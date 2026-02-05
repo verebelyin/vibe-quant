@@ -16,6 +16,8 @@ dependencies = [
     "python-telegram-bot>=21.0",
     "httpx>=0.27.0",
     "scipy>=1.14.0",
+    "eth_account>=0.13.0",
+    "python-socketio[asyncio_client]>=5.11.0",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +73,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["eth_account", "eth_account.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["socketio", "socketio.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
