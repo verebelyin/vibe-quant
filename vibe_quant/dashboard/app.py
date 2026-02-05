@@ -9,6 +9,7 @@ import streamlit as st
 
 from vibe_quant.dashboard.pages.backtest_launch import render_backtest_launch_tab
 from vibe_quant.dashboard.pages.data_management import render as render_data_management_tab
+from vibe_quant.dashboard.pages.discovery import render_discovery_tab
 from vibe_quant.dashboard.pages.paper_trading import render as render_paper_trading_tab
 from vibe_quant.dashboard.pages.results_analysis import (
     render_results_tab as render_results_analysis_tab,
@@ -37,6 +38,7 @@ def main() -> None:
                 "Strategy Management",
                 "Backtest Launch",
                 "Results Analysis",
+                "Discovery",
                 "Paper Trading",
                 "Data Management",
                 "Settings",
@@ -51,6 +53,8 @@ def main() -> None:
         render_backtest_launch_tab()
     elif page == "Results Analysis":
         render_results_analysis_tab()
+    elif page == "Discovery":
+        render_discovery_tab()
     elif page == "Paper Trading":
         render_paper_trading_tab()
     elif page == "Data Management":
