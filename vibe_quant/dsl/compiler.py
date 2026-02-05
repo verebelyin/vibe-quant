@@ -565,10 +565,10 @@ class StrategyCompiler:
         lines.append("    # Evaluate entry conditions")
         lines.append("    if not self._position_open:")
         if dsl.entry_conditions.long:
-            lines.append("        if self._check_long_entry():")
+            lines.append("        if self._check_long_entry(bar):")
             lines.append("            self._submit_long_entry(bar)")
         if dsl.entry_conditions.short:
-            lines.append("        elif self._check_short_entry():")
+            lines.append("        elif self._check_short_entry(bar):")
             lines.append("            self._submit_short_entry(bar)")
 
         # Exit conditions
@@ -578,14 +578,14 @@ class StrategyCompiler:
             lines.append("    if self._position_open:")
             if dsl.exit_conditions.long:
                 lines.append("        if self._position_side == OrderSide.BUY:")
-                lines.append("            if self._check_long_exit():")
+                lines.append("            if self._check_long_exit(bar):")
                 lines.append("                self._submit_exit(bar)")
             if dsl.exit_conditions.short:
                 if dsl.exit_conditions.long:
                     lines.append("        elif self._position_side == OrderSide.SELL:")
                 else:
                     lines.append("        if self._position_side == OrderSide.SELL:")
-                lines.append("            if self._check_short_exit():")
+                lines.append("            if self._check_short_exit(bar):")
                 lines.append("                self._submit_exit(bar)")
 
         # Update previous values for crossover detection
@@ -882,7 +882,7 @@ class StrategyCompiler:
             Method source code as lines
         """
         lines = [
-            f"def {method_name}(self) -> bool:",
+            f"def {method_name}(self, bar: Bar) -> bool:",
             f'    """Check {method_name.replace("_", " ")} conditions."""',
         ]
 

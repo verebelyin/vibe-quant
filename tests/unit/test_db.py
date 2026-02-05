@@ -1,5 +1,6 @@
 """Tests for SQLite state database."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -334,3 +335,44 @@ class TestStateManager:
         running = state_manager.get_running_jobs()
         assert len(running) == 1
         assert running[0]["pid"] == 11111
+
+    def test_duplicate_run_id_raises_integrity_error(
+        self, state_manager: StateManager
+    ) -> None:
+        """Inserting two jobs with same run_id should raise IntegrityError."""
+        strategy_id = state_manager.create_strategy(name="dup_test", dsl_config={})
+        run_id = state_manager.create_backtest_run(
+            strategy_id=strategy_id,
+            run_mode="screening",
+            symbols=["BTCUSDT-PERP"],
+            timeframe="5m",
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            parameters={},
+        )
+
+        state_manager.register_job(run_id, 11111, "screening")
+        with pytest.raises(sqlite3.IntegrityError):
+            state_manager.register_job(run_id, 22222, "screening")
+
+    def test_update_job_status_persists_error(
+        self, state_manager: StateManager
+    ) -> None:
+        """update_job_status with error should persist error_message."""
+        strategy_id = state_manager.create_strategy(name="err_test", dsl_config={})
+        run_id = state_manager.create_backtest_run(
+            strategy_id=strategy_id,
+            run_mode="screening",
+            symbols=["BTCUSDT-PERP"],
+            timeframe="5m",
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            parameters={},
+        )
+
+        state_manager.register_job(run_id, 33333, "screening")
+        state_manager.update_job_status(run_id, "failed", error="Connection timeout")
+
+        job = state_manager.get_job(run_id)
+        assert job is not None
+        assert job["error_message"] == "Connection timeout"

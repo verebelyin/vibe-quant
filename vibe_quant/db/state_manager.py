@@ -613,20 +613,12 @@ class StateManager:
             error: Optional error message.
         """
         if status in ("completed", "failed", "killed"):
-            if error:
-                self.conn.execute(
-                    """UPDATE background_jobs
-                       SET status = ?, completed_at = datetime('now')
-                       WHERE run_id = ?""",
-                    (status, run_id),
-                )
-            else:
-                self.conn.execute(
-                    """UPDATE background_jobs
-                       SET status = ?, completed_at = datetime('now')
-                       WHERE run_id = ?""",
-                    (status, run_id),
-                )
+            self.conn.execute(
+                """UPDATE background_jobs
+                   SET status = ?, completed_at = datetime('now'), error_message = ?
+                   WHERE run_id = ?""",
+                (status, error, run_id),
+            )
         else:
             self.conn.execute(
                 "UPDATE background_jobs SET status = ? WHERE run_id = ?",

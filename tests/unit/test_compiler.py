@@ -624,6 +624,37 @@ take_profit:
         # Should reference bar.close
         assert "bar.close" in source or "bar." in source
 
+    def test_condition_helpers_receive_bar_parameter(
+        self, compiler: StrategyCompiler
+    ) -> None:
+        """Condition check helpers must accept bar param for price operands."""
+        yaml_content = """
+name: bar_scope_strategy
+timeframe: 5m
+indicators:
+  ema:
+    type: EMA
+    period: 20
+entry_conditions:
+  long:
+    - close > ema
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0
+"""
+        dsl = parse_strategy_string(yaml_content)
+        source = compiler.compile(dsl)
+
+        # Helper definition must include bar parameter
+        assert "def _check_long_entry(self, bar" in source
+        # Call site must pass bar
+        assert "_check_long_entry(bar)" in source
+        # Must NOT have parameterless call
+        assert "_check_long_entry()" not in source
+
 
 # =============================================================================
 # Integration Tests

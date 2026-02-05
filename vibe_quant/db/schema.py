@@ -140,14 +140,15 @@ CREATE TABLE IF NOT EXISTS sweep_results (
 -- Background job tracking for process management
 CREATE TABLE IF NOT EXISTS background_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    run_id INTEGER UNIQUE REFERENCES backtest_runs(id) ON DELETE CASCADE,
     pid INTEGER NOT NULL,
     job_type TEXT NOT NULL,
     status TEXT DEFAULT 'running',
     heartbeat_at TEXT,
     started_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
-    log_file TEXT
+    log_file TEXT,
+    error_message TEXT
 );
 
 -- Indexes
