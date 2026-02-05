@@ -615,3 +615,6 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
 
 # Convenience alias for app.py imports
 render = render_paper_trading_tab
+
+# Top-level call for st.navigation API
+render_paper_trading_tab()

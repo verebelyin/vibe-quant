@@ -1,340 +1,382 @@
-# Comprehensive Code Review (2026-02-05)
+# Comprehensive Code Review (2026-02-05, Revalidated)
 
 ## Review Basis
 
-Primary specification and conventions used for this review:
+Primary sources used as acceptance baseline:
 
-- `SPEC.md` (authoritative architecture + phase acceptance criteria)
+- `SPEC.md` (authoritative, per `CLAUDE.md:29`)
 - `README.md`
 - `CLAUDE.md`
 - `docs/claude/conventions.md`
 
-Key expectation anchors used in findings:
+Key requirement anchors used in findings:
 
-- Single-engine, two-tier fidelity and realistic validation execution (`SPEC.md:89`, `SPEC.md:814`, `SPEC.md:1527-1567`, `README.md:16-30`)
-- Dashboard background subprocess lifecycle (`SPEC.md:1168-1175`, `SPEC.md:1208-1241`)
-- Data/state layout and canonical DB path (`SPEC.md:224-225`)
-- Security rule: secrets in env vars only (`docs/claude/conventions.md:78-80`, `CLAUDE.md:40`)
-- Quality gates (`CLAUDE.md:10-12`)
+- Two-tier architecture and realistic execution expectations: `SPEC.md:679-715`, `SPEC.md:810-896`, `README.md:27-43`, `CLAUDE.md:21-24`
+- Dashboard subprocess job flow: `SPEC.md:1162-1175`, `SPEC.md:1206-1270`
+- Validation/screening CLI acceptance: `SPEC.md:1517`, `SPEC.md:1550`
+- Paper trading architecture and controls: `SPEC.md:1276-1331`, `SPEC.md:1718-1729`
+- SQLite/WAL and data-path conventions: `SPEC.md:224-225`, `SPEC.md:324-329`, `docs/claude/conventions.md:35-41`
+- Secrets policy: `docs/claude/conventions.md:76-80`, `CLAUDE.md:40`
+- Testing target: `SPEC.md:1410`, `CLAUDE.md:10`
 
 ## Scope
 
-Reviewed modules and cross-module behavior:
+Deep audit pass covered:
 
-- `vibe_quant/dsl/*`
-- `vibe_quant/screening/*`
-- `vibe_quant/validation/*`
-- `vibe_quant/overfitting/*`
-- `vibe_quant/paper/*`
-- `vibe_quant/dashboard/pages/*`
-- `vibe_quant/jobs/*`
-- `vibe_quant/db/*`
-- `vibe_quant/data/*`
-- `vibe_quant/ethereal/*`
+- Runtime/orchestration modules: `vibe_quant/screening/*`, `vibe_quant/validation/*`, `vibe_quant/overfitting/*`, `vibe_quant/jobs/*`, `vibe_quant/dashboard/pages/*`, `vibe_quant/paper/*`
+- Core strategy pipeline: `vibe_quant/dsl/*`, `vibe_quant/risk/*`
+- Data/db integration: `vibe_quant/data/*`, `vibe_quant/db/*`, `vibe_quant/ethereal/*`
+- Relevant tests under `tests/unit/*` for masking and coverage gaps
 
-## Quality Gate Baseline (Current)
+## Revalidation Commands
 
-Commands run on this codebase:
+Commands run against current working tree:
 
-- `uv run pytest` -> `975 passed, 4 skipped`
-- `uv run pytest --cov=vibe_quant --cov-report=term-missing:skip-covered` -> total coverage `59%`
-- `uv run ruff check .` -> fails with `27` issues
-- `uv run mypy vibe_quant tests` -> fails with `111` errors
+- `uv run pytest` -> `1149 passed, 4 skipped`
+- `uv run pytest --cov=vibe_quant --cov-report=term-missing:skip-covered` -> total coverage `63%`
+- `.venv/bin/coverage report` -> confirms `63%` total
+- `uv run ruff check .` -> fails with `27` issues (test files)
+- `uv run ruff check vibe_quant` -> passes
+- `uv run mypy vibe_quant tests` -> fails with `109` errors (test files)
+- `uv run mypy vibe_quant` -> passes
 - `.venv/bin/python -m vibe_quant.screening` -> fails (`No module named vibe_quant.screening.__main__`)
 - `.venv/bin/python -m vibe_quant.validation` -> fails (`No module named vibe_quant.validation.__main__`)
 
 ## Executive Summary
 
-The codebase has strong test breadth and many well-structured modules, but there are several high-impact runtime and architecture gaps against `SPEC.md` goals. The largest issues are:
+The previous review was directionally right on major runtime blockers, but it is no longer fully accurate:
 
-1. Validation currently executes a mock path instead of full-fidelity backtesting.
-2. Dashboard job launch command wiring is broken for screening/validation modules.
-3. DSL compiler-generated condition methods can fail at runtime for price-based conditions.
+- Quality-gate numbers were stale (tests/coverage/type/lint counts changed materially).
+- One major gap was missing: screening is also mock-driven by default (not just validation).
+- Additional architecture mismatches remain around overfitting execution realism, CLI contracts, and metric-unit consistency.
 
-These are blocking issues for trustworthy end-to-end behavior and for the “screening -> validation -> paper” workflow described in the spec.
+The critical path from spec perspective is still blocked: screening -> validation -> dashboard launch -> paper promotion is not yet a trustworthy end-to-end real-execution workflow.
 
 ---
 
 ## Findings (Ordered by Severity)
 
-### [P0] Validation runner is still mock-driven, not full-fidelity execution
+### [P0] Screening pipeline is mock-driven; factory path cannot disable mock
 
 **Evidence**
 
-- Main run path calls mock runner directly: `vibe_quant/validation/runner.py:241-249`
-- Mock function is explicitly a placeholder: `vibe_quant/validation/runner.py:367-380`
-- Spec requires full-fidelity validation with realistic fills/latency/costs: `SPEC.md:814`, `SPEC.md:1527-1567`
+- Mock backtest implementation is the core runner: `vibe_quant/screening/pipeline.py:240-279`
+- Pipeline defaults to mock when no runner provided: `vibe_quant/screening/pipeline.py:316`
+- Factory `use_mock=False` still passes `None`, which falls back to mock runner: `vibe_quant/screening/pipeline.py:480-494`, `vibe_quant/screening/pipeline.py:316`
 
 **Impact**
 
-- Validation metrics are synthetic and cannot satisfy the spec’s realism and promotion intent.
-- Screening-vs-validation comparisons are not trustworthy.
+- Spec requirement for NautilusTrader screening execution is not met (`SPEC.md:700-708`, `SPEC.md:1517-1520`).
+- All screening metrics can be synthetic, so downstream ranking/filtering/promotion decisions are not reliable.
 
 **Recommendation**
 
-- Replace mock execution in `ValidationRunner.run()` with actual NautilusTrader engine integration.
-- Keep mock path only behind an explicit test/dev flag.
+- Add a real screening runner integration (BacktestNode/BacktestRunConfig) and make it default runtime behavior.
+- Make `create_screening_pipeline(use_mock=False)` enforce non-mock runner wiring or fail fast.
 
 ---
 
-### [P0] Dashboard launches backtest jobs using non-executable module targets
+### [P0] Validation runner still executes mocked backtests instead of full-fidelity validation
 
 **Evidence**
 
-- Dashboard command builder uses `python -m vibe_quant.<screening|validation>`: `vibe_quant/dashboard/pages/backtest_launch.py:411-419`
-- No package entrypoints exist:
-  - `vibe_quant/screening/` has no `__main__.py`
-  - `vibe_quant/validation/` has no `__main__.py`
-- Runtime verification failed:
-  - `.venv/bin/python -m vibe_quant.screening` -> no `__main__`
-  - `.venv/bin/python -m vibe_quant.validation` -> no `__main__`
+- Main run path calls mocked implementation: `vibe_quant/validation/runner.py:241-249`
+- Mock function explicitly marked placeholder: `vibe_quant/validation/runner.py:376-380`
 
 **Impact**
 
-- Backtest jobs launched from UI fail immediately.
-- Violates spec expectation of dashboard-triggered background subprocess execution (`SPEC.md:1168-1175`, `SPEC.md:1208-1241`).
+- Violates Phase 3 validation goals (`SPEC.md:1527-1555`, `SPEC.md:1565-1569`).
+- Validation metrics are not suitable for comparing latency/slippage/funding realism.
 
 **Recommendation**
 
-- Launch supported CLI paths (for example top-level `vibe_quant` subcommands), or add explicit `__main__.py` entrypoints for `screening` and `validation` packages.
+- Replace `_run_backtest_mock` in runtime path with NautilusTrader full-fidelity execution integration.
+- Keep mock behind explicit test-only/dev flag.
 
 ---
 
-### [P0] DSL compiler emits price-dependent condition code without `bar` in method scope
+### [P0] Dashboard backtest launch command targets are non-executable packages
 
 **Evidence**
 
-- Entry/exit checks call helper methods without `bar`: `vibe_quant/dsl/compiler.py:568`, `vibe_quant/dsl/compiler.py:571`, `vibe_quant/dsl/compiler.py:581`, `vibe_quant/dsl/compiler.py:588`
-- Generated condition methods are defined as `def ... (self) -> bool`: `vibe_quant/dsl/compiler.py:885`
-- Price operands compile to `bar.<field>` access: `vibe_quant/dsl/compiler.py:954-957`
-- DSL parser explicitly supports price operands (`open`, `high`, `low`, `close`, `volume`): `vibe_quant/dsl/conditions.py:79-83`
+- Dashboard launches `python -m vibe_quant.screening` / `python -m vibe_quant.validation`: `vibe_quant/dashboard/pages/backtest_launch.py:411-419`
+- Both packages lack `__main__.py` entrypoints (runtime confirmed by module execution failures).
 
 **Impact**
 
-- Strategies using price in conditions can raise runtime `NameError`/scope errors.
-- Breaks core DSL acceptance criterion (“DSL compiles to valid strategy that runs without errors”): `SPEC.md:1565`.
+- Backtests launched from UI fail immediately, breaking required background subprocess flow (`SPEC.md:1168-1175`, `SPEC.md:1208-1241`).
 
 **Recommendation**
 
-- Pass `bar` into condition helper methods, or inline price-dependent checks inside `on_bar` where `bar` is in scope.
-- Add compiler regression tests with price-based entry and exit conditions.
+- Either add package entrypoints (`vibe_quant/screening/__main__.py`, `vibe_quant/validation/__main__.py`) or switch to a stable CLI command contract and update dashboard command builder accordingly.
 
 ---
 
-### [P1] Compiled order sizing path is placeholder and exit sizing may be incorrect
+### [P0] DSL compiler emits price-dependent conditions with `bar` out of scope
 
 **Evidence**
 
-- Position sizing hardcoded to fixed `1.0` quantity: `vibe_quant/dsl/compiler.py:1037-1040`
-- Exit order uses fresh calculated quantity with TODO note instead of tracked open size: `vibe_quant/dsl/compiler.py:1030`
+- `on_bar` invokes condition helpers without `bar`: `vibe_quant/dsl/compiler.py:568-588`
+- Generated helper signatures are `def ... (self) -> bool`: `vibe_quant/dsl/compiler.py:885`
+- Price operands compile to `bar.<field>` expressions: `vibe_quant/dsl/compiler.py:954-957`
 
 **Impact**
 
-- Does not satisfy spec requirement for real sizing/risk enforcement (`SPEC.md:1538-1543`, `SPEC.md:1567`).
-- Exit quantity mismatch can lead to partial/unbalanced position handling.
+- Price-based DSL conditions can fail at runtime due missing `bar` in helper scope.
+- Breaks acceptance criterion that compiled DSL runs without errors (`SPEC.md:1565`).
 
 **Recommendation**
 
-- Integrate pluggable sizing module output into compiled strategy runtime.
-- Track filled position quantity and use that exact value on exit.
+- Pass `bar` into condition helpers or inline bar-dependent expressions in `on_bar`.
+- Add runtime execution tests for price-based entry/exit conditions.
 
 ---
 
-### [P1] Screening consistency checker queries columns not present in production schema
+### [P1] Overfitting pipeline defaults to mock WFA/CV runners in CLI/runtime path
 
 **Evidence**
 
-- Checker selects `strategy_name` from `sweep_results` and `backtest_results`: `vibe_quant/screening/consistency.py:126`, `vibe_quant/screening/consistency.py:146`
-- Production schema does not include those columns:
-  - `vibe_quant/db/schema.py:65-92` (`backtest_results`)
-  - `vibe_quant/db/schema.py:121-137` (`sweep_results`)
-- Tests mask mismatch by creating custom tables that do include `strategy_name`: `tests/unit/test_consistency_checker.py:27-44`
+- CLI constructs `OverfittingPipeline` without real runners: `vibe_quant/overfitting/__main__.py:70-72`
+- Pipeline defaults explicitly to mock runners if none provided: `vibe_quant/overfitting/pipeline.py:203-205`
+- WFA uses `MockBacktestRunner` by default: `vibe_quant/overfitting/pipeline.py:285`
+- Purged K-Fold path also defaults to `MockBacktestRunner`: `vibe_quant/overfitting/pipeline.py:344-348`
 
 **Impact**
 
-- Consistency checks can fail in real DB while tests pass.
-- Directly conflicts with spec deliverable for screening-to-validation consistency checks (`SPEC.md:1557-1561`).
+- Filter outputs can be synthetic, violating spec intent that WFA/CV are based on backtest behavior (`SPEC.md:1588-1599`).
+- Promotion confidence from overfitting filters is overstated.
 
 **Recommendation**
 
-- Join through `backtest_runs` and `strategies` to resolve strategy name.
-- Update tests to use production schema initialization path.
+- Wire real backtest runners (screening-mode NT) into CLI default path.
+- Fail fast if real runners are unavailable in non-test execution.
 
 ---
 
-### [P1] Paper promotion query expects overfitting metrics that validation runner does not persist
+### [P1] Paper promotion query requires overfitting metrics that validation runner never writes
 
 **Evidence**
 
 - Paper strategy selection requires non-null `deflated_sharpe`, `walk_forward_efficiency`, `purged_kfold_mean_sharpe`: `vibe_quant/dashboard/pages/paper_trading.py:83-85`
-- Validation result persistence writes only `ValidationResult.to_metrics_dict()`: `vibe_quant/validation/runner.py:138-154`, `vibe_quant/validation/runner.py:532-541`
-- Those overfitting fields are not included in `to_metrics_dict()`: `vibe_quant/validation/runner.py:138-154`
+- Validation persistence writes only `to_metrics_dict()` fields: `vibe_quant/validation/runner.py:138-154`, `vibe_quant/validation/runner.py:258`
+- `to_metrics_dict()` omits those overfitting fields: `vibe_quant/validation/runner.py:138-154`
 
 **Impact**
 
-- “Start New Session” can show no eligible strategies even after successful validation.
-- Breaks manual promotion workflow usability (`SPEC.md:1725-1729`).
+- “Start New Session” may show no eligible strategies even when validation completes.
+- Blocks manual promotion workflow (`SPEC.md:1725-1729`).
 
 **Recommendation**
 
-- Unify metric model: either persist filter outputs into `backtest_results`, or drive promotion from filter result tables with explicit join keys.
+- Persist overfitting outputs into `backtest_results` (or join to filter result tables) before promotion query.
 
 ---
 
-### [P1] Secrets are written to plaintext JSON in `/tmp`
+### [P1] Secrets are serialized to plaintext JSON under `/tmp`
 
 **Evidence**
 
-- API key/secret serialized into config payload: `vibe_quant/dashboard/pages/paper_trading.py:127-128`
-- File is written to `/tmp/paper_<trader_id>.json`: `vibe_quant/dashboard/pages/paper_trading.py:149-151`
-- Project convention requires env-var-only secret handling: `docs/claude/conventions.md:78-80`, `CLAUDE.md:40`
+- API credentials written into config payload: `vibe_quant/dashboard/pages/paper_trading.py:127-128`
+- File written to `/tmp/paper_<trader_id>.json`: `vibe_quant/dashboard/pages/paper_trading.py:149-151`
 
 **Impact**
 
-- Credential exposure risk via filesystem artifacts.
+- Violates env-var-only secret handling convention (`docs/claude/conventions.md:78-80`, `CLAUDE.md:40`).
+- Increases credential exposure risk via local filesystem artifacts.
 
 **Recommendation**
 
-- Pass credentials to subprocess via environment or secure IPC.
-- Avoid plaintext secret material on disk.
+- Pass credentials via environment or secure IPC; avoid writing plaintext secrets to disk.
 
 ---
 
-### [P1] Job table upsert logic is inconsistent with schema guarantees
+### [P1] Consistency checker queries schema columns that do not exist in production tables
+
+**Evidence**
+
+- Queries `strategy_name` directly from `sweep_results` and `backtest_results`: `vibe_quant/screening/consistency.py:126-127`, `vibe_quant/screening/consistency.py:146-147`
+- Production schema lacks `strategy_name` in those tables: `vibe_quant/db/schema.py:65-96`, `vibe_quant/db/schema.py:121-138`
+- Tests mask this by creating custom tables with `strategy_name`: `tests/unit/test_consistency_checker.py:27-45`
+
+**Impact**
+
+- Runtime checker can fail against actual DB schema while unit tests pass.
+- Undermines Phase 3 consistency check deliverable (`SPEC.md:1557-1561`).
+
+**Recommendation**
+
+- Join through `backtest_runs` and `strategies` to resolve names.
+- Rework tests to use real schema initialization.
+
+---
+
+### [P1] Background job upsert semantics are inconsistent with schema constraints
 
 **Evidence**
 
 - `background_jobs` has no `UNIQUE(run_id)`: `vibe_quant/db/schema.py:141-151`
 - Manager uses `INSERT OR REPLACE` on `run_id`: `vibe_quant/jobs/manager.py:151-154`
-- Lookup is `SELECT ... WHERE run_id = ?` then `fetchone()` with no deterministic ordering: `vibe_quant/jobs/manager.py:377-381`
+- Fetch path assumes single row and returns first match: `vibe_quant/jobs/manager.py:377-381`
 
 **Impact**
 
-- Multiple rows for same run are possible.
-- Status reads may return stale/non-deterministic rows.
+- Duplicate rows per run are possible; status reads can become non-deterministic/stale.
 
 **Recommendation**
 
-- Add `UNIQUE(run_id)` and migrate existing data.
-- Keep explicit upsert semantics and deterministic read ordering.
+- Add `UNIQUE(run_id)` and migrate data.
+- Keep deterministic reads with explicit ordering as safety net.
 
 ---
 
-### [P1] Paper trading runtime and dashboard controls are mostly placeholders/no-ops
+### [P1] Validation run failures can leave runs stuck in `running`
 
 **Evidence**
 
-- Paper node uses placeholder dict instead of real TradingNode runtime: `vibe_quant/paper/node.py:302-308`
-- Run loop explicitly marked placeholder: `vibe_quant/paper/node.py:313-315`
-- Dashboard HALT/RESUME/CLOSE ALL handlers only display informational messages: `vibe_quant/dashboard/pages/paper_trading.py:529-539`
+- Status set to running before execution: `vibe_quant/validation/runner.py:233-234`
+- Success path sets completed at end: `vibe_quant/validation/runner.py:260-261`
+- No enclosing error handler to update failed status for exceptions after state transitions: `vibe_quant/validation/runner.py:236-263`
 
 **Impact**
 
-- Spec’s paper-trading operational goals and manual controls are not actually implemented (`SPEC.md:1693-1737`).
+- Failed runs can remain `running` until stale cleanup logic intervenes.
+- Dashboard status accuracy degrades; operational triage becomes harder.
 
 **Recommendation**
 
-- Implement real node control signaling and action handlers wired to running process/state.
+- Wrap run body with `try/except/finally` and set `failed` plus error message on exceptions.
 
 ---
 
-### [P1] `StateManager.update_job_status` ignores provided error message
+### [P1] Paper trading runtime/control path is still largely placeholder
 
 **Evidence**
 
-- `error` parameter exists: `vibe_quant/db/state_manager.py:605-607`
-- Both `if error` and `else` branches execute identical SQL, never persisting error text: `vibe_quant/db/state_manager.py:616-629`
+- Trading node is placeholder dict, not actual NT node runtime: `vibe_quant/paper/node.py:302-308`
+- Main loop explicitly placeholder: `vibe_quant/paper/node.py:313-315`
+- Dashboard HALT/RESUME/CLOSE ALL are informational no-ops: `vibe_quant/dashboard/pages/paper_trading.py:529-539`
 
 **Impact**
 
-- Lost failure context in job-tracking layer.
-- Harder operational debugging and UI diagnostics.
+- Manual control and runtime behavior do not match Phase 6 requirements (`SPEC.md:1697-1724`).
 
 **Recommendation**
 
-- Add error column update when `error` is provided.
+- Implement real node control signaling and action handlers wired to live process state.
 
 ---
 
-### [P2] Default DB path diverges from canonical state DB layout
+### [P1] Metric units are inconsistent across screening, validation, and dashboard rendering
 
 **Evidence**
 
-- Canonical default: `data/state/vibe_quant.db` in connection factory: `vibe_quant/db/connection.py:7`
-- Other modules default to `data/state.db`:
-  - `vibe_quant/overfitting/pipeline.py:207`
-  - `vibe_quant/screening/consistency.py:64`
-- Spec storage layout defines `data/state/vibe_quant.db`: `SPEC.md:224-225`
+- Screening mock produces decimal-style rates (`total_return` around -0.5..1.5, `win_rate` 0.3..0.9): `vibe_quant/screening/pipeline.py:262-265`
+- Validation model/tests treat values as percentage points (`total_return=5.2`, `max_drawdown=8.5`, `win_rate=59.5`): `vibe_quant/validation/runner.py:105-113`, `vibe_quant/validation/runner.py:396-404`
+- Dashboard formatter multiplies by 100 (`val * 100`): `vibe_quant/dashboard/pages/results_analysis.py:41`
+- Paper tab formats validation values with percent formatter (`:.1%`): `vibe_quant/dashboard/pages/paper_trading.py:200-202`
 
 **Impact**
 
-- Different modules can silently operate on different DB files.
+- UI can display materially wrong values (e.g., `5.2` interpreted as `520%`).
+- Cross-stage comparisons (screening vs validation) can be distorted by unit mismatch.
 
 **Recommendation**
 
-- Centralize all defaults on `DEFAULT_DB_PATH` from `vibe_quant/db/connection.py`.
+- Standardize all percentage-like metrics to one canonical unit (decimal fraction or percentage points) and enforce at persistence boundary with conversion tests.
 
 ---
 
-### [P2] Ingestion insert methods over-report inserted row counts
+### [P2] `StateManager.update_job_status` ignores provided error text
 
 **Evidence**
 
-- `INSERT OR IGNORE` used, but returned value is `len(rows)` (attempted inserts):
-  - `vibe_quant/data/archive.py:126-135`, `vibe_quant/data/archive.py:157-164`
+- `error` argument exists: `vibe_quant/db/state_manager.py:605-607`
+- Both branches execute identical SQL without persisting `error`: `vibe_quant/db/state_manager.py:616-629`
+
+**Impact**
+
+- Job failure context is dropped from this code path.
+
+**Recommendation**
+
+- Persist `error` into an error column (or remove unused parameter to avoid false expectations).
+
+---
+
+### [P2] Default DB path diverges from canonical state DB location
+
+**Evidence**
+
+- Canonical default path is `data/state/vibe_quant.db`: `vibe_quant/db/connection.py:7`
+- Other modules default to `data/state.db`: `vibe_quant/screening/consistency.py:64`, `vibe_quant/overfitting/pipeline.py:207`
+
+**Impact**
+
+- Different workflows can silently read/write different DB files.
+
+**Recommendation**
+
+- Centralize defaults on `DEFAULT_DB_PATH` from `vibe_quant/db/connection.py`.
+
+---
+
+### [P2] Ingestion insert functions over-report inserted row counts
+
+**Evidence**
+
+- Uses `INSERT OR IGNORE` but returns attempted row count `len(rows)`:
+  - `vibe_quant/data/archive.py:171-179`, `vibe_quant/data/archive.py:201-208`
   - `vibe_quant/ethereal/ingestion.py:171-179`, `vibe_quant/ethereal/ingestion.py:201-208`
 
 **Impact**
 
-- Metrics/logs can report inflated insert counts, misleading ingestion health and monitoring.
+- Ingestion metrics/logs can be inflated when duplicates are ignored.
 
 **Recommendation**
 
-- Report actual inserted count via `SELECT changes()`/cursor deltas, or compare pre/post row counts.
+- Return actual inserted rows via `SELECT changes()` or pre/post counts.
 
 ---
 
-### [P2] Broad exception swallowing in download/ingest paths hides data-quality failures
+### [P2] Download/ingestion paths broadly swallow exceptions
 
 **Evidence**
 
-- Binance downloader catches generic exceptions and returns `None`: `vibe_quant/data/downloader.py:83-84`
-- Ethereal ingestion loops swallow generic exceptions and continue: `vibe_quant/ethereal/ingestion.py:410-411`, `vibe_quant/ethereal/ingestion.py:474-475`
+- Binance downloader catches all exceptions and returns `None`: `vibe_quant/data/downloader.py:83-84`
+- Ethereal monthly loops swallow all exceptions and continue: `vibe_quant/ethereal/ingestion.py:410-411`, `vibe_quant/ethereal/ingestion.py:474-475`
 
 **Impact**
 
-- Parse/corruption/system faults can look like “no data available.”
-- Weakens reproducibility and root-cause diagnosis.
+- Corruption/parse/network issues can be misclassified as “no data.”
 
 **Recommendation**
 
-- Log structured context (symbol/timeframe/month + error type).
-- Distinguish expected `404` from unexpected failures.
+- Log structured error context and separate expected `404` from unexpected failures.
 
 ---
 
-### [P2] HTTP client lifecycle is inefficient in month-loop downloads
+### [P2] HTTP clients are recreated inside per-month loops
 
 **Evidence**
 
-- New `httpx.Client` created inside each month iteration for Ethereal kline/funding download loops: `vibe_quant/ethereal/ingestion.py:375-377`, `vibe_quant/ethereal/ingestion.py:446-448`
-- Binance monthly downloader creates new client per month call: `vibe_quant/data/downloader.py:49`, invoked in loop at `vibe_quant/data/ingest.py:201-203`
+- Ethereal downloads create `httpx.Client` each month: `vibe_quant/ethereal/ingestion.py:376`, `vibe_quant/ethereal/ingestion.py:447`
+- Binance downloader creates client per monthly fetch call: `vibe_quant/data/downloader.py:49` (called in loop at `vibe_quant/data/ingest.py:201-203`)
 
 **Impact**
 
-- Extra connection setup overhead and reduced throughput on large ranges.
+- Unnecessary connection setup overhead and lower ingestion throughput.
 
 **Recommendation**
 
-- Reuse one client per ingestion session and perform per-request calls inside the same session.
+- Reuse one client per ingestion session.
 
 ---
 
-### [P2] Leap-day edge case in default date handling
+### [P2] Leap-day edge case in default Ethereal start date
 
 **Evidence**
 
-- Default start date derived via `replace(year=end_date.year - 2)`: `vibe_quant/ethereal/ingestion.py:708`
+- Default start date uses `end_date.replace(year=end_date.year - 2)`: `vibe_quant/ethereal/ingestion.py:708`
 
 **Impact**
 
@@ -342,105 +384,95 @@ These are blocking issues for trustworthy end-to-end behavior and for the “scr
 
 **Recommendation**
 
-- Use timedelta-based fallback or guarded calendar logic.
+- Use safe date arithmetic with leap-day fallback.
 
 ---
 
-### [P2] Top-level CLI still exposes placeholder `data` and `screening` commands
+### [P2] Top-level CLI exposes placeholder `data`/`screening` commands while module CLIs exist
 
 **Evidence**
 
-- `cmd_data` and `cmd_screening` only print “not yet implemented”: `vibe_quant/__main__.py:93-122`
+- Placeholder handlers: `vibe_quant/__main__.py:94-123`
+- Real data CLI exists at `python -m vibe_quant.data`: `vibe_quant/data/__main__.py:3`, `vibe_quant/data/ingest.py:490-568`
 
 **Impact**
 
-- Inconsistent with project’s “full lifecycle management” messaging and expected operational CLI paths (`README.md:121`, `SPEC.md` phase deliverables).
+- User-facing CLI contract is confusing and diverges from phase acceptance commands (`SPEC.md:1464-1467`, `SPEC.md:1517`).
 
 **Recommendation**
 
-- Either wire real implementations or hide unfinished commands behind feature flags/internal commands.
+- Either forward top-level commands to module CLIs or hide unfinished top-level commands.
 
 ---
 
-### [P2] Instrument base-currency semantics appear inconsistent with configured symbols
+### [P2] Dashboard latency selector omits required `custom` option
 
 **Evidence**
 
-- Binance instrument configs include explicit base assets (`BTC`, `ETH`, `SOL`): `vibe_quant/data/catalog.py:29-68`
-- Constructed instrument sets `base_currency=USDT` for all Binance symbols: `vibe_quant/data/catalog.py:95`
-- Ethereal instruments set `base_currency=USDE` for all symbols: `vibe_quant/ethereal/instruments.py:108`
+- Spec includes `custom` in latency selector: `SPEC.md:1645`
+- UI options include only `None` + enum presets: `vibe_quant/dashboard/pages/backtest_launch.py:319-339`
 
 **Impact**
 
-- Potential semantic mismatch in instrument metadata, with downstream effects on analytics/risk assumptions.
+- Spec-promised custom latency configuration cannot be selected in launch flow.
 
 **Recommendation**
 
-- Verify NautilusTrader `CryptoPerpetual` base/quote/settlement conventions and align to symbol semantics.
+- Add `custom` option and corresponding value inputs persisted into run config.
 
 ---
 
-### [P2] Static quality gates are currently red and core/runtime coverage is below target
+### [P2] Testing strategy gaps: strong unit suite, but integration coverage remains limited
 
 **Evidence**
 
-- `ruff check .` fails with 27 issues.
-- `mypy vibe_quant tests` fails with 111 errors (includes `vibe_quant/__main__.py:82`, `vibe_quant/__main__.py:223` plus extensive test typing debt).
-- Coverage is `59%`, below target called out in project docs (`CLAUDE.md:10`).
-- Low-coverage runtime-facing modules include:
-  - `vibe_quant/dashboard/pages/backtest_launch.py` (8%)
-  - `vibe_quant/dashboard/pages/paper_trading.py` (13%)
-  - `vibe_quant/data/ingest.py` (4%)
+- Test tree contains only `tests/unit` (no integration suite folder)
+- Overall coverage is `63%`, below target (`SPEC.md:1410`, `CLAUDE.md:10`)
+- Very low-coverage orchestration modules include:
+  - `vibe_quant/dashboard/pages/backtest_launch.py` (`8%`)
+  - `vibe_quant/dashboard/pages/paper_trading.py` (`13%`)
+  - `vibe_quant/data/ingest.py` (`4%`)
 
 **Impact**
 
-- Weak confidence in orchestration and operational paths despite broad test count.
+- Core pipeline glue paths remain under-tested despite broad unit count.
 
 **Recommendation**
 
-- Prioritize type/lint cleanup in shared runtime paths.
-- Add integration tests for launch/promotion/paper control flows.
+- Add integration tests for subprocess launch, CLI contracts, and screening->validation->promotion flow.
 
 ---
 
-### [P3] Test run reports unclosed SQLite connections (resource warnings)
+### [P3] Coverage run still emits unclosed SQLite connection warnings
 
 **Evidence**
 
-- Coverage run emitted `ResourceWarning: unclosed database in <sqlite3.Connection ...>` during `tests/unit/test_paper_trading.py`.
+- `pytest --cov` emitted `ResourceWarning: unclosed database in <sqlite3.Connection ...>` (observed during `tests/unit/test_purged_kfold.py` execution context).
 
 **Impact**
 
-- Usually a test hygiene issue, but can hide lifecycle bugs and make CI noise-prone.
+- Primarily test hygiene noise, but can hide lifecycle problems.
 
 **Recommendation**
 
-- Ensure fixture teardown closes all DB connections consistently.
+- Ensure fixture/teardown closes all temporary connections consistently.
 
 ---
 
 ## Positive Observations
 
-- Unit test suite breadth is strong (979 collected; 975 passing).
-- Many quantitative modules are well-covered and defensively implemented (DSR/WFA/Purged K-Fold/sizing).
-- Project package lint quality appears materially better than test-side quality debt (most Ruff failures concentrated in tests).
-- WAL + busy-timeout usage is broadly consistent in core connection paths.
-
-## Performance Review
-
-- Current test runtime is good (~16-19s full unit suite).
-- Throughput claims for validation cannot be trusted yet because validation execution is mock-driven.
-- Most actionable performance wins today are:
-  - client/session reuse in ingestion loops,
-  - reduction of repeated setup work in monthly download paths,
-  - increased coverage on orchestration modules where regressions are likely.
+- Source package static quality is solid: `ruff` and `mypy` pass for `vibe_quant`.
+- Unit test breadth is substantial and currently green (`1149 passed, 4 skipped`).
+- Many computational modules (DSR/WFA/PurgedKFold/sizing/discovery operators) are strongly covered and stable.
+- WAL + busy-timeout configuration is consistently applied in core DB connection paths.
 
 ## Suggested Remediation Order
 
-1. Fix validation execution path and dashboard subprocess entrypoints (P0).
-2. Fix DSL compiler price-condition scope issue (P0).
-3. Secure secret handling and repair job-tracking invariants (P1).
-4. Align consistency/promotion data model across screening/validation/overfitting tables (P1).
-5. Implement real paper-node controls and persist operational errors cleanly (P1).
-6. Standardize DB path defaults, ingestion error/reporting correctness, and client reuse (P2).
-7. Raise quality gates (mypy/ruff) and runtime coverage in dashboard/data orchestration modules (P2).
+1. Replace mock runtime paths in screening + validation (P0).
+2. Fix dashboard subprocess command contract and package entrypoints (P0).
+3. Fix DSL price-condition scope bug (P0).
+4. Replace mock defaults in overfitting runtime path (P1).
+5. Resolve promotion pipeline blockers (overfitting metrics persistence, metric units) (P1).
+6. Secure paper config secret handling and implement real paper controls (P1).
+7. Repair DB/data integrity issues (consistency schema mismatch, job uniqueness/status flow, DB-path alignment) (P1/P2).
+8. Expand integration testing for orchestration modules and close resource warnings (P2/P3).

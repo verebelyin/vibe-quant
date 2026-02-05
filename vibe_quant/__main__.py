@@ -79,7 +79,8 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         sharpe = run.get("sharpe_ratio")
         total_return = run.get("total_return")
         trades = run.get("total_trades")
-        created = run.get("created_at", "")[:16] if run.get("created_at") else ""
+        created_raw = run.get("created_at", "")
+        created = str(created_raw)[:16] if created_raw else ""
 
         sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
         return_str = f"{total_return:.1f}%" if total_return is not None else "-"
@@ -220,7 +221,8 @@ def main() -> int:
         return 0
 
     if hasattr(args, "func"):
-        return args.func(args)
+        result: int = args.func(args)
+        return result
 
     parser.print_help()
     return 0

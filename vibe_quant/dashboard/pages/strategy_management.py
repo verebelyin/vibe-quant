@@ -672,7 +672,5 @@ def render_strategy_management_tab(db_path: Path | None = None) -> None:
     render_strategy_list(manager, search_query, show_inactive)
 
 
-# For standalone testing
-if __name__ == "__main__":
-    st.set_page_config(page_title="Strategy Management", layout="wide")
-    render_strategy_management_tab()
+# Top-level call for st.navigation API
+render_strategy_management_tab()

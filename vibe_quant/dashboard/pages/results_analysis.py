@@ -590,7 +590,5 @@ def render_results_tab() -> None:
             render_comparison_view(mgr, selected_ids)
 
 
-# Entry point for Streamlit page
-if __name__ == "__main__":
-    st.set_page_config(page_title="Results Analysis - vibe-quant", layout="wide")
-    render_results_tab()
+# Top-level call for st.navigation API
+render_results_tab()

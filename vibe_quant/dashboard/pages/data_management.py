@@ -436,6 +436,5 @@ def render() -> None:
     render_data_quality()
 
 
-# For standalone testing
-if __name__ == "__main__":
-    render()
+# Top-level call for st.navigation API
+render()

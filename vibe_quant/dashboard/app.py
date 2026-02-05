@@ -5,62 +5,69 @@ Run with: streamlit run vibe_quant/dashboard/app.py
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-from vibe_quant.dashboard.pages.backtest_launch import render_backtest_launch_tab
-from vibe_quant.dashboard.pages.data_management import render as render_data_management_tab
-from vibe_quant.dashboard.pages.discovery import render_discovery_tab
-from vibe_quant.dashboard.pages.paper_trading import render as render_paper_trading_tab
-from vibe_quant.dashboard.pages.results_analysis import (
-    render_results_tab as render_results_analysis_tab,
-)
-from vibe_quant.dashboard.pages.settings import render_settings_tab
-from vibe_quant.dashboard.pages.strategy_management import render_strategy_management_tab
+_PAGES_DIR = Path(__file__).parent / "pages"
 
 
 def main() -> None:
-    """Main dashboard entry point."""
+    """Main dashboard entry point using st.navigation API."""
+    pages = {
+        "Strategies": [
+            st.Page(
+                _PAGES_DIR / "strategy_management.py",
+                title="Strategy Management",
+                icon=":material/edit_note:",
+                default=True,
+            ),
+            st.Page(
+                _PAGES_DIR / "discovery.py",
+                title="Discovery",
+                icon=":material/psychology:",
+            ),
+        ],
+        "Backtesting": [
+            st.Page(
+                _PAGES_DIR / "backtest_launch.py",
+                title="Backtest Launch",
+                icon=":material/rocket_launch:",
+            ),
+            st.Page(
+                _PAGES_DIR / "results_analysis.py",
+                title="Results Analysis",
+                icon=":material/analytics:",
+            ),
+        ],
+        "Trading": [
+            st.Page(
+                _PAGES_DIR / "paper_trading.py",
+                title="Paper Trading",
+                icon=":material/candlestick_chart:",
+            ),
+        ],
+        "System": [
+            st.Page(
+                _PAGES_DIR / "data_management.py",
+                title="Data Management",
+                icon=":material/database:",
+            ),
+            st.Page(
+                _PAGES_DIR / "settings.py",
+                title="Settings",
+                icon=":material/settings:",
+            ),
+        ],
+    }
+
+    pg = st.navigation(pages)
     st.set_page_config(
         page_title="vibe-quant Dashboard",
-        page_icon="chart_with_upwards_trend",
+        page_icon=":material/show_chart:",
         layout="wide",
-        initial_sidebar_state="expanded",
     )
-
-    st.title("vibe-quant Dashboard")
-
-    # Sidebar navigation
-    with st.sidebar:
-        st.header("Navigation")
-        page = st.radio(
-            "Select page",
-            options=[
-                "Strategy Management",
-                "Backtest Launch",
-                "Results Analysis",
-                "Discovery",
-                "Paper Trading",
-                "Data Management",
-                "Settings",
-            ],
-            index=0,
-        )
-
-    # Route to pages
-    if page == "Strategy Management":
-        render_strategy_management_tab()
-    elif page == "Backtest Launch":
-        render_backtest_launch_tab()
-    elif page == "Results Analysis":
-        render_results_analysis_tab()
-    elif page == "Discovery":
-        render_discovery_tab()
-    elif page == "Paper Trading":
-        render_paper_trading_tab()
-    elif page == "Data Management":
-        render_data_management_tab()
-    elif page == "Settings":
-        render_settings_tab()
+    pg.run()
 
 
 if __name__ == "__main__":

@@ -543,7 +543,5 @@ def render_discovery_tab() -> None:
 # Convenience alias matching pattern from other pages
 render = render_discovery_tab
 
-# Entry point when run as Streamlit page
-if __name__ == "__main__":
-    st.set_page_config(page_title="Strategy Discovery - vibe-quant", layout="wide")
-    render_discovery_tab()
+# Top-level call for st.navigation API
+render_discovery_tab()

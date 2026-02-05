@@ -127,11 +127,13 @@ class TestModuleImports:
         assert "ETHUSDT" in DISCOVERY_SYMBOLS
         assert "SOLUSDT" in DISCOVERY_SYMBOLS
 
-    def test_app_includes_discovery(self) -> None:
-        """app.py imports render_discovery_tab."""
+    def test_app_includes_discovery_page(self) -> None:
+        """app.py references discovery page file."""
         from vibe_quant.dashboard import app
 
-        assert hasattr(app, "render_discovery_tab")
+        # st.navigation API uses file paths, not imports
+        assert hasattr(app, "_PAGES_DIR")
+        assert (app._PAGES_DIR / "discovery.py").exists()
 
 
 # ---------------------------------------------------------------------------

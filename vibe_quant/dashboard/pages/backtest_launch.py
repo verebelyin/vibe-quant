@@ -620,7 +620,5 @@ def render_backtest_launch_tab() -> None:
     _render_recent_runs(manager)
 
 
-# Entry point when run as Streamlit page
-if __name__ == "__main__":
-    st.set_page_config(page_title="Backtest Launch", layout="wide")
-    render_backtest_launch_tab()
+# Top-level call for st.navigation API
+render_backtest_launch_tab()

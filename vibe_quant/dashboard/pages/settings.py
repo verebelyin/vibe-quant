@@ -513,6 +513,5 @@ def render_settings_tab() -> None:
         render_system_info()
 
 
-# Entry point when run as Streamlit page
-if __name__ == "__main__":
-    render_settings_tab()
+# Top-level call for st.navigation API
+render_settings_tab()
