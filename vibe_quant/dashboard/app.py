@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import streamlit as st
 
+from vibe_quant.dashboard.pages.backtest_launch import render_backtest_launch_tab
+from vibe_quant.dashboard.pages.data_management import render as render_data_management_tab
+from vibe_quant.dashboard.pages.results_analysis import render_results_tab as render_results_analysis_tab
+from vibe_quant.dashboard.pages.settings import render_settings_tab
 from vibe_quant.dashboard.pages.strategy_management import render_strategy_management_tab
 
 
@@ -28,7 +32,8 @@ def main() -> None:
             "Select page",
             options=[
                 "Strategy Management",
-                "Backtest Results",
+                "Backtest Launch",
+                "Results Analysis",
                 "Data Management",
                 "Settings",
             ],
@@ -38,12 +43,14 @@ def main() -> None:
     # Route to pages
     if page == "Strategy Management":
         render_strategy_management_tab()
-    elif page == "Backtest Results":
-        st.info("Backtest Results tab - coming soon")
+    elif page == "Backtest Launch":
+        render_backtest_launch_tab()
+    elif page == "Results Analysis":
+        render_results_analysis_tab()
     elif page == "Data Management":
-        st.info("Data Management tab - coming soon")
+        render_data_management_tab()
     elif page == "Settings":
-        st.info("Settings tab - coming soon")
+        render_settings_tab()
 
 
 if __name__ == "__main__":
