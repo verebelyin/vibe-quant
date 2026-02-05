@@ -7,6 +7,7 @@ runs backtest with realistic execution simulation, and stores results.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,8 @@ from vibe_quant.validation.venue import (
 
 if TYPE_CHECKING:
     from vibe_quant.dsl.schema import StrategyDSL
+
+logger = logging.getLogger(__name__)
 
 
 class ValidationRunnerError(Exception):
@@ -255,9 +258,12 @@ class ValidationRunner:
             return result
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
-            self._state.update_backtest_run_status(
-                run_id, "failed", error_message=error_msg
-            )
+            try:
+                self._state.update_backtest_run_status(
+                    run_id, "failed", error_message=error_msg
+                )
+            except Exception:
+                logger.exception("Failed to update run %d status to failed", run_id)
             raise ValidationRunnerError(error_msg) from exc
 
     def _load_run_config(self, run_id: int) -> dict[str, object]:

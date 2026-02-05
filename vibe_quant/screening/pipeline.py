@@ -255,13 +255,13 @@ def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
     param_str = json.dumps(params, sort_keys=True)
     seed = int(hashlib.md5(param_str.encode()).hexdigest()[:8], 16)
 
-    # Generate pseudo-random but deterministic metrics
+    # Generate pseudo-random but deterministic metrics (decimal fractions)
     sharpe = (seed % 300) / 100.0 - 0.5  # Range: -0.5 to 2.5
     sortino = sharpe * 1.2
-    max_dd = (seed % 50) / 100.0 + 0.05  # Range: 0.05 to 0.55
-    total_return = (seed % 200) / 100.0 - 0.5  # Range: -0.5 to 1.5
-    pf = (seed % 300) / 100.0 + 0.5  # Range: 0.5 to 3.5
-    win_rate = (seed % 60) / 100.0 + 0.3  # Range: 0.3 to 0.9
+    max_dd = (seed % 30) / 100.0 + 0.02  # Range: 0.02 to 0.32 (2-32%)
+    total_return = (seed % 40) / 100.0 - 0.10  # Range: -0.10 to 0.30 (-10% to 30%)
+    pf = (seed % 200) / 100.0 + 0.5  # Range: 0.5 to 2.5
+    win_rate = (seed % 40) / 100.0 + 0.30  # Range: 0.30 to 0.70 (30-70%)
     num_trades = (seed % 200) + 20  # Range: 20 to 220
 
     return BacktestMetrics(

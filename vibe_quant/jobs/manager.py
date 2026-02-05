@@ -149,13 +149,27 @@ class BacktestJobManager:
 
         pid = proc.pid
 
-        # Register job in database
-        self.conn.execute(
-            """INSERT OR REPLACE INTO background_jobs
-               (run_id, pid, job_type, status, log_file, started_at, heartbeat_at)
-               VALUES (?, ?, ?, 'running', ?, datetime('now'), datetime('now'))""",
-            (run_id, pid, job_type, log_file),
-        )
+        # Register job in database (upsert: update if exists, insert otherwise)
+        existing = self.conn.execute(
+            "SELECT id FROM background_jobs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if existing:
+            self.conn.execute(
+                """UPDATE background_jobs
+                   SET pid = ?, job_type = ?, status = 'running',
+                       log_file = ?, started_at = datetime('now'),
+                       heartbeat_at = datetime('now'), completed_at = NULL,
+                       error_message = NULL
+                   WHERE run_id = ?""",
+                (pid, job_type, log_file, run_id),
+            )
+        else:
+            self.conn.execute(
+                """INSERT INTO background_jobs
+                   (run_id, pid, job_type, status, log_file, started_at, heartbeat_at)
+                   VALUES (?, ?, ?, 'running', ?, datetime('now'), datetime('now'))""",
+                (run_id, pid, job_type, log_file),
+            )
         # Also update backtest_runs table
         self.conn.execute(
             """UPDATE backtest_runs

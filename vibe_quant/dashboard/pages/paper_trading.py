@@ -72,11 +72,11 @@ def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any
                 br.symbols,
                 br.timeframe,
                 res.sharpe_ratio,
-                res.walk_forward_efficiency,
-                res.deflated_sharpe,
-                res.purged_kfold_mean_sharpe,
-                res.max_drawdown,
-                res.total_return
+                COALESCE(res.walk_forward_efficiency, 0.0) as walk_forward_efficiency,
+                COALESCE(res.deflated_sharpe, 0.0) as deflated_sharpe,
+                COALESCE(res.purged_kfold_mean_sharpe, 0.0) as purged_kfold_mean_sharpe,
+                COALESCE(res.max_drawdown, 0.0) as max_drawdown,
+                COALESCE(res.total_return, 0.0) as total_return
             FROM backtest_results res
             JOIN backtest_runs br ON res.run_id = br.id
             JOIN strategies s ON br.strategy_id = s.id
