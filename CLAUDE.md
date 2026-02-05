@@ -44,15 +44,20 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 
 ## Issue Tracking (Beads)
 
-Project uses `bd` (beads) for issue tracking. Run `bd onboard` to get started.
+**CRITICAL:** Use `bd` (beads) for ALL task/issue tracking. **NEVER use TodoWrite, TaskCreate, or markdown files for task tracking.** Beads is the single source of truth.
 
 ```bash
 bd ready              # Find available work
 bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
+bd update <id> --status in_progress  # Claim work BEFORE starting
 bd close <id>         # Complete work
+bd close <id1> <id2>  # Close multiple at once
 bd sync               # Sync with git
 ```
+
+**Workflow:** `bd ready` → `bd update <id> --status in_progress` → implement → `bd close <id>` → `bd sync`
+
+**NEVER use `bd edit`** -- it opens $EDITOR which blocks agents.
 
 ### Session Completion
 
