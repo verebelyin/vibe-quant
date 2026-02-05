@@ -391,18 +391,18 @@ class ValidationRunner:
         result = ValidationResult(
             run_id=run_id,
             strategy_name=strategy_name,
-            total_return=5.2,  # Mock: 5.2% return
-            sharpe_ratio=1.35,  # Mock: decent Sharpe
-            sortino_ratio=1.85,  # Mock: better downside-adjusted
-            max_drawdown=8.5,  # Mock: 8.5% max DD
-            total_trades=42,  # Mock: 42 trades
+            total_return=0.052,  # 5.2% as decimal
+            sharpe_ratio=1.35,  # Ratios stay as-is
+            sortino_ratio=1.85,
+            max_drawdown=0.085,  # 8.5% as decimal
+            total_trades=42,
             winning_trades=25,
             losing_trades=17,
-            win_rate=59.5,  # 25/42
-            profit_factor=1.45,  # Mock
-            total_fees=125.50,  # Mock fees
-            total_funding=45.20,  # Mock funding
-            total_slippage=32.10,  # Mock slippage
+            win_rate=0.595,  # 59.5% as decimal
+            profit_factor=1.45,
+            total_fees=0.00126,  # As fraction of equity
+            total_funding=0.00045,
+            total_slippage=0.00023,
         )
 
         # Generate some mock trades

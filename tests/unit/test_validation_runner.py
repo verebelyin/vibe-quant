@@ -496,6 +496,24 @@ class TestValidationRunner:
             runner.run(run_id=run_id)
         runner.close()
 
+    def test_mock_metrics_use_decimal_format(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+        state_with_strategy: StateManager,
+    ) -> None:
+        """Mock metrics should use decimal format (0.052 not 5.2)."""
+        state_with_strategy.close()
+
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        result = runner.run(run_id=1)
+        runner.close()
+
+        # All percentage-like values should be in decimal form
+        assert 0 <= result.win_rate <= 1.0
+        assert result.total_return < 1.0  # Not percentage points
+        assert result.max_drawdown < 1.0  # Not percentage points
+
 
 class TestListValidationRuns:
     """Tests for list_validation_runs function."""
