@@ -188,6 +188,11 @@ class EtherealArchive:
             for k in klines
         ]
 
+        before = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND timeframe = ?",
+            (symbol, timeframe),
+        ).fetchone()[0]
+
         self.conn.executemany(
             """INSERT OR IGNORE INTO raw_klines
                (symbol, timeframe, open_time, open, high, low, close, volume,
@@ -196,7 +201,12 @@ class EtherealArchive:
             rows,
         )
         self.conn.commit()
-        return len(rows)
+
+        after = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND timeframe = ?",
+            (symbol, timeframe),
+        ).fetchone()[0]
+        return after - before
 
     def insert_funding_rates(
         self,
@@ -218,6 +228,11 @@ class EtherealArchive:
             (symbol, r[0], r[1], r[2] if len(r) > 2 else None, source) for r in rates
         ]
 
+        before = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()[0]
+
         self.conn.executemany(
             """INSERT OR IGNORE INTO raw_funding_rates
                (symbol, funding_time, funding_rate, mark_price, source)
@@ -225,7 +240,12 @@ class EtherealArchive:
             rows,
         )
         self.conn.commit()
-        return len(rows)
+
+        after = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()[0]
+        return after - before
 
     def get_klines(
         self,

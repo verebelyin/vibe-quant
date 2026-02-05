@@ -479,3 +479,19 @@ class TestRunModes:
         }
 
         assert run_config["latency_preset"] is not None
+
+
+class TestLatencyOptions:
+    """Test latency option constants."""
+
+    def test_latency_options_include_custom(self) -> None:
+        """Latency options should include 'custom'."""
+        from vibe_quant.dashboard.pages.backtest_launch import LATENCY_OPTIONS
+
+        assert "custom" in LATENCY_OPTIONS
+
+    def test_latency_options_include_none(self) -> None:
+        """Latency options should include screening mode."""
+        from vibe_quant.dashboard.pages.backtest_launch import LATENCY_OPTIONS
+
+        assert "None (screening mode)" in LATENCY_OPTIONS

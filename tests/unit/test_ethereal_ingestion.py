@@ -13,6 +13,7 @@ import pytest
 from vibe_quant.ethereal.ingestion import (
     ETHEREAL_TIMEFRAMES,
     EtherealArchive,
+    _safe_years_ago,
     archive_to_catalog,
     download_bars,
     download_funding_rates,
@@ -429,6 +430,28 @@ class TestArchiveToCatalog:
         assert "ETHUSD" in results
         assert results["ETHUSD"]["1m"] == 2
         assert catalog_path.exists()
+
+
+class TestSafeYearsAgo:
+    """Tests for _safe_years_ago helper."""
+
+    def test_normal_date(self) -> None:
+        """Normal date subtraction works."""
+        d = datetime(2026, 6, 15, tzinfo=UTC)
+        result = _safe_years_ago(d, 2)
+        assert result == datetime(2024, 6, 15, tzinfo=UTC)
+
+    def test_leap_day(self) -> None:
+        """Leap day falls back to Feb 28."""
+        d = datetime(2024, 2, 29, tzinfo=UTC)  # Leap year
+        result = _safe_years_ago(d, 2)
+        assert result == datetime(2022, 2, 28, tzinfo=UTC)
+
+    def test_leap_to_leap(self) -> None:
+        """Leap day to leap day preserves Feb 29."""
+        d = datetime(2024, 2, 29, tzinfo=UTC)
+        result = _safe_years_ago(d, 4)
+        assert result == datetime(2020, 2, 29, tzinfo=UTC)
 
 
 class TestSupportedTimeframes:

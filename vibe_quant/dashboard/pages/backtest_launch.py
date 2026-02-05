@@ -41,6 +41,9 @@ DEFAULT_SYMBOLS = [
     "DOTUSDT",
 ]
 
+# Latency options: presets + custom entry
+LATENCY_OPTIONS = ["None (screening mode)"] + [p.value for p in LatencyPreset] + ["custom"]
+
 
 def _get_state_manager() -> StateManager:
     """Get or create StateManager from session state."""
@@ -316,17 +319,28 @@ def _render_latency_selector() -> str | None:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        preset_options = ["None (screening mode)"] + [p.value for p in LatencyPreset]
         selected = st.selectbox(
             "Latency Preset",
-            options=preset_options,
+            options=LATENCY_OPTIONS,
             index=0,
             key="latency_preset",
-            help="Select latency model. Use None for screening (fast), presets for validation.",
+            help="Select latency model. Use None for screening (fast), presets for validation, or custom.",
         )
 
     with col2:
-        if selected != "None (screening mode)":
+        if selected == "custom":
+            base_ms = st.number_input(
+                "Base latency (ms)", min_value=0, value=50, step=1, key="custom_base_ms"
+            )
+            insert_ms = st.number_input(
+                "Insert latency (ms)", min_value=0, value=25, step=1, key="custom_insert_ms"
+            )
+            st.metric("Total Insert Latency", f"{base_ms + insert_ms} ms")
+            st.session_state["custom_latency"] = {
+                "base_latency_nanos": base_ms * 1_000_000,
+                "insert_latency_nanos": insert_ms * 1_000_000,
+            }
+        elif selected != "None (screening mode)":
             preset = LatencyPreset(selected)
             values = LATENCY_PRESETS[preset]
             st.metric(

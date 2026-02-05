@@ -92,7 +92,7 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
 
 
 def cmd_data(args: argparse.Namespace) -> int:
-    """Data management commands (placeholder).
+    """Forward to data module CLI.
 
     Args:
         args: Parsed CLI arguments.
@@ -100,16 +100,15 @@ def cmd_data(args: argparse.Namespace) -> int:
     Returns:
         Exit code.
     """
-    print("Data commands not yet implemented.")
-    print("  ingest: Download and archive historical data")
-    print("  update: Update data to current")
-    print("  status: Show data status")
-    print("  rebuild: Rebuild catalog from archive")
-    return 0
+    remaining = args.remaining if hasattr(args, "remaining") else []
+    sys.argv = ["vibe_quant.data"] + remaining
+    from vibe_quant.data.ingest import main as data_main
+
+    return data_main()
 
 
 def cmd_screening(args: argparse.Namespace) -> int:
-    """Screening commands (placeholder).
+    """Forward to screening module CLI.
 
     Args:
         args: Parsed CLI arguments.
@@ -117,10 +116,11 @@ def cmd_screening(args: argparse.Namespace) -> int:
     Returns:
         Exit code.
     """
-    print("Screening commands not yet implemented.")
-    print("  run: Run parameter sweep screening")
-    print("  list: List screening runs")
-    return 0
+    remaining = args.remaining if hasattr(args, "remaining") else []
+    sys.argv = ["vibe_quant.screening"] + remaining
+    from vibe_quant.screening.__main__ import main as screening_main
+
+    return screening_main()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -145,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
         "data",
         help="Data management commands",
     )
+    data_parser.add_argument("remaining", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     data_parser.set_defaults(func=cmd_data)
 
     # Screening command
@@ -152,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
         "screening",
         help="Parameter sweep screening",
     )
+    screening_parser.add_argument("remaining", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     screening_parser.set_defaults(func=cmd_screening)
 
     # Validation command
