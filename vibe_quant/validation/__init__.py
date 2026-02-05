@@ -4,6 +4,7 @@ This module provides:
 - Venue configuration with realistic latency and slippage modeling
 - Custom fill models for volume-based market impact
 - Latency presets for different execution environments
+- ValidationRunner for full-fidelity backtesting
 """
 
 from vibe_quant.validation.fill_model import (
@@ -19,6 +20,13 @@ from vibe_quant.validation.latency import (
     LatencyValues,
     create_custom_latency_model,
     get_latency_model,
+)
+from vibe_quant.validation.runner import (
+    TradeRecord,
+    ValidationResult,
+    ValidationRunner,
+    ValidationRunnerError,
+    list_validation_runs,
 )
 from vibe_quant.validation.venue import (
     BINANCE_MAKER_FEE,
@@ -49,4 +57,10 @@ __all__ = [
     "create_venue_config_for_screening",
     "create_venue_config_for_validation",
     "create_backtest_venue_config",
+    # Runner
+    "ValidationRunner",
+    "ValidationRunnerError",
+    "ValidationResult",
+    "TradeRecord",
+    "list_validation_runs",
 ]
