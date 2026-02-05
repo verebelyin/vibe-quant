@@ -379,10 +379,13 @@ class TestPaperTradingNode:
         )
 
         node = PaperTradingNode(config)
-        strategy = node._load_strategy()
+        try:
+            strategy = node._load_strategy()
 
-        assert strategy.name == "test_strategy"
-        assert strategy.timeframe == "1h"
+            assert strategy.name == "test_strategy"
+            assert strategy.timeframe == "1h"
+        finally:
+            node._state_manager.close()
 
     def test_load_strategy_not_found(self, db_path: Path):
         """Raises error if strategy not found."""
@@ -396,9 +399,11 @@ class TestPaperTradingNode:
         )
 
         node = PaperTradingNode(config)
-
-        with pytest.raises(ConfigurationError, match="not found"):
-            node._load_strategy()
+        try:
+            with pytest.raises(ConfigurationError, match="not found"):
+                node._load_strategy()
+        finally:
+            node._state_manager.close()
 
     def test_halt_changes_state(self, db_path: Path):
         """Halt changes node state."""
