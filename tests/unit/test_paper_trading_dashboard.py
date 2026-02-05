@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from vibe_quant.dashboard.pages.paper_trading import (
+    _create_paper_config_file,
     _format_pnl,
     _get_state_color,
+    _get_validated_strategies,
 )
 from vibe_quant.paper.persistence import StateCheckpoint
 
@@ -237,3 +241,45 @@ class TestControlLogic:
         checkpoint = StateCheckpoint(trader_id="PAPER-001")
         has_positions = bool(checkpoint.positions)
         assert has_positions is False
+
+
+def test_validated_strategies_without_overfitting_metrics(tmp_path: Path) -> None:
+    """Strategies should be promotable even without overfitting metrics."""
+    from vibe_quant.db.connection import get_connection
+    from vibe_quant.db.schema import init_schema
+
+    db_file = tmp_path / "test.db"
+    conn = get_connection(db_file)
+    init_schema(conn)
+
+    conn.execute("INSERT INTO strategies (name, dsl_config) VALUES ('test', '{}')")
+    conn.execute(
+        """INSERT INTO backtest_runs (strategy_id, run_mode, symbols, timeframe,
+           start_date, end_date, parameters, status)
+           VALUES (1, 'validation', '["BTCUSDT"]', '5m', '2024-01-01', '2024-12-31', '{}', 'completed')"""
+    )
+    conn.execute(
+        """INSERT INTO backtest_results (run_id, total_return, sharpe_ratio, max_drawdown, win_rate)
+           VALUES (1, 0.052, 1.35, 0.085, 0.595)"""
+    )
+    conn.commit()
+
+    strategies = _get_validated_strategies(db_file)
+    assert len(strategies) == 1
+    conn.close()
+
+
+def test_paper_config_does_not_write_secrets_to_disk(tmp_path: Path) -> None:
+    """Paper config file must not contain API credentials."""
+    config_path = _create_paper_config_file(
+        trader_id="TEST-001",
+        strategy_id=1,
+        symbols=["BTCUSDT-PERP"],
+        testnet=True,
+        db_path=Path("/tmp/claude/test.db"),
+    )
+    content = json.loads(config_path.read_text())
+    full_text = json.dumps(content)
+    assert "api_key" not in full_text
+    assert "api_secret" not in full_text
+    config_path.unlink()

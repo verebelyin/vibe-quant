@@ -109,6 +109,7 @@ class BacktestJobManager:
         job_type: str,
         command: list[str],
         log_file: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> int:
         """Start a background job for a backtest run.
 
@@ -117,6 +118,7 @@ class BacktestJobManager:
             job_type: Type of job (screening, validation, data_update).
             command: Command line arguments to spawn subprocess.
             log_file: Optional path to log file.
+            env: Optional environment variables for subprocess.
 
         Returns:
             Process ID of spawned subprocess.
@@ -142,6 +144,7 @@ class BacktestJobManager:
             stdout=log_handle or subprocess.DEVNULL,
             stderr=subprocess.STDOUT if log_handle else subprocess.DEVNULL,
             start_new_session=True,  # Detach from parent process group
+            env=env,
         )
 
         pid = proc.pid

@@ -125,8 +125,11 @@ class ConsistencyChecker:
         # Get screening result
         row = self.conn.execute(
             """
-            SELECT strategy_name, sharpe_ratio, total_return, parameters
-            FROM sweep_results WHERE run_id = ?
+            SELECT s.name AS strategy_name, sr.sharpe_ratio, sr.total_return, sr.parameters
+            FROM sweep_results sr
+            JOIN backtest_runs br ON sr.run_id = br.id
+            JOIN strategies s ON br.strategy_id = s.id
+            WHERE sr.run_id = ?
             """,
             (screening_run_id,),
         ).fetchone()
@@ -145,8 +148,11 @@ class ConsistencyChecker:
         # Get validation result
         row = self.conn.execute(
             """
-            SELECT strategy_name, sharpe_ratio, total_return
-            FROM backtest_results WHERE run_id = ?
+            SELECT s.name AS strategy_name, res.sharpe_ratio, res.total_return
+            FROM backtest_results res
+            JOIN backtest_runs br ON res.run_id = br.id
+            JOIN strategies s ON br.strategy_id = s.id
+            WHERE res.run_id = ?
             """,
             (validation_run_id,),
         ).fetchone()

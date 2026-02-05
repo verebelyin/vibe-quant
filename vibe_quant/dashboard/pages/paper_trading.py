@@ -54,12 +54,12 @@ def _get_job_manager(db_path: Path | None = None) -> BacktestJobManager:
 
 
 def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any]]:
-    """Get strategies that passed validation with overfitting filters.
+    """Get strategies with completed validation backtests.
 
     Returns strategies from backtest_results that have:
-    - deflated_sharpe IS NOT NULL (passed DSR)
-    - walk_forward_efficiency IS NOT NULL (passed WFA)
-    - purged_kfold_mean_sharpe IS NOT NULL (passed K-Fold)
+    - run_mode = 'validation'
+    - status = 'completed'
+    - sharpe_ratio IS NOT NULL
     """
     conn = get_connection(db_path)
     try:
@@ -80,10 +80,9 @@ def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any
             FROM backtest_results res
             JOIN backtest_runs br ON res.run_id = br.id
             JOIN strategies s ON br.strategy_id = s.id
-            WHERE res.deflated_sharpe IS NOT NULL
-              AND res.walk_forward_efficiency IS NOT NULL
-              AND res.purged_kfold_mean_sharpe IS NOT NULL
-              AND br.run_mode = 'validation'
+            WHERE br.run_mode = 'validation'
+              AND br.status = 'completed'
+              AND res.sharpe_ratio IS NOT NULL
             ORDER BY res.sharpe_ratio DESC
             """
         )
@@ -113,19 +112,19 @@ def _create_paper_config_file(
     trader_id: str,
     strategy_id: int,
     symbols: list[str],
-    api_key: str,
-    api_secret: str,
     testnet: bool,
     db_path: Path | None,
 ) -> Path:
-    """Create paper trading config JSON file for subprocess."""
+    """Create paper trading config JSON file for subprocess.
+
+    API credentials are NOT written to disk -- they are passed via
+    environment variables at subprocess launch time.
+    """
     config_data = {
         "trader_id": trader_id,
         "strategy_id": strategy_id,
         "symbols": symbols,
         "binance": {
-            "api_key": api_key,
-            "api_secret": api_secret,
             "testnet": testnet,
             "account_type": "USDT_FUTURES",
         },
@@ -172,19 +171,19 @@ def _render_start_session(db_path: Path | None = None) -> None:
     strategies = _get_validated_strategies(db_path)
 
     if not strategies:
-        st.info("No validated strategies available. Run validation backtest with overfitting filters first.")
+        st.info("No validated strategies available. Run a validation backtest first.")
         return
 
     # Strategy selector
     strategy_options = {
-        f"{s['strategy_name']} | Sharpe: {s['sharpe_ratio']:.2f} | WFA: {s['walk_forward_efficiency']:.1%}": s
+        f"{s['strategy_name']} | Sharpe: {s['sharpe_ratio']:.2f}": s
         for s in strategies
     }
 
     selected_label = st.selectbox(
         "Select Validated Strategy",
         options=list(strategy_options.keys()),
-        help="Strategies that passed DSR, WFA, and Purged K-Fold validation",
+        help="Strategies with completed validation backtests",
     )
 
     if not selected_label:
@@ -230,13 +229,11 @@ def _render_start_session(db_path: Path | None = None) -> None:
         # Generate trader ID
         trader_id = f"PAPER-{uuid.uuid4().hex[:8].upper()}"
 
-        # Create config file
+        # Create config file (credentials passed via env, not written to disk)
         config_path = _create_paper_config_file(
             trader_id=trader_id,
             strategy_id=selected["strategy_id"],
             symbols=symbols,
-            api_key=api_key,
-            api_secret=api_secret,
             testnet=testnet,
             db_path=db_path,
         )
@@ -260,7 +257,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
         finally:
             conn.close()
 
-        # Start subprocess
+        # Start subprocess with credentials in env (not on disk)
         manager = _get_job_manager(db_path)
         command = [
             "python", "-m", "vibe_quant.paper.cli",
@@ -270,11 +267,16 @@ def _render_start_session(db_path: Path | None = None) -> None:
         ]
         log_file = f"logs/paper/{trader_id}/paper_trading.log"
 
+        env = os.environ.copy()
+        env["BINANCE_API_KEY"] = api_key
+        env["BINANCE_API_SECRET"] = api_secret
+
         pid = manager.start_job(
             run_id=run_id,
             job_type="paper_trading",
             command=command,
             log_file=log_file,
+            env=env,
         )
 
         # Update session state with new trader ID
