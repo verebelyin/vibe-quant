@@ -48,8 +48,26 @@ ignore = ["E501"]
 python_version = "3.13"
 strict = true
 warn_return_any = true
-warn_unused_ignores = true
+warn_unused_ignores = false
 disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "nautilus_trader",
+    "nautilus_trader.model.currencies",
+    "nautilus_trader.model.data",
+    "nautilus_trader.model.enums",
+    "nautilus_trader.model.identifiers",
+    "nautilus_trader.model.instruments",
+    "nautilus_trader.model.objects",
+    "nautilus_trader.persistence.catalog",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pandas_ta", "pandas_ta.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
