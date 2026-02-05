@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from pathlib import Path  # noqa: TC003 (used at runtime in rebuild_from_archive)
+from typing import Any
 
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
+    DEFAULT_CATALOG_PATH,
     INTERVAL_TO_AGGREGATION,
     CatalogManager,
     aggregate_bars,
@@ -19,11 +22,147 @@ from vibe_quant.data.downloader import (
     SUPPORTED_SYMBOLS,
     download_funding_rates,
     download_monthly_klines,
+    download_recent_klines,
     get_years_months_to_download,
 )
+from vibe_quant.data.verify import verify_symbol
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def update_symbol(
+    symbol: str,
+    archive: RawDataArchive | None = None,
+    catalog: CatalogManager | None = None,
+    verbose: bool = True,
+) -> dict[str, int]:
+    """Update data for a symbol by fetching missing candles.
+
+    Detects last timestamp in archive, fetches gap via REST API,
+    archives raw data, then rebuilds catalog.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTCUSDT').
+        archive: Raw data archive (created if not provided).
+        catalog: Catalog manager (created if not provided).
+        verbose: Print progress messages.
+
+    Returns:
+        Dict with counts: {'new_klines': N, 'bars_1m': N, ...}
+    """
+    if archive is None:
+        archive = RawDataArchive()
+    if catalog is None:
+        catalog = CatalogManager()
+
+    counts: dict[str, int] = {"new_klines": 0}
+
+    # Get last timestamp from archive
+    date_range = archive.get_date_range(symbol, "1m")
+    if date_range is None:
+        if verbose:
+            print(f"{symbol}: no existing data, use 'ingest' command first")
+        return counts
+
+    last_timestamp = date_range[1]  # max open_time in ms
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+    # Add 60000 (1 minute) to start after last candle
+    start_time = last_timestamp + 60000
+
+    if start_time >= now_ms:
+        if verbose:
+            print(f"{symbol}: already up to date")
+        return counts
+
+    if verbose:
+        last_dt = datetime.fromtimestamp(last_timestamp / 1000, tz=UTC)
+        print(f"{symbol}: fetching from {last_dt.isoformat()} to now...")
+
+    # Download new klines via REST API
+    new_klines = download_recent_klines(symbol, "1m", start_time, now_ms)
+    if new_klines:
+        archive.insert_klines(symbol, "1m", new_klines, "binance_api")
+        counts["new_klines"] = len(new_klines)
+        if verbose:
+            print(f"  Archived {len(new_klines)} new klines")
+    else:
+        if verbose:
+            print("  No new klines available")
+        return counts
+
+    # Rebuild catalog from all archived klines
+    instrument = create_instrument(symbol)
+    catalog.write_instrument(instrument)
+
+    all_klines = archive.get_klines(symbol, "1m")
+    if not all_klines:
+        return counts
+
+    # Convert to 1m bars
+    bar_type_1m = get_bar_type(symbol, "1m")
+    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
+    catalog.write_bars(bars_1m)
+    counts["bars_1m"] = len(bars_1m)
+    if verbose:
+        print(f"  Wrote {len(bars_1m)} 1m bars to catalog")
+
+    # Aggregate to higher timeframes
+    for interval in ["5m", "15m", "1h", "4h"]:
+        if "m" in interval:
+            minutes = int(interval.replace("m", ""))
+        else:
+            minutes = int(interval.replace("h", "")) * 60
+
+        bar_type = get_bar_type(symbol, interval)
+        agg_bars = aggregate_bars(bars_1m, bar_type, minutes)
+        catalog.write_bars(agg_bars)
+        counts[f"bars_{interval}"] = len(agg_bars)
+        if verbose:
+            print(f"  Wrote {len(agg_bars)} {interval} bars")
+
+    return counts
+
+
+def update_all(
+    symbols: list[str] | None = None,
+    verbose: bool = True,
+) -> dict[str, dict[str, int]]:
+    """Update data for all symbols.
+
+    Args:
+        symbols: List of symbols to update. Uses SUPPORTED_SYMBOLS if not provided.
+        verbose: Print progress messages.
+
+    Returns:
+        Dict mapping symbol to counts dict.
+    """
+    if symbols is None:
+        symbols = SUPPORTED_SYMBOLS
+
+    archive = RawDataArchive()
+    catalog = CatalogManager()
+    results: dict[str, dict[str, int]] = {}
+
+    for symbol in symbols:
+        if verbose:
+            print(f"\n{'='*50}")
+            print(f"Updating {symbol}")
+            print(f"{'='*50}")
+
+        counts = update_symbol(
+            symbol, archive=archive, catalog=catalog, verbose=verbose
+        )
+        results[symbol] = counts
+
+    archive.close()
+
+    if verbose:
+        print(f"\n{'='*50}")
+        print("UPDATE SUMMARY")
+        print(f"{'='*50}")
+        for sym, cnts in results.items():
+            print(f"{sym}: {cnts.get('new_klines', 0)} new klines")
+
+    return results
 
 
 def ingest_symbol(
@@ -251,6 +390,103 @@ def get_status(
     return status
 
 
+def rebuild_from_archive(
+    catalog_path: Path | None = None,
+    verbose: bool = True,
+) -> dict[str, dict[str, int]]:
+    """Rebuild ParquetDataCatalog from raw SQLite archive.
+
+    Deletes existing catalog and recreates it from archived klines.
+
+    Args:
+        catalog_path: Path to catalog directory. Uses default if not specified.
+        verbose: Print progress messages.
+
+    Returns:
+        Dict mapping symbol to bar counts.
+    """
+    catalog_path = catalog_path or DEFAULT_CATALOG_PATH
+
+    # Delete existing catalog
+    if catalog_path.exists():
+        if verbose:
+            print(f"Deleting existing catalog at {catalog_path}")
+        shutil.rmtree(catalog_path)
+
+    archive = RawDataArchive()
+    catalog = CatalogManager(catalog_path)
+    results: dict[str, dict[str, int]] = {}
+
+    symbols = archive.get_symbols()
+    if not symbols:
+        if verbose:
+            print("No symbols in archive")
+        archive.close()
+        return results
+
+    if verbose:
+        print(f"Rebuilding catalog for {len(symbols)} symbols...")
+
+    for symbol in symbols:
+        if verbose:
+            print(f"\n{'='*50}")
+            print(f"Processing {symbol}")
+            print(f"{'='*50}")
+
+        counts: dict[str, int] = {}
+
+        # Create and write instrument
+        instrument = create_instrument(symbol)
+        catalog.write_instrument(instrument)
+        if verbose:
+            print(f"Wrote instrument: {instrument.id}")
+
+        # Get all klines from archive
+        all_klines = archive.get_klines(symbol, "1m")
+        if not all_klines:
+            if verbose:
+                print("No klines to process")
+            results[symbol] = counts
+            continue
+
+        # Convert to 1m bars and write
+        bar_type_1m = get_bar_type(symbol, "1m")
+        bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
+        catalog.write_bars(bars_1m)
+        counts["bars_1m"] = len(bars_1m)
+        if verbose:
+            print(f"Wrote {len(bars_1m)} 1m bars")
+
+        # Aggregate to higher timeframes (same logic as ingest_symbol)
+        for interval in ["5m", "15m", "1h", "4h"]:
+            bar_type = get_bar_type(symbol, interval)
+
+            # Convert interval to minutes
+            if "m" in interval:
+                minutes = int(interval.replace("m", ""))
+            else:
+                minutes = int(interval.replace("h", "")) * 60
+
+            agg_bars = aggregate_bars(bars_1m, bar_type, minutes)
+            catalog.write_bars(agg_bars)
+            counts[f"bars_{interval}"] = len(agg_bars)
+            if verbose:
+                print(f"Wrote {len(agg_bars)} {interval} bars")
+
+        results[symbol] = counts
+
+    archive.close()
+
+    if verbose:
+        print(f"\n{'='*50}")
+        print("REBUILD COMPLETE")
+        print(f"{'='*50}")
+        for sym, counts in results.items():
+            print(f"{sym}: {counts}")
+
+    return results
+
+
 def main() -> int:
     """CLI entry point for data ingestion."""
     import argparse
@@ -276,6 +512,37 @@ def main() -> int:
     # Status command
     subparsers.add_parser("status", help="Show data status")
 
+    # Update command
+    update_parser = subparsers.add_parser(
+        "update", help="Update data with recent candles"
+    )
+    update_parser.add_argument(
+        "--symbols",
+        type=str,
+        default=",".join(SUPPORTED_SYMBOLS),
+        help="Comma-separated symbols to update",
+    )
+
+    # Rebuild command
+    rebuild_parser = subparsers.add_parser(
+        "rebuild", help="Rebuild catalog from archive"
+    )
+    rebuild_parser.add_argument(
+        "--from-archive",
+        action="store_true",
+        required=True,
+        help="Rebuild catalog from raw SQLite archive (required)",
+    )
+
+    # Verify command
+    verify_parser = subparsers.add_parser("verify", help="Verify data quality")
+    verify_parser.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="Comma-separated symbols to verify (default: all in archive)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -294,6 +561,65 @@ def main() -> int:
             if "catalog" in info:
                 for key, count in info["catalog"].items():
                     print(f"  Catalog {key}: {count}")
+    elif args.command == "update":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        update_all(symbols=symbols, verbose=True)
+    elif args.command == "rebuild":
+        rebuild_from_archive(verbose=True)
+    elif args.command == "verify":
+        archive = RawDataArchive()
+        symbols = (
+            [s.strip() for s in args.symbols.split(",")]
+            if args.symbols
+            else archive.get_symbols()
+        )
+
+        if not symbols:
+            print("No symbols to verify")
+            archive.close()
+            return 0
+
+        print("\nData Verification Report")
+        print("=" * 50)
+
+        has_issues = False
+        for symbol in symbols:
+            result = verify_symbol(archive, symbol)
+            gaps = result["gaps"]
+            ohlc_errors = result["ohlc_errors"]
+            kline_count = result["kline_count"]
+
+            print(f"\n{symbol}: {kline_count} klines")
+
+            if gaps:
+                has_issues = True
+                print(f"  GAPS ({len(gaps)}):")
+                for start_ts, _end_ts, gap_min in gaps[:5]:  # Show first 5
+                    start_dt = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
+                    print(f"    {start_dt.isoformat()} - {gap_min} min gap")
+                if len(gaps) > 5:
+                    print(f"    ... and {len(gaps) - 5} more")
+            else:
+                print("  Gaps: None")
+
+            if ohlc_errors:
+                has_issues = True
+                print(f"  OHLC ERRORS ({len(ohlc_errors)}):")
+                for ts, msg in ohlc_errors[:5]:  # Show first 5
+                    err_dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
+                    print(f"    {err_dt.isoformat()}: {msg}")
+                if len(ohlc_errors) > 5:
+                    print(f"    ... and {len(ohlc_errors) - 5} more")
+            else:
+                print("  OHLC: Valid")
+
+        archive.close()
+
+        print("\n" + "=" * 50)
+        if has_issues:
+            print("ISSUES FOUND")
+            return 1
+        print("ALL CHECKS PASSED")
 
     return 0
 

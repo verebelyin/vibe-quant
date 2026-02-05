@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from nautilus_trader.model.currencies import USDT
-from nautilus_trader.model.data import Bar, BarType
+from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import CryptoPerpetual
@@ -244,9 +244,10 @@ def get_bar_type(symbol: str, interval: str) -> BarType:
     instrument_id = InstrumentId(Symbol(f"{symbol}-PERP"), BINANCE_VENUE)
     step, aggregation = INTERVAL_TO_AGGREGATION[interval]
 
+    bar_spec = BarSpecification(step, aggregation, PriceType.LAST)
     return BarType(
         instrument_id=instrument_id,
-        bar_spec=BarType.standard(step, aggregation, PriceType.LAST).bar_spec,
+        bar_spec=bar_spec,
     )
 
 
