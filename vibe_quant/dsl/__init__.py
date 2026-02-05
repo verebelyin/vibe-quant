@@ -6,10 +6,11 @@ trading strategies in YAML format. It includes:
 - Schema definitions (Pydantic models)
 - Condition parsing
 - YAML parsing and validation
+- Indicator registry with NautilusTrader/pandas-ta mappings
 - Error reporting with line numbers
 
 Example usage:
-    from vibe_quant.dsl import parse_strategy, StrategyDSL
+    from vibe_quant.dsl import parse_strategy, StrategyDSL, indicator_registry
 
     # Parse from file
     strategy = parse_strategy("strategies/my_strategy.yaml")
@@ -20,8 +21,13 @@ Example usage:
     # Access strategy properties
     print(strategy.name)
     print(strategy.indicators)
-    for cond in strategy.entry_conditions.long:
-        print(cond)
+
+    # Get indicator spec
+    rsi_spec = indicator_registry.get("RSI")
+    print(rsi_spec.default_params)
+
+    # List all available indicators
+    print(indicator_registry.list_indicators())
 """
 
 from vibe_quant.dsl.conditions import (
@@ -32,6 +38,11 @@ from vibe_quant.dsl.conditions import (
     extract_indicator_refs,
     parse_condition,
     validate_conditions,
+)
+from vibe_quant.dsl.indicators import (
+    IndicatorRegistry,
+    IndicatorSpec,
+    indicator_registry,
 )
 from vibe_quant.dsl.parser import (
     DSLParseError,
@@ -80,6 +91,10 @@ __all__ = [
     "VALID_SOURCES",
     "VALID_STOP_LOSS_TYPES",
     "VALID_TAKE_PROFIT_TYPES",
+    # Indicator registry
+    "IndicatorSpec",
+    "IndicatorRegistry",
+    "indicator_registry",
     # Condition parsing
     "Condition",
     "Operand",
