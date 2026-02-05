@@ -1,6 +1,7 @@
 """Paper Trading Tab for vibe-quant dashboard.
 
 Live monitoring and control of paper trading sessions:
+- Strategy promotion: select validated strategy -> start paper trading
 - Live P&L display
 - Open positions table
 - Recent trades list
@@ -10,21 +11,24 @@ Live monitoring and control of paper trading sessions:
 
 from __future__ import annotations
 
+import json
+import os
+import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Any
 
 import streamlit as st
 
+from vibe_quant.db.connection import get_connection
+from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence, recover_state
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 # Session state keys
 SESSION_TRADER_ID = "paper_trading_trader_id"
 SESSION_PERSISTENCE = "paper_trading_persistence"
 SESSION_LAST_REFRESH = "paper_trading_last_refresh"
+SESSION_JOB_MANAGER = "paper_trading_job_manager"
 
 
 def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
@@ -39,6 +43,245 @@ def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
         )
     persistence: StatePersistence = st.session_state[SESSION_PERSISTENCE]
     return persistence
+
+
+def _get_job_manager(db_path: Path | None = None) -> BacktestJobManager:
+    """Get or create BacktestJobManager in session state."""
+    if SESSION_JOB_MANAGER not in st.session_state:
+        st.session_state[SESSION_JOB_MANAGER] = BacktestJobManager(db_path)
+    manager: BacktestJobManager = st.session_state[SESSION_JOB_MANAGER]
+    return manager
+
+
+def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any]]:
+    """Get strategies that passed validation with overfitting filters.
+
+    Returns strategies from backtest_results that have:
+    - deflated_sharpe IS NOT NULL (passed DSR)
+    - walk_forward_efficiency IS NOT NULL (passed WFA)
+    - purged_kfold_mean_sharpe IS NOT NULL (passed K-Fold)
+    """
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT
+                s.id as strategy_id,
+                s.name as strategy_name,
+                br.id as run_id,
+                br.symbols,
+                br.timeframe,
+                res.sharpe_ratio,
+                res.walk_forward_efficiency,
+                res.deflated_sharpe,
+                res.purged_kfold_mean_sharpe,
+                res.max_drawdown,
+                res.total_return
+            FROM backtest_results res
+            JOIN backtest_runs br ON res.run_id = br.id
+            JOIN strategies s ON br.strategy_id = s.id
+            WHERE res.deflated_sharpe IS NOT NULL
+              AND res.walk_forward_efficiency IS NOT NULL
+              AND res.purged_kfold_mean_sharpe IS NOT NULL
+              AND br.run_mode = 'validation'
+            ORDER BY res.sharpe_ratio DESC
+            """
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _get_active_paper_jobs(db_path: Path | None = None) -> list[dict[str, Any]]:
+    """Get currently running paper trading jobs."""
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.execute(
+            """
+            SELECT * FROM background_jobs
+            WHERE job_type = 'paper_trading' AND status = 'running'
+            """
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _create_paper_config_file(
+    trader_id: str,
+    strategy_id: int,
+    symbols: list[str],
+    api_key: str,
+    api_secret: str,
+    testnet: bool,
+    db_path: Path | None,
+) -> Path:
+    """Create paper trading config JSON file for subprocess."""
+    config_data = {
+        "trader_id": trader_id,
+        "strategy_id": strategy_id,
+        "symbols": symbols,
+        "binance": {
+            "api_key": api_key,
+            "api_secret": api_secret,
+            "testnet": testnet,
+            "account_type": "USDT_FUTURES",
+        },
+        "sizing": {
+            "method": "fixed_fractional",
+            "max_leverage": "10",
+            "max_position_pct": "0.3",
+            "risk_per_trade": "0.02",
+        },
+        "risk": {
+            "max_drawdown_pct": "0.15",
+            "max_daily_loss_pct": "0.05",
+            "max_consecutive_losses": 5,
+            "max_position_count": 3,
+        },
+        "db_path": str(db_path) if db_path else None,
+        "logs_path": f"logs/paper/{trader_id}",
+        "state_persistence_interval": 60,
+    }
+
+    config_path = Path(f"/tmp/paper_{trader_id}.json")
+    with config_path.open("w") as f:
+        json.dump(config_data, f, indent=2)
+
+    return config_path
+
+
+def _render_start_session(db_path: Path | None = None) -> None:
+    """Render start session section for promoting validated strategies."""
+    st.subheader("Start New Session")
+
+    # Check for existing active jobs
+    active_jobs = _get_active_paper_jobs(db_path)
+    if active_jobs:
+        st.warning(f"Paper trading session already running (PID: {active_jobs[0]['pid']})")
+        if st.button("Stop Active Session", type="secondary"):
+            manager = _get_job_manager(db_path)
+            manager.kill_job(active_jobs[0]["run_id"])
+            st.success("Session stopped")
+            st.rerun()
+        return
+
+    # Get validated strategies
+    strategies = _get_validated_strategies(db_path)
+
+    if not strategies:
+        st.info("No validated strategies available. Run validation backtest with overfitting filters first.")
+        return
+
+    # Strategy selector
+    strategy_options = {
+        f"{s['strategy_name']} | Sharpe: {s['sharpe_ratio']:.2f} | WFA: {s['walk_forward_efficiency']:.1%}": s
+        for s in strategies
+    }
+
+    selected_label = st.selectbox(
+        "Select Validated Strategy",
+        options=list(strategy_options.keys()),
+        help="Strategies that passed DSR, WFA, and Purged K-Fold validation",
+    )
+
+    if not selected_label:
+        return
+
+    selected = strategy_options[selected_label]
+
+    # Show strategy details
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Sharpe Ratio", f"{selected['sharpe_ratio']:.2f}")
+    with col2:
+        st.metric("Max Drawdown", f"{selected['max_drawdown']:.1%}")
+    with col3:
+        st.metric("Total Return", f"{selected['total_return']:.1%}")
+
+    # Binance config (collapsible)
+    with st.expander("Binance Configuration", expanded=False):
+        api_key = st.text_input(
+            "API Key",
+            type="password",
+            value=os.environ.get("BINANCE_API_KEY", ""),
+            help="Binance API key (from env BINANCE_API_KEY if set)",
+        )
+        api_secret = st.text_input(
+            "API Secret",
+            type="password",
+            value=os.environ.get("BINANCE_API_SECRET", ""),
+            help="Binance API secret (from env BINANCE_API_SECRET if set)",
+        )
+        testnet = st.checkbox("Use Testnet", value=True, help="Paper trade on Binance testnet")
+
+    # Parse symbols from JSON
+    symbols_json = selected.get("symbols", "[]")
+    symbols = json.loads(symbols_json) if isinstance(symbols_json, str) else symbols_json
+
+    # Start button
+    if st.button("Start Paper Trading", type="primary", use_container_width=True):
+        if not api_key or not api_secret:
+            st.error("API key and secret required")
+            return
+
+        # Generate trader ID
+        trader_id = f"PAPER-{uuid.uuid4().hex[:8].upper()}"
+
+        # Create config file
+        config_path = _create_paper_config_file(
+            trader_id=trader_id,
+            strategy_id=selected["strategy_id"],
+            symbols=symbols,
+            api_key=api_key,
+            api_secret=api_secret,
+            testnet=testnet,
+            db_path=db_path,
+        )
+
+        # Create a run record for tracking
+        conn = get_connection(db_path)
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO backtest_runs
+                (strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status)
+                VALUES (?, 'paper_trading', ?, ?, date('now'), date('now', '+1 year'), '{}', 'pending')
+                """,
+                (selected["strategy_id"], json.dumps(symbols), selected.get("timeframe", "1h")),
+            )
+            conn.commit()
+            run_id = cursor.lastrowid
+            if run_id is None:
+                st.error("Failed to create run record")
+                return
+        finally:
+            conn.close()
+
+        # Start subprocess
+        manager = _get_job_manager(db_path)
+        command = [
+            "python", "-m", "vibe_quant.paper.cli",
+            "start",
+            "--config", str(config_path),
+            "--run-id", str(run_id),
+        ]
+        log_file = f"logs/paper/{trader_id}/paper_trading.log"
+
+        pid = manager.start_job(
+            run_id=run_id,
+            job_type="paper_trading",
+            command=command,
+            log_file=log_file,
+        )
+
+        # Update session state with new trader ID
+        st.session_state[SESSION_TRADER_ID] = trader_id
+
+        st.success(f"Paper trading started! Trader ID: {trader_id} (PID: {pid})")
+        st.rerun()
 
 
 def _get_state_color(state: str) -> str:
@@ -329,6 +572,10 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
     # Sidebar controls
     trader_id = _render_trader_selector()
     should_refresh = _render_refresh_button()
+
+    # Start session section at top
+    _render_start_session(db_path)
+    st.divider()
 
     if not trader_id:
         st.info("Enter a Trader ID in the sidebar to view paper trading status.")
