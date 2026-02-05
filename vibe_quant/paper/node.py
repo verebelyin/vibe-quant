@@ -23,6 +23,7 @@ from vibe_quant.paper.config import (
     PaperTradingConfig,
     create_trading_node_config,
 )
+from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 
 if TYPE_CHECKING:
     from vibe_quant.dsl.schema import StrategyDSL
@@ -135,6 +136,11 @@ class PaperTradingNode:
         self._trading_node: Any = None  # NautilusTrader TradingNode
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
+        self._error_handler = ErrorHandler(
+            on_halt=self._on_error_halt,
+            on_alert=self._on_error_alert,
+        )
+        self._previous_state: NodeState | None = None  # For resume from halt
 
     @property
     def config(self) -> PaperTradingConfig:
@@ -145,6 +151,45 @@ class PaperTradingNode:
     def status(self) -> NodeStatus:
         """Get current node status."""
         return self._status
+
+    @property
+    def error_handler(self) -> ErrorHandler:
+        """Get error handler."""
+        return self._error_handler
+
+    def _on_error_halt(self, reason: str, message: str) -> None:
+        """Callback when error handler triggers halt.
+
+        Args:
+            reason: Halt reason identifier.
+            message: Human-readable message.
+        """
+        # Store previous state for potential resume
+        if self._status.state in (NodeState.RUNNING, NodeState.PAUSED):
+            self._previous_state = self._status.state
+
+        self.halt(HaltReason.ERROR, message)
+
+    def _on_error_alert(self, alert_type: str, context: ErrorContext) -> None:
+        """Callback when error handler triggers alert.
+
+        Args:
+            alert_type: Type of alert.
+            context: Error context with details.
+        """
+        self._write_event(
+            EventType.RISK_CHECK,
+            {
+                "action": "alert",
+                "alert_type": alert_type,
+                "error_category": context.category.value,
+                "error_type": type(context.error).__name__,
+                "error_message": str(context.error),
+                "operation": context.operation,
+                "symbol": context.symbol,
+                "retry_count": context.retry_count,
+            },
+        )
 
     def _load_strategy(self) -> StrategyDSL:
         """Load and validate strategy from database.
@@ -376,6 +421,68 @@ class PaperTradingNode:
                     "to_state": NodeState.RUNNING.value,
                 },
             )
+
+    def resume_from_halt(self) -> bool:
+        """Resume trading from halted state.
+
+        Can only resume if halted due to error and previous state was recoverable.
+        Returns True if resumed, False if cannot resume.
+
+        Returns:
+            True if successfully resumed, False otherwise.
+        """
+        if self._status.state != NodeState.HALTED:
+            return False
+
+        if self._status.halt_reason != HaltReason.ERROR:
+            # Only error halts can be resumed (drawdown/loss halts need manual review)
+            return False
+
+        # Determine target state (previous state or RUNNING)
+        target_state = self._previous_state or NodeState.RUNNING
+        if target_state == NodeState.HALTED:
+            target_state = NodeState.RUNNING
+
+        prev_state = self._status.state
+        self._status.state = target_state
+        self._status.halt_reason = None
+        self._status.error_message = None
+        self._status.updated_at = datetime.now(UTC)
+        self._previous_state = None
+
+        self._write_event(
+            EventType.SIGNAL,
+            {
+                "action": "state_change",
+                "from_state": prev_state.value,
+                "to_state": target_state.value,
+                "resumed": True,
+            },
+        )
+
+        return True
+
+    def handle_error(
+        self,
+        error: BaseException,
+        operation: str = "",
+        symbol: str = "",
+    ) -> ErrorContext:
+        """Handle error through the error handler.
+
+        Args:
+            error: Exception that occurred.
+            operation: Operation being performed.
+            symbol: Symbol involved (if applicable).
+
+        Returns:
+            ErrorContext with classification and handling result.
+        """
+        return self._error_handler.handle_error(
+            error=error,
+            operation=operation,
+            symbol=symbol,
+        )
 
 
 async def run_paper_trading(config: PaperTradingConfig) -> None:

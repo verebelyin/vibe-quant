@@ -5,6 +5,7 @@ Provides TradingNode configuration for Binance testnet with:
 - Simulated execution against testnet
 - Strategy deployment from DSL
 - Position sizing and risk module attachment
+- Error handling with retry logic
 """
 
 from vibe_quant.paper.config import (
@@ -12,11 +13,23 @@ from vibe_quant.paper.config import (
     PaperTradingConfig,
     create_trading_node_config,
 )
+from vibe_quant.paper.errors import (
+    ErrorCategory,
+    ErrorContext,
+    ErrorHandler,
+    RetryConfig,
+    classify_error,
+)
 from vibe_quant.paper.node import PaperTradingNode
 
 __all__ = [
     "BinanceTestnetConfig",
+    "ErrorCategory",
+    "ErrorContext",
+    "ErrorHandler",
     "PaperTradingConfig",
     "PaperTradingNode",
+    "RetryConfig",
+    "classify_error",
     "create_trading_node_config",
 ]
