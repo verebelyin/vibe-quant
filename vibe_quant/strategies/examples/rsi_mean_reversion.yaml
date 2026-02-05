@@ -1,0 +1,63 @@
+# RSI Mean Reversion with Multi-Timeframe Trend Confirmation
+# Uses 1h and 4h EMA for trend, 5m RSI for entries
+name: rsi_mean_reversion
+timeframe: 5m
+additional_timeframes:
+  - 1h
+  - 4h
+
+indicators:
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+
+  ema_trend:
+    type: EMA
+    period: 50
+    timeframe: 1h
+    source: close
+
+  ema_htf:
+    type: EMA
+    period: 50
+    timeframe: 4h
+    source: close
+
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - rsi < 30
+    - close > ema_trend
+    - close > ema_htf
+  short:
+    - rsi > 70
+    - close < ema_trend
+    - close < ema_htf
+
+exit_conditions:
+  long:
+    - rsi > 50
+  short:
+    - rsi < 50
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.0
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.0
+
+time_filters:
+  blocked_days:
+    - Saturday
+    - Sunday
+
+sweep:
+  rsi_period: [10, 14, 21]
+  ema_trend_period: [20, 50, 100]

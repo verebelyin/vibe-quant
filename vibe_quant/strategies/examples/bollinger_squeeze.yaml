@@ -1,0 +1,60 @@
+# Bollinger Band Squeeze Strategy
+# Uses RSI and EMA for simplified volatility breakout
+name: bollinger_squeeze
+timeframe: 1h
+
+indicators:
+  bbands:
+    type: BBANDS
+    period: 20
+    std_dev: 2.0
+    source: close
+
+  atr:
+    type: ATR
+    period: 14
+
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+
+  ema:
+    type: EMA
+    period: 20
+    source: close
+
+entry_conditions:
+  long:
+    - close > ema
+    - rsi > 50
+    - rsi < 70
+  short:
+    - close < ema
+    - rsi < 50
+    - rsi > 30
+
+exit_conditions:
+  long:
+    - close < ema
+  short:
+    - close > ema
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.5
+
+time_filters:
+  blocked_days:
+    - Saturday
+    - Sunday
+
+sweep:
+  bbands_period: [15, 20, 25]
+  bbands_std_dev: [1.5, 2.0, 2.5]
+  rsi_period: [10, 14, 21]

@@ -1,0 +1,65 @@
+# MACD Crossover with Session Filter
+# Simplified to use MACD value vs signal crossing
+name: macd_crossover
+timeframe: 15m
+
+indicators:
+  macd:
+    type: MACD
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+    source: close
+
+  ema_fast:
+    type: EMA
+    period: 9
+    source: close
+
+  ema_slow:
+    type: EMA
+    period: 21
+    source: close
+
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - ema_fast crosses_above ema_slow
+    - macd > 0
+  short:
+    - ema_fast crosses_below ema_slow
+    - macd < 0
+
+exit_conditions:
+  long:
+    - ema_fast crosses_below ema_slow
+  short:
+    - ema_fast crosses_above ema_slow
+
+stop_loss:
+  type: atr_fixed
+  atr_multiplier: 1.5
+  indicator: atr
+
+take_profit:
+  type: atr_fixed
+  atr_multiplier: 3.0
+  indicator: atr
+
+time_filters:
+  allowed_sessions:
+    - start: "00:00"
+      end: "08:00"
+    - start: "08:00"
+      end: "16:00"
+  blocked_days:
+    - Saturday
+    - Sunday
+
+sweep:
+  macd_fast_period: [8, 12, 16]
+  macd_slow_period: [21, 26, 34]
+  ema_fast_period: [5, 9, 13]
