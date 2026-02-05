@@ -2,18 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vibe_quant.risk.config import (
-    PortfolioRiskConfig,
-    StrategyRiskConfig,
-    create_default_portfolio_risk_config,
-    create_default_strategy_risk_config,
-)
 from vibe_quant.risk.actors import (
     PortfolioRiskActorConfig,
     PortfolioRiskState,
@@ -21,6 +13,12 @@ from vibe_quant.risk.actors import (
     RiskState,
     StrategyRiskActorConfig,
     StrategyRiskState,
+)
+from vibe_quant.risk.config import (
+    PortfolioRiskConfig,
+    StrategyRiskConfig,
+    create_default_portfolio_risk_config,
+    create_default_strategy_risk_config,
 )
 
 
@@ -303,7 +301,7 @@ class TestStrategyRiskActorConfig:
 
     def test_config_is_frozen(self) -> None:
         """Config should be immutable."""
-        config = StrategyRiskActorConfig(
+        StrategyRiskActorConfig(
             component_id="RISK-001",
             strategy_id="TEST",
         )

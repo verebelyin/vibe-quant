@@ -30,6 +30,11 @@ Example usage:
     print(indicator_registry.list_indicators())
 """
 
+from vibe_quant.dsl.compiler import (
+    CompilerError,
+    IndicatorInfo,
+    StrategyCompiler,
+)
 from vibe_quant.dsl.conditions import (
     Condition,
     ConditionParseError,
@@ -111,6 +116,10 @@ __all__ = [
     "get_referenced_indicators",
     "strategy_to_dict",
     "strategy_to_yaml",
+    # Compiler
+    "StrategyCompiler",
+    "CompilerError",
+    "IndicatorInfo",
     # Errors
     "DSLParseError",
     "DSLValidationError",

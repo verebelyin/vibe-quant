@@ -197,8 +197,8 @@ class TestVenueConfig:
 
     def test_binance_fee_constants(self) -> None:
         """Binance fee constants are correct."""
-        assert BINANCE_MAKER_FEE == Decimal("0.0002")  # 0.02%
-        assert BINANCE_TAKER_FEE == Decimal("0.0004")  # 0.04%
+        assert Decimal("0.0002") == BINANCE_MAKER_FEE  # 0.02%
+        assert Decimal("0.0004") == BINANCE_TAKER_FEE  # 0.04%
 
     def test_create_venue_config_for_screening(self) -> None:
         """Create screening venue config."""
