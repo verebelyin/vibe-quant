@@ -17,6 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, DSRResult
 from vibe_quant.overfitting.purged_kfold import CVConfig, CVResult, FoldResult, PurgedKFoldCV
 from vibe_quant.overfitting.wfa import WalkForwardAnalysis, WFAConfig, WFAResult
@@ -184,7 +185,7 @@ class OverfittingPipeline:
     updates database with pass/fail flags, and returns filtered candidates.
 
     Example:
-        pipeline = OverfittingPipeline(db_path="data/state.db")
+        pipeline = OverfittingPipeline()
         result = pipeline.run(run_id=1, config=FilterConfig.default())
         for candidate in result.filtered_candidates:
             print(f"{candidate.strategy_name}: passed all filters")
@@ -199,12 +200,12 @@ class OverfittingPipeline:
         """Initialize overfitting pipeline.
 
         Args:
-            db_path: Path to SQLite database. Defaults to data/state.db.
+            db_path: Path to SQLite database. Defaults to DEFAULT_DB_PATH.
             wfa_runner: Optional backtest runner for WFA. Uses mock if None.
             cv_runner: Optional backtest runner for Purged K-Fold. Uses mock if None.
         """
         if db_path is None:
-            db_path = Path("data/state.db")
+            db_path = DEFAULT_DB_PATH
         self.db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
         self._wfa_runner = wfa_runner

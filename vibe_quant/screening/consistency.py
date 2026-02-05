@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from vibe_quant.db.connection import DEFAULT_DB_PATH
+
 
 @dataclass(frozen=True, slots=True)
 class ConsistencyResult:
@@ -58,10 +60,10 @@ class ConsistencyChecker:
         """Initialize consistency checker.
 
         Args:
-            db_path: Path to SQLite database. Defaults to data/state.db.
+            db_path: Path to SQLite database. Defaults to DEFAULT_DB_PATH.
         """
         if db_path is None:
-            db_path = Path("data/state.db")
+            db_path = DEFAULT_DB_PATH
         self.db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
 

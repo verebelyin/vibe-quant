@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.overfitting.pipeline import (
     CandidateResult,
     FilterConfig,
@@ -181,10 +182,10 @@ class TestMockBacktestRunner:
 class TestOverfittingPipeline:
     """Tests for OverfittingPipeline class."""
 
-    def test_init_default_path(self, tmp_path: Path) -> None:
-        """Pipeline uses default db path."""
+    def test_init_default_path(self) -> None:
+        """Pipeline uses canonical DEFAULT_DB_PATH."""
         pipeline = OverfittingPipeline()
-        assert pipeline.db_path == Path("data/state.db")
+        assert pipeline.db_path == DEFAULT_DB_PATH
         pipeline.close()
 
     def test_init_custom_path(self, db_path: Path) -> None:
