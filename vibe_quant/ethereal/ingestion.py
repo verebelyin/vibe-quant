@@ -407,13 +407,13 @@ def download_bars(
     end_ms = int(end_date.timestamp() * 1000)
 
     # Download by month chunks
-    for year, month in generate_month_range(start_date, end_date):
-        # Format: ETHUSD-1m-2024-01.csv.zip
-        filename = f"{symbol}-{timeframe}-{year}-{month:02d}.csv.zip"
-        url = f"{ETHEREAL_ARCHIVE_BASE}/klines/{symbol}/{timeframe}/{filename}"
+    with httpx.Client(timeout=timeout) as client:
+        for year, month in generate_month_range(start_date, end_date):
+            # Format: ETHUSD-1m-2024-01.csv.zip
+            filename = f"{symbol}-{timeframe}-{year}-{month:02d}.csv.zip"
+            url = f"{ETHEREAL_ARCHIVE_BASE}/klines/{symbol}/{timeframe}/{filename}"
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
+            try:
                 response = client.get(url)
                 if response.status_code == 404:
                     continue
@@ -445,11 +445,11 @@ def download_bars(
                                     int(row[8]) if len(row) > 8 else 0,
                                 )
                                 all_klines.append(kline)
-        except httpx.HTTPStatusError:
-            continue
-        except Exception:
-            logger.exception("Unexpected error downloading bars %s %s/%s-%02d", symbol, timeframe, year, month)
-            continue
+            except httpx.HTTPStatusError:
+                continue
+            except Exception:
+                logger.exception("Unexpected error downloading bars %s %s/%s-%02d", symbol, timeframe, year, month)
+                continue
 
     # Sort by open_time
     all_klines.sort(key=lambda x: x[0])
