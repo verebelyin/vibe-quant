@@ -430,6 +430,36 @@ class TestValidationRunner:
         last_event = json.loads(lines[-1])
         assert "BACKTEST_COMPLETE" in str(last_event.get("data", {}))
 
+    def test_runner_sets_failed_on_exception(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+        state_with_strategy: StateManager,
+    ) -> None:
+        """Exception during run sets status to 'failed' and raises ValidationRunnerError."""
+        state_with_strategy.close()
+
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        # Monkey-patch _run_backtest_mock to raise
+        def _exploding_mock(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("simulated engine crash")
+
+        runner._run_backtest_mock = _exploding_mock  # type: ignore[assignment]
+
+        with pytest.raises(ValidationRunnerError, match="simulated engine crash"):
+            runner.run(run_id=1)
+
+        runner.close()
+
+        # Verify status set to failed with error message
+        state = StateManager(temp_db)
+        run = state.get_backtest_run(1)
+        assert run is not None
+        assert run["status"] == "failed"
+        assert "simulated engine crash" in str(run.get("error_message", ""))
+        state.close()
+
     def test_runner_invalid_strategy(
         self,
         temp_db: Path,

@@ -233,34 +233,32 @@ class ValidationRunner:
         # Update run status to running
         self._state.update_backtest_run_status(run_id, "running")
 
-        # Create event writer
-        with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
-            # Write start event
-            self._write_start_event(writer, run_id, strategy_name, venue_config)
+        try:
+            # Create event writer
+            with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
+                self._write_start_event(writer, run_id, strategy_name, venue_config)
 
-            # Run the backtest (mocked for now)
-            result = self._run_backtest_mock(
-                run_id=run_id,
-                strategy_name=strategy_name,
-                dsl=dsl,
-                venue_config=venue_config,
-                run_config=run_config,
-                writer=writer,
+                result = self._run_backtest_mock(
+                    run_id=run_id,
+                    strategy_name=strategy_name,
+                    dsl=dsl,
+                    venue_config=venue_config,
+                    run_config=run_config,
+                    writer=writer,
+                )
+
+                self._write_completion_event(writer, run_id, strategy_name, result)
+
+            result.execution_time_seconds = time.monotonic() - start_time
+            self._store_results(run_id, result)
+            self._state.update_backtest_run_status(run_id, "completed")
+            return result
+        except Exception as exc:
+            error_msg = f"{type(exc).__name__}: {exc}"
+            self._state.update_backtest_run_status(
+                run_id, "failed", error_message=error_msg
             )
-
-            # Write completion event
-            self._write_completion_event(writer, run_id, strategy_name, result)
-
-        # Record execution time
-        result.execution_time_seconds = time.monotonic() - start_time
-
-        # Store results in database
-        self._store_results(run_id, result)
-
-        # Update run status to completed
-        self._state.update_backtest_run_status(run_id, "completed")
-
-        return result
+            raise ValidationRunnerError(error_msg) from exc
 
     def _load_run_config(self, run_id: int) -> dict[str, object]:
         """Load backtest run configuration from database.
