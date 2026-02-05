@@ -1,0 +1,47 @@
+{
+  "description": "Known results for OHLC bar aggregation calculations",
+  "cases": [
+    {
+      "name": "simple_5m_aggregation",
+      "description": "5 consecutive 1m bars aggregate to 1 5m bar",
+      "input": {
+        "bars": [
+          {"open": 100.0, "high": 105.0, "low": 99.0, "close": 102.0, "volume": 1000},
+          {"open": 102.0, "high": 104.0, "low": 101.0, "close": 103.0, "volume": 1200},
+          {"open": 103.0, "high": 108.0, "low": 102.0, "close": 106.0, "volume": 1500},
+          {"open": 106.0, "high": 107.0, "low": 104.0, "close": 105.0, "volume": 900},
+          {"open": 105.0, "high": 106.0, "low": 103.0, "close": 104.0, "volume": 1100}
+        ],
+        "target_minutes": 5
+      },
+      "expected": {
+        "open": 100.0,
+        "high": 108.0,
+        "low": 99.0,
+        "close": 104.0,
+        "volume": 5700.0
+      },
+      "tolerance": 1e-10,
+      "tags": ["aggregation", "5m"]
+    },
+    {
+      "name": "doji_aggregation",
+      "description": "Bars with same open/close (doji pattern)",
+      "input": {
+        "bars": [
+          {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 500}
+        ],
+        "target_minutes": 1
+      },
+      "expected": {
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "close": 100.0,
+        "volume": 500.0
+      },
+      "tolerance": 1e-10,
+      "tags": ["aggregation", "edge-case"]
+    }
+  ]
+}
