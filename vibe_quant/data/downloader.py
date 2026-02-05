@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import zipfile
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -81,6 +84,7 @@ def download_monthly_klines(
     except httpx.HTTPStatusError:
         return None
     except Exception:
+        logger.exception("Unexpected error downloading %s %s/%s-%02d", symbol, interval, year, month)
         return None
 
 

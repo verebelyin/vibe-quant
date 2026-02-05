@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import sqlite3
 import zipfile
 from datetime import UTC, datetime
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol
@@ -97,6 +100,23 @@ CREATE INDEX IF NOT EXISTS idx_ethereal_klines_symbol_time
 CREATE INDEX IF NOT EXISTS idx_ethereal_funding_symbol_time
     ON raw_funding_rates(symbol, funding_time);
 """
+
+
+def _safe_years_ago(d: datetime, years: int) -> datetime:
+    """Subtract years from date, handling leap day.
+
+    Args:
+        d: Date to subtract from.
+        years: Number of years to subtract.
+
+    Returns:
+        Date ``years`` years before ``d``. Feb 29 falls back to Feb 28.
+    """
+    try:
+        return d.replace(year=d.year - years)
+    except ValueError:
+        # Feb 29 on non-leap target year -> Feb 28
+        return d.replace(year=d.year - years, day=28)
 
 
 class EtherealArchive:
@@ -408,6 +428,7 @@ def download_bars(
         except httpx.HTTPStatusError:
             continue
         except Exception:
+            logger.exception("Unexpected error downloading bars %s %s/%s-%02d", symbol, timeframe, year, month)
             continue
 
     # Sort by open_time
@@ -472,6 +493,7 @@ def download_funding_rates(
         except httpx.HTTPStatusError:
             continue
         except Exception:
+            logger.exception("Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month)
             continue
 
     all_rates.sort(key=lambda x: x[0])
@@ -705,7 +727,7 @@ def ingest_all_ethereal(
     if end_date is None:
         end_date = datetime.now(UTC)
     if start_date is None:
-        start_date = end_date.replace(year=end_date.year - 2)
+        start_date = _safe_years_ago(end_date, 2)
 
     archive = EtherealArchive()
     results: dict[str, dict[str, int]] = {}
@@ -851,7 +873,7 @@ def main() -> int:
         timeframes = [t.strip() for t in args.timeframes.split(",")]
 
         end_date = datetime.now(UTC)
-        start_date = end_date.replace(year=end_date.year - args.years)
+        start_date = _safe_years_ago(end_date, args.years)
 
         ingest_all_ethereal(
             symbols=symbols,
