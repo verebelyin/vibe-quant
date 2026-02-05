@@ -1,5 +1,10 @@
 """Screening pipeline with parallel parameter sweeps."""
 
+from vibe_quant.screening.consistency import (
+    ConsistencyChecker,
+    ConsistencyResult,
+    check_consistency,
+)
 from vibe_quant.screening.pipeline import (
     BacktestMetrics,
     BacktestRunner,
@@ -24,4 +29,8 @@ __all__ = [
     "create_screening_pipeline",
     "filter_by_metrics",
     "rank_by_sharpe",
+    # Consistency
+    "ConsistencyChecker",
+    "ConsistencyResult",
+    "check_consistency",
 ]
