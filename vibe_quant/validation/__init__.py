@@ -1,1 +1,52 @@
-"""Full-fidelity validation backtesting with NautilusTrader."""
+"""Full-fidelity validation backtesting with NautilusTrader.
+
+This module provides:
+- Venue configuration with realistic latency and slippage modeling
+- Custom fill models for volume-based market impact
+- Latency presets for different execution environments
+"""
+
+from vibe_quant.validation.fill_model import (
+    ScreeningFillModelConfig,
+    VolumeSlippageFillModel,
+    VolumeSlippageFillModelConfig,
+    create_screening_fill_model,
+    create_validation_fill_model,
+)
+from vibe_quant.validation.latency import (
+    LATENCY_PRESETS,
+    LatencyPreset,
+    LatencyValues,
+    create_custom_latency_model,
+    get_latency_model,
+)
+from vibe_quant.validation.venue import (
+    BINANCE_MAKER_FEE,
+    BINANCE_TAKER_FEE,
+    VenueConfig,
+    create_backtest_venue_config,
+    create_venue_config_for_screening,
+    create_venue_config_for_validation,
+)
+
+__all__ = [
+    # Latency
+    "LatencyPreset",
+    "LatencyValues",
+    "LATENCY_PRESETS",
+    "get_latency_model",
+    "create_custom_latency_model",
+    # Fill models
+    "VolumeSlippageFillModel",
+    "VolumeSlippageFillModelConfig",
+    "ScreeningFillModelConfig",
+    "create_screening_fill_model",
+    "create_validation_fill_model",
+    # Venue
+    "VenueConfig",
+    "BINANCE_MAKER_FEE",
+    "BINANCE_TAKER_FEE",
+    "create_venue_config_for_screening",
+    "create_venue_config_for_validation",
+    "create_backtest_venue_config",
+]
