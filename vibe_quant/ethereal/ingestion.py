@@ -480,12 +480,12 @@ def download_funding_rates(
     end_ms = int(end_date.timestamp() * 1000)
 
     # Download by month chunks
-    for year, month in generate_month_range(start_date, end_date):
-        filename = f"{symbol}-funding-{year}-{month:02d}.csv.zip"
-        url = f"{ETHEREAL_ARCHIVE_BASE}/funding/{symbol}/{filename}"
+    with httpx.Client(timeout=timeout) as client:
+        for year, month in generate_month_range(start_date, end_date):
+            filename = f"{symbol}-funding-{year}-{month:02d}.csv.zip"
+            url = f"{ETHEREAL_ARCHIVE_BASE}/funding/{symbol}/{filename}"
 
-        try:
-            with httpx.Client(timeout=timeout) as client:
+            try:
                 response = client.get(url)
                 if response.status_code == 404:
                     continue
@@ -510,11 +510,11 @@ def download_funding_rates(
                                     float(row[2]) if len(row) > 2 else 0.0,
                                 )
                                 all_rates.append(rate)
-        except httpx.HTTPStatusError:
-            continue
-        except Exception:
-            logger.exception("Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month)
-            continue
+            except httpx.HTTPStatusError:
+                continue
+            except Exception:
+                logger.exception("Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month)
+                continue
 
     all_rates.sort(key=lambda x: x[0])
     return all_rates

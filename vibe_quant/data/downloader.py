@@ -32,6 +32,7 @@ def download_monthly_klines(
     year: int,
     month: int,
     timeout: float = 60.0,
+    client: httpx.Client | None = None,
 ) -> list[tuple[Any, ...]] | None:
     """Download monthly klines from Binance Vision.
 
@@ -40,6 +41,8 @@ def download_monthly_klines(
         interval: Candle interval (e.g., '1m').
         year: Year to download.
         month: Month to download (1-12).
+        timeout: Request timeout in seconds.
+        client: Optional shared httpx.Client for connection reuse.
 
     Returns:
         List of kline tuples or None if not available.
@@ -48,44 +51,49 @@ def download_monthly_klines(
     filename = f"{symbol}-{interval}-{year}-{month:02d}.zip"
     url = f"{BINANCE_VISION_BASE}/{symbol}/{interval}/{filename}"
 
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(timeout=timeout)
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(url)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
+        response = client.get(url)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
 
-            # Extract CSV from ZIP
-            with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
-                csv_filename = filename.replace(".zip", ".csv")
-                with zf.open(csv_filename) as f:
-                    reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
-                    klines = []
-                    for row in reader:
-                        # Binance kline format:
-                        # open_time, open, high, low, close, volume, close_time,
-                        # quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore
-                        klines.append(
-                            (
-                                int(row[0]),  # open_time
-                                float(row[1]),  # open
-                                float(row[2]),  # high
-                                float(row[3]),  # low
-                                float(row[4]),  # close
-                                float(row[5]),  # volume
-                                int(row[6]),  # close_time
-                                float(row[7]),  # quote_volume
-                                int(row[8]),  # trade_count
-                                float(row[9]),  # taker_buy_volume
-                                float(row[10]),  # taker_buy_quote_volume
-                            )
+        # Extract CSV from ZIP
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+            csv_filename = filename.replace(".zip", ".csv")
+            with zf.open(csv_filename) as f:
+                reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
+                klines = []
+                for row in reader:
+                    # Binance kline format:
+                    # open_time, open, high, low, close, volume, close_time,
+                    # quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore
+                    klines.append(
+                        (
+                            int(row[0]),  # open_time
+                            float(row[1]),  # open
+                            float(row[2]),  # high
+                            float(row[3]),  # low
+                            float(row[4]),  # close
+                            float(row[5]),  # volume
+                            int(row[6]),  # close_time
+                            float(row[7]),  # quote_volume
+                            int(row[8]),  # trade_count
+                            float(row[9]),  # taker_buy_volume
+                            float(row[10]),  # taker_buy_quote_volume
                         )
-                    return klines
+                    )
+                return klines
     except httpx.HTTPStatusError:
         return None
     except Exception:
         logger.exception("Unexpected error downloading %s %s/%s-%02d", symbol, interval, year, month)
         return None
+    finally:
+        if own_client:
+            client.close()
 
 
 def generate_month_range(

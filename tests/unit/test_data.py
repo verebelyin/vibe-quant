@@ -33,6 +33,32 @@ class TestRawDataArchive:
         assert result[0]["open"] == 42000.0
         assert result[0]["close"] == 42300.0
 
+    def test_insert_klines_returns_actual_count(self, archive: RawDataArchive) -> None:
+        """insert_klines should return actual inserted count, not input count."""
+        klines = [
+            (1000, 100.0, 110.0, 90.0, 105.0, 1000.0, 2000, 50000.0, 100, 500.0, 25000.0),
+            (2000, 105.0, 115.0, 95.0, 110.0, 1100.0, 3000, 55000.0, 110, 550.0, 27500.0),
+        ]
+        count1 = archive.insert_klines("BTCUSDT", "1m", klines, "test")
+        assert count1 == 2
+
+        # Insert same data again - should return 0 (all ignored)
+        count2 = archive.insert_klines("BTCUSDT", "1m", klines, "test")
+        assert count2 == 0
+
+    def test_insert_funding_rates_returns_actual_count(self, archive: RawDataArchive) -> None:
+        """insert_funding_rates should return actual inserted count, not input count."""
+        rates = [
+            (1704067200000, 0.0001, 42000.0),
+            (1704096000000, -0.0002, 42500.0),
+        ]
+        count1 = archive.insert_funding_rates("BTCUSDT", rates, "test")
+        assert count1 == 2
+
+        # Insert same data again - should return 0 (all ignored)
+        count2 = archive.insert_funding_rates("BTCUSDT", rates, "test")
+        assert count2 == 0
+
     def test_insert_duplicate_klines_ignored(self, archive: RawDataArchive) -> None:
         """Should ignore duplicate klines (same symbol/interval/open_time)."""
         klines = [
