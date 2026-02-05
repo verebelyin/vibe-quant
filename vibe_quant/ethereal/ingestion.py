@@ -796,7 +796,6 @@ def get_ethereal_status(
 def main() -> int:
     """CLI entry point for Ethereal data ingestion."""
     import argparse
-    import sys
 
     parser = argparse.ArgumentParser(
         description="Ethereal exchange data ingestion",
@@ -881,7 +880,7 @@ def main() -> int:
                             print(f"  {key}: {value}")
 
     elif args.command == "catalog":
-        symbols = (
+        cat_symbols: list[str] | None = (
             [s.strip() for s in args.symbols.split(",")]
             if args.symbols
             else None
@@ -889,7 +888,7 @@ def main() -> int:
         timeframes = [t.strip() for t in args.timeframes.split(",")]
 
         archive_to_catalog(
-            symbols=symbols,
+            symbols=cat_symbols,
             timeframes=timeframes,
             verbose=True,
         )
