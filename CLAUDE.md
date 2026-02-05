@@ -42,6 +42,32 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 - **Indicators:** Prefer NautilusTrader built-in (Rust) indicators. Fall back to `pandas-ta-classic` for exotic ones. Never use the original `pandas-ta` (compromised maintainership).
 - **Data:** Raw downloaded data archived in SQLite before processing to ParquetDataCatalog. Catalog is rebuildable from archive.
 
+## Issue Tracking (Beads)
+
+Project uses `bd` (beads) for issue tracking. Run `bd onboard` to get started.
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --status in_progress  # Claim work
+bd close <id>         # Complete work
+bd sync               # Sync with git
+```
+
+### Session Completion
+
+Work is NOT complete until `git push` succeeds.
+
+1. File issues for remaining work
+2. Run quality gates (tests, linters) if code changed
+3. Update issue status - close finished, update in-progress
+4. Push:
+   ```bash
+   git pull --rebase && bd sync && git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. If push fails, resolve and retry
+
 ## Historical Documentation
 
 The files in `docs/` predate `SPEC.md` and contain **outdated architectural decisions** (FreqTrade, VectorBT, PostgreSQL, TimescaleDB, Redis, 5-year data). They are retained as research context only. When any `docs/*.md` file contradicts `SPEC.md`, **SPEC.md wins**.
