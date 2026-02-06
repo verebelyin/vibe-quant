@@ -1,90 +1,88 @@
-# vibe-quant
+# 🌊 vibe-quant
 
-Algorithmic trading engine for crypto perpetual futures. NautilusTrader (Rust core) with two-tier backtesting, strategy DSL, overfitting prevention, and paper/live execution.
+**The high-performance algorithmic trading engine built on rigorous math, realistic simulation, and pure vibes.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![Engine: NautilusTrader](https://img.shields.io/badge/Engine-NautilusTrader%20Rust%20Core-purple)]()
+[![Vibe Check: Immaculate](https://img.shields.io/badge/Vibe-Immaculate-00c853)]()
 
 ---
 
-## Why
+## 🚀 The Mission
 
-Most backtesters lie. They ignore funding rates, assume perfect liquidity, and encourage overfitting to historical noise.
+**Most backtesters lie to you.** They ignore funding rates, assume perfect liquidity, and encourage overfitting strategies to historical noise.
 
-vibe-quant uses a single engine (NautilusTrader) in two modes: fast screening for parameter sweeps and full-fidelity validation with realistic execution. Leverage, funding rates, and liquidation are modeled even during screening. If a strategy survives vibe-quant, it has a fighting chance in the real world.
+**vibe-quant** is an institutional-grade framework designed to be brutally honest. It uses a single engine — **NautilusTrader** (Rust core) — in two modes: fast screening for parameter sweeps and full-fidelity validation with realistic execution. Leverage, funding rates, and liquidation are modeled even during screening. If a strategy survives `vibe-quant`, it stands a fighting chance in the real world.
 
-**Principles:**
-1. Reality first -- fees, slippage, latency, funding rates, liquidation are first-class
-2. Death to overfitting -- rigorous statistical validation is default, not optional
-3. Code flows, money grows -- developer experience over enterprise bloat
-
----
-
-## Features
-
-### Single-Engine, Two-Tier Backtesting
-- **Screening mode**: simplified fills + multiprocessing parallelism for rapid parameter sweeps. Still models leverage, funding, liquidation.
-- **Validation mode**: custom FillModel (volume-based slippage), LatencyModel (1ms co-located to 200ms retail), full cost modeling.
-
-### Strategy DSL
-- Declarative YAML -- indicators + conditions + actions
-- Multi-timeframe (1m, 5m, 15m, 1h, 4h confirmation)
-- Time filters (session windows, funding avoidance)
-- Auto-compiles to NautilusTrader `Strategy` subclasses. Same code for backtest, paper, live.
-
-### Realistic Cost Simulation
-- Maker/taker fees, volume-based slippage (square-root market impact), dynamic spreads
-- Up to 20x leverage with maintenance margin tiers and liquidation
-- Funding rate payments (8h Binance, 1h Ethereal)
-- Network latency presets (co-located, domestic, international, retail)
-
-### Overfitting Prevention
-- **Deflated Sharpe Ratio** -- Bailey & Lopez de Prado; detects multiple-testing luck
-- **Walk-Forward Analysis** -- sliding window train/test (~13 windows over 2 years)
-- **Purged K-Fold CV** -- cross-validation with purge gaps to prevent data leakage
-- Each filter independently toggleable
-
-### Position Sizing & Risk
-- Kelly Criterion, Fixed Fractional, ATR-based sizing (pluggable modules)
-- Strategy-level circuit breakers (drawdown, daily loss, consecutive losses)
-- Portfolio-level risk limits (total exposure, correlated positions)
-
-### Execution
-- **Binance Futures**: USDT-M perpetuals via NautilusTrader adapter
-- **Ethereal DEX**: custom adapter with EIP-712 signed authentication
-- **Paper trading**: NautilusTrader TradingNode on Binance testnet
-
-### Automated Strategy Discovery
-- Genetic/evolutionary optimization discovers indicator combos
-- Strategy genome: chromosomes of (indicator, parameter, condition) genes
-- Multi-objective Pareto ranking with complexity penalty
-- Overfitting-aware -- DSR correction for total candidates tested
-
-### Dashboard
-- Streamlit UI: strategy management, backtest launch, results analysis, paper trading monitor
-- Pareto front scatter plots, equity curves, drawdown charts, monthly returns heatmaps
-- Background job management with heartbeat tracking
+**Core Philosophy:**
+1. 🧘 **Code flows, money grows.** (Developer experience > Enterprise bloat)
+2. 🎯 **Reality first.** (Fees, slippage, latency, funding rates, and liquidation are first-class citizens)
+3. 🛡️ **Death to overfitting.** (Rigorous statistical validation is default, not optional)
 
 ---
 
-## Tech Stack
+## ✨ Key Features
+
+### 🏗️ Single-Engine, Two-Tier Architecture
+* **Screening Mode:** NautilusTrader with simplified fills + multiprocessing parallelism for rapid parameter sweeps — still models leverage, funding rates, and liquidation.
+* **Validation Mode:** Full-fidelity NautilusTrader with custom `FillModel` (volume-based slippage), `LatencyModel` (co-located 1ms → retail 200ms), and complete cost modeling.
+
+### 📝 Strategy DSL
+* **Declarative YAML** — define strategies as Indicator + Condition + Action combos.
+* **Multi-timeframe** — 1m, 5m, 15m, 1h, 4h confirmation signals.
+* **Time filters** — restrict trading to specific sessions/timezones.
+* **Auto-compilation** — DSL compiles to NautilusTrader `Strategy` subclasses. Same code for backtest, paper, and live.
+
+### 💸 Realistic Simulation (The "Anti-Rekt" Layer)
+* **True Cost Analysis:** Maker/taker fees, volume-based slippage (square-root market impact), dynamic spreads.
+* **Leverage Logic:** Native support for up to **20x leverage** with:
+    * Maintenance margin tiers and liquidation price calculation.
+    * **Funding Rate Payments** (8-hour for Binance, 1-hour for Ethereal).
+* **Network Latency Simulation:** NautilusTrader `LatencyModelConfig` with presets (co-located, domestic, international, retail, custom).
+
+### 🛡️ Overfitting Prevention Pipeline
+* **Deflated Sharpe Ratio (DSR):** Bailey & Lopez de Prado formula — determines if your Sharpe is skill or multiple-testing luck.
+* **Walk-Forward Analysis:** Sliding window train/test (9m/3m/1m default → ~13 windows over 2 years).
+* **Purged K-Fold CV:** Cross-validation with purge gaps to prevent data leakage. Each filter independently toggleable.
+
+### ⚡ Execution & Connectors
+* **Binance Futures:** Full USDⓈ-M Perpetual support via NautilusTrader adapter.
+* **Ethereal DEX:** Custom adapter with **EIP-712** signed authentication.
+* **Paper Trading:** NautilusTrader `TradingNode` on Binance testnet — **zero code changes** from backtest to live.
+* **Bankroll Management:** Kelly Criterion, Fixed Fractional, and ATR volatility sizing (pluggable `PositionSizer` modules).
+
+### 🧬 Automated Strategy Discovery
+* **Genetic/Evolutionary Optimization** — automatically discovers indicator combos.
+* **Strategy genome** — chromosomes of (indicator, parameter, condition) genes.
+* **Multi-objective fitness** — Pareto ranking on Sharpe, MaxDD, Profit Factor with complexity penalty.
+* **Overfitting-aware** — DSR correction for total candidates tested, WFA required for final promotion.
+
+### 📊 Dashboard & Analytics
+* Streamlit UI: strategy management, backtest launch, results analysis, paper trading monitor, data management
+* Pareto front scatter plots, equity curves, drawdown charts, monthly returns heatmaps
+* Download audit log — see when data was fetched and how much was inserted
+* Background job management with heartbeat tracking
+
+---
+
+## 🛠️ Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Python 3.13 (via `uv`) |
-| Engine | NautilusTrader ~1.222.x (Rust core) |
-| Indicators | NautilusTrader built-in (Rust) + pandas-ta-classic |
-| Market Data | NautilusTrader ParquetDataCatalog (Apache DataFusion) |
-| Raw Archive | SQLite (immutable CSV/API data archive) |
-| State | SQLite (WAL mode) -- configs, results, trade logs |
-| Analytics | DuckDB (ad-hoc queries on Parquet + SQLite) |
-| Dashboard | Streamlit + Plotly |
-| Alerts | Telegram Bot API |
+| 🐍 **Language** | Python 3.13 (via `uv`) |
+| ⚙️ **Engine** | NautilusTrader ~1.222.x (Rust core) |
+| 📊 **Indicators** | NautilusTrader built-in (Rust) + pandas-ta-classic |
+| 💾 **Market Data** | NautilusTrader ParquetDataCatalog (Apache DataFusion) |
+| 🗄️ **Raw Archive** | SQLite (immutable CSV/API data archive) |
+| 📋 **State** | SQLite (WAL mode) — configs, results, trade logs |
+| 🔍 **Analytics** | DuckDB (ad-hoc queries on Parquet + SQLite) |
+| 📈 **Dashboard** | Streamlit + Plotly |
+| 📱 **Alerts** | Telegram Bot API |
 
 ---
 
-## Getting Started
+## 📦 Getting Started
 
 ### Prerequisites
 
@@ -94,6 +92,7 @@ vibe-quant uses a single engine (NautilusTrader) in two modes: fast screening fo
 ### Install
 
 ```bash
+# Clone the vibes
 git clone https://github.com/verebelyin/vibe-quant.git
 cd vibe-quant
 uv pip install -e ".[dev]"
@@ -105,6 +104,9 @@ uv pip install -e ".[dev]"
 # Download 2 years of OHLCV + funding rates for BTC, ETH, SOL
 vibe-quant data ingest --symbols BTCUSDT,ETHUSDT,SOLUSDT --years 2
 
+# Or specify exact date range
+vibe-quant data ingest --symbols BTCUSDT --start 2025-01-01 --end 2025-12-31
+
 # Verify data quality
 vibe-quant data status
 ```
@@ -112,7 +114,6 @@ vibe-quant data status
 ### Run a Screening Sweep
 
 ```bash
-# Create a strategy run in the database, then screen it
 vibe-quant screening --run-id 1
 ```
 
@@ -132,36 +133,36 @@ mypy vibe_quant/
 
 ---
 
-## Architecture
+## 🏛️ Architecture
 
 See [docs/architecture.md](docs/architecture.md) for detailed architecture documentation.
 
 ```
-Strategy DSL (YAML) -> Screening (NT simplified, parallel) -> Overfitting Filters -> Validation (NT full fidelity) -> Paper -> Live
+Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting Filters → Validation (NT full fidelity) → Paper → Live
 ```
 
 ```mermaid
 graph TD
-    A[Strategy DSL - YAML] --> B(Screening Pipeline)
-    B --> C{Overfitting Filters}
-    C -- DSR + WFA + PKFOLD --> D(Validation Backtest)
-    D --> E[Risk Manager]
-    E --> F[Paper Trading]
-    F --> G[Live Execution]
+    A[📝 Strategy DSL - YAML] --> B(🔍 Screening Pipeline)
+    B --> C{🛡️ Overfitting Filters}
+    C -- DSR + WFA + PKFOLD --> D(✅ Validation Backtest)
+    D --> E[⚖️ Risk Manager]
+    E --> F[📄 Paper Trading]
+    F --> G[🚀 Live Execution]
     G --> H[Binance / Ethereal]
 
-    I[ParquetDataCatalog] --> B
+    I[💾 ParquetDataCatalog] --> B
     I --> D
-    J[SQLite State] --> B
+    J[🗄️ SQLite State] --> B
     J --> D
-    K[Streamlit Dashboard] --> B
+    K[📈 Streamlit Dashboard] --> B
     K --> D
     K --> F
 ```
 
 ---
 
-## Project Structure
+## 🗂️ Project Structure
 
 ```
 vibe_quant/
@@ -184,11 +185,12 @@ vibe_quant/
 
 ---
 
-## CLI
+## 🖥️ CLI
 
 ```bash
 # Data management
 vibe-quant data ingest --symbols BTCUSDT,ETHUSDT,SOLUSDT --years 2
+vibe-quant data ingest --symbols BTCUSDT --start 2025-01-01 --end 2025-12-31
 vibe-quant data status
 
 # Screening (parameter sweep)
@@ -209,22 +211,22 @@ streamlit run vibe_quant/dashboard/app.py
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
-Development follows an 8-phase plan detailed in [`SPEC.md`](SPEC.md).
+Development follows an **8-phase implementation plan** detailed in [`SPEC.md`](SPEC.md).
 
-- [x] **Phase 1**: Foundation & Data Layer -- ingestion, archival, ParquetDataCatalog
-- [x] **Phase 2**: Strategy DSL & Screening Pipeline -- YAML parser, compiler, parallel sweeps
-- [x] **Phase 3**: Validation Backtesting & Risk -- custom fills, latency, sizing, risk actors
-- [x] **Phase 4**: Overfitting Prevention -- DSR, Walk-Forward, Purged K-Fold
-- [x] **Phase 5**: Streamlit Dashboard -- full lifecycle UI
-- [x] **Phase 6**: Paper Trading & Alerts -- Binance testnet, Telegram
-- [x] **Phase 7**: Ethereal DEX Integration -- custom adapter, EIP-712
-- [x] **Phase 8**: Automated Strategy Discovery -- genetic optimization
+- [x] **Phase 1: Foundation & Data Layer** — ingestion, archival, ParquetDataCatalog
+- [x] **Phase 2: Strategy DSL & Screening Pipeline** — YAML parser, compiler, parallel sweeps
+- [x] **Phase 3: Validation Backtesting & Risk** — custom fills, latency, sizing, risk actors
+- [x] **Phase 4: Overfitting Prevention** — DSR, Walk-Forward, Purged K-Fold
+- [x] **Phase 5: Streamlit Dashboard** — full lifecycle UI
+- [x] **Phase 6: Paper Trading & Alerts** — Binance testnet, Telegram
+- [x] **Phase 7: Ethereal DEX Integration** — custom adapter, EIP-712
+- [x] **Phase 8: Automated Strategy Discovery** — genetic optimization
 
 ---
 
-## Disclaimer
+## ⚠️ Disclaimer
 
 **Risk Warning:**
 Trading cryptocurrencies with leverage involves high risk. Leverage can work against you as well as for you.
