@@ -2,7 +2,8 @@
 
 Provides UI for:
 - Data coverage display (symbols, dates, bar counts)
-- Data ingestion/update with progress tracking
+- Data ingestion/update with date range selection
+- Download audit log (session history)
 - Raw archive status and catalog rebuild
 - Storage usage display
 - Data quality verification
@@ -12,7 +13,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -75,6 +76,10 @@ def _get_data_status() -> dict[str, Any]:
                     "end": end_dt,
                 }
 
+            # Funding rate count
+            funding = archive.get_funding_rates(symbol)
+            sym_status["funding_rates"] = len(funding)
+
             # Catalog info
             for interval in ["1m", "5m", "15m", "1h", "4h"]:
                 bar_count = catalog.get_bar_count(symbol, interval)
@@ -92,18 +97,27 @@ def _get_data_status() -> dict[str, Any]:
     return status
 
 
-def _verify_data(symbol: str) -> dict[str, Any]:
-    """Run data verification for a symbol.
+def _get_download_sessions() -> list[dict[str, Any]]:
+    """Get download audit log."""
+    from vibe_quant.data.archive import RawDataArchive
 
-    Returns dict with keys: gaps, ohlc_errors, kline_count
-    """
+    try:
+        archive = RawDataArchive(DEFAULT_ARCHIVE_PATH)
+        sessions = archive.get_download_sessions(limit=20)
+        archive.close()
+        return [dict(s) for s in sessions]
+    except Exception:
+        return []
+
+
+def _verify_data(symbol: str) -> dict[str, Any]:
+    """Run data verification for a symbol."""
     from vibe_quant.data.archive import RawDataArchive
     from vibe_quant.data.verify import verify_symbol
 
     archive = RawDataArchive(DEFAULT_ARCHIVE_PATH)
     result = verify_symbol(archive, symbol)
     archive.close()
-    # Cast to dict[str, Any] for streamlit compatibility
     return {
         "gaps": result["gaps"],
         "ohlc_errors": result["ohlc_errors"],
@@ -137,13 +151,13 @@ def render_data_coverage() -> None:
         return
 
     if not status["symbols"]:
-        st.info("No data available. Use 'Ingest Data' to download.")
+        st.info("No data available. Use 'Ingest Data' below to download.")
         return
 
     # Build coverage table
     rows = []
     for symbol, info in sorted(status["symbols"].items()):
-        row = {"Symbol": symbol}
+        row: dict[str, Any] = {"Symbol": symbol}
 
         if "archive" in info:
             row["Start Date"] = info["archive"]["start"].strftime("%Y-%m-%d")
@@ -154,12 +168,16 @@ def render_data_coverage() -> None:
             row["End Date"] = "-"
             row["1m Klines"] = 0
 
+        row["Funding Rates"] = info.get("funding_rates", 0)
+
         if "catalog" in info:
             row["5m Bars"] = info["catalog"].get("bars_5m", 0)
+            row["15m Bars"] = info["catalog"].get("bars_15m", 0)
             row["1h Bars"] = info["catalog"].get("bars_1h", 0)
             row["4h Bars"] = info["catalog"].get("bars_4h", 0)
         else:
             row["5m Bars"] = 0
+            row["15m Bars"] = 0
             row["1h Bars"] = 0
             row["4h Bars"] = 0
 
@@ -168,12 +186,34 @@ def render_data_coverage() -> None:
     st.dataframe(rows, use_container_width=True)
 
 
-def render_symbol_management() -> None:
-    """Render symbol list management."""
-    from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
+def render_download_history() -> None:
+    """Render download audit log."""
+    st.subheader("Download History")
 
-    st.subheader("Supported Symbols")
-    st.write(", ".join(SUPPORTED_SYMBOLS))
+    sessions = _get_download_sessions()
+
+    if not sessions:
+        st.info("No download sessions recorded yet.")
+        return
+
+    rows = []
+    for s in sessions:
+        row: dict[str, Any] = {
+            "Started": s.get("started_at", "-"),
+            "Completed": s.get("completed_at", "-") or "-",
+            "Symbols": s.get("symbols", "-"),
+            "Date Range": f"{s.get('start_date', '?')} to {s.get('end_date', '?')}",
+            "Source": s.get("source", "-"),
+            "Klines Fetched": s.get("klines_fetched", 0),
+            "Inserted": s.get("klines_inserted", 0),
+            "Funding": s.get("funding_rates_fetched", 0),
+            "Status": s.get("status", "-"),
+        }
+        if s.get("error_message"):
+            row["Error"] = s["error_message"]
+        rows.append(row)
+
+    st.dataframe(rows, use_container_width=True)
 
 
 def render_data_actions() -> None:
@@ -186,7 +226,7 @@ def render_data_actions() -> None:
 
     with col1:
         st.write("**Ingest Historical Data**")
-        st.caption("Download historical data from Binance Vision")
+        st.caption("Download from Binance Vision + REST API")
 
         selected_symbols = st.multiselect(
             "Symbols to ingest",
@@ -195,17 +235,23 @@ def render_data_actions() -> None:
             key="ingest_symbols",
         )
 
-        years = st.slider(
-            "Years of history",
-            min_value=1,
-            max_value=5,
-            value=2,
-            key="ingest_years",
-        )
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            start = st.date_input(
+                "Start date",
+                value=date.today() - timedelta(days=365),
+                key="ingest_start",
+            )
+        with date_col2:
+            end = st.date_input(
+                "End date",
+                value=date.today(),
+                key="ingest_end",
+            )
 
         if st.button("Ingest Data", type="primary", key="btn_ingest"):
             if selected_symbols:
-                _run_ingest(selected_symbols, years)
+                _run_ingest(selected_symbols, start, end)
             else:
                 st.warning("Select at least one symbol")
 
@@ -233,7 +279,7 @@ def render_data_actions() -> None:
             _run_rebuild()
 
 
-def _run_ingest(symbols: list[str], years: int) -> None:
+def _run_ingest(symbols: list[str], start: date, end: date) -> None:
     """Run data ingestion in subprocess."""
     cmd = [
         sys.executable,
@@ -242,11 +288,13 @@ def _run_ingest(symbols: list[str], years: int) -> None:
         "ingest",
         "--symbols",
         ",".join(symbols),
-        "--years",
-        str(years),
+        "--start",
+        start.isoformat(),
+        "--end",
+        end.isoformat(),
     ]
 
-    with st.spinner(f"Ingesting data for {', '.join(symbols)} ({years} years)..."):
+    with st.spinner(f"Ingesting {', '.join(symbols)} from {start} to {end}..."):
         try:
             result = subprocess.run(
                 cmd,
@@ -256,7 +304,7 @@ def _run_ingest(symbols: list[str], years: int) -> None:
                 check=False,
             )
             if result.returncode == 0:
-                st.success("Data ingestion completed successfully!")
+                st.success("Data ingestion completed!")
                 if result.stdout:
                     with st.expander("Output"):
                         st.code(result.stdout)
@@ -264,6 +312,9 @@ def _run_ingest(symbols: list[str], years: int) -> None:
                 st.error("Data ingestion failed")
                 if result.stderr:
                     st.code(result.stderr)
+                if result.stdout:
+                    with st.expander("Stdout"):
+                        st.code(result.stdout)
         except subprocess.TimeoutExpired:
             st.error("Data ingestion timed out (1 hour limit)")
         except Exception as e:
@@ -291,7 +342,7 @@ def _run_update(symbols: list[str]) -> None:
                 check=False,
             )
             if result.returncode == 0:
-                st.success("Data update completed successfully!")
+                st.success("Data update completed!")
                 if result.stdout:
                     with st.expander("Output"):
                         st.code(result.stdout)
@@ -325,7 +376,7 @@ def _run_rebuild() -> None:
                 check=False,
             )
             if result.returncode == 0:
-                st.success("Catalog rebuild completed successfully!")
+                st.success("Catalog rebuild completed!")
                 if result.stdout:
                     with st.expander("Output"):
                         st.code(result.stdout)
@@ -337,6 +388,14 @@ def _run_rebuild() -> None:
             st.error("Catalog rebuild timed out")
         except Exception as e:
             st.error(f"Error: {e}")
+
+
+def render_symbol_management() -> None:
+    """Render symbol list management."""
+    from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
+
+    st.subheader("Supported Symbols")
+    st.write(", ".join(SUPPORTED_SYMBOLS))
 
 
 def render_data_quality() -> None:
@@ -421,19 +480,24 @@ def render() -> None:
 
     st.divider()
 
-    # Actions and quality in columns
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        render_data_actions()
-
-    with col2:
-        render_symbol_management()
+    # Download actions with date pickers
+    render_data_actions()
 
     st.divider()
 
-    # Data quality verification
-    render_data_quality()
+    # Download audit history
+    render_download_history()
+
+    st.divider()
+
+    # Symbols and quality
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        render_symbol_management()
+
+    with col2:
+        render_data_quality()
 
 
 # Top-level call for st.navigation API

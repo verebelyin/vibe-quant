@@ -49,6 +49,22 @@ CREATE INDEX IF NOT EXISTS idx_raw_klines_symbol_time
     ON raw_klines(symbol, interval, open_time);
 CREATE INDEX IF NOT EXISTS idx_raw_funding_symbol_time
     ON raw_funding_rates(symbol, funding_time);
+
+-- Download session audit log
+CREATE TABLE IF NOT EXISTS download_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    symbols TEXT NOT NULL,
+    start_date TEXT,
+    end_date TEXT,
+    source TEXT NOT NULL,
+    klines_fetched INTEGER DEFAULT 0,
+    klines_inserted INTEGER DEFAULT 0,
+    funding_rates_fetched INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running',
+    error_message TEXT
+);
 """
 
 
@@ -289,3 +305,78 @@ class RawDataArchive:
             "SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol"
         )
         return [r[0] for r in rows]
+
+    # -- Audit log methods --
+
+    def create_download_session(
+        self,
+        symbols: list[str],
+        source: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> int:
+        """Create a new download session audit record.
+
+        Args:
+            symbols: List of symbols being downloaded.
+            source: Data source ('binance_vision', 'binance_api', 'mixed').
+            start_date: Requested start date (ISO format).
+            end_date: Requested end date (ISO format).
+
+        Returns:
+            Session ID.
+        """
+        cursor = self.conn.execute(
+            """INSERT INTO download_sessions (symbols, source, start_date, end_date)
+               VALUES (?, ?, ?, ?)""",
+            (",".join(symbols), source, start_date, end_date),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+    def complete_download_session(
+        self,
+        session_id: int,
+        klines_fetched: int = 0,
+        klines_inserted: int = 0,
+        funding_rates_fetched: int = 0,
+        status: str = "completed",
+        error_message: str | None = None,
+    ) -> None:
+        """Mark a download session as completed.
+
+        Args:
+            session_id: Session ID from create_download_session.
+            klines_fetched: Total klines downloaded.
+            klines_inserted: New klines inserted (excludes duplicates).
+            funding_rates_fetched: Total funding rates downloaded.
+            status: Final status ('completed' or 'failed').
+            error_message: Error message if failed.
+        """
+        self.conn.execute(
+            """UPDATE download_sessions
+               SET completed_at = datetime('now'),
+                   klines_fetched = ?,
+                   klines_inserted = ?,
+                   funding_rates_fetched = ?,
+                   status = ?,
+                   error_message = ?
+               WHERE id = ?""",
+            (klines_fetched, klines_inserted, funding_rates_fetched,
+             status, error_message, session_id),
+        )
+        self.conn.commit()
+
+    def get_download_sessions(self, limit: int = 50) -> list[sqlite3.Row]:
+        """Get recent download sessions.
+
+        Args:
+            limit: Max number of sessions to return.
+
+        Returns:
+            List of session rows, newest first.
+        """
+        return list(self.conn.execute(
+            "SELECT * FROM download_sessions ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        ))

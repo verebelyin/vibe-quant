@@ -247,12 +247,29 @@ def get_years_months_to_download(years: int = 2) -> list[tuple[int, int]]:
         List of (year, month) tuples.
     """
     now = datetime.now(UTC)
-    # Start from N years ago
     start = now - timedelta(days=365 * years)
-    # End at the previous complete month
-    if now.month == 1:
-        end = now.replace(year=now.year - 1, month=12, day=1)
-    else:
-        end = now.replace(month=now.month - 1, day=1)
+    return get_months_in_range(start, now)
 
-    return list(generate_month_range(start, end))
+
+def get_months_in_range(
+    start: datetime, end: datetime
+) -> list[tuple[int, int]]:
+    """Get list of (year, month) for complete months in a date range.
+
+    Only includes months that are fully completed (before the current month).
+    Binance Vision publishes monthly archives after the month ends.
+
+    Args:
+        start: Start date (inclusive).
+        end: End date (upper bound).
+
+    Returns:
+        List of (year, month) tuples for complete months.
+    """
+    # End at the previous complete month relative to end date
+    if end.month == 1:
+        last_complete = end.replace(year=end.year - 1, month=12, day=1)
+    else:
+        last_complete = end.replace(month=end.month - 1, day=1)
+
+    return list(generate_month_range(start, last_complete))

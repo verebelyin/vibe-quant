@@ -23,6 +23,7 @@ from vibe_quant.data.downloader import (
     download_funding_rates,
     download_monthly_klines,
     download_recent_klines,
+    get_months_in_range,
     get_years_months_to_download,
 )
 from vibe_quant.data.verify import verify_symbol
@@ -142,16 +143,32 @@ def update_all(
     catalog = CatalogManager()
     results: dict[str, dict[str, int]] = {}
 
-    for symbol in symbols:
-        if verbose:
-            print(f"\n{'='*50}")
-            print(f"Updating {symbol}")
-            print(f"{'='*50}")
+    session_id = archive.create_download_session(
+        symbols=symbols, source="binance_api",
+    )
+    total_new = 0
 
-        counts = update_symbol(
-            symbol, archive=archive, catalog=catalog, verbose=verbose
+    try:
+        for symbol in symbols:
+            if verbose:
+                print(f"\n{'='*50}")
+                print(f"Updating {symbol}")
+                print(f"{'='*50}")
+
+            counts = update_symbol(
+                symbol, archive=archive, catalog=catalog, verbose=verbose
+            )
+            results[symbol] = counts
+            total_new += counts.get("new_klines", 0)
+
+        archive.complete_download_session(
+            session_id, klines_fetched=total_new, klines_inserted=total_new,
         )
-        results[symbol] = counts
+    except Exception as e:
+        archive.complete_download_session(
+            session_id, status="failed", error_message=str(e),
+        )
+        raise
 
     archive.close()
 
@@ -168,6 +185,8 @@ def update_all(
 def ingest_symbol(
     symbol: str,
     years: int = 2,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     archive: RawDataArchive | None = None,
     catalog: CatalogManager | None = None,
     verbose: bool = True,
@@ -178,7 +197,9 @@ def ingest_symbol(
 
     Args:
         symbol: Trading symbol (e.g., 'BTCUSDT').
-        years: Number of years of history to download.
+        years: Number of years of history (used if start_date not given).
+        start_date: Explicit start date (overrides years).
+        end_date: Explicit end date (defaults to now).
         archive: Raw data archive (created if not provided).
         catalog: Catalog manager (created if not provided).
         verbose: Print progress messages.
@@ -192,7 +213,13 @@ def ingest_symbol(
         catalog = CatalogManager()
 
     counts: dict[str, int] = {"klines": 0}
-    months = get_years_months_to_download(years)
+
+    if start_date is not None:
+        effective_end = end_date or datetime.now(UTC)
+        months = get_months_in_range(start_date, effective_end)
+    else:
+        months = get_years_months_to_download(years)
+        effective_end = datetime.now(UTC)
 
     if verbose:
         print(f"Downloading {symbol} data for {len(months)} months...")
@@ -210,7 +237,33 @@ def ingest_symbol(
                 print(f"  {year}-{month:02d}: no data available")
 
     if verbose:
-        print(f"Total klines archived: {counts['klines']}")
+        print(f"Total klines archived from Vision: {counts['klines']}")
+
+    # Fill current incomplete month via REST API
+    if months:
+        last_year, last_month = months[-1]
+        # Start of month after last complete month
+        if last_month == 12:
+            rest_start = datetime(last_year + 1, 1, 1, tzinfo=UTC)
+        else:
+            rest_start = datetime(last_year, last_month + 1, 1, tzinfo=UTC)
+
+        rest_start_ms = int(rest_start.timestamp() * 1000)
+        rest_end_ms = int(effective_end.timestamp() * 1000)
+
+        if rest_start_ms < rest_end_ms:
+            if verbose:
+                print(f"Fetching {rest_start.strftime('%Y-%m-%d')} to "
+                      f"{effective_end.strftime('%Y-%m-%d')} via REST API...")
+            recent = download_recent_klines(symbol, "1m", rest_start_ms, rest_end_ms)
+            if recent:
+                count = archive.insert_klines(symbol, "1m", recent, "binance_api")
+                counts["klines"] += len(recent)
+                if verbose:
+                    print(f"  REST API: {len(recent)} klines (inserted {count})")
+
+    if verbose:
+        print(f"Total klines: {counts['klines']}")
 
     # Create and write instrument
     instrument = create_instrument(symbol)
@@ -256,6 +309,8 @@ def ingest_symbol(
 def ingest_funding_rates(
     symbol: str,
     years: int = 2,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     archive: RawDataArchive | None = None,
     verbose: bool = True,
 ) -> int:
@@ -263,7 +318,9 @@ def ingest_funding_rates(
 
     Args:
         symbol: Trading symbol.
-        years: Number of years of history.
+        years: Number of years of history (used if start_date not given).
+        start_date: Explicit start date (overrides years).
+        end_date: Explicit end date (defaults to now).
         archive: Raw data archive.
         verbose: Print progress messages.
 
@@ -274,8 +331,11 @@ def ingest_funding_rates(
         archive = RawDataArchive()
 
     now = datetime.now(UTC)
-    start_time = int((now.timestamp() - years * 365 * 24 * 3600) * 1000)
-    end_time = int(now.timestamp() * 1000)
+    if start_date is not None:
+        start_time = int(start_date.timestamp() * 1000)
+    else:
+        start_time = int((now.timestamp() - years * 365 * 24 * 3600) * 1000)
+    end_time = int((end_date or now).timestamp() * 1000)
 
     if verbose:
         print(f"Downloading {symbol} funding rates...")
@@ -295,13 +355,17 @@ def ingest_funding_rates(
 def ingest_all(
     symbols: list[str] | None = None,
     years: int = 2,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
     verbose: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Ingest data for all symbols.
 
     Args:
         symbols: List of symbols to ingest. Uses SUPPORTED_SYMBOLS if not provided.
-        years: Number of years of history.
+        years: Number of years of history (used if start_date not given).
+        start_date: Explicit start date (overrides years).
+        end_date: Explicit end date (defaults to now).
         verbose: Print progress messages.
 
     Returns:
@@ -314,20 +378,59 @@ def ingest_all(
     catalog = CatalogManager()
     results: dict[str, dict[str, Any]] = {}
 
-    for symbol in symbols:
-        if verbose:
-            print(f"\n{'='*50}")
-            print(f"Processing {symbol}")
-            print(f"{'='*50}")
+    # Create audit session
+    session_id = archive.create_download_session(
+        symbols=symbols,
+        source="mixed",
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+    )
 
-        counts = ingest_symbol(
-            symbol, years=years, archive=archive, catalog=catalog, verbose=verbose
+    total_klines_fetched = 0
+    total_klines_inserted = 0
+    total_funding = 0
+
+    try:
+        for symbol in symbols:
+            if verbose:
+                print(f"\n{'='*50}")
+                print(f"Processing {symbol}")
+                print(f"{'='*50}")
+
+            counts = ingest_symbol(
+                symbol,
+                years=years,
+                start_date=start_date,
+                end_date=end_date,
+                archive=archive,
+                catalog=catalog,
+                verbose=verbose,
+            )
+            funding_count = ingest_funding_rates(
+                symbol,
+                years=years,
+                start_date=start_date,
+                end_date=end_date,
+                archive=archive,
+                verbose=verbose,
+            )
+            counts["funding_rates"] = funding_count
+            results[symbol] = counts
+            total_klines_fetched += counts.get("klines", 0)
+            total_klines_inserted += counts.get("bars_1m", 0)
+            total_funding += funding_count
+
+        archive.complete_download_session(
+            session_id,
+            klines_fetched=total_klines_fetched,
+            klines_inserted=total_klines_inserted,
+            funding_rates_fetched=total_funding,
         )
-        funding_count = ingest_funding_rates(
-            symbol, years=years, archive=archive, verbose=verbose
+    except Exception as e:
+        archive.complete_download_session(
+            session_id, status="failed", error_message=str(e),
         )
-        counts["funding_rates"] = funding_count
-        results[symbol] = counts
+        raise
 
     archive.close()
 
@@ -335,8 +438,8 @@ def ingest_all(
         print(f"\n{'='*50}")
         print("SUMMARY")
         print(f"{'='*50}")
-        for sym, counts in results.items():
-            print(f"{sym}: {counts}")
+        for sym, cnts in results.items():
+            print(f"{sym}: {cnts}")
 
     return results
 
@@ -506,7 +609,19 @@ def main() -> int:
         help="Comma-separated symbols to ingest",
     )
     ingest_parser.add_argument(
-        "--years", type=int, default=2, help="Years of history to download"
+        "--years", type=int, default=2, help="Years of history (ignored if --start given)"
+    )
+    ingest_parser.add_argument(
+        "--start",
+        type=str,
+        default=None,
+        help="Start date YYYY-MM-DD (overrides --years)",
+    )
+    ingest_parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="End date YYYY-MM-DD (defaults to today)",
     )
 
     # Status command
@@ -547,7 +662,23 @@ def main() -> int:
 
     if args.command == "ingest":
         symbols = [s.strip() for s in args.symbols.split(",")]
-        ingest_all(symbols=symbols, years=args.years, verbose=True)
+        start_date = (
+            datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+            if args.start
+            else None
+        )
+        end_date = (
+            datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
+            if args.end
+            else None
+        )
+        ingest_all(
+            symbols=symbols,
+            years=args.years,
+            start_date=start_date,
+            end_date=end_date,
+            verbose=True,
+        )
     elif args.command == "status":
         status = get_status()
         print("\nData Status:")
