@@ -2,7 +2,9 @@
 
 Provides UI for:
 - Data coverage display (symbols, dates, bar counts)
-- Data ingestion/update with date range selection
+- Data ingestion/update with date range selection + download preview
+- Download progress with real-time streaming output
+- OHLCV data table browser with candlestick chart
 - Download audit log (session history)
 - Raw archive status and catalog rebuild
 - Storage usage display
@@ -17,7 +19,10 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 if TYPE_CHECKING:
     from typing import Any
@@ -25,6 +30,8 @@ if TYPE_CHECKING:
 # Default paths (must match data modules)
 DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
 DEFAULT_CATALOG_PATH = Path("data/catalog")
+
+INTERVALS = ["1m", "5m", "15m", "1h", "4h"]
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -81,7 +88,7 @@ def _get_data_status() -> dict[str, Any]:
             sym_status["funding_rates"] = len(funding)
 
             # Catalog info
-            for interval in ["1m", "5m", "15m", "1h", "4h"]:
+            for interval in INTERVALS:
                 bar_count = catalog.get_bar_count(symbol, interval)
                 if bar_count > 0:
                     if "catalog" not in sym_status:
@@ -217,7 +224,7 @@ def render_download_history() -> None:
 
 
 def render_data_actions() -> None:
-    """Render data ingestion and update actions."""
+    """Render data ingestion and update actions with download preview."""
     from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 
     st.subheader("Data Actions")
@@ -249,6 +256,15 @@ def render_data_actions() -> None:
                 key="ingest_end",
             )
 
+        # Download preview
+        if (
+            selected_symbols
+            and start
+            and end
+            and st.button("Preview Download", key="btn_preview")
+        ):
+            _render_download_preview(selected_symbols, start, end)
+
         if st.button("Ingest Data", type="primary", key="btn_ingest"):
             if selected_symbols:
                 _run_ingest(selected_symbols, start, end)
@@ -279,115 +295,299 @@ def render_data_actions() -> None:
             _run_rebuild()
 
 
+def _render_download_preview(
+    symbols: list[str], start: date, end: date,
+) -> None:
+    """Show preview of what will be downloaded vs skipped."""
+    from vibe_quant.data.ingest import get_download_preview
+
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=UTC)
+
+    with st.spinner("Checking archive coverage..."):
+        preview = get_download_preview(symbols, start_dt, end_dt)
+
+    if not preview:
+        st.info("No months in selected range")
+        return
+
+    # Summary counts
+    archived = sum(1 for p in preview if p["Status"] == "Archived")
+    to_download = len(preview) - archived
+    st.info(
+        f"{len(preview)} total months: "
+        f"**{archived}** already archived, "
+        f"**{to_download}** to download"
+    )
+
+    st.dataframe(preview, use_container_width=True)
+
+
 def _run_ingest(symbols: list[str], start: date, end: date) -> None:
-    """Run data ingestion in subprocess."""
+    """Run data ingestion with streaming progress."""
     cmd = [
-        sys.executable,
-        "-m",
-        "vibe_quant.data",
+        sys.executable, "-u",  # unbuffered output
+        "-m", "vibe_quant.data",
         "ingest",
-        "--symbols",
-        ",".join(symbols),
-        "--start",
-        start.isoformat(),
-        "--end",
-        end.isoformat(),
+        "--symbols", ",".join(symbols),
+        "--start", start.isoformat(),
+        "--end", end.isoformat(),
     ]
 
-    with st.spinner(f"Ingesting {', '.join(symbols)} from {start} to {end}..."):
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600,  # 1 hour timeout
-                check=False,
-            )
-            if result.returncode == 0:
-                st.success("Data ingestion completed!")
-                if result.stdout:
-                    with st.expander("Output"):
-                        st.code(result.stdout)
-            else:
-                st.error("Data ingestion failed")
-                if result.stderr:
-                    st.code(result.stderr)
-                if result.stdout:
-                    with st.expander("Stdout"):
-                        st.code(result.stdout)
-        except subprocess.TimeoutExpired:
-            st.error("Data ingestion timed out (1 hour limit)")
-        except Exception as e:
-            st.error(f"Error: {e}")
+    status_container = st.status(
+        f"Ingesting {', '.join(symbols)} from {start} to {end}...",
+        expanded=True,
+    )
+    log_area = status_container.empty()
+    output_lines: list[str] = []
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
+            output_lines.append(line.rstrip())
+            # Show last 30 lines to keep UI responsive
+            log_area.code("\n".join(output_lines[-30:]))
+
+        process.wait()
+
+        if process.returncode == 0:
+            status_container.update(label="Data ingestion completed!", state="complete")
+        else:
+            status_container.update(label="Data ingestion failed", state="error")
+    except Exception as e:
+        status_container.update(label=f"Error: {e}", state="error")
 
 
 def _run_update(symbols: list[str]) -> None:
-    """Run data update in subprocess."""
+    """Run data update with streaming progress."""
     cmd = [
-        sys.executable,
-        "-m",
-        "vibe_quant.data",
+        sys.executable, "-u",
+        "-m", "vibe_quant.data",
         "update",
-        "--symbols",
-        ",".join(symbols),
+        "--symbols", ",".join(symbols),
     ]
 
-    with st.spinner(f"Updating data for {', '.join(symbols)}..."):
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 min timeout
-                check=False,
-            )
-            if result.returncode == 0:
-                st.success("Data update completed!")
-                if result.stdout:
-                    with st.expander("Output"):
-                        st.code(result.stdout)
-            else:
-                st.error("Data update failed")
-                if result.stderr:
-                    st.code(result.stderr)
-        except subprocess.TimeoutExpired:
-            st.error("Data update timed out")
-        except Exception as e:
-            st.error(f"Error: {e}")
+    status_container = st.status(
+        f"Updating data for {', '.join(symbols)}...",
+        expanded=True,
+    )
+    log_area = status_container.empty()
+    output_lines: list[str] = []
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
+            output_lines.append(line.rstrip())
+            log_area.code("\n".join(output_lines[-30:]))
+
+        process.wait()
+
+        if process.returncode == 0:
+            status_container.update(label="Data update completed!", state="complete")
+        else:
+            status_container.update(label="Data update failed", state="error")
+    except Exception as e:
+        status_container.update(label=f"Error: {e}", state="error")
 
 
 def _run_rebuild() -> None:
-    """Run catalog rebuild in subprocess."""
+    """Run catalog rebuild with streaming progress."""
     cmd = [
-        sys.executable,
-        "-m",
-        "vibe_quant.data",
+        sys.executable, "-u",
+        "-m", "vibe_quant.data",
         "rebuild",
         "--from-archive",
     ]
 
-    with st.spinner("Rebuilding catalog from archive..."):
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 min timeout
-                check=False,
+    status_container = st.status("Rebuilding catalog from archive...", expanded=True)
+    log_area = status_container.empty()
+    output_lines: list[str] = []
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
+            output_lines.append(line.rstrip())
+            log_area.code("\n".join(output_lines[-30:]))
+
+        process.wait()
+
+        if process.returncode == 0:
+            status_container.update(
+                label="Catalog rebuild completed!", state="complete",
             )
-            if result.returncode == 0:
-                st.success("Catalog rebuild completed!")
-                if result.stdout:
-                    with st.expander("Output"):
-                        st.code(result.stdout)
-            else:
-                st.error("Catalog rebuild failed")
-                if result.stderr:
-                    st.code(result.stderr)
-        except subprocess.TimeoutExpired:
-            st.error("Catalog rebuild timed out")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        else:
+            status_container.update(label="Catalog rebuild failed", state="error")
+    except Exception as e:
+        status_container.update(label=f"Error: {e}", state="error")
+
+
+def render_data_browser() -> None:
+    """Render OHLCV data table browser and candlestick chart."""
+    from vibe_quant.data.catalog import CatalogManager
+    from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
+
+    st.subheader("Data Browser")
+
+    # Shared selectors
+    sel_col1, sel_col2, sel_col3, sel_col4 = st.columns([2, 1, 2, 2])
+
+    with sel_col1:
+        symbol = st.selectbox("Symbol", SUPPORTED_SYMBOLS, key="browser_symbol")
+    with sel_col2:
+        interval = st.selectbox("Interval", INTERVALS, key="browser_interval")
+    with sel_col3:
+        browse_start = st.date_input(
+            "Start",
+            value=date.today() - timedelta(days=7),
+            key="browser_start",
+        )
+    with sel_col4:
+        browse_end = st.date_input(
+            "End",
+            value=date.today(),
+            key="browser_end",
+        )
+
+    if not symbol or not browse_start or not browse_end:
+        return
+
+    # Load data from catalog
+    try:
+        catalog = CatalogManager(DEFAULT_CATALOG_PATH)
+        start_dt = datetime(
+            browse_start.year, browse_start.month, browse_start.day, tzinfo=UTC,
+        )
+        end_dt = datetime(
+            browse_end.year, browse_end.month, browse_end.day,
+            23, 59, 59, tzinfo=UTC,
+        )
+        bars = catalog.get_bars(symbol, interval, start=start_dt, end=end_dt)
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return
+
+    if not bars:
+        st.info("No data for selected symbol/interval/range")
+        return
+
+    # Build DataFrame from bars
+    df = pd.DataFrame([
+        {
+            "Time": datetime.fromtimestamp(b.ts_event / 1e9, tz=UTC),
+            "Open": float(b.open),
+            "High": float(b.high),
+            "Low": float(b.low),
+            "Close": float(b.close),
+            "Volume": float(b.volume),
+        }
+        for b in bars
+    ])
+
+    st.caption(
+        f"{len(df)} bars | "
+        f"{df['Time'].min().strftime('%Y-%m-%d %H:%M')} to "
+        f"{df['Time'].max().strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    # Tabbed view: Table | Chart
+    tab_table, tab_chart = st.tabs(["Table", "Chart"])
+
+    with tab_table:
+        st.dataframe(
+            df,
+            use_container_width=True,
+            column_config={
+                "Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
+                "Volume": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+    with tab_chart:
+        _render_candlestick_chart(df, symbol, interval)
+
+
+def _render_candlestick_chart(
+    df: pd.DataFrame, symbol: str, interval: str,
+) -> None:
+    """Render Plotly candlestick chart with volume subplot."""
+    # Limit candles for performance (range slider handles navigation)
+    max_candles = 10_000
+    if len(df) > max_candles:
+        st.warning(
+            f"Showing last {max_candles:,} of {len(df):,} candles. "
+            f"Narrow date range for full data."
+        )
+        df = df.tail(max_candles)
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.75, 0.25],
+    )
+
+    # Candlestick
+    fig.add_trace(
+        go.Candlestick(
+            x=df["Time"],
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
+            close=df["Close"],
+            name="OHLC",
+        ),
+        row=1, col=1,
+    )
+
+    # Volume bars colored by direction
+    colors = [
+        "#26a69a" if c >= o else "#ef5350"
+        for c, o in zip(df["Close"], df["Open"], strict=True)
+    ]
+    fig.add_trace(
+        go.Bar(
+            x=df["Time"],
+            y=df["Volume"],
+            marker_color=colors,
+            name="Volume",
+            opacity=0.7,
+        ),
+        row=2, col=1,
+    )
+
+    fig.update_layout(
+        title=f"{symbol} {interval}",
+        xaxis_rangeslider_visible=False,
+        xaxis2_rangeslider_visible=True,
+        xaxis2_rangeslider_thickness=0.05,
+        height=600,
+        showlegend=False,
+    )
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_symbol_management() -> None:
@@ -412,58 +612,58 @@ def render_data_quality() -> None:
     selected = st.selectbox("Select symbol to verify", symbols, key="verify_symbol")
 
     if st.button("Run Verification", key="btn_verify") and selected:
-            with st.spinner(f"Verifying {selected}..."):
-                result = _verify_data(selected)
+        with st.spinner(f"Verifying {selected}..."):
+            result = _verify_data(selected)
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Kline Count", result["kline_count"])
-            with col2:
-                gap_count = len(result["gaps"])
-                st.metric(
-                    "Gaps Detected",
-                    gap_count,
-                    delta="OK" if gap_count == 0 else None,
-                    delta_color="off" if gap_count == 0 else "inverse",
-                )
-            with col3:
-                error_count = len(result["ohlc_errors"])
-                st.metric(
-                    "OHLC Errors",
-                    error_count,
-                    delta="OK" if error_count == 0 else None,
-                    delta_color="off" if error_count == 0 else "inverse",
-                )
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Kline Count", result["kline_count"])
+        with col2:
+            gap_count = len(result["gaps"])
+            st.metric(
+                "Gaps Detected",
+                gap_count,
+                delta="OK" if gap_count == 0 else None,
+                delta_color="off" if gap_count == 0 else "inverse",
+            )
+        with col3:
+            error_count = len(result["ohlc_errors"])
+            st.metric(
+                "OHLC Errors",
+                error_count,
+                delta="OK" if error_count == 0 else None,
+                delta_color="off" if error_count == 0 else "inverse",
+            )
 
-            if result["gaps"]:
-                with st.expander(f"Gap Details ({len(result['gaps'])} gaps)"):
-                    gap_rows = []
-                    for start_ts, _end_ts, gap_min in result["gaps"][:20]:
-                        start_dt = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
-                        gap_rows.append(
-                            {
-                                "Start": start_dt.strftime("%Y-%m-%d %H:%M"),
-                                "Gap (min)": gap_min,
-                            }
-                        )
-                    st.dataframe(gap_rows, use_container_width=True)
-                    if len(result["gaps"]) > 20:
-                        st.caption(f"Showing 20 of {len(result['gaps'])} gaps")
+        if result["gaps"]:
+            with st.expander(f"Gap Details ({len(result['gaps'])} gaps)"):
+                gap_rows = []
+                for start_ts, _end_ts, gap_min in result["gaps"][:20]:
+                    start_dt = datetime.fromtimestamp(start_ts / 1000, tz=UTC)
+                    gap_rows.append(
+                        {
+                            "Start": start_dt.strftime("%Y-%m-%d %H:%M"),
+                            "Gap (min)": gap_min,
+                        }
+                    )
+                st.dataframe(gap_rows, use_container_width=True)
+                if len(result["gaps"]) > 20:
+                    st.caption(f"Showing 20 of {len(result['gaps'])} gaps")
 
-            if result["ohlc_errors"]:
-                with st.expander(f"OHLC Errors ({len(result['ohlc_errors'])} errors)"):
-                    err_rows = []
-                    for ts, msg in result["ohlc_errors"][:20]:
-                        err_dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
-                        err_rows.append(
-                            {
-                                "Time": err_dt.strftime("%Y-%m-%d %H:%M"),
-                                "Error": msg,
-                            }
-                        )
-                    st.dataframe(err_rows, use_container_width=True)
-                    if len(result["ohlc_errors"]) > 20:
-                        st.caption(f"Showing 20 of {len(result['ohlc_errors'])} errors")
+        if result["ohlc_errors"]:
+            with st.expander(f"OHLC Errors ({len(result['ohlc_errors'])} errors)"):
+                err_rows = []
+                for ts, msg in result["ohlc_errors"][:20]:
+                    err_dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
+                    err_rows.append(
+                        {
+                            "Time": err_dt.strftime("%Y-%m-%d %H:%M"),
+                            "Error": msg,
+                        }
+                    )
+                st.dataframe(err_rows, use_container_width=True)
+                if len(result["ohlc_errors"]) > 20:
+                    st.caption(f"Showing 20 of {len(result['ohlc_errors'])} errors")
 
 
 def render() -> None:
@@ -480,8 +680,13 @@ def render() -> None:
 
     st.divider()
 
-    # Download actions with date pickers
+    # Download actions with date pickers + preview
     render_data_actions()
+
+    st.divider()
+
+    # OHLCV data browser (table + candlestick chart)
+    render_data_browser()
 
     st.divider()
 

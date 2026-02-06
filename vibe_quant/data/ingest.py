@@ -29,6 +29,55 @@ from vibe_quant.data.downloader import (
 from vibe_quant.data.verify import verify_symbol
 
 
+def get_download_preview(
+    symbols: list[str],
+    start_date: datetime,
+    end_date: datetime,
+    archive: RawDataArchive | None = None,
+) -> list[dict[str, Any]]:
+    """Preview what months will be downloaded vs skipped.
+
+    Args:
+        symbols: Symbols to check.
+        start_date: Start date.
+        end_date: End date.
+        archive: Raw data archive.
+
+    Returns:
+        List of dicts with keys: symbol, year, month, status, kline_count, expected.
+    """
+    import calendar
+
+    if archive is None:
+        archive = RawDataArchive()
+
+    months = get_months_in_range(start_date, end_date)
+    preview: list[dict[str, Any]] = []
+
+    for symbol in symbols:
+        for year, month in months:
+            actual = archive.get_month_kline_count(symbol, "1m", year, month)
+            _, days = calendar.monthrange(year, month)
+            expected = days * 24 * 60
+
+            if actual >= expected * 0.9:
+                status = "Archived"
+            elif actual > 0:
+                status = "Partial - will re-download"
+            else:
+                status = "Will download"
+
+            preview.append({
+                "Symbol": symbol,
+                "Month": f"{year}-{month:02d}",
+                "Status": status,
+                "Klines": actual,
+                "Expected": expected,
+            })
+
+    return preview
+
+
 def update_symbol(
     symbol: str,
     archive: RawDataArchive | None = None,
@@ -221,11 +270,21 @@ def ingest_symbol(
         months = get_years_months_to_download(years)
         effective_end = datetime.now(UTC)
 
-    if verbose:
-        print(f"Downloading {symbol} data for {len(months)} months...")
-
-    # Download and archive 1m klines
+    # Smart skip: check which months already have sufficient coverage
+    skipped: list[tuple[int, int]] = []
+    to_download: list[tuple[int, int]] = []
     for year, month in months:
+        if archive.has_month_coverage(symbol, "1m", year, month):
+            skipped.append((year, month))
+        else:
+            to_download.append((year, month))
+
+    if verbose:
+        print(f"Downloading {symbol}: {len(to_download)} months to download, "
+              f"{len(skipped)} months skipped (already archived)")
+
+    # Download and archive 1m klines (only missing/partial months)
+    for year, month in to_download:
         klines = download_monthly_klines(symbol, "1m", year, month)
         if klines:
             archive.insert_klines(symbol, "1m", klines, "binance_vision")
@@ -235,6 +294,9 @@ def ingest_symbol(
         else:
             if verbose:
                 print(f"  {year}-{month:02d}: no data available")
+
+    counts["months_skipped"] = len(skipped)
+    counts["months_downloaded"] = len(to_download)
 
     if verbose:
         print(f"Total klines archived from Vision: {counts['klines']}")

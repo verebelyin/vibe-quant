@@ -310,6 +310,29 @@ class CatalogManager:
         bars = self.catalog.bars(bar_types=[bar_type])
         return len(bars)
 
+    def get_bars(
+        self,
+        symbol: str,
+        interval: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[Bar]:
+        """Get bars for a symbol and interval with optional date filtering.
+
+        Args:
+            symbol: Trading symbol.
+            interval: Candle interval.
+            start: Start datetime (inclusive).
+            end: End datetime (inclusive).
+
+        Returns:
+            List of Bar objects.
+        """
+        bar_type = get_bar_type(symbol, interval)
+        return self.catalog.bars(
+            bar_types=[bar_type], start=start, end=end,  # type: ignore[arg-type]
+        )
+
     def get_bar_date_range(
         self, symbol: str, interval: str
     ) -> tuple[datetime, datetime] | None:

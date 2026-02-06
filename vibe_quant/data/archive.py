@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import calendar
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -294,6 +296,79 @@ class RawDataArchive:
             (symbol, interval),
         ).fetchone()
         return row[0] if row else 0
+
+    def get_month_kline_count(
+        self, symbol: str, interval: str, year: int, month: int,
+    ) -> int:
+        """Get kline count for a specific month.
+
+        Args:
+            symbol: Trading symbol.
+            interval: Candle interval.
+            year: Year.
+            month: Month (1-12).
+
+        Returns:
+            Number of klines in that month.
+        """
+        # First ms of month
+        start_ms = int(
+            datetime(year, month, 1, tzinfo=UTC).timestamp() * 1000
+        )
+        if month == 12:
+            end_ms = int(
+                datetime(year + 1, 1, 1, tzinfo=UTC).timestamp() * 1000
+            )
+        else:
+            end_ms = int(
+                datetime(year, month + 1, 1, tzinfo=UTC).timestamp() * 1000
+            )
+
+        row = self.conn.execute(
+            """SELECT COUNT(*) FROM raw_klines
+               WHERE symbol = ? AND interval = ?
+               AND open_time >= ? AND open_time < ?""",
+            (symbol, interval, start_ms, end_ms),
+        ).fetchone()
+        return row[0] if row else 0
+
+    def has_month_coverage(
+        self, symbol: str, interval: str, year: int, month: int,
+        threshold: float = 0.9,
+    ) -> bool:
+        """Check if a month has sufficient kline coverage.
+
+        A month is considered covered if it has >= threshold of expected klines.
+        For 1m interval, a 30-day month has ~43200 expected klines.
+
+        Args:
+            symbol: Trading symbol.
+            interval: Candle interval.
+            year: Year.
+            month: Month (1-12).
+            threshold: Coverage ratio threshold (0-1). Default 0.9.
+
+        Returns:
+            True if month is sufficiently covered.
+        """
+        _, days_in_month = calendar.monthrange(year, month)
+
+        # Expected klines per interval
+        if interval == "1m":
+            expected = days_in_month * 24 * 60
+        elif interval == "5m":
+            expected = days_in_month * 24 * 12
+        elif interval == "15m":
+            expected = days_in_month * 24 * 4
+        elif interval == "1h":
+            expected = days_in_month * 24
+        elif interval == "4h":
+            expected = days_in_month * 6
+        else:
+            return False
+
+        actual = self.get_month_kline_count(symbol, interval, year, month)
+        return actual >= expected * threshold
 
     def get_symbols(self) -> list[str]:
         """Get list of symbols in archive.

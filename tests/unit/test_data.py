@@ -1,10 +1,12 @@
 """Tests for data ingestion module."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from vibe_quant.data.archive import RawDataArchive
+from vibe_quant.data.ingest import get_download_preview
 
 
 class TestRawDataArchive:
@@ -156,3 +158,92 @@ class TestRawDataArchive:
             "BTCUSDT", "1m", start_time=1704067260000, end_time=1704067260000
         )
         assert len(result) == 1
+
+    def test_get_month_kline_count(self, archive: RawDataArchive) -> None:
+        """Should count klines within a specific month."""
+        # Jan 1 2024 00:00:00 UTC = 1704067200000
+        # Jan 1 2024 00:01:00 UTC = 1704067260000
+        klines = [
+            (1704067200000, 42000.0, 42500.0, 41800.0, 42300.0, 100.0, 1704067259999),
+            (1704067260000, 42300.0, 42600.0, 42200.0, 42500.0, 150.0, 1704067319999),
+        ]
+        archive.insert_klines("BTCUSDT", "1m", klines, "test")
+
+        assert archive.get_month_kline_count("BTCUSDT", "1m", 2024, 1) == 2
+        assert archive.get_month_kline_count("BTCUSDT", "1m", 2024, 2) == 0
+        assert archive.get_month_kline_count("BTCUSDT", "1m", 2023, 12) == 0
+
+    def test_has_month_coverage_full(self, archive: RawDataArchive) -> None:
+        """Should return True when month has >= 90% coverage."""
+        # Generate enough klines for Jan 2024 (31 days * 1440 min = 44640 expected)
+        # We need >= 40176 (90%) klines. Use 41000.
+        jan1_ms = 1704067200000  # 2024-01-01 00:00:00 UTC
+        klines = [
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
+             jan1_ms + i * 60000 + 59999)
+            for i in range(41000)
+        ]
+        archive.insert_klines("BTCUSDT", "1m", klines, "test")
+
+        assert archive.has_month_coverage("BTCUSDT", "1m", 2024, 1) is True
+
+    def test_has_month_coverage_empty(self, archive: RawDataArchive) -> None:
+        """Should return False when no data."""
+        assert archive.has_month_coverage("BTCUSDT", "1m", 2024, 1) is False
+
+    def test_has_month_coverage_partial(self, archive: RawDataArchive) -> None:
+        """Should return False when < 90% coverage."""
+        jan1_ms = 1704067200000
+        # Only 100 klines for a month that needs ~44640
+        klines = [
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
+             jan1_ms + i * 60000 + 59999)
+            for i in range(100)
+        ]
+        archive.insert_klines("BTCUSDT", "1m", klines, "test")
+
+        assert archive.has_month_coverage("BTCUSDT", "1m", 2024, 1) is False
+
+
+class TestGetDownloadPreview:
+    """Tests for get_download_preview."""
+
+    def test_empty_archive(self, tmp_path: Path) -> None:
+        """All months should show 'Will download' for empty archive."""
+        archive = RawDataArchive(tmp_path / "test.db")
+        start = datetime(2024, 3, 1, tzinfo=UTC)
+        end = datetime(2024, 5, 1, tzinfo=UTC)
+
+        preview = get_download_preview(
+            ["BTCUSDT"], start, end, archive=archive,
+        )
+        archive.close()
+
+        # March and April are complete months before May
+        assert len(preview) >= 1
+        assert all(p["Status"] == "Will download" for p in preview)
+
+    def test_archived_month_shows_archived(self, tmp_path: Path) -> None:
+        """Fully archived month should show 'Archived'."""
+        archive = RawDataArchive(tmp_path / "test.db")
+
+        # Fill Jan 2024 with enough klines (>= 90% of 44640)
+        jan1_ms = 1704067200000
+        klines = [
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
+             jan1_ms + i * 60000 + 59999)
+            for i in range(41000)
+        ]
+        archive.insert_klines("BTCUSDT", "1m", klines, "test")
+
+        start = datetime(2024, 1, 1, tzinfo=UTC)
+        end = datetime(2024, 3, 1, tzinfo=UTC)
+
+        preview = get_download_preview(
+            ["BTCUSDT"], start, end, archive=archive,
+        )
+        archive.close()
+
+        jan_rows = [p for p in preview if p["Month"] == "2024-01"]
+        assert len(jan_rows) == 1
+        assert jan_rows[0]["Status"] == "Archived"
