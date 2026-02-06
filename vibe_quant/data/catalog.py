@@ -279,6 +279,25 @@ class CatalogManager:
         """
         self.catalog.write_data([instrument])
 
+    def clear_bar_data(self, symbol: str, interval: str) -> None:
+        """Remove existing parquet files for a bar type.
+
+        Used before re-writing bars from archive to avoid disjoint interval errors.
+
+        Args:
+            symbol: Trading symbol.
+            interval: Candle interval.
+        """
+        import shutil
+
+        bar_type = get_bar_type(symbol, interval)
+        # NautilusTrader catalog stores bars under data/bar/<bar_type_str>/
+        bar_dir = self._catalog_path / "data" / "bar" / str(bar_type)
+        if bar_dir.exists():
+            shutil.rmtree(bar_dir)
+        # Reset catalog cache so it re-reads from disk
+        self._catalog = None
+
     def write_bars(self, bars: list[Bar]) -> None:
         """Write bars to catalog.
 

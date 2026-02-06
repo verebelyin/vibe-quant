@@ -340,6 +340,11 @@ def ingest_symbol(
             print("No klines to process")
         return counts
 
+    # Clear existing catalog data to avoid disjoint interval errors
+    # (archive is source of truth; catalog rebuilt from full archive each time)
+    for interval in ["1m", "5m", "15m", "1h", "4h"]:
+        catalog.clear_bar_data(symbol, interval)
+
     # Convert to 1m bars and write
     bar_type_1m = get_bar_type(symbol, "1m")
     bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
