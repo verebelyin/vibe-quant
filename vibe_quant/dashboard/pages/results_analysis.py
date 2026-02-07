@@ -229,7 +229,7 @@ def render_equity_chart(equity_df: pd.DataFrame) -> None:
         return
 
     fig = px.line(
-        equity_df, x="time", y="equity", title="Equity Curve", labels={"equity": "Cumulative P&L", "time": "Time"}
+        equity_df, x="time", y="equity", title="Equity Curve", labels={"equity": "Equity", "time": "Time"}
     )
     fig.update_layout(height=400)
     st.plotly_chart(fig, use_container_width=True)

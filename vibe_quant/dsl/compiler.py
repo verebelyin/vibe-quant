@@ -334,14 +334,12 @@ class StrategyCompiler:
             + dsl.exit_conditions.short
         ):
             cond = parse_condition(cond_str, list(dsl.indicators.keys()))
-            if not cond.right.is_indicator and not cond.right.is_price:
-                # It's a numeric threshold - use value in name for uniqueness
-                if isinstance(cond.right.value, float):
-                    value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
-                    param_name = f"{cond.left.value}_{value_str}_threshold"
-                    if param_name not in seen_thresholds:
-                        seen_thresholds.add(param_name)
-                        lines.append(f"    {param_name}: float = {cond.right.value}")
+            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, float):
+                value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
+                param_name = f"{cond.left.value}_{value_str}_threshold"
+                if param_name not in seen_thresholds:
+                    seen_thresholds.add(param_name)
+                    lines.append(f"    {param_name}: float = {cond.right.value}")
 
         return "\n".join(lines)
 
@@ -416,15 +414,26 @@ class StrategyCompiler:
     def _generate_on_event(self) -> str:
         """Generate on_event() method for event-based position tracking.
 
+        SL/TP orders are submitted here on PositionOpened, not in the entry
+        methods, to ensure the entry order has actually filled first.  This
+        avoids a race condition where reduce_only SL/TP orders are rejected
+        because no position exists yet.  The actual fill price from the
+        position's avg_px_open is used instead of bar.close estimate.
+
         Returns:
             on_event method source code
         """
         lines = [
             "def on_event(self, event) -> None:",
-            '    """Handle strategy events for position tracking."""',
+            '    """Handle strategy events for position tracking and SL/TP submission."""',
             "    if isinstance(event, PositionOpened):",
             "        if event.instrument_id == self.instrument_id:",
             "            self._sync_position_state()",
+            "            # Submit SL/TP using actual fill price from opened position",
+            "            pos = self.cache.position(event.position_id)",
+            "            if pos is not None:",
+            "                entry_price = float(pos.avg_px_open)",
+            "                self._submit_sl_tp_orders(entry_price, pos.entry, pos.quantity)",
             "    elif isinstance(event, PositionClosed):",
             "        if event.instrument_id == self.instrument_id:",
             "            self._position_open = False",
@@ -1062,10 +1071,7 @@ class StrategyCompiler:
             "        time_in_force=TimeInForce.IOC,",
             "    )",
             "    self.submit_order(order)",
-            "",
-            "    # Submit SL/TP orders based on estimated fill price",
-            "    entry_price = float(bar.close.as_double())",
-            "    self._submit_sl_tp_orders(entry_price, OrderSide.BUY, qty)",
+            "    # SL/TP orders are submitted from on_event(PositionOpened) after fill",
             "",
             # _submit_short_entry
             "def _submit_short_entry(self, bar: Bar) -> None:",
@@ -1081,10 +1087,7 @@ class StrategyCompiler:
             "        time_in_force=TimeInForce.IOC,",
             "    )",
             "    self.submit_order(order)",
-            "",
-            "    # Submit SL/TP orders based on estimated fill price",
-            "    entry_price = float(bar.close.as_double())",
-            "    self._submit_sl_tp_orders(entry_price, OrderSide.SELL, qty)",
+            "    # SL/TP orders are submitted from on_event(PositionOpened) after fill",
             "",
             # _submit_exit
             "def _submit_exit(self, bar: Bar) -> None:",
