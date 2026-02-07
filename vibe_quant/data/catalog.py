@@ -158,6 +158,11 @@ def aggregate_bars(
 ) -> list[Bar]:
     """Aggregate 1-minute bars to higher timeframe.
 
+    Pre-computes a combined divisor (ns -> target-minute alignment)
+    to replace the two-step division per bar with a single integer
+    division. Tracks group OHLCV inline to avoid building intermediate
+    lists where possible.
+
     Args:
         bars_1m: List of 1-minute bars (sorted by time).
         target_bar_type: Target bar type for aggregated bars.
@@ -169,42 +174,44 @@ def aggregate_bars(
     if not bars_1m:
         return []
 
-    aggregated = []
+    # Pre-compute combined divisor: ns -> ms -> minutes -> target-aligned
+    # bar_ts_ns // 1_000_000 // 60_000 // target_minutes
+    # = bar_ts_ns // (1_000_000 * 60_000 * target_minutes)
+    ns_per_target_period = 1_000_000 * 60_000 * target_minutes
+
+    aggregated: list[Bar] = []
     current_group: list[Bar] = []
-    group_start_minute = None
+    group_key: int | None = None
 
     for bar in bars_1m:
-        # Get minute of bar (floor to target interval)
-        bar_ts_ms = bar.ts_event // 1_000_000
-        bar_minute = bar_ts_ms // 60_000
+        bar_key = bar.ts_event // ns_per_target_period
 
-        if group_start_minute is None:
-            group_start_minute = (bar_minute // target_minutes) * target_minutes
+        if group_key is None:
+            group_key = bar_key
 
-        current_group_minute = (bar_minute // target_minutes) * target_minutes
-
-        if current_group_minute != group_start_minute:
+        if bar_key != group_key:
             # Aggregate current group
             if current_group:
-                agg_bar = _aggregate_group(current_group, target_bar_type)
-                aggregated.append(agg_bar)
+                aggregated.append(_aggregate_group(current_group, target_bar_type))
 
             # Start new group
             current_group = [bar]
-            group_start_minute = current_group_minute
+            group_key = bar_key
         else:
             current_group.append(bar)
 
     # Don't forget the last group
     if current_group:
-        agg_bar = _aggregate_group(current_group, target_bar_type)
-        aggregated.append(agg_bar)
+        aggregated.append(_aggregate_group(current_group, target_bar_type))
 
     return aggregated
 
 
 def _aggregate_group(bars: list[Bar], bar_type: BarType) -> Bar:
     """Aggregate a group of bars into a single bar.
+
+    Uses a single loop to track high/low/volume instead of
+    separate max/min/sum generator expressions.
 
     Args:
         bars: List of bars to aggregate.
@@ -213,21 +220,45 @@ def _aggregate_group(bars: list[Bar], bar_type: BarType) -> Bar:
     Returns:
         Aggregated bar.
     """
-    open_price = bars[0].open
-    high_price = max(b.high for b in bars)
-    low_price = min(b.low for b in bars)
-    close_price = bars[-1].close
-    total_volume = sum(float(b.volume) for b in bars)
+    first = bars[0]
+    if len(bars) == 1:
+        # Fast path: single bar, no aggregation needed
+        return Bar(
+            bar_type=bar_type,
+            open=first.open,
+            high=first.high,
+            low=first.low,
+            close=first.close,
+            volume=first.volume,
+            ts_event=first.ts_event,
+            ts_init=first.ts_init,
+        )
 
+    # Single-pass OHLCV computation
+    high_price = first.high
+    low_price = first.low
+    total_volume = float(first.volume)
+
+    for i in range(1, len(bars)):
+        b = bars[i]
+        h = b.high
+        if h > high_price:
+            high_price = h
+        lo = b.low
+        if lo < low_price:
+            low_price = lo
+        total_volume += float(b.volume)
+
+    last = bars[-1]
     return Bar(
         bar_type=bar_type,
-        open=open_price,
+        open=first.open,
         high=high_price,
         low=low_price,
-        close=close_price,
+        close=last.close,
         volume=Quantity.from_str(str(total_volume)),
-        ts_event=bars[0].ts_event,
-        ts_init=bars[-1].ts_init,
+        ts_event=first.ts_event,
+        ts_init=last.ts_init,
     )
 
 

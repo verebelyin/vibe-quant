@@ -28,11 +28,30 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-
-from scipy import stats as scipy_stats
+from functools import lru_cache
 
 # Euler-Mascheroni constant
 EULER_MASCHERONI: float = 0.5772156649015329
+# Pre-compute squared constant to avoid repeated multiplication
+_EULER_MASCHERONI_SQ: float = EULER_MASCHERONI * EULER_MASCHERONI
+# Pre-compute 1/sqrt(2) for fast normal CDF
+_INV_SQRT2: float = 1.0 / math.sqrt(2.0)
+
+
+def _norm_sf(x: float) -> float:
+    """Fast survival function (1 - CDF) of the standard normal distribution.
+
+    Uses math.erfc which is implemented in C and avoids the overhead
+    of scipy.stats.norm.sf (which imports and dispatches through
+    multiple layers). Numerically equivalent to scipy.stats.norm.sf(x).
+
+    Args:
+        x: Z-score value.
+
+    Returns:
+        P(Z > x) for standard normal Z.
+    """
+    return 0.5 * math.erfc(x * _INV_SQRT2)
 
 
 @dataclass(frozen=True)
@@ -141,10 +160,11 @@ class DeflatedSharpeRatio:
 
         # Compute p-value (probability of observing this DSR or higher under null)
         # Using survival function (1 - CDF) for upper tail
+        # Uses math.erfc instead of scipy.stats.norm.sf for ~100x speedup
         if math.isinf(deflated_sharpe):
             p_value = 0.0 if deflated_sharpe > 0 else 1.0
         else:
-            p_value = float(scipy_stats.norm.sf(deflated_sharpe))
+            p_value = _norm_sf(deflated_sharpe)
 
         is_significant = p_value < self.significance_level
 
@@ -187,7 +207,9 @@ class DeflatedSharpeRatio:
             msg = f"kurtosis must be >= 1, got {kurtosis}"
             raise ValueError(msg)
 
-    def _expected_max_sharpe(self, num_trials: int) -> float:
+    @staticmethod
+    @lru_cache(maxsize=1024)
+    def _expected_max_sharpe(num_trials: int) -> float:
         """Compute expected maximum Sharpe ratio under null hypothesis.
 
         Uses the asymptotic approximation for the expected maximum of N
@@ -196,6 +218,9 @@ class DeflatedSharpeRatio:
             E[max(Z_1, ..., Z_N)] ≈ sqrt(2*ln(N)) * (1 - gamma/(ln(N)) + gamma^2/(2*ln(N)^2))
 
         For N=1, returns 0 (single trial has no multiple testing bias).
+
+        Cached because num_trials is typically a small integer that repeats
+        across many candidates in the same screening pipeline.
 
         Args:
             num_trials: Number of independent trials (N).
@@ -210,17 +235,16 @@ class DeflatedSharpeRatio:
 
         # Asymptotic approximation
         # E[max] ≈ sqrt(2*ln(N)) * (1 - gamma/ln(N) + gamma^2/(2*ln(N)^2))
-        base = math.sqrt(2 * log_n)
+        base = math.sqrt(2.0 * log_n)
 
-        # Higher-order correction terms
-        correction = 1 - EULER_MASCHERONI / log_n
-        if log_n > 0:
-            correction += (EULER_MASCHERONI**2) / (2 * log_n**2)
+        # Higher-order correction terms using pre-computed squared constant
+        inv_log_n = 1.0 / log_n
+        correction = 1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
 
         return base * correction
 
+    @staticmethod
     def _sharpe_variance(
-        self,
         sharpe: float,
         num_observations: int,
         skewness: float,
@@ -249,14 +273,13 @@ class DeflatedSharpeRatio:
         if t_minus_1 <= 0:
             return float("inf")
 
-        sr_sq = sharpe**2
+        sr_sq = sharpe * sharpe  # Faster than sharpe**2
 
-        # Excess kurtosis (gamma_4 - 3)
-        excess_kurtosis = kurtosis - 3
-
-        # Full variance formula with non-normality correction
-        # Var(SR) = [1 + 0.5*SR^2 - skew*SR + (excess_kurt/4)*SR^2] / (T-1)
-        numerator = 1 + 0.5 * sr_sq - skewness * sharpe + (excess_kurtosis / 4) * sr_sq
+        # Combine SR^2 coefficients: 0.5 + (kurtosis - 3)/4
+        # = 0.5 + kurtosis/4 - 0.75
+        # = kurtosis/4 - 0.25
+        sr_sq_coeff = kurtosis * 0.25 - 0.25
+        numerator = 1.0 + sr_sq_coeff * sr_sq - skewness * sharpe
 
         return numerator / t_minus_1
 

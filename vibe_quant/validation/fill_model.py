@@ -100,6 +100,9 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         ``ValidationRunner`` to adjust fill prices post-execution or for
         analytics/reporting.
 
+        Optimized with early exits for common zero-volatility cases
+        and combined multiplication to reduce operations.
+
         Args:
             order_size: Order quantity.
             avg_volume: Average bar volume.
@@ -111,13 +114,18 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         Returns:
             Slippage factor as a decimal (e.g., 0.001 for 0.1% slippage).
         """
-        if avg_volume <= 0:
-            return spread / 2.0
+        half_spread = spread * 0.5
+
+        # Fast path: no volume data or no volatility → spread-only slippage
+        if avg_volume <= 0 or volatility == 0.0:
+            return half_spread
 
         # SPEC formula: spread/2 + k * volatility * sqrt(order_size / avg_volume)
-        size_ratio = order_size / avg_volume
-        market_impact = self._impact_coefficient * volatility * math.sqrt(size_ratio)
-        return spread / 2.0 + market_impact
+        # Combine k * volatility first, then multiply by sqrt
+        market_impact = (
+            self._impact_coefficient * volatility * math.sqrt(order_size / avg_volume)
+        )
+        return half_spread + market_impact
 
 
 @dataclass(frozen=True)

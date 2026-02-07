@@ -6,6 +6,7 @@ initialization for evolving trading strategy chromosomes.
 
 from __future__ import annotations
 
+import heapq
 import random
 from dataclasses import dataclass, field
 from enum import Enum
@@ -168,13 +169,20 @@ def _random_gene() -> StrategyGene:
 
 
 def _perturb(value: float, frac: float = 0.2, lo: float | None = None, hi: float | None = None) -> float:
-    """Perturb a value by +/- frac fraction. Optionally clamp to [lo, hi]."""
-    delta = value * frac
-    result = value + random.uniform(-delta, delta)
-    if lo is not None:
-        result = max(lo, result)
-    if hi is not None:
-        result = min(hi, result)
+    """Perturb a value by +/- frac fraction. Optionally clamp to [lo, hi].
+
+    Optimized with early exit for zero-value case and inlined clamping.
+    """
+    if value == 0.0:
+        # Avoid delta=0 which makes uniform(-0, 0) pointless
+        result = 0.0
+    else:
+        delta = value * frac
+        result = value + random.uniform(-delta, delta)
+    if lo is not None and result < lo:
+        result = lo
+    if hi is not None and result > hi:
+        result = hi
     return round(result, 4)
 
 
@@ -425,6 +433,9 @@ def apply_elitism(
 ) -> list[Chromosome]:
     """Return top elite_count individuals unchanged.
 
+    Uses heapq.nlargest for O(n log k) instead of O(n log n) full sort
+    when elite_count << population size (typical: 2 elites from 50+ pop).
+
     Args:
         population: List of chromosomes.
         fitness_scores: Parallel list of fitness values (higher is better).
@@ -443,8 +454,9 @@ def apply_elitism(
         msg = f"Population size ({len(population)}) != fitness size ({len(fitness_scores)})"
         raise ValueError(msg)
     elite_count = min(elite_count, len(population))
-    ranked = sorted(range(len(population)), key=lambda i: fitness_scores[i], reverse=True)
-    return [population[i].clone() for i in ranked[:elite_count]]
+    # heapq.nlargest is O(n log k) vs sorted O(n log n)
+    top_indices = heapq.nlargest(elite_count, range(len(population)), key=lambda i: fitness_scores[i])
+    return [population[i].clone() for i in top_indices]
 
 
 def initialize_population(size: int = 50) -> list[Chromosome]:

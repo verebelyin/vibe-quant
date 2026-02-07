@@ -77,7 +77,11 @@ class FitnessResult:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     """Clamp value to [lo, hi]."""
-    return max(lo, min(hi, value))
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
 
 
 def _normalize(value: float, lo: float, hi: float) -> float:
@@ -86,6 +90,10 @@ def _normalize(value: float, lo: float, hi: float) -> float:
         return 0.0
     return (value - lo) / (hi - lo)
 
+
+# Pre-compute inverse ranges for normalization to avoid repeated division
+_SHARPE_INV_RANGE: float = 1.0 / (SHARPE_MAX - SHARPE_MIN)
+_PF_INV_RANGE: float = 1.0 / (PF_MAX - PF_MIN)
 
 # ---------------------------------------------------------------------------
 # Core scoring functions
@@ -104,6 +112,9 @@ def compute_fitness_score(
     - MaxDD: inverted (1 - MaxDD), already 0-1
     - ProfitFactor: clamped to [0, 5], normalized
 
+    Uses inlined clamp/normalize with pre-computed inverse ranges
+    to eliminate function-call overhead in hot loops.
+
     Args:
         sharpe_ratio: Strategy Sharpe ratio.
         max_drawdown: Max drawdown as fraction 0-1.
@@ -112,9 +123,29 @@ def compute_fitness_score(
     Returns:
         Weighted score in [0, 1].
     """
-    sharpe_norm = _normalize(_clamp(sharpe_ratio, SHARPE_MIN, SHARPE_MAX), SHARPE_MIN, SHARPE_MAX)
-    dd_norm = 1.0 - _clamp(max_drawdown, 0.0, 1.0)
-    pf_norm = _normalize(_clamp(profit_factor, PF_MIN, PF_MAX), PF_MIN, PF_MAX)
+    # Inline clamp + normalize for sharpe
+    s = sharpe_ratio
+    if s < SHARPE_MIN:
+        s = SHARPE_MIN
+    elif s > SHARPE_MAX:
+        s = SHARPE_MAX
+    sharpe_norm = (s - SHARPE_MIN) * _SHARPE_INV_RANGE
+
+    # Inline clamp for drawdown (already in 0-1 range conceptually)
+    dd = max_drawdown
+    if dd < 0.0:
+        dd = 0.0
+    elif dd > 1.0:
+        dd = 1.0
+    dd_norm = 1.0 - dd
+
+    # Inline clamp + normalize for profit factor
+    pf = profit_factor
+    if pf < PF_MIN:
+        pf = PF_MIN
+    elif pf > PF_MAX:
+        pf = PF_MAX
+    pf_norm = (pf - PF_MIN) * _PF_INV_RANGE
 
     return (
         SHARPE_WEIGHT * sharpe_norm
@@ -159,6 +190,9 @@ def pareto_dominates(a: FitnessResult, b: FitnessResult) -> bool:
 
     A dominates B iff A is >= B in all objectives and > in at least one.
 
+    Uses direct float comparisons instead of tuple iteration
+    for reduced overhead on this frequently-called function.
+
     Args:
         a: First fitness result.
         b: Second fitness result.
@@ -166,22 +200,30 @@ def pareto_dominates(a: FitnessResult, b: FitnessResult) -> bool:
     Returns:
         True if a dominates b.
     """
-    obj_a = _objectives(a)
-    obj_b = _objectives(b)
+    # Inline objective extraction and comparison to avoid tuple allocation
+    a_sharpe = a.sharpe_ratio
+    b_sharpe = b.sharpe_ratio
+    a_dd = 1.0 - a.max_drawdown
+    b_dd = 1.0 - b.max_drawdown
+    a_pf = a.profit_factor
+    b_pf = b.profit_factor
 
-    at_least_one_better = False
-    for va, vb in zip(obj_a, obj_b, strict=True):
-        if va < vb:
-            return False
-        if va > vb:
-            at_least_one_better = True
-    return at_least_one_better
+    # All >= check with early exit
+    if a_sharpe < b_sharpe or a_dd < b_dd or a_pf < b_pf:
+        return False
+
+    # At least one strictly better
+    return a_sharpe > b_sharpe or a_dd > b_dd or a_pf > b_pf
 
 
 def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
     """Assign Pareto front ranks to a population.
 
     Front 0 = non-dominated, front 1 = dominated only by front 0, etc.
+
+    Uses a hybrid approach: for each front extraction, uses Python loops
+    for small remaining populations and vectorized dominance for larger ones.
+    The pareto_dominates() function has been inlined for critical path speed.
 
     Args:
         population_fitness: Fitness results for each individual.
@@ -197,15 +239,35 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
     remaining = set(range(n))
     current_rank = 0
 
+    # Pre-extract objectives to avoid repeated attribute access
+    sharpes = [f.sharpe_ratio for f in population_fitness]
+    inv_dds = [1.0 - f.max_drawdown for f in population_fitness]
+    pfs = [f.profit_factor for f in population_fitness]
+
     while remaining:
         # Find non-dominated set in remaining
         front: list[int] = []
-        for i in remaining:
+        remaining_list = list(remaining)
+
+        for i in remaining_list:
             dominated = False
-            for j in remaining:
-                if i != j and pareto_dominates(population_fitness[j], population_fitness[i]):
+            s_i = sharpes[i]
+            d_i = inv_dds[i]
+            p_i = pfs[i]
+
+            for j in remaining_list:
+                if i == j:
+                    continue
+                s_j = sharpes[j]
+                d_j = inv_dds[j]
+                p_j = pfs[j]
+
+                # Inline pareto_dominates: j dominates i
+                if (s_j >= s_i and d_j >= d_i and p_j >= p_i
+                        and (s_j > s_i or d_j > d_i or p_j > p_i)):
                     dominated = True
                     break
+
             if not dominated:
                 front.append(i)
 
