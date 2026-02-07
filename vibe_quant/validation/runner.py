@@ -454,15 +454,19 @@ class ValidationRunner:
             )
             raise ValidationRunnerError(msg)
 
+        # Build strategy config dict: instrument_id + any override parameters
+        strategy_params = self._build_strategy_params(run_config)
+
         # Build strategy configs (one per symbol)
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
+            config_dict = {"instrument_id": instrument_id, **strategy_params}
             strategy_configs.append(
                 ImportableStrategyConfig(
                     strategy_path=f"{module_path}:{strategy_cls_name}",
                     config_path=f"{module_path}:{config_cls_name}",
-                    config={"instrument_id": instrument_id},
+                    config=config_dict,
                 )
             )
 
@@ -499,13 +503,15 @@ class ValidationRunner:
             run_analysis=True,
         )
 
-        # Create run config
+        # Create run config -- dispose_on_completion=False so we can
+        # access engine.trader for positions report after run completes.
         bt_run_config = BacktestRunConfig(
             engine=engine_config,
             venues=[bt_venue_config],
             data=data_configs,
             start=start_date,
             end=end_date,
+            dispose_on_completion=False,
         )
 
         logger.info(
@@ -521,9 +527,12 @@ class ValidationRunner:
         # Execute the backtest
         node = BacktestNode(configs=[bt_run_config])
         try:
+            # Build engines, then register portfolio statistics before running
+            node.build()
+            self._register_statistics(node)
             node.run()
 
-            engine = node.get_engine(0)
+            engine = node.get_engine(bt_run_config.id)
             bt_result = engine.get_result()
 
             # Extract metrics and trades from the engine
@@ -542,6 +551,72 @@ class ValidationRunner:
             return result
         finally:
             node.dispose()
+
+    def _register_statistics(self, node: object) -> None:
+        """Register portfolio statistics on the engine's analyzer.
+
+        NautilusTrader's PortfolioAnalyzer starts with no registered
+        statistics.  We register the standard set so that BacktestResult
+        stats_pnls / stats_returns are populated.
+
+        Args:
+            node: BacktestNode (after build, before run).
+        """
+        from nautilus_trader.core.nautilus_pyo3 import (
+            AvgLoser,
+            AvgWinner,
+            Expectancy,
+            LongRatio,
+            MaxDrawdown,
+            ProfitFactor,
+            SharpeRatio,
+            SortinoRatio,
+            WinRate,
+        )
+
+        stats = [
+            SharpeRatio(),
+            SortinoRatio(),
+            MaxDrawdown(),
+            WinRate(),
+            ProfitFactor(),
+            Expectancy(),
+            LongRatio(),
+            AvgWinner(),
+            AvgLoser(),
+        ]
+
+        for engine in node.get_engines():
+            analyzer = engine.kernel.portfolio.analyzer
+            for stat in stats:
+                analyzer.register_statistic(stat)
+
+    def _build_strategy_params(self, run_config: dict[str, object]) -> dict[str, object]:
+        """Extract strategy parameter overrides from run config.
+
+        If the run was created to validate specific sweep parameters,
+        those are stored in run_config['parameters'] and should be
+        forwarded to the compiled strategy's config.
+
+        Args:
+            run_config: Run configuration dict from database.
+
+        Returns:
+            Dict of parameter overrides to merge into ImportableStrategyConfig.
+        """
+        params: dict[str, object] = {}
+        raw_params = run_config.get("parameters")
+        if not isinstance(raw_params, dict):
+            return params
+
+        # Direct parameter overrides (e.g., from validated screening results)
+        for key, value in raw_params.items():
+            # Skip meta-keys that aren't strategy parameters
+            if key in ("sweep", "overfitting_filters"):
+                continue
+            params[key] = value
+
+        return params
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.
@@ -608,8 +683,15 @@ class ValidationRunner:
     ) -> None:
         """Extract aggregate statistics from BacktestResult into ValidationResult.
 
-        NautilusTrader stores stats in dicts keyed by descriptive strings.
-        We do fuzzy matching on key names to be resilient across NT versions.
+        NT's PortfolioAnalyzer populates stats_pnls with PnL and any
+        registered statistics keyed by their ``name`` attribute, and
+        stats_returns with the same registered statistics.
+
+        Known key names from NT 1.222 (Rust statistics):
+            stats_pnls:  "PnL (total)", "PnL% (total)", "Sharpe Ratio (252 days)",
+                         "Sortino Ratio (252 days)", "Max Drawdown", "Win Rate",
+                         "Profit Factor", "Expectancy", "Avg Winner", "Avg Loser"
+            stats_returns: same statistic names
 
         Args:
             result: ValidationResult to populate (mutated in place).
@@ -618,6 +700,7 @@ class ValidationRunner:
         stats_returns = bt_result.stats_returns or {}
         stats_pnls = bt_result.stats_pnls or {}
 
+        # Extract from returns stats (keyed by statistic name)
         for key, value in stats_returns.items():
             if value is None:
                 continue
@@ -627,23 +710,32 @@ class ValidationRunner:
                 result.sharpe_ratio = fval
             elif "sortino" in key_lower:
                 result.sortino_ratio = fval
-            elif "max drawdown" in key_lower or "max_drawdown" in key_lower:
+            elif "max drawdown" in key_lower:
                 result.max_drawdown = abs(fval)
-            elif "win rate" in key_lower or "win_rate" in key_lower:
+            elif key_lower == "win rate":
                 result.win_rate = fval
-            elif "profit factor" in key_lower or "profit_factor" in key_lower:
+            elif key_lower == "profit factor":
                 result.profit_factor = fval
-            elif "total return" in key_lower or "cumulative return" in key_lower:
-                result.total_return = fval
 
+        # Extract from PnL stats (keyed by currency, e.g. "USDT")
         for _currency, pnl_stats in stats_pnls.items():
             for key, value in pnl_stats.items():
                 if value is None:
                     continue
                 key_lower = key.lower()
                 fval = float(value)
-                if "commission" in key_lower or "total fees" in key_lower:
-                    result.total_fees += abs(fval)
+                if key_lower == "pnl% (total)":
+                    result.total_return = fval
+                elif "sharpe" in key_lower:
+                    result.sharpe_ratio = fval
+                elif "sortino" in key_lower:
+                    result.sortino_ratio = fval
+                elif key_lower == "max drawdown":
+                    result.max_drawdown = abs(fval)
+                elif key_lower == "win rate":
+                    result.win_rate = fval
+                elif key_lower == "profit factor":
+                    result.profit_factor = fval
 
     def _extract_trades(
         self,
@@ -651,7 +743,10 @@ class ValidationRunner:
         engine: BacktestEngine,
         venue_config: VenueConfig,
     ) -> None:
-        """Extract individual trade records from the engine's position reports.
+        """Extract individual trade records from the engine's closed positions.
+
+        Uses the Position objects from the engine cache directly, since the
+        positions report DataFrame column names can vary across NT versions.
 
         Args:
             result: ValidationResult to populate trades on (mutated in place).
@@ -659,58 +754,62 @@ class ValidationRunner:
             venue_config: Venue config for default leverage.
         """
         try:
-            positions_report = engine.trader.generate_positions_report()
+            positions = engine.kernel.cache.positions()
         except Exception:
-            logger.warning("Could not generate positions report", exc_info=True)
+            logger.warning("Could not read positions from engine cache", exc_info=True)
             return
 
-        if positions_report is None or positions_report.empty:
+        if not positions:
             return
 
         default_leverage = int(venue_config.default_leverage)
         winning = 0
         losing = 0
+        total_fees = 0.0
 
-        for _idx, row in positions_report.iterrows():
-            realized_pnl = float(row.get("realized_pnl", 0.0))
+        for pos in positions:
+            if not pos.is_closed:
+                continue
+
+            realized_pnl = float(pos.realized_pnl)
+            entry_price = float(pos.avg_px_open)
+            exit_price = float(pos.avg_px_close)
+            quantity = float(pos.quantity)
+
+            # commissions is a list of Money objects
+            pos_fees = sum(float(c) for c in pos.commissions)
+            total_fees += abs(pos_fees)
 
             if realized_pnl > 0:
                 winning += 1
             elif realized_pnl < 0:
                 losing += 1
 
-            entry_price = float(row.get("avg_px_open", 0.0))
-            exit_price = float(row.get("avg_px_close", 0.0))
-            quantity = float(row.get("quantity", 0.0))
-            commissions = float(row.get("commissions", 0.0))
-
             # Compute ROI: PnL / notional value at entry
             notional = entry_price * quantity if entry_price and quantity else 1.0
             roi_pct = (realized_pnl / notional) * 100.0 if notional else 0.0
 
-            # Format timestamps
-            entry_time = str(row.get("ts_opened", ""))
-            exit_time = str(row.get("ts_closed", ""))
+            # Format timestamps (ns -> ISO via pandas/datetime)
+            entry_time = str(pos.ts_opened)
+            exit_time = str(pos.ts_closed) if pos.ts_closed else None
 
-            # Determine direction from side column
-            side = str(row.get("side", "")).upper()
-            direction = "LONG" if side in ("BUY", "LONG") else "SHORT"
+            # entry is the opening OrderSide (BUY = LONG, SELL = SHORT)
+            direction = "LONG" if str(pos.entry).upper() == "BUY" else "SHORT"
 
-            # Determine instrument symbol
-            instrument_id = str(row.get("instrument_id", ""))
+            instrument_id = str(pos.instrument_id)
 
             trade = TradeRecord(
                 symbol=instrument_id,
                 direction=direction,
                 leverage=default_leverage,
                 entry_time=entry_time,
-                exit_time=exit_time if exit_time else None,
+                exit_time=exit_time,
                 entry_price=entry_price,
-                exit_price=exit_price if exit_price else None,
+                exit_price=exit_price,
                 quantity=quantity,
-                entry_fee=abs(commissions) / 2.0,
-                exit_fee=abs(commissions) / 2.0,
-                gross_pnl=realized_pnl + abs(commissions),
+                entry_fee=abs(pos_fees) / 2.0,
+                exit_fee=abs(pos_fees) / 2.0,
+                gross_pnl=realized_pnl + abs(pos_fees),
                 net_pnl=realized_pnl,
                 roi_percent=roi_pct,
                 exit_reason="signal",
@@ -720,6 +819,7 @@ class ValidationRunner:
         result.total_trades = len(result.trades)
         result.winning_trades = winning
         result.losing_trades = losing
+        result.total_fees = total_fees
         if result.total_trades > 0:
             result.win_rate = winning / result.total_trades
 
