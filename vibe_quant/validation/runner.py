@@ -10,7 +10,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,10 +21,14 @@ from vibe_quant.logging.writer import EventWriter
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.venue import (
     VenueConfig,
+    create_backtest_venue_config,
     create_venue_config_for_validation,
 )
 
 if TYPE_CHECKING:
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.results import BacktestResult
+
     from vibe_quant.dsl.schema import StrategyDSL
 
 logger = logging.getLogger(__name__)
@@ -242,7 +245,7 @@ class ValidationRunner:
             with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
                 self._write_start_event(writer, run_id, strategy_name, venue_config)
 
-                result = self._run_backtest_mock(
+                result = self._run_backtest(
                     run_id=run_id,
                     strategy_name=strategy_name,
                     dsl=dsl,
@@ -369,7 +372,7 @@ class ValidationRunner:
             latency_preset=latency_preset or LatencyPreset.RETAIL,
         )
 
-    def _run_backtest_mock(
+    def _run_backtest(
         self,
         run_id: int,
         strategy_name: str,
@@ -378,88 +381,347 @@ class ValidationRunner:
         run_config: dict[str, object],
         writer: EventWriter,
     ) -> ValidationResult:
-        """Run backtest (mocked implementation).
+        """Run NautilusTrader backtest with full-fidelity execution.
 
-        This is a placeholder that returns mock results. Will be replaced
-        with actual NautilusTrader BacktestEngine integration.
+        Compiles the strategy DSL to a NautilusTrader Strategy, loads market
+        data from the ParquetDataCatalog, configures the venue with latency
+        and slippage models, and runs a BacktestNode.
 
         Args:
             run_id: Run ID.
             strategy_name: Strategy name.
-            dsl: Compiled strategy DSL.
+            dsl: Validated strategy DSL.
             venue_config: Venue configuration.
-            run_config: Run configuration.
+            run_config: Run configuration from database.
             writer: Event writer for logging.
 
         Returns:
-            Mock validation result.
+            ValidationResult with real metrics and trades.
+
+        Raises:
+            ValidationRunnerError: If backtest setup or execution fails.
         """
-        # Create mock result with reasonable values
+        from nautilus_trader.backtest.node import BacktestNode
+        from nautilus_trader.config import (
+            BacktestDataConfig,
+            BacktestEngineConfig,
+            BacktestRunConfig,
+            ImportableStrategyConfig,
+        )
+
+        from vibe_quant.data.catalog import (
+            DEFAULT_CATALOG_PATH,
+            INSTRUMENT_CONFIGS,
+            INTERVAL_TO_AGGREGATION,
+            CatalogManager,
+            create_instrument,
+        )
+
+        # Parse symbols from run config
+        symbols = self._parse_symbols(run_config)
+
+        # Parse date range
+        start_date = str(run_config.get("start_date", "2024-01-01"))
+        end_date = str(run_config.get("end_date", "2024-12-31"))
+
+        # Collect all timeframes needed by the strategy
+        all_timeframes = {dsl.timeframe}
+        all_timeframes.update(dsl.additional_timeframes)
+        for ind_config in dsl.indicators.values():
+            if ind_config.timeframe:
+                all_timeframes.add(ind_config.timeframe)
+
+        # Ensure instruments exist in catalog
+        catalog_path = DEFAULT_CATALOG_PATH
+        catalog_mgr = CatalogManager(catalog_path)
+        for symbol in symbols:
+            if symbol in INSTRUMENT_CONFIGS:
+                instrument = create_instrument(symbol)
+                catalog_mgr.write_instrument(instrument)
+
+        # Compile strategy to an importable module (registers in sys.modules)
+        module = self._compiler.compile_to_module(dsl)
+        class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
+        module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+
+        # Verify generated classes exist in the module
+        strategy_cls_name = f"{class_name}Strategy"
+        config_cls_name = f"{class_name}Config"
+        if not hasattr(module, strategy_cls_name) or not hasattr(module, config_cls_name):
+            msg = (
+                f"Compiled module missing expected classes: "
+                f"{strategy_cls_name}, {config_cls_name}"
+            )
+            raise ValidationRunnerError(msg)
+
+        # Build strategy configs (one per symbol)
+        strategy_configs: list[ImportableStrategyConfig] = []
+        for symbol in symbols:
+            instrument_id = f"{symbol}-PERP.BINANCE"
+            strategy_configs.append(
+                ImportableStrategyConfig(
+                    strategy_path=f"{module_path}:{strategy_cls_name}",
+                    config_path=f"{module_path}:{config_cls_name}",
+                    config={"instrument_id": instrument_id},
+                )
+            )
+
+        # Build data configs (one per symbol per timeframe)
+        data_configs: list[BacktestDataConfig] = []
+        for symbol in symbols:
+            instrument_id = f"{symbol}-PERP.BINANCE"
+            for tf in sorted(all_timeframes):
+                if tf not in INTERVAL_TO_AGGREGATION:
+                    logger.warning("Unknown timeframe %s, skipping", tf)
+                    continue
+                step, agg = INTERVAL_TO_AGGREGATION[tf]
+                data_configs.append(
+                    BacktestDataConfig(
+                        catalog_path=str(catalog_path.resolve()),
+                        data_cls="nautilus_trader.model.data:Bar",
+                        instrument_id=instrument_id,
+                        bar_spec=f"{step}-{agg.name}-LAST",
+                        start_time=start_date,
+                        end_time=end_date,
+                    )
+                )
+
+        if not data_configs:
+            msg = "No valid data configurations could be built"
+            raise ValidationRunnerError(msg)
+
+        # Convert our VenueConfig to NautilusTrader BacktestVenueConfig
+        bt_venue_config = create_backtest_venue_config(venue_config)
+
+        # Create engine config
+        engine_config = BacktestEngineConfig(
+            strategies=strategy_configs,
+            run_analysis=True,
+        )
+
+        # Create run config
+        bt_run_config = BacktestRunConfig(
+            engine=engine_config,
+            venues=[bt_venue_config],
+            data=data_configs,
+            start=start_date,
+            end=end_date,
+        )
+
+        logger.info(
+            "Starting NautilusTrader backtest for run %d: "
+            "%d symbols, %d timeframes, %s to %s",
+            run_id,
+            len(symbols),
+            len(all_timeframes),
+            start_date,
+            end_date,
+        )
+
+        # Execute the backtest
+        node = BacktestNode(configs=[bt_run_config])
+        try:
+            node.run()
+
+            engine = node.get_engine(0)
+            bt_result = engine.get_result()
+
+            # Extract metrics and trades from the engine
+            result = self._extract_results(
+                run_id=run_id,
+                strategy_name=strategy_name,
+                bt_result=bt_result,
+                engine=engine,
+                venue_config=venue_config,
+            )
+
+            # Log trade events
+            for trade in result.trades:
+                self._write_trade_events(writer, run_id, strategy_name, trade)
+
+            return result
+        finally:
+            node.dispose()
+
+    def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
+        """Parse symbol list from run configuration.
+
+        Args:
+            run_config: Run configuration dict from database.
+
+        Returns:
+            List of symbol strings (e.g., ['BTCUSDT', 'ETHUSDT']).
+        """
+        symbols_raw = run_config.get("symbols", ["BTCUSDT"])
+        if isinstance(symbols_raw, str):
+            return json.loads(symbols_raw)
+        elif isinstance(symbols_raw, list):
+            return [str(s) for s in symbols_raw]
+        return ["BTCUSDT"]
+
+    def _extract_results(
+        self,
+        run_id: int,
+        strategy_name: str,
+        bt_result: BacktestResult,
+        engine: BacktestEngine,
+        venue_config: VenueConfig,
+    ) -> ValidationResult:
+        """Extract ValidationResult from NautilusTrader backtest output.
+
+        Parses BacktestResult statistics and the engine's position/fill
+        reports into our ValidationResult and TradeRecord format.
+
+        Args:
+            run_id: Run ID.
+            strategy_name: Strategy name.
+            bt_result: NautilusTrader BacktestResult.
+            engine: BacktestEngine after run for report generation.
+            venue_config: Venue config for leverage info.
+
+        Returns:
+            Populated ValidationResult.
+        """
         result = ValidationResult(
             run_id=run_id,
             strategy_name=strategy_name,
-            total_return=0.052,  # 5.2% as decimal
-            sharpe_ratio=1.35,  # Ratios stay as-is
-            sortino_ratio=1.85,
-            max_drawdown=0.085,  # 8.5% as decimal
-            total_trades=42,
-            winning_trades=25,
-            losing_trades=17,
-            win_rate=0.595,  # 59.5% as decimal
-            profit_factor=1.45,
-            total_fees=0.00126,  # As fraction of equity
-            total_funding=0.00045,
-            total_slippage=0.00023,
         )
 
-        # Generate some mock trades
-        symbols_raw = run_config.get("symbols", ["BTCUSDT-PERP"])
-        if isinstance(symbols_raw, str):
-            symbols: list[str] = json.loads(symbols_raw)
-        elif isinstance(symbols_raw, list):
-            symbols = [str(s) for s in symbols_raw]
-        else:
-            symbols = ["BTCUSDT-PERP"]
+        if bt_result is None:
+            return result
 
-        # Use date range from run config instead of hardcoded dates
-        start_date_str = str(run_config.get("start_date", "2025-01-01"))
-        end_date_str = str(run_config.get("end_date", "2025-12-31"))
-        start_dt = date.fromisoformat(start_date_str)
-        end_dt = date.fromisoformat(end_date_str)
-        date_range_days = max((end_dt - start_dt).days, 1)
+        result.execution_time_seconds = bt_result.elapsed_time
+        result.total_trades = bt_result.total_positions
 
-        for i in range(min(5, result.total_trades)):
-            is_winner = i < 3  # First 3 are winners
-            symbol = symbols[i % len(symbols)] if symbols else "BTCUSDT-PERP"
+        # Parse aggregate statistics from BacktestResult
+        self._extract_stats(result, bt_result)
 
-            # Spread mock trades evenly across the configured date range
-            day_offset = (date_range_days * (i + 1)) // (min(5, result.total_trades) + 1)
-            trade_date = start_dt + timedelta(days=day_offset)
+        # Extract individual trades from engine position reports
+        self._extract_trades(result, engine, venue_config)
+
+        return result
+
+    def _extract_stats(
+        self,
+        result: ValidationResult,
+        bt_result: BacktestResult,
+    ) -> None:
+        """Extract aggregate statistics from BacktestResult into ValidationResult.
+
+        NautilusTrader stores stats in dicts keyed by descriptive strings.
+        We do fuzzy matching on key names to be resilient across NT versions.
+
+        Args:
+            result: ValidationResult to populate (mutated in place).
+            bt_result: NautilusTrader BacktestResult.
+        """
+        stats_returns = bt_result.stats_returns or {}
+        stats_pnls = bt_result.stats_pnls or {}
+
+        for key, value in stats_returns.items():
+            if value is None:
+                continue
+            key_lower = key.lower()
+            fval = float(value)
+            if "sharpe" in key_lower:
+                result.sharpe_ratio = fval
+            elif "sortino" in key_lower:
+                result.sortino_ratio = fval
+            elif "max drawdown" in key_lower or "max_drawdown" in key_lower:
+                result.max_drawdown = abs(fval)
+            elif "win rate" in key_lower or "win_rate" in key_lower:
+                result.win_rate = fval
+            elif "profit factor" in key_lower or "profit_factor" in key_lower:
+                result.profit_factor = fval
+            elif "total return" in key_lower or "cumulative return" in key_lower:
+                result.total_return = fval
+
+        for _currency, pnl_stats in stats_pnls.items():
+            for key, value in pnl_stats.items():
+                if value is None:
+                    continue
+                key_lower = key.lower()
+                fval = float(value)
+                if "commission" in key_lower or "total fees" in key_lower:
+                    result.total_fees += abs(fval)
+
+    def _extract_trades(
+        self,
+        result: ValidationResult,
+        engine: BacktestEngine,
+        venue_config: VenueConfig,
+    ) -> None:
+        """Extract individual trade records from the engine's position reports.
+
+        Args:
+            result: ValidationResult to populate trades on (mutated in place).
+            engine: BacktestEngine after run.
+            venue_config: Venue config for default leverage.
+        """
+        try:
+            positions_report = engine.trader.generate_positions_report()
+        except Exception:
+            logger.warning("Could not generate positions report", exc_info=True)
+            return
+
+        if positions_report is None or positions_report.empty:
+            return
+
+        default_leverage = int(venue_config.default_leverage)
+        winning = 0
+        losing = 0
+
+        for _idx, row in positions_report.iterrows():
+            realized_pnl = float(row.get("realized_pnl", 0.0))
+
+            if realized_pnl > 0:
+                winning += 1
+            elif realized_pnl < 0:
+                losing += 1
+
+            entry_price = float(row.get("avg_px_open", 0.0))
+            exit_price = float(row.get("avg_px_close", 0.0))
+            quantity = float(row.get("quantity", 0.0))
+            commissions = float(row.get("commissions", 0.0))
+
+            # Compute ROI: PnL / notional value at entry
+            notional = entry_price * quantity if entry_price and quantity else 1.0
+            roi_pct = (realized_pnl / notional) * 100.0 if notional else 0.0
+
+            # Format timestamps
+            entry_time = str(row.get("ts_opened", ""))
+            exit_time = str(row.get("ts_closed", ""))
+
+            # Determine direction from side column
+            side = str(row.get("side", "")).upper()
+            direction = "LONG" if side in ("BUY", "LONG") else "SHORT"
+
+            # Determine instrument symbol
+            instrument_id = str(row.get("instrument_id", ""))
 
             trade = TradeRecord(
-                symbol=str(symbol),
-                direction="LONG" if i % 2 == 0 else "SHORT",
-                leverage=10,
-                entry_time=f"{trade_date.isoformat()}T10:00:00Z",
-                exit_time=f"{trade_date.isoformat()}T14:00:00Z",
-                entry_price=42000.0 + i * 100,
-                exit_price=42100.0 + i * 100 if is_winner else 41900.0 + i * 100,
-                quantity=0.05,
-                entry_fee=2.10,
-                exit_fee=2.10,
-                funding_fees=1.50 if i % 3 == 0 else -0.75,
-                slippage_cost=0.85,
-                gross_pnl=100.0 if is_winner else -100.0,
-                net_pnl=95.0 if is_winner else -105.0,
-                roi_percent=2.5 if is_winner else -2.6,
-                exit_reason="take_profit" if is_winner else "stop_loss",
+                symbol=instrument_id,
+                direction=direction,
+                leverage=default_leverage,
+                entry_time=entry_time,
+                exit_time=exit_time if exit_time else None,
+                entry_price=entry_price,
+                exit_price=exit_price if exit_price else None,
+                quantity=quantity,
+                entry_fee=abs(commissions) / 2.0,
+                exit_fee=abs(commissions) / 2.0,
+                gross_pnl=realized_pnl + abs(commissions),
+                net_pnl=realized_pnl,
+                roi_percent=roi_pct,
+                exit_reason="signal",
             )
             result.trades.append(trade)
 
-            # Log trade events
-            self._write_trade_events(writer, run_id, strategy_name, trade)
-
-        return result
+        result.total_trades = len(result.trades)
+        result.winning_trades = winning
+        result.losing_trades = losing
+        if result.total_trades > 0:
+            result.win_rate = winning / result.total_trades
 
     def _write_start_event(
         self,

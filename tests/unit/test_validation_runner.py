@@ -441,11 +441,11 @@ class TestValidationRunner:
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
 
-        # Monkey-patch _run_backtest_mock to raise
+        # Monkey-patch _run_backtest to raise
         def _exploding_mock(*args: object, **kwargs: object) -> None:
             raise RuntimeError("simulated engine crash")
 
-        runner._run_backtest_mock = _exploding_mock  # type: ignore[assignment]
+        runner._run_backtest = _exploding_mock  # type: ignore[assignment]
 
         with pytest.raises(ValidationRunnerError, match="simulated engine crash"):
             runner.run(run_id=1)
