@@ -426,6 +426,19 @@ class StateManager:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def update_result_notes(self, run_id: int, notes: str) -> None:
+        """Update notes/annotations for a backtest result.
+
+        Args:
+            run_id: Backtest run ID.
+            notes: Notes text to store.
+        """
+        self.conn.execute(
+            "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
+            (notes, run_id),
+        )
+        self.conn.commit()
+
     # --- Trade CRUD ---
 
     def save_trade(self, run_id: int, trade: JsonDict) -> int:

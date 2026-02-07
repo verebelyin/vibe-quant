@@ -154,6 +154,8 @@ class ValidationResult:
     execution_time_seconds: float = 0.0
     trades: list[TradeRecord] = field(default_factory=list)
 
+    starting_balance: float = 100000.0
+
     def to_metrics_dict(self) -> dict[str, object]:
         """Convert to metrics dictionary for database storage."""
         return {
@@ -181,6 +183,7 @@ class ValidationResult:
             "total_funding": self.total_funding,
             "total_slippage": self.total_slippage,
             "execution_time_seconds": self.execution_time_seconds,
+            "starting_balance": self.starting_balance,
         }
 
 
@@ -683,6 +686,7 @@ class ValidationRunner:
         result = ValidationResult(
             run_id=run_id,
             strategy_name=strategy_name,
+            starting_balance=venue_config.starting_balance_usdt,
         )
 
         if bt_result is None:
