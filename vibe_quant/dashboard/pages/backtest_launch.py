@@ -464,7 +464,13 @@ def _render_active_jobs(manager: StateManager, job_manager: BacktestJobManager) 
     """Render active jobs list with status and kill button."""
     st.subheader("Active Jobs")
 
-    # Sync and get active jobs
+    # Sync job status with actual process state before listing.
+    # This detects processes that exited without updating the DB
+    # (e.g. crashes, missing status updates) and marks them accordingly.
+    for job in job_manager.list_active_jobs():
+        job_manager.sync_job_status(job.run_id)
+
+    # Now get the (potentially updated) active jobs list
     active_jobs = job_manager.list_active_jobs()
 
     # Also check for stale jobs
