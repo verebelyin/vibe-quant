@@ -183,7 +183,7 @@ def create_backtest_venue_config(config: VenueConfig) -> BacktestVenueConfig:
         latency_model=latency_model,
         fee_model=fee_model,
         bar_execution=True,
-        reject_stop_orders=True,
+        reject_stop_orders=False,
         support_gtd_orders=True,
         support_contingent_orders=True,
         use_position_ids=True,

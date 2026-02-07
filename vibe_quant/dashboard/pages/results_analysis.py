@@ -130,8 +130,15 @@ def build_trades_dataframe(trades: list[dict[str, Any]]) -> pd.DataFrame:
     return df[available]
 
 
-def build_equity_curve(trades: list[dict[str, Any]]) -> pd.DataFrame:
-    """Build equity curve from trades."""
+def build_equity_curve(
+    trades: list[dict[str, Any]], starting_balance: float = 100000
+) -> pd.DataFrame:
+    """Build equity curve from trades.
+
+    Args:
+        trades: List of trade dicts with exit_time and net_pnl.
+        starting_balance: Initial account equity. Defaults to 100000.
+    """
     if not trades:
         return pd.DataFrame()
 
@@ -142,12 +149,12 @@ def build_equity_curve(trades: list[dict[str, Any]]) -> pd.DataFrame:
 
     sorted_trades = sorted(closed, key=lambda x: x["exit_time"])
     cumulative_pnl = 0.0
-    equity_points = [{"time": sorted_trades[0]["entry_time"], "equity": 0.0}]
+    equity_points = [{"time": sorted_trades[0]["entry_time"], "equity": starting_balance}]
 
     for trade in sorted_trades:
         pnl = trade.get("net_pnl", 0.0) or 0.0
         cumulative_pnl += pnl
-        equity_points.append({"time": trade["exit_time"], "equity": cumulative_pnl})
+        equity_points.append({"time": trade["exit_time"], "equity": starting_balance + cumulative_pnl})
 
     return pd.DataFrame(equity_points)
 
@@ -164,7 +171,7 @@ def compute_drawdown_series(equity_df: pd.DataFrame) -> pd.DataFrame:
     for i, val in enumerate(equity):
         if val > peak:
             peak = val
-        dd = (peak - val) / max(peak, 1e-9) if peak > 0 else 0
+        dd = (peak - val) / peak if peak > 0 else (peak - val) / abs(peak) if peak < 0 else 0.0
         drawdowns.append({"time": equity_df.iloc[i]["time"], "drawdown": dd})
 
     return pd.DataFrame(drawdowns)
@@ -212,7 +219,7 @@ def render_pareto_scatter(sweep_df: pd.DataFrame) -> None:
         )
 
     fig.update_layout(height=500)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_equity_chart(equity_df: pd.DataFrame) -> None:
@@ -225,7 +232,7 @@ def render_equity_chart(equity_df: pd.DataFrame) -> None:
         equity_df, x="time", y="equity", title="Equity Curve", labels={"equity": "Cumulative P&L", "time": "Time"}
     )
     fig.update_layout(height=400)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_drawdown_chart(dd_df: pd.DataFrame) -> None:
@@ -251,7 +258,7 @@ def render_drawdown_chart(dd_df: pd.DataFrame) -> None:
         yaxis_title="Drawdown (%)",
         height=300,
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_metrics_panel(result: dict[str, Any]) -> None:
@@ -387,7 +394,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                 comparison_data[col_name][label] = str(val)
 
     df = pd.DataFrame(comparison_data)
-    st.dataframe(df, width="stretch")
+    st.dataframe(df, use_container_width=True)
 
 
 def export_to_csv(df: pd.DataFrame, filename: str) -> bytes:
@@ -485,7 +492,7 @@ def render_results_tab() -> None:
                     },
                     na_rep="N/A",
                 ),
-                width="stretch",
+                use_container_width=True,
                 height=400,
             )
 
@@ -529,12 +536,81 @@ def render_results_tab() -> None:
 
             if trades:
                 # Equity curve
-                equity_df = build_equity_curve(trades)
+                starting_balance = backtest_result.get("starting_balance", 100000)
+                equity_df = build_equity_curve(trades, starting_balance=starting_balance)
                 render_equity_chart(equity_df)
 
                 # Drawdown chart
                 dd_df = compute_drawdown_series(equity_df)
                 render_drawdown_chart(dd_df)
+
+                # Monthly returns heatmap
+                closed_trades = [
+                    t for t in trades if t.get("exit_time") and t.get("net_pnl") is not None
+                ]
+                if closed_trades:
+                    st.subheader("Monthly Returns")
+                    trade_df = pd.DataFrame(closed_trades)
+                    trade_df["exit_time"] = pd.to_datetime(trade_df["exit_time"])
+                    trade_df["year"] = trade_df["exit_time"].dt.year
+                    trade_df["month"] = trade_df["exit_time"].dt.month
+                    monthly = trade_df.groupby(["year", "month"])["net_pnl"].sum().reset_index()
+                    pivot = monthly.pivot(index="year", columns="month", values="net_pnl").fillna(0)
+                    month_names = {
+                        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
+                        5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
+                        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+                    }
+                    pivot = pivot.rename(columns=month_names)
+                    for m in month_names.values():
+                        if m not in pivot.columns:
+                            pivot[m] = 0.0
+                    pivot = pivot[list(month_names.values())]
+
+                    fig_heatmap = px.imshow(
+                        pivot.values,
+                        x=list(pivot.columns),
+                        y=[str(y) for y in pivot.index],
+                        color_continuous_scale=["red", "white", "green"],
+                        color_continuous_midpoint=0,
+                        text_auto=".0f",
+                        labels={"x": "Month", "y": "Year", "color": "P&L ($)"},
+                        title="Monthly Returns Heatmap",
+                        aspect="auto",
+                    )
+                    fig_heatmap.update_layout(height=max(250, len(pivot) * 60 + 100))
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                    # Trade P&L distribution histogram
+                    st.subheader("Trade P&L Distribution")
+                    pnl_values = [float(t.get("net_pnl", 0.0) or 0.0) for t in closed_trades]
+                    if pnl_values:
+                        fig_hist = go.Figure()
+                        profits = [v for v in pnl_values if v >= 0]
+                        losses = [v for v in pnl_values if v < 0]
+                        if profits:
+                            fig_hist.add_trace(go.Histogram(
+                                x=profits,
+                                name="Profit",
+                                marker_color="green",
+                                opacity=0.7,
+                            ))
+                        if losses:
+                            fig_hist.add_trace(go.Histogram(
+                                x=losses,
+                                name="Loss",
+                                marker_color="red",
+                                opacity=0.7,
+                            ))
+                        fig_hist.add_vline(x=0, line_dash="dash", line_color="black", line_width=1)
+                        fig_hist.update_layout(
+                            title="Trade P&L Distribution",
+                            xaxis_title="P&L ($)",
+                            yaxis_title="Count",
+                            barmode="overlay",
+                            height=400,
+                        )
+                        st.plotly_chart(fig_hist, use_container_width=True)
 
                 # Trade log
                 st.subheader("Trade Log")
@@ -560,7 +636,7 @@ def render_results_tab() -> None:
                 if symbol_filter and "symbol" in filtered_trades.columns:
                     filtered_trades = filtered_trades[filtered_trades["symbol"].isin(symbol_filter)]
 
-                st.dataframe(filtered_trades, width="stretch", height=400)
+                st.dataframe(filtered_trades, use_container_width=True, height=400)
 
                 # Export trades
                 csv_data = export_to_csv(filtered_trades, f"trades_{selected_run_id}.csv")

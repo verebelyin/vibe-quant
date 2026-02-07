@@ -162,14 +162,14 @@ class ConditionParseError(ValueError):
 
 # Regex patterns for parsing
 _COMPARISON_PATTERN = re.compile(
-    r"^\s*(\w+)\s*(>=|<=|>|<)\s*(\w+\.?\w*)\s*$"
+    r"^\s*(\w+)\s*(>=|<=|>|<)\s*(-?\w+\.?\w*)\s*$"
 )
 _CROSS_PATTERN = re.compile(
     r"^\s*(\w+)\s+(crosses_above|crosses_below)\s+(\w+\.?\w*)\s*$",
     re.IGNORECASE,
 )
 _BETWEEN_PATTERN = re.compile(
-    r"^\s*(\w+)\s+between\s+(\w+\.?\w*)\s+(\w+\.?\w*)\s*$",
+    r"^\s*(\w+)\s+between\s+(-?\w+\.?\w*)\s+(-?\w+\.?\w*)\s*$",
     re.IGNORECASE,
 )
 

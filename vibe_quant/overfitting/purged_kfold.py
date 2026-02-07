@@ -100,7 +100,7 @@ class CVResult:
         mean_oos_sharpe: Mean out-of-sample Sharpe across folds.
         std_oos_sharpe: Standard deviation of out-of-sample Sharpe.
         mean_oos_return: Mean out-of-sample return across folds.
-        is_robust: True if mean_oos_sharpe - std_oos_sharpe > threshold.
+        is_robust: True if mean OOS Sharpe > threshold AND std OOS Sharpe < max.
     """
 
     fold_results: list[FoldResult]
@@ -248,14 +248,21 @@ class PurgedKFoldCV:
     Runs backtests on each fold and aggregates results to assess strategy
     robustness across different time periods.
 
+    SPEC Section 8 robustness criteria:
+        - Mean OOS Sharpe > min_oos_sharpe (default 0.5)
+        - std(OOS Sharpe) < max_oos_sharpe_std (default 1.0)
+
     Args:
         config: CV configuration (n_splits, purge_pct, embargo_pct).
-        robustness_threshold: Sharpe threshold for is_robust (default 0.5).
-            Strategy is robust if mean_oos_sharpe - std_oos_sharpe > threshold.
+        robustness_threshold: Legacy threshold (kept for backwards compatibility).
+        min_oos_sharpe: Minimum mean OOS Sharpe ratio (default 0.5).
+        max_oos_sharpe_std: Maximum std of OOS Sharpe ratios (default 1.0).
     """
 
     config: CVConfig
     robustness_threshold: float = 0.5
+    min_oos_sharpe: float = 0.5
+    max_oos_sharpe_std: float = 1.0
     _kfold: PurgedKFold = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -353,7 +360,9 @@ class PurgedKFoldCV:
         else:
             std_sharpe = 0.0
 
-        is_robust = (mean_sharpe - std_sharpe) > self.robustness_threshold
+        is_robust = (mean_sharpe > self.min_oos_sharpe) and (
+            std_sharpe < self.max_oos_sharpe_std
+        )
 
         return CVResult(
             fold_results=list(fold_results),

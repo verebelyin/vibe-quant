@@ -46,6 +46,25 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 
 **CRITICAL:** Use `bd` (beads) for ALL task/issue tracking. **NEVER use TodoWrite, TaskCreate, or markdown files for task tracking.** Beads is the single source of truth.
 
+### Installing `bd`
+
+Install via npm (preferred in this env), or any method from [beads repo](https://github.com/steveyegge/beads):
+
+```bash
+npm install -g @beads/bd          # npm (needs network to github for binary)
+bun install -g --trust @beads/bd  # bun alternative
+go install github.com/steveyegge/beads/cmd/bd@latest  # go (needs go 1.25+)
+# Or: curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+```
+
+**Fallback (no network):** If `bd` cannot be installed (e.g., no external network), edit `.beads/issues.jsonl` directly. Each issue is one JSON line:
+```json
+{"id":"vibe-quant-xxx","title":"...","description":"...","status":"open","priority":1,"issue_type":"bug","owner":"verebelyin@gmail.com","created_at":"2026-02-07T14:00:00.000000+01:00","created_by":"Claude"}
+```
+To list open issues without `bd`: `python3 -c "import json; [print(f'{j[\"id\"]}: {j[\"title\"]}') for line in open('.beads/issues.jsonl') if (j:=json.loads(line.strip())) and j.get('status')=='open']"`
+
+### Usage
+
 ```bash
 bd ready              # Find available work
 bd show <id>          # View issue details

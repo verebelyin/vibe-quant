@@ -395,10 +395,10 @@ class TestPurgedKFoldCV:
         assert abs(result.std_oos_sharpe - 0.3) < 0.001
 
     def test_is_robust_true(self) -> None:
-        """Strategy marked robust when mean - std > threshold."""
+        """Strategy marked robust when mean > min and std < max."""
         config = CVConfig(n_splits=3, purge_pct=0.0, embargo_pct=0.0)
-        cv = PurgedKFoldCV(config=config, robustness_threshold=0.5)
-        # Mean = 1.0, Std = ~0.0 -> 1.0 - 0.0 > 0.5
+        cv = PurgedKFoldCV(config=config, min_oos_sharpe=0.5, max_oos_sharpe_std=1.0)
+        # Mean = 1.0, Std = 0.0 -> 1.0 > 0.5 AND 0.0 < 1.0
         sharpes = [1.0, 1.0, 1.0]
         runner = MockBacktestRunner(sharpes=sharpes, returns=[0.1, 0.1, 0.1])
 
@@ -407,9 +407,9 @@ class TestPurgedKFoldCV:
         assert result.is_robust is True
 
     def test_is_robust_false_low_mean(self) -> None:
-        """Strategy not robust when mean too low."""
+        """Strategy not robust when mean OOS Sharpe below threshold."""
         config = CVConfig(n_splits=3, purge_pct=0.0, embargo_pct=0.0)
-        cv = PurgedKFoldCV(config=config, robustness_threshold=0.5)
+        cv = PurgedKFoldCV(config=config, min_oos_sharpe=0.5, max_oos_sharpe_std=1.0)
         sharpes = [0.3, 0.3, 0.3]  # Mean = 0.3 < 0.5
         runner = MockBacktestRunner(sharpes=sharpes, returns=[0.1, 0.1, 0.1])
 
@@ -418,10 +418,11 @@ class TestPurgedKFoldCV:
         assert result.is_robust is False
 
     def test_is_robust_false_high_std(self) -> None:
-        """Strategy not robust when std too high."""
+        """Strategy not robust when std OOS Sharpe exceeds maximum."""
         config = CVConfig(n_splits=3, purge_pct=0.0, embargo_pct=0.0)
-        cv = PurgedKFoldCV(config=config, robustness_threshold=0.5)
-        sharpes = [0.0, 0.9, 1.8]  # Mean = 0.9, Std = 0.9 -> 0.9 - 0.9 = 0
+        cv = PurgedKFoldCV(config=config, min_oos_sharpe=0.5, max_oos_sharpe_std=1.0)
+        # Mean = 1.2, Std ~= 1.44 -> 1.2 > 0.5 BUT 1.44 >= 1.0
+        sharpes = [0.0, 0.8, 2.8]
         runner = MockBacktestRunner(sharpes=sharpes, returns=[0.1, 0.1, 0.1])
 
         result = cv.run(n_samples=90, runner=runner)

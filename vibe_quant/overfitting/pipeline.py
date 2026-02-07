@@ -300,10 +300,18 @@ class OverfittingPipeline:
             passed_dsr: bool | None = None
 
             if config.enable_dsr:
+                # Use actual return distribution moments if available in
+                # sweep_results, otherwise fall back to normal distribution
+                # assumption (skewness=0, kurtosis=3). For accurate DSR,
+                # the screening pipeline should store these in sweep_results.
+                skewness = candidate.get("skewness", 0.0)
+                kurtosis = candidate.get("kurtosis", 3.0)
                 dsr_result = dsr.calculate(
                     observed_sharpe=candidate["sharpe_ratio"],
                     num_trials=num_trials,
                     num_observations=num_observations,
+                    skewness=skewness,
+                    kurtosis=kurtosis,
                 )
                 passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
                 if passed_dsr:

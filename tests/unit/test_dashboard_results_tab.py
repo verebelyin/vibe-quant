@@ -195,10 +195,11 @@ class TestBuildEquityCurve:
         df = build_equity_curve(trades)
 
         assert len(df) == 4  # Initial + 3 trades
-        assert df.iloc[0]["equity"] == 0.0
-        assert df.iloc[1]["equity"] == 100.0
-        assert df.iloc[2]["equity"] == 50.0
-        assert df.iloc[3]["equity"] == 125.0
+        # Default starting_balance is 100000
+        assert df.iloc[0]["equity"] == 100000.0
+        assert df.iloc[1]["equity"] == 100100.0
+        assert df.iloc[2]["equity"] == 100050.0
+        assert df.iloc[3]["equity"] == 100125.0
 
 
 class TestComputeDrawdownSeries:
