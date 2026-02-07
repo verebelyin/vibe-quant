@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     walk_forward_efficiency REAL,
     purged_kfold_mean_sharpe REAL,
     execution_time_seconds REAL,
+    starting_balance REAL,
+    notes TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
