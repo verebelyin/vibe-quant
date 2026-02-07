@@ -189,7 +189,7 @@ def render_data_coverage() -> None:
 
         rows.append(row)
 
-    st.dataframe(rows, width="stretch")
+    st.dataframe(rows, use_container_width=True)
 
 
 def render_download_history() -> None:
@@ -219,7 +219,7 @@ def render_download_history() -> None:
             row["Error"] = s["error_message"]
         rows.append(row)
 
-    st.dataframe(rows, width="stretch")
+    st.dataframe(rows, use_container_width=True)
 
 
 def render_data_actions() -> None:
@@ -319,7 +319,7 @@ def _render_download_preview(
         f"**{to_download}** to download"
     )
 
-    st.dataframe(preview, width="stretch")
+    st.dataframe(preview, use_container_width=True)
 
 
 def _run_ingest(symbols: list[str], start: date, end: date) -> None:
@@ -521,7 +521,7 @@ def render_data_browser() -> None:
     with tab_table:
         st.dataframe(
             df,
-            width="stretch",
+            use_container_width=True,
             column_config={
                 "Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
                 "Volume": st.column_config.NumberColumn(format="%.2f"),
@@ -637,7 +637,7 @@ def render_data_quality() -> None:
                             "Gap (min)": gap_min,
                         }
                     )
-                st.dataframe(gap_rows, width="stretch")
+                st.dataframe(gap_rows, use_container_width=True)
                 if len(result["gaps"]) > 20:
                     st.caption(f"Showing 20 of {len(result['gaps'])} gaps")
 
@@ -652,7 +652,7 @@ def render_data_quality() -> None:
                             "Error": msg,
                         }
                     )
-                st.dataframe(err_rows, width="stretch")
+                st.dataframe(err_rows, use_container_width=True)
                 if len(result["ohlc_errors"]) > 20:
                     st.caption(f"Showing 20 of {len(result['ohlc_errors'])} errors")
 

@@ -34,6 +34,7 @@ class WFAConfig:
         min_oos_sharpe: Minimum aggregated OOS Sharpe to pass.
         max_degradation: Maximum allowed IS vs OOS degradation (0.5 = 50%).
         min_consistency: Minimum fraction of profitable OOS windows.
+        min_efficiency: Minimum walk-forward efficiency (mean OOS / mean IS return).
     """
 
     in_sample_days: int
@@ -43,6 +44,7 @@ class WFAConfig:
     min_oos_sharpe: float = 0.5
     max_degradation: float = 0.5
     min_consistency: float = 0.5
+    min_efficiency: float = 0.5
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -58,6 +60,8 @@ class WFAConfig:
             raise ValueError("max_degradation must be in [0, 1]")
         if not (0 <= self.min_consistency <= 1):
             raise ValueError("min_consistency must be in [0, 1]")
+        if self.min_efficiency < 0:
+            raise ValueError("min_efficiency must be non-negative")
 
     @classmethod
     def default(cls) -> WFAConfig:
@@ -70,6 +74,7 @@ class WFAConfig:
             min_oos_sharpe=0.5,
             max_degradation=0.5,
             min_consistency=0.5,
+            min_efficiency=0.5,
         )
 
 
@@ -424,11 +429,12 @@ class WalkForwardAnalysis:
         profitable_windows = sum(1 for w in windows if w.is_oos_profitable)
         consistency = profitable_windows / len(windows)
 
-        # Robustness check
+        # Robustness check (SPEC Section 8: efficiency > 0.5 AND > 50% OOS profitable)
         is_robust = (
             aggregated_oos_sharpe >= self._config.min_oos_sharpe
             and avg_degradation <= self._config.max_degradation
             and consistency >= self._config.min_consistency
+            and efficiency >= self._config.min_efficiency
         )
 
         return WFAResult(
@@ -492,6 +498,11 @@ class WalkForwardAnalysis:
                 lines.append(
                     f"  - Consistency {result.consistency_ratio:.1%} < "
                     f"{self._config.min_consistency:.1%}"
+                )
+            if result.efficiency < self._config.min_efficiency:
+                lines.append(
+                    f"  - Efficiency {result.efficiency:.3f} < "
+                    f"{self._config.min_efficiency}"
                 )
             lines.append("")
 

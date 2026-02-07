@@ -29,7 +29,8 @@ class VolumeSlippageFillModelConfig:
 class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
     """Fill model with volume-based slippage using square-root market impact.
 
-    Slippage formula: slippage = k * sqrt(order_size / avg_volume)
+    Slippage formula (SPEC):
+        slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
 
     This models the market impact of larger orders: as order size increases
     relative to average volume, slippage increases at a diminishing rate
@@ -37,6 +38,16 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
 
     For small orders (< 1% of avg volume), slippage is minimal.
     For large orders (> 10% of avg volume), slippage becomes significant.
+
+    Note on NautilusTrader integration:
+        NautilusTrader's ``FillModel`` uses internal C-level fill logic.  The
+        ``prob_slippage`` parameter controls the *probability* that slippage
+        occurs on a market order, but the actual slippage *amount* is
+        determined internally by NT and cannot be overridden by subclassing
+        alone.  Our custom ``calculate_slippage_factor()`` method is therefore
+        **not** called automatically by NT's matching engine.  It is exposed
+        for use by the ``ValidationRunner`` to adjust prices post-fill or for
+        reporting/analytics purposes.
     """
 
     def __init__(
@@ -76,22 +87,37 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         self,
         order_size: float,
         avg_volume: float,
+        volatility: float = 0.0,
+        spread: float = 0.0,
     ) -> float:
         """Calculate slippage factor using square-root market impact.
+
+        Formula (from SPEC):
+            slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
+
+        This method is **not** called by NautilusTrader's internal matching
+        engine (see class docstring).  It is available for the
+        ``ValidationRunner`` to adjust fill prices post-execution or for
+        analytics/reporting.
 
         Args:
             order_size: Order quantity.
             avg_volume: Average bar volume.
+            volatility: Current volatility estimate (e.g. realized vol or ATR
+                as a fraction of price).  Defaults to 0.0.
+            spread: Current bid-ask spread as a fraction of price.
+                Defaults to 0.0.
 
         Returns:
             Slippage factor as a decimal (e.g., 0.001 for 0.1% slippage).
         """
         if avg_volume <= 0:
-            return 0.0
+            return spread / 2.0
 
-        # Square-root market impact formula
+        # SPEC formula: spread/2 + k * volatility * sqrt(order_size / avg_volume)
         size_ratio = order_size / avg_volume
-        return self._impact_coefficient * math.sqrt(size_ratio)
+        market_impact = self._impact_coefficient * volatility * math.sqrt(size_ratio)
+        return spread / 2.0 + market_impact
 
 
 @dataclass(frozen=True)

@@ -49,15 +49,15 @@ class TestLatencyPresets:
         """Get latency model using enum."""
         config = get_latency_model(LatencyPreset.COLOCATED)
         assert isinstance(config, LatencyModelConfig)
-        # Co-located: 0.5ms base
-        assert config.base_latency_nanos == 500_000
+        # Co-located: 1ms base (SPEC value)
+        assert config.base_latency_nanos == 1_000_000
 
     def test_get_latency_model_by_string(self) -> None:
         """Get latency model using string."""
         config = get_latency_model("retail")
         assert isinstance(config, LatencyModelConfig)
-        # Retail: 100ms base
-        assert config.base_latency_nanos == 100_000_000
+        # Retail: 200ms base (SPEC value)
+        assert config.base_latency_nanos == 200_000_000
 
     def test_get_latency_model_invalid_preset(self) -> None:
         """Invalid preset raises ValueError."""
@@ -91,13 +91,13 @@ class TestLatencyPresets:
         assert config.insert_latency_nanos == 25_000_000
 
     def test_create_custom_latency_model_defaults(self) -> None:
-        """Custom latency model defaults operation latencies to half base."""
+        """Custom latency model defaults operation latencies to zero."""
         config = create_custom_latency_model(base_ms=100.0)
         assert config.base_latency_nanos == 100_000_000
-        # Defaults to half of base
-        assert config.insert_latency_nanos == 50_000_000
-        assert config.update_latency_nanos == 50_000_000
-        assert config.cancel_latency_nanos == 50_000_000
+        # Defaults to 0 (base_latency covers total latency)
+        assert config.insert_latency_nanos == 0
+        assert config.update_latency_nanos == 0
+        assert config.cancel_latency_nanos == 0
 
     def test_preset_latency_ordering(self) -> None:
         """Presets are ordered by increasing latency."""
@@ -162,22 +162,41 @@ class TestFillModels:
         assert model.prob_slippage == 0.9
 
     def test_volume_slippage_calculate_factor(self) -> None:
-        """VolumeSlippageFillModel calculates slippage factor correctly."""
+        """VolumeSlippageFillModel calculates slippage factor correctly.
+
+        SPEC formula: slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
+        """
         model = VolumeSlippageFillModel(impact_coefficient=0.1)
 
-        # Small order: 1% of volume -> sqrt(0.01) * 0.1 = 0.01
-        factor = model.calculate_slippage_factor(order_size=100, avg_volume=10000)
+        # With volatility=1.0, spread=0: factor = 0 + 0.1 * 1.0 * sqrt(0.01) = 0.01
+        factor = model.calculate_slippage_factor(
+            order_size=100, avg_volume=10000, volatility=1.0
+        )
         assert abs(factor - 0.01) < 1e-9
 
-        # Larger order: 25% of volume -> sqrt(0.25) * 0.1 = 0.05
-        factor = model.calculate_slippage_factor(order_size=2500, avg_volume=10000)
+        # Larger order: 0 + 0.1 * 1.0 * sqrt(0.25) = 0.05
+        factor = model.calculate_slippage_factor(
+            order_size=2500, avg_volume=10000, volatility=1.0
+        )
         assert abs(factor - 0.05) < 1e-9
+
+        # With spread: spread/2 + k * vol * sqrt(ratio) = 0.001/2 + 0.01 = 0.0105
+        factor = model.calculate_slippage_factor(
+            order_size=100, avg_volume=10000, volatility=1.0, spread=0.001
+        )
+        assert abs(factor - 0.0105) < 1e-9
 
     def test_volume_slippage_zero_volume(self) -> None:
         """VolumeSlippageFillModel handles zero volume gracefully."""
         model = VolumeSlippageFillModel()
         factor = model.calculate_slippage_factor(order_size=100, avg_volume=0)
         assert factor == 0.0
+
+        # With spread, zero volume returns spread/2
+        factor = model.calculate_slippage_factor(
+            order_size=100, avg_volume=0, spread=0.002
+        )
+        assert abs(factor - 0.001) < 1e-9
 
 
 class TestVenueConfig:

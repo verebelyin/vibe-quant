@@ -221,7 +221,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
     symbols = json.loads(symbols_json) if isinstance(symbols_json, str) else symbols_json
 
     # Start button
-    if st.button("Start Paper Trading", type="primary", width="stretch"):
+    if st.button("Start Paper Trading", type="primary", use_container_width=True):
         if not api_key or not api_secret:
             st.error("API key and secret required")
             return
@@ -350,7 +350,7 @@ def _render_pnl_metrics(checkpoint: StateCheckpoint | None) -> None:
             "Total P&L",
             _format_pnl(total_pnl),
             delta=_format_pnl(daily_pnl) if daily_pnl != 0 else None,
-            delta_color="inverse" if total_pnl < 0 else "normal",
+            delta_color="normal",
         )
 
 
@@ -410,7 +410,7 @@ def _render_positions_table(checkpoint: StateCheckpoint | None) -> None:
 
     st.dataframe(
         positions_list,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -437,7 +437,7 @@ def _render_orders_table(checkpoint: StateCheckpoint | None) -> None:
 
     st.dataframe(
         orders_list,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -494,7 +494,7 @@ def _render_controls(checkpoint: StateCheckpoint | None) -> dict[str, bool]:
             "HALT",
             type="primary",
             disabled=halt_disabled,
-            width="stretch",
+            use_container_width=True,
             help="Halt trading immediately",
         ):
             actions["halt"] = True
@@ -506,7 +506,7 @@ def _render_controls(checkpoint: StateCheckpoint | None) -> dict[str, bool]:
             "RESUME",
             type="secondary",
             disabled=resume_disabled,
-            width="stretch",
+            use_container_width=True,
             help="Resume from error halt",
         ):
             actions["resume"] = True
@@ -518,7 +518,7 @@ def _render_controls(checkpoint: StateCheckpoint | None) -> dict[str, bool]:
             "CLOSE ALL",
             type="secondary",
             disabled=not has_positions,
-            width="stretch",
+            use_container_width=True,
             help="Close all open positions",
         ):
             actions["close_all"] = True
@@ -560,7 +560,7 @@ def _render_trader_selector() -> str | None:
 
 def _render_refresh_button() -> bool:
     """Render refresh button in sidebar."""
-    return st.sidebar.button("Refresh Data", width="stretch")
+    return st.sidebar.button("Refresh Data", use_container_width=True)
 
 
 def render_paper_trading_tab(db_path: Path | None = None) -> None:

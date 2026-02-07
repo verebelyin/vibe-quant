@@ -156,7 +156,6 @@ class StrategyCompiler:
             timeframe = config.timeframe or dsl.timeframe
 
             # Generate variable names
-            timeframe.replace("m", "_min").replace("h", "_hour")
             bar_type_var = f"self.bar_type_{timeframe}"
             indicator_var = f"self.ind_{name}"
 
@@ -223,7 +222,8 @@ class StrategyCompiler:
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
-            "from nautilus_trader.model.orders import MarketOrder",
+            "from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionOpened, PositionClosed",
+            "from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder",
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
         ]
 
@@ -318,10 +318,15 @@ class StrategyCompiler:
             lines.append(
                 f"    take_profit_risk_reward: float = {dsl.take_profit.risk_reward_ratio}"
             )
+        if dsl.take_profit.indicator is not None:
+            lines.append(
+                f'    take_profit_indicator: str = "{dsl.take_profit.indicator}"'
+            )
 
         # Add custom thresholds (extracted from conditions)
         lines.append("")
         lines.append("    # Condition thresholds (can be overridden)")
+        seen_thresholds: set[str] = set()
         for cond_str in (
             dsl.entry_conditions.long
             + dsl.entry_conditions.short
@@ -329,10 +334,11 @@ class StrategyCompiler:
             + dsl.exit_conditions.short
         ):
             cond = parse_condition(cond_str, list(dsl.indicators.keys()))
-            if not cond.right.is_indicator and not cond.right.is_price:
-                # It's a numeric threshold
-                param_name = f"{cond.left.value}_threshold"
-                if isinstance(cond.right.value, float):
+            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, float):
+                value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
+                param_name = f"{cond.left.value}_{value_str}_threshold"
+                if param_name not in seen_thresholds:
+                    seen_thresholds.add(param_name)
                     lines.append(f"    {param_name}: float = {cond.right.value}")
 
         return "\n".join(lines)
@@ -389,10 +395,68 @@ class StrategyCompiler:
         lines.append(textwrap.indent(on_bar, "    "))
         lines.append("")
 
+        # Add on_event method for position tracking
+        on_event = self._generate_on_event()
+        lines.append(textwrap.indent(on_event, "    "))
+        lines.append("")
+
+        # Add on_stop method for cleanup
+        on_stop = self._generate_on_stop()
+        lines.append(textwrap.indent(on_stop, "    "))
+        lines.append("")
+
         # Add helper methods
         helpers = self._generate_helper_methods(dsl, indicators, indicator_names)
         lines.append(textwrap.indent(helpers, "    "))
 
+        return "\n".join(lines)
+
+    def _generate_on_event(self) -> str:
+        """Generate on_event() method for event-based position tracking.
+
+        SL/TP orders are submitted here on PositionOpened, not in the entry
+        methods, to ensure the entry order has actually filled first.  This
+        avoids a race condition where reduce_only SL/TP orders are rejected
+        because no position exists yet.  The actual fill price from the
+        position's avg_px_open is used instead of bar.close estimate.
+
+        Returns:
+            on_event method source code
+        """
+        lines = [
+            "def on_event(self, event) -> None:",
+            '    """Handle strategy events for position tracking and SL/TP submission."""',
+            "    if isinstance(event, PositionOpened):",
+            "        if event.instrument_id == self.instrument_id:",
+            "            self._sync_position_state()",
+            "            # Submit SL/TP using actual fill price from opened position",
+            "            pos = self.cache.position(event.position_id)",
+            "            if pos is not None:",
+            "                entry_price = float(pos.avg_px_open)",
+            "                self._submit_sl_tp_orders(entry_price, pos.entry, pos.quantity)",
+            "    elif isinstance(event, PositionClosed):",
+            "        if event.instrument_id == self.instrument_id:",
+            "            self._position_open = False",
+            "            self._position_side = None",
+            "            self.cancel_all_orders(self.instrument_id)",
+            "    elif isinstance(event, OrderFilled):",
+            "        if event.instrument_id == self.instrument_id:",
+            "            self._sync_position_state()",
+        ]
+        return "\n".join(lines)
+
+    def _generate_on_stop(self) -> str:
+        """Generate on_stop() method for clean shutdown.
+
+        Returns:
+            on_stop method source code
+        """
+        lines = [
+            "def on_stop(self) -> None:",
+            '    """Strategy shutdown: cancel orders and close positions."""',
+            "    self.cancel_all_orders(self.instrument_id)",
+            "    self.close_all_positions(self.instrument_id)",
+        ]
         return "\n".join(lines)
 
     def _generate_on_start(
@@ -488,7 +552,6 @@ class StrategyCompiler:
 
         # Map DSL params to NT params based on indicator type
         if config.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI"}:
-            config.period or spec.default_params.get("period", 14)
             args.append(f"period=self.config.{info.name}_period")
         elif config.type == "MACD":
             args.append(f"fast_period=self.config.{info.name}_fast_period")
@@ -813,10 +876,17 @@ class StrategyCompiler:
 
         lines.append(f"    session_start_{index} = dt_time({int(start_h)}, {int(start_m)})")
         lines.append(f"    session_end_{index} = dt_time({int(end_h)}, {int(end_m)})")
+        lines.append(f"    if session_start_{index} <= session_end_{index}:")
         lines.append(
-            f"    if session_start_{index} <= local_time_{index} <= session_end_{index}:"
+            f"        if session_start_{index} <= local_time_{index} <= session_end_{index}:"
         )
-        lines.append("        in_session = True")
+        lines.append("            in_session = True")
+        lines.append("    else:")
+        lines.append("        # Overnight session (start > end)")
+        lines.append(
+            f"        if local_time_{index} >= session_start_{index} or local_time_{index} <= session_end_{index}:"
+        )
+        lines.append("            in_session = True")
 
         return lines
 
@@ -981,63 +1051,167 @@ class StrategyCompiler:
             return self._operand_to_code(operand)
 
     def _generate_order_methods(self) -> list[str]:
-        """Generate order submission methods.
+        """Generate order submission methods with SL/TP and event-based tracking.
 
         Returns:
             Order method source code as lines
         """
         lines = [
+            # _submit_long_entry
             "def _submit_long_entry(self, bar: Bar) -> None:",
-            '    """Submit a long entry order."""',
+            '    """Submit a long entry order with SL/TP."""',
             "    if self._position_open:",
             "        return",
             "",
+            "    qty = self._calculate_position_size(bar)",
             "    order = self.order_factory.market(",
             "        instrument_id=self.instrument_id,",
             "        order_side=OrderSide.BUY,",
-            "        quantity=self._calculate_position_size(bar),",
+            "        quantity=qty,",
             "        time_in_force=TimeInForce.IOC,",
             "    )",
             "    self.submit_order(order)",
-            "    self._position_open = True",
-            "    self._position_side = OrderSide.BUY",
+            "    # SL/TP orders are submitted from on_event(PositionOpened) after fill",
             "",
+            # _submit_short_entry
             "def _submit_short_entry(self, bar: Bar) -> None:",
-            '    """Submit a short entry order."""',
+            '    """Submit a short entry order with SL/TP."""',
             "    if self._position_open:",
             "        return",
             "",
+            "    qty = self._calculate_position_size(bar)",
             "    order = self.order_factory.market(",
             "        instrument_id=self.instrument_id,",
             "        order_side=OrderSide.SELL,",
-            "        quantity=self._calculate_position_size(bar),",
+            "        quantity=qty,",
             "        time_in_force=TimeInForce.IOC,",
             "    )",
             "    self.submit_order(order)",
-            "    self._position_open = True",
-            "    self._position_side = OrderSide.SELL",
+            "    # SL/TP orders are submitted from on_event(PositionOpened) after fill",
             "",
+            # _submit_exit
             "def _submit_exit(self, bar: Bar) -> None:",
-            '    """Submit an exit order."""',
+            '    """Submit an exit order using actual position quantity from cache."""',
             "    if not self._position_open:",
             "        return",
             "",
-            "    # Exit with opposite side",
+            "    # Cancel existing SL/TP orders",
+            "    self.cancel_all_orders(self.instrument_id)",
+            "",
+            "    # Determine exit side and get actual position quantity from cache",
             "    exit_side = OrderSide.SELL if self._position_side == OrderSide.BUY else OrderSide.BUY",
+            "    quantity = self._calculate_position_size(bar)",
+            "    positions = self.cache.positions_open(venue=self.instrument_id.venue)",
+            "    for pos in positions:",
+            "        if pos.instrument_id == self.instrument_id and pos.is_open:",
+            "            quantity = pos.quantity",
+            "            break",
+            "",
             "    order = self.order_factory.market(",
             "        instrument_id=self.instrument_id,",
             "        order_side=exit_side,",
-            "        quantity=self._calculate_position_size(bar),  # TODO: Track actual position size",
+            "        quantity=quantity,",
             "        time_in_force=TimeInForce.IOC,",
             "    )",
             "    self.submit_order(order)",
-            "    self._position_open = False",
-            "    self._position_side = None",
             "",
+            # _submit_sl_tp_orders
+            "def _submit_sl_tp_orders(self, entry_price: float, side: OrderSide, qty: Quantity) -> None:",
+            '    """Submit stop-loss and take-profit orders after entry."""',
+            "    is_long = side == OrderSide.BUY",
+            "",
+            "    # Calculate and submit stop-loss order",
+            "    sl_price = self._calculate_sl_price(entry_price, is_long)",
+            "    if sl_price is not None:",
+            "        sl_side = OrderSide.SELL if is_long else OrderSide.BUY",
+            "        sl_order = self.order_factory.stop_market(",
+            "            instrument_id=self.instrument_id,",
+            "            order_side=sl_side,",
+            "            quantity=qty,",
+            "            trigger_price=self.instrument.make_price(sl_price),",
+            "            time_in_force=TimeInForce.GTC,",
+            "            reduce_only=True,",
+            "        )",
+            "        self.submit_order(sl_order)",
+            "",
+            "    # Calculate and submit take-profit order",
+            "    tp_price = self._calculate_tp_price(entry_price, is_long)",
+            "    if tp_price is not None:",
+            "        tp_side = OrderSide.SELL if is_long else OrderSide.BUY",
+            "        tp_order = self.order_factory.limit(",
+            "            instrument_id=self.instrument_id,",
+            "            order_side=tp_side,",
+            "            quantity=qty,",
+            "            price=self.instrument.make_price(tp_price),",
+            "            time_in_force=TimeInForce.GTC,",
+            "            reduce_only=True,",
+            "        )",
+            "        self.submit_order(tp_order)",
+            "",
+            # _calculate_sl_price
+            "def _calculate_sl_price(self, entry_price: float, is_long: bool) -> float | None:",
+            '    """Calculate stop-loss price based on config type."""',
+            "    sl_type = self.config.stop_loss_type",
+            '    if sl_type == "fixed_pct":',
+            "        pct = self.config.stop_loss_percent",
+            "        if is_long:",
+            "            return entry_price * (1 - pct / 100)",
+            "        else:",
+            "            return entry_price * (1 + pct / 100)",
+            '    elif sl_type in ("atr_fixed", "atr_trailing"):',
+            "        atr_value = self._get_indicator_value(self.config.stop_loss_indicator)",
+            "        multiplier = self.config.stop_loss_atr_multiplier",
+            "        if is_long:",
+            "            return entry_price - atr_value * multiplier",
+            "        else:",
+            "            return entry_price + atr_value * multiplier",
+            "    return None",
+            "",
+            # _calculate_tp_price
+            "def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:",
+            '    """Calculate take-profit price based on config type."""',
+            "    tp_type = self.config.take_profit_type",
+            '    if tp_type == "fixed_pct":',
+            "        pct = self.config.take_profit_percent",
+            "        if is_long:",
+            "            return entry_price * (1 + pct / 100)",
+            "        else:",
+            "            return entry_price * (1 - pct / 100)",
+            '    elif tp_type == "atr_fixed":',
+            "        atr_value = self._get_indicator_value(self.config.take_profit_indicator)",
+            "        multiplier = self.config.take_profit_atr_multiplier",
+            "        if is_long:",
+            "            return entry_price + atr_value * multiplier",
+            "        else:",
+            "            return entry_price - atr_value * multiplier",
+            '    elif tp_type == "risk_reward":',
+            "        sl_price = self._calculate_sl_price(entry_price, is_long)",
+            "        if sl_price is not None:",
+            "            sl_distance = abs(entry_price - sl_price)",
+            "            ratio = self.config.take_profit_risk_reward",
+            "            if is_long:",
+            "                return entry_price + sl_distance * ratio",
+            "            else:",
+            "                return entry_price - sl_distance * ratio",
+            "    return None",
+            "",
+            # _calculate_position_size
             "def _calculate_position_size(self, bar: Bar) -> Quantity:",
             '    """Calculate position size (placeholder - uses fixed quantity)."""',
             "    # TODO: Integrate with position sizing module",
             "    return self.instrument.make_qty(1.0)",
+            "",
+            # _sync_position_state
+            "def _sync_position_state(self) -> None:",
+            '    """Sync position tracking state from cache."""',
+            "    positions = self.cache.positions_open(venue=self.instrument_id.venue)",
+            "    for pos in positions:",
+            "        if pos.instrument_id == self.instrument_id and pos.is_open:",
+            "            self._position_open = True",
+            "            self._position_side = pos.entry",
+            "            return",
+            "    self._position_open = False",
+            "    self._position_side = None",
         ]
         return lines
 

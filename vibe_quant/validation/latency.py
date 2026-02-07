@@ -33,9 +33,10 @@ class LatencyValues:
     def to_config(self) -> LatencyModelConfig:
         """Convert to NautilusTrader LatencyModelConfig.
 
-        Note: NautilusTrader adds operation latencies to base_latency internally.
-        So total insert latency = base_latency_nanos + insert_latency_nanos.
-        We configure operation latencies as half of total desired latency.
+        NautilusTrader's LatencyModel applies base_latency_nanos as the minimum
+        latency for all operations. Operation-specific latencies (insert, update,
+        cancel) are added on top of the base. Therefore we set base to the SPEC
+        value and operation latencies to 0 so total = SPEC value exactly.
         """
         return LatencyModelConfig(
             base_latency_nanos=int(self.base_ms * _MS_TO_NS),
@@ -47,34 +48,35 @@ class LatencyValues:
 
 # Latency presets based on typical network conditions
 # Values represent one-way latency from order submission to exchange
+# SPEC values: co-located 1ms, domestic 20ms, international 100ms, retail 200ms
 LATENCY_PRESETS: dict[LatencyPreset, LatencyValues] = {
-    # Co-located: Server in same datacenter as exchange
+    # Co-located: Server in same datacenter as exchange (SPEC: 1ms)
     LatencyPreset.COLOCATED: LatencyValues(
-        base_ms=0.5,
-        insert_ms=0.25,
-        update_ms=0.25,
-        cancel_ms=0.25,
+        base_ms=1.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
     ),
-    # Domestic: Same country/region as exchange
+    # Domestic: Same country/region as exchange (SPEC: 20ms)
     LatencyPreset.DOMESTIC: LatencyValues(
-        base_ms=10.0,
-        insert_ms=5.0,
-        update_ms=5.0,
-        cancel_ms=5.0,
+        base_ms=20.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
     ),
-    # International: Cross-continent connection
+    # International: Cross-continent connection (SPEC: 100ms)
     LatencyPreset.INTERNATIONAL: LatencyValues(
-        base_ms=50.0,
-        insert_ms=25.0,
-        update_ms=25.0,
-        cancel_ms=25.0,
-    ),
-    # Retail: Typical home internet connection
-    LatencyPreset.RETAIL: LatencyValues(
         base_ms=100.0,
-        insert_ms=50.0,
-        update_ms=50.0,
-        cancel_ms=50.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
+    ),
+    # Retail: Typical home internet connection (SPEC: 200ms)
+    LatencyPreset.RETAIL: LatencyValues(
+        base_ms=200.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
     ),
 }
 
@@ -112,18 +114,17 @@ def create_custom_latency_model(
 
     Args:
         base_ms: Base latency in milliseconds.
-        insert_ms: Insert order latency (defaults to base_ms / 2).
-        update_ms: Update order latency (defaults to base_ms / 2).
-        cancel_ms: Cancel order latency (defaults to base_ms / 2).
+        insert_ms: Insert order latency (defaults to 0, added on top of base).
+        update_ms: Update order latency (defaults to 0, added on top of base).
+        cancel_ms: Cancel order latency (defaults to 0, added on top of base).
 
     Returns:
         Configured LatencyModelConfig.
     """
-    half_base = base_ms / 2
     values = LatencyValues(
         base_ms=base_ms,
-        insert_ms=insert_ms if insert_ms is not None else half_base,
-        update_ms=update_ms if update_ms is not None else half_base,
-        cancel_ms=cancel_ms if cancel_ms is not None else half_base,
+        insert_ms=insert_ms if insert_ms is not None else 0.0,
+        update_ms=update_ms if update_ms is not None else 0.0,
+        cancel_ms=cancel_ms if cancel_ms is not None else 0.0,
     )
     return values.to_config()

@@ -111,6 +111,7 @@ class TestWFAConfig:
         assert cfg.min_oos_sharpe == 0.5
         assert cfg.max_degradation == 0.5
         assert cfg.min_consistency == 0.5
+        assert cfg.min_efficiency == 0.5
 
     def test_custom_config(self) -> None:
         """Custom config accepted."""

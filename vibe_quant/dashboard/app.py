@@ -61,12 +61,12 @@ def main() -> None:
         ],
     }
 
-    pg = st.navigation(pages)
     st.set_page_config(
         page_title="vibe-quant Dashboard",
         page_icon=":material/show_chart:",
         layout="wide",
     )
+    pg = st.navigation(pages)
     pg.run()
 
 
