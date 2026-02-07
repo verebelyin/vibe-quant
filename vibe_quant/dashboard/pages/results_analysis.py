@@ -212,7 +212,7 @@ def render_pareto_scatter(sweep_df: pd.DataFrame) -> None:
         )
 
     fig.update_layout(height=500)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_equity_chart(equity_df: pd.DataFrame) -> None:
@@ -225,7 +225,7 @@ def render_equity_chart(equity_df: pd.DataFrame) -> None:
         equity_df, x="time", y="equity", title="Equity Curve", labels={"equity": "Cumulative P&L", "time": "Time"}
     )
     fig.update_layout(height=400)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_drawdown_chart(dd_df: pd.DataFrame) -> None:
@@ -251,7 +251,7 @@ def render_drawdown_chart(dd_df: pd.DataFrame) -> None:
         yaxis_title="Drawdown (%)",
         height=300,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def render_metrics_panel(result: dict[str, Any]) -> None:
@@ -387,7 +387,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                 comparison_data[col_name][label] = str(val)
 
     df = pd.DataFrame(comparison_data)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width="stretch")
 
 
 def export_to_csv(df: pd.DataFrame, filename: str) -> bytes:
@@ -485,7 +485,7 @@ def render_results_tab() -> None:
                     },
                     na_rep="N/A",
                 ),
-                use_container_width=True,
+                width="stretch",
                 height=400,
             )
 
@@ -560,7 +560,7 @@ def render_results_tab() -> None:
                 if symbol_filter and "symbol" in filtered_trades.columns:
                     filtered_trades = filtered_trades[filtered_trades["symbol"].isin(symbol_filter)]
 
-                st.dataframe(filtered_trades, use_container_width=True, height=400)
+                st.dataframe(filtered_trades, width="stretch", height=400)
 
                 # Export trades
                 csv_data = export_to_csv(filtered_trades, f"trades_{selected_run_id}.csv")

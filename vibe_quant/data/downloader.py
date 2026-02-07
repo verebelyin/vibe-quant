@@ -67,6 +67,9 @@ def download_monthly_klines(
                 reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
                 klines = []
                 for row in reader:
+                    # Skip header row if present
+                    if row[0] == "open_time":
+                        continue
                     # Binance kline format:
                     # open_time, open, high, low, close, volume, close_time,
                     # quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore

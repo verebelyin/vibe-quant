@@ -20,9 +20,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
+from lightweight_charts.widgets import StreamlitChart
 
 if TYPE_CHECKING:
     from typing import Any
@@ -190,7 +189,7 @@ def render_data_coverage() -> None:
 
         rows.append(row)
 
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(rows, width="stretch")
 
 
 def render_download_history() -> None:
@@ -220,7 +219,7 @@ def render_download_history() -> None:
             row["Error"] = s["error_message"]
         rows.append(row)
 
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(rows, width="stretch")
 
 
 def render_data_actions() -> None:
@@ -320,7 +319,7 @@ def _render_download_preview(
         f"**{to_download}** to download"
     )
 
-    st.dataframe(preview, use_container_width=True)
+    st.dataframe(preview, width="stretch")
 
 
 def _run_ingest(symbols: list[str], start: date, end: date) -> None:
@@ -449,25 +448,28 @@ def render_data_browser() -> None:
 
     st.subheader("Data Browser")
 
-    # Shared selectors
-    sel_col1, sel_col2, sel_col3, sel_col4 = st.columns([2, 1, 2, 2])
+    # Symbol + date selectors
+    sel_col1, sel_col2, sel_col3 = st.columns([2, 2, 2])
 
     with sel_col1:
         symbol = st.selectbox("Symbol", SUPPORTED_SYMBOLS, key="browser_symbol")
     with sel_col2:
-        interval = st.selectbox("Interval", INTERVALS, key="browser_interval")
-    with sel_col3:
         browse_start = st.date_input(
             "Start",
             value=date.today() - timedelta(days=7),
             key="browser_start",
         )
-    with sel_col4:
+    with sel_col3:
         browse_end = st.date_input(
             "End",
             value=date.today(),
             key="browser_end",
         )
+
+    # Timeframe selector (pill-style)
+    interval = st.segmented_control(
+        "Timeframe", INTERVALS, default="1h", key="browser_interval",
+    )
 
     if not symbol or not browse_start or not browse_end:
         return
@@ -510,28 +512,27 @@ def render_data_browser() -> None:
         f"{df['Time'].max().strftime('%Y-%m-%d %H:%M')}"
     )
 
-    # Tabbed view: Table | Chart
-    tab_table, tab_chart = st.tabs(["Table", "Chart"])
+    # Tabbed view: Chart | Table
+    tab_chart, tab_table = st.tabs(["Chart", "Table"])
+
+    with tab_chart:
+        _render_candlestick_chart(df, symbol, interval)
 
     with tab_table:
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Time": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
                 "Volume": st.column_config.NumberColumn(format="%.2f"),
             },
         )
 
-    with tab_chart:
-        _render_candlestick_chart(df, symbol, interval)
-
 
 def _render_candlestick_chart(
     df: pd.DataFrame, symbol: str, interval: str,
 ) -> None:
-    """Render Plotly candlestick chart with volume subplot."""
-    # Limit candles for performance (range slider handles navigation)
+    """Render TradingView-style candlestick chart with volume."""
     max_candles = 10_000
     if len(df) > max_candles:
         st.warning(
@@ -540,54 +541,44 @@ def _render_candlestick_chart(
         )
         df = df.tail(max_candles)
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.75, 0.25],
+    # lightweight-charts expects lowercase columns + 'time' as str
+    chart_df = df.rename(columns={
+        "Time": "time", "Open": "open", "High": "high",
+        "Low": "low", "Close": "close", "Volume": "volume",
+    }).copy()
+    chart_df["time"] = chart_df["time"].dt.strftime("%Y-%m-%d %H:%M")
+
+    chart = StreamlitChart(height=600)
+
+    chart.layout(
+        background_color="#131722",
+        text_color="#d1d4dc",
+        font_size=12,
+        font_family="Trebuchet MS",
     )
 
-    # Candlestick
-    fig.add_trace(
-        go.Candlestick(
-            x=df["Time"],
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="OHLC",
-        ),
-        row=1, col=1,
+    chart.candle_style(
+        up_color="#26a69a",
+        down_color="#ef5350",
+        wick_up_color="#26a69a",
+        wick_down_color="#ef5350",
+        border_up_color="#26a69a",
+        border_down_color="#ef5350",
     )
 
-    # Volume bars colored by direction
-    colors = [
-        "#26a69a" if c >= o else "#ef5350"
-        for c, o in zip(df["Close"], df["Open"], strict=True)
-    ]
-    fig.add_trace(
-        go.Bar(
-            x=df["Time"],
-            y=df["Volume"],
-            marker_color=colors,
-            name="Volume",
-            opacity=0.7,
-        ),
-        row=2, col=1,
+    chart.volume_config(
+        up_color="rgba(38,166,154,0.5)",
+        down_color="rgba(239,83,80,0.5)",
     )
 
-    fig.update_layout(
-        title=f"{symbol} {interval}",
-        xaxis_rangeslider_visible=False,
-        xaxis2_rangeslider_visible=True,
-        xaxis2_rangeslider_thickness=0.05,
-        height=600,
-        showlegend=False,
-    )
-    fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=2, col=1)
+    chart.crosshair(mode="normal")
 
-    st.plotly_chart(fig, use_container_width=True)
+    chart.watermark(symbol, color="rgba(180, 180, 200, 0.15)")
+
+    chart.legend(visible=True, font_size=14)
+
+    chart.set(chart_df)
+    chart.load()
 
 
 def render_symbol_management() -> None:
@@ -646,7 +637,7 @@ def render_data_quality() -> None:
                             "Gap (min)": gap_min,
                         }
                     )
-                st.dataframe(gap_rows, use_container_width=True)
+                st.dataframe(gap_rows, width="stretch")
                 if len(result["gaps"]) > 20:
                     st.caption(f"Showing 20 of {len(result['gaps'])} gaps")
 
@@ -661,7 +652,7 @@ def render_data_quality() -> None:
                             "Error": msg,
                         }
                     )
-                st.dataframe(err_rows, use_container_width=True)
+                st.dataframe(err_rows, width="stretch")
                 if len(result["ohlc_errors"]) > 20:
                     st.caption(f"Showing 20 of {len(result['ohlc_errors'])} errors")
 

@@ -373,7 +373,7 @@ def render_latency_section() -> None:
             "Cancel (ms)": values.cancel_ms,
         })
 
-    st.dataframe(preset_data, use_container_width=True)
+    st.dataframe(preset_data, width="stretch")
 
     st.markdown("---")
     st.markdown("**Custom Latency Configuration**")

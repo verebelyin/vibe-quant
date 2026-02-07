@@ -147,6 +147,10 @@ def update_symbol(
     if not all_klines:
         return counts
 
+    # Clear existing catalog data to avoid disjoint interval errors
+    for interval in ["1m", "5m", "15m", "1h", "4h"]:
+        catalog.clear_bar_data(symbol, interval)
+
     # Convert to 1m bars
     bar_type_1m = get_bar_type(symbol, "1m")
     bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
@@ -261,7 +265,7 @@ def ingest_symbol(
     if catalog is None:
         catalog = CatalogManager()
 
-    counts: dict[str, int] = {"klines": 0}
+    counts: dict[str, int] = {"klines_fetched": 0, "klines_inserted": 0}
 
     if start_date is not None:
         effective_end = end_date or datetime.now(UTC)
@@ -287,10 +291,11 @@ def ingest_symbol(
     for year, month in to_download:
         klines = download_monthly_klines(symbol, "1m", year, month)
         if klines:
-            archive.insert_klines(symbol, "1m", klines, "binance_vision")
-            counts["klines"] += len(klines)
+            inserted = archive.insert_klines(symbol, "1m", klines, "binance_vision")
+            counts["klines_fetched"] += len(klines)
+            counts["klines_inserted"] += inserted
             if verbose:
-                print(f"  {year}-{month:02d}: {len(klines)} klines")
+                print(f"  {year}-{month:02d}: {len(klines)} klines ({inserted} new)")
         else:
             if verbose:
                 print(f"  {year}-{month:02d}: no data available")
@@ -299,7 +304,8 @@ def ingest_symbol(
     counts["months_downloaded"] = len(to_download)
 
     if verbose:
-        print(f"Total klines archived from Vision: {counts['klines']}")
+        print(f"Total from Vision: {counts['klines_fetched']} fetched, "
+              f"{counts['klines_inserted']} new")
 
     # Fill current incomplete month via REST API
     if months:
@@ -319,13 +325,11 @@ def ingest_symbol(
                       f"{effective_end.strftime('%Y-%m-%d')} via REST API...")
             recent = download_recent_klines(symbol, "1m", rest_start_ms, rest_end_ms)
             if recent:
-                count = archive.insert_klines(symbol, "1m", recent, "binance_api")
-                counts["klines"] += len(recent)
+                inserted = archive.insert_klines(symbol, "1m", recent, "binance_api")
+                counts["klines_fetched"] += len(recent)
+                counts["klines_inserted"] += inserted
                 if verbose:
-                    print(f"  REST API: {len(recent)} klines (inserted {count})")
-
-    if verbose:
-        print(f"Total klines: {counts['klines']}")
+                    print(f"  REST API: {len(recent)} fetched ({inserted} new)")
 
     # Create and write instrument
     instrument = create_instrument(symbol)
@@ -483,8 +487,8 @@ def ingest_all(
             )
             counts["funding_rates"] = funding_count
             results[symbol] = counts
-            total_klines_fetched += counts.get("klines", 0)
-            total_klines_inserted += counts.get("bars_1m", 0)
+            total_klines_fetched += counts.get("klines_fetched", 0)
+            total_klines_inserted += counts.get("klines_inserted", 0)
             total_funding += funding_count
 
         archive.complete_download_session(
@@ -502,13 +506,82 @@ def ingest_all(
     archive.close()
 
     if verbose:
-        print(f"\n{'='*50}")
-        print("SUMMARY")
-        print(f"{'='*50}")
-        for sym, cnts in results.items():
-            print(f"{sym}: {cnts}")
+        _print_summary(results, archive._db_path, catalog._catalog_path,
+                       total_klines_fetched, total_klines_inserted, total_funding)
 
     return results
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format byte count as human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _dir_size(path: Path) -> int:
+    """Get total size of a directory recursively."""
+    if not path.exists():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _print_summary(
+    results: dict[str, dict[str, int]],
+    archive_path: Path,
+    catalog_path: Path,
+    total_fetched: int,
+    total_inserted: int,
+    total_funding: int,
+) -> None:
+    """Print formatted download summary."""
+    print(f"\n{'='*60}")
+    print("SUMMARY")
+    print(f"{'='*60}")
+
+    for sym, cnts in results.items():
+        fetched = cnts.get("klines_fetched", 0)
+        inserted = cnts.get("klines_inserted", 0)
+        bars_1m = cnts.get("bars_1m", 0)
+        funding = cnts.get("funding_rates", 0)
+        skipped = cnts.get("months_skipped", 0)
+        downloaded = cnts.get("months_downloaded", 0)
+
+        print(f"\n  {sym}:")
+        print(f"    Months: {downloaded} downloaded, {skipped} skipped")
+        print(f"    Klines: {fetched:,} fetched, {inserted:,} new")
+        print(f"    Archive total: {bars_1m:,} 1m bars")
+
+        # Higher timeframes
+        htf = []
+        for tf in ["5m", "15m", "1h", "4h"]:
+            key = f"bars_{tf}"
+            if key in cnts:
+                htf.append(f"{cnts[key]:,} {tf}")
+        if htf:
+            print(f"    Aggregated: {', '.join(htf)}")
+
+        if funding:
+            print(f"    Funding rates: {funding:,}")
+
+    # File sizes
+    archive_size = archive_path.stat().st_size if archive_path.exists() else 0
+    catalog_size = _dir_size(catalog_path)
+
+    print(f"\n  Storage:")
+    print(f"    Archive DB:  {_format_size(archive_size)}")
+    print(f"    Catalog dir: {_format_size(catalog_size)}")
+    print(f"    Total:       {_format_size(archive_size + catalog_size)}")
+
+    # Totals if multiple symbols
+    if len(results) > 1:
+        print(f"\n  Totals: {total_fetched:,} fetched, {total_inserted:,} new, "
+              f"{total_funding:,} funding rates")
+
+    print()
 
 
 def get_status(
