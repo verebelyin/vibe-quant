@@ -848,6 +848,10 @@ class TestCatalogDivisorPrecision:
 class TestSlippageFormulaPrecision:
     """Verify the slippage formula matches the SPEC."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_nautilus(self) -> None:
+        pytest.importorskip("nautilus_trader")
+
     def test_spec_formula(self) -> None:
         """slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)"""
         from vibe_quant.validation.fill_model import SlippageEstimator

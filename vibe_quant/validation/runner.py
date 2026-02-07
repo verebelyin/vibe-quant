@@ -723,24 +723,11 @@ class ValidationRunner:
         stats_returns = bt_result.stats_returns or {}
         stats_pnls = bt_result.stats_pnls or {}
 
-        # Extract from returns stats (keyed by statistic name)
-        for key, value in stats_returns.items():
-            if value is None:
-                continue
-            key_lower = key.lower()
-            fval = float(value)
-            if "sharpe" in key_lower:
-                result.sharpe_ratio = fval
-            elif "sortino" in key_lower:
-                result.sortino_ratio = fval
-            elif "max drawdown" in key_lower:
-                result.max_drawdown = abs(fval)
-            elif key_lower == "win rate":
-                result.win_rate = fval
-            elif key_lower == "profit factor":
-                result.profit_factor = fval
+        _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",
+                           "max drawdown", "win rate", "profit factor",
+                           "expectancy", "avg winner", "avg loser", "long ratio"}
 
-        # Extract from PnL stats (keyed by currency, e.g. "USDT")
+        # Extract from PnL stats first (keyed by currency, e.g. "USDT")
         for _currency, pnl_stats in stats_pnls.items():
             for key, value in pnl_stats.items():
                 if value is None:
@@ -759,6 +746,34 @@ class ValidationRunner:
                     result.win_rate = fval
                 elif key_lower == "profit factor":
                     result.profit_factor = fval
+                elif key_lower == "avg winner":
+                    result.avg_win = fval
+                elif key_lower == "avg loser":
+                    result.avg_loss = fval
+                elif not any(k in key_lower for k in _known_pnl_keys):
+                    logger.debug("Unmatched PnL stats key: %s = %s", key, value)
+
+        # Fill from returns stats only if not already set by PnL stats
+        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate",
+                               "profit factor", "expectancy", "avg winner",
+                               "avg loser", "long ratio"}
+        for key, value in stats_returns.items():
+            if value is None:
+                continue
+            key_lower = key.lower()
+            fval = float(value)
+            if "sharpe" in key_lower and result.sharpe_ratio == 0.0:
+                result.sharpe_ratio = fval
+            elif "sortino" in key_lower and result.sortino_ratio == 0.0:
+                result.sortino_ratio = fval
+            elif "max drawdown" in key_lower and result.max_drawdown == 0.0:
+                result.max_drawdown = abs(fval)
+            elif key_lower == "win rate" and result.win_rate == 0.0:
+                result.win_rate = fval
+            elif key_lower == "profit factor" and result.profit_factor == 0.0:
+                result.profit_factor = fval
+            elif not any(k in key_lower for k in _known_returns_keys):
+                logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
     def _extract_trades(
         self,
@@ -796,10 +811,8 @@ class ValidationRunner:
         impact_k = getattr(fill_cfg, "impact_coefficient", 0.1) if fill_cfg else 0.1
         slippage_estimator = SlippageEstimator(impact_coefficient=impact_k)
 
-        # Estimate average volume from all closed positions for slippage calc
-        # (in a real scenario this would come from bar data; use position qty
-        # as rough proxy scaled by leverage for order-vs-market comparison)
-        avg_bar_volume = 1000.0  # Conservative default
+        # Estimate avg volume and volatility from bar data in engine cache
+        avg_bar_volume, bar_volatility = self._estimate_market_stats(engine)
 
         for pos in positions:
             if not pos.is_closed:
@@ -824,7 +837,7 @@ class ValidationRunner:
                 entry_price=entry_price,
                 order_size=quantity,
                 avg_volume=avg_bar_volume,
-                volatility=0.02,  # ~2% daily vol typical for crypto
+                volatility=bar_volatility,
                 spread=0.0001,  # ~1bp spread for major pairs
             )
             total_slippage += slippage_cost
@@ -872,11 +885,69 @@ class ValidationRunner:
         # Compute SPEC-required extended metrics from trades
         self._compute_extended_metrics(result)
 
+    @staticmethod
+    def _estimate_market_stats(engine: BacktestEngine) -> tuple[float, float]:
+        """Estimate average bar volume and daily volatility from engine cache.
+
+        Reads bars from the engine cache to compute realistic slippage
+        parameters instead of using hardcoded values.
+
+        Args:
+            engine: BacktestEngine after run.
+
+        Returns:
+            Tuple of (avg_bar_volume, daily_volatility). Falls back to
+            conservative defaults (1000.0, 0.02) if data is unavailable.
+        """
+        default_volume = 1000.0
+        default_volatility = 0.02
+
+        try:
+            bars = engine.kernel.cache.bars()
+            if not bars:
+                return default_volume, default_volatility
+
+            volumes: list[float] = []
+            closes: list[float] = []
+            for bar in bars:
+                vol = float(bar.volume)
+                if vol > 0:
+                    volumes.append(vol)
+                close = float(bar.close)
+                if close > 0:
+                    closes.append(close)
+
+            avg_volume = sum(volumes) / len(volumes) if volumes else default_volume
+
+            # Compute daily volatility from log returns
+            volatility = default_volatility
+            if len(closes) >= 2:
+                import math
+
+                log_returns: list[float] = []
+                for i in range(1, len(closes)):
+                    if closes[i - 1] > 0:
+                        log_returns.append(math.log(closes[i] / closes[i - 1]))
+                if len(log_returns) >= 2:
+                    mean_r = sum(log_returns) / len(log_returns)
+                    var = sum((r - mean_r) ** 2 for r in log_returns) / (
+                        len(log_returns) - 1
+                    )
+                    volatility = math.sqrt(var) if var > 0 else default_volatility
+
+            return avg_volume, volatility
+        except Exception:
+            logger.debug(
+                "Could not estimate market stats from engine cache, using defaults",
+                exc_info=True,
+            )
+            return default_volume, default_volatility
+
     def _compute_extended_metrics(self, result: ValidationResult) -> None:
         """Compute SPEC-required extended metrics from trades.
 
         Populates: largest_win/loss, avg_win/loss, max_consecutive_wins/losses,
-        avg_trade_duration_hours, calmar_ratio.
+        avg_trade_duration_hours, cagr, volatility_annual, calmar_ratio.
 
         Args:
             result: ValidationResult to populate (mutated in place).
@@ -886,6 +957,7 @@ class ValidationRunner:
 
         wins: list[float] = []
         losses: list[float] = []
+        durations_hours: list[float] = []
 
         # Consecutive streak tracking
         max_con_wins = 0
@@ -909,6 +981,19 @@ class ValidationRunner:
                 cur_wins = 0
                 cur_losses = 0
 
+            # Trade duration
+            if trade.entry_time and trade.exit_time:
+                try:
+                    from datetime import datetime
+
+                    entry_dt = datetime.fromisoformat(trade.entry_time.replace("Z", "+00:00"))
+                    exit_dt = datetime.fromisoformat(trade.exit_time.replace("Z", "+00:00"))
+                    duration_h = (exit_dt - entry_dt).total_seconds() / 3600.0
+                    if duration_h >= 0:
+                        durations_hours.append(duration_h)
+                except (ValueError, TypeError):
+                    pass
+
         result.max_consecutive_wins = max_con_wins
         result.max_consecutive_losses = max_con_losses
 
@@ -918,6 +1003,43 @@ class ValidationRunner:
         if losses:
             result.largest_loss = min(losses)
             result.avg_loss = sum(losses) / len(losses)
+
+        # Average trade duration
+        if durations_hours:
+            result.avg_trade_duration_hours = sum(durations_hours) / len(durations_hours)
+
+        # CAGR: (1 + total_return)^(365/days) - 1
+        if result.total_return != 0.0 and result.trades:
+            try:
+                from datetime import datetime
+
+                first_entry = datetime.fromisoformat(
+                    result.trades[0].entry_time.replace("Z", "+00:00")
+                )
+                last_exit_str = result.trades[-1].exit_time or result.trades[-1].entry_time
+                last_exit = datetime.fromisoformat(last_exit_str.replace("Z", "+00:00"))
+                days = max((last_exit - first_entry).total_seconds() / 86400.0, 1.0)
+                total_return_frac = result.total_return / 100.0 if abs(result.total_return) > 2.0 else result.total_return
+                if total_return_frac > -1.0:
+                    import math
+                    result.cagr = ((1.0 + total_return_frac) ** (365.0 / days)) - 1.0
+            except (ValueError, TypeError):
+                pass
+
+        # Annualized volatility from per-trade returns
+        if len(result.trades) >= 2:
+            trade_returns: list[float] = [t.roi_percent / 100.0 for t in result.trades if t.roi_percent != 0.0]
+            if len(trade_returns) >= 2:
+                import math
+                mean_r = sum(trade_returns) / len(trade_returns)
+                var = sum((r - mean_r) ** 2 for r in trade_returns) / (len(trade_returns) - 1)
+                # Annualize: assume ~252 trading days, estimate trades per day
+                if durations_hours:
+                    avg_dur_days = max(sum(durations_hours) / len(durations_hours) / 24.0, 0.01)
+                    trades_per_year = 365.0 / avg_dur_days
+                else:
+                    trades_per_year = 252.0
+                result.volatility_annual = math.sqrt(var * trades_per_year) if var > 0 else 0.0
 
         # Calmar ratio: CAGR / max_drawdown
         if result.max_drawdown > 0 and result.cagr != 0:

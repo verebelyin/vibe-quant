@@ -515,6 +515,12 @@ class NTScreeningRunner:
         self._end_date = end_date
         self._catalog_path = catalog_path
 
+        # Cached per-process compilation results (populated on first __call__)
+        self._compiled = False
+        self._module_path: str = ""
+        self._strategy_cls_name: str = ""
+        self._config_cls_name: str = ""
+
     def __call__(self, params: dict[str, float | int]) -> BacktestMetrics:
         """Run a single screening backtest with the given parameters.
 
@@ -534,6 +540,52 @@ class NTScreeningRunner:
                 sharpe_ratio=float("-inf"),
                 execution_time_seconds=time.time() - start_time,
             )
+
+    def _ensure_compiled(self) -> None:
+        """Parse and compile DSL once per worker process.
+
+        Results are cached in instance attributes so subsequent calls
+        to _run_backtest skip recompilation.
+        """
+        if self._compiled:
+            return
+
+        from vibe_quant.data.catalog import (
+            DEFAULT_CATALOG_PATH,
+            INSTRUMENT_CONFIGS,
+            CatalogManager,
+            create_instrument,
+        )
+        from vibe_quant.dsl.compiler import StrategyCompiler
+        from vibe_quant.dsl.parser import validate_strategy_dict
+
+        dsl = validate_strategy_dict(self._dsl_dict)
+        compiler = StrategyCompiler()
+        compiler.compile_to_module(dsl)  # registers in sys.modules
+
+        class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
+        self._module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        self._strategy_cls_name = f"{class_name}Strategy"
+        self._config_cls_name = f"{class_name}Config"
+
+        # Cache parsed DSL fields needed for data config
+        self._all_timeframes: set[str] = {dsl.timeframe}
+        self._all_timeframes.update(dsl.additional_timeframes)
+        for ind_config in dsl.indicators.values():
+            if ind_config.timeframe:
+                self._all_timeframes.add(ind_config.timeframe)
+
+        # Catalog path and instruments (once per process)
+        self._resolved_catalog_path = (
+            Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
+        )
+        catalog_mgr = CatalogManager(self._resolved_catalog_path)
+        for symbol in self._symbols:
+            if symbol in INSTRUMENT_CONFIGS:
+                instrument = create_instrument(symbol)
+                catalog_mgr.write_instrument(instrument)
+
+        self._compiled = True
 
     def _run_backtest(
         self, params: dict[str, float | int], start_time: float
@@ -555,45 +607,20 @@ class NTScreeningRunner:
         )
 
         from vibe_quant.data.catalog import (
-            DEFAULT_CATALOG_PATH,
-            INSTRUMENT_CONFIGS,
             INTERVAL_TO_AGGREGATION,
-            CatalogManager,
-            create_instrument,
         )
-        from vibe_quant.dsl.compiler import StrategyCompiler
-        from vibe_quant.dsl.parser import validate_strategy_dict
         from vibe_quant.validation.venue import (
             create_backtest_venue_config,
             create_venue_config_for_screening,
         )
 
-        # Parse and compile DSL
-        dsl = validate_strategy_dict(self._dsl_dict)
-        compiler = StrategyCompiler()
-        compiler.compile_to_module(dsl)  # registers in sys.modules
+        # Compile DSL once per worker process
+        self._ensure_compiled()
 
-        class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        module_path = f"vibe_quant.dsl.generated.{dsl.name}"
-        strategy_cls_name = f"{class_name}Strategy"
-        config_cls_name = f"{class_name}Config"
-
-        # Catalog path
-        catalog_path = Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
-
-        # Ensure instruments exist
-        catalog_mgr = CatalogManager(catalog_path)
-        for symbol in self._symbols:
-            if symbol in INSTRUMENT_CONFIGS:
-                instrument = create_instrument(symbol)
-                catalog_mgr.write_instrument(instrument)
-
-        # Timeframes
-        all_timeframes = {dsl.timeframe}
-        all_timeframes.update(dsl.additional_timeframes)
-        for ind_config in dsl.indicators.values():
-            if ind_config.timeframe:
-                all_timeframes.add(ind_config.timeframe)
+        module_path = self._module_path
+        strategy_cls_name = self._strategy_cls_name
+        config_cls_name = self._config_cls_name
+        catalog_path = self._resolved_catalog_path
 
         # Strategy configs (with parameter overrides)
         strategy_configs: list[ImportableStrategyConfig] = []
@@ -613,7 +640,7 @@ class NTScreeningRunner:
         data_configs: list[BacktestDataConfig] = []
         for symbol in self._symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
-            for tf in sorted(all_timeframes):
+            for tf in sorted(self._all_timeframes):
                 if tf not in INTERVAL_TO_AGGREGATION:
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
@@ -692,25 +719,9 @@ class NTScreeningRunner:
 
         metrics.num_trades = bt_result.total_positions
 
-        # Extract from returns stats
-        stats_returns = bt_result.stats_returns or {}
-        for key, value in stats_returns.items():
-            if value is None:
-                continue
-            key_lower = key.lower()
-            fval = float(value)
-            if "sharpe" in key_lower:
-                metrics.sharpe_ratio = fval
-            elif "sortino" in key_lower:
-                metrics.sortino_ratio = fval
-            elif "max drawdown" in key_lower:
-                metrics.max_drawdown = abs(fval)
-            elif key_lower == "win rate":
-                metrics.win_rate = fval
-            elif key_lower == "profit factor":
-                metrics.profit_factor = fval
-
-        # Extract from PnL stats
+        # Extract from PnL stats first (more comprehensive, includes total return)
+        _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",
+                           "max drawdown", "win rate", "profit factor"}
         stats_pnls = bt_result.stats_pnls or {}
         for _currency, pnl_stats in stats_pnls.items():
             for key, value in pnl_stats.items():
@@ -730,6 +741,30 @@ class NTScreeningRunner:
                     metrics.win_rate = fval
                 elif key_lower == "profit factor":
                     metrics.profit_factor = fval
+                elif not any(k in key_lower for k in _known_pnl_keys):
+                    logger.debug("Unmatched PnL stats key: %s = %s", key, value)
+
+        # Fill from returns stats only if not already set by PnL stats
+        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate",
+                               "profit factor"}
+        stats_returns = bt_result.stats_returns or {}
+        for key, value in stats_returns.items():
+            if value is None:
+                continue
+            key_lower = key.lower()
+            fval = float(value)
+            if "sharpe" in key_lower and metrics.sharpe_ratio == 0.0:
+                metrics.sharpe_ratio = fval
+            elif "sortino" in key_lower and metrics.sortino_ratio == 0.0:
+                metrics.sortino_ratio = fval
+            elif "max drawdown" in key_lower and metrics.max_drawdown == 0.0:
+                metrics.max_drawdown = abs(fval)
+            elif key_lower == "win rate" and metrics.win_rate == 0.0:
+                metrics.win_rate = fval
+            elif key_lower == "profit factor" and metrics.profit_factor == 0.0:
+                metrics.profit_factor = fval
+            elif not any(k in key_lower for k in _known_returns_keys):
+                logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
         # Extract fees from closed positions
         try:
@@ -740,7 +775,7 @@ class NTScreeningRunner:
                     total_fees += sum(abs(float(c)) for c in pos.commissions)
             metrics.total_fees = total_fees
         except Exception:
-            pass
+            logger.warning("Could not extract fees from engine cache", exc_info=True)
 
         return metrics
 
