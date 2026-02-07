@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -420,16 +421,27 @@ class ValidationRunner:
         else:
             symbols = ["BTCUSDT-PERP"]
 
+        # Use date range from run config instead of hardcoded dates
+        start_date_str = str(run_config.get("start_date", "2025-01-01"))
+        end_date_str = str(run_config.get("end_date", "2025-12-31"))
+        start_dt = date.fromisoformat(start_date_str)
+        end_dt = date.fromisoformat(end_date_str)
+        date_range_days = max((end_dt - start_dt).days, 1)
+
         for i in range(min(5, result.total_trades)):
             is_winner = i < 3  # First 3 are winners
             symbol = symbols[i % len(symbols)] if symbols else "BTCUSDT-PERP"
+
+            # Spread mock trades evenly across the configured date range
+            day_offset = (date_range_days * (i + 1)) // (min(5, result.total_trades) + 1)
+            trade_date = start_dt + timedelta(days=day_offset)
 
             trade = TradeRecord(
                 symbol=str(symbol),
                 direction="LONG" if i % 2 == 0 else "SHORT",
                 leverage=10,
-                entry_time=f"2025-01-{10 + i:02d}T10:00:00Z",
-                exit_time=f"2025-01-{10 + i:02d}T14:00:00Z",
+                entry_time=f"{trade_date.isoformat()}T10:00:00Z",
+                exit_time=f"{trade_date.isoformat()}T14:00:00Z",
                 entry_price=42000.0 + i * 100,
                 exit_price=42100.0 + i * 100 if is_winner else 41900.0 + i * 100,
                 quantity=0.05,
