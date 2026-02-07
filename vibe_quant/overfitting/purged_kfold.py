@@ -165,6 +165,9 @@ class PurgedKFold:
         The train set is all other partitions, with purge and embargo gaps
         applied to prevent leakage.
 
+        Uses range slicing and list pre-allocation instead of repeated
+        extend operations for better memory efficiency.
+
         Args:
             n_samples: Total number of samples in the dataset.
 
@@ -190,49 +193,49 @@ class PurgedKFold:
             )
             raise ValueError(msg)
 
-        # Divide data into K equal folds
+        # Pre-compute fold boundaries once (avoid repeated multiplication)
         fold_size = n_samples // self.n_splits
-        all_indices = list(range(n_samples))
+        fold_starts = [i * fold_size for i in range(self.n_splits)]
+        fold_ends = [fold_starts[i + 1] if i < self.n_splits - 1 else n_samples
+                     for i in range(self.n_splits)]
 
         for fold_idx in range(self.n_splits):
             # Test set is the current fold
-            test_start = fold_idx * fold_size
-            test_end = (
-                (fold_idx + 1) * fold_size
-                if fold_idx < self.n_splits - 1
-                else n_samples
-            )
-            test_indices = all_indices[test_start:test_end]
+            test_indices = list(range(fold_starts[fold_idx], fold_ends[fold_idx]))
 
             # Build train set from all other folds, applying purge/embargo
-            train_indices: list[int] = []
+            # Collect ranges first, then build list in one shot
+            train_ranges: list[range] = []
 
             for train_fold_idx in range(self.n_splits):
                 if train_fold_idx == fold_idx:
                     continue
 
-                train_fold_start = train_fold_idx * fold_size
-                train_fold_end = (
-                    (train_fold_idx + 1) * fold_size
-                    if train_fold_idx < self.n_splits - 1
-                    else n_samples
-                )
+                train_fold_start = fold_starts[train_fold_idx]
+                train_fold_end = fold_ends[train_fold_idx]
 
                 # Apply purge if train fold immediately precedes test fold
                 if train_fold_idx == fold_idx - 1:
-                    # Purge samples at end of train fold
                     purge_start = max(train_fold_start, train_fold_end - purge_len)
                     train_fold_end = purge_start
 
                 # Apply embargo if train fold immediately follows test fold
                 if train_fold_idx == fold_idx + 1:
-                    # Embargo samples at start of train fold
                     embargo_end = min(train_fold_end, train_fold_start + embargo_len)
                     train_fold_start = embargo_end
 
                 # Only add if we have samples left after purge/embargo
                 if train_fold_start < train_fold_end:
-                    train_indices.extend(all_indices[train_fold_start:train_fold_end])
+                    train_ranges.append(range(train_fold_start, train_fold_end))
+
+            # Build train indices from collected ranges
+            total_train = sum(len(r) for r in train_ranges)
+            train_indices: list[int] = [0] * total_train
+            offset = 0
+            for r in train_ranges:
+                rlen = len(r)
+                train_indices[offset:offset + rlen] = r
+                offset += rlen
 
             yield train_indices, test_indices
 
@@ -330,6 +333,9 @@ class PurgedKFoldCV:
     def _aggregate_results(self, fold_results: list[FoldResult]) -> CVResult:
         """Aggregate fold results into CVResult.
 
+        Uses single-pass computation (sum and sum-of-squares) for mean and
+        variance to avoid multiple list iterations.
+
         Args:
             fold_results: Results from each fold.
 
@@ -345,18 +351,29 @@ class PurgedKFoldCV:
                 is_robust=False,
             )
 
-        oos_sharpes = [r.test_sharpe for r in fold_results]
-        oos_returns = [r.test_return for r in fold_results]
+        n = len(fold_results)
+        inv_n = 1.0 / n
 
-        mean_sharpe = sum(oos_sharpes) / len(oos_sharpes)
-        mean_return = sum(oos_returns) / len(oos_returns)
+        # Single-pass accumulation
+        sum_sharpe = 0.0
+        sum_return = 0.0
+        sum_sharpe_sq = 0.0
+
+        for r in fold_results:
+            s = r.test_sharpe
+            sum_sharpe += s
+            sum_sharpe_sq += s * s
+            sum_return += r.test_return
+
+        mean_sharpe = sum_sharpe * inv_n
+        mean_return = sum_return * inv_n
 
         # Compute std with Bessel's correction (n-1)
-        if len(oos_sharpes) > 1:
-            variance = sum((s - mean_sharpe) ** 2 for s in oos_sharpes) / (
-                len(oos_sharpes) - 1
-            )
-            std_sharpe = variance**0.5
+        # Var = (sum(x^2) - n*mean^2) / (n-1)
+        if n > 1:
+            variance = (sum_sharpe_sq - n * mean_sharpe * mean_sharpe) / (n - 1)
+            # Guard against floating-point negative variance
+            std_sharpe = variance**0.5 if variance > 0.0 else 0.0
         else:
             std_sharpe = 0.0
 

@@ -388,6 +388,9 @@ class WalkForwardAnalysis:
     def _aggregate_results(self, windows: list[WFAWindow]) -> WFAResult:
         """Aggregate window results into final WFAResult.
 
+        Uses a single pass over windows to accumulate all metrics,
+        avoiding 5+ separate list iterations.
+
         Args:
             windows: List of individual window results.
 
@@ -406,28 +409,35 @@ class WalkForwardAnalysis:
                 config=self._config,
             )
 
-        # Calculate aggregated OOS metrics
-        oos_sharpes = [w.oos_sharpe for w in windows]
-        oos_returns = [w.oos_return for w in windows]
-        is_returns = [w.is_return for w in windows]
+        # Single-pass accumulation of all metrics
+        n = len(windows)
+        inv_n = 1.0 / n
+        sum_oos_sharpe = 0.0
+        sum_oos_return = 0.0
+        sum_is_return = 0.0
+        sum_degradation = 0.0
+        profitable_count = 0
 
-        aggregated_oos_sharpe = sum(oos_sharpes) / len(oos_sharpes)
-        aggregated_oos_return = sum(oos_returns) / len(oos_returns)
+        for w in windows:
+            sum_oos_sharpe += w.oos_sharpe
+            sum_oos_return += w.oos_return
+            sum_is_return += w.is_return
+            sum_degradation += w.sharpe_degradation
+            if w.oos_return > 0:
+                profitable_count += 1
+
+        aggregated_oos_sharpe = sum_oos_sharpe * inv_n
+        aggregated_oos_return = sum_oos_return * inv_n
 
         # Efficiency: mean(OOS_return) / mean(IS_return)
-        mean_is_return = sum(is_returns) / len(is_returns)
+        mean_is_return = sum_is_return * inv_n
         if mean_is_return == 0:
             efficiency = 0.0 if aggregated_oos_return == 0 else float("inf")
         else:
             efficiency = aggregated_oos_return / mean_is_return
 
-        # Average IS vs OOS degradation
-        degradations = [w.sharpe_degradation for w in windows]
-        avg_degradation = sum(degradations) / len(degradations)
-
-        # Consistency: fraction of profitable OOS windows
-        profitable_windows = sum(1 for w in windows if w.is_oos_profitable)
-        consistency = profitable_windows / len(windows)
+        avg_degradation = sum_degradation * inv_n
+        consistency = profitable_count * inv_n
 
         # Robustness check (SPEC Section 8: efficiency > 0.5 AND > 50% OOS profitable)
         is_robust = (
