@@ -48,16 +48,42 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 
 ### Installing `bd`
 
-Install via npm (preferred in this env), or any method from [beads repo](https://github.com/steveyegge/beads):
+**This environment** (Claude Code remote container): DNS doesn't resolve for npm/go, but `curl` works through the envoy proxy. Use this two-step install:
 
 ```bash
-npm install -g @beads/bd          # npm (needs network to github for binary)
-bun install -g --trust @beads/bd  # bun alternative
-go install github.com/steveyegge/beads/cmd/bd@latest  # go (needs go 1.25+)
-# Or: curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+# 1. Install npm wrapper (skip postinstall since it can't reach GitHub directly)
+npm install -g @beads/bd --ignore-scripts
+
+# 2. Download the binary via curl and place it where the npm wrapper expects it
+VERSION=0.49.4
+curl -sL -o /tmp/beads.tar.gz \
+  "https://github.com/steveyegge/beads/releases/download/v${VERSION}/beads_${VERSION}_linux_amd64.tar.gz"
+tar xzf /tmp/beads.tar.gz -C /tmp
+cp /tmp/bd "$(npm root -g)/@beads/bd/bin/bd"
+chmod +x "$(npm root -g)/@beads/bd/bin/bd"
+
+# 3. Initialize and start daemon
+bd init                # Creates .beads/beads.db, imports issues from JSONL
+bd hooks install       # Installs pre-commit/pre-push shims
+bd daemon start        # Background daemon for auto-export to JSONL
 ```
 
-**Fallback (no network):** If `bd` cannot be installed (e.g., no external network), edit `.beads/issues.jsonl` directly. Each issue is one JSON line:
+**Other environments** (normal network access):
+```bash
+npm install -g @beads/bd          # npm (auto-downloads binary)
+bun install -g --trust @beads/bd  # bun alternative
+go install github.com/steveyegge/beads/cmd/bd@latest  # go (needs go 1.25+)
+```
+
+### Daemon notes
+
+- The daemon auto-exports to JSONL after every mutation — no manual `bd sync` needed for daily work
+- CRUD commands (`bd ready/show/create/update/close`) go through daemon RPC and work while daemon runs
+- `bd sync` and `bd doctor` need direct DB access — stop the daemon first: `bd daemon stop <PID>`
+- If daemon crashes (repo fingerprint mismatch after push): `rm -f .beads/beads.db .beads/beads.db-wal .beads/beads.db-shm && bd init`
+- Valid issue types: `bug`, `feature`, `task`, `epic`, `chore`, `merge-request`, `molecule`, `gate`, `agent`, `role`, `rig`, `convoy`, `event`. Use `feature` not `enhancement` (alias fails import validation)
+
+**Fallback (no `bd`):** Edit `.beads/issues.jsonl` directly. Each issue is one JSON line:
 ```json
 {"id":"vibe-quant-xxx","title":"...","description":"...","status":"open","priority":1,"issue_type":"bug","owner":"verebelyin@gmail.com","created_at":"2026-02-07T14:00:00.000000+01:00","created_by":"Claude"}
 ```
