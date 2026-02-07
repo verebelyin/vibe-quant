@@ -171,11 +171,15 @@ def _random_gene() -> StrategyGene:
 def _perturb(value: float, frac: float = 0.2, lo: float | None = None, hi: float | None = None) -> float:
     """Perturb a value by +/- frac fraction. Optionally clamp to [lo, hi].
 
-    Optimized with early exit for zero-value case and inlined clamping.
+    When value is exactly 0.0, ``frac`` is used as an absolute range
+    [-frac, frac] so that genes (e.g., thresholds) can mutate away from
+    zero. Without this, zero-valued genes would be permanently stuck
+    since ``0 * frac = 0``.
     """
     if value == 0.0:
-        # Avoid delta=0 which makes uniform(-0, 0) pointless
-        result = 0.0
+        # When value is exactly 0, use frac as absolute perturbation range
+        # so genes (e.g., thresholds) can mutate away from zero
+        result = random.uniform(-frac, frac)
     else:
         delta = value * frac
         result = value + random.uniform(-delta, delta)

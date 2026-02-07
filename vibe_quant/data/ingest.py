@@ -571,7 +571,7 @@ def _print_summary(
     archive_size = archive_path.stat().st_size if archive_path.exists() else 0
     catalog_size = _dir_size(catalog_path)
 
-    print(f"\n  Storage:")
+    print("\n  Storage:")
     print(f"    Archive DB:  {_format_size(archive_size)}")
     print(f"    Catalog dir: {_format_size(catalog_size)}")
     print(f"    Total:       {_format_size(archive_size + catalog_size)}")

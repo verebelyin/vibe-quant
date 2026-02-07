@@ -15,6 +15,7 @@ from vibe_quant.validation import (
     LatencyPreset,
     LatencyValues,
     ScreeningFillModelConfig,
+    SlippageEstimator,
     VenueConfig,
     VolumeSlippageFillModel,
     VolumeSlippageFillModelConfig,
@@ -161,42 +162,51 @@ class TestFillModels:
         assert model.prob_fill_on_limit == 0.7
         assert model.prob_slippage == 0.9
 
-    def test_volume_slippage_calculate_factor(self) -> None:
-        """VolumeSlippageFillModel calculates slippage factor correctly.
+    def test_slippage_estimator_calculate(self) -> None:
+        """SlippageEstimator calculates slippage factor correctly.
 
         SPEC formula: slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
         """
-        model = VolumeSlippageFillModel(impact_coefficient=0.1)
+        estimator = SlippageEstimator(impact_coefficient=0.1)
 
         # With volatility=1.0, spread=0: factor = 0 + 0.1 * 1.0 * sqrt(0.01) = 0.01
-        factor = model.calculate_slippage_factor(
+        factor = estimator.calculate(
             order_size=100, avg_volume=10000, volatility=1.0
         )
         assert abs(factor - 0.01) < 1e-9
 
         # Larger order: 0 + 0.1 * 1.0 * sqrt(0.25) = 0.05
-        factor = model.calculate_slippage_factor(
+        factor = estimator.calculate(
             order_size=2500, avg_volume=10000, volatility=1.0
         )
         assert abs(factor - 0.05) < 1e-9
 
         # With spread: spread/2 + k * vol * sqrt(ratio) = 0.001/2 + 0.01 = 0.0105
-        factor = model.calculate_slippage_factor(
+        factor = estimator.calculate(
             order_size=100, avg_volume=10000, volatility=1.0, spread=0.001
         )
         assert abs(factor - 0.0105) < 1e-9
 
-    def test_volume_slippage_zero_volume(self) -> None:
-        """VolumeSlippageFillModel handles zero volume gracefully."""
-        model = VolumeSlippageFillModel()
-        factor = model.calculate_slippage_factor(order_size=100, avg_volume=0)
+    def test_slippage_estimator_zero_volume(self) -> None:
+        """SlippageEstimator handles zero volume gracefully."""
+        estimator = SlippageEstimator()
+        factor = estimator.calculate(order_size=100, avg_volume=0)
         assert factor == 0.0
 
         # With spread, zero volume returns spread/2
-        factor = model.calculate_slippage_factor(
+        factor = estimator.calculate(
             order_size=100, avg_volume=0, spread=0.002
         )
         assert abs(factor - 0.001) < 1e-9
+
+    def test_slippage_estimator_estimate_cost(self) -> None:
+        """SlippageEstimator.estimate_cost returns cost in quote currency."""
+        estimator = SlippageEstimator(impact_coefficient=0.1)
+        cost = estimator.estimate_cost(
+            entry_price=50000.0, order_size=1.0, avg_volume=1000.0,
+            volatility=0.02, spread=0.0001,
+        )
+        assert cost > 0.0
 
 
 class TestVenueConfig:

@@ -273,6 +273,11 @@ class StrategyCompiler:
             "",
         ]
 
+        # Add risk/sizing parameter (overridable via strategy config or sweep params)
+        lines.append("    # Position sizing (override via ImportableStrategyConfig.config)")
+        lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
+        lines.append("")
+
         # Add indicator parameters
         lines.append("    # Indicator parameters")
         for name, config in dsl.indicators.items():
@@ -326,7 +331,7 @@ class StrategyCompiler:
         # Add custom thresholds (extracted from conditions)
         lines.append("")
         lines.append("    # Condition thresholds (can be overridden)")
-        seen_thresholds: set[str] = set()
+        seen_thresholds: dict[str, float | int] = {}
         for cond_str in (
             dsl.entry_conditions.long
             + dsl.entry_conditions.short
@@ -334,12 +339,22 @@ class StrategyCompiler:
             + dsl.exit_conditions.short
         ):
             cond = parse_condition(cond_str, list(dsl.indicators.keys()))
-            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, float):
+            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, (int, float)):
                 value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
-                param_name = f"{cond.left.value}_{value_str}_threshold"
-                if param_name not in seen_thresholds:
-                    seen_thresholds.add(param_name)
-                    lines.append(f"    {param_name}: float = {cond.right.value}")
+                # Try short name first (backward compatible)
+                short_name = f"{cond.left.value}_{value_str}_threshold"
+                if short_name not in seen_thresholds:
+                    seen_thresholds[short_name] = cond.right.value
+                elif seen_thresholds[short_name] != cond.right.value:
+                    # Collision: same indicator, same value but different operator
+                    # Use disambiguated name
+                    op_name = cond.operator.name.lower()
+                    long_name = f"{cond.left.value}_{op_name}_{value_str}_threshold"
+                    if long_name not in seen_thresholds:
+                        seen_thresholds[long_name] = cond.right.value
+
+        for param_name, default_val in seen_thresholds.items():
+            lines.append(f"    {param_name}: float = {default_val}")
 
         return "\n".join(lines)
 
@@ -1063,7 +1078,7 @@ class StrategyCompiler:
             "    if self._position_open:",
             "        return",
             "",
-            "    qty = self._calculate_position_size(bar)",
+            "    qty = self._calculate_position_size(bar, is_long=True)",
             "    order = self.order_factory.market(",
             "        instrument_id=self.instrument_id,",
             "        order_side=OrderSide.BUY,",
@@ -1079,7 +1094,7 @@ class StrategyCompiler:
             "    if self._position_open:",
             "        return",
             "",
-            "    qty = self._calculate_position_size(bar)",
+            "    qty = self._calculate_position_size(bar, is_long=False)",
             "    order = self.order_factory.market(",
             "        instrument_id=self.instrument_id,",
             "        order_side=OrderSide.SELL,",
@@ -1196,10 +1211,50 @@ class StrategyCompiler:
             "    return None",
             "",
             # _calculate_position_size
-            "def _calculate_position_size(self, bar: Bar) -> Quantity:",
-            '    """Calculate position size (placeholder - uses fixed quantity)."""',
-            "    # TODO: Integrate with position sizing module",
-            "    return self.instrument.make_qty(1.0)",
+            "def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity:",
+            '    """Calculate position size based on risk config."""',
+            "    # Get account equity from cache",
+            "    account = self.cache.account_for_venue(self.instrument_id.venue)",
+            "    if account is None:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    equity = float(account.balance_total(account.currencies()[0]))",
+            "    if equity <= 0:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    price = float(bar.close)",
+            "    if price <= 0:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    # Fixed fractional sizing: risk_per_trade % of equity",
+            "    risk_pct = getattr(self.config, 'risk_per_trade', 0.02)",
+            "    risk_amount = equity * risk_pct",
+            "",
+            "    # Use stop loss distance if available, otherwise use 2% of price",
+            "    sl_price = self._calculate_sl_price(price, is_long)",
+            "    if sl_price is not None and sl_price > 0:",
+            "        stop_distance = abs(price - sl_price)",
+            "    else:",
+            "        stop_distance = price * 0.02  # 2% default stop distance",
+            "",
+            "    if stop_distance <= 0:",
+            "        stop_distance = price * 0.02",
+            "",
+            "    # Size = risk_amount / stop_distance",
+            "    raw_size = risk_amount / stop_distance",
+            "",
+            "    # Apply max position limit (50% of equity at entry price)",
+            "    max_size = (equity * 0.5) / price",
+            "    final_size = min(raw_size, max_size)",
+            "",
+            "    # Ensure minimum quantity: 1% of equity at current price",
+            "    min_size = (equity * 0.01) / price if price > 0 else 0.001",
+            "    if final_size <= 0:",
+            "        final_size = min_size",
+            "",
+            "    # Clamp to instrument minimums",
+            "    final_size = max(final_size, float(self.instrument.min_quantity))",
+            "    return self.instrument.make_qty(final_size)",
             "",
             # _sync_position_state
             "def _sync_position_state(self) -> None:",

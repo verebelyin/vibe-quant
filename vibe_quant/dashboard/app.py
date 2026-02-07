@@ -14,6 +14,13 @@ _PAGES_DIR = Path(__file__).parent / "pages"
 
 def main() -> None:
     """Main dashboard entry point using st.navigation API."""
+    # st.set_page_config MUST be the first Streamlit command
+    st.set_page_config(
+        page_title="vibe-quant Dashboard",
+        page_icon=":material/show_chart:",
+        layout="wide",
+    )
+
     pages = {
         "Strategies": [
             st.Page(
@@ -61,11 +68,6 @@ def main() -> None:
         ],
     }
 
-    st.set_page_config(
-        page_title="vibe-quant Dashboard",
-        page_icon=":material/show_chart:",
-        layout="wide",
-    )
     pg = st.navigation(pages)
     pg.run()
 

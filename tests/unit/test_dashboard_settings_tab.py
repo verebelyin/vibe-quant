@@ -113,14 +113,13 @@ class TestLatencyPresets:
 
     def test_latency_presets_imported(self) -> None:
         """Latency presets are available via validation module."""
+        # Settings module uses these same presets
+        from vibe_quant.dashboard.pages import settings
         from vibe_quant.validation.latency import (
             LATENCY_PRESETS,
             LatencyPreset,
             LatencyValues,
         )
-
-        # Settings module uses these same presets
-        from vibe_quant.dashboard.pages import settings
 
         assert settings is not None  # Module loads without error
 

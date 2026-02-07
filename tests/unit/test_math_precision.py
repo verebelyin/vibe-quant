@@ -848,11 +848,15 @@ class TestCatalogDivisorPrecision:
 class TestSlippageFormulaPrecision:
     """Verify the slippage formula matches the SPEC."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_nautilus(self) -> None:
+        pytest.importorskip("nautilus_trader")
+
     def test_spec_formula(self) -> None:
         """slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)"""
-        from vibe_quant.validation.fill_model import VolumeSlippageFillModel
+        from vibe_quant.validation.fill_model import SlippageEstimator
 
-        model = VolumeSlippageFillModel(impact_coefficient=0.1)
+        estimator = SlippageEstimator(impact_coefficient=0.1)
 
         k = 0.1
         vol = 0.02
@@ -861,30 +865,30 @@ class TestSlippageFormulaPrecision:
         avg_vol = 1000.0
 
         expected = spread / 2.0 + k * vol * math.sqrt(order_size / avg_vol)
-        actual = model.calculate_slippage_factor(order_size, avg_vol, vol, spread)
+        actual = estimator.calculate(order_size, avg_vol, vol, spread)
 
         assert actual == pytest.approx(expected, rel=1e-14)
 
     def test_zero_volatility_gives_half_spread(self) -> None:
-        from vibe_quant.validation.fill_model import VolumeSlippageFillModel
+        from vibe_quant.validation.fill_model import SlippageEstimator
 
-        model = VolumeSlippageFillModel(impact_coefficient=0.1)
-        result = model.calculate_slippage_factor(10.0, 1000.0, 0.0, 0.002)
+        estimator = SlippageEstimator(impact_coefficient=0.1)
+        result = estimator.calculate(10.0, 1000.0, 0.0, 0.002)
         assert result == pytest.approx(0.001, rel=1e-14)  # spread/2
 
     def test_zero_volume_gives_half_spread(self) -> None:
-        from vibe_quant.validation.fill_model import VolumeSlippageFillModel
+        from vibe_quant.validation.fill_model import SlippageEstimator
 
-        model = VolumeSlippageFillModel(impact_coefficient=0.1)
-        result = model.calculate_slippage_factor(10.0, 0.0, 0.02, 0.002)
+        estimator = SlippageEstimator(impact_coefficient=0.1)
+        result = estimator.calculate(10.0, 0.0, 0.02, 0.002)
         assert result == pytest.approx(0.001, rel=1e-14)  # spread/2
 
     def test_slippage_scales_with_sqrt_of_size(self) -> None:
         """Doubling order size should increase impact by sqrt(2)."""
-        from vibe_quant.validation.fill_model import VolumeSlippageFillModel
+        from vibe_quant.validation.fill_model import SlippageEstimator
 
-        model = VolumeSlippageFillModel(impact_coefficient=0.1)
-        small = model.calculate_slippage_factor(100.0, 10000.0, 0.02, 0.0)
-        large = model.calculate_slippage_factor(200.0, 10000.0, 0.02, 0.0)
+        estimator = SlippageEstimator(impact_coefficient=0.1)
+        small = estimator.calculate(100.0, 10000.0, 0.02, 0.0)
+        large = estimator.calculate(200.0, 10000.0, 0.02, 0.0)
         # With spread=0: slippage = k*vol*sqrt(size/vol)
         assert large / small == pytest.approx(math.sqrt(2.0), rel=1e-12)

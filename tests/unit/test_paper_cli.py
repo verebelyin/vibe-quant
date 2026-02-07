@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -20,9 +19,6 @@ from vibe_quant.paper.config import (
     RiskModuleConfig,
     SizingModuleConfig,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class TestDecimalFromStr:

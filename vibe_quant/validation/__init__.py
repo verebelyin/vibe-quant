@@ -9,6 +9,7 @@ This module provides:
 
 from vibe_quant.validation.fill_model import (
     ScreeningFillModelConfig,
+    SlippageEstimator,
     VolumeSlippageFillModel,
     VolumeSlippageFillModelConfig,
     create_screening_fill_model,
@@ -47,6 +48,7 @@ __all__ = [
     # Fill models
     "VolumeSlippageFillModel",
     "VolumeSlippageFillModelConfig",
+    "SlippageEstimator",
     "ScreeningFillModelConfig",
     "create_screening_fill_model",
     "create_validation_fill_model",

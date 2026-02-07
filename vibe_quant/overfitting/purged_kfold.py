@@ -15,8 +15,11 @@ Example with purge_pct=0.01, embargo_pct=0.01, n_samples=1000:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -71,12 +74,18 @@ class CVConfig:
     Attributes:
         n_splits: Number of folds (K).
         purge_pct: Percentage of total samples to remove after train set.
+            If indicator_lookback_bars is set, this is auto-calculated.
         embargo_pct: Percentage of total samples to remove before test set.
+        indicator_lookback_bars: Max indicator lookback in bars (e.g., 50 for
+            EMA-50). Per SPEC Section 8, the purge period should equal the
+            max indicator lookback. If set, overrides purge_pct when
+            n_samples is known.
     """
 
     n_splits: int = 5
     purge_pct: float = 0.01
     embargo_pct: float = 0.01
+    indicator_lookback_bars: int | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -133,6 +142,7 @@ class PurgedKFold:
         n_splits: int = 5,
         purge_pct: float = 0.01,
         embargo_pct: float = 0.01,
+        indicator_lookback_bars: int | None = None,
     ) -> None:
         """Initialize PurgedKFold.
 
@@ -140,6 +150,9 @@ class PurgedKFold:
             n_splits: Number of folds.
             purge_pct: Fraction of data to purge after train.
             embargo_pct: Fraction of data to embargo before test.
+            indicator_lookback_bars: Max indicator lookback in bars. Per SPEC
+                Section 8, purge period should equal max indicator lookback.
+                If set, overrides purge_pct when n_samples is known in split().
 
         Raises:
             ValueError: If parameters are invalid.
@@ -157,6 +170,7 @@ class PurgedKFold:
         self.n_splits = n_splits
         self.purge_pct = purge_pct
         self.embargo_pct = embargo_pct
+        self.indicator_lookback_bars = indicator_lookback_bars
 
     def split(self, n_samples: int) -> Iterator[tuple[list[int], list[int]]]:
         """Generate train/test indices for each fold.
@@ -177,7 +191,21 @@ class PurgedKFold:
         Raises:
             ValueError: If n_samples is too small for the configuration.
         """
-        purge_len = int(n_samples * self.purge_pct)
+        # SPEC Section 8: purge period = max indicator lookback
+        if self.indicator_lookback_bars is not None and self.indicator_lookback_bars > 0:
+            purge_len = self.indicator_lookback_bars
+            computed_pct = purge_len / n_samples if n_samples > 0 else 0.0
+            if self.purge_pct != 0.01 and abs(computed_pct - self.purge_pct) > 1e-6:
+                logger.warning(
+                    "indicator_lookback_bars=%d overrides purge_pct=%.4f "
+                    "(effective purge=%.4f of %d samples)",
+                    self.indicator_lookback_bars,
+                    self.purge_pct,
+                    computed_pct,
+                    n_samples,
+                )
+        else:
+            purge_len = int(n_samples * self.purge_pct)
         embargo_len = int(n_samples * self.embargo_pct)
         total_gap = purge_len + embargo_len
 
@@ -354,25 +382,26 @@ class PurgedKFoldCV:
         n = len(fold_results)
         inv_n = 1.0 / n
 
-        # Single-pass accumulation
-        sum_sharpe = 0.0
+        # Single-pass Welford's online algorithm for numerically stable variance
         sum_return = 0.0
-        sum_sharpe_sq = 0.0
+        mean_sharpe = 0.0
+        m2_sharpe = 0.0  # sum of squared deviations from running mean
 
-        for r in fold_results:
+        for i, r in enumerate(fold_results):
             s = r.test_sharpe
-            sum_sharpe += s
-            sum_sharpe_sq += s * s
             sum_return += r.test_return
+            # Welford update
+            k = i + 1
+            delta = s - mean_sharpe
+            mean_sharpe += delta / k
+            delta2 = s - mean_sharpe
+            m2_sharpe += delta * delta2
 
-        mean_sharpe = sum_sharpe * inv_n
         mean_return = sum_return * inv_n
 
-        # Compute std with Bessel's correction (n-1)
-        # Var = (sum(x^2) - n*mean^2) / (n-1)
+        # Bessel's correction: sample variance = M2 / (n-1)
         if n > 1:
-            variance = (sum_sharpe_sq - n * mean_sharpe * mean_sharpe) / (n - 1)
-            # Guard against floating-point negative variance
+            variance = m2_sharpe / (n - 1)
             std_sharpe = variance**0.5 if variance > 0.0 else 0.0
         else:
             std_sharpe = 0.0

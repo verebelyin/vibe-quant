@@ -283,6 +283,11 @@ class OverfittingPipeline:
         if self._wfa_runner:
             wfa.runner = self._wfa_runner
         else:
+            logger.warning(
+                "No WFA backtest runner provided - using MockBacktestRunner. "
+                "Results will be synthetic. Pass wfa_runner= to OverfittingPipeline "
+                "for real walk-forward analysis."
+            )
             wfa.runner = MockBacktestRunner()
 
         cv_config = config.cv_config or CVConfig()
@@ -350,10 +355,19 @@ class OverfittingPipeline:
             passed_cv: bool | None = None
 
             if config.enable_purged_kfold:
-                runner = self._cv_runner or MockBacktestRunner(
-                    oos_sharpe=candidate["sharpe_ratio"],
-                    oos_return=candidate["total_return"],
-                )
+                if self._cv_runner:
+                    runner = self._cv_runner
+                else:
+                    if candidate is candidates[0]:  # Log once
+                        logger.warning(
+                            "No CV backtest runner provided - using MockBacktestRunner. "
+                            "Results will be synthetic. Pass cv_runner= to OverfittingPipeline "
+                            "for real purged k-fold analysis."
+                        )
+                    runner = MockBacktestRunner(
+                        oos_sharpe=candidate["sharpe_ratio"],
+                        oos_return=candidate["total_return"],
+                    )
                 cv_result = cv.run(n_samples=n_samples, runner=runner)
                 passed_cv = cv_result.is_robust
                 if passed_cv:
