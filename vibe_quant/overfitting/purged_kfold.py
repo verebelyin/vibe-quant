@@ -333,8 +333,8 @@ class PurgedKFoldCV:
     def _aggregate_results(self, fold_results: list[FoldResult]) -> CVResult:
         """Aggregate fold results into CVResult.
 
-        Uses single-pass Welford-style computation for mean and variance
-        to avoid multiple list iterations.
+        Uses single-pass computation (sum and sum-of-squares) for mean and
+        variance to avoid multiple list iterations.
 
         Args:
             fold_results: Results from each fold.
