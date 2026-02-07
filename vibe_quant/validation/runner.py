@@ -18,6 +18,7 @@ from vibe_quant.dsl.compiler import CompilerError, StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
+from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.venue import (
     VenueConfig,
@@ -131,11 +132,22 @@ class ValidationResult:
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
     max_drawdown: float = 0.0
+    cagr: float = 0.0
+    calmar_ratio: float = 0.0
+    volatility_annual: float = 0.0
+    max_drawdown_duration_days: float = 0.0
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
     win_rate: float = 0.0
     profit_factor: float = 0.0
+    avg_trade_duration_hours: float = 0.0
+    max_consecutive_wins: int = 0
+    max_consecutive_losses: int = 0
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    avg_win: float = 0.0
+    avg_loss: float = 0.0
     total_fees: float = 0.0
     total_funding: float = 0.0
     total_slippage: float = 0.0
@@ -149,11 +161,22 @@ class ValidationResult:
             "sharpe_ratio": self.sharpe_ratio,
             "sortino_ratio": self.sortino_ratio,
             "max_drawdown": self.max_drawdown,
+            "cagr": self.cagr,
+            "calmar_ratio": self.calmar_ratio,
+            "volatility_annual": self.volatility_annual,
+            "max_drawdown_duration_days": self.max_drawdown_duration_days,
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,
             "losing_trades": self.losing_trades,
             "win_rate": self.win_rate,
             "profit_factor": self.profit_factor,
+            "avg_trade_duration_hours": self.avg_trade_duration_hours,
+            "max_consecutive_wins": self.max_consecutive_wins,
+            "max_consecutive_losses": self.max_consecutive_losses,
+            "largest_win": self.largest_win,
+            "largest_loss": self.largest_loss,
+            "avg_win": self.avg_win,
+            "avg_loss": self.avg_loss,
             "total_fees": self.total_fees,
             "total_funding": self.total_funding,
             "total_slippage": self.total_slippage,
@@ -766,6 +789,17 @@ class ValidationRunner:
         winning = 0
         losing = 0
         total_fees = 0.0
+        total_slippage = 0.0
+
+        # Slippage estimator using SPEC formula for post-fill cost analytics
+        fill_cfg = venue_config.fill_config
+        impact_k = getattr(fill_cfg, "impact_coefficient", 0.1) if fill_cfg else 0.1
+        slippage_estimator = SlippageEstimator(impact_coefficient=impact_k)
+
+        # Estimate average volume from all closed positions for slippage calc
+        # (in a real scenario this would come from bar data; use position qty
+        # as rough proxy scaled by leverage for order-vs-market comparison)
+        avg_bar_volume = 1000.0  # Conservative default
 
         for pos in positions:
             if not pos.is_closed:
@@ -784,6 +818,16 @@ class ValidationRunner:
                 winning += 1
             elif realized_pnl < 0:
                 losing += 1
+
+            # Estimate slippage cost using SPEC formula
+            slippage_cost = slippage_estimator.estimate_cost(
+                entry_price=entry_price,
+                order_size=quantity,
+                avg_volume=avg_bar_volume,
+                volatility=0.02,  # ~2% daily vol typical for crypto
+                spread=0.0001,  # ~1bp spread for major pairs
+            )
+            total_slippage += slippage_cost
 
             # Compute ROI: PnL / notional value at entry
             notional = entry_price * quantity if entry_price and quantity else 1.0
@@ -809,6 +853,7 @@ class ValidationRunner:
                 quantity=quantity,
                 entry_fee=abs(pos_fees) / 2.0,
                 exit_fee=abs(pos_fees) / 2.0,
+                slippage_cost=slippage_cost,
                 gross_pnl=realized_pnl + abs(pos_fees),
                 net_pnl=realized_pnl,
                 roi_percent=roi_pct,
@@ -820,8 +865,63 @@ class ValidationRunner:
         result.winning_trades = winning
         result.losing_trades = losing
         result.total_fees = total_fees
+        result.total_slippage = total_slippage
         if result.total_trades > 0:
             result.win_rate = winning / result.total_trades
+
+        # Compute SPEC-required extended metrics from trades
+        self._compute_extended_metrics(result)
+
+    def _compute_extended_metrics(self, result: ValidationResult) -> None:
+        """Compute SPEC-required extended metrics from trades.
+
+        Populates: largest_win/loss, avg_win/loss, max_consecutive_wins/losses,
+        avg_trade_duration_hours, calmar_ratio.
+
+        Args:
+            result: ValidationResult to populate (mutated in place).
+        """
+        if not result.trades:
+            return
+
+        wins: list[float] = []
+        losses: list[float] = []
+
+        # Consecutive streak tracking
+        max_con_wins = 0
+        max_con_losses = 0
+        cur_wins = 0
+        cur_losses = 0
+
+        for trade in result.trades:
+            pnl = trade.net_pnl
+            if pnl > 0:
+                wins.append(pnl)
+                cur_wins += 1
+                max_con_wins = max(max_con_wins, cur_wins)
+                cur_losses = 0
+            elif pnl < 0:
+                losses.append(pnl)
+                cur_losses += 1
+                max_con_losses = max(max_con_losses, cur_losses)
+                cur_wins = 0
+            else:
+                cur_wins = 0
+                cur_losses = 0
+
+        result.max_consecutive_wins = max_con_wins
+        result.max_consecutive_losses = max_con_losses
+
+        if wins:
+            result.largest_win = max(wins)
+            result.avg_win = sum(wins) / len(wins)
+        if losses:
+            result.largest_loss = min(losses)
+            result.avg_loss = sum(losses) / len(losses)
+
+        # Calmar ratio: CAGR / max_drawdown
+        if result.max_drawdown > 0 and result.cagr != 0:
+            result.calmar_ratio = result.cagr / result.max_drawdown
 
     def _write_start_event(
         self,

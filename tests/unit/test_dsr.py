@@ -6,8 +6,8 @@ import pytest
 
 from vibe_quant.overfitting.dsr import (
     EULER_MASCHERONI,
-    DSRResult,
     DeflatedSharpeRatio,
+    DSRResult,
     calculate_dsr,
 )
 

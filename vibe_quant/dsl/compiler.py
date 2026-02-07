@@ -273,6 +273,11 @@ class StrategyCompiler:
             "",
         ]
 
+        # Add risk/sizing parameter
+        lines.append("    # Position sizing")
+        lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
+        lines.append("")
+
         # Add indicator parameters
         lines.append("    # Indicator parameters")
         for name, config in dsl.indicators.items():
@@ -334,9 +339,12 @@ class StrategyCompiler:
             + dsl.exit_conditions.short
         ):
             cond = parse_condition(cond_str, list(dsl.indicators.keys()))
-            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, float):
+            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, (int, float)):
+                # Include operator in name to avoid duplicates for same indicator
+                # e.g., rsi_gt_70_threshold vs rsi_lt_30_threshold
+                op_name = cond.operator.name.lower()
                 value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
-                param_name = f"{cond.left.value}_{value_str}_threshold"
+                param_name = f"{cond.left.value}_{op_name}_{value_str}_threshold"
                 if param_name not in seen_thresholds:
                     seen_thresholds.add(param_name)
                     lines.append(f"    {param_name}: float = {cond.right.value}")
@@ -1197,9 +1205,46 @@ class StrategyCompiler:
             "",
             # _calculate_position_size
             "def _calculate_position_size(self, bar: Bar) -> Quantity:",
-            '    """Calculate position size (placeholder - uses fixed quantity)."""',
-            "    # TODO: Integrate with position sizing module",
-            "    return self.instrument.make_qty(1.0)",
+            '    """Calculate position size based on risk config."""',
+            "    # Get account equity from cache",
+            "    account = self.cache.account_for_venue(self.instrument_id.venue)",
+            "    if account is None:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    equity = float(account.balance_total(account.currencies()[0]))",
+            "    if equity <= 0:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    price = float(bar.close)",
+            "    if price <= 0:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    # Fixed fractional sizing: risk_per_trade % of equity",
+            "    risk_pct = getattr(self.config, 'risk_per_trade', 0.02)",
+            "    risk_amount = equity * risk_pct",
+            "",
+            "    # Use stop loss distance if available, otherwise use 2% of price",
+            "    sl_price = self._calculate_sl_price(price, True)",
+            "    if sl_price is not None and sl_price > 0:",
+            "        stop_distance = abs(price - sl_price)",
+            "    else:",
+            "        stop_distance = price * 0.02  # 2% default stop distance",
+            "",
+            "    if stop_distance <= 0:",
+            "        stop_distance = price * 0.02",
+            "",
+            "    # Size = risk_amount / stop_distance",
+            "    raw_size = risk_amount / stop_distance",
+            "",
+            "    # Apply max position limit (50% of equity at entry price)",
+            "    max_size = (equity * 0.5) / price",
+            "    final_size = min(raw_size, max_size)",
+            "",
+            "    # Ensure minimum quantity",
+            "    if final_size <= 0:",
+            "        return self.instrument.make_qty(1.0)",
+            "",
+            "    return self.instrument.make_qty(final_size)",
             "",
             # _sync_position_state
             "def _sync_position_state(self) -> None:",

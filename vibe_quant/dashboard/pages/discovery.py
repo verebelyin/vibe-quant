@@ -455,8 +455,9 @@ def _render_results_section(result: DiscoveryResult) -> None:
                 st.success(f"Strategy #{i + 1} exported. Go to Strategy Management to save.")
 
 
+@st.fragment(run_every=2)
 def _render_active_discovery_jobs(job_manager: BacktestJobManager) -> None:
-    """Render active discovery jobs with status and kill button."""
+    """Render active discovery jobs with status and kill button. Auto-refreshes every 2s."""
     st.subheader("Active Discovery Jobs")
 
     active_jobs = job_manager.list_active_jobs()

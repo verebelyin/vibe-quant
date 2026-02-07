@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-import pytest
 
 from vibe_quant.dashboard.pages.paper_trading import (
     _create_paper_config_file,
@@ -17,9 +12,6 @@ from vibe_quant.dashboard.pages.paper_trading import (
     _get_validated_strategies,
 )
 from vibe_quant.paper.persistence import StateCheckpoint
-
-if TYPE_CHECKING:
-    pass
 
 
 class TestFormatPnl:

@@ -174,8 +174,9 @@ def _perturb(value: float, frac: float = 0.2, lo: float | None = None, hi: float
     Optimized with early exit for zero-value case and inlined clamping.
     """
     if value == 0.0:
-        # Avoid delta=0 which makes uniform(-0, 0) pointless
-        result = 0.0
+        # When value is exactly 0, use frac as absolute perturbation range
+        # so genes (e.g., thresholds) can mutate away from zero
+        result = random.uniform(-frac, frac)
     else:
         delta = value * frac
         result = value + random.uniform(-delta, delta)

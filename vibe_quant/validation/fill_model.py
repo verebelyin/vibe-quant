@@ -1,4 +1,10 @@
-"""Custom fill models for validation backtesting."""
+"""Custom fill models and slippage estimation for validation backtesting.
+
+Provides:
+- VolumeSlippageFillModel: FillModel subclass that passes prob_slippage to NT
+- SlippageEstimator: Standalone SPEC-formula slippage calculator for post-fill analytics
+- ScreeningFillModelConfig / create_screening_fill_model: Simple fill model for screening
+"""
 
 from __future__ import annotations
 
@@ -18,7 +24,7 @@ class VolumeSlippageFillModelConfig:
         prob_fill_on_limit: Probability of limit order fill when price touches.
             Default 0.8.
         prob_slippage: Probability that market orders experience slippage.
-            Default 1.0 (always apply slippage formula).
+            Default 1.0 (always apply slippage in validation).
     """
 
     impact_coefficient: float = 0.1
@@ -27,27 +33,18 @@ class VolumeSlippageFillModelConfig:
 
 
 class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
-    """Fill model with volume-based slippage using square-root market impact.
+    """Fill model for validation backtesting with volume-based slippage estimation.
 
-    Slippage formula (SPEC):
-        slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
+    NautilusTrader's matching engine uses FillModel.is_slipped() to decide
+    whether a fill gets 1-tick slippage. The slippage *amount* is fixed at
+    1 tick internally and cannot be overridden via subclassing.
 
-    This models the market impact of larger orders: as order size increases
-    relative to average volume, slippage increases at a diminishing rate
-    (square-root relationship).
+    This class:
+    1. Passes prob_slippage to the base FillModel (controlling slippage probability)
+    2. Stores the impact_coefficient for use by SlippageEstimator
 
-    For small orders (< 1% of avg volume), slippage is minimal.
-    For large orders (> 10% of avg volume), slippage becomes significant.
-
-    Note on NautilusTrader integration:
-        NautilusTrader's ``FillModel`` uses internal C-level fill logic.  The
-        ``prob_slippage`` parameter controls the *probability* that slippage
-        occurs on a market order, but the actual slippage *amount* is
-        determined internally by NT and cannot be overridden by subclassing
-        alone.  Our custom ``calculate_slippage_factor()`` method is therefore
-        **not** called automatically by NT's matching engine.  It is exposed
-        for use by the ``ValidationRunner`` to adjust prices post-fill or for
-        reporting/analytics purposes.
+    For realistic slippage *cost* estimation per the SPEC formula, use
+    SlippageEstimator separately in post-fill analytics.
     """
 
     def __init__(
@@ -83,7 +80,39 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         """Get market impact coefficient."""
         return self._impact_coefficient
 
-    def calculate_slippage_factor(
+
+class SlippageEstimator:
+    """Standalone slippage estimator using SPEC square-root market impact formula.
+
+    Formula (SPEC Section 7):
+        slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
+
+    This is used by ValidationRunner post-fill to compute realistic slippage
+    costs for each trade. It is NOT integrated into NT's matching engine
+    (which only supports 1-tick slippage).
+
+    Example:
+        estimator = SlippageEstimator(impact_coefficient=0.1)
+        slippage = estimator.calculate(
+            order_size=1.0, avg_volume=1000.0,
+            volatility=0.02, spread=0.0001,
+        )
+    """
+
+    def __init__(self, impact_coefficient: float = 0.1) -> None:
+        """Initialize SlippageEstimator.
+
+        Args:
+            impact_coefficient: Market impact coefficient k.
+        """
+        self._k = impact_coefficient
+
+    @property
+    def impact_coefficient(self) -> float:
+        """Get market impact coefficient."""
+        return self._k
+
+    def calculate(
         self,
         order_size: float,
         avg_volume: float,
@@ -95,37 +124,50 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         Formula (from SPEC):
             slippage = spread/2 + k * volatility * sqrt(order_size / avg_volume)
 
-        This method is **not** called by NautilusTrader's internal matching
-        engine (see class docstring).  It is available for the
-        ``ValidationRunner`` to adjust fill prices post-execution or for
-        analytics/reporting.
-
-        Optimized with early exits for common zero-volatility cases
-        and combined multiplication to reduce operations.
-
         Args:
             order_size: Order quantity.
             avg_volume: Average bar volume.
             volatility: Current volatility estimate (e.g. realized vol or ATR
-                as a fraction of price).  Defaults to 0.0.
+                as a fraction of price).
             spread: Current bid-ask spread as a fraction of price.
-                Defaults to 0.0.
 
         Returns:
             Slippage factor as a decimal (e.g., 0.001 for 0.1% slippage).
         """
         half_spread = spread * 0.5
 
-        # Fast path: no volume data or no volatility → spread-only slippage
+        # Fast path: no volume data or no volatility -> spread-only slippage
         if avg_volume <= 0 or volatility == 0.0:
             return half_spread
 
         # SPEC formula: spread/2 + k * volatility * sqrt(order_size / avg_volume)
-        # Combine k * volatility first, then multiply by sqrt
         market_impact = (
-            self._impact_coefficient * volatility * math.sqrt(order_size / avg_volume)
+            self._k * volatility * math.sqrt(order_size / avg_volume)
         )
         return half_spread + market_impact
+
+    def estimate_cost(
+        self,
+        entry_price: float,
+        order_size: float,
+        avg_volume: float,
+        volatility: float = 0.0,
+        spread: float = 0.0,
+    ) -> float:
+        """Calculate estimated slippage cost in quote currency.
+
+        Args:
+            entry_price: Trade entry price.
+            order_size: Order quantity.
+            avg_volume: Average bar volume.
+            volatility: Current volatility estimate.
+            spread: Current bid-ask spread as fraction of price.
+
+        Returns:
+            Estimated slippage cost in quote currency.
+        """
+        factor = self.calculate(order_size, avg_volume, volatility, spread)
+        return factor * entry_price * order_size
 
 
 @dataclass(frozen=True)
@@ -169,13 +211,14 @@ def create_validation_fill_model(
 ) -> VolumeSlippageFillModel:
     """Create volume-based FillModel for validation mode.
 
-    Validation uses realistic volume-based slippage modeling.
+    Validation uses realistic fill probability. For slippage cost estimation,
+    use SlippageEstimator separately.
 
     Args:
         config: Configuration for the model.
 
     Returns:
-        VolumeSlippageFillModel for realistic execution simulation.
+        VolumeSlippageFillModel for validation execution simulation.
     """
     if config is None:
         config = VolumeSlippageFillModelConfig()

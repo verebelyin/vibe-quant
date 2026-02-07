@@ -460,8 +460,12 @@ def _render_run_buttons(
             manager.update_backtest_run_status(run_id, "failed", error_message=str(e))
 
 
+@st.fragment(run_every=2)
 def _render_active_jobs(manager: StateManager, job_manager: BacktestJobManager) -> None:
-    """Render active jobs list with status and kill button."""
+    """Render active jobs list with status and kill button.
+
+    Auto-refreshes every 2 seconds per SPEC requirement.
+    """
     st.subheader("Active Jobs")
 
     # Sync job status with actual process state before listing.

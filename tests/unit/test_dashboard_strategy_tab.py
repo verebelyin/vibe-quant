@@ -147,7 +147,7 @@ class TestStrategyManagerIntegration:
             return Path(f.name)
 
     @pytest.fixture
-    def manager(self, temp_db: Path) -> Generator[StateManager, None, None]:
+    def manager(self, temp_db: Path) -> Generator[StateManager]:
         """Create StateManager with temp database."""
         mgr = StateManager(temp_db)
         yield mgr

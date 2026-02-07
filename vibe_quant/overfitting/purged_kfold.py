@@ -71,12 +71,18 @@ class CVConfig:
     Attributes:
         n_splits: Number of folds (K).
         purge_pct: Percentage of total samples to remove after train set.
+            If indicator_lookback_bars is set, this is auto-calculated.
         embargo_pct: Percentage of total samples to remove before test set.
+        indicator_lookback_bars: Max indicator lookback in bars (e.g., 50 for
+            EMA-50). Per SPEC Section 8, the purge period should equal the
+            max indicator lookback. If set, overrides purge_pct when
+            n_samples is known.
     """
 
     n_splits: int = 5
     purge_pct: float = 0.01
     embargo_pct: float = 0.01
+    indicator_lookback_bars: int | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -133,6 +139,7 @@ class PurgedKFold:
         n_splits: int = 5,
         purge_pct: float = 0.01,
         embargo_pct: float = 0.01,
+        indicator_lookback_bars: int | None = None,
     ) -> None:
         """Initialize PurgedKFold.
 
@@ -140,6 +147,9 @@ class PurgedKFold:
             n_splits: Number of folds.
             purge_pct: Fraction of data to purge after train.
             embargo_pct: Fraction of data to embargo before test.
+            indicator_lookback_bars: Max indicator lookback in bars. Per SPEC
+                Section 8, purge period should equal max indicator lookback.
+                If set, overrides purge_pct when n_samples is known in split().
 
         Raises:
             ValueError: If parameters are invalid.
@@ -157,6 +167,7 @@ class PurgedKFold:
         self.n_splits = n_splits
         self.purge_pct = purge_pct
         self.embargo_pct = embargo_pct
+        self.indicator_lookback_bars = indicator_lookback_bars
 
     def split(self, n_samples: int) -> Iterator[tuple[list[int], list[int]]]:
         """Generate train/test indices for each fold.
@@ -177,7 +188,11 @@ class PurgedKFold:
         Raises:
             ValueError: If n_samples is too small for the configuration.
         """
-        purge_len = int(n_samples * self.purge_pct)
+        # SPEC Section 8: purge period = max indicator lookback
+        if self.indicator_lookback_bars is not None and self.indicator_lookback_bars > 0:
+            purge_len = self.indicator_lookback_bars
+        else:
+            purge_len = int(n_samples * self.purge_pct)
         embargo_len = int(n_samples * self.embargo_pct)
         total_gap = purge_len + embargo_len
 

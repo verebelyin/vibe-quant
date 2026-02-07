@@ -354,8 +354,9 @@ def _render_pnl_metrics(checkpoint: StateCheckpoint | None) -> None:
         )
 
 
+@st.fragment(run_every=2)
 def _render_status_indicator(checkpoint: StateCheckpoint | None) -> None:
-    """Render strategy status indicator."""
+    """Render strategy status indicator. Auto-refreshes every 2s."""
     st.subheader("Strategy Status")
 
     if checkpoint is None:

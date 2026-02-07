@@ -246,7 +246,7 @@ class TestCmdReport:
         from argparse import Namespace
 
         # First run pipeline to set flags
-        from vibe_quant.overfitting.pipeline import FilterConfig, OverfittingPipeline
+        from vibe_quant.overfitting.pipeline import OverfittingPipeline
 
         pipeline = OverfittingPipeline(db_path)
         pipeline.run(run_id=1, config=FilterConfig.dsr_only())
