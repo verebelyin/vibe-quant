@@ -132,13 +132,15 @@ def _render_condition_row(
     rows_to_remove: list[int],
 ) -> str | None:
     """Render a single condition row and return the condition string."""
-    op = row.get("operator", "<")
-    is_between = op == "between"
+    # Always create 5 columns to avoid NameError when operator changes
+    # between 'between' (needs c5) and other operators at runtime.
+    c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
 
-    if is_between:
-        c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
-    else:
-        c1, c2, c3, c4 = st.columns([3, 2, 3, 1])
+    # Defaults for variables that may not be set in every branch
+    right: str = str(row.get("right", 0))
+    low: float = float(row.get("right_low", 0))
+    high: float = float(row.get("right_high", 100))
+    use_number: bool = row.get("right_is_numeric", True)
 
     # Left operand
     with c1:
@@ -155,7 +157,8 @@ def _render_condition_row(
 
     # Operator
     with c2:
-        op_idx = OPERATORS.index(op) if op in OPERATORS else 0
+        stored_op = row.get("operator", "<")
+        op_idx = OPERATORS.index(stored_op) if stored_op in OPERATORS else 0
         operator = st.selectbox(
             "Op",
             options=OPERATORS,
@@ -165,8 +168,8 @@ def _render_condition_row(
             label_visibility="collapsed",
         )
 
-    # Right operand(s)
-    if is_between or operator == "between":
+    # Right operand(s) — use the *widget* value (operator) not the stale row value
+    if operator == "between":
         with c3:
             low = st.number_input(
                 "Low",
@@ -183,7 +186,6 @@ def _render_condition_row(
                 label_visibility="collapsed",
                 step=1.0,
             )
-        remove_col = c5
     else:
         with c3:
             # Right side can be a number or another indicator
@@ -215,13 +217,12 @@ def _render_condition_row(
                     )
                 with rc2:
                     if use_number:
-                        right = str(st.number_input(
+                        right = _format_num(st.number_input(
                             "Value",
-                            value=float(row.get("right", 0)),
+                            value=_try_float(row.get("right", 0)),
                             key=f"{key_prefix}_rval_{idx}",
                             label_visibility="collapsed",
                             step=1.0,
-                            format="%.1f",
                         ))
                     else:
                         r_idx = (
@@ -236,10 +237,10 @@ def _render_condition_row(
                             key=f"{key_prefix}_rind_{idx}",
                             label_visibility="collapsed",
                         )
-        remove_col = c4
+        # c4 intentionally empty in non-between mode
 
-    # Remove button
-    with remove_col:
+    # Remove button (always in c5)
+    with c5:
         if st.button("X", key=f"{key_prefix}_rm_{idx}", help="Remove this condition"):
             rows_to_remove.append(idx)
             return None
@@ -257,7 +258,7 @@ def _render_condition_row(
         return f"{left} {operator} {right}"
     else:
         row["right"] = right
-        row["right_is_numeric"] = use_number if "use_number" in dir() else right_is_numeric
+        row["right_is_numeric"] = use_number
         return f"{left} {operator} {right}"
 
 
@@ -337,3 +338,60 @@ def _is_numeric(val: str | float | int) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# Human-readable condition formatting
+# ---------------------------------------------------------------------------
+
+OPERATOR_HUMAN = {
+    "<": "is less than",
+    ">": "is greater than",
+    "<=": "is at most",
+    ">=": "is at least",
+    "crosses_above": "crosses above",
+    "crosses_below": "crosses below",
+    "between": "is between",
+}
+
+
+def format_condition_human(condition: str) -> str:
+    """Format a condition string into human-readable text.
+
+    Examples:
+        "rsi < 30"  ->  "RSI is less than 30"
+        "ema_fast crosses_above ema_slow"  ->  "EMA Fast crosses above EMA Slow"
+    """
+    parts = condition.strip().strip('"').strip("'").split()
+    if not parts:
+        return condition
+
+    def _humanize_name(name: str) -> str:
+        """Convert indicator name to human-readable form."""
+        return name.replace("_", " ").title()
+
+    if len(parts) >= 4 and parts[1] == "between":
+        return f"{_humanize_name(parts[0])} is between {parts[2]} and {parts[3]}"
+
+    if len(parts) >= 3:
+        left = _humanize_name(parts[0])
+        op = OPERATOR_HUMAN.get(parts[1], parts[1])
+        right = _humanize_name(parts[2]) if not _is_numeric(parts[2]) else parts[2]
+        return f"{left} {op} {right}"
+
+    return condition
+
+
+def render_conditions_human_readable(
+    conditions: list[str],
+    label: str = "",
+) -> None:
+    """Render conditions as human-readable text instead of raw syntax."""
+    if label:
+        st.markdown(f"**{label}:**")
+    if not conditions:
+        st.caption("None defined")
+        return
+    for cond in conditions:
+        human = format_condition_human(cond)
+        st.markdown(f"- {human}")

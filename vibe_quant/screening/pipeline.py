@@ -16,81 +16,30 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.metrics import PerformanceMetrics
 from vibe_quant.screening.grid import (
     build_parameter_grid,
     compute_pareto_front,
     filter_by_metrics,
     rank_by_sharpe,
 )
+from vibe_quant.screening.types import (
+    BacktestMetrics,
+    BacktestRunner,
+    MetricFilters,
+    ScreeningResult,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.dsl.schema import StrategyDSL
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class MetricFilters:
-    """Hard filters for screening results.
-
-    These are applied before ranking to eliminate clearly unsuitable
-    parameter combinations.
-
-    Attributes:
-        min_sharpe: Minimum Sharpe ratio (default 0.0)
-        min_profit_factor: Minimum profit factor (default 1.0)
-        max_drawdown: Maximum drawdown as decimal (default 0.3 = 30%)
-        min_trades: Minimum number of trades (default 50)
-    """
-
-    min_sharpe: float = 0.0
-    min_profit_factor: float = 1.0
-    max_drawdown: float = 0.3
-    min_trades: int = 50
-
-
-@dataclass
-class BacktestMetrics(PerformanceMetrics):
-    """Performance metrics from a single screening backtest run.
-
-    Extends :class:`~vibe_quant.metrics.PerformanceMetrics` with the
-    specific parameter combination that produced these results.
-    """
-
-    parameters: dict[str, float | int] = field(default_factory=dict)
-
-
-@dataclass
-class ScreeningResult:
-    """Result of a screening pipeline run.
-
-    Attributes:
-        strategy_name: Name of the strategy
-        total_combinations: Total parameter combinations tested
-        passed_filters: Number passing hard filters
-        execution_time_seconds: Total pipeline execution time
-        results: List of BacktestMetrics sorted by ranking
-        pareto_optimal_indices: Indices of Pareto-optimal results
-    """
-
-    strategy_name: str
-    total_combinations: int
-    passed_filters: int
-    execution_time_seconds: float
-    results: list[BacktestMetrics] = field(default_factory=list)
-    pareto_optimal_indices: list[int] = field(default_factory=list)
-
-
-# Type alias for backtest runner function
-BacktestRunner = Callable[[dict[str, float | int]], BacktestMetrics]
 
 
 def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
@@ -366,7 +315,7 @@ def create_screening_pipeline(
 
         effective_symbols = symbols or ["BTCUSDT"]
         # Convert DSL to dict for pickling across process boundaries
-        dsl_dict = dsl.to_dict() if hasattr(dsl, "to_dict") else _dsl_to_dict(dsl)
+        dsl_dict = _dsl_to_dict(dsl)
         runner = NTScreeningRunner(
             dsl_dict=dsl_dict,
             symbols=effective_symbols,
@@ -380,12 +329,19 @@ def create_screening_pipeline(
 def _dsl_to_dict(dsl: StrategyDSL) -> dict[str, Any]:
     """Convert a StrategyDSL to a serializable dict for pickling.
 
+    Handles Pydantic BaseModel (model_dump), dataclasses (asdict),
+    and plain dicts.
+
     Args:
         dsl: Parsed StrategyDSL object.
 
     Returns:
         Dictionary representation suitable for validate_strategy_dict().
     """
+    # Pydantic BaseModel — StrategyDSL is a Pydantic v2 model
+    if hasattr(dsl, "model_dump"):
+        return dsl.model_dump()
+
     import dataclasses
 
     def _to_dict(obj: Any) -> Any:

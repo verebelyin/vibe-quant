@@ -13,10 +13,7 @@ from vibe_quant.overfitting.dsr import (
     calculate_dsr,
 )
 from vibe_quant.overfitting.pipeline import (
-    CandidateResult,
-    FilterConfig,
     OverfittingPipeline,
-    PipelineResult,
     run_overfitting_pipeline,
 )
 from vibe_quant.overfitting.purged_kfold import (
@@ -25,6 +22,11 @@ from vibe_quant.overfitting.purged_kfold import (
     FoldResult,
     PurgedKFold,
     PurgedKFoldCV,
+)
+from vibe_quant.overfitting.types import (
+    CandidateResult,
+    FilterConfig,
+    PipelineResult,
 )
 from vibe_quant.overfitting.wfa import (
     WalkForwardAnalysis,

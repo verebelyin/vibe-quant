@@ -7,6 +7,13 @@ This module provides:
 - ValidationRunner for full-fidelity backtesting
 """
 
+from vibe_quant.validation.extraction import (
+    compute_extended_metrics,
+    estimate_market_stats,
+    extract_results,
+    extract_stats,
+    extract_trades,
+)
 from vibe_quant.validation.fill_model import (
     ScreeningFillModelConfig,
     SlippageEstimator,
@@ -58,6 +65,12 @@ __all__ = [
     "create_venue_config_for_screening",
     "create_venue_config_for_validation",
     "create_backtest_venue_config",
+    # Extraction
+    "extract_results",
+    "extract_stats",
+    "extract_trades",
+    "estimate_market_stats",
+    "compute_extended_metrics",
     # Runner
     "ValidationRunner",
     "ValidationRunnerError",

@@ -8,13 +8,9 @@ from __future__ import annotations
 
 import io
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pandas as pd
-
-if TYPE_CHECKING:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # DataFrame builders
@@ -108,6 +104,37 @@ def build_equity_curve(
         equity_points.append({"time": trade["exit_time"], "equity": starting_balance + cumulative_pnl})
 
     return pd.DataFrame(equity_points)
+
+
+def build_equity_curve_daily(
+    trades: list[dict[str, Any]], starting_balance: float = 100000
+) -> pd.DataFrame:
+    """Build equity curve from daily aggregated returns.
+
+    Instead of plotting per-trade, this aggregates to daily P&L,
+    producing a smoother and more accurate equity representation
+    that handles overlapping trades correctly.
+
+    Args:
+        trades: List of trade dicts with exit_time and net_pnl.
+        starting_balance: Initial account equity.
+
+    Returns:
+        DataFrame with 'time' and 'equity' columns at daily granularity.
+    """
+    daily = compute_daily_returns(trades)
+    if daily.empty:
+        return pd.DataFrame()
+
+    daily = daily.sort_values("date").reset_index(drop=True)
+    equity = starting_balance
+    points = [{"time": daily.iloc[0]["date"], "equity": equity}]
+
+    for _, row in daily.iterrows():
+        equity += row["daily_pnl"]
+        points.append({"time": row["date"], "equity": equity})
+
+    return pd.DataFrame(points)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +339,61 @@ def compute_long_short_split(
 # ---------------------------------------------------------------------------
 # Export helpers
 # ---------------------------------------------------------------------------
+
+
+def build_benchmark_equity(
+    trades: list[dict[str, Any]],
+    starting_balance: float = 100000,
+    annual_return: float = 0.50,
+) -> pd.DataFrame:
+    """Build a simple BTC buy-and-hold benchmark equity curve.
+
+    Approximates BTC buy-and-hold using a constant growth rate
+    matched to the strategy's time range. In a real deployment,
+    this would use actual BTC price data from the catalog.
+
+    Args:
+        trades: Strategy trades (used to determine time range).
+        starting_balance: Initial equity.
+        annual_return: Assumed annual return for BTC (default 50%).
+
+    Returns:
+        DataFrame with 'time' and 'equity' columns.
+    """
+    if not trades:
+        return pd.DataFrame()
+
+    closed = [t for t in trades if t.get("exit_time")]
+    if not closed:
+        return pd.DataFrame()
+
+    sorted_trades = sorted(closed, key=lambda x: x["exit_time"])
+    start_time = sorted_trades[0].get("entry_time", sorted_trades[0]["exit_time"])
+    end_time = sorted_trades[-1]["exit_time"]
+
+    try:
+        start_dt = pd.to_datetime(start_time)
+        end_dt = pd.to_datetime(end_time)
+    except Exception:
+        return pd.DataFrame()
+
+    if start_dt >= end_dt:
+        return pd.DataFrame()
+
+    # Generate daily points
+    date_range = pd.date_range(start=start_dt, end=end_dt, freq="D")
+    if len(date_range) < 2:
+        return pd.DataFrame()
+
+    total_days = (end_dt - start_dt).total_seconds() / 86400.0  # noqa: F841
+    daily_return = (1.0 + annual_return) ** (1.0 / 365.0) - 1.0
+
+    equity_values = []
+    for i, dt in enumerate(date_range):
+        equity = starting_balance * (1.0 + daily_return) ** i
+        equity_values.append({"time": dt, "equity": equity})
+
+    return pd.DataFrame(equity_values)
 
 
 def export_to_csv(df: pd.DataFrame, filename: str) -> bytes:

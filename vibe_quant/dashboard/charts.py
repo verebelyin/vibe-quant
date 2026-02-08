@@ -13,7 +13,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-
 # ---------------------------------------------------------------------------
 # Pareto charts
 # ---------------------------------------------------------------------------
@@ -140,6 +139,47 @@ def build_equity_chart(equity_df: pd.DataFrame) -> go.Figure | None:
         xaxis_title="Time",
         yaxis_title="Equity ($)",
         height=400,
+    )
+    return fig
+
+
+def build_equity_chart_with_benchmark(
+    equity_df: pd.DataFrame,
+    benchmark_df: pd.DataFrame | None = None,
+) -> go.Figure | None:
+    """Build equity curve with optional BTC buy-and-hold benchmark overlay."""
+    if equity_df.empty:
+        return None
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=equity_df["time"],
+            y=equity_df["equity"],
+            mode="lines",
+            name="Strategy",
+            line={"color": "#2196F3", "width": 2},
+        )
+    )
+
+    if benchmark_df is not None and not benchmark_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=benchmark_df["time"],
+                y=benchmark_df["equity"],
+                mode="lines",
+                name="BTC Buy & Hold",
+                line={"color": "#FF9800", "width": 1.5, "dash": "dash"},
+                opacity=0.7,
+            )
+        )
+
+    fig.update_layout(
+        title="Equity Curve" + (" vs BTC Buy & Hold" if benchmark_df is not None else ""),
+        xaxis_title="Time",
+        yaxis_title="Equity ($)",
+        height=400,
+        legend={"yanchor": "top", "y": 0.99, "xanchor": "left", "x": 0.01},
     )
     return fig
 
@@ -470,13 +510,132 @@ def build_radar_chart(results: list[dict[str, Any]]) -> go.Figure | None:
     return fig
 
 
+def build_wfa_window_chart(windows: list[dict[str, Any]]) -> go.Figure | None:
+    """Build WFA IS vs OOS bar chart for each window."""
+    if not windows:
+        return None
+
+    indices = [f"W{w.get('window_index', i)}" for i, w in enumerate(windows)]
+    is_returns = [w.get("is_return", 0) for w in windows]
+    oos_returns = [w.get("oos_return", 0) for w in windows]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="In-Sample", x=indices, y=is_returns, marker_color="#2196F3"))
+    fig.add_trace(go.Bar(name="Out-of-Sample", x=indices, y=oos_returns, marker_color="#FF5722"))
+
+    fig.update_layout(
+        title="Walk-Forward Analysis: IS vs OOS Returns",
+        xaxis_title="Window",
+        yaxis_title="Return (%)",
+        barmode="group",
+        height=350,
+    )
+    return fig
+
+
+def build_wfa_efficiency_chart(windows: list[dict[str, Any]]) -> go.Figure | None:
+    """Build WFA efficiency timeline chart."""
+    if not windows:
+        return None
+
+    indices = [f"W{w.get('window_index', i)}" for i, w in enumerate(windows)]
+    efficiencies = []
+    for w in windows:
+        is_ret = w.get("is_return", 0)
+        oos_ret = w.get("oos_return", 0)
+        eff = oos_ret / is_ret if is_ret != 0 else 0
+        efficiencies.append(eff)
+
+    colors = ["green" if e >= 0.5 else "orange" if e >= 0 else "red" for e in efficiencies]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=indices, y=efficiencies, marker_color=colors, name="Efficiency"))
+    fig.add_hline(y=0.5, line_dash="dash", line_color="green", annotation_text="Threshold (0.5)")
+    fig.add_hline(y=0, line_dash="solid", line_color="gray", line_width=0.5)
+
+    fig.update_layout(
+        title="Walk-Forward Efficiency Timeline",
+        xaxis_title="Window",
+        yaxis_title="Efficiency (OOS/IS)",
+        height=300,
+    )
+    return fig
+
+
+def build_degradation_scatter(
+    screening_results: list[dict[str, Any]],
+    validation_results: list[dict[str, Any]],
+) -> go.Figure | None:
+    """Build screening-to-validation degradation scatter plot."""
+    if not screening_results or not validation_results:
+        return None
+
+    # Match by strategy/parameters
+    screen_sharpes = [r.get("sharpe_ratio", 0) for r in screening_results]
+    valid_sharpes = [r.get("sharpe_ratio", 0) for r in validation_results]
+
+    # Pad shorter list
+    min_len = min(len(screen_sharpes), len(valid_sharpes))
+    screen_sharpes = screen_sharpes[:min_len]
+    valid_sharpes = valid_sharpes[:min_len]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=screen_sharpes,
+            y=valid_sharpes,
+            mode="markers",
+            marker={"size": 8, "color": "#2196F3", "opacity": 0.6},
+            name="Strategies",
+        )
+    )
+
+    # Add y=x reference line
+    max_val = max(max(screen_sharpes, default=1), max(valid_sharpes, default=1))
+    min_val = min(min(screen_sharpes, default=0), min(valid_sharpes, default=0))
+    fig.add_trace(
+        go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode="lines",
+            line={"color": "gray", "dash": "dash", "width": 1},
+            name="No Degradation (y=x)",
+        )
+    )
+
+    fig.update_layout(
+        title="Screening vs Validation Performance",
+        xaxis_title="Screening Sharpe",
+        yaxis_title="Validation Sharpe",
+        height=400,
+    )
+    return fig
+
+
 def build_funding_pie(gross_pnl: float, total_fees: float,
                       total_funding: float, total_slippage: float) -> go.Figure:
     """Build gross P&L breakdown pie chart."""
-    labels = ["Net Trading P&L", "Fees", "Funding", "Slippage"]
-    values = [abs(gross_pnl - total_fees - total_funding - total_slippage),
-              total_fees, abs(total_funding), total_slippage]
-    colors_pie = ["#4CAF50", "#FF9800", "#F44336", "#9E9E9E"]
+    # Use signed arithmetic consistent with how the caller computes gross_pnl
+    net_pnl = gross_pnl - total_fees - total_funding - total_slippage
+
+    # Pie charts require positive values — label the net slice appropriately
+    funding_label = "Funding Paid" if total_funding >= 0 else "Funding Received"
+    labels = [
+        "Net P&L" if net_pnl >= 0 else "Net Loss",
+        "Fees", funding_label, "Slippage",
+    ]
+    values = [abs(net_pnl), total_fees, abs(total_funding), total_slippage]
+
+    # Guard against all-zero values (Plotly renders an empty pie)
+    if not any(v > 0 for v in values):
+        values = [1]
+        labels = ["No P&L data"]
+        colors_pie = ["#9E9E9E"]
+    else:
+        colors_pie = [
+            "#4CAF50" if net_pnl >= 0 else "#F44336",
+            "#FF9800", "#E91E63", "#9E9E9E",
+        ]
 
     fig = go.Figure(
         data=[

@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -21,118 +20,14 @@ from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, DSRResult
 from vibe_quant.overfitting.mock_runner import MockBacktestRunner
 from vibe_quant.overfitting.purged_kfold import CVConfig, CVResult, PurgedKFoldCV
+from vibe_quant.overfitting.types import (
+    CandidateResult,
+    FilterConfig,
+    PipelineResult,
+)
 from vibe_quant.overfitting.wfa import WalkForwardAnalysis, WFAConfig, WFAResult
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class FilterConfig:
-    """Configuration for overfitting filter chain.
-
-    Attributes:
-        enable_dsr: Enable Deflated Sharpe Ratio filter.
-        enable_wfa: Enable Walk-Forward Analysis filter.
-        enable_purged_kfold: Enable Purged K-Fold CV filter.
-        dsr_significance: DSR significance level (default 0.05).
-        dsr_confidence_threshold: Confidence threshold for pass (default 0.95).
-        wfa_config: WFA configuration. Uses default if None.
-        cv_config: Purged K-Fold configuration. Uses default if None.
-        cv_robustness_threshold: Threshold for CV robustness (default 0.5).
-    """
-
-    enable_dsr: bool = True
-    enable_wfa: bool = True
-    enable_purged_kfold: bool = True
-    dsr_significance: float = 0.05
-    dsr_confidence_threshold: float = 0.95
-    wfa_config: WFAConfig | None = None
-    cv_config: CVConfig | None = None
-    cv_robustness_threshold: float = 0.5
-
-    @classmethod
-    def default(cls) -> FilterConfig:
-        """Return default configuration with all filters enabled."""
-        return cls()
-
-    @classmethod
-    def dsr_only(cls) -> FilterConfig:
-        """Return configuration with only DSR enabled."""
-        return cls(enable_dsr=True, enable_wfa=False, enable_purged_kfold=False)
-
-    @classmethod
-    def wfa_only(cls) -> FilterConfig:
-        """Return configuration with only WFA enabled."""
-        return cls(enable_dsr=False, enable_wfa=True, enable_purged_kfold=False)
-
-    @classmethod
-    def cv_only(cls) -> FilterConfig:
-        """Return configuration with only Purged K-Fold enabled."""
-        return cls(enable_dsr=False, enable_wfa=False, enable_purged_kfold=True)
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateResult:
-    """Result of overfitting filter chain for a single candidate.
-
-    Attributes:
-        sweep_result_id: ID in sweep_results table.
-        run_id: Associated backtest run ID.
-        strategy_name: Strategy name.
-        parameters: Strategy parameters JSON.
-        sharpe_ratio: Observed Sharpe ratio.
-        total_return: Total return percentage.
-        passed_dsr: Whether passed DSR filter (None if disabled).
-        passed_wfa: Whether passed WFA filter (None if disabled).
-        passed_cv: Whether passed Purged K-Fold filter (None if disabled).
-        passed_all: Whether passed all enabled filters.
-        dsr_result: Full DSR result (None if disabled).
-        wfa_result: Full WFA result (None if disabled).
-        cv_result: Full CV result (None if disabled).
-    """
-
-    sweep_result_id: int
-    run_id: int
-    strategy_name: str
-    parameters: str
-    sharpe_ratio: float
-    total_return: float
-    passed_dsr: bool | None
-    passed_wfa: bool | None
-    passed_cv: bool | None
-    passed_all: bool
-    dsr_result: DSRResult | None = None
-    wfa_result: WFAResult | None = None
-    cv_result: CVResult | None = None
-
-
-@dataclass
-class PipelineResult:
-    """Aggregated result from overfitting pipeline.
-
-    Attributes:
-        config: Filter configuration used.
-        total_candidates: Total candidates evaluated.
-        passed_dsr: Number passing DSR (0 if disabled).
-        passed_wfa: Number passing WFA (0 if disabled).
-        passed_cv: Number passing Purged K-Fold (0 if disabled).
-        passed_all: Number passing all enabled filters.
-        candidates: List of all candidate results.
-        filtered_candidates: Candidates that passed all enabled filters.
-    """
-
-    config: FilterConfig
-    total_candidates: int
-    passed_dsr: int
-    passed_wfa: int
-    passed_cv: int
-    passed_all: int
-    candidates: list[CandidateResult] = field(default_factory=list)
-
-    @property
-    def filtered_candidates(self) -> list[CandidateResult]:
-        """Get candidates that passed all enabled filters."""
-        return [c for c in self.candidates if c.passed_all]
 
 
 class OverfittingPipeline:
@@ -266,16 +161,20 @@ class OverfittingPipeline:
                 # sweep_results, otherwise fall back to normal distribution
                 # assumption (skewness=0, kurtosis=3). For accurate DSR,
                 # the screening pipeline should store these in sweep_results.
-                skewness = candidate.get("skewness", 0.0)
-                kurtosis = candidate.get("kurtosis", 3.0)
-                dsr_result = dsr.calculate(
-                    observed_sharpe=candidate["sharpe_ratio"],
-                    num_trials=num_trials,
-                    num_observations=num_observations,
-                    skewness=skewness,
-                    kurtosis=kurtosis,
-                )
-                passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
+                sharpe = candidate.get("sharpe_ratio")
+                if sharpe is None:
+                    passed_dsr = False
+                else:
+                    skewness = candidate.get("skewness", 0.0)
+                    kurtosis = candidate.get("kurtosis", 3.0)
+                    dsr_result = dsr.calculate(
+                        observed_sharpe=float(sharpe),
+                        num_trials=num_trials,
+                        num_observations=num_observations,
+                        skewness=skewness,
+                        kurtosis=kurtosis,
+                    )
+                    passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
                 if passed_dsr:
                     passed_dsr_count += 1
 
@@ -288,8 +187,13 @@ class OverfittingPipeline:
                 start = data_start or date(2024, 1, 1)
                 end = data_end or date(2025, 12, 31)
 
-                # Parse parameters for param_grid
-                params = json.loads(candidate["parameters"])
+                # Parse parameters for param_grid (may be JSON string or dict)
+                raw_params = candidate.get("parameters", "{}")
+                try:
+                    params = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or {})
+                except json.JSONDecodeError:
+                    logger.warning("Invalid JSON in parameters for candidate %d", candidate["id"])
+                    params = {}
                 param_grid = {k: [v] for k, v in params.items()}
 
                 try:
@@ -315,15 +219,15 @@ class OverfittingPipeline:
                 if self._cv_runner:
                     runner = self._cv_runner
                 else:
-                    if candidate is candidates[0]:  # Log once
+                    if candidate == candidates[0]:  # Log once
                         logger.warning(
                             "No CV backtest runner provided - using MockBacktestRunner. "
                             "Results will be synthetic. Pass cv_runner= to OverfittingPipeline "
                             "for real purged k-fold analysis."
                         )
                     runner = MockBacktestRunner(
-                        oos_sharpe=candidate["sharpe_ratio"],
-                        oos_return=candidate["total_return"],
+                        oos_sharpe=candidate.get("sharpe_ratio") or 0.0,
+                        oos_return=candidate.get("total_return") or 0.0,
                     )
                 cv_result = cv.run(n_samples=n_samples, runner=runner)
                 passed_cv = cv_result.is_robust
@@ -339,13 +243,16 @@ class OverfittingPipeline:
             if config.enable_purged_kfold and not passed_cv:
                 passed_all = False
 
+            # Normalize types for CandidateResult (expects str parameters, float sharpe/return)
+            raw_params_val = candidate.get("parameters", "{}")
+            norm_params = json.dumps(raw_params_val) if isinstance(raw_params_val, dict) else str(raw_params_val or "{}")
             result = CandidateResult(
                 sweep_result_id=candidate["id"],
                 run_id=candidate["run_id"],
                 strategy_name=candidate.get("strategy_name", f"run_{candidate['run_id']}"),
-                parameters=candidate["parameters"],
-                sharpe_ratio=candidate["sharpe_ratio"],
-                total_return=candidate["total_return"],
+                parameters=norm_params,
+                sharpe_ratio=float(candidate.get("sharpe_ratio") or 0.0),
+                total_return=float(candidate.get("total_return") or 0.0),
                 passed_dsr=passed_dsr,
                 passed_wfa=passed_wfa,
                 passed_cv=passed_cv,
