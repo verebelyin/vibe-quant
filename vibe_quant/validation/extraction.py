@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -21,6 +21,17 @@ if TYPE_CHECKING:
     from vibe_quant.validation.venue import VenueConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _ns_to_isoformat(ns_timestamp: Any) -> str:
+    """Convert a nanosecond Unix timestamp to ISO 8601 string.
+
+    NautilusTrader Position.ts_opened / ts_closed are uint64
+    nanosecond timestamps.  ``str()`` gives a bare integer string
+    which breaks ``datetime.fromisoformat()``.
+    """
+    ns = int(ns_timestamp)
+    return datetime.fromtimestamp(ns / 1e9, tz=UTC).isoformat()
 
 
 def extract_results(
@@ -76,6 +87,10 @@ def extract_stats(
                        "max drawdown", "win rate", "profit factor",
                        "expectancy", "avg winner", "avg loser", "long ratio"}
 
+    # Track which fields were populated from stats_pnls so we only
+    # fall back to stats_returns for fields that weren't set.
+    _populated: set[str] = set()
+
     for _currency, pnl_stats in stats_pnls.items():
         for key, value in pnl_stats.items():
             if value is None:
@@ -84,16 +99,22 @@ def extract_stats(
             fval = float(value)
             if key_lower == "pnl% (total)":
                 result.total_return = fval
+                _populated.add("total_return")
             elif "sharpe" in key_lower:
                 result.sharpe_ratio = fval
+                _populated.add("sharpe_ratio")
             elif "sortino" in key_lower:
                 result.sortino_ratio = fval
+                _populated.add("sortino_ratio")
             elif key_lower == "max drawdown":
                 result.max_drawdown = abs(fval)
+                _populated.add("max_drawdown")
             elif key_lower == "win rate":
                 result.win_rate = fval
+                _populated.add("win_rate")
             elif key_lower == "profit factor":
                 result.profit_factor = fval
+                _populated.add("profit_factor")
             elif key_lower == "avg winner":
                 result.avg_win = fval
             elif key_lower == "avg loser":
@@ -109,15 +130,15 @@ def extract_stats(
             continue
         key_lower = key.lower()
         fval = float(value)
-        if "sharpe" in key_lower and result.sharpe_ratio == 0.0:
+        if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
             result.sharpe_ratio = fval
-        elif "sortino" in key_lower and result.sortino_ratio == 0.0:
+        elif "sortino" in key_lower and "sortino_ratio" not in _populated:
             result.sortino_ratio = fval
-        elif "max drawdown" in key_lower and result.max_drawdown == 0.0:
+        elif "max drawdown" in key_lower and "max_drawdown" not in _populated:
             result.max_drawdown = abs(fval)
-        elif key_lower == "win rate" and result.win_rate == 0.0:
+        elif key_lower == "win rate" and "win_rate" not in _populated:
             result.win_rate = fval
-        elif key_lower == "profit factor" and result.profit_factor == 0.0:
+        elif key_lower == "profit factor" and "profit_factor" not in _populated:
             result.profit_factor = fval
         elif not any(k in key_lower for k in _known_returns_keys):
             logger.debug("Unmatched returns stats key: %s = %s", key, value)
@@ -185,11 +206,11 @@ def extract_trades(
         )
         total_slippage += slippage_cost
 
-        notional = entry_price * quantity if entry_price and quantity else 1.0
+        notional = entry_price * quantity if entry_price > 0 and quantity > 0 else 1.0
         roi_pct = (realized_pnl / notional) * 100.0 if notional else 0.0
 
-        entry_time = str(pos.ts_opened)
-        exit_time = str(pos.ts_closed) if pos.ts_closed else None
+        entry_time = _ns_to_isoformat(pos.ts_opened)
+        exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
 
         direction = "LONG" if str(pos.entry).upper() == "BUY" else "SHORT"
         instrument_id = str(pos.instrument_id)
@@ -342,7 +363,9 @@ def compute_extended_metrics(result: ValidationResult) -> None:
             last_exit_str = result.trades[-1].exit_time or result.trades[-1].entry_time
             last_exit = datetime.fromisoformat(last_exit_str.replace("Z", "+00:00"))
             days = max((last_exit - first_entry).total_seconds() / 86400.0, 1.0)
-            total_return_frac = result.total_return / 100.0 if abs(result.total_return) > 2.0 else result.total_return
+            # total_return is stored as a decimal fraction from NT stats
+            # (e.g. 0.12 = 12%). Use directly — no heuristic conversion.
+            total_return_frac = result.total_return
             if total_return_frac > -1.0:
                 result.cagr = ((1.0 + total_return_frac) ** (365.0 / days)) - 1.0
         except (ValueError, TypeError):

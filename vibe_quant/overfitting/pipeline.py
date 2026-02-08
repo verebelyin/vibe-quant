@@ -161,16 +161,20 @@ class OverfittingPipeline:
                 # sweep_results, otherwise fall back to normal distribution
                 # assumption (skewness=0, kurtosis=3). For accurate DSR,
                 # the screening pipeline should store these in sweep_results.
-                skewness = candidate.get("skewness", 0.0)
-                kurtosis = candidate.get("kurtosis", 3.0)
-                dsr_result = dsr.calculate(
-                    observed_sharpe=candidate["sharpe_ratio"],
-                    num_trials=num_trials,
-                    num_observations=num_observations,
-                    skewness=skewness,
-                    kurtosis=kurtosis,
-                )
-                passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
+                sharpe = candidate.get("sharpe_ratio")
+                if sharpe is None:
+                    passed_dsr = False
+                else:
+                    skewness = candidate.get("skewness", 0.0)
+                    kurtosis = candidate.get("kurtosis", 3.0)
+                    dsr_result = dsr.calculate(
+                        observed_sharpe=float(sharpe),
+                        num_trials=num_trials,
+                        num_observations=num_observations,
+                        skewness=skewness,
+                        kurtosis=kurtosis,
+                    )
+                    passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
                 if passed_dsr:
                     passed_dsr_count += 1
 
@@ -183,8 +187,9 @@ class OverfittingPipeline:
                 start = data_start or date(2024, 1, 1)
                 end = data_end or date(2025, 12, 31)
 
-                # Parse parameters for param_grid
-                params = json.loads(candidate["parameters"])
+                # Parse parameters for param_grid (may be JSON string or dict)
+                raw_params = candidate.get("parameters", "{}")
+                params = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or {})
                 param_grid = {k: [v] for k, v in params.items()}
 
                 try:

@@ -315,7 +315,7 @@ def create_screening_pipeline(
 
         effective_symbols = symbols or ["BTCUSDT"]
         # Convert DSL to dict for pickling across process boundaries
-        dsl_dict = dsl.to_dict() if hasattr(dsl, "to_dict") else _dsl_to_dict(dsl)
+        dsl_dict = _dsl_to_dict(dsl)
         runner = NTScreeningRunner(
             dsl_dict=dsl_dict,
             symbols=effective_symbols,
@@ -329,12 +329,19 @@ def create_screening_pipeline(
 def _dsl_to_dict(dsl: StrategyDSL) -> dict[str, Any]:
     """Convert a StrategyDSL to a serializable dict for pickling.
 
+    Handles Pydantic BaseModel (model_dump), dataclasses (asdict),
+    and plain dicts.
+
     Args:
         dsl: Parsed StrategyDSL object.
 
     Returns:
         Dictionary representation suitable for validate_strategy_dict().
     """
+    # Pydantic BaseModel — StrategyDSL is a Pydantic v2 model
+    if hasattr(dsl, "model_dump"):
+        return dsl.model_dump()
+
     import dataclasses
 
     def _to_dict(obj: Any) -> Any:

@@ -615,10 +615,19 @@ def build_degradation_scatter(
 def build_funding_pie(gross_pnl: float, total_fees: float,
                       total_funding: float, total_slippage: float) -> go.Figure:
     """Build gross P&L breakdown pie chart."""
-    labels = ["Net Trading P&L", "Fees", "Funding", "Slippage"]
-    values = [abs(gross_pnl - total_fees - total_funding - total_slippage),
-              total_fees, abs(total_funding), total_slippage]
-    colors_pie = ["#4CAF50", "#FF9800", "#F44336", "#9E9E9E"]
+    total_costs = total_fees + abs(total_funding) + total_slippage
+    net_pnl = gross_pnl - total_costs
+
+    # Pie charts require positive values — label the net slice appropriately
+    labels = [
+        "Net P&L" if net_pnl >= 0 else "Net Loss",
+        "Fees", "Funding", "Slippage",
+    ]
+    values = [abs(net_pnl), total_fees, abs(total_funding), total_slippage]
+    colors_pie = [
+        "#4CAF50" if net_pnl >= 0 else "#F44336",
+        "#FF9800", "#E91E63", "#9E9E9E",
+    ]
 
     fig = go.Figure(
         data=[

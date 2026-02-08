@@ -106,9 +106,8 @@ class ValidationRunner:
         strategy_name = str(strategy_data["name"])
         dsl_config = strategy_data["dsl_config"]
 
-        # Validate and compile strategy
+        # Validate strategy DSL (compilation happens in _run_backtest)
         dsl = self._validate_dsl(dsl_config)
-        self._compile_strategy(dsl)
 
         # Determine latency preset
         effective_latency = self._resolve_latency(run_config, latency_preset)
@@ -246,8 +245,11 @@ class ValidationRunner:
         Returns:
             Configured VenueConfig.
         """
+        balance = run_config.get("starting_balance", 100_000)
+        if not isinstance(balance, (int, float)):
+            balance = 100_000
         return create_venue_config_for_validation(
-            starting_balance_usdt=100_000,  # Could be configurable
+            starting_balance_usdt=float(balance),
             latency_preset=latency_preset or LatencyPreset.RETAIL,
         )
 

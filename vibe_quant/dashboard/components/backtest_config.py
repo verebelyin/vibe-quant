@@ -83,8 +83,9 @@ def render_symbol_timeframe_selector(strategy: JsonDict | None) -> tuple[list[st
             key="symbols_select", help="Select one or more perpetual futures symbols",
         )
         custom = st.text_input("Add custom symbol", placeholder="e.g., ARBUSDT", key="custom_symbol")
-        if custom and custom not in symbols and st.button("Add Symbol", key="add_symbol"):
-            symbols.append(custom.upper())
+        if custom and custom.upper() not in symbols and st.button("Add Symbol", key="add_symbol"):
+            st.session_state["symbols_select"] = symbols + [custom.upper()]
+            st.rerun()
 
     with c2:
         default_tf = strategy["dsl_config"].get("timeframe", "1h") if strategy else "1h"

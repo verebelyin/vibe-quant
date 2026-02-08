@@ -48,7 +48,7 @@ def render_time_filters_section(dsl: dict[str, Any]) -> None:
         st.markdown("**Trading Days**")
         st.multiselect(
             "Blocked Days",
-            options=sorted(VALID_DAYS),
+            options=[d for d in ALL_DAYS if d in VALID_DAYS],
             default=time_filters.get("blocked_days", []),
             key="form_blocked_days",
             help="Days when the strategy will not open new positions",
@@ -125,34 +125,40 @@ def _render_weekly_schedule(time_filters: dict[str, Any]) -> None:
                 st.session_state["form_sessions"] = sessions
                 st.rerun()
 
-    # Current sessions display
-    sessions = st.session_state.get(
+    # Current sessions display — deep-copy to avoid mutating original DSL dict
+    raw_sessions = st.session_state.get(
         "form_sessions",
         time_filters.get("allowed_sessions", []),
     )
+    sessions = [dict(s) for s in raw_sessions]
 
     if sessions:
         for i, session in enumerate(sessions):
             c1, c2, c3 = st.columns([2, 2, 1])
             with c1:
-                st.text_input(
+                new_start = st.text_input(
                     "Start",
                     value=session.get("start", "00:00"),
                     key=f"session_start_{i}",
                     help="HH:MM UTC format",
                 )
             with c2:
-                st.text_input(
+                new_end = st.text_input(
                     "End",
                     value=session.get("end", "08:00"),
                     key=f"session_end_{i}",
                     help="HH:MM UTC format",
                 )
+            # Read back edited values into the session dict
+            session["start"] = new_start
+            session["end"] = new_end
             with c3:
                 if st.button("X", key=f"session_rm_{i}"):
                     sessions.pop(i)
                     st.session_state["form_sessions"] = sessions
                     st.rerun()
+        # Persist any edits back to session state
+        st.session_state["form_sessions"] = sessions
     else:
         st.caption("No session restrictions (24/7 trading)")
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
+from vibe_quant.dashboard.components.backtest_config import LATENCY_OPTIONS  # noqa: F401
 from vibe_quant.dashboard.components.backtest_config import (
     render_date_range_selector as _component_render_date_range_selector,
 )
