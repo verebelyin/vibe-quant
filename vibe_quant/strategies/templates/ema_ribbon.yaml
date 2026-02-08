@@ -1,0 +1,70 @@
+name: ema_ribbon
+description: "Triple EMA ribbon trend-following: enter when fast > mid > slow alignment"
+version: 1
+timeframe: 1h
+additional_timeframes: []
+
+indicators:
+  ema_fast:
+    type: EMA
+    period: 9
+    source: close
+  ema_mid:
+    type: EMA
+    period: 21
+    source: close
+  ema_slow:
+    type: EMA
+    period: 55
+    source: close
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "ema_fast > ema_mid"
+    - "ema_mid > ema_slow"
+    - "rsi > 50"
+  short:
+    - "ema_fast < ema_mid"
+    - "ema_mid < ema_slow"
+    - "rsi < 50"
+
+exit_conditions:
+  long:
+    - "ema_fast crosses_below ema_mid"
+  short:
+    - "ema_fast crosses_above ema_mid"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.0
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  ema_fast.period: [5, 9, 13]
+  ema_mid.period: [15, 21, 30]
+  ema_slow.period: [40, 55, 80]

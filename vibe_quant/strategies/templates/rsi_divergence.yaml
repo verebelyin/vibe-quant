@@ -1,0 +1,71 @@
+name: rsi_divergence
+description: "RSI divergence detector with EMA trend filter and ATR stops"
+version: 1
+timeframe: 15m
+additional_timeframes: [1h]
+
+indicators:
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+  ema_fast:
+    type: EMA
+    period: 9
+    source: close
+  ema_slow:
+    type: EMA
+    period: 21
+    source: close
+  ema_trend:
+    type: EMA
+    period: 50
+    source: close
+    timeframe: 1h
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "rsi < 35"
+    - "close > ema_trend"
+    - "ema_fast > ema_slow"
+  short:
+    - "rsi > 65"
+    - "close < ema_trend"
+    - "ema_fast < ema_slow"
+
+exit_conditions:
+  long:
+    - "rsi > 65"
+  short:
+    - "rsi < 35"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.5
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  rsi.period: [10, 14, 21]
+  ema_fast.period: [5, 9, 13]
+  ema_slow.period: [15, 21, 30]

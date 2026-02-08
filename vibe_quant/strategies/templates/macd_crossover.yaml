@@ -1,0 +1,73 @@
+name: macd_crossover
+description: "MACD signal line crossover with EMA trend filter and session restrictions"
+version: 1
+timeframe: 15m
+additional_timeframes: []
+
+indicators:
+  macd:
+    type: MACD
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+    source: close
+  ema_fast:
+    type: EMA
+    period: 9
+    source: close
+  ema_slow:
+    type: EMA
+    period: 21
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "ema_fast crosses_above ema_slow"
+    - "macd > 0"
+  short:
+    - "ema_fast crosses_below ema_slow"
+    - "macd < 0"
+
+exit_conditions:
+  long:
+    - "ema_fast crosses_below ema_slow"
+  short:
+    - "ema_fast crosses_above ema_slow"
+
+time_filters:
+  allowed_sessions:
+    - start: "00:00"
+      end: "08:00"
+      timezone: UTC
+    - start: "08:00"
+      end: "16:00"
+      timezone: UTC
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_fixed
+  atr_multiplier: 1.5
+  indicator: atr
+
+take_profit:
+  type: atr_fixed
+  atr_multiplier: 3.0
+  indicator: atr
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  macd.fast_period: [8, 12, 16]
+  macd.slow_period: [21, 26, 34]
+  ema_fast.period: [5, 9, 13]

@@ -1,0 +1,59 @@
+name: stochastic_reversal
+description: "Stochastic oscillator reversals filtered by EMA trend direction"
+version: 1
+timeframe: 1h
+additional_timeframes: []
+
+indicators:
+  stoch:
+    type: STOCH
+    period: 14
+    source: close
+  ema_trend:
+    type: EMA
+    period: 50
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "stoch < 20"
+    - "close > ema_trend"
+  short:
+    - "stoch > 80"
+    - "close < ema_trend"
+
+exit_conditions:
+  long:
+    - "stoch > 75"
+  short:
+    - "stoch < 25"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.0
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.0
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  stoch.period: [10, 14, 21]
+  ema_trend.period: [30, 50, 100]

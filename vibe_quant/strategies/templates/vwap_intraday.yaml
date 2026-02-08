@@ -1,0 +1,64 @@
+name: vwap_intraday
+description: "VWAP intraday mean reversion with RSI confirmation"
+version: 1
+timeframe: 5m
+additional_timeframes: []
+
+indicators:
+  vwap:
+    type: VWAP
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+  ema:
+    type: EMA
+    period: 20
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "close < vwap"
+    - "rsi < 35"
+  short:
+    - "close > vwap"
+    - "rsi > 65"
+
+exit_conditions:
+  long:
+    - "close > vwap"
+  short:
+    - "close < vwap"
+
+time_filters:
+  allowed_sessions:
+    - start: "01:00"
+      end: "21:00"
+      timezone: UTC
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_fixed
+  atr_multiplier: 1.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 1.5
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  rsi.period: [10, 14, 21]
+  ema.period: [10, 20, 30]

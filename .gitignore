@@ -51,6 +51,12 @@ data/logs/
 # Keep data directory structure
 !data/.gitkeep
 
+# Beads (issue tracker runtime files)
+.beads/*.db
+.beads/*.db-wal
+.beads/*.db-shm
+.beads/daemon-error
+
 # uv
 .uv/
 uv.lock

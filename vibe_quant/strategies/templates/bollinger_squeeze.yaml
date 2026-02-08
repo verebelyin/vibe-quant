@@ -1,0 +1,65 @@
+name: bollinger_squeeze
+description: "Bollinger Band squeeze breakout with RSI direction confirmation"
+version: 1
+timeframe: 1h
+additional_timeframes: []
+
+indicators:
+  bbands:
+    type: BBANDS
+    period: 20
+    std_dev: 2.0
+    source: close
+  atr:
+    type: ATR
+    period: 14
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+  ema:
+    type: EMA
+    period: 20
+    source: close
+
+entry_conditions:
+  long:
+    - "close > ema"
+    - "rsi between 50 70"
+  short:
+    - "close < ema"
+    - "rsi between 30 50"
+
+exit_conditions:
+  long:
+    - "close crosses_below ema"
+  short:
+    - "close crosses_above ema"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.5
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  bbands.period: [15, 20, 25]
+  bbands.std_dev: [1.5, 2.0, 2.5]
+  rsi.period: [10, 14, 21]

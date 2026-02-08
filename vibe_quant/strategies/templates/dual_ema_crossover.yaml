@@ -1,0 +1,55 @@
+name: dual_ema_crossover
+description: "Simple dual EMA crossover: fast EMA crosses slow EMA for trend entries"
+version: 1
+timeframe: 1h
+additional_timeframes: []
+
+indicators:
+  ema_fast:
+    type: EMA
+    period: 12
+    source: close
+  ema_slow:
+    type: EMA
+    period: 26
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "ema_fast crosses_above ema_slow"
+  short:
+    - "ema_fast crosses_below ema_slow"
+
+exit_conditions:
+  long:
+    - "ema_fast crosses_below ema_slow"
+  short:
+    - "ema_fast crosses_above ema_slow"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: []
+  avoid_around_funding:
+    enabled: false
+
+stop_loss:
+  type: atr_fixed
+  atr_multiplier: 2.0
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.0
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  ema_fast.period: [8, 12, 16, 20]
+  ema_slow.period: [20, 26, 34, 50]

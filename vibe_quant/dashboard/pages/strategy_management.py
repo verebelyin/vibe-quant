@@ -1,11 +1,10 @@
 """Strategy Management Tab for vibe-quant dashboard.
 
-Provides CRUD operations for trading strategies:
-- List strategies with search/filter
-- Create new strategy (YAML editor or form)
-- Edit existing strategy
-- Delete strategy (with confirmation)
-- DSL validation on save
+Provides CRUD operations for trading strategies with:
+- Strategy list with search/filter and strategy cards
+- Template selector with categorized card grid
+- Visual form editor (indicators, conditions, risk, time, sweep)
+- Raw YAML editor with live validation preview
 """
 
 from __future__ import annotations
@@ -16,177 +15,169 @@ import streamlit as st
 import yaml
 from pydantic import ValidationError
 
-from vibe_quant.dashboard.utils import get_state_manager
-from vibe_quant.dsl.schema import (
-    VALID_DAYS,
-    VALID_INDICATOR_TYPES,
-    VALID_SOURCES,
-    VALID_STOP_LOSS_TYPES,
-    VALID_TAKE_PROFIT_TYPES,
-    VALID_TIMEFRAMES,
-    StrategyDSL,
+from vibe_quant.dashboard.components.condition_builder import render_condition_builder
+from vibe_quant.dashboard.components.form_state import (
+    build_dsl_from_form,
+    cleanup_form_state,
+    init_form_state,
 )
+from vibe_quant.dashboard.components.indicator_catalog import (
+    render_indicator_card,
+    render_indicator_selector,
+)
+from vibe_quant.dashboard.components.risk_management import render_risk_section
+from vibe_quant.dashboard.components.strategy_card import render_strategy_card
+from vibe_quant.dashboard.components.sweep_builder import render_sweep_builder
+from vibe_quant.dashboard.components.template_selector import render_template_selector
+from vibe_quant.dashboard.components.time_filters import render_time_filters_section
+from vibe_quant.dashboard.components.validation_summary import render_validation_summary
+from vibe_quant.dashboard.utils import get_state_manager
+from vibe_quant.dsl.indicator_metadata import suggest_indicator_name
+from vibe_quant.dsl.schema import VALID_TIMEFRAMES, StrategyDSL
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from vibe_quant.db.state_manager import StateManager
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _format_validation_errors(e: ValidationError) -> str:
+    """Format pydantic ValidationError into a human-readable string."""
+    errors = []
+    for err in e.errors():
+        loc = ".".join(str(x) for x in err["loc"])
+        errors.append(f"{loc}: {err['msg']}")
+    return "\n".join(errors)
 
 
 def _validate_dsl(yaml_str: str) -> tuple[StrategyDSL | None, str | None]:
-    """Validate DSL YAML string.
-
-    Returns:
-        Tuple of (validated model, error message). One will be None.
-    """
+    """Validate DSL YAML string. Returns (model, error)."""
     try:
         data = yaml.safe_load(yaml_str)
         if not isinstance(data, dict):
             return None, "YAML must be a mapping"
-        model = StrategyDSL.model_validate(data)
-        return model, None
+        return StrategyDSL.model_validate(data), None
     except yaml.YAMLError as e:
         return None, f"YAML parse error: {e}"
     except ValidationError as e:
-        errors = []
-        for err in e.errors():
-            loc = ".".join(str(x) for x in err["loc"])
-            errors.append(f"{loc}: {err['msg']}")
-        return None, "\n".join(errors)
+        return None, _format_validation_errors(e)
+
+
+def _validate_dsl_dict(dsl_dict: dict[str, Any]) -> tuple[StrategyDSL | None, str | None]:
+    """Validate a DSL dict directly (avoids YAML round-trip)."""
+    try:
+        return StrategyDSL.model_validate(dsl_dict), None
+    except ValidationError as e:
+        return None, _format_validation_errors(e)
 
 
 def _get_default_dsl_yaml() -> str:
     """Return default DSL YAML template."""
-    return """name: my_strategy
-description: A simple RSI-based strategy
-version: 1
-timeframe: 1h
-additional_timeframes: []
-
-indicators:
-  rsi_14:
-    type: RSI
-    period: 14
-    source: close
-  atr_14:
-    type: ATR
-    period: 14
-
-entry_conditions:
-  long:
-    - "rsi_14 < 30"
-  short:
-    - "rsi_14 > 70"
-
-exit_conditions:
-  long:
-    - "rsi_14 > 70"
-  short:
-    - "rsi_14 < 30"
-
-time_filters:
-  allowed_sessions: []
-  blocked_days: []
-  avoid_around_funding:
-    enabled: false
-
-stop_loss:
-  type: atr_fixed
-  atr_multiplier: 2.0
-  indicator: atr_14
-
-take_profit:
-  type: risk_reward
-  risk_reward_ratio: 2.0
-
-position_management:
-  scale_in:
-    enabled: false
-  partial_exit:
-    enabled: false
-
-sweep: {}
-"""
+    return yaml.dump({
+        "name": "my_strategy",
+        "description": "A simple RSI-based strategy",
+        "version": 1,
+        "timeframe": "1h",
+        "additional_timeframes": [],
+        "indicators": {
+            "rsi_14": {"type": "RSI", "period": 14, "source": "close"},
+            "atr_14": {"type": "ATR", "period": 14},
+        },
+        "entry_conditions": {"long": ["rsi_14 < 30"], "short": ["rsi_14 > 70"]},
+        "exit_conditions": {"long": ["rsi_14 > 70"], "short": ["rsi_14 < 30"]},
+        "time_filters": {
+            "allowed_sessions": [], "blocked_days": [],
+            "avoid_around_funding": {"enabled": False},
+        },
+        "stop_loss": {"type": "atr_fixed", "atr_multiplier": 2.0, "indicator": "atr_14"},
+        "take_profit": {"type": "risk_reward", "risk_reward_ratio": 2.0},
+        "position_management": {"scale_in": {"enabled": False}, "partial_exit": {"enabled": False}},
+        "sweep": {},
+    }, default_flow_style=False, sort_keys=False)
 
 
-def render_strategy_list(manager: StateManager, search_query: str, show_inactive: bool) -> None:
+def _save_strategy(
+    manager: StateManager,
+    dsl_dict: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> bool:
+    """Validate and save strategy. Returns True on success."""
+    model, error = _validate_dsl_dict(dsl_dict)
+    if error:
+        st.error(f"Validation failed:\n{error}")
+        return False
+    if model is None:
+        st.error("Validation returned no model")
+        return False
+
+    dumped = model.model_dump()
+    if existing:
+        manager.update_strategy(existing["id"], dsl_config=dumped, description=model.description)
+        st.success(f"Updated strategy '{model.name}'")
+    else:
+        manager.create_strategy(name=model.name, dsl_config=dumped, description=model.description)
+        st.success(f"Created strategy '{model.name}'")
+
+    st.session_state.show_editor = False
+    st.session_state.editing_strategy_id = None
+    return True
+
+
+
+
+# ── Strategy List ──────────────────────────────────────────────────────────
+
+
+def render_strategy_list(
+    manager: StateManager, search_query: str, show_inactive: bool,
+) -> None:
     """Render strategy list with search/filter."""
     strategies = manager.list_strategies(active_only=not show_inactive)
-
-    # Filter by search query
     if search_query:
-        query_lower = search_query.lower()
+        q = search_query.lower()
         strategies = [
             s for s in strategies
-            if query_lower in s["name"].lower()
-            or (s.get("description") and query_lower in s["description"].lower())
+            if q in s["name"].lower()
+            or (s.get("description") and q in s["description"].lower())
         ]
-
     if not strategies:
-        st.info("No strategies found")
+        st.info("No strategies found. Create one using the **New Strategy** button above.")
         return
-
     for strategy in strategies:
-        with st.expander(
-            f"**{strategy['name']}** (v{strategy['version']}) "
-            f"{'[inactive]' if not strategy['is_active'] else ''}"
-        ):
-            col1, col2 = st.columns([3, 1])
+        render_strategy_card(manager, strategy)
 
-            with col1:
-                st.write(f"**Description:** {strategy.get('description') or 'N/A'}")
-                st.write(f"**Type:** {strategy.get('strategy_type') or 'N/A'}")
-                st.write(f"**Created:** {strategy['created_at']}")
-                st.write(f"**Updated:** {strategy['updated_at']}")
 
-                # Show DSL details
-                dsl = strategy.get("dsl_config", {})
-                st.write(f"**Timeframe:** {dsl.get('timeframe', 'N/A')}")
+def render_delete_confirmation(manager: StateManager) -> None:
+    """Render delete confirmation dialog."""
+    sid = st.session_state.get("confirm_delete_id")
+    sname = st.session_state.get("confirm_delete_name")
+    if not sid:
+        return
+    st.warning(f"Delete strategy '{sname}'? This cannot be undone.")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Confirm Delete"):
+            manager.update_strategy(sid, is_active=False)
+            st.success(f"Deleted strategy '{sname}'")
+            st.session_state.confirm_delete_id = None
+            st.session_state.confirm_delete_name = None
+            st.rerun()
+    with c2:
+        if st.button("Cancel Delete"):
+            st.session_state.confirm_delete_id = None
+            st.session_state.confirm_delete_name = None
+            st.rerun()
 
-                indicators = dsl.get("indicators", {})
-                if indicators:
-                    st.write(f"**Indicators:** {', '.join(indicators.keys())}")
 
-                entry = dsl.get("entry_conditions", {})
-                if entry.get("long"):
-                    st.write(f"**Long entries:** {len(entry['long'])} conditions")
-                if entry.get("short"):
-                    st.write(f"**Short entries:** {len(entry['short'])} conditions")
-
-                sweep = dsl.get("sweep", {})
-                if sweep:
-                    st.write(f"**Sweep params:** {', '.join(sweep.keys())}")
-
-            with col2:
-                if st.button("Edit", key=f"edit_{strategy['id']}"):
-                    st.session_state.editing_strategy_id = strategy["id"]
-                    st.session_state.show_editor = True
-                    st.rerun()
-
-                if st.button("Delete", key=f"delete_{strategy['id']}"):
-                    st.session_state.confirm_delete_id = strategy["id"]
-                    st.session_state.confirm_delete_name = strategy["name"]
-                    st.rerun()
-
-                if strategy["is_active"]:
-                    if st.button("Deactivate", key=f"deact_{strategy['id']}"):
-                        manager.update_strategy(strategy["id"], is_active=False)
-                        st.success(f"Deactivated {strategy['name']}")
-                        st.rerun()
-                else:
-                    if st.button("Activate", key=f"act_{strategy['id']}"):
-                        manager.update_strategy(strategy["id"], is_active=True)
-                        st.success(f"Activated {strategy['name']}")
-                        st.rerun()
+# ── Editor Entrypoint ─────────────────────────────────────────────────────
 
 
 def render_strategy_editor(
-    manager: StateManager,
-    strategy_id: int | None = None,
-    raw_mode: bool = False,
+    manager: StateManager, strategy_id: int | None = None,
 ) -> None:
-    """Render strategy create/edit form.
-
-    Args:
-        manager: StateManager instance.
-        strategy_id: If provided, edit existing strategy.
-        raw_mode: If True, show raw YAML editor only.
-    """
+    """Render strategy create/edit with template selector and multi-mode editor."""
     existing = None
     if strategy_id:
         existing = manager.get_strategy(strategy_id)
@@ -196,468 +187,306 @@ def render_strategy_editor(
 
     st.subheader("Edit Strategy" if existing else "Create Strategy")
 
-    # Initialize yaml_content in session state if not present
     yaml_key = f"yaml_content_{strategy_id or 'new'}"
     if yaml_key not in st.session_state:
         if existing:
             st.session_state[yaml_key] = yaml.dump(
-                existing["dsl_config"],
-                default_flow_style=False,
-                sort_keys=False,
+                existing["dsl_config"], default_flow_style=False, sort_keys=False,
             )
         else:
             st.session_state[yaml_key] = _get_default_dsl_yaml()
 
-    if raw_mode:
+    # Template selector (new strategies only)
+    if not existing and not st.session_state.get("template_applied"):
+        template_yaml = render_template_selector()
+        if template_yaml is not None:
+            st.session_state[yaml_key] = template_yaml
+            st.session_state["template_applied"] = True
+            st.rerun()
+        st.divider()
+        col_blank, _ = st.columns([1, 3])
+        with col_blank:
+            if st.button("Start from scratch", use_container_width=True):
+                st.session_state["template_applied"] = True
+                st.rerun()
+        return
+
+    # Mode selector
+    col_mode, col_cancel = st.columns([3, 1])
+    with col_mode:
+        mode = st.radio(
+            "Editor mode", ["Visual", "YAML"], horizontal=True,
+            key="editor_mode", label_visibility="collapsed",
+        )
+    with col_cancel:
+        if st.button("Back to list"):
+            st.session_state.show_editor = False
+            st.session_state.editing_strategy_id = None
+            st.session_state.pop("template_applied", None)
+            cleanup_form_state()
+            st.rerun()
+
+    st.divider()
+    if mode == "YAML":
         _render_yaml_editor(manager, existing, yaml_key)
     else:
         _render_form_editor(manager, existing, yaml_key)
 
 
+# ── YAML Editor ───────────────────────────────────────────────────────────
+
+
 def _render_yaml_editor(
-    manager: StateManager,
-    existing: dict[str, Any] | None,
-    yaml_key: str,
+    manager: StateManager, existing: dict[str, Any] | None, yaml_key: str,
 ) -> None:
-    """Render raw YAML editor."""
-    yaml_content = st.text_area(
-        "Strategy DSL (YAML)",
-        value=st.session_state[yaml_key],
-        height=500,
-        key=f"yaml_editor_{yaml_key}",
-    )
+    """Render YAML editor with live validation panel."""
+    col_editor, col_preview = st.columns([3, 2])
+    with col_editor:
+        yaml_content = st.text_area(
+            "Strategy DSL (YAML)", value=st.session_state[yaml_key],
+            height=550, key=f"yaml_editor_{yaml_key}",
+        )
+        uploaded = st.file_uploader("Or upload YAML file", type=["yaml", "yml"], key="yaml_upload")
+        if uploaded:
+            yaml_content = uploaded.read().decode("utf-8")
+            st.session_state[yaml_key] = yaml_content
+            st.rerun()
 
-    # File upload
-    uploaded_file = st.file_uploader("Or upload YAML file", type=["yaml", "yml"])
-    if uploaded_file:
-        yaml_content = uploaded_file.read().decode("utf-8")
-        st.session_state[yaml_key] = yaml_content
-        st.rerun()
+    with col_preview:
+        st.markdown("**Validation Preview**")
+        model, error = _validate_dsl(yaml_content)
+        render_validation_summary(model, error)
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button("Validate"):
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Save", type="primary", use_container_width=True):
             model, error = _validate_dsl(yaml_content)
             if error:
                 st.error(f"Validation failed:\n{error}")
-            else:
-                st.success("Valid DSL!")
-
-    with col2:
-        if st.button("Save"):
-            model, error = _validate_dsl(yaml_content)
-            if error:
-                st.error(f"Validation failed:\n{error}")
-                return
-
-            if model is None:
-                st.error("Validation returned no model")
-                return
-
-            dsl_dict = model.model_dump()
-
+            elif model and _save_strategy(manager, model.model_dump(), existing):
+                st.session_state.pop("template_applied", None)
+                st.rerun()
+    with c2:
+        if st.button("Copy to Visual Editor", use_container_width=True):
+            st.session_state[yaml_key] = yaml_content
+            st.session_state["editor_mode"] = "Visual"
+            st.rerun()
+    with c3:
+        if st.button("Reset", use_container_width=True):
             if existing:
-                manager.update_strategy(
-                    existing["id"],
-                    dsl_config=dsl_dict,
-                    description=model.description,
+                st.session_state[yaml_key] = yaml.dump(
+                    existing["dsl_config"], default_flow_style=False, sort_keys=False,
                 )
-                st.success(f"Updated strategy '{model.name}'")
             else:
-                manager.create_strategy(
-                    name=model.name,
-                    dsl_config=dsl_dict,
-                    description=model.description,
-                )
-                st.success(f"Created strategy '{model.name}'")
-
-            st.session_state.show_editor = False
-            st.session_state.editing_strategy_id = None
+                st.session_state[yaml_key] = _get_default_dsl_yaml()
             st.rerun()
 
-    with col3:
-        if st.button("Cancel"):
-            st.session_state.show_editor = False
-            st.session_state.editing_strategy_id = None
-            st.rerun()
+
+# ── Visual Form Editor ────────────────────────────────────────────────────
 
 
 def _render_form_editor(
-    manager: StateManager,
-    existing: dict[str, Any] | None,
-    yaml_key: str,
+    manager: StateManager, existing: dict[str, Any] | None, yaml_key: str,
 ) -> None:
-    """Render form-based editor with structured inputs."""
-    dsl = existing["dsl_config"] if existing else yaml.safe_load(_get_default_dsl_yaml())
+    """Render the visual form editor with all components."""
+    try:
+        dsl = yaml.safe_load(st.session_state[yaml_key])
+        if not isinstance(dsl, dict):
+            dsl = yaml.safe_load(_get_default_dsl_yaml())
+    except yaml.YAMLError:
+        dsl = yaml.safe_load(_get_default_dsl_yaml())
 
-    with st.form("strategy_form"):
-        # Basic info
-        st.markdown("### Basic Info")
-        name = st.text_input(
-            "Name",
-            value=dsl.get("name", ""),
+    init_form_state(dsl)
+
+    with st.expander("**1. Basic Info**", expanded=True):
+        _render_basic_info_section(dsl)
+    with st.expander("**2. Indicators**", expanded=True):
+        _render_indicators_section()
+    with st.expander("**3. Entry & Exit Rules**", expanded=True):
+        _render_conditions_section()
+    with st.expander("**4. Risk Management** (Stop Loss & Take Profit)", expanded=True):
+        render_risk_section(dsl)
+    with st.expander("**5. Time Filters**", expanded=False):
+        render_time_filters_section(dsl)
+    with st.expander("**6. Parameter Sweep**", expanded=False):
+        render_sweep_builder(
+            sweep_config=dsl.get("sweep", {}),
+            indicators=st.session_state.get("form_indicators", {}),
+            key_prefix="sweep",
+        )
+
+    st.divider()
+    _render_save_section(manager, existing, yaml_key, dsl)
+
+
+
+def _render_basic_info_section(dsl: dict[str, Any]) -> None:
+    """Render basic info: name, description, version, timeframes."""
+    c1, c2, c3 = st.columns([3, 1, 1])
+    with c1:
+        st.text_input(
+            "Name", value=dsl.get("name", ""), key="form_name",
             help="Lowercase, letters/numbers/underscores, starts with letter",
         )
-        description = st.text_area(
-            "Description",
-            value=dsl.get("description", ""),
-        )
-        version = st.number_input(
-            "Version",
-            value=dsl.get("version", 1),
-            min_value=1,
-            max_value=1000,
-        )
+    with c2:
+        st.number_input("Version", value=dsl.get("version", 1), min_value=1,
+                         max_value=1000, key="form_version")
+    with c3:
+        tf_list = sorted(VALID_TIMEFRAMES)
+        current_tf = dsl.get("timeframe", "1h")
+        st.selectbox("Primary Timeframe", options=tf_list,
+                      index=tf_list.index(current_tf) if current_tf in tf_list else 0,
+                      key="form_timeframe")
 
-        # Timeframes
-        st.markdown("### Timeframes")
-        timeframe = st.selectbox(
-            "Primary Timeframe",
-            options=sorted(VALID_TIMEFRAMES),
-            index=list(sorted(VALID_TIMEFRAMES)).index(dsl.get("timeframe", "1h")),
-        )
-        additional_tfs = st.multiselect(
-            "Additional Timeframes",
-            options=[tf for tf in sorted(VALID_TIMEFRAMES) if tf != timeframe],
-            default=dsl.get("additional_timeframes", []),
-        )
+    st.text_area("Description", value=dsl.get("description", ""),
+                  key="form_description", height=68)
+    st.multiselect(
+        "Additional Timeframes (for multi-TF strategies)",
+        options=[tf for tf in sorted(VALID_TIMEFRAMES)
+                 if tf != st.session_state.get("form_timeframe", "1h")],
+        default=[tf for tf in dsl.get("additional_timeframes", [])
+                 if tf != st.session_state.get("form_timeframe", "1h")],
+        key="form_additional_tfs",
+    )
 
-        # Indicators
-        st.markdown("### Indicators")
-        st.info("Configure indicators below. Each indicator needs a unique name.")
 
-        indicators = dsl.get("indicators", {})
-        indicator_configs: dict[str, dict[str, Any]] = {}
+def _render_indicators_section() -> None:
+    """Render indicators section with catalog, add/remove/duplicate."""
+    indicators: dict[str, dict[str, Any]] = st.session_state["form_indicators"]
+    if not indicators:
+        st.info("No indicators defined. Add one below.")
+    else:
+        st.caption(f"{len(indicators)} indicator(s) defined")
 
-        for i, (ind_name, ind_config) in enumerate(indicators.items()):
-            with st.expander(f"Indicator: {ind_name}", expanded=i == 0):
-                ind_type = st.selectbox(
-                    "Type",
-                    options=sorted(VALID_INDICATOR_TYPES),
-                    index=list(sorted(VALID_INDICATOR_TYPES)).index(ind_config.get("type", "RSI")),
-                    key=f"ind_type_{ind_name}",
-                )
-                ind_source = st.selectbox(
-                    "Source",
-                    options=sorted(VALID_SOURCES),
-                    index=list(sorted(VALID_SOURCES)).index(ind_config.get("source", "close")),
-                    key=f"ind_source_{ind_name}",
-                )
-                ind_period = st.number_input(
-                    "Period",
-                    value=ind_config.get("period") or 14,
-                    min_value=1,
-                    max_value=500,
-                    key=f"ind_period_{ind_name}",
-                )
-                ind_tf = st.selectbox(
-                    "Timeframe Override (optional)",
-                    options=[""] + list(sorted(VALID_TIMEFRAMES)),
-                    index=0 if not ind_config.get("timeframe") else
-                    ([""] + list(sorted(VALID_TIMEFRAMES))).index(ind_config["timeframe"]),
-                    key=f"ind_tf_{ind_name}",
-                )
+    all_tfs = sorted(VALID_TIMEFRAMES)
+    to_remove: list[str] = []
+    to_add: list[tuple[str, dict[str, Any]]] = []
 
-                indicator_configs[ind_name] = {
-                    "type": ind_type,
-                    "source": ind_source,
-                    "period": ind_period,
-                }
-                if ind_tf:
-                    indicator_configs[ind_name]["timeframe"] = ind_tf
+    for name, config in list(indicators.items()):
+        with st.expander(f"`{name}` ({config.get('type', '?')})", expanded=False):
+            updated, should_remove, should_dup = render_indicator_card(
+                name=name, config=config, key_prefix="form_ind", all_timeframes=all_tfs,
+            )
+            if should_remove:
+                to_remove.append(name)
+            elif should_dup:
+                new_name = suggest_indicator_name(config.get("type", ""), set(indicators.keys()))
+                to_add.append((new_name, dict(config)))
+            elif updated is not None:
+                indicators[name] = updated
 
-        # Entry/Exit conditions
-        st.markdown("### Entry Conditions")
-        entry = dsl.get("entry_conditions", {})
-        long_entries = st.text_area(
-            "Long Conditions (one per line)",
-            value="\n".join(entry.get("long", [])),
-            help='e.g., "rsi_14 < 30"',
-        )
-        short_entries = st.text_area(
-            "Short Conditions (one per line)",
-            value="\n".join(entry.get("short", [])),
-        )
-
-        st.markdown("### Exit Conditions")
-        exit_cond = dsl.get("exit_conditions", {})
-        long_exits = st.text_area(
-            "Long Exits (one per line)",
-            value="\n".join(exit_cond.get("long", [])),
-        )
-        short_exits = st.text_area(
-            "Short Exits (one per line)",
-            value="\n".join(exit_cond.get("short", [])),
-        )
-
-        # Time filters
-        st.markdown("### Time Filters")
-        time_filters = dsl.get("time_filters", {})
-        blocked_days = st.multiselect(
-            "Blocked Days",
-            options=sorted(VALID_DAYS),
-            default=time_filters.get("blocked_days", []),
-        )
-
-        funding = time_filters.get("avoid_around_funding", {})
-        funding_enabled = st.checkbox(
-            "Avoid Around Funding",
-            value=funding.get("enabled", False),
-        )
-        funding_before = st.number_input(
-            "Minutes Before Funding",
-            value=funding.get("minutes_before", 5),
-            min_value=0,
-            max_value=60,
-        )
-        funding_after = st.number_input(
-            "Minutes After Funding",
-            value=funding.get("minutes_after", 5),
-            min_value=0,
-            max_value=60,
-        )
-
-        # Stop loss
-        st.markdown("### Stop Loss")
-        sl = dsl.get("stop_loss", {})
-        sl_type = st.selectbox(
-            "Stop Loss Type",
-            options=sorted(VALID_STOP_LOSS_TYPES),
-            index=list(sorted(VALID_STOP_LOSS_TYPES)).index(sl.get("type", "fixed_pct")),
-        )
-        sl_percent = st.number_input(
-            "Stop Loss Percent (for fixed_pct)",
-            value=sl.get("percent") or 2.0,
-            min_value=0.1,
-            max_value=50.0,
-        )
-        sl_atr_mult = st.number_input(
-            "ATR Multiplier (for atr_fixed/atr_trailing)",
-            value=sl.get("atr_multiplier") or 2.0,
-            min_value=0.5,
-            max_value=10.0,
-        )
-        sl_indicator = st.text_input(
-            "ATR Indicator Name",
-            value=sl.get("indicator") or "",
-        )
-
-        # Take profit
-        st.markdown("### Take Profit")
-        tp = dsl.get("take_profit", {})
-        tp_type = st.selectbox(
-            "Take Profit Type",
-            options=sorted(VALID_TAKE_PROFIT_TYPES),
-            index=list(sorted(VALID_TAKE_PROFIT_TYPES)).index(tp.get("type", "fixed_pct")),
-        )
-        tp_percent = st.number_input(
-            "Take Profit Percent (for fixed_pct)",
-            value=tp.get("percent") or 4.0,
-            min_value=0.1,
-            max_value=100.0,
-        )
-        tp_atr_mult = st.number_input(
-            "ATR Multiplier (for atr_fixed)",
-            value=tp.get("atr_multiplier") or 3.0,
-            min_value=0.5,
-            max_value=20.0,
-        )
-        tp_rr = st.number_input(
-            "Risk/Reward Ratio (for risk_reward)",
-            value=tp.get("risk_reward_ratio") or 2.0,
-            min_value=0.5,
-            max_value=10.0,
-        )
-        tp_indicator = st.text_input(
-            "ATR Indicator Name (for atr_fixed TP)",
-            value=tp.get("indicator") or "",
-        )
-
-        # Sweep params
-        st.markdown("### Parameter Sweep")
-        sweep = dsl.get("sweep", {})
-        sweep_yaml = st.text_area(
-            "Sweep Parameters (YAML)",
-            value=yaml.dump(sweep, default_flow_style=False) if sweep else "",
-            help="e.g., rsi_period: [10, 14, 20]",
-        )
-
-        # Submit
-        col1, col2 = st.columns(2)
-        with col1:
-            submitted = st.form_submit_button("Save Strategy")
-        with col2:
-            cancelled = st.form_submit_button("Cancel")
-
-    if cancelled:
-        st.session_state.show_editor = False
-        st.session_state.editing_strategy_id = None
+    if to_remove or to_add:
+        for name in to_remove:
+            indicators.pop(name, None)
+        for name, config in to_add:
+            indicators[name] = config
+        st.session_state["form_indicators"] = indicators
         st.rerun()
 
-    if submitted:
-        # Build DSL dict
-        new_dsl: dict[str, Any] = {
-            "name": name,
-            "description": description,
-            "version": version,
-            "timeframe": timeframe,
-            "additional_timeframes": additional_tfs,
-            "indicators": indicator_configs,
-            "entry_conditions": {
-                "long": [c.strip() for c in long_entries.split("\n") if c.strip()],
-                "short": [c.strip() for c in short_entries.split("\n") if c.strip()],
-            },
-            "exit_conditions": {
-                "long": [c.strip() for c in long_exits.split("\n") if c.strip()],
-                "short": [c.strip() for c in short_exits.split("\n") if c.strip()],
-            },
-            "time_filters": {
-                "allowed_sessions": time_filters.get("allowed_sessions", []),
-                "blocked_days": blocked_days,
-                "avoid_around_funding": {
-                    "enabled": funding_enabled,
-                    "minutes_before": funding_before,
-                    "minutes_after": funding_after,
-                },
-            },
-            "stop_loss": {"type": sl_type},
-            "take_profit": {"type": tp_type},
-            "position_management": {
-                "scale_in": {"enabled": False},
-                "partial_exit": {"enabled": False},
-            },
-        }
-
-        # Stop loss params
-        if sl_type == "fixed_pct":
-            new_dsl["stop_loss"]["percent"] = sl_percent
-        elif sl_type in {"atr_fixed", "atr_trailing"}:
-            new_dsl["stop_loss"]["atr_multiplier"] = sl_atr_mult
-            new_dsl["stop_loss"]["indicator"] = sl_indicator
-
-        # Take profit params
-        if tp_type == "fixed_pct":
-            new_dsl["take_profit"]["percent"] = tp_percent
-        elif tp_type == "atr_fixed":
-            new_dsl["take_profit"]["atr_multiplier"] = tp_atr_mult
-            new_dsl["take_profit"]["indicator"] = tp_indicator
-        elif tp_type == "risk_reward":
-            new_dsl["take_profit"]["risk_reward_ratio"] = tp_rr
-
-        # Parse sweep
-        if sweep_yaml.strip():
-            try:
-                new_dsl["sweep"] = yaml.safe_load(sweep_yaml)
-            except yaml.YAMLError as e:
-                st.error(f"Invalid sweep YAML: {e}")
-                return
-        else:
-            new_dsl["sweep"] = {}
-
-        # Validate
-        model, error = _validate_dsl(yaml.dump(new_dsl))
-        if error:
-            st.error(f"Validation failed:\n{error}")
-            return
-
-        if model is None:
-            st.error("Validation returned no model")
-            return
-
-        dsl_dict = model.model_dump()
-
-        if existing:
-            manager.update_strategy(
-                existing["id"],
-                dsl_config=dsl_dict,
-                description=model.description,
-            )
-            st.success(f"Updated strategy '{model.name}'")
-        else:
-            manager.create_strategy(
-                name=model.name,
-                dsl_config=dsl_dict,
-                description=model.description,
-            )
-            st.success(f"Created strategy '{model.name}'")
-
-        st.session_state.show_editor = False
-        st.session_state.editing_strategy_id = None
+    st.divider()
+    if st.session_state.get("show_indicator_catalog"):
+        result = render_indicator_selector(
+            key_prefix="form_add_ind", existing_indicator_names=set(indicators.keys()),
+        )
+        if result is not None:
+            indicators[result["name"]] = result["config"]
+            st.session_state["form_indicators"] = indicators
+            st.session_state["show_indicator_catalog"] = False
+            st.rerun()
+    elif st.button("+ Add Indicator", type="primary"):
+        st.session_state["show_indicator_catalog"] = True
         st.rerun()
 
 
-def render_delete_confirmation(manager: StateManager) -> None:
-    """Render delete confirmation dialog."""
-    strategy_id = st.session_state.get("confirm_delete_id")
-    strategy_name = st.session_state.get("confirm_delete_name")
+def _render_conditions_section() -> None:
+    """Render entry/exit conditions using visual condition builder."""
+    indicator_names = list(st.session_state.get("form_indicators", {}).keys())
+    tab_entry, tab_exit = st.tabs(["Entry Conditions", "Exit Conditions"])
+    with tab_entry:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.session_state["form_entry_long"] = render_condition_builder(
+                "Long Entry", st.session_state.get("form_entry_long", []),
+                indicator_names, "cond_entry_long")
+        with c2:
+            st.session_state["form_entry_short"] = render_condition_builder(
+                "Short Entry", st.session_state.get("form_entry_short", []),
+                indicator_names, "cond_entry_short")
+    with tab_exit:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.session_state["form_exit_long"] = render_condition_builder(
+                "Long Exit", st.session_state.get("form_exit_long", []),
+                indicator_names, "cond_exit_long")
+        with c2:
+            st.session_state["form_exit_short"] = render_condition_builder(
+                "Short Exit", st.session_state.get("form_exit_short", []),
+                indicator_names, "cond_exit_short")
 
-    if not strategy_id:
-        return
 
-    st.warning(f"Delete strategy '{strategy_name}'? This cannot be undone.")
-    col1, col2 = st.columns(2)
+def _render_save_section(
+    manager: StateManager, existing: dict[str, Any] | None,
+    yaml_key: str, original_dsl: dict[str, Any],
+) -> None:
+    """Render validation, save, and action buttons."""
+    new_dsl = build_dsl_from_form(original_dsl)
+    model, error = _validate_dsl_dict(new_dsl)
+    render_validation_summary(model, error)
 
-    with col1:
-        if st.button("Confirm Delete"):
-            # Soft delete by deactivating
-            manager.update_strategy(strategy_id, is_active=False)
-            st.success(f"Deleted strategy '{strategy_name}'")
-            st.session_state.confirm_delete_id = None
-            st.session_state.confirm_delete_name = None
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if (st.button("Save Strategy", type="primary", use_container_width=True,
+                       disabled=model is None)
+                and model and _save_strategy(manager, model.model_dump(), existing)):
+            cleanup_form_state()
+            st.rerun()
+    with c2:
+        if st.button("View as YAML", use_container_width=True):
+            st.session_state[yaml_key] = yaml.dump(new_dsl, default_flow_style=False, sort_keys=False)
+            st.session_state["editor_mode"] = "YAML"
+            cleanup_form_state()
+            st.rerun()
+    with c3:
+        if st.button("Reset", use_container_width=True):
+            cleanup_form_state()
             st.rerun()
 
-    with col2:
-        if st.button("Cancel Delete"):
-            st.session_state.confirm_delete_id = None
-            st.session_state.confirm_delete_name = None
-            st.rerun()
+
+
+# ── Main Entry Point ──────────────────────────────────────────────────────
 
 
 def render_strategy_management_tab(db_path: Path | None = None) -> None:
-    """Main entry point for strategy management tab.
-
-    Args:
-        db_path: Optional database path. Uses default if not specified.
-    """
+    """Main entry point for strategy management tab."""
     st.header("Strategy Management")
-
     manager = get_state_manager(db_path)
 
-    # Check for delete confirmation
     if st.session_state.get("confirm_delete_id"):
         render_delete_confirmation(manager)
         return
 
-    # Check for editor mode
     if st.session_state.get("show_editor"):
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            raw_mode = st.toggle("Raw YAML Mode", value=True)
-        render_strategy_editor(
-            manager,
-            strategy_id=st.session_state.get("editing_strategy_id"),
-            raw_mode=raw_mode,
-        )
+        render_strategy_editor(manager, strategy_id=st.session_state.get("editing_strategy_id"))
         return
 
-    # Main view
-    col1, col2, col3 = st.columns([2, 2, 1])
-
-    with col1:
-        search_query = st.text_input("Search strategies", placeholder="Name or description...")
-
-    with col2:
+    c1, c2, c3 = st.columns([3, 1, 1])
+    with c1:
+        search_query = st.text_input(
+            "Search strategies", placeholder="Name or description...",
+            label_visibility="collapsed",
+        )
+    with c2:
         show_inactive = st.checkbox("Show inactive")
-
-    with col3:
-        if st.button("New Strategy", type="primary"):
+    with c3:
+        if st.button("New Strategy", type="primary", use_container_width=True):
             st.session_state.show_editor = True
             st.session_state.editing_strategy_id = None
+            st.session_state.pop("template_applied", None)
             st.rerun()
 
     st.divider()
-
     render_strategy_list(manager, search_query, show_inactive)
 
 
