@@ -77,6 +77,83 @@ def render_validation_summary(
             icon = "white_check_mark" if ok else "x"
             st.markdown(f":{icon}: {item}")
 
+    # Overfitting risk indicator
+    _render_overfitting_risk(dsl)
+
+
+def _render_overfitting_risk(dsl: StrategyDSL) -> None:
+    """Render overfitting risk indicator for strategy creation."""
+    sweep = dsl.sweep
+    combos = 1
+    for v in sweep.values():
+        combos *= len(v)
+
+    n_conditions = (
+        len(dsl.entry_conditions.long)
+        + len(dsl.entry_conditions.short)
+    )
+    n_indicators = len(dsl.indicators)
+
+    # Risk factors
+    risk_score = 0
+    risk_factors: list[str] = []
+
+    if combos > 500:
+        risk_score += 3
+        risk_factors.append(f"{combos:,} sweep combinations (very high)")
+    elif combos > 50:
+        risk_score += 2
+        risk_factors.append(f"{combos:,} sweep combinations (moderate)")
+    elif combos > 10:
+        risk_score += 1
+        risk_factors.append(f"{combos:,} sweep combinations")
+
+    if n_conditions > 6:
+        risk_score += 2
+        risk_factors.append(f"{n_conditions} entry conditions (complex)")
+    elif n_conditions > 3:
+        risk_score += 1
+
+    if n_indicators > 5:
+        risk_score += 1
+        risk_factors.append(f"{n_indicators} indicators (many degrees of freedom)")
+
+    if dsl.additional_timeframes:
+        risk_score += 1
+        risk_factors.append(f"{len(dsl.additional_timeframes)} additional timeframes")
+
+    if not sweep:
+        # No sweep = no overfitting from optimization
+        return
+
+    # Display
+    if risk_score >= 4:
+        level, color = "High", "red"
+    elif risk_score >= 2:
+        level, color = "Medium", "orange"
+    else:
+        level, color = "Low", "green"
+
+    with st.expander(f"**Overfitting Risk:** :{color}[{level}]", expanded=risk_score >= 4):
+        if risk_factors:
+            for factor in risk_factors:
+                st.caption(f"- {factor}")
+        else:
+            st.caption("Strategy has low overfitting risk.")
+
+        if combos > 20:
+            false_positive_pct = min(99, int((1 - 0.95**combos) * 100))
+            st.caption(
+                f"With {combos} comparisons, there is a ~{false_positive_pct}% chance "
+                f"of finding a spuriously profitable combination by chance alone."
+            )
+
+        if risk_score >= 2:
+            st.caption(
+                "**Recommendation:** Enable all three overfitting filters (DSR, WFA, "
+                "Purged K-Fold) when running screening backtests."
+            )
+
 
 def _calculate_complexity(dsl: StrategyDSL) -> int:
     """Calculate strategy complexity score (1-10)."""

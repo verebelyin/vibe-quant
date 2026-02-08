@@ -14,6 +14,22 @@ if TYPE_CHECKING:
     from vibe_quant.db.state_manager import JsonDict
 
 
+def _estimate_duration(total_runs: int, latency_preset: str | None) -> float:
+    """Estimate backtest duration in seconds.
+
+    Uses rough heuristics: screening ~0.5s per run, validation ~2s per run.
+    Adjusted by CPU count for parallel execution.
+    """
+    import os
+
+    cpus = max(1, (os.cpu_count() or 1) - 1)
+
+    # Screening mode (~0.5s/run) vs validation mode (~2s/run)
+    per_run = 0.5 if latency_preset is None else 2.0
+
+    return (total_runs * per_run) / cpus
+
+
 def render_preflight_summary(
     strategy: JsonDict,
     symbols: list[str],
@@ -56,3 +72,13 @@ def render_preflight_summary(
             st.markdown(f"**Total backtests:** {total_runs:,}")
             filters_on = sum(1 for v in overfitting_filters.values() if v)
             st.caption(f"{filters_on}/3 overfitting filters active")
+
+            # Estimated duration
+            est_seconds = _estimate_duration(total_runs, latency_preset)
+            if est_seconds < 60:
+                est_label = f"~{est_seconds:.0f}s"
+            elif est_seconds < 3600:
+                est_label = f"~{est_seconds / 60:.0f}min"
+            else:
+                est_label = f"~{est_seconds / 3600:.1f}h"
+            st.caption(f"Estimated duration: {est_label}")

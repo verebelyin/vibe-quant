@@ -337,3 +337,60 @@ def _is_numeric(val: str | float | int) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# Human-readable condition formatting
+# ---------------------------------------------------------------------------
+
+OPERATOR_HUMAN = {
+    "<": "is less than",
+    ">": "is greater than",
+    "<=": "is at most",
+    ">=": "is at least",
+    "crosses_above": "crosses above",
+    "crosses_below": "crosses below",
+    "between": "is between",
+}
+
+
+def format_condition_human(condition: str) -> str:
+    """Format a condition string into human-readable text.
+
+    Examples:
+        "rsi < 30"  ->  "RSI is less than 30"
+        "ema_fast crosses_above ema_slow"  ->  "EMA Fast crosses above EMA Slow"
+    """
+    parts = condition.strip().strip('"').strip("'").split()
+    if not parts:
+        return condition
+
+    def _humanize_name(name: str) -> str:
+        """Convert indicator name to human-readable form."""
+        return name.replace("_", " ").title()
+
+    if len(parts) >= 4 and parts[1] == "between":
+        return f"{_humanize_name(parts[0])} is between {parts[2]} and {parts[3]}"
+
+    if len(parts) >= 3:
+        left = _humanize_name(parts[0])
+        op = OPERATOR_HUMAN.get(parts[1], parts[1])
+        right = _humanize_name(parts[2]) if not _is_numeric(parts[2]) else parts[2]
+        return f"{left} {op} {right}"
+
+    return condition
+
+
+def render_conditions_human_readable(
+    conditions: list[str],
+    label: str = "",
+) -> None:
+    """Render conditions as human-readable text instead of raw syntax."""
+    if label:
+        st.markdown(f"**{label}:**")
+    if not conditions:
+        st.caption("None defined")
+        return
+    for cond in conditions:
+        human = format_condition_human(cond)
+        st.markdown(f"- {human}")

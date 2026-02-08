@@ -515,12 +515,77 @@ def _render_sweep_view(
         with col3:
             render_overfitting_badge(sweep_result.get("passed_purged_kfold"), "Purged K-Fold")
 
+        # Run Validation button
+        st.divider()
+        if st.button(
+            "Run Validation for this candidate",
+            key=f"run_val_{selected_sweep_id}",
+            type="primary",
+            help="Launch a full-fidelity validation backtest with these parameters",
+        ):
+            st.session_state["launch_validation_params"] = sweep_result.get("parameters", {})
+            st.session_state["launch_validation_from_run"] = run_id
+            st.info(
+                "Parameters saved. Go to **Backtest Launch** tab and select "
+                "'Validation' mode to run with these parameters."
+            )
+
+
+def _render_tearsheet_button(result: dict[str, Any], run_id: int) -> None:
+    """Render tearsheet generation/download button."""
+    import json as _json
+
+    tearsheet_data = {
+        "run_id": run_id,
+        "total_return": result.get("total_return"),
+        "sharpe_ratio": result.get("sharpe_ratio"),
+        "sortino_ratio": result.get("sortino_ratio"),
+        "max_drawdown": result.get("max_drawdown"),
+        "win_rate": result.get("win_rate"),
+        "profit_factor": result.get("profit_factor"),
+        "total_trades": result.get("total_trades"),
+        "calmar_ratio": result.get("calmar_ratio"),
+        "cagr": result.get("cagr"),
+        "volatility_annual": result.get("volatility_annual"),
+        "avg_win": result.get("avg_win"),
+        "avg_loss": result.get("avg_loss"),
+        "largest_win": result.get("largest_win"),
+        "largest_loss": result.get("largest_loss"),
+        "max_consecutive_wins": result.get("max_consecutive_wins"),
+        "max_consecutive_losses": result.get("max_consecutive_losses"),
+        "total_fees": result.get("total_fees"),
+        "total_funding": result.get("total_funding"),
+        "total_slippage": result.get("total_slippage"),
+        "passed_deflated_sharpe": result.get("passed_deflated_sharpe"),
+        "passed_walk_forward": result.get("passed_walk_forward"),
+        "passed_purged_kfold": result.get("passed_purged_kfold"),
+    }
+
+    json_bytes = _json.dumps(tearsheet_data, indent=2).encode("utf-8")
+    st.download_button(
+        label="Download Tearsheet (JSON)",
+        data=json_bytes,
+        file_name=f"tearsheet_run_{run_id}.json",
+        mime="application/json",
+    )
+
 
 def _render_backtest_result_view(
     mgr: StateManager, run_id: int, backtest_result: dict[str, Any],
 ) -> None:
     """Render single backtest result view with all analysis panels."""
     render_metrics_panel(backtest_result)
+
+    # Raw NT stats (persisted)
+    nt_stats = backtest_result.get("raw_nt_stats")
+    if nt_stats:
+        with st.expander("Raw NautilusTrader Statistics", expanded=False):
+            st.json(nt_stats)
+
+    # Tearsheet generation
+    with st.expander("Export Tearsheet", expanded=False):
+        _render_tearsheet_button(backtest_result, run_id)
+
     render_cost_breakdown(backtest_result)
     render_overfitting_results(backtest_result)
 
