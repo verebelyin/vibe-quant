@@ -24,6 +24,8 @@ from multiprocessing import cpu_count
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.metrics import PerformanceMetrics
+
 if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.dsl.schema import StrategyDSL
@@ -52,34 +54,14 @@ class MetricFilters:
 
 
 @dataclass
-class BacktestMetrics:
-    """Performance metrics from a single backtest run.
+class BacktestMetrics(PerformanceMetrics):
+    """Performance metrics from a single screening backtest run.
 
-    Attributes:
-        parameters: Parameter combination used
-        sharpe_ratio: Sharpe ratio
-        sortino_ratio: Sortino ratio
-        max_drawdown: Maximum drawdown as decimal
-        total_return: Total return as decimal
-        profit_factor: Gross profit / gross loss
-        win_rate: Winning trades / total trades
-        num_trades: Total number of trades
-        total_fees: Total fees paid
-        total_funding: Total funding payments
-        execution_time_seconds: Time to run backtest
+    Extends :class:`~vibe_quant.metrics.PerformanceMetrics` with the
+    specific parameter combination that produced these results.
     """
 
-    parameters: dict[str, float | int]
-    sharpe_ratio: float = 0.0
-    sortino_ratio: float = 0.0
-    max_drawdown: float = 0.0
-    total_return: float = 0.0
-    profit_factor: float = 0.0
-    win_rate: float = 0.0
-    num_trades: int = 0
-    total_fees: float = 0.0
-    total_funding: float = 0.0
-    execution_time_seconds: float = 0.0
+    parameters: dict[str, float | int] = field(default_factory=dict)
 
 
 @dataclass
@@ -155,7 +137,7 @@ def filter_by_metrics(
             continue
         if r.max_drawdown > filters.max_drawdown:
             continue
-        if r.num_trades < filters.min_trades:
+        if r.total_trades < filters.min_trades:
             continue
 
         filtered.append(r)
@@ -266,7 +248,7 @@ def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
     total_return = (seed % 40) / 100.0 - 0.10  # Range: -0.10 to 0.30 (-10% to 30%)
     pf = (seed % 200) / 100.0 + 0.5  # Range: 0.5 to 2.5
     win_rate = (seed % 40) / 100.0 + 0.30  # Range: 0.30 to 0.70 (30-70%)
-    num_trades = (seed % 200) + 20  # Range: 20 to 220
+    n_trades = (seed % 200) + 20  # Range: 20 to 220
 
     return BacktestMetrics(
         parameters=params,
@@ -276,9 +258,9 @@ def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
         total_return=total_return,
         profit_factor=pf,
         win_rate=win_rate,
-        num_trades=num_trades,
-        total_fees=num_trades * 0.001,
-        total_funding=num_trades * 0.0005,
+        total_trades=n_trades,
+        total_fees=n_trades * 0.001,
+        total_funding=n_trades * 0.0005,
         execution_time_seconds=0.01,
     )
 
@@ -465,7 +447,7 @@ class ScreeningPipeline:
                 "total_return": metrics.total_return,
                 "profit_factor": metrics.profit_factor,
                 "win_rate": metrics.win_rate,
-                "total_trades": metrics.num_trades,
+                "total_trades": metrics.total_trades,
                 "total_fees": metrics.total_fees,
                 "total_funding": metrics.total_funding,
                 "is_pareto_optimal": is_pareto,
@@ -717,7 +699,7 @@ class NTScreeningRunner:
         if bt_result is None:
             return metrics
 
-        metrics.num_trades = bt_result.total_positions
+        metrics.total_trades = bt_result.total_positions
 
         # Extract from PnL stats first (more comprehensive, includes total return)
         _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",

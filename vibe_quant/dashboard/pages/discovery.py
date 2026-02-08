@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
-from vibe_quant.db.connection import DEFAULT_DB_PATH
+from vibe_quant.dashboard.utils import get_job_manager
 from vibe_quant.discovery.genome import INDICATOR_POOL
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
@@ -26,7 +26,7 @@ from vibe_quant.discovery.pipeline import (
     GenerationResult,
 )
 from vibe_quant.dsl.schema import VALID_TIMEFRAMES
-from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
+from vibe_quant.jobs.manager import JobStatus
 
 if TYPE_CHECKING:
     from vibe_quant.discovery.fitness import FitnessResult
@@ -34,20 +34,6 @@ if TYPE_CHECKING:
 
 # Symbols available for discovery
 DISCOVERY_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _get_job_manager() -> BacktestJobManager:
-    """Get or create BacktestJobManager from session state."""
-    if "job_manager" not in st.session_state:
-        db_path = st.session_state.get("db_path", DEFAULT_DB_PATH)
-        st.session_state["job_manager"] = BacktestJobManager(Path(db_path))
-    manager: BacktestJobManager = st.session_state["job_manager"]
-    return manager
 
 
 def build_fitness_chart_data(
@@ -511,7 +497,7 @@ def render_discovery_tab() -> None:
     st.header("Strategy Discovery")
     st.caption("Genetic algorithm-based strategy evolution")
 
-    job_manager = _get_job_manager()
+    job_manager = get_job_manager()
 
     # Configuration
     config = _render_config_section()

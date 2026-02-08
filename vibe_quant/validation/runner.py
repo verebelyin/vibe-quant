@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from vibe_quant.metrics import PerformanceMetrics
+
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import CompilerError, StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -104,43 +106,21 @@ class TradeRecord:
 
 
 @dataclass
-class ValidationResult:
+class ValidationResult(PerformanceMetrics):
     """Results from a validation backtest run.
 
-    Attributes:
-        run_id: Backtest run ID.
-        strategy_name: Name of strategy.
-        total_return: Total return percentage.
-        sharpe_ratio: Sharpe ratio.
-        sortino_ratio: Sortino ratio.
-        max_drawdown: Maximum drawdown percentage.
-        total_trades: Number of trades.
-        winning_trades: Number of winning trades.
-        losing_trades: Number of losing trades.
-        win_rate: Win rate percentage.
-        profit_factor: Profit factor.
-        total_fees: Total fees paid.
-        total_funding: Total funding paid/received.
-        total_slippage: Total slippage cost.
-        execution_time_seconds: Time to run backtest.
-        trades: List of individual trades.
+    Extends :class:`~vibe_quant.metrics.PerformanceMetrics` with
+    validation-specific fields (trade detail, extended analytics).
     """
 
-    run_id: int
-    strategy_name: str
-    total_return: float = 0.0
-    sharpe_ratio: float = 0.0
-    sortino_ratio: float = 0.0
-    max_drawdown: float = 0.0
+    run_id: int = 0
+    strategy_name: str = ""
     cagr: float = 0.0
     calmar_ratio: float = 0.0
     volatility_annual: float = 0.0
     max_drawdown_duration_days: float = 0.0
-    total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
-    win_rate: float = 0.0
-    profit_factor: float = 0.0
     avg_trade_duration_hours: float = 0.0
     max_consecutive_wins: int = 0
     max_consecutive_losses: int = 0
@@ -148,10 +128,7 @@ class ValidationResult:
     largest_loss: float = 0.0
     avg_win: float = 0.0
     avg_loss: float = 0.0
-    total_fees: float = 0.0
-    total_funding: float = 0.0
     total_slippage: float = 0.0
-    execution_time_seconds: float = 0.0
     trades: list[TradeRecord] = field(default_factory=list)
 
     starting_balance: float = 100000.0

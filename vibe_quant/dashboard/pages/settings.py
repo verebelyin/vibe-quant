@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
-from vibe_quant.db import StateManager
-from vibe_quant.db.connection import DEFAULT_DB_PATH
+from vibe_quant.dashboard.utils import get_state_manager
 from vibe_quant.validation.latency import (
     LATENCY_PRESETS,
     LatencyPreset,
@@ -47,15 +46,6 @@ SIZING_PARAM_SCHEMAS: dict[str, dict[str, dict[str, object]]] = {
         "atr_multiplier": {"type": "decimal", "default": "2.0", "min": "0.5", "max": "10"},
     },
 }
-
-
-def _get_state_manager() -> StateManager:
-    """Get or create StateManager from session state."""
-    if "state_manager" not in st.session_state:
-        db_path = st.session_state.get("db_path", DEFAULT_DB_PATH)
-        st.session_state["state_manager"] = StateManager(Path(db_path))
-    manager: StateManager = st.session_state["state_manager"]
-    return manager
 
 
 def _parse_decimal(value: str, field_name: str) -> Decimal:
@@ -279,7 +269,7 @@ def render_sizing_section() -> None:
     """Render position sizing configuration section."""
     st.subheader("Position Sizing Configs")
 
-    manager = _get_state_manager()
+    manager = get_state_manager()
     configs = manager.list_sizing_configs()
 
     # List existing configs
@@ -314,7 +304,7 @@ def render_risk_section() -> None:
     """Render risk management configuration section."""
     st.subheader("Risk Management Configs")
 
-    manager = _get_state_manager()
+    manager = get_state_manager()
     configs = manager.list_risk_configs()
 
     # List existing configs
@@ -424,7 +414,7 @@ def render_database_section() -> None:
 
     # Show current DB stats
     try:
-        manager = _get_state_manager()
+        manager = get_state_manager()
         cursor = manager.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
