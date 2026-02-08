@@ -22,9 +22,8 @@ from vibe_quant.validation.latency import (
     create_custom_latency_model,
     get_latency_model,
 )
+from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.runner import (
-    TradeRecord,
-    ValidationResult,
     ValidationRunner,
     ValidationRunnerError,
     list_validation_runs,
