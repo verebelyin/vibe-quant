@@ -219,7 +219,7 @@ class OverfittingPipeline:
                 if self._cv_runner:
                     runner = self._cv_runner
                 else:
-                    if candidate is candidates[0]:  # Log once
+                    if candidate == candidates[0]:  # Log once
                         logger.warning(
                             "No CV backtest runner provided - using MockBacktestRunner. "
                             "Results will be synthetic. Pass cv_runner= to OverfittingPipeline "

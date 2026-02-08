@@ -625,10 +625,17 @@ def build_funding_pie(gross_pnl: float, total_fees: float,
         "Fees", funding_label, "Slippage",
     ]
     values = [abs(net_pnl), total_fees, abs(total_funding), total_slippage]
-    colors_pie = [
-        "#4CAF50" if net_pnl >= 0 else "#F44336",
-        "#FF9800", "#E91E63", "#9E9E9E",
-    ]
+
+    # Guard against all-zero values (Plotly renders an empty pie)
+    if not any(v > 0 for v in values):
+        values = [1]
+        labels = ["No P&L data"]
+        colors_pie = ["#9E9E9E"]
+    else:
+        colors_pie = [
+            "#4CAF50" if net_pnl >= 0 else "#F44336",
+            "#FF9800", "#E91E63", "#9E9E9E",
+        ]
 
     fig = go.Figure(
         data=[

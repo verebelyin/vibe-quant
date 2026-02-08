@@ -217,13 +217,12 @@ def _render_condition_row(
                     )
                 with rc2:
                     if use_number:
-                        right = str(st.number_input(
+                        right = _format_num(st.number_input(
                             "Value",
                             value=_try_float(row.get("right", 0)),
                             key=f"{key_prefix}_rval_{idx}",
                             label_visibility="collapsed",
                             step=1.0,
-                            format="%.1f",
                         ))
                     else:
                         r_idx = (

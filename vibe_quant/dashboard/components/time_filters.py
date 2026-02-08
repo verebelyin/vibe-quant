@@ -10,11 +10,14 @@ Provides:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import streamlit as st
 
 from vibe_quant.dsl.schema import VALID_DAYS
+
+_HH_MM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # Session presets for common trading patterns
 SESSION_PRESETS = {
@@ -121,8 +124,7 @@ def _render_weekly_schedule(time_filters: dict[str, Any]) -> None:
                 use_container_width=True,
                 help=name,
             ):
-                sessions = SESSION_PRESETS[name]
-                st.session_state["form_sessions"] = sessions
+                st.session_state["form_sessions"] = [dict(s) for s in SESSION_PRESETS[name]]
                 st.rerun()
 
     # Current sessions display — deep-copy to avoid mutating original DSL dict
@@ -149,7 +151,13 @@ def _render_weekly_schedule(time_filters: dict[str, Any]) -> None:
                     key=f"session_end_{i}",
                     help="HH:MM UTC format",
                 )
-            # Read back edited values into the session dict
+            # Validate HH:MM format before storing
+            if not _HH_MM_RE.match(new_start):
+                st.warning(f"Session {i + 1}: invalid start time '{new_start}' (expected HH:MM)")
+                new_start = session.get("start", "00:00")
+            if not _HH_MM_RE.match(new_end):
+                st.warning(f"Session {i + 1}: invalid end time '{new_end}' (expected HH:MM)")
+                new_end = session.get("end", "08:00")
             session["start"] = new_start
             session["end"] = new_end
             with c3:
