@@ -45,7 +45,7 @@ LATENCY_OPTIONS = ["None (screening mode)"] + [p.value for p in LatencyPreset] +
 
 
 def _render_strategy_selector(manager: StateManager) -> JsonDict | None:
-    """Render strategy selector and return selected strategy."""
+    """Render strategy selector with rich summary card."""
     strategies = manager.list_strategies(active_only=True)
 
     if not strategies:
@@ -62,11 +62,34 @@ def _render_strategy_selector(manager: StateManager) -> JsonDict | None:
 
     if selected_name:
         strategy = strategy_options[selected_name]
-        with st.expander("Strategy Details", expanded=False):
-            st.write(f"**Description:** {strategy.get('description') or 'N/A'}")
-            st.write(f"**Timeframe:** {strategy['dsl_config'].get('timeframe', 'N/A')}")
-            indicators = strategy["dsl_config"].get("indicators", {})
-            st.write(f"**Indicators:** {', '.join(indicators.keys()) or 'None'}")
+        dsl = strategy["dsl_config"]
+        indicators = dsl.get("indicators", {})
+        entry = dsl.get("entry_conditions", {})
+        sweep = dsl.get("sweep", {})
+
+        # Strategy summary card
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(f"**{selected_name}** v{strategy.get('version', 1)}")
+                st.caption(strategy.get("description") or "No description")
+            with col2:
+                st.metric("Timeframe", dsl.get("timeframe", "N/A"))
+            with col3:
+                n_ind = len(indicators)
+                n_long = len(entry.get("long", []))
+                n_short = len(entry.get("short", []))
+                st.metric("Indicators", n_ind)
+                st.caption(f"{n_long}L / {n_short}S entries")
+            with col4:
+                n_sweep = len(sweep)
+                combos = 1
+                for v in sweep.values():
+                    combos *= len(v)
+                st.metric("Sweep Params", n_sweep)
+                if n_sweep:
+                    st.caption(f"{combos:,} combinations")
+
         return strategy
 
     return None
@@ -117,17 +140,37 @@ def _render_symbol_timeframe_selector(strategy: JsonDict | None) -> tuple[list[s
 
 
 def _render_date_range_selector() -> tuple[str, str]:
-    """Render date range selector."""
-    col1, col2 = st.columns(2)
-
-    # Default: last 365 days
+    """Render date range selector with presets."""
     default_end = date.today()
+
+    # Date presets
+    st.caption("**Quick presets:**")
+    preset_cols = st.columns(5)
+    presets = [
+        ("30 days", 30),
+        ("90 days", 90),
+        ("6 months", 180),
+        ("1 year", 365),
+        ("Full history", None),
+    ]
+    for col, (label, days) in zip(preset_cols, presets, strict=False):
+        with col:
+            if st.button(label, key=f"date_preset_{label}", use_container_width=True):
+                if days is not None:
+                    st.session_state["start_date"] = default_end - timedelta(days=days)
+                else:
+                    st.session_state["start_date"] = date(2019, 1, 1)
+                st.session_state["end_date"] = default_end
+                st.rerun()
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+
     default_start = default_end - timedelta(days=365)
 
     with col1:
         start_date = st.date_input(
             "Start Date",
-            value=default_start,
+            value=st.session_state.get("start_date", default_start),
             min_value=date(2019, 1, 1),
             max_value=default_end,
             key="start_date",
@@ -136,11 +179,15 @@ def _render_date_range_selector() -> tuple[str, str]:
     with col2:
         end_date = st.date_input(
             "End Date",
-            value=default_end,
+            value=st.session_state.get("end_date", default_end),
             min_value=start_date,
             max_value=date.today(),
             key="end_date",
         )
+
+    with col3:
+        duration = (end_date - start_date).days
+        st.metric("Duration", f"{duration} days")
 
     return start_date.isoformat(), end_date.isoformat()
 
@@ -211,9 +258,52 @@ def _render_sweep_params_form(strategy: JsonDict | None) -> dict[str, list[int |
     return sweep_values
 
 
-def _render_overfitting_filter_toggles() -> dict[str, bool]:
-    """Render overfitting filter toggles."""
-    st.subheader("Overfitting Filters")
+def _render_overfitting_filter_toggles(
+    strategy: JsonDict | None,
+    start_date: str,
+    end_date: str,
+) -> dict[str, bool]:
+    """Render overfitting filter toggles with risk indicator."""
+    st.subheader("Overfitting Protection")
+
+    # Overfitting risk indicator
+    if strategy:
+        dsl = strategy["dsl_config"]
+        sweep = dsl.get("sweep", {})
+        combos = 1
+        for v in sweep.values():
+            combos *= len(v)
+        n_conditions = (
+            len(dsl.get("entry_conditions", {}).get("long", []))
+            + len(dsl.get("entry_conditions", {}).get("short", []))
+        )
+
+        # Calculate risk level
+        if combos > 500 or n_conditions > 6:
+            risk_level = "High"
+            risk_color = "red"
+        elif combos > 50 or n_conditions > 3:
+            risk_level = "Medium"
+            risk_color = "orange"
+        else:
+            risk_level = "Low"
+            risk_color = "green"
+
+        col_risk, col_detail = st.columns([1, 3])
+        with col_risk:
+            st.markdown(f"**Overfitting Risk:** :{risk_color}[**{risk_level}**]")
+        with col_detail:
+            st.caption(
+                f"{combos:,} parameter combinations | "
+                f"{n_conditions} entry conditions | "
+                f"Data: {start_date} to {end_date}"
+            )
+            if combos > 20:
+                st.caption(
+                    f"With {combos} comparisons, there is a "
+                    f"~{min(99, int((1 - 0.95**combos) * 100))}% chance of finding "
+                    f"a spuriously profitable combination by chance alone."
+                )
 
     col1, col2, col3 = st.columns(3)
 
@@ -222,7 +312,9 @@ def _render_overfitting_filter_toggles() -> dict[str, bool]:
             "Deflated Sharpe Ratio (DSR)",
             value=True,
             key="filter_dsr",
-            help="Tests statistical significance of Sharpe ratio accounting for multiple comparisons",
+            help="Tests statistical significance of Sharpe ratio "
+                 "accounting for multiple comparisons. Adjusts the Sharpe "
+                 "ratio downward based on how many strategies were tested.",
         )
 
     with col2:
@@ -230,7 +322,9 @@ def _render_overfitting_filter_toggles() -> dict[str, bool]:
             "Walk-Forward Analysis (WFA)",
             value=True,
             key="filter_wfa",
-            help="Tests out-of-sample performance using rolling optimization windows",
+            help="Splits data into in-sample (optimization) and out-of-sample "
+                 "(validation) periods. Tests if optimized parameters work on "
+                 "unseen data. The gold standard for overfitting detection.",
         )
 
     with col3:
@@ -238,7 +332,21 @@ def _render_overfitting_filter_toggles() -> dict[str, bool]:
             "Purged K-Fold CV",
             value=True,
             key="filter_pkfold",
-            help="Cross-validation with purging to prevent data leakage",
+            help="Cross-validation with purging to prevent data leakage "
+                 "between train and test folds. More robust than simple "
+                 "train/test split for time series data.",
+        )
+
+    # Educational context
+    with st.expander("Why overfitting protection matters", expanded=False):
+        st.markdown(
+            "Research shows a **100% average performance gap** between in-sample "
+            "and out-of-sample results for trading strategies. Without these filters:\n"
+            "- Strategies that look profitable in backtests often fail in live trading\n"
+            "- Testing many parameter combinations guarantees finding false positives\n"
+            "- The more you optimize, the worse real performance typically gets\n\n"
+            "**Recommendation:** Keep all three filters enabled. They work together "
+            "to catch different types of overfitting."
         )
 
     return {
@@ -562,6 +670,50 @@ def _render_recent_runs(manager: StateManager) -> None:
             )
 
 
+def _render_preflight_summary(
+    strategy: JsonDict,
+    symbols: list[str],
+    timeframe: str,
+    start_date: str,
+    end_date: str,
+    sweep_params: dict[str, list[int | float]],
+    overfitting_filters: dict[str, bool],
+    latency_preset: str | None,
+) -> None:
+    """Render pre-flight summary before launching backtest."""
+    st.divider()
+    st.subheader("Pre-flight Summary")
+
+    with st.container(border=True):
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.markdown(f"**Strategy:** {strategy['name']}")
+            st.caption(f"Timeframe: {timeframe}")
+
+        with col2:
+            st.markdown(f"**Symbols:** {len(symbols)}")
+            sym_display = ", ".join(symbols[:4])
+            if len(symbols) > 4:
+                sym_display += f" +{len(symbols) - 4}"
+            st.caption(sym_display)
+
+        with col3:
+            st.markdown(f"**Period:** {start_date} to {end_date}")
+            mode = "Screening" if latency_preset is None else "Validation"
+            st.caption(f"Mode: {mode}")
+
+        with col4:
+            total_combos = 1
+            for v in sweep_params.values():
+                total_combos *= len(v)
+            total_combos = max(1, total_combos)
+            total_runs = total_combos * len(symbols)
+            st.markdown(f"**Total backtests:** {total_runs:,}")
+            filters_on = sum(1 for v in overfitting_filters.values() if v)
+            st.caption(f"{filters_on}/3 overfitting filters active")
+
+
 def render_backtest_launch_tab() -> None:
     """Render the complete backtest launch tab."""
     st.title("Backtest Launch")
@@ -588,7 +740,7 @@ def render_backtest_launch_tab() -> None:
     st.divider()
 
     # Overfitting filters
-    overfitting_filters = _render_overfitting_filter_toggles()
+    overfitting_filters = _render_overfitting_filter_toggles(strategy, start_date, end_date)
 
     st.divider()
 
@@ -599,6 +751,11 @@ def render_backtest_launch_tab() -> None:
 
     # Latency preset
     latency_preset = _render_latency_selector()
+
+    # Pre-flight summary
+    if strategy and symbols:
+        _render_preflight_summary(strategy, symbols, timeframe, start_date, end_date,
+                                   sweep_params, overfitting_filters, latency_preset)
 
     # Run buttons
     _render_run_buttons(

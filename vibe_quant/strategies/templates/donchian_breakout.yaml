@@ -1,0 +1,58 @@
+name: donchian_breakout
+description: "Donchian channel breakout (turtle trading) with ATR trailing stops"
+version: 1
+timeframe: 4h
+additional_timeframes: []
+
+indicators:
+  donchian:
+    type: DONCHIAN
+    period: 20
+  ema_trend:
+    type: EMA
+    period: 50
+    source: close
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "close > donchian"
+    - "close > ema_trend"
+  short:
+    - "close < donchian"
+    - "close < ema_trend"
+
+exit_conditions:
+  long:
+    - "close < ema_trend"
+  short:
+    - "close > ema_trend"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: []
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 3.0
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.0
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  donchian.period: [10, 20, 40]
+  ema_trend.period: [30, 50, 100]

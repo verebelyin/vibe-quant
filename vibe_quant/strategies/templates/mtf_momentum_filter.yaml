@@ -1,0 +1,70 @@
+name: mtf_momentum_filter
+description: "Triple-confirmation: 4h EMA trend, 1h MACD momentum, 15m RSI entry"
+version: 1
+timeframe: 15m
+additional_timeframes: [1h, 4h]
+
+indicators:
+  rsi:
+    type: RSI
+    period: 14
+    source: close
+  macd:
+    type: MACD
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+    source: close
+    timeframe: 1h
+  ema_trend:
+    type: EMA
+    period: 50
+    source: close
+    timeframe: 4h
+  atr:
+    type: ATR
+    period: 14
+
+entry_conditions:
+  long:
+    - "rsi < 35"
+    - "macd > 0"
+    - "close > ema_trend"
+  short:
+    - "rsi > 65"
+    - "macd < 0"
+    - "close < ema_trend"
+
+exit_conditions:
+  long:
+    - "rsi > 60"
+  short:
+    - "rsi < 40"
+
+time_filters:
+  allowed_sessions: []
+  blocked_days: [Saturday, Sunday]
+  avoid_around_funding:
+    enabled: true
+    minutes_before: 5
+    minutes_after: 5
+
+stop_loss:
+  type: atr_trailing
+  atr_multiplier: 2.5
+  indicator: atr
+
+take_profit:
+  type: risk_reward
+  risk_reward_ratio: 2.5
+
+position_management:
+  scale_in:
+    enabled: false
+  partial_exit:
+    enabled: false
+
+sweep:
+  rsi.period: [10, 14, 21]
+  macd.fast_period: [8, 12, 16]
+  macd.slow_period: [21, 26, 34]
