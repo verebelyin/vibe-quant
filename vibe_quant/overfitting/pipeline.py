@@ -189,7 +189,11 @@ class OverfittingPipeline:
 
                 # Parse parameters for param_grid (may be JSON string or dict)
                 raw_params = candidate.get("parameters", "{}")
-                params = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or {})
+                try:
+                    params = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or {})
+                except json.JSONDecodeError:
+                    logger.warning("Invalid JSON in parameters for candidate %d", candidate["id"])
+                    params = {}
                 param_grid = {k: [v] for k, v in params.items()}
 
                 try:
@@ -222,8 +226,8 @@ class OverfittingPipeline:
                             "for real purged k-fold analysis."
                         )
                     runner = MockBacktestRunner(
-                        oos_sharpe=candidate["sharpe_ratio"],
-                        oos_return=candidate["total_return"],
+                        oos_sharpe=candidate.get("sharpe_ratio") or 0.0,
+                        oos_return=candidate.get("total_return") or 0.0,
                     )
                 cv_result = cv.run(n_samples=n_samples, runner=runner)
                 passed_cv = cv_result.is_robust
@@ -239,13 +243,16 @@ class OverfittingPipeline:
             if config.enable_purged_kfold and not passed_cv:
                 passed_all = False
 
+            # Normalize types for CandidateResult (expects str parameters, float sharpe/return)
+            raw_params_val = candidate.get("parameters", "{}")
+            norm_params = json.dumps(raw_params_val) if isinstance(raw_params_val, dict) else str(raw_params_val or "{}")
             result = CandidateResult(
                 sweep_result_id=candidate["id"],
                 run_id=candidate["run_id"],
                 strategy_name=candidate.get("strategy_name", f"run_{candidate['run_id']}"),
-                parameters=candidate["parameters"],
-                sharpe_ratio=candidate["sharpe_ratio"],
-                total_return=candidate["total_return"],
+                parameters=norm_params,
+                sharpe_ratio=float(candidate.get("sharpe_ratio") or 0.0),
+                total_return=float(candidate.get("total_return") or 0.0),
                 passed_dsr=passed_dsr,
                 passed_wfa=passed_wfa,
                 passed_cv=passed_cv,

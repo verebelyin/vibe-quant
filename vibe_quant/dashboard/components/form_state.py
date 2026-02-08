@@ -37,25 +37,41 @@ def sync_form_state(dsl: dict[str, Any]) -> None:
     exit_cond = dsl.get("exit_conditions", {})
     st.session_state["form_exit_long"] = list(exit_cond.get("long", []))
     st.session_state["form_exit_short"] = list(exit_cond.get("short", []))
-    # Also sync risk fields — use ``is not None`` to preserve 0.0 values
+    # Also sync risk fields — use ``is not None`` to preserve 0.0 values.
+    # Clear stale keys when the DSL key is absent so a previous strategy's
+    # values don't leak through.
     sl = dsl.get("stop_loss", {})
     st.session_state["form_sl_type"] = sl.get("type", "fixed_pct")
     if sl.get("percent") is not None:
         st.session_state["form_sl_pct"] = sl["percent"]
+    else:
+        st.session_state.pop("form_sl_pct", None)
     if sl.get("atr_multiplier") is not None:
         st.session_state["form_sl_atr_mult"] = sl["atr_multiplier"]
+    else:
+        st.session_state.pop("form_sl_atr_mult", None)
     if sl.get("indicator") is not None:
         st.session_state["form_sl_indicator"] = sl["indicator"]
+    else:
+        st.session_state.pop("form_sl_indicator", None)
     tp = dsl.get("take_profit", {})
     st.session_state["form_tp_type"] = tp.get("type", "risk_reward")
     if tp.get("percent") is not None:
         st.session_state["form_tp_pct"] = tp["percent"]
+    else:
+        st.session_state.pop("form_tp_pct", None)
     if tp.get("atr_multiplier") is not None:
         st.session_state["form_tp_atr_mult"] = tp["atr_multiplier"]
+    else:
+        st.session_state.pop("form_tp_atr_mult", None)
     if tp.get("indicator") is not None:
         st.session_state["form_tp_indicator"] = tp["indicator"]
+    else:
+        st.session_state.pop("form_tp_indicator", None)
     if tp.get("risk_reward_ratio") is not None:
         st.session_state["form_tp_rr"] = tp["risk_reward_ratio"]
+    else:
+        st.session_state.pop("form_tp_rr", None)
     # Sync time filters (including allowed_sessions for session editor)
     tf = dsl.get("time_filters", {})
     st.session_state["form_sessions"] = tf.get("allowed_sessions", [])

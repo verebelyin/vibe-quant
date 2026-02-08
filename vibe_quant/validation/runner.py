@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.dsl.compiler import CompilerError, StrategyCompiler
+from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
@@ -190,24 +190,6 @@ class ValidationRunner:
             msg = f"Strategy DSL validation failed: {e}"
             raise ValidationRunnerError(msg) from e
 
-    def _compile_strategy(self, dsl: StrategyDSL) -> str:
-        """Compile strategy DSL to NautilusTrader code.
-
-        Args:
-            dsl: Validated strategy DSL.
-
-        Returns:
-            Generated Python source code.
-
-        Raises:
-            ValidationRunnerError: If compilation fails.
-        """
-        try:
-            return self._compiler.compile(dsl)
-        except CompilerError as e:
-            msg = f"Strategy compilation failed: {e}"
-            raise ValidationRunnerError(msg) from e
-
     def _resolve_latency(
         self,
         run_config: dict[str, object],
@@ -246,7 +228,7 @@ class ValidationRunner:
             Configured VenueConfig.
         """
         balance = run_config.get("starting_balance", 100_000)
-        if not isinstance(balance, (int, float)):
+        if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
             balance = 100_000
         return create_venue_config_for_validation(
             starting_balance_usdt=float(balance),

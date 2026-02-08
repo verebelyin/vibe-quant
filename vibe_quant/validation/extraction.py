@@ -206,8 +206,11 @@ def extract_trades(
         )
         total_slippage += slippage_cost
 
-        notional = entry_price * quantity if entry_price > 0 and quantity > 0 else 1.0
-        roi_pct = (realized_pnl / notional) * 100.0 if notional else 0.0
+        if entry_price > 0 and quantity > 0:
+            notional = entry_price * quantity
+            roi_pct = (realized_pnl / notional) * 100.0
+        else:
+            roi_pct = 0.0
 
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None

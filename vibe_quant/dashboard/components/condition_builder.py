@@ -219,7 +219,7 @@ def _render_condition_row(
                     if use_number:
                         right = str(st.number_input(
                             "Value",
-                            value=float(row.get("right", 0)),
+                            value=_try_float(row.get("right", 0)),
                             key=f"{key_prefix}_rval_{idx}",
                             label_visibility="collapsed",
                             step=1.0,

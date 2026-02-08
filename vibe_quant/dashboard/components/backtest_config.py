@@ -78,12 +78,17 @@ def render_symbol_timeframe_selector(strategy: JsonDict | None) -> tuple[list[st
     c1, c2 = st.columns([2, 1])
 
     with c1:
+        # Build dynamic options list that includes any previously added custom symbols
+        custom_syms: list[str] = st.session_state.get("custom_symbols_list", [])
+        all_symbol_options = DEFAULT_SYMBOLS + [s for s in custom_syms if s not in DEFAULT_SYMBOLS]
         symbols = st.multiselect(
-            "Symbols", options=DEFAULT_SYMBOLS, default=["BTCUSDT", "ETHUSDT"],
+            "Symbols", options=all_symbol_options, default=["BTCUSDT", "ETHUSDT"],
             key="symbols_select", help="Select one or more perpetual futures symbols",
         )
         custom = st.text_input("Add custom symbol", placeholder="e.g., ARBUSDT", key="custom_symbol")
-        if custom and custom.upper() not in symbols and st.button("Add Symbol", key="add_symbol"):
+        if custom and custom.upper() not in all_symbol_options and st.button("Add Symbol", key="add_symbol"):
+            custom_syms.append(custom.upper())
+            st.session_state["custom_symbols_list"] = custom_syms
             st.session_state["symbols_select"] = symbols + [custom.upper()]
             st.rerun()
 
