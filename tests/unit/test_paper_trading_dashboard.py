@@ -7,39 +7,39 @@ from pathlib import Path
 
 from vibe_quant.dashboard.pages.paper_trading import (
     _create_paper_config_file,
-    _format_pnl,
     _get_state_color,
     _get_validated_strategies,
 )
+from vibe_quant.dashboard.utils import format_pnl
 from vibe_quant.paper.persistence import StateCheckpoint
 
 
 class TestFormatPnl:
-    """Tests for _format_pnl helper."""
+    """Tests for format_pnl helper."""
 
     def test_positive_pnl(self) -> None:
         """Positive P&L shows + sign."""
-        result = _format_pnl(1234.56)
+        result = format_pnl(1234.56)
         assert result == "+$1,234.56"
 
     def test_negative_pnl(self) -> None:
         """Negative P&L shows - sign."""
-        result = _format_pnl(-1234.56)
+        result = format_pnl(-1234.56)
         assert result == "-$1,234.56"
 
     def test_zero_pnl(self) -> None:
         """Zero P&L shows + sign."""
-        result = _format_pnl(0.0)
+        result = format_pnl(0.0)
         assert result == "+$0.00"
 
     def test_small_pnl(self) -> None:
         """Small P&L formats correctly."""
-        result = _format_pnl(0.01)
+        result = format_pnl(0.01)
         assert result == "+$0.01"
 
     def test_large_pnl(self) -> None:
         """Large P&L formats with commas."""
-        result = _format_pnl(1234567.89)
+        result = format_pnl(1234567.89)
         assert result == "+$1,234,567.89"
 
 

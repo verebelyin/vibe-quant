@@ -16,7 +16,7 @@ import streamlit as st
 import yaml
 from pydantic import ValidationError
 
-from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dashboard.utils import get_state_manager
 from vibe_quant.dsl.schema import (
     VALID_DAYS,
     VALID_INDICATOR_TYPES,
@@ -26,17 +26,6 @@ from vibe_quant.dsl.schema import (
     VALID_TIMEFRAMES,
     StrategyDSL,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-
-def _get_state_manager(db_path: Path | None = None) -> StateManager:
-    """Get or create StateManager in session state."""
-    if "state_manager" not in st.session_state:
-        st.session_state.state_manager = StateManager(db_path)
-    manager: StateManager = st.session_state.state_manager
-    return manager
 
 
 def _validate_dsl(yaml_str: str) -> tuple[StrategyDSL | None, str | None]:
@@ -633,7 +622,7 @@ def render_strategy_management_tab(db_path: Path | None = None) -> None:
     """
     st.header("Strategy Management")
 
-    manager = _get_state_manager(db_path)
+    manager = get_state_manager(db_path)
 
     # Check for delete confirmation
     if st.session_state.get("confirm_delete_id"):

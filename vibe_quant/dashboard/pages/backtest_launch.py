@@ -18,10 +18,9 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
-from vibe_quant.db.connection import DEFAULT_DB_PATH
-from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dashboard.utils import get_job_manager, get_state_manager
 from vibe_quant.dsl.schema import VALID_TIMEFRAMES
-from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
+from vibe_quant.jobs.manager import JobStatus
 from vibe_quant.validation.latency import LATENCY_PRESETS, LatencyPreset
 
 if TYPE_CHECKING:
@@ -43,24 +42,6 @@ DEFAULT_SYMBOLS = [
 
 # Latency options: presets + custom entry
 LATENCY_OPTIONS = ["None (screening mode)"] + [p.value for p in LatencyPreset] + ["custom"]
-
-
-def _get_state_manager() -> StateManager:
-    """Get or create StateManager from session state."""
-    if "state_manager" not in st.session_state:
-        db_path = st.session_state.get("db_path", DEFAULT_DB_PATH)
-        st.session_state["state_manager"] = StateManager(Path(db_path))
-    manager: StateManager = st.session_state["state_manager"]
-    return manager
-
-
-def _get_job_manager() -> BacktestJobManager:
-    """Get or create BacktestJobManager from session state."""
-    if "job_manager" not in st.session_state:
-        db_path = st.session_state.get("db_path", DEFAULT_DB_PATH)
-        st.session_state["job_manager"] = BacktestJobManager(Path(db_path))
-    manager: BacktestJobManager = st.session_state["job_manager"]
-    return manager
 
 
 def _render_strategy_selector(manager: StateManager) -> JsonDict | None:
@@ -585,8 +566,8 @@ def render_backtest_launch_tab() -> None:
     """Render the complete backtest launch tab."""
     st.title("Backtest Launch")
 
-    manager = _get_state_manager()
-    job_manager = _get_job_manager()
+    manager = get_state_manager()
+    job_manager = get_job_manager()
 
     # Strategy selector
     strategy = _render_strategy_selector(manager)

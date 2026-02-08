@@ -95,7 +95,7 @@ def sample_metrics() -> list[BacktestMetrics]:
             total_return=0.30,
             profit_factor=1.8,
             win_rate=0.55,
-            num_trades=100,
+            total_trades=100,
         ),
         BacktestMetrics(
             parameters={"p1": 2},
@@ -105,7 +105,7 @@ def sample_metrics() -> list[BacktestMetrics]:
             total_return=0.40,
             profit_factor=2.0,
             win_rate=0.60,
-            num_trades=80,
+            total_trades=80,
         ),
         BacktestMetrics(
             parameters={"p1": 3},
@@ -115,7 +115,7 @@ def sample_metrics() -> list[BacktestMetrics]:
             total_return=0.10,
             profit_factor=1.1,
             win_rate=0.45,
-            num_trades=150,
+            total_trades=150,
         ),
         BacktestMetrics(
             parameters={"p1": 4},
@@ -125,7 +125,7 @@ def sample_metrics() -> list[BacktestMetrics]:
             total_return=0.20,
             profit_factor=1.5,
             win_rate=0.52,
-            num_trades=30,
+            total_trades=30,
         ),
     ]
 
@@ -215,8 +215,8 @@ class TestFilterByMetrics:
     def test_min_sharpe_filter(self) -> None:
         """Results below min_sharpe should be filtered out."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=0.5, profit_factor=1.5, num_trades=100),
-            BacktestMetrics(parameters={}, sharpe_ratio=1.5, profit_factor=1.5, num_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=0.5, profit_factor=1.5, total_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.5, profit_factor=1.5, total_trades=100),
         ]
         filters = MetricFilters(min_sharpe=1.0, max_drawdown=1.0)
         result = filter_by_metrics(metrics, filters)
@@ -227,8 +227,8 @@ class TestFilterByMetrics:
     def test_min_profit_factor_filter(self) -> None:
         """Results below min_profit_factor should be filtered out."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=0.9, num_trades=100),
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, num_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=0.9, total_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, total_trades=100),
         ]
         filters = MetricFilters(max_drawdown=1.0)
         result = filter_by_metrics(metrics, filters)
@@ -239,8 +239,8 @@ class TestFilterByMetrics:
     def test_max_drawdown_filter(self) -> None:
         """Results above max_drawdown should be filtered out."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.40, num_trades=100),
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.20, num_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.40, total_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.20, total_trades=100),
         ]
         filters = MetricFilters(max_drawdown=0.30)
         result = filter_by_metrics(metrics, filters)
@@ -251,14 +251,14 @@ class TestFilterByMetrics:
     def test_min_trades_filter(self) -> None:
         """Results below min_trades should be filtered out."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, num_trades=30),
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, num_trades=100),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, total_trades=30),
+            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, total_trades=100),
         ]
         filters = MetricFilters(max_drawdown=1.0)
         result = filter_by_metrics(metrics, filters)
 
         assert len(result) == 1
-        assert result[0].num_trades == 100
+        assert result[0].total_trades == 100
 
     def test_empty_input_returns_empty(self) -> None:
         """Empty input should return empty list."""
@@ -268,7 +268,7 @@ class TestFilterByMetrics:
     def test_all_filtered_returns_empty(self) -> None:
         """If all results fail filters, return empty list."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=-1.0, profit_factor=0.5, num_trades=10),
+            BacktestMetrics(parameters={}, sharpe_ratio=-1.0, profit_factor=0.5, total_trades=10),
         ]
         result = filter_by_metrics(metrics, MetricFilters())
         assert result == []

@@ -20,15 +20,14 @@ from typing import Any
 
 import streamlit as st
 
+from vibe_quant.dashboard.utils import format_pnl, get_job_manager
 from vibe_quant.db.connection import get_connection
-from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence, recover_state
 
 # Session state keys
 SESSION_TRADER_ID = "paper_trading_trader_id"
 SESSION_PERSISTENCE = "paper_trading_persistence"
 SESSION_LAST_REFRESH = "paper_trading_last_refresh"
-SESSION_JOB_MANAGER = "paper_trading_job_manager"
 
 
 def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
@@ -43,14 +42,6 @@ def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
         )
     persistence: StatePersistence = st.session_state[SESSION_PERSISTENCE]
     return persistence
-
-
-def _get_job_manager(db_path: Path | None = None) -> BacktestJobManager:
-    """Get or create BacktestJobManager in session state."""
-    if SESSION_JOB_MANAGER not in st.session_state:
-        st.session_state[SESSION_JOB_MANAGER] = BacktestJobManager(db_path)
-    manager: BacktestJobManager = st.session_state[SESSION_JOB_MANAGER]
-    return manager
 
 
 def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any]]:
@@ -161,7 +152,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
     if active_jobs:
         st.warning(f"Paper trading session already running (PID: {active_jobs[0]['pid']})")
         if st.button("Stop Active Session", type="secondary"):
-            manager = _get_job_manager(db_path)
+            manager = get_job_manager(db_path)
             manager.kill_job(active_jobs[0]["run_id"])
             st.success("Session stopped")
             st.rerun()
@@ -258,7 +249,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
             conn.close()
 
         # Start subprocess with credentials in env (not on disk)
-        manager = _get_job_manager(db_path)
+        manager = get_job_manager(db_path)
         command = [
             "python", "-m", "vibe_quant.paper.cli",
             "start",
@@ -299,11 +290,6 @@ def _get_state_color(state: str) -> str:
     return colors.get(state, "gray")
 
 
-def _format_pnl(pnl: float) -> str:
-    """Format P&L with sign and color indicator."""
-    if pnl >= 0:
-        return f"+${pnl:,.2f}"
-    return f"-${abs(pnl):,.2f}"
 
 
 def _render_pnl_metrics(checkpoint: StateCheckpoint | None) -> None:
@@ -330,7 +316,7 @@ def _render_pnl_metrics(checkpoint: StateCheckpoint | None) -> None:
         st.metric(
             "Total Balance",
             f"${total_balance:,.2f}",
-            delta=_format_pnl(daily_pnl) if daily_pnl != 0 else None,
+            delta=format_pnl(daily_pnl) if daily_pnl != 0 else None,
         )
 
     with col2:
@@ -348,8 +334,8 @@ def _render_pnl_metrics(checkpoint: StateCheckpoint | None) -> None:
     with col4:
         st.metric(
             "Total P&L",
-            _format_pnl(total_pnl),
-            delta=_format_pnl(daily_pnl) if daily_pnl != 0 else None,
+            format_pnl(total_pnl),
+            delta=format_pnl(daily_pnl) if daily_pnl != 0 else None,
             delta_color="normal",
         )
 
@@ -406,7 +392,7 @@ def _render_positions_table(checkpoint: StateCheckpoint | None) -> None:
             "Quantity": pos.get("quantity", 0),
             "Entry Price": f"${float(pos.get('entry_price', 0)):,.2f}",
             "Current Price": f"${float(pos.get('current_price', 0)):,.2f}",
-            "Unrealized P&L": _format_pnl(float(pos.get("unrealized_pnl", 0))),
+            "Unrealized P&L": format_pnl(float(pos.get("unrealized_pnl", 0))),
         })
 
     st.dataframe(
@@ -468,7 +454,7 @@ def _render_recent_trades(persistence: StatePersistence | None) -> None:
         st.markdown(
             f":{color}[{state.upper()}] | "
             f"{timestamp} | "
-            f"P&L: {_format_pnl(daily_pnl)}"
+            f"P&L: {format_pnl(daily_pnl)}"
         )
 
 

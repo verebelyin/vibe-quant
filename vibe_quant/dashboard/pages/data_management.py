@@ -23,6 +23,8 @@ import pandas as pd
 import streamlit as st
 from lightweight_charts.widgets import StreamlitChart
 
+from vibe_quant.dashboard.utils import format_bytes
+
 if TYPE_CHECKING:
     from typing import Any
 
@@ -31,15 +33,6 @@ DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
 DEFAULT_CATALOG_PATH = Path("data/catalog")
 
 INTERVALS = ["1m", "5m", "15m", "1h", "4h"]
-
-
-def _format_bytes(size_bytes: int) -> str:
-    """Format bytes to human-readable string."""
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024  # type: ignore[assignment]
-    return f"{size_bytes:.1f} TB"
 
 
 def _get_storage_usage() -> dict[str, int]:
@@ -139,11 +132,11 @@ def render_storage_metrics() -> None:
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("SQLite Archive", _format_bytes(usage["archive"]))
+        st.metric("SQLite Archive", format_bytes(usage["archive"]))
     with col2:
-        st.metric("Parquet Catalog", _format_bytes(usage["catalog"]))
+        st.metric("Parquet Catalog", format_bytes(usage["catalog"]))
     with col3:
-        st.metric("Total", _format_bytes(usage["archive"] + usage["catalog"]))
+        st.metric("Total", format_bytes(usage["archive"] + usage["catalog"]))
 
 
 def render_data_coverage() -> None:
