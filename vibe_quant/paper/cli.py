@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -52,11 +53,13 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
     with config_path.open() as f:
         data = json.load(f)
 
-    # Parse binance config
+    # Parse binance config -- credentials always come from env vars
     binance_data = data.get("binance", {})
+    api_key = binance_data.get("api_key") or os.getenv("BINANCE_TESTNET_API_KEY", "")
+    api_secret = binance_data.get("api_secret") or os.getenv("BINANCE_TESTNET_API_SECRET", "")
     binance = BinanceTestnetConfig(
-        api_key=binance_data.get("api_key", ""),
-        api_secret=binance_data.get("api_secret", ""),
+        api_key=api_key,
+        api_secret=api_secret,
         testnet=binance_data.get("testnet", True),
         account_type=binance_data.get("account_type", "USDT_FUTURES"),
     )
@@ -108,8 +111,7 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
     data = {
         "trader_id": config.trader_id,
         "binance": {
-            "api_key": config.binance.api_key,
-            "api_secret": config.binance.api_secret,
+            # Credentials excluded - must come from env vars
             "testnet": config.binance.testnet,
             "account_type": config.binance.account_type,
         },

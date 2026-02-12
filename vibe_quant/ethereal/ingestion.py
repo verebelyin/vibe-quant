@@ -153,7 +153,11 @@ def download_bars(
                                     int(row[8]) if len(row) > 8 else 0,
                                 )
                                 all_klines.append(kline)
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as exc:
+                logger.warning(
+                    "HTTP %d downloading bars %s %s/%d-%02d: %s",
+                    exc.response.status_code, symbol, timeframe, year, month, exc,
+                )
                 continue
             except Exception:
                 logger.exception("Unexpected error downloading bars %s %s/%s-%02d", symbol, timeframe, year, month)
@@ -218,7 +222,11 @@ def download_funding_rates(
                                     float(row[2]) if len(row) > 2 else 0.0,
                                 )
                                 all_rates.append(rate)
-            except httpx.HTTPStatusError:
+            except httpx.HTTPStatusError as exc:
+                logger.warning(
+                    "HTTP %d downloading funding %s %d-%02d: %s",
+                    exc.response.status_code, symbol, year, month, exc,
+                )
                 continue
             except Exception:
                 logger.exception("Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month)

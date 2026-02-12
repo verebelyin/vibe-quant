@@ -344,3 +344,11 @@ class TelegramBot:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+
+    async def __aenter__(self) -> TelegramBot:
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Exit async context manager, ensuring client cleanup."""
+        await self.close()

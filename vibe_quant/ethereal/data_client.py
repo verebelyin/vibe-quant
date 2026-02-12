@@ -252,6 +252,11 @@ class EtherealDataClient:
             logger.warning("Socket.IO disconnected")
             self._connected = False
             if self._auto_reconnect and not self._shutdown_event.is_set():
+                # Cancel any existing reconnect task to avoid orphaned loops
+                if self._reconnect_task is not None and not self._reconnect_task.done():
+                    self._reconnect_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._reconnect_task
                 self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
         @self._sio.on("BookDepth")  # type: ignore[untyped-decorator]

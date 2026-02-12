@@ -32,8 +32,26 @@ class TemplateMeta:
         return self.path.read_text()
 
     def load_dict(self) -> dict:
-        """Load the template as a parsed dict."""
-        return yaml.safe_load(self.path.read_text())
+        """Load the template as a parsed dict.
+
+        Raises:
+            FileNotFoundError: If the template file does not exist.
+            yaml.YAMLError: If the YAML content is malformed.
+        """
+        if not self.path.exists():
+            raise FileNotFoundError(f"Template file not found: {self.path}")
+        text = self.path.read_text()
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise yaml.YAMLError(
+                f"Malformed YAML in template {self.file_name}: {exc}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise yaml.YAMLError(
+                f"Template {self.file_name} must be a YAML mapping, got {type(data).__name__}"
+            )
+        return data
 
 
 # ── Template registry ──────────────────────────────────────────────────────

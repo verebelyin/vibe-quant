@@ -105,7 +105,7 @@ def create_ethereal_instrument(symbol: str) -> CryptoPerpetual:
     return CryptoPerpetual(
         instrument_id=InstrumentId(Symbol(f"{symbol}-PERP"), ETHEREAL_VENUE),
         raw_symbol=Symbol(symbol),
-        base_currency=USDE,  # Settlement in USDe
+        base_currency=Currency.from_str(config.base_currency),
         quote_currency=USDE,
         settlement_currency=USDE,
         is_inverse=False,

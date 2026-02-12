@@ -7,12 +7,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nautilus_trader.model.currencies import USDT
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import CryptoPerpetual
-from nautilus_trader.model.objects import Money, Price, Quantity
+from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
 if TYPE_CHECKING:
@@ -88,13 +87,14 @@ def create_instrument(symbol: str) -> CryptoPerpetual:
         CryptoPerpetual instrument.
     """
     config = INSTRUMENT_CONFIGS[symbol]
+    quote = Currency.from_str(config["quote"])
 
     return CryptoPerpetual(
         instrument_id=InstrumentId(Symbol(f"{symbol}-PERP"), BINANCE_VENUE),
         raw_symbol=Symbol(symbol),
-        base_currency=USDT,  # Settlement currency for USDT-M
-        quote_currency=USDT,
-        settlement_currency=USDT,
+        base_currency=Currency.from_str(config["base"]),
+        quote_currency=quote,
+        settlement_currency=quote,
         is_inverse=False,
         price_precision=config["price_precision"],
         size_precision=config["size_precision"],
@@ -103,7 +103,7 @@ def create_instrument(symbol: str) -> CryptoPerpetual:
         max_quantity=None,
         min_quantity=None,
         max_notional=None,
-        min_notional=Money(5, USDT),  # Binance minimum
+        min_notional=Money(5, quote),  # Binance minimum
         max_price=None,
         min_price=None,
         margin_init=config["margin_init"],

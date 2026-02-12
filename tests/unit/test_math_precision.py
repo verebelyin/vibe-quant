@@ -795,8 +795,8 @@ class TestWFAAggregationPrecision:
         config = WFAConfig.default()
         wfa = WalkForwardAnalysis(config=config)
         result = wfa._aggregate_results(windows)
-        # mean_is_return = 0, agg_oos_return = 3 → inf
-        assert result.efficiency == float("inf")
+        # mean_is_return = 0, agg_oos_return = 3 → 0.0 (undefined ratio)
+        assert result.efficiency == 0.0
 
 
 # ============================================================================

@@ -9,7 +9,7 @@ Provides pluggable position sizers that calculate trade size based on:
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,7 @@ class PositionSizer(ABC):
 
         # Round down to avoid exceeding limits
         quantize_str = "1." + "0" * size_precision if size_precision > 0 else "1"
-        return final_size.quantize(Decimal(quantize_str))
+        return final_size.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
 
 
 class FixedFractionalSizer(PositionSizer):
