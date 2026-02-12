@@ -705,8 +705,8 @@ class TestEdgeCases:
 
         result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
 
-        # mean IS = 0, mean OOS = 5 -> efficiency = inf
-        assert result.efficiency == float("inf")
+        # mean IS = 0 -> efficiency = 0 (no predictive value)
+        assert result.efficiency == 0.0
 
     def test_all_negative_returns(self) -> None:
         """Handles all negative returns."""

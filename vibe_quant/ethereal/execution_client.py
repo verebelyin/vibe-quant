@@ -142,7 +142,7 @@ class EtherealConfig:
         verifying_contract: EIP-712 verifying contract address.
     """
 
-    private_key: str
+    private_key: str = field(repr=False)
     testnet: bool = True
     verifying_contract: str = "0x0000000000000000000000000000000000000000"
 

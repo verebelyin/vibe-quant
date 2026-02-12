@@ -6,8 +6,11 @@ and Pareto ranking for selection.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -304,8 +307,21 @@ def evaluate_population(
     """
     results: list[FitnessResult] = []
 
+    # Zero-fitness result for failed evaluations
+    _zero = FitnessResult(
+        sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0,
+        total_trades=0, complexity_penalty=0.0, raw_score=0.0,
+        adjusted_score=0.0, passed_filters=False, filter_results={},
+    )
+
     for chrom in chromosomes:
-        bt = backtest_fn(chrom)
+        try:
+            bt = backtest_fn(chrom)
+        except Exception:
+            logger.warning("Backtest failed for chromosome, assigning zero fitness", exc_info=True)
+            results.append(_zero)
+            continue
+
         sharpe = float(bt["sharpe_ratio"])
         max_dd = float(bt["max_drawdown"])
         pf = float(bt["profit_factor"])

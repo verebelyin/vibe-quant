@@ -531,7 +531,7 @@ def _dir_size(path: Path) -> int:
 
 def _print_summary(
     results: dict[str, dict[str, int]],
-    archive_path: Path,
+    archive_path: Path | None,
     catalog_path: Path,
     total_fetched: int,
     total_inserted: int,
@@ -568,7 +568,7 @@ def _print_summary(
             print(f"    Funding rates: {funding:,}")
 
     # File sizes
-    archive_size = archive_path.stat().st_size if archive_path.exists() else 0
+    archive_size = archive_path.stat().st_size if archive_path and archive_path.exists() else 0
     catalog_size = _dir_size(catalog_path)
 
     print("\n  Storage:")

@@ -193,18 +193,21 @@ class TestConvergence:
     def test_not_converged_too_few_generations(self) -> None:
         cfg = _make_config(convergence_generations=3)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
-        results = [self._make_gen_result(i, 1.0) for i in range(3)]
+        # Need at least 2*n=6 generations
+        results = [self._make_gen_result(i, 1.0) for i in range(5)]
         assert not pipe._check_convergence(results)
 
     def test_converged_stagnation(self) -> None:
         cfg = _make_config(convergence_generations=3)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
-        # Gen 0 had best=2.0, gens 1-3 stagnate at 1.0
+        # Gens 0-2 improve, then gens 3-5 stagnate
         results = [
-            self._make_gen_result(0, 2.0),
-            self._make_gen_result(1, 1.0),
-            self._make_gen_result(2, 1.0),
+            self._make_gen_result(0, 1.0),
+            self._make_gen_result(1, 1.5),
+            self._make_gen_result(2, 2.0),
             self._make_gen_result(3, 1.0),
+            self._make_gen_result(4, 1.0),
+            self._make_gen_result(5, 1.0),
         ]
         assert pipe._check_convergence(results)
 
@@ -216,6 +219,8 @@ class TestConvergence:
             self._make_gen_result(1, 1.1),
             self._make_gen_result(2, 1.2),
             self._make_gen_result(3, 1.3),
+            self._make_gen_result(4, 1.4),
+            self._make_gen_result(5, 1.5),
         ]
         assert not pipe._check_convergence(results)
 

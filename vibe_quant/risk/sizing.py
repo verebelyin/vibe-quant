@@ -6,10 +6,13 @@ Provides pluggable position sizers that calculate trade size based on:
 - ATR-based: volatility-adaptive sizing using ATR for stop distance
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from nautilus_trader.model.instruments import CryptoPerpetual
@@ -306,7 +309,12 @@ class KellySizer(PositionSizer):
         # Apply kelly_fraction (e.g., half-Kelly)
         f_adjusted = f_star * self._kelly_fraction
 
-        # Clip to valid range
+        # Clip to valid range; warn if negative (unfavorable edge)
+        if f_adjusted < 0:
+            logger.warning(
+                "Kelly f*=%.4f is negative (unfavorable edge), clipping to 0",
+                float(f_adjusted),
+            )
         return max(Decimal(0), min(f_adjusted, Decimal(1)))
 
     def calculate_size(

@@ -21,6 +21,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
+from vibe_quant.discovery.operators import _random_chromosome
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -273,12 +274,15 @@ class DiscoveryPipeline:
             for child in (child_a, child_b):
                 if remaining <= 0:
                     break
-                # Retry if invalid
+                # Retry if invalid; fall back to random if all retries fail
                 valid_child = child
                 for _ in range(_MAX_OFFSPRING_RETRIES):
                     if is_valid_chromosome(valid_child):
                         break
                     valid_child = mutate(child, cfg.mutation_rate)
+                else:
+                    if not is_valid_chromosome(valid_child):
+                        valid_child = _random_chromosome()
                 new_pop.append(valid_child)
                 remaining -= 1
 
@@ -287,6 +291,9 @@ class DiscoveryPipeline:
     def _check_convergence(self, generation_results: list[GenerationResult]) -> bool:
         """Check if best fitness has stagnated for convergence_generations.
 
+        Requires at least 2*n generations to avoid false convergence from
+        unusually good random initialization.
+
         Args:
             generation_results: All generation results so far.
 
@@ -294,7 +301,7 @@ class DiscoveryPipeline:
             True if no improvement for convergence_generations consecutive gens.
         """
         n = self.config.convergence_generations
-        if len(generation_results) <= n:
+        if len(generation_results) < 2 * n:
             return False
 
         recent = generation_results[-n:]

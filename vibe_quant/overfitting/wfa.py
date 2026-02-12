@@ -430,9 +430,10 @@ class WalkForwardAnalysis:
         aggregated_oos_return = sum_oos_return * inv_n
 
         # Efficiency: mean(OOS_return) / mean(IS_return)
+        # Zero IS return has no predictive value; return 0 efficiency
         mean_is_return = sum_is_return * inv_n
         if mean_is_return == 0:
-            efficiency = 0.0 if aggregated_oos_return == 0 else float("inf")
+            efficiency = 0.0
         else:
             efficiency = aggregated_oos_return / mean_is_return
 
