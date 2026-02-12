@@ -11,7 +11,6 @@ import sys
 def main() -> int:
     """CLI entry point for Ethereal data ingestion."""
     import argparse
-
     from datetime import UTC, datetime
 
     from vibe_quant.ethereal.archive import _safe_years_ago

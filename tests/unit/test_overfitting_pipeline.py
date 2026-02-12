@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.overfitting.pipeline import (

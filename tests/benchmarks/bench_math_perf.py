@@ -68,7 +68,6 @@ def pareto_front_numpy_loop(objectives_array):
 
 def pareto_front_numpy_full(objectives_array):
     """Fully vectorized NumPy (no Python loops)."""
-    n = len(objectives_array)
     diff = objectives_array[:, np.newaxis, :] - objectives_array[np.newaxis, :, :]
     all_ge = np.all(diff >= 0, axis=2)
     any_gt = np.any(diff > 0, axis=2)
@@ -287,7 +286,7 @@ def main():
     t_uncached = _time_it(lambda: [expected_max_sharpe_uncached(t) for t in trial_values], iterations=5000)
     # First call (cold cache)
     expected_max_sharpe_cached.cache_clear()
-    t_cold = _time_it(lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=1)
+    _time_it(lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=1)
     # Warm cache
     t_cached = _time_it(lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=5000)
     speedup_warm = t_uncached / t_cached if t_cached > 0 else float("inf")
@@ -320,7 +319,7 @@ def main():
     # Validate accuracy
     r1 = aggregate_multipass(data)
     r2 = aggregate_singlepass(data)
-    for a, b in zip(r1[:4], r2[:4]):
+    for a, b in zip(r1[:4], r2[:4], strict=True):
         assert abs(a - b) < 1e-10, f"Mismatch: {a} vs {b}"
     assert r1[4] == r2[4]
     print("  -> Accuracy verified: exact match")

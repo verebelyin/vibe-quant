@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.operators import (
     StrategyChromosome,
+    _random_chromosome,
     apply_elitism,
     crossover,
     initialize_population,
@@ -21,7 +22,6 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
-from vibe_quant.discovery.operators import _random_chromosome
 
 if TYPE_CHECKING:
     from collections.abc import Callable

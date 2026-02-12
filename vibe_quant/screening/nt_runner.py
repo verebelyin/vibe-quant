@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-if __name__ != "__main__":
+if TYPE_CHECKING:
     from vibe_quant.screening.pipeline import BacktestMetrics
 
 logger = logging.getLogger(__name__)

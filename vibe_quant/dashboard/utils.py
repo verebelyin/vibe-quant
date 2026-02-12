@@ -14,7 +14,6 @@ from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 
-
 # ---------------------------------------------------------------------------
 # Session-state singletons
 # ---------------------------------------------------------------------------

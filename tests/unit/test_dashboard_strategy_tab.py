@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 from vibe_quant.db.state_manager import StateManager
 

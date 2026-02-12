@@ -268,7 +268,7 @@ class TestDSRResult:
             num_trials=100,
             num_observations=252,
         )
-        with pytest.raises(Exception):  # FrozenInstanceError
+        with pytest.raises(AttributeError):  # FrozenInstanceError
             result.p_value = 0.5  # type: ignore[misc]
 
     def test_result_contains_inputs(self) -> None:

@@ -5,9 +5,12 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from vibe_quant.overfitting.__main__ import (
     cmd_report,

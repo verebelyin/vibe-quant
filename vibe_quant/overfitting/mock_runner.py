@@ -6,9 +6,12 @@ without requiring real NautilusTrader backtests.
 
 from __future__ import annotations
 
-from datetime import date
+from typing import TYPE_CHECKING
 
 from vibe_quant.overfitting.purged_kfold import FoldResult
+
+if TYPE_CHECKING:
+    from datetime import date
 
 
 class MockBacktestRunner:

@@ -432,10 +432,7 @@ class WalkForwardAnalysis:
         # Efficiency: mean(OOS_return) / mean(IS_return)
         # Zero IS return has no predictive value; return 0 efficiency
         mean_is_return = sum_is_return * inv_n
-        if mean_is_return == 0:
-            efficiency = 0.0
-        else:
-            efficiency = aggregated_oos_return / mean_is_return
+        efficiency = 0.0 if mean_is_return == 0 else aggregated_oos_return / mean_is_return
 
         avg_degradation = sum_degradation * inv_n
         consistency = profitable_count * inv_n

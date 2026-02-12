@@ -7,12 +7,12 @@ in a local SQLite database with WAL mode for concurrent access.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from datetime import datetime
 
 # Default archive path for Ethereal
 DEFAULT_ETHEREAL_ARCHIVE_PATH = Path("data/archive/ethereal_raw.db")

@@ -6,13 +6,11 @@ import csv
 import io
 import logging
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime  # noqa: TC003 - used at runtime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-
-logger = logging.getLogger(__name__)
 from nautilus_trader.model.data import Bar, BarSpecification, BarType
 from nautilus_trader.model.enums import BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol
@@ -30,6 +28,8 @@ from vibe_quant.ethereal.instruments import (
     create_ethereal_instrument,
     get_ethereal_symbols,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import sqlite3

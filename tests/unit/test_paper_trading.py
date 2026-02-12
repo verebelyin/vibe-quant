@@ -6,10 +6,13 @@ import json
 import os
 import sqlite3
 from decimal import Decimal
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
@@ -95,15 +98,17 @@ class TestBinanceTestnetConfig:
 
     def test_from_env_missing_key(self):
         """Raises error if API key missing."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ConfigurationError, match="BINANCE_API_KEY"):
-                BinanceTestnetConfig.from_env()
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(
+            ConfigurationError, match="BINANCE_API_KEY"
+        ):
+            BinanceTestnetConfig.from_env()
 
     def test_from_env_missing_secret(self):
         """Raises error if API secret missing."""
-        with patch.dict(os.environ, {"BINANCE_API_KEY": "key"}, clear=True):
-            with pytest.raises(ConfigurationError, match="BINANCE_API_SECRET"):
-                BinanceTestnetConfig.from_env()
+        with patch.dict(os.environ, {"BINANCE_API_KEY": "key"}, clear=True), pytest.raises(
+            ConfigurationError, match="BINANCE_API_SECRET"
+        ):
+            BinanceTestnetConfig.from_env()
 
     def test_from_env_success(self):
         """Creates config from env vars."""
