@@ -238,6 +238,13 @@ class NTScreeningRunner:
 
             return self._extract_metrics(params, bt_result, engine, start_time)
         finally:
+            # Reset engines before dispose to avoid
+            # InvalidStateTrigger('RUNNING -> DISPOSE')
+            import contextlib
+
+            for eng in node.get_engines():
+                with contextlib.suppress(Exception):
+                    eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
 
     def _extract_metrics(
