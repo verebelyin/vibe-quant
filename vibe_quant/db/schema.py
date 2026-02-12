@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS background_jobs (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_status ON backtest_runs(status);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_run ON backtest_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_trades_run ON trades(run_id);
 CREATE INDEX IF NOT EXISTS idx_sweep_results_run ON sweep_results(run_id);

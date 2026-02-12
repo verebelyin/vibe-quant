@@ -147,8 +147,8 @@ class StrategyChromosome:
 
     entry_genes: list[StrategyGene]
     exit_genes: list[StrategyGene]
-    stop_loss_pct: float
-    take_profit_pct: float
+    stop_loss_pct: float  # Percentage value (e.g. 2.0 = 2%)
+    take_profit_pct: float  # Percentage value (e.g. 5.0 = 5%)
     time_filters: dict[str, Any] = field(default_factory=dict)
     direction: str = "long"
     uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -180,6 +180,14 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
             params[pname] = r.randint(int(lo), int(hi))
         else:
             params[pname] = round(r.uniform(lo, hi), 4)
+
+    # Enforce MACD fast < slow
+    if ind_name == "MACD":
+        fast = params.get("fast_period", 12)
+        slow = params.get("slow_period", 26)
+        if fast >= slow:
+            params["fast_period"] = min(fast, slow)
+            params["slow_period"] = max(fast, slow) + 1
 
     condition = r.choice(list(VALID_CONDITIONS))
 
@@ -214,8 +222,8 @@ def generate_random_chromosome(
     entry_genes = [_random_gene(r) for _ in range(n_entry)]
     exit_genes = [_random_gene(r) for _ in range(n_exit)]
 
-    sl = round(r.uniform(0.01, 0.15), 4)
-    tp = round(r.uniform(0.01, 0.30), 4)
+    sl = round(r.uniform(0.5, 10.0), 4)  # Percentage (0.5% to 10%)
+    tp = round(r.uniform(0.5, 20.0), 4)  # Percentage (0.5% to 20%)
 
     direction = r.choice(list(VALID_DIRECTIONS))
 
@@ -289,14 +297,23 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
                 if pname not in ind_def.param_ranges:
                     errors.append(f"{prefix}: unexpected param '{pname}'")
 
-    # SL/TP ranges
-    if not (0.01 <= chrom.stop_loss_pct <= 0.15):
+            # MACD: fast_period must be < slow_period
+            if gene.indicator_type == "MACD":
+                fast = gene.parameters.get("fast_period", 12)
+                slow = gene.parameters.get("slow_period", 26)
+                if fast >= slow:
+                    errors.append(
+                        f"{prefix}: MACD fast_period ({fast}) must be < slow_period ({slow})"
+                    )
+
+    # SL/TP ranges (percentage values, e.g. 2.0 = 2%)
+    if not (0.5 <= chrom.stop_loss_pct <= 10.0):
         errors.append(
-            f"stop_loss_pct={chrom.stop_loss_pct} out of range [0.01, 0.15]"
+            f"stop_loss_pct={chrom.stop_loss_pct} out of range [0.5, 10.0]"
         )
-    if not (0.01 <= chrom.take_profit_pct <= 0.30):
+    if not (0.5 <= chrom.take_profit_pct <= 20.0):
         errors.append(
-            f"take_profit_pct={chrom.take_profit_pct} out of range [0.01, 0.30]"
+            f"take_profit_pct={chrom.take_profit_pct} out of range [0.5, 20.0]"
         )
 
     # Direction
@@ -325,6 +342,7 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, Any]:
         cfg["slow_period"] = int(gene.parameters.get("slow_period", 26))
         cfg["signal_period"] = int(gene.parameters.get("signal_period", 9))
     elif gene.indicator_type == "STOCH":
+        # DSL schema only supports 'period'; map k_period to it
         cfg["period"] = int(gene.parameters.get("k_period", 14))
     elif gene.indicator_type == "BBANDS":
         cfg["period"] = int(gene.parameters.get("period", 20))
@@ -401,9 +419,9 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
     if exit_short:
         exit_conditions["short"] = exit_short
 
-    # Stop loss / take profit as fixed_pct
-    sl_pct = round(chrom.stop_loss_pct * 100, 2)
-    tp_pct = round(chrom.take_profit_pct * 100, 2)
+    # Stop loss / take profit as fixed_pct (already in percentage)
+    sl_pct = round(chrom.stop_loss_pct, 2)
+    tp_pct = round(chrom.take_profit_pct, 2)
 
     dsl: dict[str, Any] = {
         "name": f"genome_{chrom.uid}",

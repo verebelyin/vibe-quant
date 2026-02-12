@@ -62,8 +62,8 @@ class TestStrategyChromosome:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
         )
         assert len(chrom.entry_genes) == 1
         assert len(chrom.exit_genes) == 1
@@ -75,8 +75,8 @@ class TestStrategyChromosome:
             StrategyChromosome(
                 entry_genes=[StrategyGene("RSI", {"period": 14}, "less_than", 30.0)],
                 exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
-                stop_loss_pct=0.02,
-                take_profit_pct=0.04,
+                stop_loss_pct=2.0,
+                take_profit_pct=4.0,
             ).uid
             for _ in range(100)
         }
@@ -94,8 +94,8 @@ class TestRandomGeneration:
         chrom = generate_random_chromosome(rng)
         assert 1 <= len(chrom.entry_genes) <= 5
         assert 1 <= len(chrom.exit_genes) <= 3
-        assert 0.01 <= chrom.stop_loss_pct <= 0.15
-        assert 0.01 <= chrom.take_profit_pct <= 0.30
+        assert 0.5 <= chrom.stop_loss_pct <= 10.0
+        assert 0.5 <= chrom.take_profit_pct <= 20.0
         assert chrom.direction in VALID_DIRECTIONS
 
     def test_1000_samples_all_valid(self) -> None:
@@ -142,8 +142,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene()],
             exit_genes=[self._make_gene(cond="greater_than", thr=70.0)],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         assert validate_chromosome(chrom) == []
 
@@ -151,8 +151,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("entry" in e.lower() for e in errors)
@@ -161,8 +161,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene()],
             exit_genes=[],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("exit" in e.lower() for e in errors)
@@ -171,8 +171,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene() for _ in range(6)],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("5" in e and "entry" in e.lower() for e in errors)
@@ -182,8 +182,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("unknown" in e.lower() for e in errors)
@@ -193,8 +193,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("out of range" in e for e in errors)
@@ -204,8 +204,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("missing" in e.lower() for e in errors)
@@ -215,8 +215,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("condition" in e.lower() for e in errors)
@@ -225,8 +225,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene()],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.50,
-            take_profit_pct=0.10,
+            stop_loss_pct=15.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("stop_loss" in e for e in errors)
@@ -235,8 +235,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene()],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.50,
+            stop_loss_pct=5.0,
+            take_profit_pct=25.0,
         )
         errors = validate_chromosome(chrom)
         assert any("take_profit" in e for e in errors)
@@ -245,8 +245,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[self._make_gene()],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
             direction="sideways",
         )
         errors = validate_chromosome(chrom)
@@ -257,8 +257,8 @@ class TestValidation:
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[self._make_gene()],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         errors = validate_chromosome(chrom)
         assert any("unexpected" in e.lower() for e in errors)
@@ -276,8 +276,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g_entry],
             exit_genes=[g_exit],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
             direction="long",
         )
         dsl_dict = chromosome_to_dsl(chrom)
@@ -291,8 +291,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
             direction="both",
         )
         dsl_dict = chromosome_to_dsl(chrom)
@@ -305,8 +305,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
             direction="short",
         )
         dsl_dict = chromosome_to_dsl(chrom)
@@ -324,8 +324,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
         )
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)
@@ -338,8 +338,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
         )
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)
@@ -352,8 +352,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.02,
-            take_profit_pct=0.04,
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
         )
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)
@@ -364,8 +364,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
-            stop_loss_pct=0.05,
-            take_profit_pct=0.10,
+            stop_loss_pct=5.0,
+            take_profit_pct=10.0,
         )
         dsl_dict = chromosome_to_dsl(chrom)
         assert dsl_dict["stop_loss"]["percent"] == 5.0
@@ -389,8 +389,8 @@ class TestDSLConversion:
         chrom = StrategyChromosome(
             entry_genes=genes,
             exit_genes=[genes[0]],
-            stop_loss_pct=0.03,
-            take_profit_pct=0.06,
+            stop_loss_pct=3.0,
+            take_profit_pct=6.0,
         )
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)

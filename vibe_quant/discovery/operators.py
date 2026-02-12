@@ -28,7 +28,7 @@ INDICATOR_POOL: dict[str, dict[str, tuple[float, float]]] = {
     "DEMA": {"period": (5, 200)},
     "TEMA": {"period": (5, 200)},
     "MACD": {"fast_period": (5, 30), "slow_period": (15, 60), "signal_period": (3, 20)},
-    "STOCH": {"period_k": (5, 30), "period_d": (2, 10)},
+    "STOCH": {"k_period": (5, 30), "d_period": (2, 10)},
     "CCI": {"period": (10, 50)},
     "WILLR": {"period": (5, 30)},
     "ROC": {"period": (5, 30)},
@@ -154,7 +154,19 @@ def _random_params(indicator_type: str) -> dict[str, float]:
             params[name] = round(random.uniform(lo, hi), 4)
         else:
             params[name] = float(random.randint(int(lo), int(hi)))
+    _enforce_param_constraints(indicator_type, params)
     return params
+
+
+def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) -> None:
+    """Enforce cross-parameter constraints (e.g. MACD fast < slow)."""
+    if indicator_type == "MACD":
+        fast = params.get("fast_period", 12)
+        slow = params.get("slow_period", 26)
+        if fast >= slow:
+            # Swap so fast < slow, with minimum gap of 1
+            params["fast_period"] = min(fast, slow)
+            params["slow_period"] = max(fast, slow) + 1
 
 
 def _random_gene() -> StrategyGene:
@@ -212,6 +224,11 @@ def is_valid_chromosome(chrom: Chromosome) -> bool:
     for gene in chrom.entry_genes + chrom.exit_genes:
         if gene.indicator_type not in INDICATOR_POOL:
             return False
+        if gene.indicator_type == "MACD":
+            fast = gene.parameters.get("fast_period", 12)
+            slow = gene.parameters.get("slow_period", 26)
+            if fast >= slow:
+                return False
     return True
 
 
@@ -390,6 +407,7 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
                 gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
             else:
                 gene.parameters[pname] = _perturb(val, 0.2)
+        _enforce_param_constraints(gene.indicator_type, gene.parameters)
 
     elif mutation_type == 2:
         # Flip condition

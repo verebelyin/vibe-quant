@@ -7,9 +7,10 @@ Uses EIP-712 typed data signatures for non-custodial order submission.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING
@@ -248,7 +249,9 @@ EIP712_ORDER_TYPES: dict[str, list[dict[str, str]]] = {
 
 def generate_nonce() -> int:
     """Generate unique nonce using timestamp + random bits."""
-    return int(time.time() * 1000)
+    ts = time.time_ns() // 1_000_000  # ms precision
+    random_bits = int.from_bytes(secrets.token_bytes(4))
+    return (ts << 32) | random_bits
 
 
 def sign_order(
@@ -568,7 +571,7 @@ class EtherealExecutionClient:
                         quantity=Decimal(str(f["quantity"])),
                         price=Decimal(str(f["price"])),
                         fee=Decimal(str(f.get("fee", "0"))),
-                        timestamp=datetime.fromtimestamp(int(f["timestamp"]) / 1000),
+                        timestamp=datetime.fromtimestamp(int(f["timestamp"]) / 1000, tz=UTC),
                     )
                 )
             return fills

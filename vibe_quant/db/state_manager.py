@@ -16,6 +16,39 @@ if TYPE_CHECKING:
 # Type alias for JSON-like dict structures from database
 JsonDict = dict[str, Any]
 
+# Column whitelists per table (must match schema.py definitions)
+_BACKTEST_RESULTS_COLUMNS: frozenset[str] = frozenset({
+    "run_id", "total_return", "cagr", "sharpe_ratio", "sortino_ratio",
+    "calmar_ratio", "max_drawdown", "max_drawdown_duration_days",
+    "volatility_annual", "total_trades", "winning_trades", "losing_trades",
+    "win_rate", "profit_factor", "avg_win", "avg_loss", "largest_win",
+    "largest_loss", "avg_trade_duration_hours", "max_consecutive_wins",
+    "max_consecutive_losses", "total_fees", "total_funding", "total_slippage",
+    "deflated_sharpe", "walk_forward_efficiency", "purged_kfold_mean_sharpe",
+    "execution_time_seconds", "starting_balance", "notes",
+})
+
+_TRADES_COLUMNS: frozenset[str] = frozenset({
+    "run_id", "symbol", "direction", "leverage", "entry_time", "exit_time",
+    "entry_price", "exit_price", "quantity", "entry_fee", "exit_fee",
+    "funding_fees", "slippage_cost", "gross_pnl", "net_pnl", "roi_percent",
+    "exit_reason",
+})
+
+_SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset({
+    "run_id", "parameters", "sharpe_ratio", "sortino_ratio", "max_drawdown",
+    "total_return", "profit_factor", "win_rate", "total_trades", "total_fees",
+    "total_funding", "is_pareto_optimal", "passed_deflated_sharpe",
+    "passed_walk_forward", "passed_purged_kfold",
+})
+
+
+def _validate_columns(columns: list[str], allowed: frozenset[str], table: str) -> None:
+    """Validate column names against whitelist. Raises ValueError on unknown columns."""
+    bad = set(columns) - allowed
+    if bad:
+        raise ValueError(f"Unknown columns for {table}: {sorted(bad)}")
+
 
 class StateManager:
     """Manager for vibe-quant SQLite state database.
@@ -408,6 +441,7 @@ class StateManager:
             ID of created result.
         """
         columns = ["run_id"] + list(metrics.keys())
+        _validate_columns(columns, _BACKTEST_RESULTS_COLUMNS, "backtest_results")
         placeholders = ", ".join(["?"] * len(columns))
         values = [run_id] + list(metrics.values())
 
@@ -453,6 +487,7 @@ class StateManager:
         """
         trade_data = {"run_id": run_id, **trade}
         columns = list(trade_data.keys())
+        _validate_columns(columns, _TRADES_COLUMNS, "trades")
         placeholders = ", ".join(["?"] * len(columns))
 
         cursor = self.conn.execute(
@@ -474,6 +509,7 @@ class StateManager:
 
         # Get columns from first trade
         columns = ["run_id"] + list(trades[0].keys())
+        _validate_columns(columns, _TRADES_COLUMNS, "trades")
         placeholders = ", ".join(["?"] * len(columns))
 
         self.conn.executemany(
@@ -506,6 +542,7 @@ class StateManager:
             result_data["parameters"] = json.dumps(result_data["parameters"])
 
         columns = list(result_data.keys())
+        _validate_columns(columns, _SWEEP_RESULTS_COLUMNS, "sweep_results")
         placeholders = ", ".join(["?"] * len(columns))
 
         cursor = self.conn.execute(
@@ -528,6 +565,7 @@ class StateManager:
             processed.append(result_data)
 
         columns = list(processed[0].keys())
+        _validate_columns(columns, _SWEEP_RESULTS_COLUMNS, "sweep_results")
         placeholders = ", ".join(["?"] * len(columns))
 
         self.conn.executemany(

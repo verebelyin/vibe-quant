@@ -18,7 +18,8 @@ import plotly.graph_objects as go
 import streamlit as st
 import yaml
 
-from vibe_quant.dashboard.utils import get_job_manager
+from vibe_quant.dashboard.utils import get_job_manager, get_state_manager
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.discovery.genome import INDICATOR_POOL
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
@@ -26,7 +27,7 @@ from vibe_quant.discovery.pipeline import (
     GenerationResult,
 )
 from vibe_quant.dsl.schema import VALID_TIMEFRAMES
-from vibe_quant.jobs.manager import JobStatus
+from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
     from vibe_quant.discovery.fitness import FitnessResult
@@ -322,11 +323,38 @@ def _render_start_button(
         log_dir.mkdir(exist_ok=True)
         log_file = str(log_dir / "discovery_latest.log")
 
-        # Use run_id=0 as placeholder for discovery (not tied to backtest_runs)
-        # In practice, create a special entry or use a discovery_runs table
+        # Create a real backtest_run entry for FK integrity
         try:
+            sm = get_state_manager()
+            # Create a placeholder strategy for discovery if needed
+            disc_strategy = sm.get_strategy_by_name("__discovery__")
+            if disc_strategy is None:
+                strategy_id = sm.create_strategy(
+                    name="__discovery__",
+                    dsl_config={"type": "discovery"},
+                    description="Auto-created for discovery job tracking",
+                    strategy_type="discovery",
+                )
+            else:
+                strategy_id = disc_strategy["id"]
+
+            run_id = sm.create_backtest_run(
+                strategy_id=strategy_id,
+                run_mode="discovery",
+                symbols=config.symbols,
+                timeframe=config.timeframe,
+                start_date=config.start_date,
+                end_date=config.end_date,
+                parameters={
+                    "population_size": config.population_size,
+                    "max_generations": config.max_generations,
+                    "mutation_rate": config.mutation_rate,
+                    "elite_count": config.elite_count,
+                },
+            )
+
             pid = job_manager.start_job(
-                run_id=0,
+                run_id=run_id,
                 job_type="discovery",
                 command=command,
                 log_file=log_file,
