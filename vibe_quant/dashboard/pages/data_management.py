@@ -464,7 +464,7 @@ def render_data_browser() -> None:
         "Timeframe", INTERVALS, default="1h", key="browser_interval",
     )
 
-    if not symbol or not browse_start or not browse_end:
+    if not symbol or not browse_start or not browse_end or not interval:
         return
 
     # Load data from catalog

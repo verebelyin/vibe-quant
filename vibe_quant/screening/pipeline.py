@@ -353,4 +353,4 @@ def _dsl_to_dict(dsl: StrategyDSL) -> dict[str, Any]:
             return {k: _to_dict(v) for k, v in obj.items()}
         return obj
 
-    return _to_dict(dsl)
+    return dict(_to_dict(dsl))  # type: ignore[arg-type]

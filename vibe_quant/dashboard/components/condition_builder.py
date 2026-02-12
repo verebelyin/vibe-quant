@@ -10,6 +10,8 @@ Replaces free-text condition editing with a row-based builder:
 
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
 # Operators supported by the DSL condition parser
@@ -125,7 +127,7 @@ def _render_visual_mode(
 
 
 def _render_condition_row(
-    row: dict,
+    row: dict[str, Any],
     idx: int,
     all_operands: list[str],
     key_prefix: str,
@@ -269,7 +271,7 @@ def _format_num(val: float) -> str:
     return str(val)
 
 
-def _parse_condition_to_row(condition: str) -> dict:
+def _parse_condition_to_row(condition: str) -> dict[str, Any]:
     """Parse a condition string into a row dict for the visual builder."""
     condition = condition.strip().strip('"').strip("'")
     parts = condition.split()
@@ -313,7 +315,7 @@ def _parse_condition_to_row(condition: str) -> dict:
     }
 
 
-def _empty_row() -> dict:
+def _empty_row() -> dict[str, Any]:
     """Return an empty condition row."""
     return {
         "left": "",

@@ -231,7 +231,7 @@ class ValidationRunner:
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
             balance = 100_000
         return create_venue_config_for_validation(
-            starting_balance_usdt=float(balance),
+            starting_balance_usdt=int(balance),
             latency_preset=latency_preset or LatencyPreset.RETAIL,
         )
 
@@ -417,7 +417,7 @@ class ValidationRunner:
 
             return result
         finally:
-            node.dispose()
+            node.dispose()  # type: ignore[no-untyped-call]
 
     def _register_statistics(self, node: object) -> None:
         """Register portfolio statistics on the engine's analyzer.
@@ -453,7 +453,7 @@ class ValidationRunner:
             AvgLoser(),
         ]
 
-        for engine in node.get_engines():
+        for engine in node.get_engines():  # type: ignore[attr-defined]
             analyzer = engine.kernel.portfolio.analyzer
             for stat in stats:
                 analyzer.register_statistic(stat)
@@ -496,7 +496,7 @@ class ValidationRunner:
         """
         symbols_raw = run_config.get("symbols", ["BTCUSDT"])
         if isinstance(symbols_raw, str):
-            return json.loads(symbols_raw)
+            return list(json.loads(symbols_raw))
         elif isinstance(symbols_raw, list):
             return [str(s) for s in symbols_raw]
         return ["BTCUSDT"]

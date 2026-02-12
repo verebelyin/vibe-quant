@@ -54,6 +54,7 @@ def download_monthly_klines(
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=timeout)
+    assert client is not None  # narrowing for mypy
     try:
         response = client.get(url)
         if response.status_code == 404:

@@ -161,7 +161,7 @@ class EtherealArchive:
             "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND timeframe = ?",
             (symbol, timeframe),
         ).fetchone()[0]
-        return after - before
+        return int(after - before)
 
     def insert_funding_rates(
         self,
@@ -200,7 +200,7 @@ class EtherealArchive:
             "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
             (symbol,),
         ).fetchone()[0]
-        return after - before
+        return int(after - before)
 
     def get_klines(
         self,

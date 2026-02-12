@@ -14,10 +14,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from vibe_quant.overfitting.pipeline import (
-    FilterConfig,
-    OverfittingPipeline,
-)
+from vibe_quant.overfitting.pipeline import OverfittingPipeline
+from vibe_quant.overfitting.types import FilterConfig
 
 
 def parse_filters(filters_str: str) -> FilterConfig:

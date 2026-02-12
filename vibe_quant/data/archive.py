@@ -160,7 +160,7 @@ class RawDataArchive:
             "SELECT COUNT(*) FROM raw_klines WHERE symbol = ? AND interval = ?",
             (symbol, interval),
         ).fetchone()[0]
-        return after - before
+        return int(after - before)
 
     def insert_funding_rates(
         self,
@@ -199,7 +199,7 @@ class RawDataArchive:
             "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
             (symbol,),
         ).fetchone()[0]
-        return after - before
+        return int(after - before)
 
     def get_klines(
         self,

@@ -84,7 +84,7 @@ def sync_form_state(dsl: dict[str, Any]) -> None:
     st.session_state["sweep_sweep_params"] = dsl.get("sweep", {})
     # Clear any condition builder visual row caches so they reinitialize
     for key in list(st.session_state.keys()):
-        if key.startswith("cond_") and key.endswith("_rows"):
+        if isinstance(key, str) and key.startswith("cond_") and key.endswith("_rows"):
             del st.session_state[key]
 
 
@@ -92,7 +92,7 @@ def cleanup_form_state() -> None:
     """Remove form-specific session state keys."""
     prefixes = ("form_", "cond_", "sweep_", "show_indicator_catalog", "template_applied")
     for key in list(st.session_state.keys()):
-        if any(key.startswith(p) for p in prefixes):
+        if isinstance(key, str) and any(key.startswith(p) for p in prefixes):
             del st.session_state[key]
 
 

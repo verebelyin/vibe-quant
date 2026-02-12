@@ -10,7 +10,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from vibe_quant.screening.pipeline import BacktestMetrics
+    from vibe_quant.screening.types import BacktestMetrics, MetricFilters
 
 
 def build_parameter_grid(
@@ -44,7 +44,7 @@ def build_parameter_grid(
 
 def filter_by_metrics(
     results: list[BacktestMetrics],
-    filters: object,
+    filters: MetricFilters,
 ) -> list[BacktestMetrics]:
     """Apply hard metric filters to screening results.
 

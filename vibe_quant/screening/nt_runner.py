@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from vibe_quant.screening.pipeline import BacktestMetrics
+    from vibe_quant.screening.types import BacktestMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class NTScreeningRunner:
         Returns:
             BacktestMetrics from the backtest run.
         """
-        from vibe_quant.screening.pipeline import BacktestMetrics
+        from vibe_quant.screening.types import BacktestMetrics
 
         start_time = time.time()
         try:
@@ -148,7 +148,7 @@ class NTScreeningRunner:
         from vibe_quant.data.catalog import (
             INTERVAL_TO_AGGREGATION,
         )
-        from vibe_quant.screening.pipeline import BacktestMetrics
+        from vibe_quant.screening.types import BacktestMetrics
         from vibe_quant.validation.venue import (
             create_backtest_venue_config,
             create_venue_config_for_screening,
@@ -235,11 +235,17 @@ class NTScreeningRunner:
             node.run()
 
             engine = node.get_engine(bt_run_config.id)
+            if engine is None:
+                return BacktestMetrics(
+                    parameters=params,
+                    sharpe_ratio=float("-inf"),
+                    execution_time_seconds=time.time() - start_time,
+                )
             bt_result = engine.get_result()
 
             return self._extract_metrics(params, bt_result, engine, start_time)
         finally:
-            node.dispose()
+            node.dispose()  # type: ignore[no-untyped-call]
 
     def _extract_metrics(
         self,
@@ -249,7 +255,7 @@ class NTScreeningRunner:
         start_time: float,
     ) -> BacktestMetrics:
         """Extract BacktestMetrics from NT BacktestResult."""
-        from vibe_quant.screening.pipeline import BacktestMetrics
+        from vibe_quant.screening.types import BacktestMetrics
 
         metrics = BacktestMetrics(
             parameters=params,

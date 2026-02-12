@@ -1,5 +1,6 @@
 """Ethereal DEX integration for perpetual futures trading."""
 
+from vibe_quant.ethereal.archive import EtherealArchive
 from vibe_quant.ethereal.data_client import (
     ETHEREAL_MAINNET_WS,
     ETHEREAL_TESTNET_WS,
@@ -34,7 +35,6 @@ from vibe_quant.ethereal.execution_client import (
 from vibe_quant.ethereal.ingestion import (
     ETHEREAL_ARCHIVE_BASE,
     ETHEREAL_TIMEFRAMES,
-    EtherealArchive,
     archive_to_catalog,
     download_bars,
     download_funding_rates,

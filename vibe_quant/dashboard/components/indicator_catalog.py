@@ -97,13 +97,13 @@ def render_indicator_selector(
     if not selected_type:
         return None
 
-    meta = INDICATOR_CATALOG.get(selected_type)
-    if not meta:
+    selected_meta = INDICATOR_CATALOG.get(selected_type)
+    if selected_meta is None:
         return None
 
     st.divider()
-    st.markdown(f"#### Configure {meta.display_name}")
-    st.caption(meta.use_case)
+    st.markdown(f"#### Configure {selected_meta.display_name}")
+    st.caption(selected_meta.use_case)
 
     # Name input with auto-suggestion
     suggested = suggest_indicator_name(selected_type, existing_indicator_names)
@@ -117,7 +117,7 @@ def render_indicator_selector(
     # Source selector (if applicable)
     config: dict[str, Any] = {"type": selected_type}
 
-    if meta.source_required:
+    if selected_meta.source_required:
         source = st.selectbox(
             "Price source",
             options=sorted(VALID_SOURCES),
@@ -127,7 +127,7 @@ def render_indicator_selector(
         config["source"] = source
 
     # Dynamic parameter fields based on indicator type
-    for param in meta.params:
+    for param in selected_meta.params:
         config[param.name] = _render_param_input(param, key_prefix)
 
     # Optional timeframe override

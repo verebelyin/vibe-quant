@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -31,7 +32,7 @@ class TemplateMeta:
         """Load the template YAML content as a string."""
         return self.path.read_text()
 
-    def load_dict(self) -> dict:
+    def load_dict(self) -> dict[str, Any]:
         """Load the template as a parsed dict.
 
         Raises:

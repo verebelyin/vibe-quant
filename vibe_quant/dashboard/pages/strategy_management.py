@@ -52,7 +52,7 @@ _validate_dsl_dict = validate_dsl_dict
 
 def _get_default_dsl_yaml() -> str:
     """Return default DSL YAML template."""
-    return yaml.dump({
+    return str(yaml.dump({
         "name": "my_strategy",
         "description": "A simple RSI-based strategy",
         "version": 1,
@@ -72,7 +72,7 @@ def _get_default_dsl_yaml() -> str:
         "take_profit": {"type": "risk_reward", "risk_reward_ratio": 2.0},
         "position_management": {"scale_in": {"enabled": False}, "partial_exit": {"enabled": False}},
         "sweep": {},
-    }, default_flow_style=False, sort_keys=False)
+    }, default_flow_style=False, sort_keys=False))
 
 
 def _save_strategy(
