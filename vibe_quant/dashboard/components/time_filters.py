@@ -61,15 +61,15 @@ def render_time_filters_section(dsl: dict[str, Any]) -> None:
         st.caption("**Presets:**")
         dc1, dc2, dc3 = st.columns(3)
         with dc1:
-            if st.button("Weekdays only", key="tf_preset_weekdays", use_container_width=True):
+            if st.button("Weekdays only", key="tf_preset_weekdays", width="stretch"):
                 st.session_state["form_blocked_days"] = ["Saturday", "Sunday"]
                 st.rerun()
         with dc2:
-            if st.button("All days", key="tf_preset_alldays", use_container_width=True):
+            if st.button("All days", key="tf_preset_alldays", width="stretch"):
                 st.session_state["form_blocked_days"] = []
                 st.rerun()
         with dc3:
-            if st.button("Low vol days", key="tf_preset_lowvol", use_container_width=True):
+            if st.button("Low vol days", key="tf_preset_lowvol", width="stretch"):
                 st.session_state["form_blocked_days"] = ["Saturday", "Sunday", "Monday"]
                 st.rerun()
 
@@ -121,7 +121,7 @@ def _render_weekly_schedule(time_filters: dict[str, Any]) -> None:
             if st.button(
                 name.split("(")[0].strip(),
                 key=f"session_preset_{i}",
-                use_container_width=True,
+                width="stretch",
                 help=name,
             ):
                 st.session_state["form_sessions"] = [dict(s) for s in SESSION_PRESETS[name]]

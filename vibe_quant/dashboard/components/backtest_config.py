@@ -113,7 +113,7 @@ def render_date_range_selector() -> tuple[str, str]:
     presets = [("30 days", 30), ("90 days", 90), ("6 months", 180), ("1 year", 365), ("Full history", None)]
     for col, (label, days) in zip(preset_cols, presets, strict=False):
         with col:
-            if st.button(label, key=f"date_preset_{label}", use_container_width=True):
+            if st.button(label, key=f"date_preset_{label}", width="stretch"):
                 if days is not None:
                     st.session_state["start_date"] = default_end - timedelta(days=days)
                 else:

@@ -52,24 +52,24 @@ def render_strategy_card(manager: StateManager, strategy: dict[str, Any]) -> Non
         with col_actions:
             c1, c2, c3 = st.columns(3)
             with c1:
-                if st.button("Edit", key=f"edit_{strategy['id']}", use_container_width=True):
+                if st.button("Edit", key=f"edit_{strategy['id']}", width="stretch"):
                     st.session_state.editing_strategy_id = strategy["id"]
                     st.session_state.show_editor = True
                     st.rerun()
             with c2:
                 if is_active:
                     if st.button("Deactivate", key=f"deact_{strategy['id']}",
-                                 use_container_width=True):
+                                 width="stretch"):
                         manager.update_strategy(strategy["id"], is_active=False)
                         st.rerun()
                 else:
                     if st.button("Activate", key=f"act_{strategy['id']}",
-                                 use_container_width=True):
+                                 width="stretch"):
                         manager.update_strategy(strategy["id"], is_active=True)
                         st.rerun()
             with c3:
                 if st.button("Delete", key=f"del_{strategy['id']}",
-                             use_container_width=True):
+                             width="stretch"):
                     st.session_state.confirm_delete_id = strategy["id"]
                     st.session_state.confirm_delete_name = strategy["name"]
                     st.rerun()

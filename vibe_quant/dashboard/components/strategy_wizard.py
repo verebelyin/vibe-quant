@@ -66,10 +66,10 @@ def _render_nav_buttons(current_step: int) -> tuple[bool, bool]:
 
     with c1:
         if current_step > 0:
-            go_back = st.button("Back", use_container_width=True)
+            go_back = st.button("Back", width="stretch")
     with c3:
         if current_step < len(WIZARD_STEPS) - 1:
-            go_next = st.button("Next", type="primary", use_container_width=True)
+            go_next = st.button("Next", type="primary", width="stretch")
 
     return go_back, go_next
 
@@ -112,7 +112,7 @@ def _step_template() -> None:
             st.rerun()
 
     st.divider()
-    if st.button("Start from scratch", use_container_width=False):
+    if st.button("Start from scratch", width="content"):
         dsl = _get_default_wizard_dsl()
         st.session_state["wizard_dsl"] = dsl
         init_form_state(dsl)
@@ -312,7 +312,7 @@ def _step_review(manager: Any) -> bool:
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
-        if (st.button("Save Strategy", type="primary", use_container_width=True, disabled=model is None)
+        if (st.button("Save Strategy", type="primary", width="stretch", disabled=model is None)
                 and model):
             dumped = model.model_dump()
             manager.create_strategy(name=model.name, dsl_config=dumped, description=model.description)
@@ -325,7 +325,7 @@ def _step_review(manager: Any) -> bool:
             st.session_state.show_editor = False
             return True
     with c2:
-        if st.button("Edit in Full Editor", use_container_width=True):
+        if st.button("Edit in Full Editor", width="stretch"):
             yaml_key = "yaml_content_new"
             st.session_state[yaml_key] = yaml.dump(new_dsl, default_flow_style=False, sort_keys=False)
             st.session_state["template_applied"] = True

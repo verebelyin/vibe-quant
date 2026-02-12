@@ -417,7 +417,7 @@ def _render_fitness_chart(generations: list[GenerationResult]) -> None:
         height=400,
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def _render_results_section(result: DiscoveryResult) -> None:
@@ -442,7 +442,7 @@ def _render_results_section(result: DiscoveryResult) -> None:
         st.warning("No strategies discovered")
         return
 
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
     # Expandable detail per strategy
     for i, (chrom, fr) in enumerate(result.top_strategies):

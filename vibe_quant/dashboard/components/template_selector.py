@@ -82,7 +82,7 @@ def _render_template_card(tmpl: TemplateMeta, key: str) -> str | None:
             st.caption(f"**Markets:** {tmpl.market_conditions[:60]}")
             st.caption(f"**Instruments:** {tmpl.instruments}")
         with btn_col:
-            if st.button("Use", key=f"{key}_use", type="primary", use_container_width=True):
+            if st.button("Use", key=f"{key}_use", type="primary", width="stretch"):
                 try:
                     return tmpl.load_yaml()
                 except FileNotFoundError:

@@ -184,16 +184,16 @@ def render_risk_section(dsl: dict[str, Any]) -> None:
     pc1, pc2, pc3 = st.columns(3)
     with pc1:
         if st.button("Conservative", key="risk_preset_conservative",
-                      help="1% SL, 2:1 R:R", use_container_width=True):
+                      help="1% SL, 2:1 R:R", width="stretch"):
             _apply_risk_preset("fixed_pct", 1.0, "risk_reward", 2.0)
             st.rerun()
     with pc2:
         if st.button("Moderate", key="risk_preset_moderate",
-                      help="2% SL, 1.5:1 R:R", use_container_width=True):
+                      help="2% SL, 1.5:1 R:R", width="stretch"):
             _apply_risk_preset("fixed_pct", 2.0, "risk_reward", 1.5)
             st.rerun()
     with pc3:
         if st.button("Aggressive", key="risk_preset_aggressive",
-                      help="3% SL, 1:1 R:R", use_container_width=True):
+                      help="3% SL, 1:1 R:R", width="stretch"):
             _apply_risk_preset("fixed_pct", 3.0, "risk_reward", 1.0)
             st.rerun()

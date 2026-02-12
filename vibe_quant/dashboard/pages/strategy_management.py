@@ -183,7 +183,7 @@ def render_strategy_editor(
         st.divider()
         col_blank, _ = st.columns([1, 3])
         with col_blank:
-            if st.button("Start from scratch", use_container_width=True):
+            if st.button("Start from scratch", width="stretch"):
                 st.session_state["template_applied"] = True
                 st.rerun()
         return
@@ -264,7 +264,7 @@ def _render_yaml_editor(
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Save", type="primary", use_container_width=True):
+        if st.button("Save", type="primary", width="stretch"):
             model, error = validate_dsl_yaml(yaml_content)
             if error:
                 st.error(f"Validation failed:\n{error}")
@@ -272,7 +272,7 @@ def _render_yaml_editor(
                 st.session_state.pop("template_applied", None)
                 st.rerun()
     with c2:
-        if st.button("Copy to Visual Editor", use_container_width=True):
+        if st.button("Copy to Visual Editor", width="stretch"):
             st.session_state[yaml_key] = yaml_content
             try:
                 dsl = yaml.safe_load(yaml_content)
@@ -283,7 +283,7 @@ def _render_yaml_editor(
             st.session_state["editor_mode"] = "Visual"
             st.rerun()
     with c3:
-        if st.button("Reset", use_container_width=True):
+        if st.button("Reset", width="stretch"):
             if existing:
                 st.session_state[yaml_key] = yaml.dump(
                     existing["dsl_config"], default_flow_style=False, sort_keys=False,
@@ -367,7 +367,7 @@ def _render_split_editor(
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Save", type="primary", use_container_width=True):
+        if st.button("Save", type="primary", width="stretch"):
             model, error = validate_dsl_yaml(yaml_content)
             if error:
                 st.error(f"Validation failed:\n{error}")
@@ -375,11 +375,11 @@ def _render_split_editor(
                 st.session_state.pop("template_applied", None)
                 st.rerun()
     with c2:
-        if st.button("Sync to YAML", use_container_width=True):
+        if st.button("Sync to YAML", width="stretch"):
             st.session_state[yaml_key] = yaml_content
             st.rerun()
     with c3:
-        if st.button("Reset", use_container_width=True):
+        if st.button("Reset", width="stretch"):
             if existing:
                 st.session_state[yaml_key] = yaml.dump(
                     existing["dsl_config"], default_flow_style=False, sort_keys=False,
@@ -543,19 +543,19 @@ def _render_save_section(
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1:
-        if (st.button("Save Strategy", type="primary", use_container_width=True,
+        if (st.button("Save Strategy", type="primary", width="stretch",
                        disabled=model is None)
                 and model and _save_strategy(manager, model.model_dump(), existing)):
             cleanup_form_state()
             st.rerun()
     with c2:
-        if st.button("View as YAML", use_container_width=True):
+        if st.button("View as YAML", width="stretch"):
             st.session_state[yaml_key] = yaml.dump(new_dsl, default_flow_style=False, sort_keys=False)
             st.session_state["editor_mode"] = "YAML"
             cleanup_form_state()
             st.rerun()
     with c3:
-        if st.button("Reset", use_container_width=True):
+        if st.button("Reset", width="stretch"):
             cleanup_form_state()
             st.rerun()
 
@@ -599,13 +599,13 @@ def render_strategy_management_tab(db_path: Path | None = None) -> None:
     with c2:
         show_inactive = st.checkbox("Show inactive")
     with c3:
-        if st.button("New Strategy", type="primary", use_container_width=True):
+        if st.button("New Strategy", type="primary", width="stretch"):
             st.session_state.show_editor = True
             st.session_state.editing_strategy_id = None
             st.session_state.pop("template_applied", None)
             st.rerun()
     with c4:
-        if st.button("Wizard", use_container_width=True):
+        if st.button("Wizard", width="stretch"):
             st.session_state["wizard_active"] = True
             st.rerun()
 

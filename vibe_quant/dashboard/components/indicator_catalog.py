@@ -68,7 +68,7 @@ def render_indicator_selector(
                     f"{meta.type_name}",
                     key=f"{key_prefix}_pop_{meta.type_name}",
                     help=meta.description[:80],
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state[f"{key_prefix}_selected_type"] = meta.type_name
 
@@ -86,7 +86,7 @@ def render_indicator_selector(
                         if st.button(
                             "Select",
                             key=f"{key_prefix}_sel_{meta.type_name}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state[f"{key_prefix}_selected_type"] = meta.type_name
     elif search:
