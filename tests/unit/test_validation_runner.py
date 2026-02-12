@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +18,58 @@ from vibe_quant.validation.runner import (
     ValidationRunnerError,
     list_validation_runs,
 )
+
+
+def _make_mock_result(run_id: int = 1, strategy_name: str = "test_strategy") -> ValidationResult:
+    """Create a realistic mock ValidationResult for unit tests."""
+    return ValidationResult(
+        run_id=run_id,
+        strategy_name=strategy_name,
+        total_return=0.052,
+        sharpe_ratio=1.4,
+        sortino_ratio=1.8,
+        max_drawdown=0.08,
+        total_trades=15,
+        winning_trades=9,
+        losing_trades=6,
+        win_rate=0.6,
+        profit_factor=1.5,
+        total_fees=45.0,
+        total_funding=12.0,
+        total_slippage=8.0,
+        trades=[
+            TradeRecord(
+                symbol="BTCUSDT-PERP",
+                direction="LONG",
+                leverage=10,
+                entry_time="2025-01-10T08:00:00Z",
+                exit_time="2025-01-10T14:00:00Z",
+                entry_price=42000.0,
+                exit_price=42500.0,
+                quantity=0.1,
+                entry_fee=2.1,
+                exit_fee=2.125,
+                net_pnl=45.775,
+                gross_pnl=50.0,
+                exit_reason="take_profit",
+            ),
+            TradeRecord(
+                symbol="BTCUSDT-PERP",
+                direction="SHORT",
+                leverage=10,
+                entry_time="2025-01-12T10:00:00Z",
+                exit_time="2025-01-12T16:00:00Z",
+                entry_price=43000.0,
+                exit_price=42800.0,
+                quantity=0.1,
+                entry_fee=2.15,
+                exit_fee=2.14,
+                net_pnl=15.71,
+                gross_pnl=20.0,
+                exit_reason="take_profit",
+            ),
+        ],
+    )
 
 
 @pytest.fixture
@@ -306,6 +359,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(run_id=1)  # First run has ID 1
 
         assert result is not None
@@ -327,6 +383,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(
             run_id=1,
             latency_preset=LatencyPreset.COLOCATED,
@@ -345,6 +404,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(run_id=1, latency_preset="domestic")
 
         assert result is not None
@@ -360,6 +422,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(run_id=1)
         runner.close()
 
@@ -388,6 +453,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         runner.run(run_id=1)
         runner.close()
 
@@ -409,6 +477,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         runner.run(run_id=1)
         runner.close()
 
@@ -506,6 +577,9 @@ class TestValidationRunner:
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(run_id=1)
         runner.close()
 
@@ -576,6 +650,9 @@ class TestListValidationRuns:
 
         # Run validation to create results
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        runner._run_backtest = lambda **kwargs: _make_mock_result(  # type: ignore[assignment]
+            run_id=kwargs["run_id"], strategy_name=kwargs["strategy_name"]
+        )
         result = runner.run(run_id=1)
         runner.close()
 

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import streamlit as st
 
 from vibe_quant.dashboard.utils import get_state_manager
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.validation.latency import (
     LATENCY_PRESETS,
     LatencyPreset,
