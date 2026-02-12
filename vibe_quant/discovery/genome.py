@@ -159,13 +159,6 @@ class StrategyChromosome:
 # ---------------------------------------------------------------------------
 
 
-def _random_param_value(low: float, high: float, *, is_int: bool) -> int | float:
-    """Sample a parameter value uniformly from [low, high]."""
-    if is_int:
-        return random.randint(int(low), int(high))
-    return round(random.uniform(low, high), 4)
-
-
 def _random_gene(rng: random.Random | None = None) -> StrategyGene:
     """Generate a single random gene from the indicator pool."""
     r = rng or random

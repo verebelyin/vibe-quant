@@ -253,7 +253,7 @@ def _render_condition_row(
     if operator == "between":
         row["right_low"] = low
         row["right_high"] = high
-        return f"{left} between {_format_num(low)} {_format_num(high)}"
+        return f"{left} between {_format_num(low)} and {_format_num(high)}"
     elif operator in ("crosses_above", "crosses_below"):
         row["right"] = right
         row["right_is_numeric"] = False

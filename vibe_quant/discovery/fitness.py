@@ -73,27 +73,6 @@ class FitnessResult:
     filter_results: dict[str, bool]
 
 
-# ---------------------------------------------------------------------------
-# Normalization helpers
-# ---------------------------------------------------------------------------
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp value to [lo, hi]."""
-    if value < lo:
-        return lo
-    if value > hi:
-        return hi
-    return value
-
-
-def _normalize(value: float, lo: float, hi: float) -> float:
-    """Normalize value from [lo, hi] to [0, 1]."""
-    if hi <= lo:
-        return 0.0
-    return (value - lo) / (hi - lo)
-
-
 # Pre-compute inverse ranges for normalization to avoid repeated division
 _SHARPE_INV_RANGE: float = 1.0 / (SHARPE_MAX - SHARPE_MIN)
 _PF_INV_RANGE: float = 1.0 / (PF_MAX - PF_MIN)
@@ -178,15 +157,6 @@ def compute_complexity_penalty(num_genes: int) -> float:
 # ---------------------------------------------------------------------------
 # Pareto dominance
 # ---------------------------------------------------------------------------
-
-# Objectives: (sharpe, 1-maxdd, profit_factor) -- all higher is better
-ObjectivesTuple = tuple[float, float, float]
-
-
-def _objectives(result: FitnessResult) -> ObjectivesTuple:
-    """Extract objective values (all higher-is-better) from FitnessResult."""
-    return (result.sharpe_ratio, 1.0 - result.max_drawdown, result.profit_factor)
-
 
 def pareto_dominates(a: FitnessResult, b: FitnessResult) -> bool:
     """Check if strategy A Pareto-dominates strategy B.
