@@ -209,9 +209,3 @@ def get_templates_by_category() -> dict[str, list[TemplateMeta]]:
     return {k: v for k, v in result.items() if v}
 
 
-def get_template_by_filename(filename: str) -> TemplateMeta | None:
-    """Look up a template by its filename."""
-    for t in TEMPLATES:
-        if t.file_name == filename:
-            return t
-    return None

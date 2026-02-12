@@ -7,14 +7,13 @@ import io
 import logging
 import zipfile
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from vibe_quant.utils import generate_month_range
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
+logger = logging.getLogger(__name__)
 
 # Binance Vision base URL for futures data
 BINANCE_VISION_BASE = "https://data.binance.vision/data/futures/um/monthly/klines"
@@ -98,28 +97,6 @@ def download_monthly_klines(
     finally:
         if own_client:
             client.close()
-
-
-def generate_month_range(
-    start_date: datetime, end_date: datetime
-) -> Generator[tuple[int, int]]:
-    """Generate (year, month) tuples between two dates.
-
-    Args:
-        start_date: Start date (inclusive).
-        end_date: End date (inclusive).
-
-    Yields:
-        (year, month) tuples.
-    """
-    current = start_date.replace(day=1)
-    while current <= end_date:
-        yield (current.year, current.month)
-        # Move to next month
-        if current.month == 12:
-            current = current.replace(year=current.year + 1, month=1)
-        else:
-            current = current.replace(month=current.month + 1)
 
 
 def download_funding_rates(

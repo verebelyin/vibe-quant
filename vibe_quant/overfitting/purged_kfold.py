@@ -302,6 +302,7 @@ class PurgedKFoldCV:
             n_splits=self.config.n_splits,
             purge_pct=self.config.purge_pct,
             embargo_pct=self.config.embargo_pct,
+            indicator_lookback_bars=self.config.indicator_lookback_bars,
         )
 
     def run(self, n_samples: int, runner: BacktestRunner) -> CVResult:

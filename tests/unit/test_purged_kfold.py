@@ -487,6 +487,19 @@ class TestPurgedKFoldCV:
         assert result.std_oos_sharpe == 0.0
 
 
+    def test_indicator_lookback_bars_propagated(self) -> None:
+        """CVConfig.indicator_lookback_bars propagated to PurgedKFold."""
+        config = CVConfig(n_splits=5, indicator_lookback_bars=77)
+        cv = PurgedKFoldCV(config=config)
+        assert cv._kfold.indicator_lookback_bars == 77
+
+    def test_indicator_lookback_bars_none_by_default(self) -> None:
+        """indicator_lookback_bars is None when not set in CVConfig."""
+        config = CVConfig(n_splits=5)
+        cv = PurgedKFoldCV(config=config)
+        assert cv._kfold.indicator_lookback_bars is None
+
+
 class TestPurgedKFoldCVEdgeCases:
     """Edge case tests for PurgedKFoldCV."""
 

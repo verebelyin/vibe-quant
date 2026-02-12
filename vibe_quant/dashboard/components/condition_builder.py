@@ -384,16 +384,3 @@ def format_condition_human(condition: str) -> str:
     return condition
 
 
-def render_conditions_human_readable(
-    conditions: list[str],
-    label: str = "",
-) -> None:
-    """Render conditions as human-readable text instead of raw syntax."""
-    if label:
-        st.markdown(f"**{label}:**")
-    if not conditions:
-        st.caption("None defined")
-        return
-    for cond in conditions:
-        human = format_condition_human(cond)
-        st.markdown(f"- {human}")

@@ -235,13 +235,14 @@ class TestOverfittingPipeline:
         pipeline.close()
 
     def test_run_wfa_only(self, db_path: Path) -> None:
-        """Run with WFA filter only."""
+        """Run with WFA filter only (allow_mock)."""
         pipeline = OverfittingPipeline(db_path)
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.wfa_only(),
             data_start=date(2024, 1, 1),
             data_end=date(2025, 12, 31),
+            allow_mock=True,
         )
         assert result.total_candidates == 3
         assert result.passed_dsr == 0  # Disabled
@@ -250,13 +251,24 @@ class TestOverfittingPipeline:
         assert result.passed_cv == 0  # Disabled
         pipeline.close()
 
+    def test_run_wfa_no_runner_raises(self, db_path: Path) -> None:
+        """WFA without runner and allow_mock=False raises ValueError."""
+        pipeline = OverfittingPipeline(db_path)
+        with pytest.raises(ValueError, match="WFA enabled but no backtest runner"):
+            pipeline.run(
+                run_id=1,
+                config=FilterConfig.wfa_only(),
+            )
+        pipeline.close()
+
     def test_run_cv_only(self, db_path: Path) -> None:
-        """Run with Purged K-Fold filter only."""
+        """Run with Purged K-Fold filter only (allow_mock)."""
         pipeline = OverfittingPipeline(db_path)
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.cv_only(),
             n_samples=1000,
+            allow_mock=True,
         )
         assert result.total_candidates == 3
         assert result.passed_dsr == 0  # Disabled
@@ -264,8 +276,18 @@ class TestOverfittingPipeline:
         assert result.passed_cv >= 0
         pipeline.close()
 
+    def test_run_cv_no_runner_raises(self, db_path: Path) -> None:
+        """CV without runner and allow_mock=False raises ValueError."""
+        pipeline = OverfittingPipeline(db_path)
+        with pytest.raises(ValueError, match="Purged K-Fold CV enabled but no backtest runner"):
+            pipeline.run(
+                run_id=1,
+                config=FilterConfig.cv_only(),
+            )
+        pipeline.close()
+
     def test_run_all_filters(self, db_path: Path) -> None:
-        """Run with all filters enabled."""
+        """Run with all filters enabled (allow_mock)."""
         pipeline = OverfittingPipeline(db_path)
         result = pipeline.run(
             run_id=1,
@@ -274,6 +296,7 @@ class TestOverfittingPipeline:
             data_start=date(2024, 1, 1),
             data_end=date(2025, 12, 31),
             n_samples=1000,
+            allow_mock=True,
         )
         assert result.total_candidates == 3
         assert result.config.enable_dsr is True
@@ -449,7 +472,7 @@ class TestIntegration:
         # Create pipeline
         pipeline = OverfittingPipeline(db_path)
 
-        # Run with all filters
+        # Run with all filters (allow_mock for testing)
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.default(),
@@ -457,6 +480,7 @@ class TestIntegration:
             data_start=date(2024, 1, 1),
             data_end=date(2025, 12, 31),
             n_samples=1000,
+            allow_mock=True,
         )
 
         # Verify structure
@@ -493,8 +517,8 @@ class TestIntegration:
         # First run DSR only
         result1 = pipeline.run(run_id=1, config=FilterConfig.dsr_only())
 
-        # Then run WFA only
-        result2 = pipeline.run(run_id=1, config=FilterConfig.wfa_only())
+        # Then run WFA only (allow_mock for testing)
+        result2 = pipeline.run(run_id=1, config=FilterConfig.wfa_only(), allow_mock=True)
 
         # Both should have same total candidates
         assert result1.total_candidates == result2.total_candidates

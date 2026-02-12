@@ -87,6 +87,7 @@ class OverfittingPipeline:
         data_start: date | None = None,
         data_end: date | None = None,
         n_samples: int = 1000,
+        allow_mock: bool = False,
     ) -> PipelineResult:
         """Run overfitting filter chain on sweep results.
 
@@ -97,9 +98,15 @@ class OverfittingPipeline:
             data_start: Start date for WFA windows (optional).
             data_end: End date for WFA windows (optional).
             n_samples: Number of samples for Purged K-Fold (default 1000).
+            allow_mock: If True, allow MockBacktestRunner fallback for WFA/CV.
+                If False (default), raise ValueError when no real runner is injected.
 
         Returns:
             PipelineResult with all candidate results and filter counts.
+
+        Raises:
+            ValueError: If WFA or CV is enabled, no runner is injected, and
+                allow_mock is False.
         """
         config = config or FilterConfig.default()
 
@@ -134,7 +141,13 @@ class OverfittingPipeline:
         wfa = WalkForwardAnalysis(config=wfa_config)
         if self._wfa_runner:
             wfa.runner = self._wfa_runner
-        else:
+        elif config.enable_wfa:
+            if not allow_mock:
+                raise ValueError(
+                    "WFA enabled but no backtest runner injected. "
+                    "Pass wfa_runner= to OverfittingPipeline, or use --allow-mock / allow_mock=True "
+                    "to fall back to MockBacktestRunner (synthetic results)."
+                )
             logger.warning(
                 "No WFA backtest runner provided - using MockBacktestRunner. "
                 "Results will be synthetic. Pass wfa_runner= to OverfittingPipeline "
@@ -218,6 +231,12 @@ class OverfittingPipeline:
             if config.enable_purged_kfold:
                 if self._cv_runner:
                     runner = self._cv_runner
+                elif not allow_mock:
+                    raise ValueError(
+                        "Purged K-Fold CV enabled but no backtest runner injected. "
+                        "Pass cv_runner= to OverfittingPipeline, or use --allow-mock / allow_mock=True "
+                        "to fall back to MockBacktestRunner (synthetic results)."
+                    )
                 else:
                     if candidate == candidates[0]:  # Log once
                         logger.warning(

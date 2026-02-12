@@ -163,6 +163,7 @@ class TestCmdRun:
             end_date=None,
             samples=1000,
             output=None,
+            allow_mock=False,
         )
 
         result = cmd_run(args)
@@ -174,7 +175,7 @@ class TestCmdRun:
         assert "passed DSR" in captured.out
 
     def test_run_all_filters(self, db_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        """Run with all filters."""
+        """Run with all filters (allow_mock)."""
         from argparse import Namespace
 
         args = Namespace(
@@ -186,6 +187,7 @@ class TestCmdRun:
             end_date="2025-12-31",
             samples=1000,
             output=None,
+            allow_mock=True,
         )
 
         result = cmd_run(args)
@@ -210,6 +212,7 @@ class TestCmdRun:
             end_date=None,
             samples=1000,
             output=str(output_file),
+            allow_mock=False,
         )
 
         result = cmd_run(args)
@@ -232,6 +235,7 @@ class TestCmdRun:
             end_date=None,
             samples=1000,
             output=None,
+            allow_mock=False,
         )
 
         result = cmd_run(args)

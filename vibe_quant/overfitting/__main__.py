@@ -81,6 +81,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             data_start=data_start,
             data_end=data_end,
             n_samples=args.samples,
+            allow_mock=args.allow_mock,
         )
 
         # Print summary
@@ -271,6 +272,11 @@ def main() -> int:
         "-o",
         type=str,
         help="Output file for detailed report",
+    )
+    run_parser.add_argument(
+        "--allow-mock",
+        action="store_true",
+        help="Allow MockBacktestRunner fallback for WFA/CV (synthetic results)",
     )
 
     # Report command

@@ -240,6 +240,7 @@ def extract_trades(
         result.trades.append(trade)
 
     result.total_trades = len(result.trades)
+    result.trades.sort(key=lambda t: t.entry_time)
     result.winning_trades = winning
     result.losing_trades = losing
     result.total_fees = total_fees

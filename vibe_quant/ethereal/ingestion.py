@@ -28,12 +28,13 @@ from vibe_quant.ethereal.instruments import (
     create_ethereal_instrument,
     get_ethereal_symbols,
 )
+from vibe_quant.utils import generate_month_range
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Generator, Sequence
+    from collections.abc import Sequence
 
 # Ethereal archive base URL
 ETHEREAL_ARCHIVE_BASE = "https://archive.ethereal.trade"
@@ -63,27 +64,6 @@ TIMEFRAME_TO_MINUTES: dict[str, int] = {
 
 # Default catalog path
 DEFAULT_CATALOG_PATH = Path("data/catalog")
-
-
-def generate_month_range(
-    start_date: datetime, end_date: datetime
-) -> Generator[tuple[int, int]]:
-    """Generate (year, month) tuples between two dates.
-
-    Args:
-        start_date: Start date (inclusive).
-        end_date: End date (inclusive).
-
-    Yields:
-        (year, month) tuples.
-    """
-    current = start_date.replace(day=1)
-    while current <= end_date:
-        yield (current.year, current.month)
-        if current.month == 12:
-            current = current.replace(year=current.year + 1, month=1)
-        else:
-            current = current.replace(month=current.month + 1)
 
 
 def download_bars(
