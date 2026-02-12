@@ -16,7 +16,12 @@ from vibe_quant.discovery.fitness import (
     pareto_dominates,
     pareto_rank,
 )
-from vibe_quant.discovery.genome import StrategyChromosome, StrategyGene
+from vibe_quant.discovery.operators import (
+    ConditionType,
+    Direction,
+    StrategyChromosome,
+    StrategyGene,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,8 +31,8 @@ from vibe_quant.discovery.genome import StrategyChromosome, StrategyGene
 def _make_gene(indicator: str = "RSI", period: int = 14) -> StrategyGene:
     return StrategyGene(
         indicator_type=indicator,
-        parameters={"period": period},
-        condition="crosses_above",
+        parameters={"period": float(period)},
+        condition=ConditionType.CROSSES_ABOVE,
         threshold=30.0,
     )
 
@@ -38,7 +43,7 @@ def _make_chromosome(n_entry: int = 1, n_exit: int = 1) -> StrategyChromosome:
         exit_genes=[_make_gene() for _ in range(n_exit)],
         stop_loss_pct=0.05,
         take_profit_pct=0.10,
-        direction="long",
+        direction=Direction.LONG,
     )
 
 

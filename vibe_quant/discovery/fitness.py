@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from vibe_quant.discovery.genome import StrategyChromosome
+    from vibe_quant.discovery.operators import StrategyChromosome
 
 # ---------------------------------------------------------------------------
 # Constants
