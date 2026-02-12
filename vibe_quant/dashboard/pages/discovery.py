@@ -10,6 +10,7 @@ Genetic strategy discovery interface:
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -296,7 +297,7 @@ def _render_start_button(
         # Build subprocess command
         db_path = st.session_state.get("db_path", str(DEFAULT_DB_PATH))
         command = [
-            "python",
+            sys.executable,
             "-m",
             "vibe_quant.discovery",
             "--population-size",

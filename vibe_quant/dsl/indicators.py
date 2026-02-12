@@ -290,7 +290,7 @@ def _get_nt_class(module_path: str, class_name: str) -> type | None:
 def _rsi_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="RSI",
-        nt_class=_get_nt_class("nautilus_trader.indicators.rsi", "RelativeStrengthIndex"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "RelativeStrengthIndex"),
         pandas_ta_func="rsi",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -301,7 +301,7 @@ def _rsi_spec() -> IndicatorSpec:
 def _ema_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="EMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators.average", "ExponentialMovingAverage"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "ExponentialMovingAverage"),
         pandas_ta_func="ema",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -312,7 +312,7 @@ def _ema_spec() -> IndicatorSpec:
 def _sma_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="SMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators.average", "SimpleMovingAverage"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "SimpleMovingAverage"),
         pandas_ta_func="sma",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -323,7 +323,7 @@ def _sma_spec() -> IndicatorSpec:
 def _wma_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="WMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators.average", "WeightedMovingAverage"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "WeightedMovingAverage"),
         pandas_ta_func="wma",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -334,7 +334,7 @@ def _wma_spec() -> IndicatorSpec:
 def _dema_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="DEMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators.average", "DoubleExponentialMovingAverage"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "DoubleExponentialMovingAverage"),
         pandas_ta_func="dema",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -345,7 +345,7 @@ def _dema_spec() -> IndicatorSpec:
 def _tema_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="TEMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators.average", "TripleExponentialMovingAverage"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "TripleExponentialMovingAverage"),
         pandas_ta_func="tema",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -359,7 +359,7 @@ def _tema_spec() -> IndicatorSpec:
 def _macd_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="MACD",
-        nt_class=_get_nt_class("nautilus_trader.indicators.macd", "MovingAverageConvergenceDivergence"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "MovingAverageConvergenceDivergence"),
         pandas_ta_func="macd",
         default_params={"fast_period": 12, "slow_period": 26, "signal_period": 9},
         param_schema={"fast_period": int, "slow_period": int, "signal_period": int},
@@ -371,7 +371,7 @@ def _macd_spec() -> IndicatorSpec:
 def _stoch_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="STOCH",
-        nt_class=_get_nt_class("nautilus_trader.indicators.stochastics", "Stochastics"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "Stochastics"),
         pandas_ta_func="stoch",
         default_params={"period_k": 14, "period_d": 3},
         param_schema={"period_k": int, "period_d": int},
@@ -383,7 +383,7 @@ def _stoch_spec() -> IndicatorSpec:
 def _cci_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="CCI",
-        nt_class=_get_nt_class("nautilus_trader.indicators.cci", "CommodityChannelIndex"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "CommodityChannelIndex"),
         pandas_ta_func="cci",
         default_params={"period": 20},
         param_schema={"period": int},
@@ -406,7 +406,7 @@ def _willr_spec() -> IndicatorSpec:
 def _roc_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="ROC",
-        nt_class=_get_nt_class("nautilus_trader.indicators.roc", "RateOfChange"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "RateOfChange"),
         pandas_ta_func="roc",
         default_params={"period": 10},
         param_schema={"period": int},
@@ -420,7 +420,7 @@ def _roc_spec() -> IndicatorSpec:
 def _atr_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="ATR",
-        nt_class=_get_nt_class("nautilus_trader.indicators.atr", "AverageTrueRange"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "AverageTrueRange"),
         pandas_ta_func="atr",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -431,7 +431,7 @@ def _atr_spec() -> IndicatorSpec:
 def _bbands_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="BBANDS",
-        nt_class=_get_nt_class("nautilus_trader.indicators.bollinger_bands", "BollingerBands"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "BollingerBands"),
         pandas_ta_func="bbands",
         default_params={"period": 20, "std_dev": 2.0},
         param_schema={"period": int, "std_dev": float},
@@ -443,7 +443,7 @@ def _bbands_spec() -> IndicatorSpec:
 def _kc_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="KC",
-        nt_class=_get_nt_class("nautilus_trader.indicators.keltner_channel", "KeltnerChannel"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "KeltnerChannel"),
         pandas_ta_func="kc",
         default_params={"period": 20, "atr_multiplier": 2.0},
         param_schema={"period": int, "atr_multiplier": float},
@@ -455,7 +455,7 @@ def _kc_spec() -> IndicatorSpec:
 def _donchian_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="DONCHIAN",
-        nt_class=_get_nt_class("nautilus_trader.indicators.donchian_channel", "DonchianChannel"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "DonchianChannel"),
         pandas_ta_func="donchian",
         default_params={"period": 20},
         param_schema={"period": int},
@@ -470,7 +470,7 @@ def _donchian_spec() -> IndicatorSpec:
 def _obv_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="OBV",
-        nt_class=_get_nt_class("nautilus_trader.indicators.obv", "OnBalanceVolume"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "OnBalanceVolume"),
         pandas_ta_func="obv",
         default_params={},
         param_schema={},
@@ -481,7 +481,7 @@ def _obv_spec() -> IndicatorSpec:
 def _vwap_spec() -> IndicatorSpec:
     return IndicatorSpec(
         name="VWAP",
-        nt_class=_get_nt_class("nautilus_trader.indicators.vwap", "VolumeWeightedAveragePrice"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "VolumeWeightedAveragePrice"),
         pandas_ta_func="vwap",
         default_params={},
         param_schema={},
@@ -490,9 +490,10 @@ def _vwap_spec() -> IndicatorSpec:
 
 @indicator_registry.register("MFI")
 def _mfi_spec() -> IndicatorSpec:
+    # NT 1.222 doesn't have MoneyFlowIndex as a top-level indicator
     return IndicatorSpec(
         name="MFI",
-        nt_class=_get_nt_class("nautilus_trader.indicators.mfi", "MoneyFlowIndex"),
+        nt_class=_get_nt_class("nautilus_trader.indicators", "MoneyFlowIndex"),
         pandas_ta_func="mfi",
         default_params={"period": 14},
         param_schema={"period": int},

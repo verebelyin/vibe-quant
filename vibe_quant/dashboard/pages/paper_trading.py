@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -251,7 +252,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
         # Start subprocess with credentials in env (not on disk)
         manager = get_job_manager(db_path)
         command = [
-            "python", "-m", "vibe_quant.paper.cli",
+            sys.executable, "-m", "vibe_quant.paper.cli",
             "start",
             "--config", str(config_path),
             "--run-id", str(run_id),

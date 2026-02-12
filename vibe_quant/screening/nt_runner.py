@@ -91,9 +91,6 @@ class NTScreeningRunner:
 
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
-            INSTRUMENT_CONFIGS,
-            CatalogManager,
-            create_instrument,
         )
         from vibe_quant.dsl.compiler import StrategyCompiler
         from vibe_quant.dsl.parser import validate_strategy_dict
@@ -114,15 +111,11 @@ class NTScreeningRunner:
             if ind_config.timeframe:
                 self._all_timeframes.add(ind_config.timeframe)
 
-        # Catalog path and instruments (once per process)
+        # Catalog path (instruments already written during data ingest/rebuild;
+        # writing here from parallel workers causes parquet corruption)
         self._resolved_catalog_path = (
             Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
         )
-        catalog_mgr = CatalogManager(self._resolved_catalog_path)
-        for symbol in self._symbols:
-            if symbol in INSTRUMENT_CONFIGS:
-                instrument = create_instrument(symbol)
-                catalog_mgr.write_instrument(instrument)
 
         self._compiled = True
 
@@ -138,7 +131,6 @@ class NTScreeningRunner:
             ImportableStrategyConfig,
         )
         from nautilus_trader.core.nautilus_pyo3 import (
-            MaxDrawdown,
             ProfitFactor,
             SharpeRatio,
             SortinoRatio,
@@ -226,7 +218,8 @@ class NTScreeningRunner:
             node.build()
 
             # Register statistics
-            stats = [SharpeRatio(), SortinoRatio(), MaxDrawdown(), WinRate(), ProfitFactor()]
+            # MaxDrawdown excluded: lacks calculate_from_realized_pnls in NT 1.222
+            stats = [SharpeRatio(), SortinoRatio(), WinRate(), ProfitFactor()]
             for engine in node.get_engines():
                 analyzer = engine.kernel.portfolio.analyzer
                 for stat in stats:
@@ -320,7 +313,7 @@ class NTScreeningRunner:
             total_fees = 0.0
             for pos in positions:
                 if pos.is_closed:
-                    total_fees += sum(abs(float(c)) for c in pos.commissions)
+                    total_fees += sum(abs(float(c)) for c in pos.commissions())
             metrics.total_fees = total_fees
         except Exception:
             logger.warning("Could not extract fees from engine cache", exc_info=True)

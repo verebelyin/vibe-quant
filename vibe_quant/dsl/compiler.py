@@ -390,7 +390,6 @@ class StrategyCompiler:
             f"    def __init__(self, config: {config_name}) -> None:",
             f'        """Initialize {class_name}Strategy."""',
             "        super().__init__(config)",
-            "        self.config = config",
             "",
             "        # Position tracking",
             "        self._position_open = False",

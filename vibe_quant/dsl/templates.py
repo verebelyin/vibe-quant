@@ -224,7 +224,8 @@ ORDER_METHODS_LINES: tuple[str, ...] = (
     "        final_size = min_size",
     "",
     "    # Clamp to instrument minimums",
-    "    final_size = max(final_size, float(self.instrument.min_quantity))",
+    "    if self.instrument.min_quantity is not None:",
+    "        final_size = max(final_size, float(self.instrument.min_quantity))",
     "    return self.instrument.make_qty(final_size)",
     "",
     # _sync_position_state

@@ -12,6 +12,7 @@ Provides interface for launching backtests with:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -187,7 +188,7 @@ def _render_run_buttons(
 
     db_path = st.session_state.get("db_path", str(DEFAULT_DB_PATH))
     command = [
-        "python", "-m", f"vibe_quant.{'screening' if run_screening else 'validation'}",
+        sys.executable, "-m", f"vibe_quant.{'screening' if run_screening else 'validation'}",
         "--run-id", str(run_id), "--db", db_path,
     ]
     log_dir = Path("logs")

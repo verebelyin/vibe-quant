@@ -34,11 +34,30 @@ def main() -> int:
             print(f"Strategy {strategy_id} not found")
             return 1
 
-        from vibe_quant.dsl.parser import parse_strategy
+        from vibe_quant.dsl.schema import StrategyDSL
         from vibe_quant.screening.pipeline import create_screening_pipeline
 
-        dsl = parse_strategy(strategy["dsl_config"])
-        pipeline = create_screening_pipeline(dsl)
+        dsl = StrategyDSL.model_validate(strategy["dsl_config"])
+
+        # Extract run parameters
+        symbols = run_config["symbols"]
+        start_date = run_config["start_date"]
+        end_date = run_config["end_date"]
+        parameters = run_config.get("parameters", {})
+        sweep_params = parameters.get("sweep", {})
+
+        # Apply sweep overrides to DSL if present
+        if sweep_params:
+            dsl_dict = dsl.model_dump()
+            dsl_dict["sweep"] = sweep_params
+            dsl = StrategyDSL.model_validate(dsl_dict)
+
+        pipeline = create_screening_pipeline(
+            dsl,
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+        )
         result = pipeline.run()
         pipeline.save_results(result, state, args.run_id)
         state.update_backtest_run_status(args.run_id, "completed")

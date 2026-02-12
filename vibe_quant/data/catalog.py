@@ -119,6 +119,7 @@ def klines_to_bars(
     klines: Sequence[sqlite3.Row],
     instrument_id: InstrumentId,
     bar_type: BarType,
+    size_precision: int = 8,
 ) -> list[Bar]:
     """Convert raw klines to NautilusTrader Bar objects.
 
@@ -126,6 +127,7 @@ def klines_to_bars(
         klines: Sequence of kline rows from archive.
         instrument_id: NautilusTrader instrument ID.
         bar_type: NautilusTrader bar type.
+        size_precision: Decimal places for volume (must match instrument).
 
     Returns:
         List of Bar objects.
@@ -136,13 +138,17 @@ def klines_to_bars(
         ts_event = int(k["open_time"]) * 1_000_000
         ts_init = int(k["close_time"]) * 1_000_000
 
+        # Round volume to instrument size_precision to avoid NT mismatch
+        vol = round(float(k["volume"]), size_precision)
+        vol_str = f"{vol:.{size_precision}f}"
+
         bar = Bar(
             bar_type=bar_type,
             open=Price.from_str(str(k["open"])),
             high=Price.from_str(str(k["high"])),
             low=Price.from_str(str(k["low"])),
             close=Price.from_str(str(k["close"])),
-            volume=Quantity.from_str(str(k["volume"])),
+            volume=Quantity.from_str(vol_str),
             ts_event=ts_event,
             ts_init=ts_init,
         )
@@ -155,6 +161,7 @@ def aggregate_bars(
     bars_1m: list[Bar],
     target_bar_type: BarType,
     target_minutes: int,
+    size_precision: int = 8,
 ) -> list[Bar]:
     """Aggregate 1-minute bars to higher timeframe.
 
@@ -167,6 +174,7 @@ def aggregate_bars(
         bars_1m: List of 1-minute bars (sorted by time).
         target_bar_type: Target bar type for aggregated bars.
         target_minutes: Target bar duration in minutes.
+        size_precision: Decimal places for volume (must match instrument).
 
     Returns:
         List of aggregated bars.
@@ -192,7 +200,9 @@ def aggregate_bars(
         if bar_key != group_key:
             # Aggregate current group
             if current_group:
-                aggregated.append(_aggregate_group(current_group, target_bar_type))
+                aggregated.append(
+                    _aggregate_group(current_group, target_bar_type, size_precision)
+                )
 
             # Start new group
             current_group = [bar]
@@ -202,12 +212,14 @@ def aggregate_bars(
 
     # Don't forget the last group
     if current_group:
-        aggregated.append(_aggregate_group(current_group, target_bar_type))
+        aggregated.append(
+            _aggregate_group(current_group, target_bar_type, size_precision)
+        )
 
     return aggregated
 
 
-def _aggregate_group(bars: list[Bar], bar_type: BarType) -> Bar:
+def _aggregate_group(bars: list[Bar], bar_type: BarType, size_precision: int = 8) -> Bar:
     """Aggregate a group of bars into a single bar.
 
     Uses a single loop to track high/low/volume instead of
@@ -216,6 +228,7 @@ def _aggregate_group(bars: list[Bar], bar_type: BarType) -> Bar:
     Args:
         bars: List of bars to aggregate.
         bar_type: Target bar type.
+        size_precision: Decimal places for volume (must match instrument).
 
     Returns:
         Aggregated bar.
@@ -250,13 +263,15 @@ def _aggregate_group(bars: list[Bar], bar_type: BarType) -> Bar:
         total_volume += float(b.volume)
 
     last = bars[-1]
+    vol = round(total_volume, size_precision)
+    vol_str = f"{vol:.{size_precision}f}"
     return Bar(
         bar_type=bar_type,
         open=first.open,
         high=high_price,
         low=low_price,
         close=last.close,
-        volume=Quantity.from_str(str(total_volume)),
+        volume=Quantity.from_str(vol_str),
         ts_event=first.ts_event,
         ts_init=last.ts_init,
     )

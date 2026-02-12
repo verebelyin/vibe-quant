@@ -153,7 +153,8 @@ def update_symbol(
 
     # Convert to 1m bars
     bar_type_1m = get_bar_type(symbol, "1m")
-    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
+    size_prec = instrument.size_precision
+    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
     catalog.write_bars(bars_1m)
     counts["bars_1m"] = len(bars_1m)
     if verbose:
@@ -167,7 +168,7 @@ def update_symbol(
             minutes = int(interval.replace("h", "")) * 60
 
         bar_type = get_bar_type(symbol, interval)
-        agg_bars = aggregate_bars(bars_1m, bar_type, minutes)
+        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
         catalog.write_bars(agg_bars)
         counts[f"bars_{interval}"] = len(agg_bars)
         if verbose:
@@ -351,7 +352,8 @@ def ingest_symbol(
 
     # Convert to 1m bars and write
     bar_type_1m = get_bar_type(symbol, "1m")
-    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
+    size_prec = instrument.size_precision
+    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
     catalog.write_bars(bars_1m)
     counts["bars_1m"] = len(bars_1m)
     if verbose:
@@ -368,7 +370,7 @@ def ingest_symbol(
         else:
             minutes = int(interval.replace("h", "")) * 60
 
-        agg_bars = aggregate_bars(bars_1m, bar_type, minutes)
+        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
         catalog.write_bars(agg_bars)
         counts[f"bars_{interval}"] = len(agg_bars)
         if verbose:
@@ -694,7 +696,8 @@ def rebuild_from_archive(
 
         # Convert to 1m bars and write
         bar_type_1m = get_bar_type(symbol, "1m")
-        bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m)
+        size_prec = instrument.size_precision
+        bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
         catalog.write_bars(bars_1m)
         counts["bars_1m"] = len(bars_1m)
         if verbose:
@@ -710,7 +713,7 @@ def rebuild_from_archive(
             else:
                 minutes = int(interval.replace("h", "")) * 60
 
-            agg_bars = aggregate_bars(bars_1m, bar_type, minutes)
+            agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
             catalog.write_bars(agg_bars)
             counts[f"bars_{interval}"] = len(agg_bars)
             if verbose:
