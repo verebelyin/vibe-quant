@@ -98,7 +98,9 @@ def extract_stats(
             key_lower = key.lower()
             fval = float(value)
             if key_lower == "pnl% (total)":
-                result.total_return = fval
+                # NT reports as percentage (e.g. -13.06 for -13.06%);
+                # we store as fraction (e.g. -0.1306)
+                result.total_return = fval / 100.0
                 _populated.add("total_return")
             elif "sharpe" in key_lower:
                 result.sharpe_ratio = fval
@@ -189,7 +191,7 @@ def extract_trades(
         exit_price = float(pos.avg_px_close)
         quantity = float(pos.quantity)
 
-        pos_fees = sum(float(c) for c in pos.commissions)
+        pos_fees = sum(float(c) for c in pos.commissions())
         total_fees += abs(pos_fees)
 
         if realized_pnl > 0:

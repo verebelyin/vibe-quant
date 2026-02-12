@@ -10,7 +10,43 @@ Algorithmic trading engine for crypto perpetual futures using NautilusTrader (Ru
 - **Tests:** `pytest` (target 80% coverage on core modules)
 - **Lint:** `ruff check`
 - **Type check:** `mypy`
-- **Dashboard:** `streamlit run vibe_quant/dashboard/app.py`
+- **Dashboard:** `.venv/bin/streamlit run vibe_quant/dashboard/app.py --server.port 8501 --server.headless true`
+
+## UI Testing (agent-browser)
+
+Start the dashboard then test with `agent-browser`. **Always use `dangerouslyDisableSandbox: true`** for agent-browser commands (it needs `~/.agent-browser` socket dir).
+
+**Quick start:**
+```bash
+# Start app (background)
+.venv/bin/streamlit run vibe_quant/dashboard/app.py --server.port 8501 --server.headless true &
+
+# Open and take initial screenshot
+agent-browser open http://localhost:8501 && agent-browser screenshot /tmp/claude/page.png
+```
+
+**Chain commands with `&&`** to reduce round-trips:
+```bash
+# Navigate + snapshot in one call
+agent-browser open http://localhost:8501 && agent-browser snapshot -i
+
+# Click + wait + screenshot in one call
+agent-browser click @e5 && agent-browser wait 2000 && agent-browser screenshot /tmp/claude/result.png
+
+# Fill form + click save in one call
+agent-browser fill @e1 "test_strategy" && agent-browser fill @e2 "description" && agent-browser click @e3
+```
+
+**Key workflow:**
+1. `agent-browser open <url>` — navigate
+2. `agent-browser snapshot -i` — get interactive elements with refs (`@e1`, `@e2`...)
+3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` — interact using refs
+4. `agent-browser screenshot /tmp/claude/name.png` — capture state
+5. Re-snapshot after any navigation or DOM change (refs get invalidated)
+
+**Navigation pages** (sidebar links): Strategy Management, Discovery, Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings
+
+**Test flow:** Data Management (download data) → Strategy Management (create strategy) → Backtest Launch (run screening) → Results Analysis (verify results)
 
 ## Architecture
 

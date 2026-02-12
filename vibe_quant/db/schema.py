@@ -164,6 +164,19 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)
 """
 
 
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Add columns that may be missing from older databases."""
+    import contextlib
+
+    migrations = [
+        ("backtest_results", "starting_balance", "REAL"),
+        ("backtest_results", "notes", "TEXT"),
+    ]
+    for table, column, col_type in migrations:
+        with contextlib.suppress(Exception):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     """Initialize database schema.
 
@@ -171,4 +184,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn: SQLite connection with WAL mode enabled.
     """
     conn.executescript(SCHEMA_SQL)
+    _migrate_add_columns(conn)
     conn.commit()

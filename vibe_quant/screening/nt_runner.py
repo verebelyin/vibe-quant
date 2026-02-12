@@ -278,7 +278,8 @@ class NTScreeningRunner:
                 key_lower = key.lower()
                 fval = float(value)
                 if key_lower == "pnl% (total)":
-                    metrics.total_return = fval
+                    # NT reports as percentage; store as fraction
+                    metrics.total_return = fval / 100.0
                 elif "sharpe" in key_lower:
                     metrics.sharpe_ratio = fval
                 elif "sortino" in key_lower:

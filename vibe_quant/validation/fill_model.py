@@ -12,11 +12,14 @@ import math
 from dataclasses import dataclass
 
 from nautilus_trader.backtest.models import FillModel
+from nautilus_trader.common.config import NautilusConfig
 
 
-@dataclass(frozen=True)
-class VolumeSlippageFillModelConfig:
+class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
     """Configuration for VolumeSlippageFillModel.
+
+    Must inherit from NautilusConfig so NT's resolve_config_path accepts it
+    when used via ImportableFillModelConfig.
 
     Attributes:
         impact_coefficient: Market impact coefficient k in slippage formula.

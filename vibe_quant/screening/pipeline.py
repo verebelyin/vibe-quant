@@ -169,11 +169,22 @@ class ScreeningPipeline:
             len(all_results),
         )
 
-        # Rank by Sharpe
-        ranked = rank_by_sharpe(filtered)
+        # Rank ALL results by Sharpe (save everything so user can inspect)
+        ranked_all = rank_by_sharpe(all_results)
 
-        # Compute Pareto front
-        pareto_indices = compute_pareto_front(ranked)
+        # Compute Pareto front on filtered results only
+        ranked_filtered = rank_by_sharpe(filtered)
+        pareto_indices_filtered = compute_pareto_front(ranked_filtered)
+
+        # Map pareto indices back to the all-results list
+        pareto_params = {
+            json.dumps(ranked_filtered[i].parameters, sort_keys=True)
+            for i in pareto_indices_filtered
+        }
+        pareto_indices = [
+            i for i, r in enumerate(ranked_all)
+            if json.dumps(r.parameters, sort_keys=True) in pareto_params
+        ]
         logger.info("Found %d Pareto-optimal results", len(pareto_indices))
 
         execution_time = time.time() - start_time
@@ -183,7 +194,7 @@ class ScreeningPipeline:
             total_combinations=self.num_combinations,
             passed_filters=len(filtered),
             execution_time_seconds=execution_time,
-            results=ranked,
+            results=ranked_all,
             pareto_optimal_indices=pareto_indices,
         )
 

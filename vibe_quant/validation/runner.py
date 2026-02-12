@@ -417,6 +417,13 @@ class ValidationRunner:
 
             return result
         finally:
+            # Reset engines before dispose to avoid
+            # InvalidStateTrigger('RUNNING -> DISPOSE')
+            import contextlib
+
+            for eng in node.get_engines():
+                with contextlib.suppress(Exception):
+                    eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
 
     def _register_statistics(self, node: object) -> None:
@@ -434,17 +441,16 @@ class ValidationRunner:
             AvgWinner,
             Expectancy,
             LongRatio,
-            MaxDrawdown,
             ProfitFactor,
             SharpeRatio,
             SortinoRatio,
             WinRate,
         )
 
+        # MaxDrawdown excluded: lacks calculate_from_realized_pnls in NT 1.222
         stats = [
             SharpeRatio(),
             SortinoRatio(),
-            MaxDrawdown(),
             WinRate(),
             ProfitFactor(),
             Expectancy(),
