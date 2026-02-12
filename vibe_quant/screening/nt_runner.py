@@ -159,7 +159,11 @@ class NTScreeningRunner:
         for symbol in self._symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
             config_dict: dict[str, Any] = {"instrument_id": instrument_id}
-            config_dict.update(params)
+            # Convert sweep dot-notation (e.g. "ema_fast.period") to
+            # config underscore-notation (e.g. "ema_fast_period")
+            for k, v in params.items():
+                config_key = k.replace(".", "_")
+                config_dict[config_key] = v
             strategy_configs.append(
                 ImportableStrategyConfig(
                     strategy_path=f"{module_path}:{strategy_cls_name}",
