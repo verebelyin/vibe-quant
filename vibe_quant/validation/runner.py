@@ -396,6 +396,10 @@ class ValidationRunner:
             node.run()
 
             engine = node.get_engine(bt_run_config.id)
+            if engine is None:
+                raise ValidationRunnerError(
+                    f"Backtest engine not found for run config {bt_run_config.id}"
+                )
             bt_result = engine.get_result()
 
             # Extract metrics and trades from the engine

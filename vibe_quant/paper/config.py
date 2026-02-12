@@ -161,6 +161,10 @@ class PaperTradingConfig:
         if self.strategy_id is None:
             errors.append("strategy_id is required")
 
+        _VALID_SIZING_METHODS = {"fixed_fractional", "kelly", "atr"}
+        if self.sizing.method not in _VALID_SIZING_METHODS:
+            errors.append(f"sizing method must be one of {sorted(_VALID_SIZING_METHODS)}, got '{self.sizing.method}'")
+
         if self.sizing.risk_per_trade <= 0 or self.sizing.risk_per_trade > Decimal("0.5"):
             errors.append("risk_per_trade must be between 0 and 0.5")
 

@@ -284,7 +284,7 @@ class ScreeningPipeline:
 
 def create_screening_pipeline(
     dsl: StrategyDSL,
-    use_mock: bool = True,
+    use_mock: bool = False,
     max_workers: int | None = None,
     symbols: list[str] | None = None,
     start_date: str = "2024-01-01",
