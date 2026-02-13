@@ -543,7 +543,7 @@ class ValidationRunner:
     ) -> None:
         """Write backtest start event."""
         event = create_event(
-            event_type=EventType.SIGNAL,  # Using SIGNAL for start marker
+            event_type=EventType.LIFECYCLE,
             run_id=str(run_id),
             strategy_name=strategy_name,
             data={
@@ -566,7 +566,7 @@ class ValidationRunner:
     ) -> None:
         """Write backtest completion event."""
         event = create_event(
-            event_type=EventType.SIGNAL,  # Using SIGNAL for end marker
+            event_type=EventType.LIFECYCLE,
             run_id=str(run_id),
             strategy_name=strategy_name,
             data={

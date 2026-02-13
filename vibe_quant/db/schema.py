@@ -171,6 +171,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     migrations = [
         ("backtest_results", "starting_balance", "REAL"),
         ("backtest_results", "notes", "TEXT"),
+        ("background_jobs", "error_message", "TEXT"),
     ]
     for table, column, col_type in migrations:
         with contextlib.suppress(Exception):

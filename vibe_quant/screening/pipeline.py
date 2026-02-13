@@ -20,6 +20,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 from vibe_quant.screening.grid import (
     build_parameter_grid,
     compute_pareto_front,
@@ -138,12 +139,16 @@ class ScreeningPipeline:
         self,
         filters: MetricFilters | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        apply_dsr: bool = True,
+        dsr_significance: float = 0.05,
     ) -> ScreeningResult:
         """Run the screening pipeline.
 
         Args:
             filters: Hard metric filters. Uses defaults if None.
             progress_callback: Optional callback(completed, total) for progress.
+            apply_dsr: Apply Deflated Sharpe Ratio filter (default True).
+            dsr_significance: DSR p-value threshold (default 0.05).
 
         Returns:
             ScreeningResult with filtered and ranked results
@@ -161,13 +166,33 @@ class ScreeningPipeline:
         # Run backtests in parallel
         all_results = self._run_parallel(progress_callback)
 
-        # Apply filters
+        # Apply hard metric filters
         filtered = filter_by_metrics(all_results, filters)
         logger.info(
             "Filtered %d/%d results pass hard filters",
             len(filtered),
             len(all_results),
         )
+
+        # Apply DSR overfitting filter
+        if apply_dsr and len(filtered) > 1:
+            dsr = DeflatedSharpeRatio(significance_level=dsr_significance)
+            num_trials = len(all_results)
+            dsr_passed = []
+            for r in filtered:
+                num_obs = max(r.total_trades, 30)
+                result = dsr.calculate(
+                    observed_sharpe=r.sharpe_ratio,
+                    num_trials=num_trials,
+                    num_observations=num_obs,
+                )
+                if result.is_significant:
+                    dsr_passed.append(r)
+            logger.info(
+                "DSR filter: %d/%d pass significance test (p<%.2f, %d trials)",
+                len(dsr_passed), len(filtered), dsr_significance, num_trials,
+            )
+            filtered = dsr_passed
 
         # Rank ALL results by Sharpe (save everything so user can inspect)
         ranked_all = rank_by_sharpe(all_results)

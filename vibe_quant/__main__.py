@@ -91,33 +91,33 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_data(args: argparse.Namespace) -> int:
+def cmd_data(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to data module CLI.
 
     Args:
-        args: Parsed CLI arguments.
+        _args: Parsed CLI arguments (unused, forwarding via extra).
+        extra: Remaining arguments for submodule.
 
     Returns:
         Exit code.
     """
-    remaining = args.remaining if hasattr(args, "remaining") else []
-    sys.argv = ["vibe_quant.data"] + remaining
+    sys.argv = ["vibe_quant.data"] + (extra or [])
     from vibe_quant.data.ingest import main as data_main
 
     return data_main()
 
 
-def cmd_screening(args: argparse.Namespace) -> int:
+def cmd_screening(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to screening module CLI.
 
     Args:
-        args: Parsed CLI arguments.
+        _args: Parsed CLI arguments (unused, forwarding via extra).
+        extra: Remaining arguments for submodule.
 
     Returns:
         Exit code.
     """
-    remaining = args.remaining if hasattr(args, "remaining") else []
-    sys.argv = ["vibe_quant.screening"] + remaining
+    sys.argv = ["vibe_quant.screening"] + (extra or [])
     from vibe_quant.screening.__main__ import main as screening_main
 
     return screening_main()
@@ -140,20 +140,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Available commands",
     )
 
-    # Data command
+    # Data command - uses parse_known_args forwarding
     data_parser = subparsers.add_parser(
         "data",
         help="Data management commands",
     )
-    data_parser.add_argument("remaining", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     data_parser.set_defaults(func=cmd_data)
 
-    # Screening command
+    # Screening command - uses parse_known_args forwarding
     screening_parser = subparsers.add_parser(
         "screening",
         help="Parameter sweep screening",
     )
-    screening_parser.add_argument("remaining", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     screening_parser.set_defaults(func=cmd_screening)
 
     # Validation command
@@ -209,7 +207,8 @@ def main() -> int:
         Exit code.
     """
     parser = build_parser()
-    args = parser.parse_args()
+    # parse_known_args so dashed args like --run-id can be forwarded
+    args, extra = parser.parse_known_args()
 
     if args.command is None:
         parser.print_help()
@@ -223,7 +222,11 @@ def main() -> int:
         return 0
 
     if hasattr(args, "func"):
-        result: int = args.func(args)
+        # Forward extra args to submodule commands (data, screening)
+        if args.command in ("data", "screening"):
+            result: int = args.func(args, extra=extra)
+        else:
+            result = args.func(args)
         return result
 
     parser.print_help()

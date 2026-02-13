@@ -6,6 +6,7 @@ by event type and returns results as dicts or pandas DataFrames.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,15 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from vibe_quant.logging.events import EventType
+
+_SAFE_RUN_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
+
+def _validate_run_id(run_id: str) -> None:
+    """Validate run_id is safe for use in file paths and queries."""
+    if not _SAFE_RUN_ID.match(run_id):
+        msg = f"Invalid run_id: must be alphanumeric/hyphens/underscores, got '{run_id}'"
+        raise ValueError(msg)
 
 
 def _get_log_path(run_id: str, base_path: Path | str = "logs/events") -> Path:
@@ -50,13 +60,14 @@ def query_events(
     """
     import duckdb
 
+    _validate_run_id(run_id)
     log_path = _get_log_path(run_id, base_path)
 
     if not log_path.exists():
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    # Build query
+    # Build query -- run_id validated above, log_path safe
     query = f"SELECT * FROM read_json_auto('{log_path}')"
 
     if event_type is not None:
@@ -64,11 +75,9 @@ def query_events(
 
     query += " ORDER BY timestamp"
 
-    # Execute and convert to list of dicts
     result = duckdb.query(query)
     df = result.fetchdf()
 
-    # Convert DataFrame rows to dicts
     records: list[dict[str, object]] = df.to_dict(orient="records")  # type: ignore[assignment]
     return records
 
@@ -95,13 +104,13 @@ def query_events_df(
     """
     import duckdb
 
+    _validate_run_id(run_id)
     log_path = _get_log_path(run_id, base_path)
 
     if not log_path.exists():
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    # Build query
     query = f"SELECT * FROM read_json_auto('{log_path}')"
 
     if event_type is not None:
@@ -109,7 +118,6 @@ def query_events_df(
 
     query += " ORDER BY timestamp"
 
-    # Execute and return DataFrame
     result = duckdb.query(query)
     return result.fetchdf()
 
@@ -132,6 +140,7 @@ def count_events_by_type(
     """
     import duckdb
 
+    _validate_run_id(run_id)
     log_path = _get_log_path(run_id, base_path)
 
     if not log_path.exists():
@@ -173,6 +182,7 @@ def get_run_summary(
     """
     import duckdb
 
+    _validate_run_id(run_id)
     log_path = _get_log_path(run_id, base_path)
 
     if not log_path.exists():

@@ -220,7 +220,7 @@ class IndicatorRegistry:
             kwargs["period_d"] = params.get("period_d", 3)
         elif name == "KC":
             kwargs["period"] = params.get("period", 20)
-            kwargs["k"] = params.get("atr_multiplier", 2.0)
+            kwargs["k_multiplier"] = params.get("atr_multiplier", 2.0)
         elif name == "DONCHIAN":
             kwargs["period"] = params.get("period", 20)
 

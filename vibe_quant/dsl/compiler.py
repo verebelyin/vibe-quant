@@ -68,7 +68,9 @@ class StrategyCompiler:
 
     def __init__(self) -> None:
         """Initialize the compiler."""
-        pass
+        # Maps (indicator_name, literal_value) → config threshold field name
+        # Built during compile() for use in condition code generation
+        self._threshold_map: dict[tuple[str, float], str] = {}
 
     def compile(self, dsl: StrategyDSL) -> str:
         """Compile DSL to Python source code string.
@@ -86,6 +88,12 @@ class StrategyCompiler:
 
         # Gather indicator info
         indicators = self._gather_indicator_info(dsl)
+
+        # Add sub-output names for multi-output indicators (e.g., bbands_upper)
+        for info in indicators:
+            if info.spec.output_names != ("value",):
+                for output_name in info.spec.output_names:
+                    indicator_names.append(f"{info.name}_{output_name}")
 
         # Gather all timeframes
         timeframes = self._get_all_timeframes(dsl)
@@ -333,6 +341,7 @@ class StrategyCompiler:
         lines.append("")
         lines.append("    # Condition thresholds (can be overridden)")
         seen_thresholds: dict[str, float | int] = {}
+        self._threshold_map = {}
         for cond_str in (
             dsl.entry_conditions.long
             + dsl.entry_conditions.short
@@ -341,18 +350,18 @@ class StrategyCompiler:
         ):
             cond = parse_condition(cond_str, list(dsl.indicators.keys()))
             if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, (int, float)):
+                left_name = str(cond.left.value) if cond.left.is_indicator else str(cond.left.value)
                 value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
-                # Try short name first (backward compatible)
-                short_name = f"{cond.left.value}_{value_str}_threshold"
+                short_name = f"{left_name}_{value_str}_threshold"
                 if short_name not in seen_thresholds:
                     seen_thresholds[short_name] = cond.right.value
+                    self._threshold_map[(left_name, float(cond.right.value))] = short_name
                 elif seen_thresholds[short_name] != cond.right.value:
-                    # Collision: same indicator, same value but different operator
-                    # Use disambiguated name
                     op_name = cond.operator.name.lower()
-                    long_name = f"{cond.left.value}_{op_name}_{value_str}_threshold"
+                    long_name = f"{left_name}_{op_name}_{value_str}_threshold"
                     if long_name not in seen_thresholds:
                         seen_thresholds[long_name] = cond.right.value
+                    self._threshold_map[(left_name, float(cond.right.value))] = long_name
 
         for param_name, default_val in seen_thresholds.items():
             lines.append(f"    {param_name}: float = {default_val}")
@@ -545,8 +554,7 @@ class StrategyCompiler:
         elif config.type == "MACD":
             args.append(f"fast_period=self.config.{info.name}_fast_period")
             args.append(f"slow_period=self.config.{info.name}_slow_period")
-            # Note: NT MACD might have different param name
-            args.append(f"signal_period=self.config.{info.name}_signal_period")
+            # NT MACD does not accept signal_period
         elif config.type == "BBANDS":
             args.append(f"period=self.config.{info.name}_period")
             args.append(f"k=self.config.{info.name}_std_dev")
@@ -555,7 +563,7 @@ class StrategyCompiler:
             args.append("period_d=3")  # Default D period
         elif config.type == "KC":
             args.append(f"period=self.config.{info.name}_period")
-            args.append(f"k=self.config.{info.name}_atr_multiplier")
+            args.append(f"k_multiplier=self.config.{info.name}_atr_multiplier")
         elif config.type == "DONCHIAN":
             args.append(f"period=self.config.{info.name}_period")
         elif config.type in {"OBV", "VWAP"}:
@@ -639,6 +647,12 @@ class StrategyCompiler:
                     lines.append("        if self._position_side == OrderSide.SELL:")
                 lines.append("            if self._check_short_exit(bar):")
                 lines.append("                self._submit_exit(bar)")
+
+        # Trailing stop update
+        if dsl.stop_loss.type == "atr_trailing":
+            lines.append("")
+            lines.append("    # Update trailing stop loss")
+            lines.append("    self._update_trailing_stop(bar)")
 
         # Update previous values for crossover detection
         lines.append("")
@@ -759,14 +773,49 @@ class StrategyCompiler:
         ]
 
         for info in indicators:
-            lines.append(f'    if name == "{info.name}":')
-            if info.spec.nt_class is not None:
-                lines.append(f"        return float({info.indicator_var}.value)")
-            else:
+            if info.spec.nt_class is None:
+                lines.append(f'    if name == "{info.name}":')
                 lines.append("        return 0.0  # Placeholder")
+                continue
+
+            nt_attr = self._get_default_output_attr(info)
+            lines.append(f'    if name == "{info.name}":')
+            lines.append(f"        return float({info.indicator_var}.{nt_attr})")
+
+            # Register sub-names for each output of multi-output indicators
+            if info.spec.output_names != ("value",):
+                for output_name in info.spec.output_names:
+                    attr = self._output_to_nt_attr(info.config.type, output_name)
+                    lines.append(f'    if name == "{info.name}_{output_name}":')
+                    lines.append(f"        return float({info.indicator_var}.{attr})")
 
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
         return lines
+
+    @staticmethod
+    def _output_to_nt_attr(indicator_type: str, output_name: str) -> str:
+        """Map DSL output name to NautilusTrader attribute name."""
+        # STOCH outputs use value_ prefix in NT
+        if indicator_type == "STOCH":
+            return f"value_{output_name}"  # k -> value_k, d -> value_d
+        # BBANDS/KC/DONCHIAN: output name matches NT attr directly
+        return output_name  # upper -> upper, middle -> middle, lower -> lower
+
+    @staticmethod
+    def _get_default_output_attr(info: IndicatorInfo) -> str:
+        """Get the default NT attribute for an indicator's primary output."""
+        if info.spec.output_names == ("value",):
+            return "value"
+        # Channel indicators: default to middle band
+        if info.config.type in {"BBANDS", "KC", "DONCHIAN"}:
+            return "middle"
+        # Stochastics: default to K line
+        if info.config.type == "STOCH":
+            return "value_k"
+        # MACD: only has .value in NT
+        if info.config.type == "MACD":
+            return "value"
+        return "value"
 
     def _generate_update_prev_values(self, indicators: list[IndicatorInfo]) -> list[str]:
         """Generate _update_prev_values method.
@@ -782,13 +831,23 @@ class StrategyCompiler:
             '    """Store current indicator values for crossover detection."""',
         ]
 
+        has_nt = False
         for info in indicators:
             if info.spec.nt_class is not None:
+                has_nt = True
+                nt_attr = self._get_default_output_attr(info)
                 lines.append(
-                    f'    self._prev_values["{info.name}"] = float({info.indicator_var}.value)'
+                    f'    self._prev_values["{info.name}"] = float({info.indicator_var}.{nt_attr})'
                 )
+                # Also store sub-outputs for multi-output indicators
+                if info.spec.output_names != ("value",):
+                    for output_name in info.spec.output_names:
+                        attr = self._output_to_nt_attr(info.config.type, output_name)
+                        lines.append(
+                            f'    self._prev_values["{info.name}_{output_name}"] = float({info.indicator_var}.{attr})'
+                        )
 
-        if not any(info.spec.nt_class is not None for info in indicators):
+        if not has_nt:
             lines.append("    pass")
 
         return lines
@@ -968,7 +1027,7 @@ class StrategyCompiler:
             Python code for the condition check
         """
         left = self._operand_to_code(cond.left)
-        right = self._operand_to_code(cond.right)
+        right = self._operand_to_threshold_code(cond.left, cond.right)
 
         if cond.operator == Operator.GT:
             return f"cond_{index} = {left} > {right}"
@@ -991,7 +1050,7 @@ class StrategyCompiler:
                 f"cond_{index} = ({left} < {right}) and ({prev_left} >= {prev_right})"
             )
         elif cond.operator == Operator.BETWEEN:
-            right2 = self._operand_to_code(cond.right2) if cond.right2 else "0"
+            right2 = self._operand_to_threshold_code(cond.left, cond.right2) if cond.right2 else "0"
             return f"cond_{index} = {right} <= {left} <= {right2}"
         else:
             return f"cond_{index} = False  # Unknown operator"
@@ -1018,6 +1077,28 @@ class StrategyCompiler:
         else:
             # Literal value
             return str(operand.value)
+
+    def _operand_to_threshold_code(self, left_operand: object, right_operand: object) -> str:
+        """Convert right operand to code, using config threshold if available.
+
+        For numeric literals compared against indicators, uses self.config.{threshold}
+        so threshold values are sweepable via parameter grid.
+        """
+        from vibe_quant.dsl.conditions import Operand
+
+        if (
+            isinstance(left_operand, Operand)
+            and isinstance(right_operand, Operand)
+            and not right_operand.is_indicator
+            and not right_operand.is_price
+            and isinstance(right_operand.value, (int, float))
+        ):
+            left_name = str(left_operand.value)
+            key = (left_name, float(right_operand.value))
+            threshold_name = self._threshold_map.get(key)
+            if threshold_name:
+                return f"self.config.{threshold_name}"
+        return self._operand_to_code(right_operand)
 
     def _operand_to_prev_code(self, operand: object) -> str:
         """Convert an Operand to Python code for previous value.

@@ -60,7 +60,9 @@ class EventWriter:
     def _ensure_open(self) -> None:
         """Ensure file is open for writing."""
         if self._file is None:
-            self._file = open(self.file_path, "a", encoding="utf-8")  # noqa: SIM115
+            # Line buffering (buffering=1) ensures each write is flushed on newline,
+            # preventing data loss if process crashes before close()
+            self._file = open(self.file_path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
 
     def write(self, event: Event) -> None:
         """Write event to JSONL file.

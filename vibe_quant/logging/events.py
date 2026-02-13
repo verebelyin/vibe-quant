@@ -28,6 +28,7 @@ class EventType(StrEnum):
     RISK_CHECK = "RISK_CHECK"
     FUNDING = "FUNDING"
     LIQUIDATION = "LIQUIDATION"
+    LIFECYCLE = "LIFECYCLE"
 
 
 @dataclass

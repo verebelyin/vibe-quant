@@ -87,6 +87,7 @@ class BacktestJobManager:
             db_path: Path to database. Uses default if not specified.
         """
         self._db_path = db_path
+        self._log_handles: dict[int, Any] = {}  # run_id → file handle
         self._conn: sqlite3.Connection | None = None
 
     @property
@@ -148,6 +149,10 @@ class BacktestJobManager:
         )
 
         pid = proc.pid
+
+        # Track log handle for cleanup
+        if log_handle is not None:
+            self._log_handles[run_id] = log_handle
 
         # Register job in database (upsert: update if exists, insert otherwise)
         existing = self.conn.execute(
@@ -405,11 +410,17 @@ class BacktestJobManager:
     ) -> None:
         """Update job status in database."""
         if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.KILLED):
+            # Close log file handle to prevent FD leak
+            handle = self._log_handles.pop(run_id, None)
+            if handle is not None:
+                with contextlib.suppress(Exception):
+                    handle.close()
             self.conn.execute(
                 """UPDATE background_jobs
-                   SET status = ?, completed_at = datetime('now')
+                   SET status = ?, completed_at = datetime('now'),
+                       error_message = ?
                    WHERE run_id = ?""",
-                (status.value, run_id),
+                (status.value, error, run_id),
             )
             # Also update backtest_runs
             if error:

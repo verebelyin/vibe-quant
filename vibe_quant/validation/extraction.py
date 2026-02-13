@@ -189,7 +189,8 @@ def extract_trades(
         realized_pnl = float(pos.realized_pnl)
         entry_price = float(pos.avg_px_open)
         exit_price = float(pos.avg_px_close)
-        quantity = float(pos.quantity)
+        # pos.quantity is 0 for closed positions; use peak_qty for trade size
+        quantity = float(pos.peak_qty)
 
         pos_fees = sum(float(c) for c in pos.commissions())
         total_fees += abs(pos_fees)
