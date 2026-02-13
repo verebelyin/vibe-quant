@@ -612,7 +612,7 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
     st.divider()
 
     if not trader_id:
-        st.info("Enter a Trader ID in the sidebar to view paper trading status.")
+        st.info("Enter a Trader ID above to view paper trading status.")
         return
 
     # Load checkpoint data

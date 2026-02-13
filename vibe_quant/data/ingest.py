@@ -12,7 +12,6 @@ from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
     DEFAULT_CATALOG_PATH,
     INSTRUMENT_CONFIGS,
-    INTERVAL_TO_AGGREGATION,
     CatalogManager,
     aggregate_bars,
     create_instrument,
@@ -124,7 +123,16 @@ def update_symbol(
 
     Returns:
         Dict with counts: {'new_klines': N, 'bars_1m': N, ...}
+
+    Raises:
+        ValueError: If symbol is not in INSTRUMENT_CONFIGS.
     """
+    if symbol not in INSTRUMENT_CONFIGS:
+        supported = sorted(INSTRUMENT_CONFIGS.keys())
+        raise ValueError(
+            f"Unsupported symbol '{symbol}'. Supported symbols: {supported}"
+        )
+
     if archive is None:
         archive = RawDataArchive()
     if catalog is None:
@@ -391,7 +399,6 @@ def ingest_symbol(
 
     # Aggregate to higher timeframes
     for interval in ["5m", "15m", "1h", "4h"]:
-        step, aggregation = INTERVAL_TO_AGGREGATION[interval]
         bar_type = get_bar_type(symbol, interval)
         minutes = _interval_to_minutes(interval)
 
