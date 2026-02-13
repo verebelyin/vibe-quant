@@ -145,7 +145,7 @@ class SlippageEstimator:
 
         # SPEC formula: spread/2 + k * volatility * sqrt(order_size / avg_volume)
         market_impact = (
-            self._k * volatility * math.sqrt(order_size / avg_volume)
+            self._k * volatility * math.sqrt(abs(order_size) / avg_volume)
         )
         return half_spread + market_impact
 
@@ -170,7 +170,7 @@ class SlippageEstimator:
             Estimated slippage cost in quote currency.
         """
         factor = self.calculate(order_size, avg_volume, volatility, spread)
-        return factor * entry_price * order_size
+        return factor * entry_price * abs(order_size)
 
 
 @dataclass(frozen=True)

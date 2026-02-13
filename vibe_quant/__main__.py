@@ -31,7 +31,7 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
 
         print("\nValidation Results:")
         print(f"  Strategy: {result.strategy_name}")
-        print(f"  Total Return: {result.total_return:.2f}%")
+        print(f"  Total Return: {result.total_return * 100:.2f}%")
         print(f"  Sharpe Ratio: {result.sharpe_ratio:.2f}")
         print(f"  Sortino Ratio: {result.sortino_ratio:.2f}")
         print(f"  Max Drawdown: {result.max_drawdown:.2f}%")
@@ -83,7 +83,7 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         created = str(created_raw)[:16] if created_raw else ""
 
         sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
-        return_str = f"{total_return:.1f}%" if total_return is not None else "-"
+        return_str = f"{total_return * 100:.1f}%" if total_return is not None else "-"
         trades_str = str(trades) if trades is not None else "-"
 
         print(f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<8} {return_str:<10} {trades_str:<8} {created}")

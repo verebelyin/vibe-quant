@@ -13,6 +13,9 @@ Provides UI for:
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import subprocess
 import sys
 from datetime import UTC, date, datetime, timedelta
@@ -33,6 +36,39 @@ DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
 DEFAULT_CATALOG_PATH = Path("data/catalog")
 
 INTERVALS = ["1m", "5m", "15m", "1h", "4h"]
+
+# Session state key for tracking active data subprocess PID
+_SESSION_DATA_SUBPROCESS_PID = "data_mgmt_subprocess_pid"
+
+# Default timeout for data operations (1 hour)
+DATA_OPERATION_TIMEOUT_SECONDS = 3600
+
+
+def _register_subprocess(pid: int) -> None:
+    """Track subprocess PID in session state for cleanup."""
+    st.session_state[_SESSION_DATA_SUBPROCESS_PID] = pid
+
+
+def _unregister_subprocess() -> None:
+    """Clear tracked subprocess PID."""
+    st.session_state.pop(_SESSION_DATA_SUBPROCESS_PID, None)
+
+
+def _cleanup_orphaned_subprocess() -> None:
+    """Kill any orphaned data subprocess from a previous page visit.
+
+    Called at page load to prevent orphaned processes when user navigates away.
+    """
+    pid = st.session_state.get(_SESSION_DATA_SUBPROCESS_PID)
+    if pid is None:
+        return
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass  # Already dead or not accessible
+
+    _unregister_subprocess()
 
 
 def _get_storage_usage() -> dict[str, int]:
@@ -315,6 +351,78 @@ def _render_download_preview(
     st.dataframe(preview, width="stretch")
 
 
+def _run_subprocess_with_progress(
+    cmd: list[str],
+    label: str,
+    success_label: str,
+    fail_label: str,
+    timeout: float = DATA_OPERATION_TIMEOUT_SECONDS,
+) -> None:
+    """Run a subprocess with streaming progress, timeout, and PID tracking.
+
+    Args:
+        cmd: Command to execute.
+        label: Status label while running.
+        success_label: Status label on success.
+        fail_label: Status label on failure.
+        timeout: Max seconds before killing the subprocess (default 1 hour).
+    """
+    import time
+
+    status_container = st.status(label, expanded=True)
+    log_area = status_container.empty()
+    output_lines: list[str] = []
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        _register_subprocess(process.pid)
+        start_time = time.monotonic()
+        timed_out = False
+
+        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
+            output_lines.append(line.rstrip())
+            # Show last 30 lines to keep UI responsive
+            log_area.code("\n".join(output_lines[-30:]))
+
+            # Check timeout
+            if time.monotonic() - start_time > timeout:
+                timed_out = True
+                # Graceful SIGTERM, then SIGKILL after 5s
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError, OSError):
+                        process.kill()
+                break
+
+        if not timed_out:
+            process.wait()
+
+        _unregister_subprocess()
+
+        if timed_out:
+            timeout_min = int(timeout // 60)
+            status_container.update(
+                label=f"Timed out after {timeout_min}min", state="error",
+            )
+        elif process.returncode == 0:
+            status_container.update(label=success_label, state="complete")
+        else:
+            status_container.update(label=fail_label, state="error")
+    except Exception as e:
+        _unregister_subprocess()
+        status_container.update(label=f"Error: {e}", state="error")
+
+
 def _run_ingest(symbols: list[str], start: date, end: date) -> None:
     """Run data ingestion with streaming progress."""
     cmd = [
@@ -326,35 +434,12 @@ def _run_ingest(symbols: list[str], start: date, end: date) -> None:
         "--end", end.isoformat(),
     ]
 
-    status_container = st.status(
-        f"Ingesting {', '.join(symbols)} from {start} to {end}...",
-        expanded=True,
+    _run_subprocess_with_progress(
+        cmd=cmd,
+        label=f"Ingesting {', '.join(symbols)} from {start} to {end}...",
+        success_label="Data ingestion completed!",
+        fail_label="Data ingestion failed",
     )
-    log_area = status_container.empty()
-    output_lines: list[str] = []
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
-            output_lines.append(line.rstrip())
-            # Show last 30 lines to keep UI responsive
-            log_area.code("\n".join(output_lines[-30:]))
-
-        process.wait()
-
-        if process.returncode == 0:
-            status_container.update(label="Data ingestion completed!", state="complete")
-        else:
-            status_container.update(label="Data ingestion failed", state="error")
-    except Exception as e:
-        status_container.update(label=f"Error: {e}", state="error")
 
 
 def _run_update(symbols: list[str]) -> None:
@@ -366,34 +451,12 @@ def _run_update(symbols: list[str]) -> None:
         "--symbols", ",".join(symbols),
     ]
 
-    status_container = st.status(
-        f"Updating data for {', '.join(symbols)}...",
-        expanded=True,
+    _run_subprocess_with_progress(
+        cmd=cmd,
+        label=f"Updating data for {', '.join(symbols)}...",
+        success_label="Data update completed!",
+        fail_label="Data update failed",
     )
-    log_area = status_container.empty()
-    output_lines: list[str] = []
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
-            output_lines.append(line.rstrip())
-            log_area.code("\n".join(output_lines[-30:]))
-
-        process.wait()
-
-        if process.returncode == 0:
-            status_container.update(label="Data update completed!", state="complete")
-        else:
-            status_container.update(label="Data update failed", state="error")
-    except Exception as e:
-        status_container.update(label=f"Error: {e}", state="error")
 
 
 def _run_rebuild() -> None:
@@ -405,33 +468,12 @@ def _run_rebuild() -> None:
         "--from-archive",
     ]
 
-    status_container = st.status("Rebuilding catalog from archive...", expanded=True)
-    log_area = status_container.empty()
-    output_lines: list[str] = []
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-
-        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
-            output_lines.append(line.rstrip())
-            log_area.code("\n".join(output_lines[-30:]))
-
-        process.wait()
-
-        if process.returncode == 0:
-            status_container.update(
-                label="Catalog rebuild completed!", state="complete",
-            )
-        else:
-            status_container.update(label="Catalog rebuild failed", state="error")
-    except Exception as e:
-        status_container.update(label=f"Error: {e}", state="error")
+    _run_subprocess_with_progress(
+        cmd=cmd,
+        label="Rebuilding catalog from archive...",
+        success_label="Catalog rebuild completed!",
+        fail_label="Catalog rebuild failed",
+    )
 
 
 def render_data_browser() -> None:
@@ -652,6 +694,9 @@ def render_data_quality() -> None:
 
 def render() -> None:
     """Render the data management page."""
+    # Kill any orphaned subprocess from a previous page visit
+    _cleanup_orphaned_subprocess()
+
     st.title("Data Management")
 
     # Storage metrics at top

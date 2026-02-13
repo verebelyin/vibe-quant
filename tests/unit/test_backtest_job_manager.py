@@ -499,6 +499,47 @@ class TestStaleJobDetection:
         assert not manager.is_process_alive(pid)
 
 
+class TestRunWithHeartbeat:
+    """Tests for run_with_heartbeat function."""
+
+    def test_returns_manager_and_stop_fn(self, tmp_path: "Path") -> None:
+        """run_with_heartbeat returns (manager, stop_fn) tuple."""
+        from vibe_quant.jobs.manager import run_with_heartbeat
+
+        db_path = tmp_path / "hb.db"
+        result = run_with_heartbeat(run_id=1, db_path=db_path, interval=1)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+        manager, stop_fn = result
+        assert isinstance(manager, BacktestJobManager)
+        assert callable(stop_fn)
+
+        # Stop the heartbeat thread
+        stop_fn()
+        manager.close()
+
+    def test_stop_fn_terminates_thread(self, tmp_path: "Path") -> None:
+        """stop_fn should terminate the heartbeat thread."""
+        import threading
+
+        from vibe_quant.jobs.manager import run_with_heartbeat
+
+        db_path = tmp_path / "hb2.db"
+        initial_threads = threading.active_count()
+
+        manager, stop_fn = run_with_heartbeat(run_id=1, db_path=db_path, interval=1)
+        # Thread should have been created
+        time.sleep(0.1)
+
+        stop_fn()
+        time.sleep(0.2)
+
+        # Thread should be stopped
+        manager.close()
+
+
 class TestConstants:
     """Tests for module constants."""
 

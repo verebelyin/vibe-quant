@@ -249,6 +249,14 @@ def extract_trades(
     if result.total_trades > 0:
         result.win_rate = winning / result.total_trades
 
+    # NT 1.222+ may not populate max_drawdown via stats_pnls/stats_returns
+    # (the old MaxDrawdown indicator was removed). Compute from equity curve
+    # built from trade PnLs as a robust fallback.
+    if result.max_drawdown == 0.0 and result.trades:
+        result.max_drawdown = _compute_max_drawdown_from_trades(
+            result.trades, result.starting_balance
+        )
+
     compute_extended_metrics(result)
 
 
@@ -308,6 +316,42 @@ def estimate_market_stats(engine: BacktestEngine) -> tuple[float, float]:
     except Exception:
         logger.debug("Could not estimate market stats, using defaults", exc_info=True)
         return default_volume, default_volatility
+
+
+def _compute_max_drawdown_from_trades(
+    trades: list[TradeRecord],
+    starting_balance: float,
+) -> float:
+    """Compute max drawdown from trade PnLs as equity curve.
+
+    NT 1.222+ removed the MaxDrawdown indicator, so stats may not contain it.
+    This reconstructs the equity curve from cumulative net PnL and computes
+    max drawdown = max((peak - current) / peak) over the curve.
+
+    Args:
+        trades: Sorted list of trade records.
+        starting_balance: Starting account balance.
+
+    Returns:
+        Max drawdown as a positive fraction (e.g. 0.12 for 12%).
+    """
+    if not trades or starting_balance <= 0:
+        return 0.0
+
+    equity = starting_balance
+    peak = equity
+    max_dd = 0.0
+
+    for trade in trades:
+        equity += trade.net_pnl
+        if equity > peak:
+            peak = equity
+        if peak > 0:
+            dd = (peak - equity) / peak
+            if dd > max_dd:
+                max_dd = dd
+
+    return max_dd
 
 
 def compute_extended_metrics(result: ValidationResult) -> None:

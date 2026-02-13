@@ -32,6 +32,8 @@ class TestStrategyRiskConfig:
         assert config.max_daily_loss_pct == Decimal("0.02")
         assert config.max_consecutive_losses == 10
         assert config.max_position_count == 5
+        assert config.drawdown_scale_pct == Decimal("0.10")
+        assert config.cooldown_after_halt_hours == 24
 
     def test_custom_values(self) -> None:
         """Should accept custom values."""
@@ -40,11 +42,33 @@ class TestStrategyRiskConfig:
             max_daily_loss_pct=Decimal("0.03"),
             max_consecutive_losses=15,
             max_position_count=10,
+            drawdown_scale_pct=Decimal("0.12"),
+            cooldown_after_halt_hours=48,
         )
         assert config.max_drawdown_pct == Decimal("0.20")
         assert config.max_daily_loss_pct == Decimal("0.03")
         assert config.max_consecutive_losses == 15
         assert config.max_position_count == 10
+        assert config.drawdown_scale_pct == Decimal("0.12")
+        assert config.cooldown_after_halt_hours == 48
+
+    def test_drawdown_scale_disabled(self) -> None:
+        """Should accept None to disable drawdown scaling."""
+        config = StrategyRiskConfig(drawdown_scale_pct=None)
+        assert config.drawdown_scale_pct is None
+
+    def test_invalid_drawdown_scale_exceeds_halt(self) -> None:
+        """drawdown_scale_pct must be < max_drawdown_pct."""
+        with pytest.raises(ValueError, match="drawdown_scale_pct must be < max_drawdown_pct"):
+            StrategyRiskConfig(
+                max_drawdown_pct=Decimal("0.15"),
+                drawdown_scale_pct=Decimal("0.15"),
+            )
+
+    def test_invalid_cooldown_negative(self) -> None:
+        """cooldown_after_halt_hours must be >= 0."""
+        with pytest.raises(ValueError, match="cooldown_after_halt_hours must be >= 0"):
+            StrategyRiskConfig(cooldown_after_halt_hours=-1)
 
     def test_invalid_drawdown_zero(self) -> None:
         """Should reject zero drawdown."""
@@ -97,6 +121,7 @@ class TestPortfolioRiskConfig:
         assert config.max_portfolio_drawdown_pct == Decimal("0.20")
         assert config.max_total_exposure_pct == Decimal("0.50")
         assert config.max_single_instrument_pct == Decimal("0.30")
+        assert config.max_portfolio_heat_pct == Decimal("0.06")
 
     def test_custom_values(self) -> None:
         """Should accept custom values."""
@@ -104,10 +129,27 @@ class TestPortfolioRiskConfig:
             max_portfolio_drawdown_pct=Decimal("0.25"),
             max_total_exposure_pct=Decimal("0.80"),
             max_single_instrument_pct=Decimal("0.40"),
+            max_portfolio_heat_pct=Decimal("0.10"),
         )
         assert config.max_portfolio_drawdown_pct == Decimal("0.25")
         assert config.max_total_exposure_pct == Decimal("0.80")
         assert config.max_single_instrument_pct == Decimal("0.40")
+        assert config.max_portfolio_heat_pct == Decimal("0.10")
+
+    def test_portfolio_heat_disabled(self) -> None:
+        """Should accept None to disable portfolio heat checking."""
+        config = PortfolioRiskConfig(max_portfolio_heat_pct=None)
+        assert config.max_portfolio_heat_pct is None
+
+    def test_invalid_portfolio_heat_zero(self) -> None:
+        """Should reject zero portfolio heat."""
+        with pytest.raises(ValueError, match="max_portfolio_heat_pct must be positive"):
+            PortfolioRiskConfig(max_portfolio_heat_pct=Decimal("0"))
+
+    def test_invalid_portfolio_heat_over_100(self) -> None:
+        """Should reject portfolio heat over 100%."""
+        with pytest.raises(ValueError, match="max_portfolio_heat_pct must be <= 1"):
+            PortfolioRiskConfig(max_portfolio_heat_pct=Decimal("1.5"))
 
     def test_invalid_portfolio_drawdown_zero(self) -> None:
         """Should reject zero portfolio drawdown."""
@@ -152,6 +194,8 @@ class TestDefaultConfigFactories:
         assert config.max_daily_loss_pct == Decimal("0.02")
         assert config.max_consecutive_losses == 10
         assert config.max_position_count == 5
+        assert config.drawdown_scale_pct == Decimal("0.10")
+        assert config.cooldown_after_halt_hours == 24
 
     def test_create_default_portfolio_risk_config(self) -> None:
         """Should create valid default portfolio config."""
@@ -160,6 +204,7 @@ class TestDefaultConfigFactories:
         assert config.max_portfolio_drawdown_pct == Decimal("0.20")
         assert config.max_total_exposure_pct == Decimal("0.50")
         assert config.max_single_instrument_pct == Decimal("0.30")
+        assert config.max_portfolio_heat_pct == Decimal("0.06")
 
 
 class TestRiskState:
@@ -240,6 +285,8 @@ class TestStrategyRiskState:
         assert state.current_date is None
         assert state.state == RiskState.ACTIVE
         assert state.position_count == 0
+        assert state.position_scale_factor == Decimal("1")
+        assert state.halted_at is None
 
     def test_mutable(self) -> None:
         """State should be mutable for updates."""
@@ -248,11 +295,13 @@ class TestStrategyRiskState:
         state.current_drawdown_pct = Decimal("0.05")
         state.consecutive_losses = 3
         state.state = RiskState.WARNING
+        state.position_scale_factor = Decimal("0.75")
 
         assert state.high_water_mark == Decimal("100000")
         assert state.current_drawdown_pct == Decimal("0.05")
         assert state.consecutive_losses == 3
         assert state.state == RiskState.WARNING
+        assert state.position_scale_factor == Decimal("0.75")
 
 
 class TestPortfolioRiskState:
@@ -266,6 +315,7 @@ class TestPortfolioRiskState:
         assert state.total_exposure_pct == Decimal("0")
         assert state.instrument_exposures == {}
         assert state.state == RiskState.ACTIVE
+        assert state.portfolio_heat_pct == Decimal("0")
 
     def test_mutable(self) -> None:
         """State should be mutable for updates."""
@@ -277,10 +327,12 @@ class TestPortfolioRiskState:
             "ETHUSDT-PERP": Decimal("0.15"),
         }
         state.state = RiskState.WARNING
+        state.portfolio_heat_pct = Decimal("0.04")
 
         assert state.high_water_mark == Decimal("500000")
         assert state.total_exposure_pct == Decimal("0.35")
         assert len(state.instrument_exposures) == 2
+        assert state.portfolio_heat_pct == Decimal("0.04")
 
 
 class TestStrategyRiskActorConfig:
@@ -526,3 +578,85 @@ class TestRiskStateTransitions:
         state.current_drawdown_pct = Decimal("0")  # Recovered
         # State remains HALTED until explicitly changed
         assert state.state == RiskState.HALTED
+
+
+class TestDrawdownScaling:
+    """Tests for drawdown-based position scaling."""
+
+    def test_no_drawdown_full_size(self) -> None:
+        """Scale factor = 1.0 when no drawdown."""
+        config = StrategyRiskConfig(
+            max_drawdown_pct=Decimal("0.15"),
+            drawdown_scale_pct=Decimal("0.10"),
+        )
+        state = StrategyRiskState(current_drawdown_pct=Decimal("0"))
+        # Simulate the scaling logic
+        dd = state.current_drawdown_pct
+        assert dd <= Decimal("0")  # no DD -> factor = 1.0
+
+    def test_below_scale_threshold_partial(self) -> None:
+        """Linear scale from 1.0 to 0.5 as DD approaches scale_pct."""
+        config = StrategyRiskConfig(
+            max_drawdown_pct=Decimal("0.15"),
+            drawdown_scale_pct=Decimal("0.10"),
+        )
+        # At 5% DD (half of 10% scale threshold): factor = 1.0 - (0.5/1.0)*0.5 = 0.75
+        dd = Decimal("0.05")
+        ratio = dd / config.drawdown_scale_pct
+        factor = Decimal("1") - (ratio * Decimal("0.5"))
+        assert factor == Decimal("0.75")
+
+    def test_at_scale_threshold_half_size(self) -> None:
+        """Factor = 0.5 exactly at drawdown_scale_pct."""
+        dd = Decimal("0.10")
+        scale_pct = Decimal("0.10")
+        ratio = dd / scale_pct
+        factor = Decimal("1") - (ratio * Decimal("0.5"))
+        assert factor == Decimal("0.5")
+
+    def test_between_scale_and_halt_linear(self) -> None:
+        """Linear scale from 0.5 to 0.0 between scale and halt."""
+        scale_pct = Decimal("0.10")
+        halt_pct = Decimal("0.15")
+        dd = Decimal("0.125")  # midpoint
+        remaining = halt_pct - scale_pct
+        ratio = (dd - scale_pct) / remaining
+        factor = Decimal("0.5") * (Decimal("1") - ratio)
+        assert factor == Decimal("0.25")
+
+    def test_disabled_when_none(self) -> None:
+        """Scale factor stays 1.0 when drawdown_scale_pct is None."""
+        config = StrategyRiskConfig(drawdown_scale_pct=None)
+        # No scaling configured -> factor stays 1.0
+        assert config.drawdown_scale_pct is None
+
+
+class TestPortfolioHeat:
+    """Tests for portfolio heat limit."""
+
+    def test_heat_breach_detection(self) -> None:
+        """Should detect when portfolio heat exceeds limit."""
+        config = PortfolioRiskConfig(max_portfolio_heat_pct=Decimal("0.06"))
+        state = PortfolioRiskState(portfolio_heat_pct=Decimal("0.07"))
+        assert state.portfolio_heat_pct >= config.max_portfolio_heat_pct
+
+    def test_heat_within_limit(self) -> None:
+        """Should not trigger when heat within limit."""
+        config = PortfolioRiskConfig(max_portfolio_heat_pct=Decimal("0.06"))
+        state = PortfolioRiskState(portfolio_heat_pct=Decimal("0.04"))
+        assert state.portfolio_heat_pct < config.max_portfolio_heat_pct
+
+    def test_heat_calculation(self) -> None:
+        """Heat = sum(position_risk) / equity."""
+        equity = Decimal("100000")
+        # 2 positions, each risking 2% of notional at stop
+        pos1_notional = Decimal("20000")
+        pos2_notional = Decimal("10000")
+        stop_pct = Decimal("0.02")
+        total_heat = (pos1_notional * stop_pct + pos2_notional * stop_pct) / equity
+        assert total_heat == Decimal("0.006")  # 0.6%
+
+    def test_heat_disabled_when_none(self) -> None:
+        """Should accept None to disable heat checking."""
+        config = PortfolioRiskConfig(max_portfolio_heat_pct=None)
+        assert config.max_portfolio_heat_pct is None

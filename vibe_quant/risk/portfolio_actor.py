@@ -32,11 +32,14 @@ class PortfolioRiskActorConfig(ActorConfig, frozen=True):
         max_portfolio_drawdown_pct: Maximum portfolio drawdown before halt.
         max_total_exposure_pct: Maximum total exposure as pct of equity.
         max_single_instrument_pct: Maximum concentration in single instrument.
+        max_portfolio_heat_pct: Maximum portfolio heat (total risk from all stops).
+            None disables heat checking.
     """
 
     max_portfolio_drawdown_pct: Decimal = Decimal("0.20")
     max_total_exposure_pct: Decimal = Decimal("0.50")
     max_single_instrument_pct: Decimal = Decimal("0.30")
+    max_portfolio_heat_pct: Decimal | None = Decimal("0.06")
 
 
 @dataclass
@@ -49,6 +52,7 @@ class PortfolioRiskState:
         total_exposure_pct: Current total exposure as pct of equity.
         instrument_exposures: Per-instrument exposure as pct of equity.
         state: Current risk state.
+        portfolio_heat_pct: Current portfolio heat (total risk from stops / equity).
     """
 
     high_water_mark: Decimal = Decimal("0")
@@ -56,6 +60,7 @@ class PortfolioRiskState:
     total_exposure_pct: Decimal = Decimal("0")
     instrument_exposures: dict[str, Decimal] = field(default_factory=dict)
     state: RiskState = RiskState.ACTIVE
+    portfolio_heat_pct: Decimal = Decimal("0")
 
 
 class PortfolioRiskActor(Actor):  # type: ignore[misc]
@@ -80,6 +85,7 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             max_portfolio_drawdown_pct=config.max_portfolio_drawdown_pct,
             max_total_exposure_pct=config.max_total_exposure_pct,
             max_single_instrument_pct=config.max_single_instrument_pct,
+            max_portfolio_heat_pct=config.max_portfolio_heat_pct,
         )
         self._state = PortfolioRiskState()
         self._halted_strategies: set[str] = set()
@@ -98,6 +104,11 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
     def total_exposure_pct(self) -> Decimal:
         """Get current total exposure percentage."""
         return self._state.total_exposure_pct
+
+    @property
+    def portfolio_heat_pct(self) -> Decimal:
+        """Get current portfolio heat percentage."""
+        return self._state.portfolio_heat_pct
 
     def on_start(self) -> None:
         """Initialize actor on start."""
@@ -146,6 +157,14 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
                 )
                 return RiskState.HALTED
 
+        # Portfolio heat check
+        if (
+            self._risk_config.max_portfolio_heat_pct is not None
+            and self._state.portfolio_heat_pct >= self._risk_config.max_portfolio_heat_pct
+        ):
+            self._halt_portfolio("portfolio_heat", self._state.portfolio_heat_pct)
+            return RiskState.HALTED
+
         self._state.state = RiskState.ACTIVE
         return RiskState.ACTIVE
 
@@ -158,6 +177,8 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             threshold = self._risk_config.max_portfolio_drawdown_pct
         elif metric == "total_exposure":
             threshold = self._risk_config.max_total_exposure_pct
+        elif metric == "portfolio_heat":
+            threshold = self._risk_config.max_portfolio_heat_pct or Decimal("0")
         else:
             threshold = self._risk_config.max_single_instrument_pct
 
@@ -206,23 +227,24 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
         self._update_exposures(equity)
 
     def _update_exposures(self, equity: Decimal) -> None:
-        """Update exposure calculations."""
+        """Update exposure and portfolio heat calculations."""
         if equity <= Decimal("0"):
             self._state.total_exposure_pct = Decimal("0")
             self._state.instrument_exposures = {}
+            self._state.portfolio_heat_pct = Decimal("0")
             return
 
         try:
             positions = self.cache.positions_open()
 
             total_notional = Decimal("0")
+            total_heat = Decimal("0")
             instrument_notionals: dict[str, Decimal] = {}
 
             for position in positions:
-                notional = abs(
-                    Decimal(str(position.quantity.as_double()))
-                    * Decimal(str(position.avg_px_open))
-                )
+                qty = Decimal(str(position.quantity.as_double()))
+                avg_open = Decimal(str(position.avg_px_open))
+                notional = abs(qty * avg_open)
                 total_notional += notional
 
                 instrument_id = str(position.instrument_id)
@@ -230,10 +252,19 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
                     instrument_notionals[instrument_id] = Decimal("0")
                 instrument_notionals[instrument_id] += notional
 
+                # Portfolio heat: estimate risk per position as
+                # (position_size * estimated_stop_distance) / equity.
+                # Without explicit stop prices, use a conservative 2%
+                # of entry price as the stop distance estimate.
+                stop_distance_pct = Decimal("0.02")
+                position_risk = abs(qty) * avg_open * stop_distance_pct
+                total_heat += position_risk
+
             self._state.total_exposure_pct = total_notional / equity
             self._state.instrument_exposures = {
                 k: v / equity for k, v in instrument_notionals.items()
             }
+            self._state.portfolio_heat_pct = total_heat / equity
 
         except Exception as e:
             self._log_error(f"Error calculating exposures: {e}")

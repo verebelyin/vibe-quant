@@ -138,7 +138,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
             for i, c in enumerate(result.filtered_candidates[:10]):
                 params_short = c.parameters[:37] + "..." if len(c.parameters) > 40 else c.parameters
-                print(f"{i+1:3d}  {c.sharpe_ratio:8.3f}  {c.total_return:7.2f}%  {params_short:<40}")
+                print(f"{i+1:3d}  {c.sharpe_ratio:8.3f}  {c.total_return * 100:7.2f}%  {params_short:<40}")
 
             if len(result.filtered_candidates) > 10:
                 print(f"  ... and {len(result.filtered_candidates) - 10} more")
@@ -205,7 +205,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
             print(
                 f"{i+1:3d}  {c['id']:5d}  {c.get('sharpe_ratio', 0):8.3f}  "
-                f"{c.get('total_return', 0):7.2f}%  {dsr:>4}  {wfa:>4}  {cv:>4}"
+                f"{(c.get('total_return', 0) or 0) * 100:7.2f}%  {dsr:>4}  {wfa:>4}  {cv:>4}"
             )
 
         if len(candidates) > 20:

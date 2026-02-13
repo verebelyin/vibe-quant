@@ -16,6 +16,7 @@ from vibe_quant.dsl.conditions import (
     extract_indicator_refs,
     parse_condition,
 )
+from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.dsl.schema import StrategyDSL
 
 
@@ -215,6 +216,28 @@ def parse_strategy_string(
     return strategy
 
 
+def _build_valid_indicator_names(strategy: StrategyDSL) -> list[str]:
+    """Build list of valid indicator names including multi-output sub-names.
+
+    For multi-output indicators (e.g., MACD with outputs macd/signal/histogram),
+    adds both the base name and ``{base}_{output}`` sub-names so conditions
+    like ``macd.histogram > 0`` (resolved to ``macd_histogram``) validate.
+
+    Args:
+        strategy: Parsed strategy.
+
+    Returns:
+        List of valid indicator names for condition validation.
+    """
+    names: list[str] = list(strategy.indicators.keys())
+    for name, config in strategy.indicators.items():
+        spec = indicator_registry.get(config.type)
+        if spec is not None and spec.output_names != ("value",):
+            for output_name in spec.output_names:
+                names.append(f"{name}_{output_name}")
+    return names
+
+
 def _validate_condition_indicators(
     strategy: StrategyDSL,
     yaml_content: str,
@@ -230,32 +253,32 @@ def _validate_condition_indicators(
     Raises:
         DSLValidationError: If conditions reference undefined indicators
     """
-    indicator_names = set(strategy.indicators.keys())
+    valid_names = _build_valid_indicator_names(strategy)
     errors: list[str] = []
 
     # Check entry conditions
     for cond_str in strategy.entry_conditions.long:
         try:
-            parse_condition(cond_str, list(indicator_names))
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             errors.append(f"entry_conditions.long: {e}")
 
     for cond_str in strategy.entry_conditions.short:
         try:
-            parse_condition(cond_str, list(indicator_names))
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             errors.append(f"entry_conditions.short: {e}")
 
     # Check exit conditions
     for cond_str in strategy.exit_conditions.long:
         try:
-            parse_condition(cond_str, list(indicator_names))
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             errors.append(f"exit_conditions.long: {e}")
 
     for cond_str in strategy.exit_conditions.short:
         try:
-            parse_condition(cond_str, list(indicator_names))
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             errors.append(f"exit_conditions.short: {e}")
 
@@ -364,31 +387,31 @@ def validate_strategy_dict(data: dict[str, object]) -> StrategyDSL:
             details=errors,
         ) from e
 
-    # Validate conditions
-    indicator_names = list(strategy.indicators.keys())
+    # Validate conditions (including multi-output sub-names)
+    valid_names = _build_valid_indicator_names(strategy)
 
     condition_errors: list[str] = []
     for cond_str in strategy.entry_conditions.long:
         try:
-            parse_condition(cond_str, indicator_names)
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             condition_errors.append(f"entry_conditions.long: {e}")
 
     for cond_str in strategy.entry_conditions.short:
         try:
-            parse_condition(cond_str, indicator_names)
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             condition_errors.append(f"entry_conditions.short: {e}")
 
     for cond_str in strategy.exit_conditions.long:
         try:
-            parse_condition(cond_str, indicator_names)
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             condition_errors.append(f"exit_conditions.long: {e}")
 
     for cond_str in strategy.exit_conditions.short:
         try:
-            parse_condition(cond_str, indicator_names)
+            parse_condition(cond_str, valid_names)
         except ConditionParseError as e:
             condition_errors.append(f"exit_conditions.short: {e}")
 

@@ -91,6 +91,7 @@ class RawDataArchive:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA busy_timeout=5000;")
+            self._conn.execute("PRAGMA foreign_keys=ON;")
             self._conn.executescript(ARCHIVE_SCHEMA)
             self._conn.commit()
         return self._conn

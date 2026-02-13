@@ -64,6 +64,10 @@ class Operand:
     def parse(cls, s: str, valid_indicators: Sequence[str] | None = None) -> Operand:
         """Parse operand from string.
 
+        Supports dot notation for multi-output indicators: ``macd.histogram``
+        is resolved to the flat name ``macd_histogram`` which the compiler
+        registers as a sub-output accessor.
+
         Args:
             s: String to parse
             valid_indicators: Optional list of valid indicator names for validation
@@ -81,22 +85,29 @@ class Operand:
         if s.lower() in price_refs:
             return cls(value=s.lower(), is_indicator=False, is_price=True)
 
-        # Try to parse as numeric
-        try:
-            # Handle both int and float
-            if "." in s:
+        # Try to parse as numeric (only if no dot-notation indicator)
+        # A pure numeric like "3.5" has no alpha chars; "macd.histogram" does
+        if not any(c.isalpha() for c in s):
+            try:
                 return cls(value=float(s), is_indicator=False, is_price=False)
-            return cls(value=float(s), is_indicator=False, is_price=False)
-        except ValueError:
-            pass
+            except ValueError:
+                pass
+        elif "." not in s:
+            try:
+                return cls(value=float(s), is_indicator=False, is_price=False)
+            except ValueError:
+                pass
+
+        # Handle dot notation: "macd.histogram" -> "macd_histogram"
+        resolved = s.replace(".", "_") if "." in s else s
 
         # Must be an indicator reference
-        if valid_indicators is not None and s not in valid_indicators:
+        if valid_indicators is not None and resolved not in valid_indicators:
             valid_list = ", ".join(sorted(valid_indicators)) if valid_indicators else "(none)"
             msg = f"Unknown indicator '{s}' in condition. Defined indicators: {valid_list}"
             raise ValueError(msg)
 
-        return cls(value=s, is_indicator=True, is_price=False)
+        return cls(value=resolved, is_indicator=True, is_price=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,15 +172,16 @@ class ConditionParseError(ValueError):
 
 
 # Regex patterns for parsing
+# Allow dot notation for multi-output indicators (e.g., macd.histogram)
 _COMPARISON_PATTERN = re.compile(
-    r"^\s*(\w+)\s*(>=|<=|>|<)\s*(-?\w+\.?\w*)\s*$"
+    r"^\s*(\w+(?:\.\w+)?)\s*(>=|<=|>|<)\s*(-?\w+(?:\.\w+)?)\s*$"
 )
 _CROSS_PATTERN = re.compile(
-    r"^\s*(\w+)\s+(crosses_above|crosses_below)\s+(\w+\.?\w*)\s*$",
+    r"^\s*(\w+(?:\.\w+)?)\s+(crosses_above|crosses_below)\s+(\w+(?:\.\w+)?)\s*$",
     re.IGNORECASE,
 )
 _BETWEEN_PATTERN = re.compile(
-    r"^\s*(\w+)\s+between\s+(-?\w+\.?\w*)\s+(-?\w+\.?\w*)\s*$",
+    r"^\s*(\w+(?:\.\w+)?)\s+between\s+(-?\w+(?:\.\w+)?)\s+(-?\w+(?:\.\w+)?)\s*$",
     re.IGNORECASE,
 )
 

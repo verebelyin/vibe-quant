@@ -71,6 +71,7 @@ class OverfittingPipeline:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
     def close(self) -> None:
@@ -456,7 +457,7 @@ class OverfittingPipeline:
 
             for i, c in enumerate(result.filtered_candidates[:10]):
                 lines.append(f"\n  [{i+1}] {c.strategy_name}")
-                lines.append(f"      Sharpe: {c.sharpe_ratio:.3f}  Return: {c.total_return:.2f}%")
+                lines.append(f"      Sharpe: {c.sharpe_ratio:.3f}  Return: {c.total_return * 100:.2f}%")
                 lines.append(f"      DSR: {'PASS' if c.passed_dsr else ('FAIL' if c.passed_dsr is False else 'N/A')}")
                 lines.append(f"      WFA: {'PASS' if c.passed_wfa else ('FAIL' if c.passed_wfa is False else 'N/A')}")
                 lines.append(f"      CV:  {'PASS' if c.passed_cv else ('FAIL' if c.passed_cv is False else 'N/A')}")

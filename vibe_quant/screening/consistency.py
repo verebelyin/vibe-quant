@@ -75,6 +75,7 @@ class ConsistencyChecker:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn.execute("PRAGMA foreign_keys=ON")
             self._ensure_tables()
         return self._conn
 
@@ -370,7 +371,7 @@ class ConsistencyChecker:
             for c in sensitive:
                 lines.append(f"  {c.strategy_name}")
                 lines.append(f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})")
-                lines.append(f"    Return: {c.screening_return:.2f}% -> {c.validation_return:.2f}% ({c.return_degradation:+.1%})")
+                lines.append(f"    Return: {c.screening_return * 100:.2f}% -> {c.validation_return * 100:.2f}% ({c.return_degradation:+.1%})")
             lines.append("")
 
         if improved:

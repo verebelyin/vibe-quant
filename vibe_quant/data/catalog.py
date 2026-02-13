@@ -74,6 +74,7 @@ INTERVAL_TO_AGGREGATION = {
     "15m": (15, BarAggregation.MINUTE),
     "1h": (1, BarAggregation.HOUR),
     "4h": (4, BarAggregation.HOUR),
+    "1d": (1, BarAggregation.DAY),
 }
 
 
@@ -347,11 +348,21 @@ class CatalogManager:
     def write_bars(self, bars: list[Bar]) -> None:
         """Write bars to catalog.
 
+        Validates that bars are non-empty and have valid (non-zero) timestamps
+        before writing to avoid corrupt 4-byte parquet files.
+
         Args:
             bars: List of bars to write.
         """
-        if bars:
-            self.catalog.write_data(bars)
+        if not bars:
+            return
+
+        # Filter out bars with epoch-zero timestamps (corrupt data)
+        valid_bars = [b for b in bars if b.ts_event > 0 and b.ts_init > 0]
+        if not valid_bars:
+            return
+
+        self.catalog.write_data(valid_bars)
 
     def get_instruments(self) -> list[CryptoPerpetual]:
         """Get all instruments from catalog.

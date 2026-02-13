@@ -40,6 +40,9 @@ class StrategyRiskState:
         current_date: Date for daily reset tracking.
         state: Current risk state.
         position_count: Number of open positions.
+        position_scale_factor: Current position size scaling factor (0.0-1.0).
+            Reduced by drawdown scaling. 1.0 = full size.
+        halted_at: Datetime when strategy was halted (for cooldown tracking).
     """
 
     high_water_mark: Decimal = Decimal("0")
@@ -50,6 +53,8 @@ class StrategyRiskState:
     current_date: date | None = None
     state: RiskState = RiskState.ACTIVE
     position_count: int = 0
+    position_scale_factor: Decimal = Decimal("1")
+    halted_at: datetime | None = None
 
 
 class StrategyRiskActorConfig(ActorConfig, frozen=True):
@@ -61,6 +66,8 @@ class StrategyRiskActorConfig(ActorConfig, frozen=True):
         max_daily_loss_pct: Maximum daily loss before halt.
         max_consecutive_losses: Maximum consecutive losses before halt.
         max_position_count: Maximum open positions allowed.
+        drawdown_scale_pct: DD threshold where position scaling begins (None=disabled).
+        cooldown_after_halt_hours: Hours to wait before auto-resuming after halt (0=manual only).
     """
 
     strategy_id: str
@@ -68,6 +75,8 @@ class StrategyRiskActorConfig(ActorConfig, frozen=True):
     max_daily_loss_pct: Decimal = Decimal("0.02")
     max_consecutive_losses: int = 10
     max_position_count: int = 5
+    drawdown_scale_pct: Decimal | None = Decimal("0.10")
+    cooldown_after_halt_hours: int = 24
 
 
 class StrategyRiskActor(Actor):  # type: ignore[misc]
@@ -99,6 +108,8 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
             max_daily_loss_pct=config.max_daily_loss_pct,
             max_consecutive_losses=config.max_consecutive_losses,
             max_position_count=config.max_position_count,
+            drawdown_scale_pct=config.drawdown_scale_pct,
+            cooldown_after_halt_hours=config.cooldown_after_halt_hours,
         )
         self._state = StrategyRiskState()
         self._strategy_id_str = config.strategy_id
@@ -122,6 +133,11 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
     def daily_pnl(self) -> Decimal:
         """Get current daily PnL."""
         return self._state.daily_pnl
+
+    @property
+    def position_scale_factor(self) -> Decimal:
+        """Get current position size scaling factor (0.0-1.0)."""
+        return self._state.position_scale_factor
 
     def on_start(self) -> None:
         """Initialize actor on start."""
@@ -165,9 +181,21 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
         return self._check_risk()
 
     def _check_risk(self) -> RiskState:
-        """Internal risk check implementation."""
+        """Internal risk check implementation.
+
+        Includes cooldown auto-resume: if halted and cooldown period has
+        elapsed, transitions back to ACTIVE.
+        Also computes drawdown-based position scaling factor.
+        """
         if self._state.state == RiskState.HALTED:
-            return RiskState.HALTED
+            if self._check_cooldown_expired():
+                self._state.state = RiskState.ACTIVE
+                self._state.halted_at = None
+                self._log_info(
+                    f"Cooldown expired for {self._strategy_id_str}, resuming"
+                )
+            else:
+                return RiskState.HALTED
 
         if self._state.current_drawdown_pct >= self._risk_config.max_drawdown_pct:
             self._halt_strategy("drawdown", self._state.current_drawdown_pct)
@@ -185,6 +213,9 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
             )
             return RiskState.HALTED
 
+        # Drawdown-based position scaling
+        self._update_position_scale_factor()
+
         if self._state.position_count >= self._risk_config.max_position_count:
             self._state.state = RiskState.WARNING
             return RiskState.WARNING
@@ -195,6 +226,8 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
     def _halt_strategy(self, metric: str, value: Decimal) -> None:
         """Halt strategy trading due to risk breach."""
         self._state.state = RiskState.HALTED
+        self._state.halted_at = datetime.now(UTC)
+        self._state.position_scale_factor = Decimal("0")
         self._cancel_all_strategy_orders()
 
         thresholds = {
@@ -282,6 +315,59 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
         self._state.current_date = today
         self._state.daily_pnl = Decimal("0")
         self._state.daily_start_equity = self._get_current_equity()
+
+    def _update_position_scale_factor(self) -> None:
+        """Update position size scaling based on drawdown.
+
+        When drawdown exceeds drawdown_scale_pct, linearly reduce the
+        position scale factor from 1.0 (at 0 DD) through 0.5 (at scale
+        threshold) down to 0.0 (at halt threshold). If drawdown scaling
+        is disabled (None), factor stays at 1.0.
+        """
+        scale_pct = self._risk_config.drawdown_scale_pct
+        if scale_pct is None:
+            self._state.position_scale_factor = Decimal("1")
+            return
+
+        dd = self._state.current_drawdown_pct
+        if dd <= Decimal("0"):
+            self._state.position_scale_factor = Decimal("1")
+        elif dd < scale_pct:
+            # Linear from 1.0 at 0 DD to 0.5 at scale_pct
+            ratio = dd / scale_pct
+            self._state.position_scale_factor = Decimal("1") - (ratio * Decimal("0.5"))
+        elif dd < self._risk_config.max_drawdown_pct:
+            # Linear from 0.5 at scale_pct to 0.0 at halt_pct
+            remaining = self._risk_config.max_drawdown_pct - scale_pct
+            if remaining > Decimal("0"):
+                ratio = (dd - scale_pct) / remaining
+                self._state.position_scale_factor = Decimal("0.5") * (Decimal("1") - ratio)
+            else:
+                self._state.position_scale_factor = Decimal("0")
+        else:
+            self._state.position_scale_factor = Decimal("0")
+
+    def _check_cooldown_expired(self) -> bool:
+        """Check if cooldown period has elapsed since halt.
+
+        Returns:
+            True if cooldown has expired and strategy can resume.
+            False if still in cooldown or cooldown is disabled (0 hours).
+        """
+        cooldown_hours = self._risk_config.cooldown_after_halt_hours
+        if cooldown_hours <= 0:
+            return False  # Manual resume only
+
+        if self._state.halted_at is None:
+            return False
+
+        halted_at = self._state.halted_at
+        if halted_at.tzinfo is None:
+            halted_at = halted_at.replace(tzinfo=UTC)
+
+        elapsed = datetime.now(UTC) - halted_at
+        from datetime import timedelta
+        return elapsed >= timedelta(hours=cooldown_hours)
 
     def _check_daily_reset(self) -> None:
         """Check if daily state should be reset (new day)."""

@@ -17,6 +17,7 @@ from vibe_quant.db.schema import init_schema
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Callable
 
 # Type alias for database row dict
 RowDict = dict[str, Any]
@@ -242,12 +243,22 @@ class BacktestJobManager:
         )
         return [self._record_to_info(dict(row)) for row in cursor]
 
-    def kill_job(self, run_id: int, force: bool = True) -> bool:
+    def kill_job(
+        self,
+        run_id: int,
+        force: bool = False,
+        graceful_timeout: float = 10.0,
+    ) -> bool:
         """Terminate a running job.
+
+        Default behavior sends SIGTERM for graceful shutdown. If the process
+        doesn't exit within ``graceful_timeout`` seconds, SIGKILL is sent.
 
         Args:
             run_id: Backtest run ID.
-            force: If True, use SIGKILL (default). If False, use SIGTERM.
+            force: If True, skip SIGTERM and send SIGKILL immediately.
+            graceful_timeout: Seconds to wait after SIGTERM before SIGKILL.
+                Only used when ``force=False``.
 
         Returns:
             True if job was killed, False if job not found or not running.
@@ -261,10 +272,27 @@ class BacktestJobManager:
 
         pid = record["pid"]
 
-        # Try to terminate the process
         try:
-            sig = signal.SIGKILL if force else signal.SIGTERM
-            os.kill(pid, sig)
+            if force:
+                os.kill(pid, signal.SIGKILL)
+            else:
+                # Graceful: SIGTERM first
+                os.kill(pid, signal.SIGTERM)
+                # Wait up to graceful_timeout for process to exit
+                import time
+
+                poll_interval = 0.1
+                waited = 0.0
+                while waited < graceful_timeout:
+                    if not self.is_process_alive(pid):
+                        break
+                    time.sleep(poll_interval)
+                    waited += poll_interval
+
+                # If still alive, escalate to SIGKILL
+                if self.is_process_alive(pid):
+                    with contextlib.suppress(ProcessLookupError, OSError):
+                        os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             # Process already dead
             pass
@@ -478,10 +506,12 @@ def run_with_heartbeat(
     run_id: int,
     db_path: Path | None = None,
     interval: int = HEARTBEAT_INTERVAL_SECONDS,
-) -> BacktestJobManager:
+) -> tuple[BacktestJobManager, "Callable[[], None]"]:
     """Create job manager and start heartbeat thread for a running job.
 
     Utility for subprocess scripts to send periodic heartbeats.
+    Returns both the manager and a stop function to cleanly shut down
+    the heartbeat thread.
 
     Args:
         run_id: Backtest run ID.
@@ -489,19 +519,26 @@ def run_with_heartbeat(
         interval: Heartbeat interval in seconds (default 30).
 
     Returns:
-        BacktestJobManager instance (caller should call update_heartbeat periodically).
+        Tuple of (BacktestJobManager, stop_fn). Call stop_fn() to terminate
+        the heartbeat thread. The manager should be closed separately.
     """
     import threading
 
     manager = BacktestJobManager(db_path)
+    stop_event = threading.Event()
 
     def heartbeat_loop() -> None:
-        while True:
+        while not stop_event.is_set():
             with contextlib.suppress(Exception):
                 manager.update_heartbeat(run_id)
-            threading.Event().wait(interval)
+            stop_event.wait(interval)
 
     thread = threading.Thread(target=heartbeat_loop, daemon=True)
     thread.start()
 
-    return manager
+    def stop() -> None:
+        """Signal heartbeat thread to stop and wait for it to exit."""
+        stop_event.set()
+        thread.join(timeout=interval + 1)
+
+    return manager, stop

@@ -11,6 +11,7 @@ Live monitoring and control of paper trading sessions:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -144,6 +145,16 @@ def _create_paper_config_file(
     return config_path
 
 
+def _cleanup_paper_config_file(trader_id: str) -> None:
+    """Remove paper trading config file from /tmp.
+
+    Safe to call even if file doesn't exist.
+    """
+    config_path = Path(f"/tmp/paper_{trader_id}.json")
+    with contextlib.suppress(FileNotFoundError, OSError):
+        config_path.unlink()
+
+
 def _render_start_session(db_path: Path | None = None) -> None:
     """Render start session section for promoting validated strategies."""
     st.subheader("Start New Session")
@@ -155,6 +166,10 @@ def _render_start_session(db_path: Path | None = None) -> None:
         if st.button("Stop Active Session", type="secondary"):
             manager = get_job_manager(db_path)
             manager.kill_job(active_jobs[0]["run_id"])
+            # Clean up config file from /tmp
+            trader_id = st.session_state.get(SESSION_TRADER_ID)
+            if trader_id:
+                _cleanup_paper_config_file(trader_id)
             st.success("Session stopped")
             st.rerun()
         return
@@ -546,6 +561,10 @@ def _handle_actions(actions: dict[str, bool], db_path: Path | None = None) -> No
 
         if actions["close_all"]:
             os.kill(pid, sig.SIGTERM)
+            # Clean up config file from /tmp
+            trader_id = st.session_state.get(SESSION_TRADER_ID)
+            if trader_id:
+                _cleanup_paper_config_file(trader_id)
             st.warning("CLOSE ALL / graceful shutdown signal sent")
     except ProcessLookupError:
         st.error("Paper trading process not found (may have already stopped)")
