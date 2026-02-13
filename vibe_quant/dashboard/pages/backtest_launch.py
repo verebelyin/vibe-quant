@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 
-from vibe_quant.dashboard.components.backtest_config import LATENCY_OPTIONS  # noqa: F401
 from vibe_quant.dashboard.components.backtest_config import (
     render_date_range_selector as _component_render_date_range_selector,
 )
@@ -35,6 +34,7 @@ from vibe_quant.dashboard.components.job_status import render_active_jobs, rende
 from vibe_quant.dashboard.components.overfitting_panel import render_overfitting_panel
 from vibe_quant.dashboard.components.preflight_summary import render_preflight_summary
 from vibe_quant.dashboard.utils import get_job_manager, get_state_manager
+from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH, CatalogManager
 from vibe_quant.db.connection import DEFAULT_DB_PATH
 
 if TYPE_CHECKING:
@@ -174,6 +174,28 @@ def _render_run_buttons(
     if not symbols:
         st.error("Please select at least one symbol")
         return
+
+    # Validate catalog has data for selected symbols/dates
+    try:
+        catalog = CatalogManager(DEFAULT_CATALOG_PATH)
+        missing_data: list[str] = []
+        for sym in symbols:
+            date_range = catalog.get_bar_date_range(sym, timeframe)
+            if date_range is None:
+                missing_data.append(f"{sym}/{timeframe}: no data in catalog")
+            else:
+                cat_start, cat_end = date_range
+                sel_start = cat_start.__class__(int(start_date[:4]), int(start_date[5:7]), int(start_date[8:10]), tzinfo=cat_start.tzinfo)
+                sel_end = cat_end.__class__(int(end_date[:4]), int(end_date[5:7]), int(end_date[8:10]), tzinfo=cat_end.tzinfo)
+                if sel_start < cat_start or sel_end > cat_end:
+                    missing_data.append(
+                        f"{sym}/{timeframe}: catalog has {cat_start:%Y-%m-%d} to {cat_end:%Y-%m-%d}, "
+                        f"selected {start_date} to {end_date}"
+                    )
+        if missing_data:
+            st.warning("Data coverage gaps detected:\n- " + "\n- ".join(missing_data))
+    except Exception:
+        pass  # Don't block launch if catalog check fails
 
     run_mode = "screening" if run_screening else "validation"
     parameters = {"sweep": sweep_params, "overfitting_filters": overfitting_filters}

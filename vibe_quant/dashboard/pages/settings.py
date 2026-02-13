@@ -480,6 +480,8 @@ def render_database_section() -> None:
             path = Path(new_path)
             if path.suffix != ".db":
                 st.error("Database path must end with .db")
+            elif not path.parent.exists():
+                st.error(f"Parent directory does not exist: {path.parent}")
             else:
                 # Close existing manager if any
                 if "state_manager" in st.session_state:

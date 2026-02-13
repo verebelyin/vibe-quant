@@ -376,3 +376,72 @@ class TestStateManager:
         job = state_manager.get_job(run_id)
         assert job is not None
         assert job["error_message"] == "Connection timeout"
+
+    def test_list_backtest_results_empty(self, state_manager: StateManager) -> None:
+        """list_backtest_results returns empty list when no results."""
+        results = state_manager.list_backtest_results()
+        assert results == []
+
+    def test_list_backtest_results_returns_all(self, state_manager: StateManager) -> None:
+        """list_backtest_results returns all results."""
+        strategy_id = state_manager.create_strategy(name="list_res_test", dsl_config={})
+        run_id_1 = state_manager.create_backtest_run(
+            strategy_id=strategy_id,
+            run_mode="screening",
+            symbols=["BTCUSDT-PERP"],
+            timeframe="5m",
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            parameters={},
+        )
+        run_id_2 = state_manager.create_backtest_run(
+            strategy_id=strategy_id,
+            run_mode="validation",
+            symbols=["ETHUSDT-PERP"],
+            timeframe="1h",
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            parameters={},
+        )
+
+        state_manager.save_backtest_result(run_id_1, {"total_return": 0.10, "sharpe_ratio": 1.2})
+        state_manager.save_backtest_result(run_id_2, {"total_return": 0.25, "sharpe_ratio": 1.8})
+
+        results = state_manager.list_backtest_results()
+        assert len(results) == 2
+        # Includes joined run metadata
+        assert results[0]["strategy_id"] == strategy_id
+
+    def test_list_backtest_results_filter_by_strategy(self, state_manager: StateManager) -> None:
+        """list_backtest_results filters by strategy_id."""
+        sid_1 = state_manager.create_strategy(name="strat_a", dsl_config={})
+        sid_2 = state_manager.create_strategy(name="strat_b", dsl_config={})
+
+        rid_1 = state_manager.create_backtest_run(
+            strategy_id=sid_1, run_mode="screening", symbols=["BTCUSDT-PERP"],
+            timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+        )
+        rid_2 = state_manager.create_backtest_run(
+            strategy_id=sid_2, run_mode="screening", symbols=["ETHUSDT-PERP"],
+            timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+        )
+
+        state_manager.save_backtest_result(rid_1, {"total_return": 0.10})
+        state_manager.save_backtest_result(rid_2, {"total_return": 0.20})
+
+        results = state_manager.list_backtest_results(strategy_id=sid_1)
+        assert len(results) == 1
+        assert results[0]["total_return"] == 0.10
+
+    def test_list_backtest_results_with_limit(self, state_manager: StateManager) -> None:
+        """list_backtest_results respects limit parameter."""
+        sid = state_manager.create_strategy(name="limit_test", dsl_config={})
+        for i in range(5):
+            rid = state_manager.create_backtest_run(
+                strategy_id=sid, run_mode="screening", symbols=["BTCUSDT-PERP"],
+                timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+            )
+            state_manager.save_backtest_result(rid, {"total_return": i * 0.1})
+
+        results = state_manager.list_backtest_results(limit=3)
+        assert len(results) == 3

@@ -27,13 +27,11 @@ import streamlit as st
 from lightweight_charts.widgets import StreamlitChart
 
 from vibe_quant.dashboard.utils import format_bytes
+from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
+from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
 
 if TYPE_CHECKING:
     from typing import Any
-
-# Default paths (must match data modules)
-DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
-DEFAULT_CATALOG_PATH = Path("data/catalog")
 
 INTERVALS = ["1m", "5m", "15m", "1h", "4h"]
 
@@ -568,11 +566,18 @@ def _render_candlestick_chart(
     df: pd.DataFrame, symbol: str, interval: str,
 ) -> None:
     """Render TradingView-style candlestick chart with volume."""
-    max_candles = 10_000
+    candle_options = [1_000, 5_000, 10_000, 25_000]
+    max_candles = st.select_slider(
+        "Max candles to display",
+        options=candle_options,
+        value=10_000,
+        format_func=lambda x: f"{x:,}",
+        key="chart_max_candles",
+    )
     if len(df) > max_candles:
         st.warning(
             f"Showing last {max_candles:,} of {len(df):,} candles. "
-            f"Narrow date range for full data."
+            f"Narrow date range or increase limit for full data."
         )
         df = df.tail(max_candles)
 

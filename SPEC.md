@@ -423,6 +423,8 @@ CREATE TABLE backtest_results (
 
     -- Execution metadata
     execution_time_seconds REAL,
+    starting_balance REAL,
+    notes TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -462,6 +464,7 @@ CREATE TABLE sweep_results (
     total_trades INTEGER,
     total_fees REAL,
     total_funding REAL,
+    execution_time_seconds REAL,
     is_pareto_optimal BOOLEAN DEFAULT 0,
     passed_deflated_sharpe BOOLEAN,
     passed_walk_forward BOOLEAN,
@@ -471,18 +474,20 @@ CREATE TABLE sweep_results (
 -- Background job tracking for process management
 CREATE TABLE background_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER REFERENCES backtest_runs(id) ON DELETE CASCADE,
+    run_id INTEGER UNIQUE REFERENCES backtest_runs(id) ON DELETE CASCADE,
     pid INTEGER NOT NULL,
     job_type TEXT NOT NULL,                 -- 'screening', 'validation', 'data_update'
     status TEXT DEFAULT 'running',          -- 'running', 'completed', 'failed', 'killed'
     heartbeat_at TEXT,
     started_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
-    log_file TEXT                           -- Path to log file
+    log_file TEXT,                          -- Path to log file
+    error_message TEXT
 );
 
 -- Indexes
 CREATE INDEX idx_backtest_runs_strategy ON backtest_runs(strategy_id);
+CREATE INDEX idx_backtest_runs_status ON backtest_runs(status);
 CREATE INDEX idx_backtest_results_run ON backtest_results(run_id);
 CREATE INDEX idx_trades_run ON trades(run_id);
 CREATE INDEX idx_sweep_results_run ON sweep_results(run_id);

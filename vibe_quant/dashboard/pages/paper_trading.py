@@ -573,10 +573,8 @@ def _handle_actions(actions: dict[str, bool], db_path: Path | None = None) -> No
 
 
 def _render_trader_selector() -> str | None:
-    """Render trader ID selector."""
-    st.sidebar.subheader("Paper Trading")
-
-    trader_id: str = st.sidebar.text_input(
+    """Render trader ID selector in main content area."""
+    trader_id: str = st.text_input(
         "Trader ID",
         value=st.session_state.get(SESSION_TRADER_ID, ""),
         placeholder="e.g., PAPER-001",
@@ -590,8 +588,8 @@ def _render_trader_selector() -> str | None:
 
 
 def _render_refresh_button() -> bool:
-    """Render refresh button in sidebar."""
-    return st.sidebar.button("Refresh Data", width="stretch")
+    """Render refresh button."""
+    return st.button("Refresh Data")
 
 
 def render_paper_trading_tab(db_path: Path | None = None) -> None:
@@ -602,9 +600,12 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
     """
     st.title("Paper Trading")
 
-    # Sidebar controls
-    trader_id = _render_trader_selector()
-    should_refresh = _render_refresh_button()
+    # Trader selector and refresh in top row (not sidebar -- avoids bleed to other pages)
+    sel_col, refresh_col = st.columns([3, 1])
+    with sel_col:
+        trader_id = _render_trader_selector()
+    with refresh_col:
+        should_refresh = _render_refresh_button()
 
     # Start session section at top
     _render_start_session(db_path)

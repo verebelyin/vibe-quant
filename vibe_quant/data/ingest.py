@@ -11,6 +11,7 @@ from typing import Any
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
     DEFAULT_CATALOG_PATH,
+    INSTRUMENT_CONFIGS,
     INTERVAL_TO_AGGREGATION,
     CatalogManager,
     aggregate_bars,
@@ -27,6 +28,32 @@ from vibe_quant.data.downloader import (
     get_years_months_to_download,
 )
 from vibe_quant.data.verify import verify_symbol
+
+
+def _interval_to_minutes(interval: str) -> int:
+    """Convert interval string to minutes.
+
+    Supports 'm' (minutes), 'h' (hours), 'd' (days) suffixes.
+
+    Args:
+        interval: Interval string like '1m', '5m', '1h', '4h', '1d'.
+
+    Returns:
+        Number of minutes.
+
+    Raises:
+        ValueError: If interval format is unrecognized.
+    """
+    interval = interval.strip().lower()
+    if interval.endswith("m"):
+        return int(interval[:-1])
+    elif interval.endswith("h"):
+        return int(interval[:-1]) * 60
+    elif interval.endswith("d"):
+        return int(interval[:-1]) * 1440
+    else:
+        msg = f"Unrecognized interval format '{interval}'. Use suffixes: m, h, d"
+        raise ValueError(msg)
 
 
 def get_download_preview(
@@ -162,10 +189,7 @@ def update_symbol(
 
     # Aggregate to higher timeframes
     for interval in ["5m", "15m", "1h", "4h"]:
-        if "m" in interval:
-            minutes = int(interval.replace("m", ""))
-        else:
-            minutes = int(interval.replace("h", "")) * 60
+        minutes = _interval_to_minutes(interval)
 
         bar_type = get_bar_type(symbol, interval)
         agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
@@ -261,6 +285,12 @@ def ingest_symbol(
     Returns:
         Dict with counts: {'klines': N, 'bars_1m': N, 'bars_5m': N, ...}
     """
+    if symbol not in INSTRUMENT_CONFIGS:
+        supported = sorted(INSTRUMENT_CONFIGS.keys())
+        raise ValueError(
+            f"Unsupported symbol '{symbol}'. Supported symbols: {supported}"
+        )
+
     if archive is None:
         archive = RawDataArchive()
     if catalog is None:
@@ -363,12 +393,7 @@ def ingest_symbol(
     for interval in ["5m", "15m", "1h", "4h"]:
         step, aggregation = INTERVAL_TO_AGGREGATION[interval]
         bar_type = get_bar_type(symbol, interval)
-
-        # Convert step to minutes
-        if "m" in interval:
-            minutes = int(interval.replace("m", ""))
-        else:
-            minutes = int(interval.replace("h", "")) * 60
+        minutes = _interval_to_minutes(interval)
 
         agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
         catalog.write_bars(agg_bars)
@@ -712,12 +737,7 @@ def rebuild_from_archive(
         # Aggregate to higher timeframes (same logic as ingest_symbol)
         for interval in ["5m", "15m", "1h", "4h"]:
             bar_type = get_bar_type(symbol, interval)
-
-            # Convert interval to minutes
-            if "m" in interval:
-                minutes = int(interval.replace("m", ""))
-            else:
-                minutes = int(interval.replace("h", "")) * 60
+            minutes = _interval_to_minutes(interval)
 
             agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
             catalog.write_bars(agg_bars)

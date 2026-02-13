@@ -231,7 +231,7 @@ class StrategyCompiler:
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
-            "from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionOpened, PositionClosed",
+            "from nautilus_trader.model.events import OrderFilled, PositionOpened, PositionClosed",
             "from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder",
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
         ]
@@ -999,9 +999,13 @@ class StrategyCompiler:
         Returns:
             Method source code as lines
         """
+        # Strip leading 'check' to avoid 'Check check ...' stutter in docstring
+        readable = method_name.replace("_", " ").strip()
+        if readable.startswith("check "):
+            readable = readable[len("check "):]
         lines = [
             f"def {method_name}(self, bar: Bar) -> bool:",
-            f'    """Check {method_name.replace("_", " ")} conditions."""',
+            f'    """Check {readable} conditions."""',
         ]
 
         for i, cond_str in enumerate(conditions):

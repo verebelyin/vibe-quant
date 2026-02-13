@@ -21,6 +21,7 @@ VALID_INDICATOR_TYPES = frozenset({
     "WMA",
     "DEMA",
     "TEMA",
+    "ICHIMOKU",
     # Momentum
     "RSI",
     "MACD",
@@ -37,6 +38,7 @@ VALID_INDICATOR_TYPES = frozenset({
     "OBV",
     "VWAP",
     "MFI",
+    "VOLSMA",
 })
 
 # Valid price sources for indicators
@@ -133,7 +135,7 @@ class IndicatorConfig(BaseModel):
                 self.slow_period = 26
             if self.signal_period is None:
                 self.signal_period = 9
-        elif self.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI"}:
+        elif self.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "VOLSMA"}:
             if self.period is None:
                 self.period = 14  # Default period
         elif self.type == "BBANDS":
@@ -144,6 +146,9 @@ class IndicatorConfig(BaseModel):
         elif self.type == "STOCH":
             if self.period is None:
                 self.period = 14
+        elif self.type == "ICHIMOKU":
+            # Ichimoku uses its own param names; period not required
+            pass
         return self
 
 

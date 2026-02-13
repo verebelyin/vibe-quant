@@ -343,9 +343,10 @@ def _dema_spec() -> IndicatorSpec:
 
 @indicator_registry.register("TEMA")
 def _tema_spec() -> IndicatorSpec:
+    # NT does not have TripleExponentialMovingAverage; use pandas-ta fallback
     return IndicatorSpec(
         name="TEMA",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "TripleExponentialMovingAverage"),
+        nt_class=None,
         pandas_ta_func="tema",
         default_params={"period": 14},
         param_schema={"period": int},
@@ -496,5 +497,36 @@ def _mfi_spec() -> IndicatorSpec:
         nt_class=_get_nt_class("nautilus_trader.indicators", "MoneyFlowIndex"),
         pandas_ta_func="mfi",
         default_params={"period": 14},
+        param_schema={"period": int},
+    )
+
+
+# Trend indicators (SPEC Section 5 additions)
+
+
+@indicator_registry.register("ICHIMOKU")
+def _ichimoku_spec() -> IndicatorSpec:
+    # NT doesn't have Ichimoku built-in; use pandas-ta fallback
+    return IndicatorSpec(
+        name="ICHIMOKU",
+        nt_class=None,
+        pandas_ta_func="ichimoku",
+        default_params={"tenkan": 9, "kijun": 26, "senkou": 52},
+        param_schema={"tenkan": int, "kijun": int, "senkou": int},
+        output_names=("conversion", "base", "span_a", "span_b"),
+    )
+
+
+# Volume indicators (SPEC Section 5 additions)
+
+
+@indicator_registry.register("VOLSMA")
+def _volsma_spec() -> IndicatorSpec:
+    # Volume SMA: SMA applied to volume. No dedicated NT class; pandas-ta fallback.
+    return IndicatorSpec(
+        name="VOLSMA",
+        nt_class=None,
+        pandas_ta_func="sma",  # Applied to volume column
+        default_params={"period": 20},
         param_schema={"period": int},
     )

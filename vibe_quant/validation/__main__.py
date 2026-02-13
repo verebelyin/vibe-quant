@@ -25,7 +25,7 @@ def main() -> int:
     try:
         result = runner.run(args.run_id)
         job_manager.mark_completed(args.run_id)
-        print(f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%")
+        print(f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%", file=sys.stderr)
         return 0
     except Exception as exc:
         import contextlib
@@ -33,7 +33,7 @@ def main() -> int:
         error_msg = f"{type(exc).__name__}: {exc}"
         with contextlib.suppress(Exception):
             job_manager.mark_completed(args.run_id, error=error_msg)
-        print(f"Validation failed: {exc}")
+        print(f"Validation failed: {exc}", file=sys.stderr)
         return 1
     finally:
         runner.close()

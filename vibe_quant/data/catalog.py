@@ -129,6 +129,8 @@ def klines_to_bars(
         instrument_id: NautilusTrader instrument ID.
         bar_type: NautilusTrader bar type.
         size_precision: Decimal places for volume (must match instrument).
+            Default 8 kept for API compatibility; callers should pass
+            instrument.size_precision explicitly for production use.
 
     Returns:
         List of Bar objects.

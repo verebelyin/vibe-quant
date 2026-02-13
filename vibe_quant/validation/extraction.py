@@ -221,6 +221,18 @@ def extract_trades(
         direction = "LONG" if str(pos.entry).upper() == "BUY" else "SHORT"
         instrument_id = str(pos.instrument_id)
 
+        # Split fees by maker/taker rates instead of 50/50.
+        # Entry is typically a taker (market) order, exit may be maker (limit).
+        maker_rate = float(venue_config.maker_fee)
+        taker_rate = float(venue_config.taker_fee)
+        total_rate = maker_rate + taker_rate
+        if total_rate > 0 and abs(pos_fees) > 0:
+            entry_fee = abs(pos_fees) * (taker_rate / total_rate)
+            exit_fee = abs(pos_fees) * (maker_rate / total_rate)
+        else:
+            entry_fee = abs(pos_fees) / 2.0
+            exit_fee = abs(pos_fees) / 2.0
+
         trade = TradeRecord(
             symbol=instrument_id,
             direction=direction,
@@ -230,8 +242,8 @@ def extract_trades(
             entry_price=entry_price,
             exit_price=exit_price,
             quantity=quantity,
-            entry_fee=abs(pos_fees) / 2.0,
-            exit_fee=abs(pos_fees) / 2.0,
+            entry_fee=entry_fee,
+            exit_fee=exit_fee,
             slippage_cost=slippage_cost,
             gross_pnl=realized_pnl + abs(pos_fees),
             net_pnl=realized_pnl,

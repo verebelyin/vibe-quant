@@ -20,6 +20,7 @@ import streamlit as st
 import yaml
 
 from vibe_quant.dashboard.utils import get_job_manager, get_state_manager
+from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.discovery.genome import INDICATOR_POOL
 from vibe_quant.discovery.pipeline import (
@@ -34,8 +35,8 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
 
-# Symbols available for discovery
-DISCOVERY_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+# Symbols available for discovery (single source of truth from data module)
+DISCOVERY_SYMBOLS = SUPPORTED_SYMBOLS
 
 
 def build_fitness_chart_data(
@@ -160,8 +161,6 @@ def chromosome_to_yaml(chrom: StrategyChromosome) -> str:
 
 def _render_config_section() -> DiscoveryConfig | None:
     """Render configuration sidebar/section. Returns config or None if invalid."""
-    st.subheader("Discovery Configuration")
-
     col1, col2 = st.columns(2)
 
     with col1:
@@ -559,16 +558,15 @@ def render_discovery_tab() -> None:
 
     job_manager = get_job_manager()
 
-    # Configuration
-    config = _render_config_section()
-
-    # Start button
-    _render_start_button(config, job_manager)
-
-    st.divider()
-
-    # Active jobs
+    # Active jobs first -- most important for monitoring
     _render_active_discovery_jobs(job_manager)
+
+    # Configuration in a compact expander so Start button stays near top
+    with st.expander("Discovery Configuration", expanded=True):
+        config = _render_config_section()
+
+    # Start button immediately after config
+    _render_start_button(config, job_manager)
 
     # Show results if available in session state
     discovery_result: DiscoveryResult | None = st.session_state.get("discovery_result")

@@ -42,6 +42,14 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _hex_to_rgba(hex_color: str, alpha: float = 1.0) -> str:
+    """Convert a hex color string (e.g. '#2196F3') to an rgba() CSS string."""
+    r = int(hex_color[1:3], 16)
+    g = int(hex_color[3:5], 16)
+    b = int(hex_color[5:7], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _show_figure(fig: object | None, empty_msg: str = "") -> None:
     """Display a Plotly figure or show an info message when *None*."""
     if fig is None:
@@ -401,7 +409,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                         name=f"Run {run_id}",
                         line={"color": colors[i % len(colors)], "width": 1.5},
                         fill="tozeroy" if i == 0 else None,
-                        fillcolor=f"rgba({','.join(str(int(colors[0][j:j+2], 16)) for j in (1,3,5))}, 0.1)" if i == 0 else None,
+                        fillcolor=_hex_to_rgba(colors[0], 0.1) if i == 0 else None,
                     )
                 )
     fig_dd.update_layout(title="Drawdowns Overlaid", yaxis_title="Drawdown (%)", height=300)
@@ -690,7 +698,10 @@ def _render_compare_view(mgr: StateManager, runs: list[dict[str, Any]]) -> None:
     st.subheader("Compare Multiple Runs")
     run_options_multi = {r["label"]: r["id"] for r in runs}
     selected_labels = st.multiselect(
-        "Select runs to compare (max 3)", options=list(run_options_multi.keys()), max_selections=3
+        "Select runs to compare",
+        options=list(run_options_multi.keys()),
+        max_selections=3,
+        help="Select 2-3 runs for side-by-side comparison. Maximum 3 runs can be compared at once.",
     )
     if selected_labels:
         selected_ids = [run_options_multi[label] for label in selected_labels]
@@ -705,6 +716,12 @@ def _render_compare_view(mgr: StateManager, runs: list[dict[str, Any]]) -> None:
 def render_results_tab() -> None:
     """Render the Results Analysis tab."""
     st.header("Results Analysis")
+
+    # Refresh button to clear cached runs
+    if st.button("Refresh Runs", key="refresh_runs", help="Reload run list from database"):
+        get_runs_for_dropdown.clear()
+        st.rerun()
+
     mgr = get_state_manager()
     runs = get_runs_for_dropdown(mgr)
     if not runs:

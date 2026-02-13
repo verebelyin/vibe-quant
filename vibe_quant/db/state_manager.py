@@ -488,6 +488,50 @@ class StateManager:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def list_backtest_results(
+        self, strategy_id: int | None = None, limit: int | None = None
+    ) -> list[JsonDict]:
+        """List backtest results with optional filters.
+
+        Joins backtest_results with backtest_runs to allow filtering by
+        strategy_id and to include run metadata in results.
+
+        Args:
+            strategy_id: Filter by strategy ID (optional).
+            limit: Maximum number of results to return (optional).
+
+        Returns:
+            List of backtest result dicts, ordered by run creation time descending.
+        """
+        query = """
+            SELECT br.*, r.strategy_id, r.run_mode, r.symbols, r.timeframe,
+                   r.start_date, r.end_date, r.status, r.created_at AS run_created_at
+            FROM backtest_results br
+            JOIN backtest_runs r ON br.run_id = r.id
+            WHERE 1=1
+        """
+        params: list[Any] = []
+
+        if strategy_id is not None:
+            query += " AND r.strategy_id = ?"
+            params.append(strategy_id)
+
+        query += " ORDER BY r.created_at DESC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        cursor = self.conn.execute(query, params)
+        results = []
+        for row in cursor:
+            result = dict(row)
+            # Parse JSON fields from the joined run data
+            if "symbols" in result and result["symbols"] is not None:
+                result["symbols"] = json.loads(result["symbols"])
+            results.append(result)
+        return results
+
     def update_result_notes(self, run_id: int, notes: str) -> None:
         """Update notes/annotations for a backtest result.
 

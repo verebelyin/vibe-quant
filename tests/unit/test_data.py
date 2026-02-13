@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from vibe_quant.data.archive import RawDataArchive
-from vibe_quant.data.ingest import get_download_preview
+from vibe_quant.data.ingest import get_download_preview, ingest_symbol
 
 
 class TestRawDataArchive:
@@ -247,3 +247,17 @@ class TestGetDownloadPreview:
         jan_rows = [p for p in preview if p["Month"] == "2024-01"]
         assert len(jan_rows) == 1
         assert jan_rows[0]["Status"] == "Archived"
+
+
+class TestIngestSymbolValidation:
+    """Tests for ingest_symbol input validation."""
+
+    def test_unsupported_symbol_raises_valueerror(self) -> None:
+        """ingest_symbol should raise ValueError for unsupported symbols."""
+        with pytest.raises(ValueError, match="Unsupported symbol 'XYZUSDT'"):
+            ingest_symbol("XYZUSDT")
+
+    def test_unsupported_symbol_lists_valid_options(self) -> None:
+        """Error message should list supported symbols."""
+        with pytest.raises(ValueError, match="BTCUSDT"):
+            ingest_symbol("FAKEUSDT")

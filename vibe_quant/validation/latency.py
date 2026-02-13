@@ -11,7 +11,7 @@ from nautilus_trader.config import LatencyModelConfig
 class LatencyPreset(StrEnum):
     """Latency preset for execution simulation."""
 
-    COLOCATED = "colocated"
+    COLOCATED = "co_located"
     DOMESTIC = "domestic"
     INTERNATIONAL = "international"
     RETAIL = "retail"

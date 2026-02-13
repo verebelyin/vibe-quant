@@ -89,6 +89,13 @@ def _save_strategy(
         st.error("Validation returned no model")
         return False
 
+    # Duplicate name check on create (or rename)
+    if not existing or existing["name"] != model.name:
+        dup = manager.get_strategy_by_name(model.name)
+        if dup is not None:
+            st.error(f"A strategy named '{model.name}' already exists. Choose a different name.")
+            return False
+
     dumped = model.model_dump()
     if existing:
         manager.update_strategy(existing["id"], dsl_config=dumped, description=model.description)
@@ -132,17 +139,17 @@ def render_delete_confirmation(manager: StateManager) -> None:
     sname = st.session_state.get("confirm_delete_name")
     if not sid:
         return
-    st.warning(f"Delete strategy '{sname}'? This cannot be undone.")
+    st.warning(f"Deactivate strategy '{sname}'? This will deactivate the strategy (it can be reactivated later).")
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Confirm Delete"):
+        if st.button("Confirm Deactivate"):
             manager.update_strategy(sid, is_active=False)
-            st.success(f"Deleted strategy '{sname}'")
+            st.success(f"Deactivated strategy '{sname}'")
             st.session_state.confirm_delete_id = None
             st.session_state.confirm_delete_name = None
             st.rerun()
     with c2:
-        if st.button("Cancel Delete"):
+        if st.button("Cancel"):
             st.session_state.confirm_delete_id = None
             st.session_state.confirm_delete_name = None
             st.rerun()
@@ -200,10 +207,11 @@ def render_strategy_editor(
             "Editor mode", ["Visual", "YAML", "Split"], horizontal=True,
             key="editor_mode", label_visibility="collapsed",
         )
-    # Handle mode switch
+    # Handle mode switch -- clean up old state to prevent leaks
     if prev_mode and prev_mode != mode:
         if mode == "Visual":
-            # Switching YAML -> Visual: parse YAML and sync form state
+            # Switching YAML -> Visual: clean old form state, parse YAML, sync
+            cleanup_form_state()
             try:
                 dsl = yaml.safe_load(st.session_state[yaml_key])
                 if isinstance(dsl, dict):
@@ -221,6 +229,9 @@ def render_strategy_editor(
                     )
             except yaml.YAMLError:
                 pass
+            cleanup_form_state()
+        elif mode == "Split":
+            # Switching to Split: clean form state to avoid stale keys
             cleanup_form_state()
     st.session_state["_prev_editor_mode"] = mode
     with col_cancel:

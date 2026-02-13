@@ -227,6 +227,71 @@ class TestEventTypes:
         assert event.run_id == "run1"
         assert event.data["indicator"] == "rsi"
 
+    def test_create_event_returns_typed_subclass(self) -> None:
+        """create_event should return typed subclass, not base Event."""
+        from vibe_quant.logging import EventType, SignalEvent, create_event
+
+        event = create_event(
+            event_type=EventType.SIGNAL,
+            run_id="run1",
+            strategy_name="strat1",
+            data={"indicator": "rsi", "value": 28.5, "condition": "rsi < 30", "side": "long"},
+        )
+
+        assert isinstance(event, SignalEvent)
+        assert event.indicator == "rsi"
+        assert event.value == 28.5
+        assert event.condition == "rsi < 30"
+        assert event.side == "long"
+
+    def test_create_event_returns_fill_subclass(self) -> None:
+        """create_event with FILL type returns FillEvent."""
+        from vibe_quant.logging import EventType, FillEvent, create_event
+
+        event = create_event(
+            event_type=EventType.FILL,
+            run_id="run1",
+            strategy_name="strat1",
+            data={"order_id": "O-001", "fill_price": 42000.0, "quantity": 0.1, "fees": 4.2},
+        )
+
+        assert isinstance(event, FillEvent)
+        assert event.order_id == "O-001"
+        assert event.fill_price == 42000.0
+        assert event.fees == 4.2
+
+    def test_create_event_lifecycle_returns_base(self) -> None:
+        """create_event with LIFECYCLE type returns base Event (no subclass)."""
+        from vibe_quant.logging import Event, EventType, SignalEvent, create_event
+
+        event = create_event(
+            event_type=EventType.LIFECYCLE,
+            run_id="run1",
+            strategy_name="strat1",
+            data={"phase": "start"},
+        )
+
+        assert type(event) is Event
+        assert not isinstance(event, SignalEvent)
+        assert event.data["phase"] == "start"
+
+    def test_create_event_partial_data(self) -> None:
+        """create_event with partial data uses defaults for missing fields."""
+        from vibe_quant.logging import EventType, OrderEvent, create_event
+
+        event = create_event(
+            event_type=EventType.ORDER,
+            run_id="run1",
+            strategy_name="strat1",
+            data={"order_id": "O-002", "side": "BUY"},
+        )
+
+        assert isinstance(event, OrderEvent)
+        assert event.order_id == "O-002"
+        assert event.side == "BUY"
+        assert event.quantity == 0.0  # default
+        assert event.order_type == "MARKET"  # default
+
 
 class TestEventWriter:
     """Tests for EventWriter."""

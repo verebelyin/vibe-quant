@@ -21,6 +21,13 @@ _DIFFICULTY_COLORS = {
     "Advanced": "red",
 }
 
+# Short labels to prevent badge text wrapping in narrow columns
+_DIFFICULTY_SHORT = {
+    "Beginner": "Beginner",
+    "Intermediate": "Mid",
+    "Advanced": "Advanced",
+}
+
 _CATEGORY_ICONS = {
     "Momentum": ":material/speed:",
     "Trend": ":material/trending_up:",
@@ -80,7 +87,8 @@ def _render_template_card(tmpl: TemplateMeta, key: str) -> str | None:
         with col1:
             st.markdown(f"**{tmpl.display_name}**")
         with col2:
-            st.markdown(f":{diff_color}[{tmpl.difficulty}]")
+            short_label = _DIFFICULTY_SHORT.get(tmpl.difficulty, tmpl.difficulty)
+            st.markdown(f":{diff_color}[{short_label}]")
 
         st.caption(tmpl.description)
 

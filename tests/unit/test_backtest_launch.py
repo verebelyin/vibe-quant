@@ -487,12 +487,12 @@ class TestLatencyOptions:
 
     def test_latency_options_include_custom(self) -> None:
         """Latency options should include 'custom'."""
-        from vibe_quant.dashboard.pages.backtest_launch import LATENCY_OPTIONS
+        from vibe_quant.dashboard.components.backtest_config import LATENCY_OPTIONS
 
         assert "custom" in LATENCY_OPTIONS
 
     def test_latency_options_include_none(self) -> None:
         """Latency options should include screening mode."""
-        from vibe_quant.dashboard.pages.backtest_launch import LATENCY_OPTIONS
+        from vibe_quant.dashboard.components.backtest_config import LATENCY_OPTIONS
 
         assert "None (screening mode)" in LATENCY_OPTIONS

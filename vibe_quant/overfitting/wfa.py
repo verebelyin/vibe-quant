@@ -31,10 +31,10 @@ class WFAConfig:
         out_of_sample_days: Number of days for testing.
         step_days: Number of days to roll forward between windows.
         min_windows: Minimum number of windows required.
-        min_oos_sharpe: Minimum aggregated OOS Sharpe to pass.
-        max_degradation: Maximum allowed IS vs OOS degradation (0.5 = 50%).
-        min_consistency: Minimum fraction of profitable OOS windows.
-        min_efficiency: Minimum walk-forward efficiency (mean OOS / mean IS return).
+        min_oos_sharpe: Informational OOS Sharpe threshold (not used in robustness check).
+        max_degradation: Informational degradation threshold (not used in robustness check).
+        min_consistency: Minimum fraction of profitable OOS windows (SPEC criterion).
+        min_efficiency: Minimum walk-forward efficiency (SPEC criterion).
     """
 
     in_sample_days: int
@@ -439,10 +439,8 @@ class WalkForwardAnalysis:
 
         # Robustness check (SPEC Section 8: efficiency > 0.5 AND > 50% OOS profitable)
         is_robust = (
-            aggregated_oos_sharpe >= self._config.min_oos_sharpe
-            and avg_degradation <= self._config.max_degradation
-            and consistency >= self._config.min_consistency
-            and efficiency >= self._config.min_efficiency
+            consistency > self._config.min_consistency
+            and efficiency > self._config.min_efficiency
         )
 
         return WFAResult(

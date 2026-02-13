@@ -385,6 +385,32 @@ class LiquidationEvent(Event):
         }
 
 
+_EVENT_TYPE_TO_CLASS: dict[EventType, type[Event]] = {
+    EventType.SIGNAL: SignalEvent,
+    EventType.TIME_FILTER: TimeFilterEvent,
+    EventType.ORDER: OrderEvent,
+    EventType.FILL: FillEvent,
+    EventType.POSITION_OPEN: PositionOpenEvent,
+    EventType.POSITION_CLOSE: PositionCloseEvent,
+    EventType.RISK_CHECK: RiskCheckEvent,
+    EventType.FUNDING: FundingEvent,
+    EventType.LIQUIDATION: LiquidationEvent,
+}
+
+# Mapping from EventType to the set of subclass-specific field names
+_EVENT_SUBCLASS_FIELDS: dict[EventType, tuple[str, ...]] = {
+    EventType.SIGNAL: ("indicator", "value", "condition", "side"),
+    EventType.TIME_FILTER: ("filter_name", "passed", "reason"),
+    EventType.ORDER: ("order_id", "side", "quantity", "price", "order_type", "reason"),
+    EventType.FILL: ("order_id", "fill_price", "quantity", "fees", "slippage"),
+    EventType.POSITION_OPEN: ("position_id", "symbol", "side", "quantity", "entry_price", "leverage"),
+    EventType.POSITION_CLOSE: ("position_id", "symbol", "exit_price", "gross_pnl", "net_pnl", "exit_reason"),
+    EventType.RISK_CHECK: ("check_type", "metric", "current_value", "threshold", "action", "passed"),
+    EventType.FUNDING: ("symbol", "funding_rate", "funding_payment", "position_value"),
+    EventType.LIQUIDATION: ("position_id", "symbol", "liquidation_price", "quantity", "loss"),
+}
+
+
 def create_event(
     event_type: EventType,
     run_id: str,
@@ -392,7 +418,11 @@ def create_event(
     data: dict[str, object],
     timestamp: datetime | None = None,
 ) -> Event:
-    """Factory function to create events.
+    """Factory function to create typed events.
+
+    Maps event_type to the appropriate Event subclass and populates
+    subclass-specific fields from the data dict. Falls back to base
+    Event for LIFECYCLE or unknown types.
 
     Args:
         event_type: Type of event to create.
@@ -402,18 +432,31 @@ def create_event(
         timestamp: Event timestamp (defaults to now).
 
     Returns:
-        Event instance with populated data.
+        Typed Event subclass instance with populated fields.
     """
     if timestamp is None:
         timestamp = datetime.now(UTC)
 
-    return Event(
-        timestamp=timestamp,
-        event_type=event_type,
-        run_id=run_id,
-        strategy_name=strategy_name,
-        data=data,
-    )
+    base_kwargs: dict[str, object] = {
+        "timestamp": timestamp,
+        "event_type": event_type,
+        "run_id": run_id,
+        "strategy_name": strategy_name,
+    }
+
+    cls = _EVENT_TYPE_TO_CLASS.get(event_type)
+    if cls is None:
+        # LIFECYCLE or unknown types fall back to base Event
+        return Event(**base_kwargs, data=data)
+
+    # Extract subclass-specific fields from data dict
+    subclass_fields = _EVENT_SUBCLASS_FIELDS.get(event_type, ())
+    subclass_kwargs: dict[str, object] = {}
+    for field_name in subclass_fields:
+        if field_name in data:
+            subclass_kwargs[field_name] = data[field_name]
+
+    return cls(**base_kwargs, **subclass_kwargs)
 
 
 __all__ = [

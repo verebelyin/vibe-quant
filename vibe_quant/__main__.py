@@ -123,6 +123,22 @@ def cmd_screening(_args: argparse.Namespace, extra: list[str] | None = None) -> 
     return screening_main()
 
 
+def cmd_overfitting(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
+    """Forward to overfitting module CLI.
+
+    Args:
+        _args: Parsed CLI arguments (unused, forwarding via extra).
+        extra: Remaining arguments for submodule.
+
+    Returns:
+        Exit code.
+    """
+    sys.argv = ["vibe_quant.overfitting"] + (extra or [])
+    from vibe_quant.overfitting.__main__ import main as overfitting_main
+
+    return overfitting_main()
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser.
 
@@ -154,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     screening_parser.set_defaults(func=cmd_screening)
 
+    # Overfitting command - uses parse_known_args forwarding
+    overfitting_parser = subparsers.add_parser(
+        "overfitting",
+        help="Overfitting prevention pipeline",
+    )
+    overfitting_parser.set_defaults(func=cmd_overfitting)
+
     # Validation command
     validation_parser = subparsers.add_parser(
         "validation",
@@ -178,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_run_parser.add_argument(
         "--latency",
         type=str,
-        choices=["colocated", "domestic", "international", "retail"],
+        choices=["co_located", "domestic", "international", "retail"],
         default=None,
         help="Override latency preset (default: from database or retail)",
     )
@@ -223,7 +246,7 @@ def main() -> int:
 
     if hasattr(args, "func"):
         # Forward extra args to submodule commands (data, screening)
-        if args.command in ("data", "screening"):
+        if args.command in ("data", "screening", "overfitting"):
             result: int = args.func(args, extra=extra)
         else:
             result = args.func(args)

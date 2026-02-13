@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 
 def render_strategy_card(manager: StateManager, strategy: dict[str, Any]) -> None:
     """Render a single strategy as a card with actions."""
+    # Prevent button label word-wrap/truncation in strategy cards
+    st.markdown(
+        "<style>.stButton button { white-space: nowrap !important; overflow: hidden; "
+        "text-overflow: ellipsis; font-size: 0.85rem; }</style>",
+        unsafe_allow_html=True,
+    )
+
     dsl = strategy.get("dsl_config", {})
     is_active = strategy["is_active"]
     indicators = dsl.get("indicators", {})
@@ -58,18 +65,18 @@ def render_strategy_card(manager: StateManager, strategy: dict[str, Any]) -> Non
                     st.rerun()
             with c2:
                 if is_active:
-                    if st.button("Deactivate", key=f"deact_{strategy['id']}",
-                                 width="stretch"):
+                    if st.button("Off", key=f"deact_{strategy['id']}",
+                                 width="stretch", help="Deactivate strategy"):
                         manager.update_strategy(strategy["id"], is_active=False)
                         st.rerun()
                 else:
-                    if st.button("Activate", key=f"act_{strategy['id']}",
-                                 width="stretch"):
+                    if st.button("On", key=f"act_{strategy['id']}",
+                                 width="stretch", help="Activate strategy"):
                         manager.update_strategy(strategy["id"], is_active=True)
                         st.rerun()
             with c3:
-                if st.button("Delete", key=f"del_{strategy['id']}",
-                             width="stretch"):
+                if st.button("Del", key=f"del_{strategy['id']}",
+                             width="stretch", help="Delete strategy"):
                     st.session_state.confirm_delete_id = strategy["id"]
                     st.session_state.confirm_delete_name = strategy["name"]
                     st.rerun()

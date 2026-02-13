@@ -34,7 +34,7 @@ class TestLatencyPresets:
 
     def test_latency_preset_enum_values(self) -> None:
         """All preset enum values are defined."""
-        assert LatencyPreset.COLOCATED.value == "colocated"
+        assert LatencyPreset.COLOCATED.value == "co_located"
         assert LatencyPreset.DOMESTIC.value == "domestic"
         assert LatencyPreset.INTERNATIONAL.value == "international"
         assert LatencyPreset.RETAIL.value == "retail"

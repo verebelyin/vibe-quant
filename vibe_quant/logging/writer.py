@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -49,7 +49,7 @@ class EventWriter:
         self.run_id = run_id
         self.base_path = Path(base_path) if base_path is not None else self._DEFAULT_BASE_PATH
         self._lock = threading.Lock()
-        self._file: open | None = None  # type: ignore[valid-type]
+        self._file: TextIO | None = None
         self._closed = False
 
         # Ensure directory exists
