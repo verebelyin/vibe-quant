@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS sweep_results (
     total_trades INTEGER,
     total_fees REAL,
     total_funding REAL,
+    execution_time_seconds REAL,
     is_pareto_optimal BOOLEAN DEFAULT 0,
     passed_deflated_sharpe BOOLEAN,
     passed_walk_forward BOOLEAN,
@@ -172,6 +173,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("backtest_results", "starting_balance", "REAL"),
         ("backtest_results", "notes", "TEXT"),
         ("background_jobs", "error_message", "TEXT"),
+        ("sweep_results", "execution_time_seconds", "REAL"),
     ]
     for table, column, col_type in migrations:
         with contextlib.suppress(Exception):

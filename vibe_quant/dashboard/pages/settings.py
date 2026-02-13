@@ -279,8 +279,44 @@ def render_sizing_section() -> None:
         for cfg in configs:
             with st.expander(f"{cfg['name']} ({cfg['method']})"):
                 st.json(cfg["config"])
+                edit_col, del_col, _ = st.columns([1, 1, 3])
+                with edit_col:
+                    if st.button("Edit", key=f"edit_sizing_{cfg['id']}"):
+                        st.session_state["editing_sizing_id"] = cfg["id"]
+                        st.rerun()
+                with del_col:
+                    if st.button("Delete", key=f"del_sizing_{cfg['id']}"):
+                        manager.delete_sizing_config(cfg["id"])
+                        st.success(f"Deleted sizing config: {cfg['name']}")
+                        st.rerun()
     else:
         st.info("No sizing configs yet. Create one below.")
+
+    # Edit existing config
+    editing_id = st.session_state.get("editing_sizing_id")
+    if editing_id is not None:
+        existing = manager.get_sizing_config(editing_id)
+        if existing:
+            st.markdown("---")
+            st.markdown(f"**Edit Sizing Config: {existing['name']}**")
+            edit_result = _render_sizing_config_form(f"edit_sizing_{editing_id}", existing_config=existing)
+            if edit_result:
+                name, method, params = edit_result
+                validated = _validate_sizing_params(method, params)
+                if validated:
+                    try:
+                        config_json = {k: str(v) for k, v in validated.items()}
+                        manager.update_sizing_config(editing_id, name, method, config_json)
+                        st.success(f"Updated sizing config: {name}")
+                        st.session_state.pop("editing_sizing_id", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to update: {e}")
+            if st.button("Cancel Edit", key="cancel_edit_sizing"):
+                st.session_state.pop("editing_sizing_id", None)
+                st.rerun()
+        else:
+            st.session_state.pop("editing_sizing_id", None)
 
     # Create new config
     st.markdown("---")
@@ -320,8 +356,49 @@ def render_risk_section() -> None:
                 with col2:
                     st.markdown("*Portfolio Level*")
                     st.json(cfg["portfolio_level"])
+                edit_col, del_col, _ = st.columns([1, 1, 3])
+                with edit_col:
+                    if st.button("Edit", key=f"edit_risk_{cfg['id']}"):
+                        st.session_state["editing_risk_id"] = cfg["id"]
+                        st.rerun()
+                with del_col:
+                    if st.button("Delete", key=f"del_risk_{cfg['id']}"):
+                        manager.delete_risk_config(cfg["id"])
+                        st.success(f"Deleted risk config: {cfg['name']}")
+                        st.rerun()
     else:
         st.info("No risk configs yet. Create one below.")
+
+    # Edit existing config
+    editing_id = st.session_state.get("editing_risk_id")
+    if editing_id is not None:
+        existing = manager.get_risk_config(editing_id)
+        if existing:
+            st.markdown("---")
+            st.markdown(f"**Edit Risk Config: {existing['name']}**")
+            edit_result = _render_risk_config_form(f"edit_risk_{editing_id}", existing_config=existing)
+            if edit_result:
+                name, strategy_level, portfolio_level = edit_result
+                validated = _validate_risk_params(strategy_level, portfolio_level)
+                if validated:
+                    strategy_dict, portfolio_dict = validated
+                    try:
+                        strategy_json = {
+                            k: str(v) if isinstance(v, Decimal) else v
+                            for k, v in strategy_dict.items()
+                        }
+                        portfolio_json = {k: str(v) for k, v in portfolio_dict.items()}
+                        manager.update_risk_config(editing_id, name, strategy_json, portfolio_json)
+                        st.success(f"Updated risk config: {name}")
+                        st.session_state.pop("editing_risk_id", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to update: {e}")
+            if st.button("Cancel Edit", key="cancel_edit_risk"):
+                st.session_state.pop("editing_risk_id", None)
+                st.rerun()
+        else:
+            st.session_state.pop("editing_risk_id", None)
 
     # Create new config
     st.markdown("---")
@@ -364,7 +441,7 @@ def render_latency_section() -> None:
             "Cancel (ms)": values.cancel_ms,
         })
 
-    st.dataframe(preset_data, width="stretch")
+    st.dataframe(preset_data, use_container_width=True)
 
     st.markdown("---")
     st.markdown("**Custom Latency Configuration**")

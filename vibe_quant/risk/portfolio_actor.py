@@ -135,12 +135,12 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             self._halt_portfolio("portfolio_drawdown", self._state.current_drawdown_pct)
             return RiskState.HALTED
 
-        if self._state.total_exposure_pct > self._risk_config.max_total_exposure_pct:
+        if self._state.total_exposure_pct >= self._risk_config.max_total_exposure_pct:
             self._halt_portfolio("total_exposure", self._state.total_exposure_pct)
             return RiskState.HALTED
 
         for instrument_id, exposure in self._state.instrument_exposures.items():
-            if exposure > self._risk_config.max_single_instrument_pct:
+            if exposure >= self._risk_config.max_single_instrument_pct:
                 self._halt_portfolio(
                     f"instrument_concentration:{instrument_id}", exposure
                 )

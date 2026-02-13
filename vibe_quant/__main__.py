@@ -36,7 +36,7 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
         print(f"  Sortino Ratio: {result.sortino_ratio:.2f}")
         print(f"  Max Drawdown: {result.max_drawdown:.2f}%")
         print(f"  Total Trades: {result.total_trades}")
-        print(f"  Win Rate: {result.win_rate:.1f}%")
+        print(f"  Win Rate: {result.win_rate * 100:.1f}%")
         print(f"  Profit Factor: {result.profit_factor:.2f}")
         print(f"  Total Fees: ${result.total_fees:.2f}")
         print(f"  Total Funding: ${result.total_funding:.2f}")

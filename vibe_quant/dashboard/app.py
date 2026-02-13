@@ -68,8 +68,32 @@ def main() -> None:
         ],
     }
 
+    # Workaround: st.navigation() captures arrow-key events for page switching,
+    # which interferes with sliders/number inputs. Hide the nav keyboard handler.
+    st.html(
+        "<style>"
+        "[data-testid='stSidebarNav'] {pointer-events: auto;}"
+        "</style>"
+        "<script>"
+        "window.addEventListener('keydown', function(e) {"
+        "  var tag = e.target.tagName;"
+        "  if (tag === 'INPUT' || tag === 'TEXTAREA' || "
+        "      e.target.getAttribute('role') === 'slider') {"
+        "    e.stopPropagation();"
+        "  }"
+        "}, true);"
+        "</script>"
+    )
+
     pg = st.navigation(pages)
-    pg.run()
+
+    try:
+        pg.run()
+    except Exception as exc:
+        # Prevent full server crash on page rendering errors (vibe-quant-4g6k)
+        # Also handles "Page not found" from st.rerun() + navigation race (vibe-quant-g6ex)
+        st.error(f"Page error: {exc}")
+        st.info("Try refreshing the page or selecting a different page from the sidebar.")
 
 
 if __name__ == "__main__":

@@ -130,6 +130,11 @@ class DeflatedSharpeRatio:
             skewness: Return distribution skewness (default 0 = symmetric).
             kurtosis: Return distribution kurtosis (default 3 = normal).
                 Note: this is full kurtosis, not excess kurtosis.
+                TODO: The screening pipeline does not yet store per-candidate
+                skewness/kurtosis, so DSR always uses the normal distribution
+                assumption. For heavy-tailed crypto returns this understates
+                the Sharpe variance, making DSR slightly optimistic. Store
+                skewness/kurtosis in sweep_results once available.
 
         Returns:
             DSRResult with deflated Sharpe, p-value, and significance flag.

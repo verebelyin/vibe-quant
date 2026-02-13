@@ -418,7 +418,7 @@ def _render_fitness_chart(generations: list[GenerationResult]) -> None:
         height=400,
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_results_section(result: DiscoveryResult) -> None:
@@ -443,7 +443,7 @@ def _render_results_section(result: DiscoveryResult) -> None:
         st.warning("No strategies discovered")
         return
 
-    st.dataframe(rows, width="stretch", hide_index=True)
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
     # Expandable detail per strategy
     for i, (chrom, fr) in enumerate(result.top_strategies):
@@ -516,6 +516,37 @@ def _render_active_discovery_jobs(job_manager: BacktestJobManager) -> None:
         st.divider()
 
 
+def _render_db_discovery_results() -> None:
+    """Load and render the latest completed discovery run from the database."""
+    sm = get_state_manager()
+    disc_strategy = sm.get_strategy_by_name("__discovery__")
+    if disc_strategy is None:
+        return
+
+    runs = sm.list_backtest_runs(strategy_id=disc_strategy["id"], status="completed")
+    if not runs:
+        return
+
+    latest_run = runs[0]
+    result = sm.get_backtest_result(latest_run["id"])
+    if result is None:
+        return
+
+    st.divider()
+    st.subheader("Latest Discovery Results (from database)")
+    st.caption(f"Run #{latest_run['id']} completed {latest_run.get('completed_at', 'N/A')}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Sharpe", f"{result.get('sharpe_ratio', 'N/A')}")
+    with col2:
+        st.metric("Max DD", f"{result.get('max_drawdown', 'N/A')}")
+    with col3:
+        st.metric("Profit Factor", f"{result.get('profit_factor', 'N/A')}")
+    with col4:
+        st.metric("Total Trades", f"{result.get('total_trades', 'N/A')}")
+
+
 # ---------------------------------------------------------------------------
 # Main render function
 # ---------------------------------------------------------------------------
@@ -554,6 +585,9 @@ def render_discovery_tab() -> None:
 
         # Results
         _render_results_section(discovery_result)
+    else:
+        # Fallback: load latest completed discovery run from DB
+        _render_db_discovery_results()
 
 
 # Convenience alias matching pattern from other pages

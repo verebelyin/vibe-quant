@@ -319,9 +319,10 @@ class OverfittingPipeline:
             """
             SELECT sr.id, sr.run_id, sr.parameters, sr.sharpe_ratio, sr.total_return,
                    sr.sortino_ratio, sr.max_drawdown, sr.profit_factor, sr.win_rate,
-                   sr.is_pareto_optimal, br.strategy_id
+                   sr.is_pareto_optimal, br.strategy_id, s.name AS strategy_name
             FROM sweep_results sr
             LEFT JOIN backtest_runs br ON sr.run_id = br.id
+            LEFT JOIN strategies s ON br.strategy_id = s.id
             WHERE sr.run_id = ?
             ORDER BY sr.sharpe_ratio DESC
             """,

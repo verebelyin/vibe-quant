@@ -7,6 +7,7 @@ queryable JSONL logs.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -14,6 +15,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from typing import Self
+
+logger = logging.getLogger(__name__)
 
 
 class EventType(StrEnum):
@@ -55,14 +58,16 @@ class Event:
     def to_dict(self) -> dict[str, object]:
         """Convert event to dictionary for JSON serialization.
 
+        Field names match SPEC.md: ts, event, strategy.
+
         Returns:
-            Dict with timestamp as ISO string, event_type as string, and all fields.
+            Dict with timestamp as ISO string, event as string, and all fields.
         """
         return {
-            "timestamp": self.timestamp.isoformat(),
-            "event_type": self.event_type.value,
+            "ts": self.timestamp.isoformat(),
+            "event": self.event_type.value,
             "run_id": self.run_id,
-            "strategy_name": self.strategy_name,
+            "strategy": self.strategy_name,
             "data": self.data,
         }
 
@@ -70,22 +75,33 @@ class Event:
     def from_dict(cls, d: dict[str, object]) -> Self:
         """Create Event from dictionary.
 
+        Accepts both SPEC field names (ts, event, strategy) and legacy names
+        (timestamp, event_type, strategy_name).
+
         Args:
             d: Dictionary with event fields.
 
         Returns:
             Event instance.
         """
-        timestamp_raw = d.get("timestamp")
+        timestamp_raw = d.get("ts") or d.get("timestamp")
         if isinstance(timestamp_raw, str):
             timestamp = datetime.fromisoformat(timestamp_raw)
         elif isinstance(timestamp_raw, datetime):
             timestamp = timestamp_raw
         else:
+            logger.warning("Event.from_dict: missing or invalid 'ts' field, defaulting to now()")
             timestamp = datetime.now(UTC)
 
-        event_type_raw = d.get("event_type", "SIGNAL")
-        event_type = EventType(str(event_type_raw))
+        event_type_raw = d.get("event") or d.get("event_type")
+        if event_type_raw is None:
+            logger.warning("Event.from_dict: missing 'event' field, defaulting to SIGNAL")
+            event_type_raw = "SIGNAL"
+        try:
+            event_type = EventType(str(event_type_raw))
+        except ValueError:
+            logger.warning("Event.from_dict: invalid event type '%s', defaulting to SIGNAL", event_type_raw)
+            event_type = EventType.SIGNAL
 
         data_raw = d.get("data")
         data: dict[str, object] = dict(data_raw) if isinstance(data_raw, dict) else {}
@@ -94,7 +110,7 @@ class Event:
             timestamp=timestamp,
             event_type=event_type,
             run_id=str(d.get("run_id", "")),
-            strategy_name=str(d.get("strategy_name", "")),
+            strategy_name=str(d.get("strategy") or d.get("strategy_name", "")),
             data=data,
         )
 

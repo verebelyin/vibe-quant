@@ -34,8 +34,15 @@ def render_template_selector(key_prefix: str = "tmpl") -> str | None:
     """Render the template selector and return the YAML content if selected.
 
     Returns None if no template was selected, or the YAML string if one was.
+    Returns empty string "" if Cancel/Back was clicked (caller should handle).
     """
-    st.markdown("#### Start from a template")
+    col_title, col_cancel = st.columns([4, 1])
+    with col_title:
+        st.markdown("#### Start from a template")
+    with col_cancel:
+        if st.button("Cancel", key=f"{key_prefix}_cancel", type="secondary"):
+            return ""
+
     st.caption("Choose a proven strategy template and customize it, or start from scratch.")
 
     by_category = get_templates_by_category()

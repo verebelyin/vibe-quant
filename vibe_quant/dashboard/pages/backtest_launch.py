@@ -88,7 +88,8 @@ def _render_sweep_params_form(strategy: JsonDict | None) -> dict[str, list[int |
                 parsed = []
                 for v in values_str.split(","):
                     v = v.strip()
-                    parsed.append(float(v) if "." in v else int(v))
+                    f = float(v)
+                    parsed.append(int(f) if f == int(f) and "e" not in v.lower() else f)
                 sweep_values[param_name] = parsed
             except ValueError:
                 st.error(f"Invalid values for {param_name}")

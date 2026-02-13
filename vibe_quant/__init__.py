@@ -1,3 +1,10 @@
 """vibe-quant: Algorithmic trading engine for crypto perpetual futures."""
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 __version__ = "0.1.0"

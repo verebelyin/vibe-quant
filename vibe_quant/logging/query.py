@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from vibe_quant.logging.events import EventType
 
 _SAFE_RUN_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+_DEFAULT_BASE_PATH = _PROJECT_ROOT / "logs" / "events"
 
 
 def _validate_run_id(run_id: str) -> None:
@@ -25,7 +27,7 @@ def _validate_run_id(run_id: str) -> None:
         raise ValueError(msg)
 
 
-def _get_log_path(run_id: str, base_path: Path | str = "logs/events") -> Path:
+def _get_log_path(run_id: str, base_path: Path | str | None = None) -> Path:
     """Get path to log file for a run.
 
     Args:
@@ -35,13 +37,14 @@ def _get_log_path(run_id: str, base_path: Path | str = "logs/events") -> Path:
     Returns:
         Path to the JSONL file.
     """
-    return Path(base_path) / f"{run_id}.jsonl"
+    resolved = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
+    return resolved / f"{run_id}.jsonl"
 
 
 def query_events(
     run_id: str,
     event_type: EventType | None = None,
-    base_path: Path | str = "logs/events",
+    base_path: Path | str | None = None,
 ) -> list[dict[str, object]]:
     """Query events from a run's log file.
 
@@ -71,9 +74,9 @@ def query_events(
     query = f"SELECT * FROM read_json_auto('{log_path}')"
 
     if event_type is not None:
-        query += f" WHERE event_type = '{event_type.value}'"
+        query += f" WHERE event = '{event_type.value}'"
 
-    query += " ORDER BY timestamp"
+    query += " ORDER BY ts"
 
     result = duckdb.query(query)
     df = result.fetchdf()
@@ -85,7 +88,7 @@ def query_events(
 def query_events_df(
     run_id: str,
     event_type: EventType | None = None,
-    base_path: Path | str = "logs/events",
+    base_path: Path | str | None = None,
 ) -> pd.DataFrame:
     """Query events as a pandas DataFrame.
 
@@ -114,9 +117,9 @@ def query_events_df(
     query = f"SELECT * FROM read_json_auto('{log_path}')"
 
     if event_type is not None:
-        query += f" WHERE event_type = '{event_type.value}'"
+        query += f" WHERE event = '{event_type.value}'"
 
-    query += " ORDER BY timestamp"
+    query += " ORDER BY ts"
 
     result = duckdb.query(query)
     return result.fetchdf()
@@ -124,7 +127,7 @@ def query_events_df(
 
 def count_events_by_type(
     run_id: str,
-    base_path: Path | str = "logs/events",
+    base_path: Path | str | None = None,
 ) -> dict[str, int]:
     """Count events by type for a run.
 
@@ -148,10 +151,10 @@ def count_events_by_type(
         raise FileNotFoundError(msg)
 
     query = f"""
-        SELECT event_type, COUNT(*) as count
+        SELECT event, COUNT(*) as count
         FROM read_json_auto('{log_path}')
-        GROUP BY event_type
-        ORDER BY event_type
+        GROUP BY event
+        ORDER BY event
     """
 
     result = duckdb.query(query)
@@ -159,14 +162,14 @@ def count_events_by_type(
 
     counts: dict[str, int] = {}
     for _, row in df.iterrows():
-        counts[str(row["event_type"])] = int(row["count"])
+        counts[str(row["event"])] = int(row["count"])
 
     return counts
 
 
 def get_run_summary(
     run_id: str,
-    base_path: Path | str = "logs/events",
+    base_path: Path | str | None = None,
 ) -> dict[str, object]:
     """Get summary statistics for a run.
 
@@ -192,9 +195,9 @@ def get_run_summary(
     query = f"""
         SELECT
             COUNT(*) as total_events,
-            MIN(timestamp) as first_event,
-            MAX(timestamp) as last_event,
-            COUNT(DISTINCT event_type) as event_type_count
+            MIN(ts) as first_event,
+            MAX(ts) as last_event,
+            COUNT(DISTINCT event) as event_type_count
         FROM read_json_auto('{log_path}')
     """
 
@@ -222,7 +225,7 @@ def get_run_summary(
     }
 
 
-def list_runs(base_path: Path | str = "logs/events") -> list[str]:
+def list_runs(base_path: Path | str | None = None) -> list[str]:
     """List all run IDs with event logs.
 
     Args:
@@ -231,7 +234,7 @@ def list_runs(base_path: Path | str = "logs/events") -> list[str]:
     Returns:
         List of run IDs.
     """
-    base = Path(base_path)
+    base = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
     if not base.exists():
         return []
 

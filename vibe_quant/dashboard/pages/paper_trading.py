@@ -514,19 +514,43 @@ def _render_controls(checkpoint: StateCheckpoint | None) -> dict[str, bool]:
     return actions
 
 
-def _handle_actions(actions: dict[str, bool]) -> None:
-    """Handle control button actions."""
-    if actions["halt"]:
-        st.warning("HALT action triggered. In production, this would halt the trading node.")
-        # In real implementation: send halt signal to trading node
+def _handle_actions(actions: dict[str, bool], db_path: Path | None = None) -> None:
+    """Handle control button actions by signalling the paper trading subprocess.
 
-    if actions["resume"]:
-        st.info("RESUME action triggered. In production, this would resume the trading node.")
-        # In real implementation: send resume signal to trading node
+    Uses OS signals for communication:
+    - HALT: SIGUSR1 → node pauses trading
+    - RESUME: SIGUSR2 → node resumes from pause/halt
+    - CLOSE ALL: SIGTERM → graceful shutdown (closes all positions)
+    """
+    import signal as sig
 
-    if actions["close_all"]:
-        st.warning("CLOSE ALL action triggered. In production, this would close all positions.")
-        # In real implementation: send close all signal to trading node
+    if not any(actions.values()):
+        return
+
+    # Find active paper trading job to get PID
+    active_jobs = _get_active_paper_jobs(db_path)
+    if not active_jobs:
+        st.error("No active paper trading session found")
+        return
+
+    pid = active_jobs[0]["pid"]
+
+    try:
+        if actions["halt"]:
+            os.kill(pid, sig.SIGUSR1)
+            st.warning("HALT signal sent to trading node")
+
+        if actions["resume"]:
+            os.kill(pid, sig.SIGUSR2)
+            st.info("RESUME signal sent to trading node")
+
+        if actions["close_all"]:
+            os.kill(pid, sig.SIGTERM)
+            st.warning("CLOSE ALL / graceful shutdown signal sent")
+    except ProcessLookupError:
+        st.error("Paper trading process not found (may have already stopped)")
+    except OSError as e:
+        st.error(f"Failed to signal process: {e}")
 
 
 def _render_trader_selector() -> str | None:
@@ -598,7 +622,7 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
         _render_status_indicator(checkpoint)
         st.divider()
         actions = _render_controls(checkpoint)
-        _handle_actions(actions)
+        _handle_actions(actions, db_path)
         st.divider()
         _render_recent_trades(persistence)
 

@@ -38,8 +38,8 @@ _TRADES_COLUMNS: frozenset[str] = frozenset({
 _SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset({
     "run_id", "parameters", "sharpe_ratio", "sortino_ratio", "max_drawdown",
     "total_return", "profit_factor", "win_rate", "total_trades", "total_fees",
-    "total_funding", "is_pareto_optimal", "passed_deflated_sharpe",
-    "passed_walk_forward", "passed_purged_kfold",
+    "total_funding", "execution_time_seconds", "is_pareto_optimal",
+    "passed_deflated_sharpe", "passed_walk_forward", "passed_purged_kfold",
 })
 
 
@@ -247,6 +247,19 @@ class StateManager:
             results.append(result)
         return results
 
+    def update_sizing_config(self, config_id: int, name: str, method: str, config: JsonDict) -> None:
+        """Update an existing sizing configuration."""
+        self.conn.execute(
+            "UPDATE sizing_configs SET name = ?, method = ?, config = ? WHERE id = ?",
+            (name, method, json.dumps(config), config_id),
+        )
+        self.conn.commit()
+
+    def delete_sizing_config(self, config_id: int) -> None:
+        """Delete a sizing configuration by ID."""
+        self.conn.execute("DELETE FROM sizing_configs WHERE id = ?", (config_id,))
+        self.conn.commit()
+
     # --- Risk Config CRUD ---
 
     def create_risk_config(
@@ -293,6 +306,21 @@ class StateManager:
             result["portfolio_level"] = json.loads(result["portfolio_level"])
             results.append(result)
         return results
+
+    def update_risk_config(
+        self, config_id: int, name: str, strategy_level: JsonDict, portfolio_level: JsonDict
+    ) -> None:
+        """Update an existing risk configuration."""
+        self.conn.execute(
+            "UPDATE risk_configs SET name = ?, strategy_level = ?, portfolio_level = ? WHERE id = ?",
+            (name, json.dumps(strategy_level), json.dumps(portfolio_level), config_id),
+        )
+        self.conn.commit()
+
+    def delete_risk_config(self, config_id: int) -> None:
+        """Delete a risk configuration by ID."""
+        self.conn.execute("DELETE FROM risk_configs WHERE id = ?", (config_id,))
+        self.conn.commit()
 
     # --- Backtest Run CRUD ---
 

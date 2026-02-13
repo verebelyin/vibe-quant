@@ -30,9 +30,17 @@ def db_path(tmp_path: Path) -> Path:
 
     # Create tables
     conn.execute("""
+        CREATE TABLE strategies (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            dsl_config JSON NOT NULL
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE backtest_runs (
             id INTEGER PRIMARY KEY,
-            strategy_id INTEGER,
+            strategy_id INTEGER REFERENCES strategies(id),
             run_mode TEXT NOT NULL,
             symbols JSON NOT NULL,
             timeframe TEXT NOT NULL,
@@ -64,6 +72,10 @@ def db_path(tmp_path: Path) -> Path:
     """)
 
     # Insert test data
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (?, ?, ?)",
+        (1, "test_strategy", "{}"),
+    )
     conn.execute(
         "INSERT INTO backtest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (1, 1, "screening", '["BTCUSDT"]', "1h", "2024-01-01", "2024-12-31", "{}"),

@@ -267,6 +267,7 @@ class NTScreeningRunner:
         )
 
         if bt_result is None:
+            logger.warning("bt_result is None for params %s, returning default metrics", params)
             return metrics
 
         metrics.total_trades = bt_result.total_positions
@@ -274,26 +275,41 @@ class NTScreeningRunner:
         # Extract from PnL stats first (more comprehensive, includes total return)
         _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",
                            "max drawdown", "win rate", "profit factor"}
+        # Track which fields were set by PnL stats so returns-stats fallback
+        # doesn't overwrite legitimate zero values (bug: == 0.0 sentinel)
+        _populated: set[str] = set()
         stats_pnls = bt_result.stats_pnls or {}
+        if not stats_pnls:
+            logger.warning("No stats_pnls in bt_result for params %s", params)
         for _currency, pnl_stats in stats_pnls.items():
             for key, value in pnl_stats.items():
                 if value is None:
                     continue
                 key_lower = key.lower()
-                fval = float(value)
+                try:
+                    fval = float(value)
+                except (ValueError, TypeError):
+                    logger.warning("Could not convert PnL stat %s=%r to float", key, value)
+                    continue
                 if key_lower == "pnl% (total)":
                     # NT reports as percentage; store as fraction
                     metrics.total_return = fval / 100.0
+                    _populated.add("total_return")
                 elif "sharpe" in key_lower:
                     metrics.sharpe_ratio = fval
+                    _populated.add("sharpe_ratio")
                 elif "sortino" in key_lower:
                     metrics.sortino_ratio = fval
+                    _populated.add("sortino_ratio")
                 elif key_lower == "max drawdown":
                     metrics.max_drawdown = abs(fval)
+                    _populated.add("max_drawdown")
                 elif key_lower == "win rate":
                     metrics.win_rate = fval
+                    _populated.add("win_rate")
                 elif key_lower == "profit factor":
                     metrics.profit_factor = fval
+                    _populated.add("profit_factor")
                 elif not any(k in key_lower for k in _known_pnl_keys):
                     logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
@@ -305,19 +321,34 @@ class NTScreeningRunner:
             if value is None:
                 continue
             key_lower = key.lower()
-            fval = float(value)
-            if "sharpe" in key_lower and metrics.sharpe_ratio == 0.0:
+            try:
+                fval = float(value)
+            except (ValueError, TypeError):
+                logger.warning("Could not convert returns stat %s=%r to float", key, value)
+                continue
+            if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
                 metrics.sharpe_ratio = fval
-            elif "sortino" in key_lower and metrics.sortino_ratio == 0.0:
+            elif "sortino" in key_lower and "sortino_ratio" not in _populated:
                 metrics.sortino_ratio = fval
-            elif "max drawdown" in key_lower and metrics.max_drawdown == 0.0:
+            elif "max drawdown" in key_lower and "max_drawdown" not in _populated:
                 metrics.max_drawdown = abs(fval)
-            elif key_lower == "win rate" and metrics.win_rate == 0.0:
+            elif key_lower == "win rate" and "win_rate" not in _populated:
                 metrics.win_rate = fval
-            elif key_lower == "profit factor" and metrics.profit_factor == 0.0:
+            elif key_lower == "profit factor" and "profit_factor" not in _populated:
                 metrics.profit_factor = fval
             elif not any(k in key_lower for k in _known_returns_keys):
                 logger.debug("Unmatched returns stats key: %s = %s", key, value)
+
+        # Warn if extraction produced no meaningful metrics
+        if (metrics.sharpe_ratio == 0.0 and metrics.total_return == 0.0
+                and metrics.total_trades == 0):
+            logger.warning(
+                "Metric extraction yielded no results for params %s "
+                "(stats_pnls keys: %s, stats_returns keys: %s)",
+                params,
+                list(stats_pnls.keys()) if stats_pnls else "empty",
+                list(stats_returns.keys()) if stats_returns else "empty",
+            )
 
         # Extract fees from closed positions
         try:
@@ -329,5 +360,8 @@ class NTScreeningRunner:
             metrics.total_fees = total_fees
         except Exception:
             logger.warning("Could not extract fees from engine cache", exc_info=True)
+
+        # Screening mode doesn't model funding; set explicitly for DB storage
+        metrics.total_funding = 0.0
 
         return metrics

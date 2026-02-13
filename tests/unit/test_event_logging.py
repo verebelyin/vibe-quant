@@ -31,10 +31,10 @@ class TestEventTypes:
 
         d = event.to_dict()
 
-        assert d["timestamp"] == "2024-01-15T10:00:00+00:00"
-        assert d["event_type"] == "SIGNAL"
+        assert d["ts"] == "2024-01-15T10:00:00+00:00"
+        assert d["event"] == "SIGNAL"
         assert d["run_id"] == "abc123"
-        assert d["strategy_name"] == "test_strat"
+        assert d["strategy"] == "test_strat"
         assert d["data"]["indicator"] == "rsi"
         assert d["data"]["value"] == 28.5
 
@@ -253,7 +253,7 @@ class TestEventWriter:
         with open(log_path) as f:
             line = f.readline()
             d = json.loads(line)
-            assert d["event_type"] == "SIGNAL"
+            assert d["event"] == "SIGNAL"
             assert d["data"]["value"] == 42
 
     def test_write_many_events(self, tmp_path: Path) -> None:
@@ -409,8 +409,8 @@ class TestEventQuery:
         df = query_events_df("df_test", base_path=tmp_path)
 
         assert len(df) == 5
-        assert "event_type" in df.columns
-        assert "timestamp" in df.columns
+        assert "event" in df.columns
+        assert "ts" in df.columns
 
     def test_query_nonexistent_raises(self, tmp_path: Path) -> None:
         """Query nonexistent file raises FileNotFoundError."""

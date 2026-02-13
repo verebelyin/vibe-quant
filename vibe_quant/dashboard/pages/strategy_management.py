@@ -176,6 +176,10 @@ def render_strategy_editor(
     # Template selector (new strategies only)
     if not existing and not st.session_state.get("template_applied"):
         template_yaml = render_template_selector()
+        if template_yaml == "":
+            st.session_state.pop("editing_strategy", None)
+            st.session_state.pop("template_applied", None)
+            st.rerun()
         if template_yaml is not None:
             st.session_state[yaml_key] = template_yaml
             st.session_state["template_applied"] = True

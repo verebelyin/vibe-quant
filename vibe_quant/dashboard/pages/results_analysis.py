@@ -48,7 +48,7 @@ def _show_figure(fig: object | None, empty_msg: str = "") -> None:
         if empty_msg:
             st.info(empty_msg)
     else:
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_overfitting_badge(passed: bool | None, label: str) -> None:
@@ -194,7 +194,7 @@ def render_funding_impact(result: dict[str, Any], trades: list[dict[str, Any]]) 
 
     with col1:
         fig = charts.build_funding_pie(gross_pnl, total_fees, total_funding, total_slippage)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.metric("Gross P&L", format_dollar(gross_pnl))
@@ -234,7 +234,7 @@ def render_long_short_split(trades: list[dict[str, Any]]) -> None:
                 data[direction].append(fmt.format(val))
 
     df = pd.DataFrame(data)
-    st.dataframe(df, width="stretch", hide_index=True)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def render_liquidation_summary(trades: list[dict[str, Any]]) -> None:
@@ -359,7 +359,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                 comparison_data[col_name][label] = str(val)
 
     df = pd.DataFrame(comparison_data)
-    st.dataframe(df, width="stretch")
+    st.dataframe(df, use_container_width=True)
 
     # Overlaid equity curves
     import plotly.graph_objects as go
@@ -382,7 +382,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                     )
                 )
     fig_eq.update_layout(title="Equity Curves Overlaid", height=400)
-    st.plotly_chart(fig_eq, width="stretch")
+    st.plotly_chart(fig_eq, use_container_width=True)
 
     # Overlaid drawdowns
     st.subheader("Drawdown Comparison")
@@ -405,7 +405,7 @@ def render_comparison_view(mgr: StateManager, run_ids: list[int]) -> None:
                     )
                 )
     fig_dd.update_layout(title="Drawdowns Overlaid", yaxis_title="Drawdown (%)", height=300)
-    st.plotly_chart(fig_dd, width="stretch")
+    st.plotly_chart(fig_dd, use_container_width=True)
 
     # Radar chart
     st.subheader("Strategy Profile Radar")
@@ -490,7 +490,7 @@ def _render_sweep_view(
              "Return": "{:.2%}", "PF": "{:.2f}", "Win Rate": "{:.2%}"},
             na_rep="N/A",
         ),
-        width="stretch", height=400,
+        use_container_width=True, height=400,
     )
 
     csv_data = export_to_csv(filtered_df, f"sweep_results_{run_id}.csv")
@@ -660,9 +660,9 @@ def _render_backtest_result_view(
 
         if "exit_reason" in filtered_trades.columns:
             styled = filtered_trades.style.apply(_highlight_liquidations, axis=1)
-            st.dataframe(styled, width="stretch", height=400)
+            st.dataframe(styled, use_container_width=True, height=400)
         else:
-            st.dataframe(filtered_trades, width="stretch", height=400)
+            st.dataframe(filtered_trades, use_container_width=True, height=400)
 
         csv_data = export_to_csv(filtered_trades, f"trades_{run_id}.csv")
         st.download_button(

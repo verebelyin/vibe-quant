@@ -201,14 +201,15 @@ class ScreeningPipeline:
         ranked_filtered = rank_by_sharpe(filtered)
         pareto_indices_filtered = compute_pareto_front(ranked_filtered)
 
-        # Map pareto indices back to the all-results list
-        pareto_params = {
-            json.dumps(ranked_filtered[i].parameters, sort_keys=True)
-            for i in pareto_indices_filtered
+        # Map pareto indices back to the all-results list using object
+        # identity (id()) instead of json.dumps of parameters, which
+        # collides when two results share identical parameters.
+        pareto_objects = {
+            id(ranked_filtered[i]) for i in pareto_indices_filtered
         }
         pareto_indices = [
             i for i, r in enumerate(ranked_all)
-            if json.dumps(r.parameters, sort_keys=True) in pareto_params
+            if id(r) in pareto_objects
         ]
         logger.info("Found %d Pareto-optimal results", len(pareto_indices))
 
@@ -305,6 +306,7 @@ class ScreeningPipeline:
                 "total_trades": metrics.total_trades,
                 "total_fees": metrics.total_fees,
                 "total_funding": metrics.total_funding,
+                "execution_time_seconds": metrics.execution_time_seconds,
                 "is_pareto_optimal": is_pareto,
             })
 

@@ -32,19 +32,22 @@ class EventWriter:
         base_path: Directory for event logs.
     """
 
+    _PROJECT_ROOT = Path(__file__).parent.parent.parent
+    _DEFAULT_BASE_PATH = _PROJECT_ROOT / "logs" / "events"
+
     def __init__(
         self,
         run_id: str,
-        base_path: Path | str = "logs/events",
+        base_path: Path | str | None = None,
     ) -> None:
         """Initialize EventWriter.
 
         Args:
             run_id: Unique backtest run identifier.
-            base_path: Directory for event log files.
+            base_path: Directory for event log files. Defaults to project-root/logs/events.
         """
         self.run_id = run_id
-        self.base_path = Path(base_path)
+        self.base_path = Path(base_path) if base_path is not None else self._DEFAULT_BASE_PATH
         self._lock = threading.Lock()
         self._file: open | None = None  # type: ignore[valid-type]
         self._closed = False

@@ -103,6 +103,10 @@ def _step_template() -> None:
     st.caption("Pick a template for common strategy patterns, or start from scratch.")
 
     template_yaml = render_template_selector()
+    if template_yaml == "":
+        st.session_state.pop("wizard_step", None)
+        st.session_state.pop("wizard_dsl", None)
+        st.rerun()
     if template_yaml is not None:
         dsl = yaml.safe_load(template_yaml)
         if isinstance(dsl, dict):

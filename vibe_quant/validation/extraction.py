@@ -253,16 +253,24 @@ def extract_trades(
 
 
 def estimate_market_stats(engine: BacktestEngine) -> tuple[float, float]:
-    """Estimate average bar volume and daily volatility from engine cache.
+    """Estimate average bar volume and bar-level volatility from engine cache.
 
     Reads bars from the engine cache to compute realistic slippage
     parameters instead of using hardcoded values.
+
+    NOTE: The volatility returned is per-bar (std of log returns between
+    consecutive bars), NOT annualized or daily. The timescale depends on
+    the bar frequency (e.g. 1h bars -> hourly vol). To convert to daily
+    volatility, multiply by sqrt(bars_per_day). The SPEC references daily
+    volatility for slippage estimation; callers should scale accordingly
+    if daily precision is needed. Currently SlippageEstimator uses this
+    value directly as a relative magnitude input, so bar-level is acceptable.
 
     Args:
         engine: BacktestEngine after run.
 
     Returns:
-        Tuple of (avg_bar_volume, daily_volatility). Falls back to
+        Tuple of (avg_bar_volume, bar_volatility). Falls back to
         conservative defaults (1000.0, 0.02) if data is unavailable.
     """
     default_volume = 1000.0

@@ -681,7 +681,13 @@ def rebuild_from_archive(
         counts: dict[str, int] = {}
 
         # Create and write instrument
-        instrument = create_instrument(symbol)
+        try:
+            instrument = create_instrument(symbol)
+        except KeyError:
+            if verbose:
+                print(f"Skipping {symbol}: no instrument config (unknown symbol)")
+            results[symbol] = counts
+            continue
         catalog.write_instrument(instrument)
         if verbose:
             print(f"Wrote instrument: {instrument.id}")
@@ -805,16 +811,20 @@ def main() -> int:
 
     if args.command == "ingest":
         symbols = [s.strip() for s in args.symbols.split(",")]
-        start_date = (
-            datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
-            if args.start
-            else None
-        )
-        end_date = (
-            datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
-            if args.end
-            else None
-        )
+        try:
+            start_date = (
+                datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+                if args.start
+                else None
+            )
+            end_date = (
+                datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
+                if args.end
+                else None
+            )
+        except ValueError as e:
+            print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
+            return 1
         ingest_all(
             symbols=symbols,
             years=args.years,
@@ -864,6 +874,11 @@ def main() -> int:
             kline_count = result["kline_count"]
 
             print(f"\n{symbol}: {kline_count} klines")
+
+            if kline_count == 0:
+                has_issues = True
+                print("  NO DATA: symbol not found in archive")
+                continue
 
             if gaps:
                 has_issues = True

@@ -34,6 +34,7 @@ LATENCY_OPTIONS = ["None (screening mode)"] + [p.value for p in LatencyPreset] +
 def render_strategy_selector(manager: StateManager) -> JsonDict | None:
     """Render strategy selector with rich summary card."""
     strategies = manager.list_strategies(active_only=True)
+    strategies = [s for s in strategies if not s["name"].startswith("__")]
     if not strategies:
         st.warning("No active strategies found. Create one in Strategy Management tab.")
         return None

@@ -142,6 +142,14 @@ class PaperTradingNode:
         )
         self._previous_state: NodeState | None = None  # For resume from halt
 
+        # Optional Telegram alerts (if env vars configured)
+        self._telegram: Any = None
+        try:
+            from vibe_quant.alerts.telegram import TelegramBot
+            self._telegram = TelegramBot.from_env()
+        except Exception:
+            pass  # Telegram not configured, alerts disabled
+
     @property
     def config(self) -> PaperTradingConfig:
         """Get node configuration."""
@@ -170,6 +178,12 @@ class PaperTradingNode:
 
         self.halt(HaltReason.ERROR, message)
 
+        # Send Telegram alert for halt events
+        self._send_telegram_alert(
+            "circuit_breaker",
+            f"HALT: {reason}\n{message}",
+        )
+
     def _on_error_alert(self, alert_type: str, context: ErrorContext) -> None:
         """Callback when error handler triggers alert.
 
@@ -190,6 +204,26 @@ class PaperTradingNode:
                 "retry_count": context.retry_count,
             },
         )
+
+        # Send Telegram alert
+        self._send_telegram_alert(
+            "error",
+            f"{alert_type}: {context.error}\nOp: {context.operation}",
+        )
+
+    def _send_telegram_alert(self, kind: str, message: str) -> None:
+        """Send alert via Telegram if configured. Fire-and-forget."""
+        if self._telegram is None:
+            return
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if kind == "circuit_breaker":
+                loop.create_task(self._telegram.send_circuit_breaker(message))
+            else:
+                loop.create_task(self._telegram.send_error(message))
+        except Exception:
+            pass  # Never let telegram failure affect trading
 
     def _load_strategy(self) -> StrategyDSL:
         """Load and validate strategy from database.
@@ -236,16 +270,35 @@ class PaperTradingNode:
             raise ConfigurationError(f"Strategy compilation failed: {e}") from e
 
     def _setup_signal_handlers(self) -> None:
-        """Setup signal handlers for graceful shutdown."""
+        """Setup signal handlers for graceful shutdown and control.
+
+        SIGINT/SIGTERM → graceful shutdown (closes positions)
+        SIGUSR1 → halt/pause trading
+        SIGUSR2 → resume trading
+        """
         loop = asyncio.get_event_loop()
 
-        def signal_handler(sig: int) -> None:
+        def shutdown_handler(sig: int) -> None:
             self._status.state = NodeState.STOPPED
             self._status.halt_reason = HaltReason.SIGNAL
             self._shutdown_event.set()
 
+        def halt_handler(sig: int) -> None:
+            if self._status.state == NodeState.RUNNING:
+                self.pause()
+            elif self._status.state == NodeState.PAUSED:
+                self.halt(HaltReason.MANUAL, "Manual halt via SIGUSR1")
+
+        def resume_handler(sig: int) -> None:
+            if self._status.state == NodeState.PAUSED:
+                self.resume()
+            elif self._status.state == NodeState.HALTED:
+                self.resume_from_halt()
+
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, signal_handler, sig)
+            loop.add_signal_handler(sig, shutdown_handler, sig)
+        loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
+        loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
 
     def _write_event(self, event_type: EventType, data: dict[str, Any]) -> None:
         """Write event to log.
@@ -348,6 +401,13 @@ class PaperTradingNode:
         if self._event_writer is not None:
             self._event_writer.close()
             self._event_writer = None
+
+        # Close Telegram client
+        if self._telegram is not None:
+            try:
+                await self._telegram.close()
+            except Exception:
+                pass
 
         # Close state manager
         self._state_manager.close()

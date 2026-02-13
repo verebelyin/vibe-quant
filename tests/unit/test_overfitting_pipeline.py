@@ -29,11 +29,20 @@ def db_path(tmp_path: Path) -> Path:
     conn = sqlite3.connect(str(db_file))
     conn.execute("PRAGMA journal_mode=WAL")
 
+    # Create strategies table
+    conn.execute("""
+        CREATE TABLE strategies (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            dsl_config JSON NOT NULL
+        )
+    """)
+
     # Create backtest_runs table
     conn.execute("""
         CREATE TABLE backtest_runs (
             id INTEGER PRIMARY KEY,
-            strategy_id INTEGER,
+            strategy_id INTEGER REFERENCES strategies(id),
             run_mode TEXT NOT NULL,
             symbols JSON NOT NULL,
             timeframe TEXT NOT NULL,
@@ -64,6 +73,12 @@ def db_path(tmp_path: Path) -> Path:
             passed_purged_kfold BOOLEAN
         )
     """)
+
+    # Insert test strategy
+    conn.execute(
+        """INSERT INTO strategies (id, name, dsl_config) VALUES (?, ?, ?)""",
+        (1, "test_strategy", "{}"),
+    )
 
     # Insert test backtest run
     conn.execute(

@@ -25,6 +25,32 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
+def max_indicator_lookback(dsl_config: dict[str, object]) -> int:
+    """Extract the maximum indicator lookback period from a DSL config dict.
+
+    Inspects all indicators' period, slow_period, and signal_period fields
+    and returns the largest value found. Returns 0 if no lookback is found.
+
+    Args:
+        dsl_config: Strategy DSL as dict (e.g. from StrategyDSL.model_dump()).
+
+    Returns:
+        Maximum lookback in bars across all indicators.
+    """
+    max_lb = 0
+    indicators = dsl_config.get("indicators", {})
+    if not isinstance(indicators, dict):
+        return 0
+    for _name, ind in indicators.items():
+        if not isinstance(ind, dict):
+            continue
+        for key in ("period", "slow_period", "signal_period"):
+            val = ind.get(key)
+            if isinstance(val, int) and val > max_lb:
+                max_lb = val
+    return max_lb
+
+
 class BacktestRunner(Protocol):
     """Protocol for backtest execution.
 
