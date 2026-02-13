@@ -105,7 +105,7 @@ class TestEtherealVenueConfig:
         """VenueConfig has sensible defaults."""
         config = EtherealVenueConfig()
         assert config.name == "ETHEREAL"
-        assert config.starting_balance_usdt == 100_000
+        assert config.starting_balance_usde == 100_000
         assert config.default_leverage == Decimal("10")
         assert config.leverages == {}
         assert config.funding_interval == 3600
@@ -139,11 +139,11 @@ class TestEtherealVenueForBacktesting:
     def test_backtesting_venue_custom_params(self) -> None:
         """Backtesting venue accepts custom parameters."""
         config = get_ethereal_venue_for_backtesting(
-            starting_balance_usdt=50_000,
+            starting_balance_usde=50_000,
             default_leverage=Decimal("5"),
             leverages={"ETHUSDT-PERP.ETHEREAL": Decimal("15")},
         )
-        assert config.starting_balance_usdt == 50_000
+        assert config.starting_balance_usde == 50_000
         assert config.default_leverage == Decimal("5")
         assert "ETHUSDT-PERP.ETHEREAL" in config.leverages
 
@@ -164,8 +164,8 @@ class TestEtherealVenueForPaperTrading:
     def test_paper_trading_venue_custom_params(self) -> None:
         """Paper trading venue accepts custom parameters."""
         config = get_ethereal_venue_for_paper_trading(
-            starting_balance_usdt=25_000,
+            starting_balance_usde=25_000,
             default_leverage=Decimal("3"),
         )
-        assert config.starting_balance_usdt == 25_000
+        assert config.starting_balance_usde == 25_000
         assert config.default_leverage == Decimal("3")

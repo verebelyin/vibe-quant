@@ -56,7 +56,7 @@ class EtherealVenueConfig:
 
     Attributes:
         name: Venue identifier, always "ETHEREAL".
-        starting_balance_usdt: Starting account balance in USDT.
+        starting_balance_usde: Starting account balance in USDe.
         default_leverage: Default leverage for all instruments.
         leverages: Per-instrument max leverage overrides.
         funding_interval: Funding interval in seconds (default 1 hour).
@@ -66,7 +66,7 @@ class EtherealVenueConfig:
     """
 
     name: str = "ETHEREAL"
-    starting_balance_usdt: int = 100_000
+    starting_balance_usde: int = 100_000
     default_leverage: Decimal = Decimal("10")
     leverages: dict[str, Decimal] = field(default_factory=dict)
     funding_interval: int = ETHEREAL_FUNDING_INTERVAL
@@ -102,7 +102,7 @@ def get_ethereal_latency_model(
 
 
 def get_ethereal_venue_for_backtesting(
-    starting_balance_usdt: int = 100_000,
+    starting_balance_usde: int = 100_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> EtherealVenueConfig:
@@ -111,7 +111,7 @@ def get_ethereal_venue_for_backtesting(
     Uses mainnet latency preset for realistic simulation.
 
     Args:
-        starting_balance_usdt: Starting balance.
+        starting_balance_usde: Starting balance.
         default_leverage: Default leverage.
         leverages: Per-instrument max leverage overrides.
 
@@ -120,7 +120,7 @@ def get_ethereal_venue_for_backtesting(
     """
     return EtherealVenueConfig(
         name="ETHEREAL",
-        starting_balance_usdt=starting_balance_usdt,
+        starting_balance_usde=starting_balance_usde,
         default_leverage=default_leverage,
         leverages=leverages or {},
         latency_preset=EtherealLatencyPreset.MAINNET,
@@ -128,7 +128,7 @@ def get_ethereal_venue_for_backtesting(
 
 
 def get_ethereal_venue_for_paper_trading(
-    starting_balance_usdt: int = 100_000,
+    starting_balance_usde: int = 100_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> EtherealVenueConfig:
@@ -137,7 +137,7 @@ def get_ethereal_venue_for_paper_trading(
     Uses testnet latency preset for faster iteration.
 
     Args:
-        starting_balance_usdt: Starting balance.
+        starting_balance_usde: Starting balance.
         default_leverage: Default leverage.
         leverages: Per-instrument max leverage overrides.
 
@@ -146,7 +146,7 @@ def get_ethereal_venue_for_paper_trading(
     """
     return EtherealVenueConfig(
         name="ETHEREAL",
-        starting_balance_usdt=starting_balance_usdt,
+        starting_balance_usde=starting_balance_usde,
         default_leverage=default_leverage,
         leverages=leverages or {},
         latency_preset=EtherealLatencyPreset.TESTNET,

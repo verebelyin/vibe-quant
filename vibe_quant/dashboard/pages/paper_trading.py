@@ -18,7 +18,7 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
 
 import streamlit as st
 
@@ -30,6 +30,25 @@ from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence, reco
 SESSION_TRADER_ID = "paper_trading_trader_id"
 SESSION_PERSISTENCE = "paper_trading_persistence"
 SESSION_LAST_REFRESH = "paper_trading_last_refresh"
+
+
+class ValidatedStrategyRow(TypedDict):
+    strategy_id: int
+    strategy_name: str
+    run_id: int
+    symbols: str | list[str]
+    timeframe: str
+    sharpe_ratio: float
+    walk_forward_efficiency: float
+    deflated_sharpe: float
+    purged_kfold_mean_sharpe: float
+    max_drawdown: float
+    total_return: float
+
+
+class ActivePaperJobRow(TypedDict):
+    run_id: int
+    pid: int
 
 
 def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
@@ -46,7 +65,7 @@ def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
     return persistence
 
 
-def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any]]:
+def _get_validated_strategies(db_path: Path | None = None) -> list[ValidatedStrategyRow]:
     """Get strategies with completed validation backtests.
 
     Returns strategies from backtest_results that have:
@@ -80,12 +99,12 @@ def _get_validated_strategies(db_path: Path | None = None) -> list[dict[str, Any
             """
         )
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [cast("ValidatedStrategyRow", dict(row)) for row in rows]
     finally:
         conn.close()
 
 
-def _get_active_paper_jobs(db_path: Path | None = None) -> list[dict[str, Any]]:
+def _get_active_paper_jobs(db_path: Path | None = None) -> list[ActivePaperJobRow]:
     """Get currently running paper trading jobs."""
     conn = get_connection(db_path)
     try:
@@ -96,7 +115,7 @@ def _get_active_paper_jobs(db_path: Path | None = None) -> list[dict[str, Any]]:
             """
         )
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [cast("ActivePaperJobRow", dict(row)) for row in rows]
     finally:
         conn.close()
 
@@ -182,7 +201,7 @@ def _render_start_session(db_path: Path | None = None) -> None:
         return
 
     # Strategy selector
-    strategy_options = {
+    strategy_options: dict[str, ValidatedStrategyRow] = {
         f"{s['strategy_name']} | Sharpe: {s['sharpe_ratio']:.2f}": s
         for s in strategies
     }
@@ -224,8 +243,12 @@ def _render_start_session(db_path: Path | None = None) -> None:
         testnet = st.checkbox("Use Testnet", value=True, help="Paper trade on Binance testnet")
 
     # Parse symbols from JSON
-    symbols_json = selected.get("symbols", "[]")
-    symbols = json.loads(symbols_json) if isinstance(symbols_json, str) else symbols_json
+    symbols_raw = selected["symbols"]
+    symbols = (
+        json.loads(symbols_raw)
+        if isinstance(symbols_raw, str)
+        else [str(symbol) for symbol in symbols_raw]
+    )
 
     # Start button
     if st.button("Start Paper Trading", type="primary", width="stretch"):
@@ -650,5 +673,5 @@ def render_paper_trading_tab(db_path: Path | None = None) -> None:
 # Convenience alias for app.py imports
 render = render_paper_trading_tab
 
-# Top-level call for st.navigation API
-render_paper_trading_tab()
+if __name__ == "__main__":
+    render_paper_trading_tab()

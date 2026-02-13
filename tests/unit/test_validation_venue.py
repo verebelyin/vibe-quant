@@ -126,7 +126,7 @@ class TestFillModels:
         config = VolumeSlippageFillModelConfig()
         assert config.impact_coefficient == 0.1
         assert config.prob_fill_on_limit == 0.8
-        assert config.prob_slippage == 1.0
+        assert config.prob_slippage == 0.0
 
     def test_create_screening_fill_model(self) -> None:
         """Create screening fill model."""
@@ -255,6 +255,7 @@ class TestVenueConfig:
         assert config.latency_preset == LatencyPreset.RETAIL
         assert config.use_volume_slippage
         assert isinstance(config.fill_config, VolumeSlippageFillModelConfig)
+        assert config.fill_config.prob_slippage == 0.0
 
     def test_create_venue_config_for_validation_custom(self) -> None:
         """Create validation venue config with custom values."""
@@ -268,6 +269,7 @@ class TestVenueConfig:
         assert config.fill_config is not None
         assert isinstance(config.fill_config, VolumeSlippageFillModelConfig)
         assert config.fill_config.impact_coefficient == 0.05
+        assert config.fill_config.prob_slippage == 0.0
 
 
 class TestBacktestVenueConfig:

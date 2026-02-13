@@ -20,7 +20,7 @@ from vibe_quant.validation.latency import (
 )
 
 if TYPE_CHECKING:
-    from vibe_quant.db.state_manager import JsonDict
+    from vibe_quant.db.state_manager import JsonDict, StateManager
 
 # Sizing method choices
 SIZING_METHODS = ["fixed_fractional", "kelly", "atr"]
@@ -46,6 +46,13 @@ SIZING_PARAM_SCHEMAS: dict[str, dict[str, dict[str, object]]] = {
         "risk_per_trade": {"type": "decimal", "default": "0.02", "min": "0.001", "max": "0.2"},
         "atr_multiplier": {"type": "decimal", "default": "2.0", "min": "0.5", "max": "10"},
     },
+}
+
+TABLE_ROW_COUNT_QUERIES: dict[str, str] = {
+    "strategies": "SELECT COUNT(*) FROM strategies",
+    "sizing_configs": "SELECT COUNT(*) FROM sizing_configs",
+    "risk_configs": "SELECT COUNT(*) FROM risk_configs",
+    "backtest_runs": "SELECT COUNT(*) FROM backtest_runs",
 }
 
 
@@ -463,6 +470,18 @@ def render_latency_section() -> None:
         st.caption(f"Base: {values.base_ms}ms + Insert: {values.insert_ms}ms")
 
 
+def _get_table_row_counts(manager: StateManager, available_tables: set[str]) -> dict[str, int]:
+    """Return row counts using a fixed SQL whitelist for known dashboard tables."""
+    counts: dict[str, int] = {}
+    for table, query in TABLE_ROW_COUNT_QUERIES.items():
+        if table not in available_tables:
+            continue
+        cursor = manager.conn.execute(query)
+        row = cursor.fetchone()
+        counts[table] = int(row[0]) if row else 0
+    return counts
+
+
 def render_database_section() -> None:
     """Render database path configuration section."""
     st.subheader("Database Configuration")
@@ -506,11 +525,7 @@ def render_database_section() -> None:
         # Row counts for key tables
         if tables:
             st.markdown("**Row Counts:**")
-            counts = {}
-            for table in ["strategies", "sizing_configs", "risk_configs", "backtest_runs"]:
-                if table in tables:
-                    cursor = manager.conn.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
-                    counts[table] = cursor.fetchone()[0]
+            counts = _get_table_row_counts(manager, set(tables))
             st.json(counts)
     except Exception as e:
         st.error(f"Could not read database: {e}")
@@ -582,6 +597,7 @@ def render_settings_tab() -> None:
     with tab5:
         render_system_info()
 
+render = render_settings_tab
 
-# Top-level call for st.navigation API
-render_settings_tab()
+if __name__ == "__main__":
+    render_settings_tab()

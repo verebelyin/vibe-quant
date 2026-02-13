@@ -186,3 +186,38 @@ class TestStateManagerIntegration:
         """List configs returns empty list when none exist."""
         assert tmp_state_manager.list_sizing_configs() == []
         assert tmp_state_manager.list_risk_configs() == []
+
+
+class TestDatabaseRowCountQueries:
+    """Test database row-count helper safety and behavior."""
+
+    def test_get_table_row_counts_uses_whitelisted_queries(self) -> None:
+        """Unknown table names should never be interpolated into SQL."""
+        from vibe_quant.dashboard.pages.settings import _get_table_row_counts
+
+        executed_queries: list[str] = []
+
+        class _FakeCursor:
+            def __init__(self, value: int) -> None:
+                self._value = value
+
+            def fetchone(self) -> tuple[int]:
+                return (self._value,)
+
+        class _FakeConn:
+            def execute(self, query: str) -> _FakeCursor:
+                executed_queries.append(query)
+                return _FakeCursor(1)
+
+        class _FakeManager:
+            conn = _FakeConn()
+
+        counts = _get_table_row_counts(
+            _FakeManager(), {"strategies", "sizing_configs", "evil_table"},
+        )
+
+        assert counts == {"strategies": 1, "sizing_configs": 1}
+        assert executed_queries == [
+            "SELECT COUNT(*) FROM strategies",
+            "SELECT COUNT(*) FROM sizing_configs",
+        ]

@@ -7,11 +7,12 @@ for paper trading with Binance testnet.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
@@ -24,9 +25,46 @@ from vibe_quant.paper.config import (
     create_trading_node_config,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
+from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
     from vibe_quant.dsl.schema import StrategyDSL
+
+
+class _TradingNodeLifecycle(Protocol):
+    """Minimal lifecycle contract for live trading node integration."""
+
+    def run(self, raise_exception: bool = False) -> None:
+        """Start and run the node."""
+
+    def stop(self) -> None:
+        """Stop the node gracefully."""
+
+    def dispose(self) -> None:
+        """Dispose resources."""
+
+
+class _StrategyRuntime(Protocol):
+    """Minimal strategy API needed for halt-time cleanup."""
+
+    id: object
+
+    def cancel_order(self, order: object) -> None:
+        """Cancel a single open order."""
+
+
+class _TraderRuntime(Protocol):
+    """Minimal trader API needed for halt-time cleanup."""
+
+    def strategies(self) -> list[_StrategyRuntime]:
+        """Return loaded runtime strategies."""
+
+
+class _CacheRuntime(Protocol):
+    """Minimal cache API needed for halt-time cleanup."""
+
+    def orders_open(self, strategy_id: object | None = None) -> list[object]:
+        """Return open orders filtered by strategy."""
 
 
 class NodeState(StrEnum):
@@ -133,9 +171,11 @@ class PaperTradingNode:
         self._compiler = StrategyCompiler()
         self._status = NodeStatus()
         self._event_writer: EventWriter | None = None
-        self._trading_node: Any = None  # NautilusTrader TradingNode
+        self._trading_node: _TradingNodeLifecycle | None = None
+        self._persistence: StatePersistence | None = None
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
+        self._compiled_strategy: object | None = None
         self._error_handler = ErrorHandler(
             on_halt=self._on_error_halt,
             on_alert=self._on_error_alert,
@@ -269,6 +309,56 @@ class PaperTradingNode:
         except Exception as e:
             raise ConfigurationError(f"Strategy compilation failed: {e}") from e
 
+    def _create_live_trading_node(self) -> _TradingNodeLifecycle:
+        """Create and build a NautilusTrader TradingNode instance."""
+        from nautilus_trader.adapters.binance import config as binance_config
+        from nautilus_trader.adapters.binance.config import (
+            BinanceDataClientConfig,
+            BinanceExecClientConfig,
+        )
+        from nautilus_trader.adapters.binance.factories import (
+            BinanceLiveDataClientFactory,
+            BinanceLiveExecClientFactory,
+        )
+        from nautilus_trader.live.config import TradingNodeConfig
+        from nautilus_trader.live.node import TradingNode
+
+        account_type_cls = getattr(binance_config, "BinanceAccountType", None)
+        if account_type_cls is None:
+            raise ConfigurationError("BinanceAccountType is unavailable in NautilusTrader config module")
+
+        try:
+            account_type = account_type_cls(self._config.binance.account_type)
+        except ValueError as e:
+            raise ConfigurationError(
+                f"Unsupported Binance account_type '{self._config.binance.account_type}'",
+            ) from e
+
+        node_config = TradingNodeConfig(
+            trader_id=self._config.trader_id,
+            data_clients={
+                "BINANCE": BinanceDataClientConfig(
+                    api_key=self._config.binance.api_key,
+                    api_secret=self._config.binance.api_secret,
+                    account_type=account_type,
+                    testnet=self._config.binance.testnet,
+                ),
+            },
+            exec_clients={
+                "BINANCE": BinanceExecClientConfig(
+                    api_key=self._config.binance.api_key,
+                    api_secret=self._config.binance.api_secret,
+                    account_type=account_type,
+                    testnet=self._config.binance.testnet,
+                ),
+            },
+        )
+        node = TradingNode(node_config)
+        node.add_data_client_factory("BINANCE", BinanceLiveDataClientFactory)
+        node.add_exec_client_factory("BINANCE", BinanceLiveExecClientFactory)
+        node.build()
+        return node
+
     def _setup_signal_handlers(self) -> None:
         """Setup signal handlers for graceful shutdown and control.
 
@@ -300,6 +390,16 @@ class PaperTradingNode:
         loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
         loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
 
+    def _capture_checkpoint(self) -> StateCheckpoint:
+        """Capture current node state for persistence."""
+        return StateCheckpoint(
+            trader_id=self._config.trader_id,
+            positions={},
+            orders={},
+            balance={},
+            node_status=self._status.to_dict(),
+        )
+
     def _write_event(self, event_type: EventType, data: dict[str, Any]) -> None:
         """Write event to log.
 
@@ -317,6 +417,49 @@ class PaperTradingNode:
             )
             self._event_writer.write(event)
 
+    def _cancel_open_orders_for_halt(self) -> int:
+        """Best-effort cancellation of all open orders before halt shutdown."""
+        if self._trading_node is None:
+            return 0
+
+        trader = getattr(self._trading_node, "trader", None)
+        cache = getattr(self._trading_node, "cache", None)
+        if trader is None or cache is None:
+            return 0
+
+        try:
+            strategies = list(cast("_TraderRuntime", trader).strategies())
+        except Exception:
+            return 0
+
+        cancelled_orders = 0
+        cache_runtime = cast("_CacheRuntime", cache)
+        for strategy in strategies:
+            strategy_id = getattr(strategy, "id", None)
+            if strategy_id is None:
+                continue
+
+            try:
+                open_orders = cache_runtime.orders_open(strategy_id=strategy_id)
+            except Exception:
+                continue
+
+            for order in open_orders:
+                try:
+                    strategy.cancel_order(order)
+                    cancelled_orders += 1
+                except Exception as exc:
+                    self._write_event(
+                        EventType.RISK_CHECK,
+                        {
+                            "action": "halt_cancel_order_failed",
+                            "strategy_id": str(strategy_id),
+                            "error": str(exc),
+                        },
+                    )
+
+        return cancelled_orders
+
     async def _initialize(self) -> None:
         """Initialize node components.
 
@@ -328,7 +471,7 @@ class PaperTradingNode:
 
         # Load and compile strategy
         self._strategy = self._load_strategy()
-        compiled_strategy = self._compile_strategy(self._strategy)
+        self._compiled_strategy = self._compile_strategy(self._strategy)
 
         # Create event writer
         self._config.logs_path.mkdir(parents=True, exist_ok=True)
@@ -350,22 +493,25 @@ class PaperTradingNode:
         )
 
         # Create trading node config
-        node_config = create_trading_node_config(self._config)
+        create_trading_node_config(self._config)  # Keep compatibility with existing config path/tests.
+        self._trading_node = self._create_live_trading_node()
 
-        # Note: Actual TradingNode instantiation requires nautilus_trader
-        # This is a placeholder for the actual implementation
-        self._trading_node = {
-            "config": node_config,
-            "strategy": compiled_strategy,
-            "status": "initialized",
-        }
+        # Start persistence lifecycle and save initial checkpoint.
+        self._persistence = StatePersistence(
+            db_path=self._config.db_path,
+            trader_id=self._config.trader_id,
+            checkpoint_interval=self._config.state_persistence_interval,
+        )
+        self._persistence.save_checkpoint(self._capture_checkpoint())
 
     async def _run_loop(self) -> None:
         """Main event loop for paper trading.
 
-        This is a placeholder for the actual NautilusTrader event loop.
-        In production, this would delegate to TradingNode.run().
+        Delegates execution lifecycle to NautilusTrader TradingNode.
         """
+        if self._trading_node is None:
+            raise RuntimeError("Trading node is not initialized")
+
         self._status.state = NodeState.RUNNING
         self._status.started_at = datetime.now(UTC)
         self._status.updated_at = datetime.now(UTC)
@@ -379,8 +525,30 @@ class PaperTradingNode:
             },
         )
 
-        # Wait for shutdown signal
-        await self._shutdown_event.wait()
+        if self._persistence is not None:
+            await self._persistence.start_periodic_checkpointing(self._capture_checkpoint)
+
+        run_task = asyncio.create_task(asyncio.to_thread(self._trading_node.run, False))
+        shutdown_task = asyncio.create_task(self._shutdown_event.wait())
+
+        done, pending = await asyncio.wait(
+            {run_task, shutdown_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if shutdown_task in done and not run_task.done():
+            self._trading_node.stop()
+            await run_task
+        elif run_task in done:
+            self._shutdown_event.set()
+            run_exc = run_task.exception()
+            if run_exc is not None:
+                raise run_exc
+
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""
@@ -397,6 +565,23 @@ class PaperTradingNode:
             },
         )
 
+        if self._persistence is not None:
+            with contextlib.suppress(Exception):
+                self._persistence.save_checkpoint(self._capture_checkpoint())
+            with contextlib.suppress(Exception):
+                await self._persistence.stop_periodic_checkpointing()
+            with contextlib.suppress(Exception):
+                self._persistence.close()
+            self._persistence = None
+
+        # Stop/dispose trading node
+        if self._trading_node is not None:
+            with contextlib.suppress(Exception):
+                self._trading_node.stop()
+            with contextlib.suppress(Exception):
+                self._trading_node.dispose()
+            self._trading_node = None
+
         # Close event writer
         if self._event_writer is not None:
             self._event_writer.close()
@@ -404,10 +589,8 @@ class PaperTradingNode:
 
         # Close Telegram client
         if self._telegram is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._telegram.close()
-            except Exception:
-                pass
 
         # Close state manager
         self._state_manager.close()
@@ -435,11 +618,15 @@ class PaperTradingNode:
         Args:
             reason: Reason for halting.
             message: Optional message.
+
+        Notes:
+            Halt is recoverable by design and does not trigger process shutdown.
         """
         self._status.state = NodeState.HALTED
         self._status.halt_reason = reason
         self._status.error_message = message
         self._status.updated_at = datetime.now(UTC)
+        cancelled_open_orders = self._cancel_open_orders_for_halt()
 
         self._write_event(
             EventType.RISK_CHECK,
@@ -447,10 +634,9 @@ class PaperTradingNode:
                 "action": "halt",
                 "reason": reason.value,
                 "message": message,
+                "cancelled_open_orders": cancelled_open_orders,
             },
         )
-
-        self._shutdown_event.set()
 
     def pause(self) -> None:
         """Pause trading (close no new positions)."""

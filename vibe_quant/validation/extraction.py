@@ -178,7 +178,24 @@ def extract_trades(
 
     fill_cfg = venue_config.fill_config
     impact_k = getattr(fill_cfg, "impact_coefficient", 0.1) if fill_cfg else 0.1
-    slippage_estimator = SlippageEstimator(impact_coefficient=impact_k)
+    engine_prob_slippage = (
+        float(getattr(fill_cfg, "prob_slippage", 0.0))
+        if fill_cfg is not None
+        else 0.0
+    )
+    use_post_fill_spec_slippage = engine_prob_slippage <= 0.0
+    slippage_estimator = (
+        SlippageEstimator(impact_coefficient=impact_k)
+        if use_post_fill_spec_slippage
+        else None
+    )
+
+    if not use_post_fill_spec_slippage:
+        logger.info(
+            "Skipping post-fill SPEC slippage estimation because engine "
+            "prob_slippage=%s is enabled",
+            engine_prob_slippage,
+        )
 
     avg_bar_volume, bar_volatility = estimate_market_stats(engine)
 
@@ -200,13 +217,16 @@ def extract_trades(
         elif realized_pnl < 0:
             losing += 1
 
-        slippage_cost = slippage_estimator.estimate_cost(
-            entry_price=entry_price,
-            order_size=quantity,
-            avg_volume=avg_bar_volume,
-            volatility=bar_volatility,
-            spread=0.0001,
-        )
+        if slippage_estimator is not None:
+            slippage_cost = slippage_estimator.estimate_cost(
+                entry_price=entry_price,
+                order_size=quantity,
+                avg_volume=avg_bar_volume,
+                volatility=bar_volatility,
+                spread=0.0001,
+            )
+        else:
+            slippage_cost = 0.0
         total_slippage += slippage_cost
 
         if entry_price > 0 and quantity > 0:

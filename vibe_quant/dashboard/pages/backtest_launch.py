@@ -210,10 +210,12 @@ def _render_run_buttons(
     )
 
     db_path = st.session_state.get("db_path", str(DEFAULT_DB_PATH))
-    command = [
-        sys.executable, "-m", f"vibe_quant.{'screening' if run_screening else 'validation'}",
-        "--run-id", str(run_id), "--db", db_path,
-    ]
+    module_name = "vibe_quant.screening" if run_screening else "vibe_quant.validation"
+    command = [sys.executable, "-m", module_name]
+    if run_screening:
+        # screening CLI requires an explicit subcommand
+        command.append("run")
+    command.extend(["--run-id", str(run_id), "--db", db_path])
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
@@ -275,8 +277,9 @@ def render_backtest_launch_tab() -> None:
 
     st.divider()
     render_active_jobs(manager, job_manager)
-    render_recent_runs(manager)
+    render_recent_runs(manager, job_manager)
 
+render = render_backtest_launch_tab
 
-# Top-level call for st.navigation API
-render_backtest_launch_tab()
+if __name__ == "__main__":
+    render_backtest_launch_tab()

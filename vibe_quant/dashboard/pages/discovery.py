@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -66,7 +66,7 @@ def build_fitness_chart_data(
 
 def build_results_table(
     top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Format top strategies for table display.
 
     Args:
@@ -75,7 +75,7 @@ def build_results_table(
     Returns:
         List of row dicts with Rank, Sharpe, MaxDD, PF, Trades, Genes, Score.
     """
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, object]] = []
     for rank, (chrom, fr) in enumerate(top_strategies, 1):
         gene_count = len(chrom.entry_genes) + len(chrom.exit_genes)
         rows.append({
@@ -90,18 +90,18 @@ def build_results_table(
     return rows
 
 
-def _ops_chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
+def _ops_chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
     """Convert an operators.StrategyChromosome to a DSL-like dict.
 
     Builds a simplified DSL dict from the chromosome for display and export.
     """
-    indicators: dict[str, Any] = {}
+    indicators: dict[str, dict[str, object]] = {}
     entry_conditions: list[str] = []
     exit_conditions: list[str] = []
 
     for i, gene in enumerate(chrom.entry_genes):
         name = f"{gene.indicator_type.lower()}_entry_{i}"
-        cfg: dict[str, Any] = {"type": gene.indicator_type}
+        cfg: dict[str, object] = {"type": gene.indicator_type}
         for pname, val in gene.parameters.items():
             cfg[pname] = int(val) if val == int(val) else round(val, 4)
         indicators[name] = cfg
@@ -293,31 +293,7 @@ def _render_start_button(
             st.error("Fix configuration errors before starting")
             return
 
-        # Build subprocess command
         db_path = st.session_state.get("db_path", str(DEFAULT_DB_PATH))
-        command = [
-            sys.executable,
-            "-m",
-            "vibe_quant.discovery",
-            "--population-size",
-            str(config.population_size),
-            "--max-generations",
-            str(config.max_generations),
-            "--mutation-rate",
-            str(config.mutation_rate),
-            "--elite-count",
-            str(config.elite_count),
-            "--symbols",
-            ",".join(config.symbols),
-            "--timeframe",
-            config.timeframe,
-            "--start-date",
-            config.start_date,
-            "--end-date",
-            config.end_date,
-            "--db",
-            db_path,
-        ]
 
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
@@ -350,8 +326,34 @@ def _render_start_button(
                     "max_generations": config.max_generations,
                     "mutation_rate": config.mutation_rate,
                     "elite_count": config.elite_count,
-                },
-            )
+                    },
+                )
+
+            command = [
+                sys.executable,
+                "-m",
+                "vibe_quant.discovery",
+                "--run-id",
+                str(run_id),
+                "--population-size",
+                str(config.population_size),
+                "--max-generations",
+                str(config.max_generations),
+                "--mutation-rate",
+                str(config.mutation_rate),
+                "--elite-count",
+                str(config.elite_count),
+                "--symbols",
+                ",".join(config.symbols),
+                "--timeframe",
+                config.timeframe,
+                "--start-date",
+                config.start_date,
+                "--end-date",
+                config.end_date,
+                "--db",
+                db_path,
+            ]
 
             pid = job_manager.start_job(
                 run_id=run_id,
@@ -591,5 +593,5 @@ def render_discovery_tab() -> None:
 # Convenience alias matching pattern from other pages
 render = render_discovery_tab
 
-# Top-level call for st.navigation API
-render_discovery_tab()
+if __name__ == "__main__":
+    render_discovery_tab()

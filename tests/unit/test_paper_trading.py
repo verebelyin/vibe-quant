@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
+import threading
+import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -427,6 +430,104 @@ class TestPaperTradingNode:
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.MAX_DRAWDOWN
         assert node.status.error_message == "Hit 15% drawdown"
+        assert not node._shutdown_event.is_set()
+
+    def test_halt_cancels_open_orders(self, db_path: Path):
+        """Halt cancels currently open orders via loaded runtime strategies."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+
+        class _Strategy:
+            def __init__(self, strategy_id: str) -> None:
+                self.id = strategy_id
+                self.cancelled: list[object] = []
+
+            def cancel_order(self, order: object) -> None:
+                self.cancelled.append(order)
+
+        class _Trader:
+            def __init__(self, strategies: list[_Strategy]) -> None:
+                self._strategies = strategies
+
+            def strategies(self) -> list[_Strategy]:
+                return self._strategies
+
+        class _Cache:
+            def __init__(self, orders_by_strategy: dict[str, list[object]]) -> None:
+                self._orders_by_strategy = orders_by_strategy
+
+            def orders_open(self, strategy_id: object | None = None) -> list[object]:
+                if strategy_id is None:
+                    return []
+                return list(self._orders_by_strategy.get(str(strategy_id), []))
+
+        class _TradingNode:
+            def __init__(self, trader: _Trader, cache: _Cache) -> None:
+                self.trader = trader
+                self.cache = cache
+
+        strategy_a = _Strategy("S-A")
+        strategy_b = _Strategy("S-B")
+        order_1 = object()
+        order_2 = object()
+        order_3 = object()
+
+        node = PaperTradingNode(config)
+        node._trading_node = _TradingNode(
+            trader=_Trader([strategy_a, strategy_b]),
+            cache=_Cache({"S-A": [order_1, order_2], "S-B": [order_3]}),
+        )
+
+        node.halt(HaltReason.ERROR, "Risk threshold breached")
+
+        assert strategy_a.cancelled == [order_1, order_2]
+        assert strategy_b.cancelled == [order_3]
+
+    def test_halt_ignores_cancel_failures(self, db_path: Path):
+        """Halt continues even if individual order cancellations fail."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+
+        class _Strategy:
+            def __init__(self) -> None:
+                self.id = "S-ERR"
+                self.calls = 0
+
+            def cancel_order(self, order: object) -> None:
+                self.calls += 1
+                raise RuntimeError("cancel failed")
+
+        class _TradingNode:
+            def __init__(self) -> None:
+                strategy = _Strategy()
+                self.strategy = strategy
+                self.trader = type("Trader", (), {"strategies": lambda _self: [strategy]})()
+                self.cache = type(
+                    "Cache",
+                    (),
+                    {"orders_open": lambda _self, strategy_id=None: [object()]},
+                )()
+
+        node = PaperTradingNode(config)
+        fake_runtime = _TradingNode()
+        node._trading_node = fake_runtime
+
+        node.halt(HaltReason.ERROR, "halt")
+
+        assert fake_runtime.strategy.calls == 1
+        assert node.status.state == NodeState.HALTED
 
     def test_pause_resume(self, db_path: Path):
         """Can pause and resume node."""
@@ -449,6 +550,257 @@ class TestPaperTradingNode:
 
         node.resume()
         assert node.status.state == NodeState.RUNNING
+
+    @pytest.mark.asyncio
+    async def test_initialize_creates_live_node_object(self, db_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """_initialize should attach a lifecycle node object, not a dict placeholder."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+
+        class _FakeTradingNode:
+            def __init__(self) -> None:
+                self.stop_calls = 0
+                self.dispose_calls = 0
+
+            def run(self, raise_exception: bool = False) -> None:
+                return
+
+            def stop(self) -> None:
+                self.stop_calls += 1
+
+            def dispose(self) -> None:
+                self.dispose_calls += 1
+
+        fake_node = _FakeTradingNode()
+        monkeypatch.setattr(
+            PaperTradingNode,
+            "_create_live_trading_node",
+            lambda _self: fake_node,
+        )
+
+        node = PaperTradingNode(config)
+        await node._initialize()
+        try:
+            assert node._trading_node is fake_node
+            assert not isinstance(node._trading_node, dict)
+        finally:
+            await node._shutdown()
+
+    @pytest.mark.asyncio
+    async def test_initialize_saves_initial_checkpoint(self, db_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """_initialize should create persistence and store initial checkpoint."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+
+        class _FakeTradingNode:
+            def run(self, raise_exception: bool = False) -> None:
+                return
+
+            def stop(self) -> None:
+                return
+
+            def dispose(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            PaperTradingNode,
+            "_create_live_trading_node",
+            lambda _self: _FakeTradingNode(),
+        )
+
+        node = PaperTradingNode(config)
+        await node._initialize()
+        try:
+            assert node._persistence is not None
+            checkpoint = node._persistence.load_latest_checkpoint()
+            assert checkpoint is not None
+            assert checkpoint.trader_id == "PAPER-001"
+            assert checkpoint.node_status["state"] == NodeState.INITIALIZING.value
+        finally:
+            await node._shutdown()
+
+    @pytest.mark.asyncio
+    async def test_run_loop_uses_trading_node_lifecycle(self, db_path: Path):
+        """_run_loop should call node.run and stop the node when shutdown is signaled."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+        node = PaperTradingNode(config)
+
+        class _BlockingTradingNode:
+            def __init__(self) -> None:
+                self.run_started = threading.Event()
+                self.stop_called = threading.Event()
+
+            def run(self, raise_exception: bool = False) -> None:
+                self.run_started.set()
+                while not self.stop_called.is_set():
+                    time.sleep(0.01)
+
+            def stop(self) -> None:
+                self.stop_called.set()
+
+            def dispose(self) -> None:
+                return
+
+        fake_node = _BlockingTradingNode()
+        node._trading_node = fake_node
+
+        run_task = asyncio.create_task(node._run_loop())
+        try:
+            for _ in range(100):
+                if fake_node.run_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert fake_node.run_started.is_set()
+            node._shutdown_event.set()
+            await asyncio.wait_for(run_task, timeout=2.0)
+            assert fake_node.stop_called.is_set()
+        finally:
+            await node._shutdown()
+
+    @pytest.mark.asyncio
+    async def test_halt_keeps_run_loop_alive_until_explicit_shutdown(self, db_path: Path):
+        """halt() should not terminate _run_loop without explicit shutdown signal."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+        node = PaperTradingNode(config)
+
+        class _BlockingTradingNode:
+            def __init__(self) -> None:
+                self.run_started = threading.Event()
+                self.stop_called = threading.Event()
+
+            def run(self, raise_exception: bool = False) -> None:
+                self.run_started.set()
+                while not self.stop_called.is_set():
+                    time.sleep(0.01)
+
+            def stop(self) -> None:
+                self.stop_called.set()
+
+            def dispose(self) -> None:
+                return
+
+        fake_node = _BlockingTradingNode()
+        node._trading_node = fake_node
+
+        run_task = asyncio.create_task(node._run_loop())
+        try:
+            for _ in range(100):
+                if fake_node.run_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+
+            node.halt(HaltReason.ERROR, "risk halt")
+            await asyncio.sleep(0.05)
+
+            assert node.status.state == NodeState.HALTED
+            assert not run_task.done()
+
+            node._shutdown_event.set()
+            await asyncio.wait_for(run_task, timeout=2.0)
+            assert fake_node.stop_called.is_set()
+        finally:
+            await node._shutdown()
+
+    @pytest.mark.asyncio
+    async def test_run_loop_starts_and_shutdown_stops_persistence(self, db_path: Path):
+        """Persistence lifecycle should run with node lifecycle."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+        node = PaperTradingNode(config)
+
+        class _BlockingTradingNode:
+            def __init__(self) -> None:
+                self.run_started = threading.Event()
+                self.stop_called = threading.Event()
+
+            def run(self, raise_exception: bool = False) -> None:
+                self.run_started.set()
+                while not self.stop_called.is_set():
+                    time.sleep(0.01)
+
+            def stop(self) -> None:
+                self.stop_called.set()
+
+            def dispose(self) -> None:
+                return
+
+        class _FakePersistence:
+            def __init__(self) -> None:
+                self.start_calls = 0
+                self.stop_calls = 0
+                self.save_calls = 0
+                self.close_calls = 0
+                self.callback = None
+
+            async def start_periodic_checkpointing(self, state_callback):
+                self.start_calls += 1
+                self.callback = state_callback
+
+            async def stop_periodic_checkpointing(self):
+                self.stop_calls += 1
+
+            def save_checkpoint(self, checkpoint):
+                self.save_calls += 1
+                return 1
+
+            def close(self):
+                self.close_calls += 1
+
+        fake_node = _BlockingTradingNode()
+        fake_persistence = _FakePersistence()
+        node._trading_node = fake_node
+        node._persistence = fake_persistence
+
+        run_task = asyncio.create_task(node._run_loop())
+        try:
+            for _ in range(100):
+                if fake_node.run_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert fake_node.run_started.is_set()
+            assert fake_persistence.start_calls == 1
+            assert callable(fake_persistence.callback)
+
+            node._shutdown_event.set()
+            await asyncio.wait_for(run_task, timeout=2.0)
+        finally:
+            await node._shutdown()
+
+        assert fake_persistence.stop_calls == 1
+        assert fake_persistence.save_calls >= 1
+        assert fake_persistence.close_calls == 1
 
 
 class TestNodeStateEnum:

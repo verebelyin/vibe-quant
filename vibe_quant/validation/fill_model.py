@@ -27,12 +27,13 @@ class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
         prob_fill_on_limit: Probability of limit order fill when price touches.
             Default 0.8.
         prob_slippage: Probability that market orders experience slippage.
-            Default 1.0 (always apply slippage in validation).
+            Default 0.0 in validation to avoid double-counting with
+            post-fill SPEC slippage estimation.
     """
 
     impact_coefficient: float = 0.1
     prob_fill_on_limit: float = 0.8
-    prob_slippage: float = 1.0
+    prob_slippage: float = 0.0
 
 
 class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
@@ -42,9 +43,14 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
     whether a fill gets 1-tick slippage. The slippage *amount* is fixed at
     1 tick internally and cannot be overridden via subclassing.
 
+    In validation mode we disable engine probabilistic slippage by default
+    (`prob_slippage=0.0`) and compute SPEC slippage post-fill via
+    :class:`SlippageEstimator`. This avoids maintaining two competing
+    slippage models for the same trade results.
+
     This class:
-    1. Passes prob_slippage to the base FillModel (controlling slippage probability)
-    2. Stores the impact_coefficient for use by SlippageEstimator
+    1. Stores `impact_coefficient` for use by SlippageEstimator.
+    2. Keeps explicit fill-probability controls for limit orders.
 
     For realistic slippage *cost* estimation per the SPEC formula, use
     SlippageEstimator separately in post-fill analytics.
@@ -215,7 +221,8 @@ def create_validation_fill_model(
     """Create volume-based FillModel for validation mode.
 
     Validation uses realistic fill probability. For slippage cost estimation,
-    use SlippageEstimator separately.
+    use SlippageEstimator separately with `prob_slippage=0.0` to avoid
+    double-counting against engine tick slippage.
 
     Args:
         config: Configuration for the model.

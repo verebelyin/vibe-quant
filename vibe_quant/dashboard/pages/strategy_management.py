@@ -627,6 +627,7 @@ def render_strategy_management_tab(db_path: Path | None = None) -> None:
     st.divider()
     render_strategy_list(manager, search_query, show_inactive)
 
+render = render_strategy_management_tab
 
-# Top-level call for st.navigation API
-render_strategy_management_tab()
+if __name__ == "__main__":
+    render_strategy_management_tab()

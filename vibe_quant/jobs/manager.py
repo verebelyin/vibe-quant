@@ -506,7 +506,7 @@ def run_with_heartbeat(
     run_id: int,
     db_path: Path | None = None,
     interval: int = HEARTBEAT_INTERVAL_SECONDS,
-) -> tuple[BacktestJobManager, "Callable[[], None]"]:
+) -> tuple[BacktestJobManager, Callable[[], None]]:
     """Create job manager and start heartbeat thread for a running job.
 
     Utility for subprocess scripts to send periodic heartbeats.

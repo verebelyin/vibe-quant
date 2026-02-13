@@ -8,6 +8,7 @@ from vibe_quant.dsl import (
     StrategyCompiler,
     parse_strategy_string,
 )
+from vibe_quant.dsl.compiler import CompilerError
 
 # =============================================================================
 # Fixtures
@@ -428,6 +429,40 @@ class TestCompileToModule:
         strategy_cls = module.TestMinimalStrategy
         assert hasattr(strategy_cls, "on_start")
         assert hasattr(strategy_cls, "on_bar")
+
+    def test_compile_to_module_rejects_unsafe_calls(
+        self,
+        compiler: StrategyCompiler,
+        minimal_strategy_yaml: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AST validation should block unsafe runtime calls in generated code."""
+        dsl = parse_strategy_string(minimal_strategy_yaml)
+        monkeypatch.setattr(
+            compiler,
+            "compile",
+            lambda _dsl: "def _bad():\n    exec('print(1)')\n",
+        )
+
+        with pytest.raises(CompilerError, match="Unsafe call"):
+            compiler.compile_to_module(dsl)
+
+    def test_compile_to_module_rejects_disallowed_imports(
+        self,
+        compiler: StrategyCompiler,
+        minimal_strategy_yaml: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AST validation should block non-whitelisted imports."""
+        dsl = parse_strategy_string(minimal_strategy_yaml)
+        monkeypatch.setattr(
+            compiler,
+            "compile",
+            lambda _dsl: "import subprocess\nx = 1\n",
+        )
+
+        with pytest.raises(CompilerError, match="Disallowed import"):
+            compiler.compile_to_module(dsl)
 
 
 class TestConfigClassGeneration:

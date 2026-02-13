@@ -766,7 +766,7 @@ def rebuild_from_archive(
     return results
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point for data ingestion."""
     import argparse
 
@@ -834,7 +834,7 @@ def main() -> int:
         help="Comma-separated symbols to verify (default: all in archive)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "ingest":
         symbols = [s.strip() for s in args.symbols.split(",")]

@@ -21,47 +21,55 @@ def main() -> None:
         layout="wide",
     )
 
+    from vibe_quant.dashboard.pages.backtest_launch import render_backtest_launch_tab
+    from vibe_quant.dashboard.pages.data_management import render as render_data_management_tab
+    from vibe_quant.dashboard.pages.discovery import render_discovery_tab
+    from vibe_quant.dashboard.pages.paper_trading import render_paper_trading_tab
+    from vibe_quant.dashboard.pages.results_analysis import render_results_tab
+    from vibe_quant.dashboard.pages.settings import render_settings_tab
+    from vibe_quant.dashboard.pages.strategy_management import render_strategy_management_tab
+
     pages = {
         "Strategies": [
             st.Page(
-                _PAGES_DIR / "strategy_management.py",
+                render_strategy_management_tab,
                 title="Strategy Management",
                 icon=":material/edit_note:",
                 default=True,
             ),
             st.Page(
-                _PAGES_DIR / "discovery.py",
+                render_discovery_tab,
                 title="Discovery",
                 icon=":material/psychology:",
             ),
         ],
         "Backtesting": [
             st.Page(
-                _PAGES_DIR / "backtest_launch.py",
+                render_backtest_launch_tab,
                 title="Backtest Launch",
                 icon=":material/rocket_launch:",
             ),
             st.Page(
-                _PAGES_DIR / "results_analysis.py",
+                render_results_tab,
                 title="Results Analysis",
                 icon=":material/analytics:",
             ),
         ],
         "Trading": [
             st.Page(
-                _PAGES_DIR / "paper_trading.py",
+                render_paper_trading_tab,
                 title="Paper Trading",
                 icon=":material/candlestick_chart:",
             ),
         ],
         "System": [
             st.Page(
-                _PAGES_DIR / "data_management.py",
+                render_data_management_tab,
                 title="Data Management",
                 icon=":material/database:",
             ),
             st.Page(
-                _PAGES_DIR / "settings.py",
+                render_settings_tab,
                 title="Settings",
                 icon=":material/settings:",
             ),

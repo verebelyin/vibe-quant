@@ -7,6 +7,7 @@ and on_bar() with time filter evaluation, condition checking, and order submissi
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 import textwrap
@@ -28,6 +29,32 @@ if TYPE_CHECKING:
         TimeFilterConfig,
     )
     pass
+
+
+_ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
+    "__future__",
+    "datetime",
+    "typing",
+    "zoneinfo",
+    "nautilus_trader",
+    "vibe_quant",
+)
+
+_BLOCKED_CALL_NAMES: frozenset[str] = frozenset({
+    "exec",
+    "eval",
+    "compile",
+    "__import__",
+    "open",
+    "input",
+})
+
+_BLOCKED_ATTR_CALLS: frozenset[tuple[str, str]] = frozenset({
+    ("os", "system"),
+    ("os", "popen"),
+    ("subprocess", "run"),
+    ("subprocess", "Popen"),
+})
 
 
 class CompilerError(Exception):
@@ -122,6 +149,7 @@ class StrategyCompiler:
             CompilerError: If compilation fails
         """
         source = self.compile(dsl)
+        self._validate_generated_source(source)
         module_name = f"vibe_quant.dsl.generated.{dsl.name}"
 
         # Create module
@@ -143,6 +171,39 @@ class StrategyCompiler:
             raise CompilerError(msg) from e
 
         return module
+
+    def _validate_generated_source(self, source: str) -> None:
+        """Validate generated source before dynamic execution."""
+        try:
+            tree = ast.parse(source, filename="<dsl-generated>", mode="exec")
+        except SyntaxError as e:
+            msg = f"Generated source failed AST parse: {e}"
+            raise CompilerError(msg) from e
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if not alias.name.startswith(_ALLOWED_IMPORT_PREFIXES):
+                        msg = f"Disallowed import in generated source: {alias.name}"
+                        raise CompilerError(msg)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level != 0:
+                    msg = "Relative imports are not allowed in generated source"
+                    raise CompilerError(msg)
+                module_name = node.module or ""
+                if not module_name.startswith(_ALLOWED_IMPORT_PREFIXES):
+                    msg = f"Disallowed import in generated source: {module_name}"
+                    raise CompilerError(msg)
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in _BLOCKED_CALL_NAMES:
+                    msg = f"Unsafe call in generated source: {node.func.id}"
+                    raise CompilerError(msg)
+                if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                    root_name = node.func.value.id
+                    attr_name = node.func.attr
+                    if (root_name, attr_name) in _BLOCKED_ATTR_CALLS:
+                        msg = f"Unsafe call in generated source: {root_name}.{attr_name}"
+                        raise CompilerError(msg)
 
     def _gather_indicator_info(self, dsl: StrategyDSL) -> list[IndicatorInfo]:
         """Gather info about all indicators in the DSL.

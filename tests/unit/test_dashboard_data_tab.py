@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def test_module_import() -> None:
     """Test that data_management module can be imported without errors."""
@@ -72,3 +74,44 @@ def test_render_functions_callable() -> None:
     assert callable(render_symbol_management)
     assert callable(render_data_actions)
     assert callable(render_data_quality)
+
+
+def test_run_subprocess_with_progress_handles_popen_error(monkeypatch: Any) -> None:
+    """Subprocess spawn failures should be surfaced with deterministic error status."""
+    from vibe_quant.dashboard.pages import data_management
+
+    updates: list[dict[str, str]] = []
+    unregister_calls = {"count": 0}
+
+    class _FakeLogArea:
+        def code(self, _text: str) -> None:
+            return None
+
+    class _FakeStatus:
+        def empty(self) -> _FakeLogArea:
+            return _FakeLogArea()
+
+        def update(self, *, label: str, state: str) -> None:
+            updates.append({"label": label, "state": state})
+
+    def _raise_popen(*_args: object, **_kwargs: object) -> Any:
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(data_management.st, "status", lambda *_args, **_kwargs: _FakeStatus())
+    monkeypatch.setattr(data_management.subprocess, "Popen", _raise_popen)
+    monkeypatch.setattr(
+        data_management,
+        "_unregister_subprocess",
+        lambda: unregister_calls.__setitem__("count", unregister_calls["count"] + 1),
+    )
+
+    data_management._run_subprocess_with_progress(
+        cmd=["/no/such/cmd"],
+        label="Running...",
+        success_label="Done",
+        fail_label="Failed",
+    )
+
+    assert unregister_calls["count"] == 1
+    assert updates[-1]["state"] == "error"
+    assert "Failed: OSError: spawn failed" in updates[-1]["label"]

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from types import SimpleNamespace
+
 from vibe_quant.validation.extraction import (
     _compute_max_drawdown_from_trades,
     compute_extended_metrics,
+    extract_trades,
 )
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
@@ -144,8 +148,6 @@ class TestFeeSplit:
         # For total fees of $6: entry_fee = $4 (taker), exit_fee = $2 (maker)
         from decimal import Decimal
 
-        from vibe_quant.validation.results import TradeRecord
-
         maker_fee = Decimal("0.0002")
         taker_fee = Decimal("0.0004")
         total_rate = float(maker_fee + taker_fee)
@@ -174,3 +176,72 @@ class TestFeeSplit:
 
         assert entry_fee == 5.0
         assert exit_fee == 5.0
+
+
+class TestSlippageModelSelection:
+    """Tests for selecting a single slippage model in extraction."""
+
+    @staticmethod
+    def _make_engine_with_closed_position():
+        class _Position:
+            is_closed = True
+            realized_pnl = 100.0
+            avg_px_open = 40000.0
+            avg_px_close = 40100.0
+            peak_qty = 0.1
+            ts_opened = 1_700_000_000_000_000_000
+            ts_closed = 1_700_000_360_000_000_000
+            entry = "BUY"
+            instrument_id = "BTCUSDT-PERP.BINANCE"
+
+            def commissions(self):
+                return [2.0]
+
+        class _Cache:
+            def positions(self):
+                return [_Position()]
+
+            def bars(self):
+                return []
+
+        class _Kernel:
+            cache = _Cache()
+
+        class _Engine:
+            kernel = _Kernel()
+
+        return _Engine()
+
+    def test_extract_trades_skips_post_fill_slippage_when_engine_slippage_enabled(self) -> None:
+        """If engine slippage is enabled, extraction should not add SPEC slippage."""
+        result = ValidationResult(starting_balance=100_000.0)
+        engine = self._make_engine_with_closed_position()
+        venue_config = SimpleNamespace(
+            default_leverage=Decimal("10"),
+            fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0),
+            maker_fee=Decimal("0.0002"),
+            taker_fee=Decimal("0.0004"),
+        )
+
+        extract_trades(result, engine, venue_config)
+
+        assert len(result.trades) == 1
+        assert result.trades[0].slippage_cost == 0.0
+        assert result.total_slippage == 0.0
+
+    def test_extract_trades_applies_post_fill_slippage_when_engine_slippage_disabled(self) -> None:
+        """If engine slippage is disabled, extraction should add SPEC slippage."""
+        result = ValidationResult(starting_balance=100_000.0)
+        engine = self._make_engine_with_closed_position()
+        venue_config = SimpleNamespace(
+            default_leverage=Decimal("10"),
+            fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=0.0),
+            maker_fee=Decimal("0.0002"),
+            taker_fee=Decimal("0.0004"),
+        )
+
+        extract_trades(result, engine, venue_config)
+
+        assert len(result.trades) == 1
+        assert result.trades[0].slippage_cost > 0.0
+        assert result.total_slippage > 0.0

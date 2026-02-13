@@ -8,22 +8,35 @@ to the StrategyDSL format.
 from __future__ import annotations
 
 import random
-import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
+
+from vibe_quant.discovery.operators import (
+    ConditionType,
+    Direction,
+    StrategyChromosome,
+    StrategyGene,
+)
 
 # ---------------------------------------------------------------------------
 # Condition and direction constants
 # ---------------------------------------------------------------------------
 
+_LEGACY_CONDITION_ALIASES: dict[str, ConditionType] = {
+    "crosses_above": ConditionType.CROSSES_ABOVE,
+    "crosses_below": ConditionType.CROSSES_BELOW,
+    "greater_than": ConditionType.GT,
+    "less_than": ConditionType.LT,
+}
+
 VALID_CONDITIONS: frozenset[str] = frozenset({
-    "crosses_above",
-    "crosses_below",
-    "greater_than",
-    "less_than",
+    *_LEGACY_CONDITION_ALIASES,
+    *(cond.value for cond in ConditionType),
 })
 
-VALID_DIRECTIONS: frozenset[str] = frozenset({"long", "short", "both"})
+VALID_DIRECTIONS: frozenset[str] = frozenset({
+    *(direction.value for direction in Direction),
+})
 
 # Maps genome condition names to DSL operator syntax
 _CONDITION_TO_DSL_OP: dict[str, str] = {
@@ -31,6 +44,10 @@ _CONDITION_TO_DSL_OP: dict[str, str] = {
     "crosses_below": "crosses_below",
     "greater_than": ">",
     "less_than": "<",
+    ">": ">",
+    "<": "<",
+    ">=": ">=",
+    "<=": "<=",
 }
 
 # ---------------------------------------------------------------------------
@@ -99,59 +116,26 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
     ),
 }
 
-# ---------------------------------------------------------------------------
-# Gene dataclass
-# ---------------------------------------------------------------------------
+def _normalize_condition(condition: ConditionType | str) -> ConditionType | None:
+    """Normalize legacy string conditions to canonical enum values."""
+    if isinstance(condition, ConditionType):
+        return condition
+    if condition in _LEGACY_CONDITION_ALIASES:
+        return _LEGACY_CONDITION_ALIASES[condition]
+    try:
+        return ConditionType(condition)
+    except ValueError:
+        return None
 
 
-@dataclass(frozen=True, slots=True)
-class StrategyGene:
-    """Single gene in a strategy chromosome.
-
-    Represents one indicator-based condition: e.g. (RSI, period=14, crosses_below, 30).
-
-    Attributes:
-        indicator_type: Indicator name from INDICATOR_POOL.
-        parameters: Indicator parameters (e.g. {"period": 14}).
-        condition: Condition operator (crosses_above, greater_than, etc.).
-        threshold: Numeric threshold for the condition.
-    """
-
-    indicator_type: str
-    parameters: dict[str, int | float]
-    condition: str
-    threshold: float
-
-
-# ---------------------------------------------------------------------------
-# Chromosome dataclass
-# ---------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class StrategyChromosome:
-    """Complete strategy genome (chromosome).
-
-    Variable-length chromosome encoding a full strategy: entry/exit conditions,
-    stop/take profit, time filters, and trade direction.
-
-    Attributes:
-        entry_genes: 1-5 entry condition genes.
-        exit_genes: 1-5 exit condition genes.
-        stop_loss_pct: Stop-loss percentage (0.01-0.15).
-        take_profit_pct: Take-profit percentage (0.01-0.30).
-        time_filters: Optional session/day filters.
-        direction: Trade direction (long, short, both).
-        uid: Unique identifier for tracking lineage.
-    """
-
-    entry_genes: list[StrategyGene]
-    exit_genes: list[StrategyGene]
-    stop_loss_pct: float  # Percentage value (e.g. 2.0 = 2%)
-    take_profit_pct: float  # Percentage value (e.g. 5.0 = 5%)
-    time_filters: dict[str, Any] = field(default_factory=dict)
-    direction: str = "long"
-    uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+def _normalize_direction(direction: Direction | str) -> Direction | None:
+    """Normalize direction string to Direction enum."""
+    if isinstance(direction, Direction):
+        return direction
+    try:
+        return Direction(direction)
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +166,7 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
             params["fast_period"] = min(fast, slow)
             params["slow_period"] = max(fast, slow) + 1
 
-    condition = r.choice(list(VALID_CONDITIONS))
+    condition = r.choice(list(ConditionType))
 
     # Threshold
     tlo, thi = ind_def.default_threshold_range
@@ -218,7 +202,7 @@ def generate_random_chromosome(
     sl = round(r.uniform(0.5, 10.0), 4)  # Percentage (0.5% to 10%)
     tp = round(r.uniform(0.5, 20.0), 4)  # Percentage (0.5% to 20%)
 
-    direction = r.choice(list(VALID_DIRECTIONS))
+    direction = r.choice(list(Direction))
 
     return StrategyChromosome(
         entry_genes=entry_genes,
@@ -272,7 +256,8 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
             ind_def = INDICATOR_POOL[gene.indicator_type]
 
             # Validate condition
-            if gene.condition not in VALID_CONDITIONS:
+            normalized_condition = _normalize_condition(gene.condition)
+            if normalized_condition is None:
                 errors.append(f"{prefix}: invalid condition '{gene.condition}'")
 
             # Validate parameters are within range
@@ -310,7 +295,7 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
         )
 
     # Direction
-    if chrom.direction not in VALID_DIRECTIONS:
+    if _normalize_direction(chrom.direction) is None:
         errors.append(f"invalid direction '{chrom.direction}'")
 
     return errors
@@ -354,7 +339,11 @@ def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
 
     Uses the DSL operator syntax: crosses_above, crosses_below, >, <.
     """
-    op = _CONDITION_TO_DSL_OP[gene.condition]
+    normalized_condition = _normalize_condition(gene.condition)
+    if normalized_condition is None:
+        msg = f"Unsupported condition: {gene.condition}"
+        raise ValueError(msg)
+    op = _CONDITION_TO_DSL_OP[normalized_condition.value]
     threshold = gene.threshold
     # Format threshold: drop trailing zeros but keep at least one decimal
     thr_str = str(int(threshold)) if threshold == int(threshold) else f"{threshold:g}"
@@ -379,14 +368,19 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
     exit_long: list[str] = []
     exit_short: list[str] = []
 
+    direction = _normalize_direction(chrom.direction)
+    if direction is None:
+        msg = f"Unsupported direction: {chrom.direction}"
+        raise ValueError(msg)
+
     # Build indicators + conditions from entry genes
     for i, gene in enumerate(chrom.entry_genes):
         ind_name = _gene_indicator_name(gene, i, "entry")
         indicators[ind_name] = _gene_to_indicator_config(gene)
         cond_str = _gene_to_condition_str(gene, ind_name)
-        if chrom.direction in ("long", "both"):
+        if direction in (Direction.LONG, Direction.BOTH):
             entry_long.append(cond_str)
-        if chrom.direction in ("short", "both"):
+        if direction in (Direction.SHORT, Direction.BOTH):
             entry_short.append(cond_str)
 
     # Build indicators + conditions from exit genes
@@ -394,9 +388,9 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
         ind_name = _gene_indicator_name(gene, i, "exit")
         indicators[ind_name] = _gene_to_indicator_config(gene)
         cond_str = _gene_to_condition_str(gene, ind_name)
-        if chrom.direction in ("long", "both"):
+        if direction in (Direction.LONG, Direction.BOTH):
             exit_long.append(cond_str)
-        if chrom.direction in ("short", "both"):
+        if direction in (Direction.SHORT, Direction.BOTH):
             exit_short.append(cond_str)
 
     # Entry conditions must have at least one side populated

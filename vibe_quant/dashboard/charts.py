@@ -6,12 +6,26 @@ No Streamlit calls — rendering is the caller's responsibility.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
+JsonMapping = Mapping[str, object]
+
+
+def _to_float(value: object, default: float = 0.0) -> float:
+    """Best-effort conversion to float with fallback."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
 
 # ---------------------------------------------------------------------------
 # Pareto charts
@@ -145,7 +159,7 @@ def build_equity_chart(equity_df: pd.DataFrame) -> go.Figure | None:
 
 def build_drawdown_chart(
     dd_df: pd.DataFrame,
-    top_periods: list[dict[str, Any]] | None = None,
+    top_periods: Sequence[JsonMapping] | None = None,
 ) -> go.Figure | None:
     """Build drawdown area chart with optional top-5 period annotations."""
     if dd_df.empty:
@@ -166,14 +180,19 @@ def build_drawdown_chart(
     colors = ["#FF0000", "#FF4444", "#FF7777", "#FF9999", "#FFBBBB"]
     if top_periods:
         for i, period in enumerate(top_periods[:5]):
+            start = period.get("start")
+            end = period.get("end")
+            if start is None or end is None:
+                continue
+            depth = _to_float(period.get("depth", 0.0), 0.0)
             color = colors[i] if i < len(colors) else colors[-1]
             fig.add_vrect(
-                x0=period["start"],
-                x1=period["end"],
+                x0=start,
+                x1=end,
                 fillcolor=color,
                 opacity=0.15,
                 line_width=0,
-                annotation_text=f"#{i + 1}: {period['depth'] * 100:.1f}%",
+                annotation_text=f"#{i + 1}: {depth * 100:.1f}%",
                 annotation_position="top left",
                 annotation_font_size=10,
             )
@@ -277,7 +296,7 @@ def build_daily_returns_chart(daily_df: pd.DataFrame) -> go.Figure | None:
 # ---------------------------------------------------------------------------
 
 
-def build_trade_scatter_roi_vs_duration(trades: list[dict[str, Any]]) -> go.Figure | None:
+def build_trade_scatter_roi_vs_duration(trades: Sequence[JsonMapping]) -> go.Figure | None:
     """Build scatter: ROI% vs duration (hours), coloured by direction."""
     closed = [t for t in trades if t.get("exit_time") and t.get("entry_time")]
     if not closed:
@@ -291,7 +310,7 @@ def build_trade_scatter_roi_vs_duration(trades: list[dict[str, Any]]) -> go.Figu
             duration_h = (exit_ - entry).total_seconds() / 3600.0
             data.append({
                 "duration_hours": duration_h,
-                "roi_percent": float(t.get("roi_percent", 0.0) or 0.0),
+                "roi_percent": _to_float(t.get("roi_percent", 0.0), 0.0),
                 "direction": t.get("direction", "UNKNOWN"),
             })
         except (ValueError, TypeError):
@@ -312,7 +331,7 @@ def build_trade_scatter_roi_vs_duration(trades: list[dict[str, Any]]) -> go.Figu
     return fig
 
 
-def build_trade_scatter_size_vs_pnl(trades: list[dict[str, Any]]) -> go.Figure | None:
+def build_trade_scatter_size_vs_pnl(trades: Sequence[JsonMapping]) -> go.Figure | None:
     """Build scatter: position size (notional) vs net PnL."""
     closed = [t for t in trades if t.get("exit_time") and t.get("entry_price") and t.get("quantity")]
     if not closed:
@@ -320,10 +339,10 @@ def build_trade_scatter_size_vs_pnl(trades: list[dict[str, Any]]) -> go.Figure |
 
     data = []
     for t in closed:
-        notional = float(t.get("entry_price", 0)) * float(t.get("quantity", 0))
+        notional = _to_float(t.get("entry_price", 0), 0.0) * _to_float(t.get("quantity", 0), 0.0)
         data.append({
             "notional": notional,
-            "net_pnl": float(t.get("net_pnl", 0.0) or 0.0),
+            "net_pnl": _to_float(t.get("net_pnl", 0.0), 0.0),
             "direction": t.get("direction", "UNKNOWN"),
         })
 
@@ -339,9 +358,9 @@ def build_trade_scatter_size_vs_pnl(trades: list[dict[str, Any]]) -> go.Figure |
     return fig
 
 
-def build_pnl_distribution(closed_trades: list[dict[str, Any]]) -> go.Figure | None:
+def build_pnl_distribution(closed_trades: Sequence[JsonMapping]) -> go.Figure | None:
     """Build histogram of trade P&L (profit vs loss)."""
-    pnl_values = [float(t.get("net_pnl", 0.0) or 0.0) for t in closed_trades]
+    pnl_values = [_to_float(t.get("net_pnl", 0.0), 0.0) for t in closed_trades]
     if not pnl_values:
         return None
 
@@ -363,7 +382,7 @@ def build_pnl_distribution(closed_trades: list[dict[str, Any]]) -> go.Figure | N
     return fig
 
 
-def build_monthly_heatmap(closed_trades: list[dict[str, Any]]) -> go.Figure | None:
+def build_monthly_heatmap(closed_trades: Sequence[JsonMapping]) -> go.Figure | None:
     """Build monthly returns heatmap."""
     if not closed_trades:
         return None
@@ -405,7 +424,7 @@ def build_monthly_heatmap(closed_trades: list[dict[str, Any]]) -> go.Figure | No
 # ---------------------------------------------------------------------------
 
 
-def build_radar_chart(results: list[dict[str, Any]]) -> go.Figure | None:
+def build_radar_chart(results: Sequence[JsonMapping]) -> go.Figure | None:
     """Build radar/spider chart for strategy comparison."""
     if not results:
         return None
@@ -427,9 +446,9 @@ def build_radar_chart(results: list[dict[str, Any]]) -> go.Figure | None:
             if val is None:
                 raw[label].append(0.0)
             elif label == "1-MaxDD":
-                raw[label].append(1.0 - abs(float(val)))
+                raw[label].append(1.0 - abs(_to_float(val, 0.0)))
             else:
-                raw[label].append(float(val))
+                raw[label].append(_to_float(val, 0.0))
 
     normalized: dict[str, list[float]] = {}
     for label, values in raw.items():

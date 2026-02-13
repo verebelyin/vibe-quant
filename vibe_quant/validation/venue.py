@@ -113,7 +113,7 @@ def create_venue_config_for_validation(
 
     Validation mode uses:
     - Realistic latency simulation
-    - Volume-based slippage model
+    - Post-fill SPEC slippage estimation (engine tick slippage disabled)
     - Standard fees from instrument definition
 
     Args:
@@ -136,7 +136,9 @@ def create_venue_config_for_validation(
         fill_config=VolumeSlippageFillModelConfig(
             impact_coefficient=impact_coefficient,
             prob_fill_on_limit=0.8,
-            prob_slippage=1.0,
+            # Keep engine slippage disabled to prevent dual slippage models:
+            # costs are estimated post-fill via SlippageEstimator.
+            prob_slippage=0.0,
         ),
     )
 

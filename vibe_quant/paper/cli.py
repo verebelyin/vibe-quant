@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -25,7 +26,10 @@ from vibe_quant.paper.config import (
 from vibe_quant.paper.node import run_paper_trading
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from decimal import Decimal
+
+    from vibe_quant.jobs.manager import BacktestJobManager
 
 
 def _decimal_from_str(value: str | float | int) -> Decimal:
@@ -166,16 +170,32 @@ async def run_with_config(config_path: Path, run_id: int | None = None) -> int:
         print(f"Invalid configuration: {'; '.join(errors)}", file=sys.stderr)
         return 1
 
+    heartbeat_manager: BacktestJobManager | None = None
+    stop_heartbeat: Callable[[], None] | None = None
+
     # Start heartbeat thread if run_id provided
     if run_id is not None:
-        run_with_heartbeat(run_id, config.db_path)
+        heartbeat_manager, stop_heartbeat = run_with_heartbeat(run_id, config.db_path)
 
     try:
         await run_paper_trading(config)
+        if run_id is not None and heartbeat_manager is not None:
+            with contextlib.suppress(Exception):
+                heartbeat_manager.mark_completed(run_id)
         return 0
     except Exception as e:
+        if run_id is not None and heartbeat_manager is not None:
+            with contextlib.suppress(Exception):
+                heartbeat_manager.mark_completed(run_id, error=f"{type(e).__name__}: {e}")
         print(f"Paper trading error: {e}", file=sys.stderr)
         return 1
+    finally:
+        if stop_heartbeat is not None:
+            with contextlib.suppress(Exception):
+                stop_heartbeat()
+        if heartbeat_manager is not None:
+            with contextlib.suppress(Exception):
+                heartbeat_manager.close()
 
 
 def main() -> int:

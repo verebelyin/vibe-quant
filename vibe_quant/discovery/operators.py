@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import heapq
 import random
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -126,6 +127,8 @@ class StrategyChromosome:
     stop_loss_pct: float
     take_profit_pct: float
     direction: Direction = field(default=Direction.LONG)
+    time_filters: dict[str, object] = field(default_factory=dict)
+    uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def clone(self) -> StrategyChromosome:
         """Deep-copy this chromosome."""
@@ -135,6 +138,8 @@ class StrategyChromosome:
             stop_loss_pct=self.stop_loss_pct,
             take_profit_pct=self.take_profit_pct,
             direction=self.direction,
+            time_filters=dict(self.time_filters),
+            uid=self.uid,
         )
 
 

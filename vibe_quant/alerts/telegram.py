@@ -178,7 +178,8 @@ class TelegramBot:
         Returns:
             True if rate limited, False if can send.
         """
-        now = time.monotonic()
+        # Wall-clock time keeps rate limits aligned with real elapsed time.
+        now = time.time()
         last_time = self._last_alert_times.get(alert_type)
 
         if last_time is None:
@@ -192,7 +193,7 @@ class TelegramBot:
         Args:
             alert_type: Type of alert sent.
         """
-        self._last_alert_times[alert_type] = time.monotonic()
+        self._last_alert_times[alert_type] = time.time()
 
     def _format_message(self, alert_type: AlertType, message: str) -> str:
         """Format message with alert type prefix.
@@ -249,9 +250,10 @@ class TelegramBot:
             response.raise_for_status()
             self._update_rate_limit(alert_type)
             return True
-        except httpx.HTTPStatusError:
-            return False
-        except httpx.RequestError:
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            # Reset client on transport/protocol failures so next send starts
+            # from a known-good connection state.
+            await self.close()
             return False
 
     async def send_error(self, message: str, *, bypass_rate_limit: bool = False) -> bool:

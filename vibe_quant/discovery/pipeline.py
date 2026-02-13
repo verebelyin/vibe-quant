@@ -175,6 +175,7 @@ class DiscoveryPipeline:
         population = initialize_population(cfg.population_size)
         generation_results: list[GenerationResult] = []
         total_evaluated = 0
+        last_fitness_results: list[FitnessResult] = []
 
         # Track global best for top-K across all generations
         all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
@@ -185,10 +186,11 @@ class DiscoveryPipeline:
         for gen in range(cfg.max_generations):
             # Evaluate
             fitness_results = evaluate_population(
-                population,  # type: ignore[arg-type]  # operators vs genome StrategyChromosome
-                self._backtest_fn,  # type: ignore[arg-type]
-                self._filter_fn,  # type: ignore[arg-type]
+                population,
+                self._backtest_fn,
+                self._filter_fn,
             )
+            last_fitness_results = fitness_results
             total_evaluated += len(population)
 
             # Record per-individual scores
@@ -231,6 +233,9 @@ class DiscoveryPipeline:
         # Select top-K
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
         top_strategies = all_scored[: cfg.top_k]
+        if last_fitness_results:
+            exported = self._export_top_strategies(population, last_fitness_results)
+            logger.debug("Exported %d top strategy DSL dicts", len(exported))
 
         return DiscoveryResult(
             generations=generation_results,

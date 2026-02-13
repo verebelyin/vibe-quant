@@ -10,6 +10,7 @@ import pytest
 from vibe_quant.paper.cli import (
     _decimal_from_str,
     load_config_from_json,
+    run_with_config,
     save_config_to_json,
 )
 from vibe_quant.paper.config import (
@@ -232,3 +233,107 @@ class TestConfigRoundTrip:
         assert reloaded.sizing.max_leverage == Decimal("12.5")
         assert reloaded.sizing.risk_per_trade == Decimal("0.015")
         assert reloaded.risk.max_drawdown_pct == Decimal("0.123")
+
+
+class TestRunWithConfig:
+    """Tests for run_with_config lifecycle behavior."""
+
+    @staticmethod
+    def _write_minimal_config(path: Path) -> None:
+        data = {
+            "trader_id": "PAPER-001",
+            "binance": {
+                "api_key": "test_key",
+                "api_secret": "test_secret",
+                "testnet": True,
+            },
+            "symbols": ["BTCUSDT"],
+            "strategy_id": 1,
+        }
+        with path.open("w") as f:
+            json.dump(data, f)
+
+    @pytest.mark.asyncio
+    async def test_run_with_config_cleans_up_heartbeat_on_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        class _FakeManager:
+            def __init__(self) -> None:
+                self.completed_calls: list[tuple[int, str | None]] = []
+                self.closed = False
+
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                self.completed_calls.append((run_id, error))
+
+            def close(self) -> None:
+                self.closed = True
+
+        fake_manager = _FakeManager()
+        stop_calls = {"count": 0}
+
+        def _stop() -> None:
+            stop_calls["count"] += 1
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (fake_manager, _stop),
+        )
+
+        async def _fake_run_paper_trading(_config: PaperTradingConfig) -> None:
+            return
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run_paper_trading)
+
+        rc = await run_with_config(config_path, run_id=7)
+
+        assert rc == 0
+        assert fake_manager.completed_calls == [(7, None)]
+        assert stop_calls["count"] == 1
+        assert fake_manager.closed
+
+    @pytest.mark.asyncio
+    async def test_run_with_config_marks_failed_and_cleans_up_on_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        class _FakeManager:
+            def __init__(self) -> None:
+                self.completed_calls: list[tuple[int, str | None]] = []
+                self.closed = False
+
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                self.completed_calls.append((run_id, error))
+
+            def close(self) -> None:
+                self.closed = True
+
+        fake_manager = _FakeManager()
+        stop_calls = {"count": 0}
+
+        def _stop() -> None:
+            stop_calls["count"] += 1
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (fake_manager, _stop),
+        )
+
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+        rc = await run_with_config(config_path, run_id=7)
+
+        assert rc == 1
+        assert len(fake_manager.completed_calls) == 1
+        assert fake_manager.completed_calls[0][0] == 7
+        assert fake_manager.completed_calls[0][1] is not None
+        assert "RuntimeError: kaboom" in fake_manager.completed_calls[0][1]
+        assert stop_calls["count"] == 1
+        assert fake_manager.closed

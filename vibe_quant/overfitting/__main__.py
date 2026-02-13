@@ -218,7 +218,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         pipeline.close()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main entry point for overfitting CLI."""
     parser = argparse.ArgumentParser(
         prog="python -m vibe_quant.overfitting",
@@ -298,7 +298,7 @@ def main() -> int:
         help="Show candidates passing ANY filter (default: ALL)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == "run":
         return cmd_run(args)

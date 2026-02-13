@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import random
 
-import pytest
-
 from vibe_quant.discovery.genome import (
     INDICATOR_POOL,
     VALID_CONDITIONS,
@@ -16,6 +14,7 @@ from vibe_quant.discovery.genome import (
     generate_random_chromosome,
     validate_chromosome,
 )
+from vibe_quant.discovery.operators import is_valid_chromosome, mutate
 from vibe_quant.dsl.schema import StrategyDSL
 
 # =============================================================================
@@ -36,10 +35,10 @@ class TestStrategyGene:
         assert gene.condition == "crosses_below"
         assert gene.threshold == 30.0
 
-    def test_frozen(self) -> None:
+    def test_mutable(self) -> None:
         gene = StrategyGene("EMA", {"period": 20}, "greater_than", 0.0)
-        with pytest.raises(AttributeError):
-            gene.threshold = 50.0  # type: ignore[misc]
+        gene.threshold = 50.0
+        assert gene.threshold == 50.0
 
     def test_all_indicators_representable(self) -> None:
         """Every pool indicator can be instantiated as a gene."""
@@ -67,7 +66,7 @@ class TestStrategyChromosome:
         )
         assert len(chrom.entry_genes) == 1
         assert len(chrom.exit_genes) == 1
-        assert chrom.direction == "long"
+        assert chrom.direction.value == "long"
         assert len(chrom.uid) == 12
 
     def test_uid_unique(self) -> None:
@@ -96,7 +95,7 @@ class TestRandomGeneration:
         assert 1 <= len(chrom.exit_genes) <= 3
         assert 0.5 <= chrom.stop_loss_pct <= 10.0
         assert 0.5 <= chrom.take_profit_pct <= 20.0
-        assert chrom.direction in VALID_DIRECTIONS
+        assert chrom.direction.value in VALID_DIRECTIONS
 
     def test_1000_samples_all_valid(self) -> None:
         rng = random.Random(123)
@@ -118,7 +117,14 @@ class TestRandomGeneration:
             chrom = generate_random_chromosome(rng)
             for gene in chrom.entry_genes + chrom.exit_genes:
                 assert gene.indicator_type in INDICATOR_POOL
-                assert gene.condition in VALID_CONDITIONS
+                assert gene.condition.value in VALID_CONDITIONS
+
+    def test_generated_chromosome_is_compatible_with_mutation_operators(self) -> None:
+        """Genome output should be directly mutable by discovery operators."""
+        chrom = generate_random_chromosome(random.Random(2026))
+        mutated = mutate(chrom, mutation_rate=0.4)
+        assert isinstance(mutated, StrategyChromosome)
+        assert is_valid_chromosome(mutated)
 
 
 # =============================================================================

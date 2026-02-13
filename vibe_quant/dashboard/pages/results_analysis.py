@@ -733,6 +733,7 @@ def render_results_tab() -> None:
     with compare_tab:
         _render_compare_view(mgr, runs)
 
+render = render_results_tab
 
-# Top-level call for st.navigation API
-render_results_tab()
+if __name__ == "__main__":
+    render_results_tab()

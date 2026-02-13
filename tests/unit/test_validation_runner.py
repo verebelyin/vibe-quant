@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -409,6 +410,95 @@ class TestValidationRunner:
         result = runner.run(run_id=1, latency_preset="domestic")
 
         assert result is not None
+        runner.close()
+
+    def test_build_walk_forward_windows(self) -> None:
+        """Walk-forward windows are generated with expected rolling boundaries."""
+        windows = ValidationRunner._build_walk_forward_windows(
+            range_start=date(2025, 1, 1),
+            range_end=date(2025, 1, 31),
+            train_days=7,
+            test_days=7,
+            step_days=7,
+        )
+
+        assert len(windows) == 3
+        assert windows[0].train_start == "2025-01-01"
+        assert windows[0].train_end == "2025-01-08"
+        assert windows[0].test_start == "2025-01-08"
+        assert windows[0].test_end == "2025-01-15"
+        assert windows[2].test_start == "2025-01-22"
+        assert windows[2].test_end == "2025-01-29"
+
+    def test_run_walk_forward_success(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+        state_with_strategy: StateManager,
+    ) -> None:
+        """Walk-forward should execute windows and persist aggregated metrics."""
+        state_with_strategy.close()
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        called_windows: list[tuple[str, str]] = []
+
+        def _fake_backtest(**kwargs: object) -> ValidationResult:
+            run_cfg = kwargs["run_config"]
+            assert isinstance(run_cfg, dict)
+            start = str(run_cfg["start_date"])
+            end = str(run_cfg["end_date"])
+            called_windows.append((start, end))
+
+            idx = len(called_windows)
+            result = _make_mock_result(
+                run_id=int(kwargs["run_id"]),
+                strategy_name=str(kwargs["strategy_name"]),
+            )
+            result.total_return = 0.01 * idx
+            result.sharpe_ratio = 1.0 + idx
+            return result
+
+        runner._run_backtest = _fake_backtest  # type: ignore[assignment]
+        window_results = runner.run_walk_forward(
+            run_id=1,
+            train_days=7,
+            test_days=7,
+            step_days=7,
+        )
+        runner.close()
+
+        assert len(window_results) == 3
+        assert called_windows == [
+            ("2025-01-08", "2025-01-15"),
+            ("2025-01-15", "2025-01-22"),
+            ("2025-01-22", "2025-01-29"),
+        ]
+
+        state = StateManager(temp_db)
+        stored_result = state.get_backtest_result(1)
+        run = state.get_backtest_run(1)
+        trades = state.get_trades(1)
+        state.close()
+
+        assert stored_result is not None
+        assert run is not None
+        assert run["status"] == "completed"
+        assert stored_result["total_return"] == pytest.approx(0.02)
+        assert stored_result["sharpe_ratio"] == pytest.approx(3.0)
+        assert stored_result["total_trades"] == 45
+        assert len(trades) == 6
+
+    def test_run_walk_forward_no_windows_raises(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+        state_with_strategy: StateManager,
+    ) -> None:
+        """Invalid train/test sizing for run range should fail clearly."""
+        state_with_strategy.close()
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        with pytest.raises(ValidationRunnerError, match="No walk-forward windows fit"):
+            runner.run_walk_forward(run_id=1, train_days=30, test_days=30, step_days=30)
         runner.close()
 
     def test_runner_stores_results(

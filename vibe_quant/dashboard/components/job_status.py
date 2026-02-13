@@ -98,20 +98,40 @@ def render_active_jobs(manager: StateManager, job_manager: BacktestJobManager) -
         st.rerun()
 
 
-def render_recent_runs(manager: StateManager) -> None:
+def _sync_recent_running_runs(
+    manager: StateManager, job_manager: BacktestJobManager, limit: int = 10,
+) -> list[dict[str, object]]:
+    """Synchronize stale running statuses before rendering recent runs."""
+    runs = manager.list_backtest_runs()[:limit]
+    for run in runs:
+        if run.get("status") == "running":
+            job_manager.sync_job_status(run["id"])
+    return manager.list_backtest_runs()[:limit]
+
+
+def render_recent_runs(manager: StateManager, job_manager: BacktestJobManager) -> None:
     """Render recent backtest runs."""
     with st.expander("Recent Runs", expanded=False):
-        runs = manager.list_backtest_runs()[:10]
+        runs = _sync_recent_running_runs(manager, job_manager, limit=10)
 
         if not runs:
             st.info("No backtest runs yet")
             return
 
         for run in runs:
-            strategy = manager.get_strategy(run["strategy_id"])
-            strategy_name = strategy["name"] if strategy else f"ID {run['strategy_id']}"
+            strategy_id_raw = run.get("strategy_id")
+            if isinstance(strategy_id_raw, (int, str, bytes, bytearray)):
+                try:
+                    strategy_id = int(strategy_id_raw)
+                except ValueError:
+                    strategy_id = -1
+            else:
+                strategy_id = -1
 
-            status = run["status"]
+            strategy = manager.get_strategy(strategy_id) if strategy_id >= 0 else None
+            strategy_name = strategy["name"] if strategy else f"ID {strategy_id_raw}"
+
+            status = str(run.get("status", ""))
             status_icon = {
                 "pending": "clock1",
                 "running": "hourglass_flowing_sand",
@@ -120,12 +140,19 @@ def render_recent_runs(manager: StateManager) -> None:
                 "killed": "octagonal_sign",
             }.get(status, "question")
 
+            symbols_raw = run.get("symbols")
+            symbols = (
+                ", ".join(str(s) for s in symbols_raw)
+                if isinstance(symbols_raw, list)
+                else str(symbols_raw)
+            )
+
             st.write(
                 f":{status_icon}: **Run #{run['id']}** - {strategy_name} "
                 f"({run['run_mode']}) - {status}"
             )
             st.caption(
-                f"Symbols: {', '.join(run['symbols'])} | "
+                f"Symbols: {symbols} | "
                 f"{run['start_date']} to {run['end_date']} | "
                 f"Created: {run['created_at']}"
             )

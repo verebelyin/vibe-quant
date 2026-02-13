@@ -6,6 +6,13 @@ import argparse
 import sys
 
 
+def _format_fraction_as_percent(value: float | int | None, *, decimals: int = 2) -> str:
+    """Format a fraction (0.05) as a percentage string (5.00%)."""
+    if not isinstance(value, (int, float)):
+        return "-"
+    return f"{float(value) * 100:.{decimals}f}%"
+
+
 def cmd_validation_run(args: argparse.Namespace) -> int:
     """Run validation backtest for a given run_id.
 
@@ -24,19 +31,19 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
     if latency:
         print(f"  Latency preset: {latency}")
 
+    runner: ValidationRunner | None = None
     try:
         runner = ValidationRunner()
         result = runner.run(run_id=run_id, latency_preset=latency)
-        runner.close()
 
         print("\nValidation Results:")
         print(f"  Strategy: {result.strategy_name}")
-        print(f"  Total Return: {result.total_return * 100:.2f}%")
+        print(f"  Total Return: {_format_fraction_as_percent(result.total_return, decimals=2)}")
         print(f"  Sharpe Ratio: {result.sharpe_ratio:.2f}")
         print(f"  Sortino Ratio: {result.sortino_ratio:.2f}")
-        print(f"  Max Drawdown: {result.max_drawdown:.2f}%")
+        print(f"  Max Drawdown: {_format_fraction_as_percent(result.max_drawdown, decimals=2)}")
         print(f"  Total Trades: {result.total_trades}")
-        print(f"  Win Rate: {result.win_rate * 100:.1f}%")
+        print(f"  Win Rate: {_format_fraction_as_percent(result.win_rate, decimals=1)}")
         print(f"  Profit Factor: {result.profit_factor:.2f}")
         print(f"  Total Fees: ${result.total_fees:.2f}")
         print(f"  Total Funding: ${result.total_funding:.2f}")
@@ -48,6 +55,9 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
     except ValidationRunnerError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    finally:
+        if runner is not None:
+            runner.close()
 
 
 def cmd_validation_list(args: argparse.Namespace) -> int:
@@ -76,14 +86,20 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         run_id = run.get("run_id", "")
         strategy = run.get("strategy_id", "")
         status = run.get("status", "")
-        sharpe = run.get("sharpe_ratio")
-        total_return = run.get("total_return")
+        sharpe_raw = run.get("sharpe_ratio")
+        total_return_raw = run.get("total_return")
         trades = run.get("total_trades")
         created_raw = run.get("created_at", "")
         created = str(created_raw)[:16] if created_raw else ""
 
+        sharpe = float(sharpe_raw) if isinstance(sharpe_raw, (int, float)) else None
+        total_return = (
+            float(total_return_raw)
+            if isinstance(total_return_raw, (int, float))
+            else None
+        )
         sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
-        return_str = f"{total_return * 100:.1f}%" if total_return is not None else "-"
+        return_str = _format_fraction_as_percent(total_return, decimals=1)
         trades_str = str(trades) if trades is not None else "-"
 
         print(f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<8} {return_str:<10} {trades_str:<8} {created}")
@@ -101,10 +117,9 @@ def cmd_data(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     Returns:
         Exit code.
     """
-    sys.argv = ["vibe_quant.data"] + (extra or [])
     from vibe_quant.data.ingest import main as data_main
 
-    return data_main()
+    return data_main(extra or [])
 
 
 def cmd_screening(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
@@ -117,10 +132,9 @@ def cmd_screening(_args: argparse.Namespace, extra: list[str] | None = None) -> 
     Returns:
         Exit code.
     """
-    sys.argv = ["vibe_quant.screening"] + (extra or [])
     from vibe_quant.screening.__main__ import main as screening_main
 
-    return screening_main()
+    return screening_main(extra or [])
 
 
 def cmd_overfitting(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
@@ -133,10 +147,9 @@ def cmd_overfitting(_args: argparse.Namespace, extra: list[str] | None = None) -
     Returns:
         Exit code.
     """
-    sys.argv = ["vibe_quant.overfitting"] + (extra or [])
     from vibe_quant.overfitting.__main__ import main as overfitting_main
 
-    return overfitting_main()
+    return overfitting_main(extra or [])
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14,17 +14,21 @@ Provides UI for:
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import signal
 import subprocess
 import sys
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
-from lightweight_charts.widgets import StreamlitChart
+
+try:
+    from lightweight_charts.widgets import StreamlitChart
+except ModuleNotFoundError:  # pragma: no cover - environment-dependent optional dependency
+    StreamlitChart = None
 
 from vibe_quant.dashboard.utils import format_bytes
 from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
@@ -40,6 +44,7 @@ _SESSION_DATA_SUBPROCESS_PID = "data_mgmt_subprocess_pid"
 
 # Default timeout for data operations (1 hour)
 DATA_OPERATION_TIMEOUT_SECONDS = 3600
+_LOGGER = logging.getLogger(__name__)
 
 
 def _register_subprocess(pid: int) -> None:
@@ -61,10 +66,8 @@ def _cleanup_orphaned_subprocess() -> None:
     if pid is None:
         return
 
-    try:
+    with contextlib.suppress(ProcessLookupError, OSError):
         os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass  # Already dead or not accessible
 
     _unregister_subprocess()
 
@@ -379,12 +382,14 @@ def _run_subprocess_with_progress(
             text=True,
             bufsize=1,
         )
+        if process.stdout is None:
+            raise RuntimeError("Subprocess stdout pipe is unavailable")
 
         _register_subprocess(process.pid)
         start_time = time.monotonic()
         timed_out = False
 
-        for line in iter(process.stdout.readline, ""):  # type: ignore[union-attr]
+        for line in iter(process.stdout.readline, ""):
             output_lines.append(line.rstrip())
             # Show last 30 lines to keep UI responsive
             log_area.code("\n".join(output_lines[-30:]))
@@ -416,9 +421,10 @@ def _run_subprocess_with_progress(
             status_container.update(label=success_label, state="complete")
         else:
             status_container.update(label=fail_label, state="error")
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
         _unregister_subprocess()
-        status_container.update(label=f"Error: {e}", state="error")
+        _LOGGER.exception("Data operation subprocess failure: cmd=%s", cmd)
+        status_container.update(label=f"{fail_label}: {type(e).__name__}: {e}", state="error")
 
 
 def _run_ingest(symbols: list[str], start: date, end: date) -> None:
@@ -566,6 +572,14 @@ def _render_candlestick_chart(
     df: pd.DataFrame, symbol: str, interval: str,
 ) -> None:
     """Render TradingView-style candlestick chart with volume."""
+    if StreamlitChart is None:
+        st.warning(
+            "Candlestick chart is unavailable because `lightweight_charts` is not installed. "
+            "Install it to enable chart rendering."
+        )
+        st.caption(f"{symbol} {interval} | showing table-only fallback")
+        return
+
     candle_options = [1_000, 5_000, 10_000, 25_000]
     max_candles = st.select_slider(
         "Max candles to display",
@@ -738,6 +752,5 @@ def render() -> None:
     with col2:
         render_data_quality()
 
-
-# Top-level call for st.navigation API
-render()
+if __name__ == "__main__":
+    render()

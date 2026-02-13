@@ -447,7 +447,13 @@ def create_event(
     cls = _EVENT_TYPE_TO_CLASS.get(event_type)
     if cls is None:
         # LIFECYCLE or unknown types fall back to base Event
-        return Event(**base_kwargs, data=data)
+        return Event(
+            timestamp=timestamp,
+            event_type=event_type,
+            run_id=run_id,
+            strategy_name=strategy_name,
+            data=data,
+        )
 
     # Extract subclass-specific fields from data dict
     subclass_fields = _EVENT_SUBCLASS_FIELDS.get(event_type, ())
@@ -456,7 +462,7 @@ def create_event(
         if field_name in data:
             subclass_kwargs[field_name] = data[field_name]
 
-    return cls(**base_kwargs, **subclass_kwargs)
+    return cls(**base_kwargs, **subclass_kwargs)  # type: ignore[arg-type]
 
 
 __all__ = [

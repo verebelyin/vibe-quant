@@ -19,7 +19,7 @@ def main() -> int:
     from vibe_quant.validation.runner import ValidationRunner
 
     db_path = Path(args.db) if args.db else DEFAULT_DB_PATH
-    job_manager = run_with_heartbeat(args.run_id, db_path)
+    job_manager, stop_heartbeat = run_with_heartbeat(args.run_id, db_path)
 
     runner = ValidationRunner(db_path=db_path)
     try:
@@ -36,6 +36,7 @@ def main() -> int:
         print(f"Validation failed: {exc}", file=sys.stderr)
         return 1
     finally:
+        stop_heartbeat()
         runner.close()
         job_manager.close()
 

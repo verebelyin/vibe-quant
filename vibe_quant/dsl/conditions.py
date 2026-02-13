@@ -87,12 +87,7 @@ class Operand:
 
         # Try to parse as numeric (only if no dot-notation indicator)
         # A pure numeric like "3.5" has no alpha chars; "macd.histogram" does
-        if not any(c.isalpha() for c in s):
-            try:
-                return cls(value=float(s), is_indicator=False, is_price=False)
-            except ValueError:
-                pass
-        elif "." not in s:
+        if not any(c.isalpha() for c in s) or "." not in s:
             try:
                 return cls(value=float(s), is_indicator=False, is_price=False)
             except ValueError:

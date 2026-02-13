@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,10 +12,74 @@ from tests.fixtures.known_results import KnownResult, load_known_results
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-    from pathlib import Path
 
     from vibe_quant.data.archive import RawDataArchive
     from vibe_quant.db import StateManager
+
+
+_NT_EAGER_IMPORT_TEST_MODULES = frozenset({
+    "test_data_catalog.py",
+    "test_ethereal_instruments.py",
+    "test_ethereal_venue.py",
+    "test_validation_venue.py",
+})
+_NT_RUNTIME_TEST_PREFIXES = ("test_validation_",)
+
+
+@lru_cache(maxsize=1)
+def _nt_runtime_preflight() -> tuple[bool, str]:
+    """Check that NautilusTrader can be imported and basic C-extension types instantiate."""
+    try:
+        from nautilus_trader.model.objects import Price, Quantity
+
+        Price.from_str("1.0")
+        Quantity.from_str("1")
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, ""
+
+
+def _requires_nt_runtime(path: Path) -> bool:
+    """Return True for tests that should be skipped when NT runtime is incompatible."""
+    filename = path.name
+    return (
+        filename in _NT_EAGER_IMPORT_TEST_MODULES
+        or filename.startswith(_NT_RUNTIME_TEST_PREFIXES)
+    )
+
+
+def _nt_skip_reason() -> str:
+    _, reason = _nt_runtime_preflight()
+    return f"Skipping NT-dependent tests: NautilusTrader runtime preflight failed ({reason})"
+
+
+def pytest_report_header(config: pytest.Config) -> str:  # pragma: no cover - pytest hook
+    """Print NT compatibility status once per test session."""
+    compatible, reason = _nt_runtime_preflight()
+    if compatible:
+        return "NT runtime preflight: OK"
+    return f"NT runtime preflight: FAILED ({reason})"
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool:
+    """Avoid importing modules with top-level NT imports when runtime is incompatible."""
+    compatible, _ = _nt_runtime_preflight()
+    if compatible or collection_path.suffix != ".py":
+        return False
+    return collection_path.name in _NT_EAGER_IMPORT_TEST_MODULES
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Mark NT-dependent tests as skipped when preflight fails."""
+    compatible, _ = _nt_runtime_preflight()
+    if compatible:
+        return
+
+    marker = pytest.mark.skip(reason=_nt_skip_reason())
+    for item in items:
+        item_path = Path(str(getattr(item, "path", item.fspath)))
+        if _requires_nt_runtime(item_path):
+            item.add_marker(marker)
 
 
 # Re-export for convenience

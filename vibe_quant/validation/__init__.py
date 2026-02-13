@@ -2,7 +2,7 @@
 
 This module provides:
 - Venue configuration with realistic latency and slippage modeling
-- Custom fill models for volume-based market impact
+- Custom fill models plus SPEC slippage estimation (post-fill)
 - Latency presets for different execution environments
 - ValidationRunner for full-fidelity backtesting
 """

@@ -127,9 +127,12 @@ streamlit run vibe_quant/dashboard/app.py
 
 ```bash
 pytest
-ruff check
-mypy vibe_quant/
+./scripts/check_quality_blocking.sh
+./scripts/check_quality_style_debt.sh
 ```
+
+`check_quality_blocking.sh` is the CI-blocking runtime gate.
+`check_quality_style_debt.sh` reports full-repo lint/type debt without blocking merges.
 
 ---
 

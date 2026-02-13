@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,6 +40,16 @@ class ValidationRunnerError(Exception):
     """Error during validation run."""
 
     pass
+
+
+@dataclass(frozen=True)
+class WalkForwardWindow:
+    """Single walk-forward train/test window."""
+
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
 
 
 class ValidationRunner:
@@ -147,6 +159,257 @@ class ValidationRunner:
             except Exception:
                 logger.exception("Failed to update run %d status to failed", run_id)
             raise ValidationRunnerError(error_msg) from exc
+
+    def run_walk_forward(
+        self,
+        run_id: int,
+        *,
+        train_days: int = 90,
+        test_days: int = 30,
+        step_days: int | None = None,
+        latency_preset: LatencyPreset | str | None = None,
+    ) -> list[ValidationResult]:
+        """Run walk-forward validation over multiple rolling windows.
+
+        Windows are constructed over the run's configured [start_date, end_date]
+        range using a rolling train window followed by an out-of-sample test
+        window. Each test window is backtested independently.
+
+        Args:
+            run_id: Backtest run ID from database.
+            train_days: Training window size in days.
+            test_days: Out-of-sample test window size in days.
+            step_days: Step size between windows. Defaults to test_days.
+            latency_preset: Optional latency override.
+
+        Returns:
+            List of ValidationResult objects, one per test window.
+
+        Raises:
+            ValidationRunnerError: If window generation or any window run fails.
+        """
+        if train_days <= 0 or test_days <= 0:
+            msg = "train_days and test_days must be positive"
+            raise ValidationRunnerError(msg)
+
+        if step_days is None:
+            step_days = test_days
+        if step_days <= 0:
+            msg = "step_days must be positive"
+            raise ValidationRunnerError(msg)
+
+        start_time = time.monotonic()
+        run_config = self._load_run_config(run_id)
+        strategy_id_raw = run_config["strategy_id"]
+        if not isinstance(strategy_id_raw, int):
+            strategy_id_raw = int(str(strategy_id_raw))
+        strategy_id: int = strategy_id_raw
+
+        strategy_data = self._state.get_strategy(strategy_id)
+        if strategy_data is None:
+            msg = f"Strategy {strategy_id} not found"
+            raise ValidationRunnerError(msg)
+
+        strategy_name = str(strategy_data["name"])
+        dsl_config = strategy_data["dsl_config"]
+        dsl = self._validate_dsl(dsl_config)
+
+        effective_latency = self._resolve_latency(run_config, latency_preset)
+        venue_config = self._create_venue_config(run_config, effective_latency)
+
+        range_start = self._parse_run_date(run_config.get("start_date"), "start_date")
+        range_end = self._parse_run_date(run_config.get("end_date"), "end_date")
+        windows = self._build_walk_forward_windows(
+            range_start=range_start,
+            range_end=range_end,
+            train_days=train_days,
+            test_days=test_days,
+            step_days=step_days,
+        )
+        if not windows:
+            msg = (
+                "No walk-forward windows fit the configured date range. "
+                f"start={range_start.isoformat()}, end={range_end.isoformat()}, "
+                f"train_days={train_days}, test_days={test_days}, step_days={step_days}"
+            )
+            raise ValidationRunnerError(msg)
+
+        self._state.update_backtest_run_status(run_id, "running")
+
+        try:
+            window_results: list[ValidationResult] = []
+            with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
+                self._write_start_event(writer, run_id, strategy_name, venue_config)
+                writer.write(
+                    create_event(
+                        event_type=EventType.LIFECYCLE,
+                        run_id=str(run_id),
+                        strategy_name=strategy_name,
+                        data={
+                            "event": "WALK_FORWARD_START",
+                            "window_count": len(windows),
+                            "train_days": train_days,
+                            "test_days": test_days,
+                            "step_days": step_days,
+                        },
+                    )
+                )
+
+                for index, window in enumerate(windows, start=1):
+                    window_run_config = dict(run_config)
+                    window_run_config["start_date"] = window.test_start
+                    window_run_config["end_date"] = window.test_end
+
+                    window_result = self._run_backtest(
+                        run_id=run_id,
+                        strategy_name=strategy_name,
+                        dsl=dsl,
+                        venue_config=venue_config,
+                        run_config=window_run_config,
+                        writer=writer,
+                    )
+                    window_results.append(window_result)
+                    writer.write(
+                        create_event(
+                            event_type=EventType.LIFECYCLE,
+                            run_id=str(run_id),
+                            strategy_name=strategy_name,
+                            data={
+                                "event": "WALK_FORWARD_WINDOW_COMPLETE",
+                                "window_index": index,
+                                "window_count": len(windows),
+                                "train_start": window.train_start,
+                                "train_end": window.train_end,
+                                "test_start": window.test_start,
+                                "test_end": window.test_end,
+                                "total_return": window_result.total_return,
+                                "sharpe_ratio": window_result.sharpe_ratio,
+                                "max_drawdown": window_result.max_drawdown,
+                                "total_trades": window_result.total_trades,
+                            },
+                        )
+                    )
+
+                aggregate = self._aggregate_walk_forward_results(
+                    run_id=run_id,
+                    strategy_name=strategy_name,
+                    window_results=window_results,
+                )
+                self._write_completion_event(writer, run_id, strategy_name, aggregate)
+
+            aggregate.execution_time_seconds = time.monotonic() - start_time
+            self._store_results(run_id, aggregate)
+            self._state.update_backtest_run_status(run_id, "completed")
+            return window_results
+        except Exception as exc:
+            error_msg = f"{type(exc).__name__}: {exc}"
+            try:
+                self._state.update_backtest_run_status(
+                    run_id, "failed", error_message=error_msg
+                )
+            except Exception:
+                logger.exception("Failed to update run %d status to failed", run_id)
+            raise ValidationRunnerError(error_msg) from exc
+
+    @staticmethod
+    def _parse_run_date(value: object, field_name: str) -> date:
+        """Parse run date fields from DB config."""
+        if not isinstance(value, str):
+            msg = f"Run config missing valid {field_name}"
+            raise ValidationRunnerError(msg)
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            msg = f"Invalid {field_name}: {value}"
+            raise ValidationRunnerError(msg) from exc
+
+    @staticmethod
+    def _build_walk_forward_windows(
+        *,
+        range_start: date,
+        range_end: date,
+        train_days: int,
+        test_days: int,
+        step_days: int,
+    ) -> list[WalkForwardWindow]:
+        """Build rolling walk-forward windows over a date range."""
+        if range_end <= range_start:
+            return []
+
+        step = timedelta(days=step_days)
+        train_delta = timedelta(days=train_days)
+        test_delta = timedelta(days=test_days)
+
+        cursor = range_start
+        windows: list[WalkForwardWindow] = []
+        while True:
+            train_start = cursor
+            train_end = train_start + train_delta
+            test_start = train_end
+            test_end = test_start + test_delta
+
+            if test_end > range_end:
+                break
+
+            windows.append(
+                WalkForwardWindow(
+                    train_start=train_start.isoformat(),
+                    train_end=train_end.isoformat(),
+                    test_start=test_start.isoformat(),
+                    test_end=test_end.isoformat(),
+                )
+            )
+            cursor += step
+
+        return windows
+
+    @staticmethod
+    def _aggregate_walk_forward_results(
+        *,
+        run_id: int,
+        strategy_name: str,
+        window_results: list[ValidationResult],
+    ) -> ValidationResult:
+        """Aggregate per-window validation results into one persisted result."""
+        if not window_results:
+            msg = "Cannot aggregate empty walk-forward result set"
+            raise ValidationRunnerError(msg)
+
+        n = float(len(window_results))
+        aggregate = ValidationResult(
+            run_id=run_id,
+            strategy_name=strategy_name,
+            total_return=sum(r.total_return for r in window_results) / n,
+            sharpe_ratio=sum(r.sharpe_ratio for r in window_results) / n,
+            sortino_ratio=sum(r.sortino_ratio for r in window_results) / n,
+            max_drawdown=max(r.max_drawdown for r in window_results),
+            profit_factor=sum(r.profit_factor for r in window_results) / n,
+            win_rate=sum(r.win_rate for r in window_results) / n,
+            total_trades=sum(r.total_trades for r in window_results),
+            total_fees=sum(r.total_fees for r in window_results),
+            total_funding=sum(r.total_funding for r in window_results),
+            total_slippage=sum(r.total_slippage for r in window_results),
+            trades=[trade for result in window_results for trade in result.trades],
+            cagr=sum(r.cagr for r in window_results) / n,
+            calmar_ratio=sum(r.calmar_ratio for r in window_results) / n,
+            volatility_annual=sum(r.volatility_annual for r in window_results) / n,
+            max_drawdown_duration_days=max(
+                r.max_drawdown_duration_days for r in window_results
+            ),
+            winning_trades=sum(r.winning_trades for r in window_results),
+            losing_trades=sum(r.losing_trades for r in window_results),
+            avg_trade_duration_hours=sum(
+                r.avg_trade_duration_hours for r in window_results
+            ) / n,
+            max_consecutive_wins=max(r.max_consecutive_wins for r in window_results),
+            max_consecutive_losses=max(r.max_consecutive_losses for r in window_results),
+            largest_win=max(r.largest_win for r in window_results),
+            largest_loss=min(r.largest_loss for r in window_results),
+            avg_win=sum(r.avg_win for r in window_results) / n,
+            avg_loss=sum(r.avg_loss for r in window_results) / n,
+            starting_balance=window_results[0].starting_balance,
+        )
+        return aggregate
 
     def _load_run_config(self, run_id: int) -> dict[str, object]:
         """Load backtest run configuration from database.
