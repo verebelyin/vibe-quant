@@ -200,6 +200,10 @@ def render_strategy_editor(
         return
 
     # Mode selector - track previous mode to detect switches
+    # Apply pending mode change (set by buttons AFTER the radio widget rendered)
+    pending = st.session_state.pop("_pending_editor_mode", None)
+    if pending:
+        st.session_state["editor_mode"] = pending
     prev_mode = st.session_state.get("_prev_editor_mode")
     col_mode, col_cancel = st.columns([3, 1])
     with col_mode:
@@ -295,7 +299,7 @@ def _render_yaml_editor(
                     sync_form_state(dsl)
             except yaml.YAMLError:
                 pass
-            st.session_state["editor_mode"] = "Visual"
+            st.session_state["_pending_editor_mode"] = "Visual"
             st.rerun()
     with c3:
         if st.button("Reset", width="stretch"):
@@ -566,7 +570,7 @@ def _render_save_section(
     with c2:
         if st.button("View as YAML", width="stretch"):
             st.session_state[yaml_key] = yaml.dump(new_dsl, default_flow_style=False, sort_keys=False)
-            st.session_state["editor_mode"] = "YAML"
+            st.session_state["_pending_editor_mode"] = "YAML"
             cleanup_form_state()
             st.rerun()
     with c3:

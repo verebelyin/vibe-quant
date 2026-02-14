@@ -335,7 +335,7 @@ def _step_review(manager: Any) -> bool:
             st.session_state["template_applied"] = True
             st.session_state.pop("wizard_step", None)
             st.session_state.pop("wizard_active", None)
-            st.session_state["editor_mode"] = "YAML"
+            st.session_state["_pending_editor_mode"] = "YAML"
             st.rerun()
 
     return False
