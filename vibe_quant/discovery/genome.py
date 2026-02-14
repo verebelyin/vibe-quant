@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any
 
 from vibe_quant.discovery.operators import (
     ConditionType,
@@ -98,7 +97,7 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
     ),
     "BBANDS": IndicatorDef(
         name="BBANDS",
-        param_ranges={"period": (10, 50), "std_dev": (1.0, 3.0)},
+        param_ranges={"period": (10, 50), "std_dev": (1.0, 4.0)},
         default_threshold_range=(0.0, 0.0),
         dsl_type="BBANDS",
     ),
@@ -311,9 +310,9 @@ def _gene_indicator_name(gene: StrategyGene, idx: int, prefix: str) -> str:
     return f"{gene.indicator_type.lower()}_{prefix}_{idx}"
 
 
-def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, Any]:
+def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
     """Build DSL IndicatorConfig dict from a gene."""
-    cfg: dict[str, Any] = {"type": gene.indicator_type}
+    cfg: dict[str, object] = {"type": gene.indicator_type}
 
     if gene.indicator_type == "MACD":
         cfg["fast_period"] = int(gene.parameters.get("fast_period", 12))
@@ -350,7 +349,7 @@ def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
     return f"{indicator_name} {op} {thr_str}"
 
 
-def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
+def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
     """Convert a chromosome to a StrategyDSL-compatible YAML dict.
 
     The output dict can be passed to ``StrategyDSL(**d)`` for validation
@@ -362,7 +361,7 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
     Returns:
         Dict compatible with vibe_quant.dsl.schema.StrategyDSL.
     """
-    indicators: dict[str, Any] = {}
+    indicators: dict[str, object] = {}
     entry_long: list[str] = []
     entry_short: list[str] = []
     exit_long: list[str] = []
@@ -410,7 +409,7 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, Any]:
     sl_pct = round(chrom.stop_loss_pct, 2)
     tp_pct = round(chrom.take_profit_pct, 2)
 
-    dsl: dict[str, Any] = {
+    dsl: dict[str, object] = {
         "name": f"genome_{chrom.uid}",
         "timeframe": "5m",
         "indicators": indicators,

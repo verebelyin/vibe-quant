@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Schema version for event log format. Bump when event structure changes.
+LOGGING_SCHEMA_VERSION: int = 1
+
 
 class EventType(StrEnum):
     """Backtest event types for structured logging."""

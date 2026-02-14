@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
@@ -28,7 +29,10 @@ from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
+    from vibe_quant.alerts.telegram import TelegramBot
     from vibe_quant.dsl.schema import StrategyDSL
+
+logger = logging.getLogger(__name__)
 
 
 class _TradingNodeLifecycle(Protocol):
@@ -117,7 +121,7 @@ class NodeStatus:
     trades_today: int = 0
     consecutive_losses: int = 0
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, str | int | float | None]:
         """Convert to dictionary for storage/serialization."""
         return {
             "state": self.state.value,
@@ -126,8 +130,8 @@ class NodeStatus:
             "halt_reason": self.halt_reason.value if self.halt_reason else None,
             "error_message": self.error_message,
             "positions": self.positions,
-            "daily_pnl": self.daily_pnl,
-            "total_pnl": self.total_pnl,
+            "daily_pnl": round(self.daily_pnl, 2),
+            "total_pnl": round(self.total_pnl, 2),
             "trades_today": self.trades_today,
             "consecutive_losses": self.consecutive_losses,
         }
@@ -183,10 +187,10 @@ class PaperTradingNode:
         self._previous_state: NodeState | None = None  # For resume from halt
 
         # Optional Telegram alerts (if env vars configured)
-        self._telegram: Any = None
+        self._telegram: TelegramBot | None = None
         try:
-            from vibe_quant.alerts.telegram import TelegramBot
-            self._telegram = TelegramBot.from_env()
+            from vibe_quant.alerts.telegram import TelegramBot as _TBot
+            self._telegram = _TBot.from_env()
         except Exception:
             pass  # Telegram not configured, alerts disabled
 
@@ -256,12 +260,13 @@ class PaperTradingNode:
         if self._telegram is None:
             return
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             if kind == "circuit_breaker":
                 loop.create_task(self._telegram.send_circuit_breaker(message))
             else:
                 loop.create_task(self._telegram.send_error(message))
+        except RuntimeError:
+            pass  # No running event loop
         except Exception:
             pass  # Never let telegram failure affect trading
 
@@ -292,14 +297,14 @@ class PaperTradingNode:
 
         return dsl
 
-    def _compile_strategy(self, dsl: StrategyDSL) -> Any:
+    def _compile_strategy(self, dsl: StrategyDSL) -> object:
         """Compile strategy DSL to NautilusTrader Strategy.
 
         Args:
             dsl: Validated strategy DSL.
 
         Returns:
-            Compiled NautilusTrader Strategy.
+            Compiled NautilusTrader Strategy (str source or module).
 
         Raises:
             ConfigurationError: If compilation fails.
@@ -377,20 +382,20 @@ class PaperTradingNode:
         SIGUSR1 → halt/pause trading
         SIGUSR2 → resume trading
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
-        def shutdown_handler(sig: int) -> None:
+        def shutdown_handler(_sig: int) -> None:
             self._status.state = NodeState.STOPPED
             self._status.halt_reason = HaltReason.SIGNAL
             self._shutdown_event.set()
 
-        def halt_handler(sig: int) -> None:
+        def halt_handler(_sig: int) -> None:
             if self._status.state == NodeState.RUNNING:
                 self.pause()
             elif self._status.state == NodeState.PAUSED:
                 self.halt(HaltReason.MANUAL, "Manual halt via SIGUSR1")
 
-        def resume_handler(sig: int) -> None:
+        def resume_handler(_sig: int) -> None:
             if self._status.state == NodeState.PAUSED:
                 self.resume()
             elif self._status.state == NodeState.HALTED:
@@ -411,7 +416,7 @@ class PaperTradingNode:
             node_status=self._status.to_dict(),
         )
 
-    def _write_event(self, event_type: EventType, data: dict[str, Any]) -> None:
+    def _write_event(self, event_type: EventType, data: dict[str, object]) -> None:
         """Write event to log.
 
         Args:
@@ -593,8 +598,10 @@ class PaperTradingNode:
                 self._trading_node.dispose()
             self._trading_node = None
 
-        # Close event writer
+        # Flush and close event writer
         if self._event_writer is not None:
+            with contextlib.suppress(Exception):
+                self._event_writer.flush()
             self._event_writer.close()
             self._event_writer = None
 

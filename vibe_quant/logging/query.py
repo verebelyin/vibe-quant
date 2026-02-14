@@ -70,16 +70,19 @@ def query_events(
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    # Build query -- run_id validated above, log_path safe
-    query = f"SELECT * FROM read_json_auto('{log_path}')"
+    # Build parameterized query
+    conn = duckdb.connect()
+    try:
+        if event_type is not None:
+            query = "SELECT * FROM read_json_auto(?) WHERE event = ? ORDER BY ts"
+            result = conn.execute(query, [str(log_path), event_type.value])
+        else:
+            query = "SELECT * FROM read_json_auto(?) ORDER BY ts"
+            result = conn.execute(query, [str(log_path)])
 
-    if event_type is not None:
-        query += f" WHERE event = '{event_type.value}'"
-
-    query += " ORDER BY ts"
-
-    result = duckdb.query(query)
-    df = result.fetchdf()
+        df = result.fetchdf()
+    finally:
+        conn.close()
 
     records: list[dict[str, object]] = df.to_dict(orient="records")  # type: ignore[assignment]
     return records
@@ -114,15 +117,17 @@ def query_events_df(
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    query = f"SELECT * FROM read_json_auto('{log_path}')"
-
-    if event_type is not None:
-        query += f" WHERE event = '{event_type.value}'"
-
-    query += " ORDER BY ts"
-
-    result = duckdb.query(query)
-    return result.fetchdf()
+    conn = duckdb.connect()
+    try:
+        if event_type is not None:
+            query = "SELECT * FROM read_json_auto(?) WHERE event = ? ORDER BY ts"
+            result = conn.execute(query, [str(log_path), event_type.value])
+        else:
+            query = "SELECT * FROM read_json_auto(?) ORDER BY ts"
+            result = conn.execute(query, [str(log_path)])
+        return result.fetchdf()
+    finally:
+        conn.close()
 
 
 def count_events_by_type(
@@ -150,15 +155,18 @@ def count_events_by_type(
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    query = f"""
-        SELECT event, COUNT(*) as count
-        FROM read_json_auto('{log_path}')
-        GROUP BY event
-        ORDER BY event
-    """
-
-    result = duckdb.query(query)
-    df = result.fetchdf()
+    conn = duckdb.connect()
+    try:
+        query = """
+            SELECT event, COUNT(*) as count
+            FROM read_json_auto(?)
+            GROUP BY event
+            ORDER BY event
+        """
+        result = conn.execute(query, [str(log_path)])
+        df = result.fetchdf()
+    finally:
+        conn.close()
 
     counts: dict[str, int] = {}
     for _, row in df.iterrows():
@@ -192,17 +200,20 @@ def get_run_summary(
         msg = f"Event log not found: {log_path}"
         raise FileNotFoundError(msg)
 
-    query = f"""
-        SELECT
-            COUNT(*) as total_events,
-            MIN(ts) as first_event,
-            MAX(ts) as last_event,
-            COUNT(DISTINCT event) as event_type_count
-        FROM read_json_auto('{log_path}')
-    """
-
-    result = duckdb.query(query)
-    df = result.fetchdf()
+    conn = duckdb.connect()
+    try:
+        query = """
+            SELECT
+                COUNT(*) as total_events,
+                MIN(ts) as first_event,
+                MAX(ts) as last_event,
+                COUNT(DISTINCT event) as event_type_count
+            FROM read_json_auto(?)
+        """
+        result = conn.execute(query, [str(log_path)])
+        df = result.fetchdf()
+    finally:
+        conn.close()
 
     if df.empty:
         return {

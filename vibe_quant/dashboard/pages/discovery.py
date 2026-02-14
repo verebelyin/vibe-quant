@@ -22,7 +22,7 @@ import yaml
 from vibe_quant.dashboard.utils import get_job_manager, get_state_manager
 from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 from vibe_quant.db.connection import DEFAULT_DB_PATH
-from vibe_quant.discovery.genome import INDICATOR_POOL
+from vibe_quant.discovery.genome import INDICATOR_POOL, chromosome_to_dsl
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryResult,
@@ -93,51 +93,9 @@ def build_results_table(
 def _ops_chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
     """Convert an operators.StrategyChromosome to a DSL-like dict.
 
-    Builds a simplified DSL dict from the chromosome for display and export.
+    Delegates to genome.chromosome_to_dsl (single source of truth).
     """
-    indicators: dict[str, dict[str, object]] = {}
-    entry_conditions: list[str] = []
-    exit_conditions: list[str] = []
-
-    for i, gene in enumerate(chrom.entry_genes):
-        name = f"{gene.indicator_type.lower()}_entry_{i}"
-        cfg: dict[str, object] = {"type": gene.indicator_type}
-        for pname, val in gene.parameters.items():
-            cfg[pname] = int(val) if val == int(val) else round(val, 4)
-        indicators[name] = cfg
-        op = gene.condition.value
-        thr = int(gene.threshold) if gene.threshold == int(gene.threshold) else round(gene.threshold, 4)
-        entry_conditions.append(f"{name} {op} {thr}")
-
-    for i, gene in enumerate(chrom.exit_genes):
-        name = f"{gene.indicator_type.lower()}_exit_{i}"
-        cfg = {"type": gene.indicator_type}
-        for pname, val in gene.parameters.items():
-            cfg[pname] = int(val) if val == int(val) else round(val, 4)
-        indicators[name] = cfg
-        op = gene.condition.value
-        thr = int(gene.threshold) if gene.threshold == int(gene.threshold) else round(gene.threshold, 4)
-        exit_conditions.append(f"{name} {op} {thr}")
-
-    direction = chrom.direction.value
-
-    entry_dict: dict[str, list[str]] = {}
-    exit_dict: dict[str, list[str]] = {}
-    if direction in ("long", "both"):
-        entry_dict["long"] = entry_conditions
-        exit_dict["long"] = exit_conditions
-    if direction in ("short", "both"):
-        entry_dict["short"] = entry_conditions
-        exit_dict["short"] = exit_conditions
-
-    return {
-        "name": f"discovered_{id(chrom)}",
-        "indicators": indicators,
-        "entry_conditions": entry_dict,
-        "exit_conditions": exit_dict,
-        "stop_loss": {"type": "fixed_pct", "percent": round(chrom.stop_loss_pct, 2)},
-        "take_profit": {"type": "fixed_pct", "percent": round(chrom.take_profit_pct, 2)},
-    }
+    return chromosome_to_dsl(chrom)
 
 
 def chromosome_to_yaml(chrom: StrategyChromosome) -> str:
@@ -204,6 +162,24 @@ def _render_config_section() -> DiscoveryConfig | None:
             help="Top individuals preserved unchanged each generation",
         )
 
+        tournament_size = st.number_input(
+            "Tournament Size",
+            min_value=2,
+            max_value=20,
+            value=3,
+            key="disc_tournament_size",
+            help="Number of contenders per tournament selection round",
+        )
+
+        convergence_generations = st.number_input(
+            "Convergence Generations",
+            min_value=3,
+            max_value=50,
+            value=10,
+            key="disc_convergence_gen",
+            help="Stop after N generations with no improvement",
+        )
+
         symbols = st.multiselect(
             "Symbols",
             options=DISCOVERY_SYMBOLS,
@@ -267,6 +243,8 @@ def _render_config_section() -> DiscoveryConfig | None:
         max_generations=max_generations,
         mutation_rate=mutation_rate,
         elite_count=elite_count,
+        tournament_size=tournament_size,
+        convergence_generations=convergence_generations,
         symbols=symbols,
         timeframe=timeframe,
         start_date=start_date.isoformat(),
@@ -592,6 +570,3 @@ def render_discovery_tab() -> None:
 
 # Convenience alias matching pattern from other pages
 render = render_discovery_tab
-
-if __name__ == "__main__":
-    render_discovery_tab()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +260,13 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
 
 def evaluate_population(
     chromosomes: list[StrategyChromosome],
-    backtest_fn: Callable[[StrategyChromosome], dict[str, Any]],
-    filter_fn: Callable[[StrategyChromosome, dict[str, Any]], dict[str, bool]] | None = None,
+    backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
 ) -> list[FitnessResult]:
-    """Evaluate fitness for an entire population.
+    """Evaluate fitness for an entire population sequentially.
+
+    This function is safe to call from multiple threads but shares no state.
+    Each call processes chromosomes in order and returns parallel results.
 
     Args:
         chromosomes: List of strategy chromosomes.
@@ -275,6 +278,7 @@ def evaluate_population(
     Returns:
         FitnessResult for each chromosome, parallel to input.
     """
+    # TODO: parallelize with ProcessPoolExecutor when population sizes warrant it
     results: list[FitnessResult] = []
 
     # Zero-fitness result for failed evaluations

@@ -252,8 +252,16 @@ class ScreeningPipeline:
             for future in as_completed(future_to_params):
                 params = future_to_params[future]
                 try:
-                    result = future.result()
+                    result = future.result(timeout=300)
                     results.append(result)
+                except TimeoutError:
+                    logger.warning("Backtest timed out (300s) for params %s", params)
+                    results.append(
+                        BacktestMetrics(
+                            parameters=params,
+                            sharpe_ratio=-999.0,
+                        )
+                    )
                 except Exception as e:
                     # Log error but continue with other backtests
                     logger.warning(
@@ -261,11 +269,12 @@ class ScreeningPipeline:
                         params,
                         e,
                     )
-                    # Add failed result with zero metrics
+                    # Add failed result with sentinel metrics (-999 avoids
+                    # -inf propagation through Pareto / ranking arithmetic)
                     results.append(
                         BacktestMetrics(
                             parameters=params,
-                            sharpe_ratio=float("-inf"),
+                            sharpe_ratio=-999.0,
                         )
                     )
 

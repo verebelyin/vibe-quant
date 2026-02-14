@@ -8,7 +8,7 @@ import logging
 import random
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 
-def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, Any]:
+def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     """PLACEHOLDER: Generate deterministic pseudo-backtest metrics.
 
     WARNING: This does NOT run actual backtests. It produces fake metrics

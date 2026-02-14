@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import sqlite3
+
+logger = logging.getLogger(__name__)
+
+# Bump when adding new migrations to _migrate_add_columns
+SCHEMA_VERSION: int = 2
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -166,18 +172,27 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)
 
 
 def _migrate_add_columns(conn: sqlite3.Connection) -> None:
-    """Add columns that may be missing from older databases."""
-    import contextlib
+    """Add columns that may be missing from older databases.
 
+    Each migration is idempotent (ALTER TABLE ADD COLUMN fails silently
+    if column already exists). When adding new migrations, bump SCHEMA_VERSION.
+    """
     migrations = [
         ("backtest_results", "starting_balance", "REAL"),
         ("backtest_results", "notes", "TEXT"),
         ("background_jobs", "error_message", "TEXT"),
         ("sweep_results", "execution_time_seconds", "REAL"),
     ]
+    applied = 0
     for table, column, col_type in migrations:
-        with contextlib.suppress(Exception):
+        try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            applied += 1
+            logger.info("Applied migration: %s.%s (%s)", table, column, col_type)
+        except Exception:  # noqa: BLE001
+            pass  # Column already exists
+    if applied:
+        logger.info("Applied %d schema migration(s) (current version: %d)", applied, SCHEMA_VERSION)
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

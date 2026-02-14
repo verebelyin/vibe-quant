@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -17,7 +18,10 @@ from vibe_quant.db.connection import get_connection
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Callable
     from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # Type alias for JSON-serializable dict
@@ -278,7 +282,7 @@ class StatePersistence:
 
     async def start_periodic_checkpointing(
         self,
-        state_callback: Any,
+        state_callback: Callable[[], StateCheckpoint | None],
     ) -> None:
         """Start periodic checkpointing background task.
 
@@ -302,7 +306,7 @@ class StatePersistence:
 
     async def _checkpoint_loop(
         self,
-        state_callback: Any,
+        state_callback: Callable[[], StateCheckpoint | None],
     ) -> None:
         """Periodic checkpoint loop.
 
@@ -323,13 +327,12 @@ class StatePersistence:
 
                 if checkpoint is not None:
                     self.save_checkpoint(checkpoint)
+                    self.delete_old_checkpoints()
 
             except asyncio.CancelledError:
                 break
             except Exception:
-                # Log error but continue checkpointing
-                # In production, would log to event writer
-                pass
+                logger.exception("checkpoint loop error")
 
 
 def recover_state(

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
+from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.operators import (
     StrategyChromosome,
     _random_chromosome,
@@ -156,8 +157,8 @@ class DiscoveryPipeline:
     def __init__(
         self,
         config: DiscoveryConfig,
-        backtest_fn: Callable[[StrategyChromosome], dict[str, Any]],
-        filter_fn: Callable[[StrategyChromosome, dict[str, Any]], dict[str, bool]] | None = None,
+        backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
+        filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
     ) -> None:
         self.config = config
         self._backtest_fn = backtest_fn
@@ -320,8 +321,10 @@ class DiscoveryPipeline:
         self,
         population: list[StrategyChromosome],
         fitness_results: list[FitnessResult],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """Export top K strategies as DSL-compatible YAML dicts.
+
+        Uses genome.chromosome_to_dsl for conversion (single source of truth).
 
         Args:
             population: Current population.
@@ -334,90 +337,11 @@ class DiscoveryPipeline:
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         top_indices = ranked[: self.config.top_k]
 
-        dsl_dicts: list[dict[str, Any]] = []
+        dsl_dicts: list[dict[str, object]] = []
         for idx in top_indices:
             chrom = population[idx]
-            dsl_dicts.append(_chromosome_to_dsl_dict(chrom, self.config))
+            dsl = chromosome_to_dsl(chrom)
+            # Override timeframe from pipeline config
+            dsl["timeframe"] = self.config.timeframe
+            dsl_dicts.append(dsl)
         return dsl_dicts
-
-
-# ---------------------------------------------------------------------------
-# DSL export helper
-# ---------------------------------------------------------------------------
-
-
-def _gene_to_condition_str(gene: Any, name: str) -> str:
-    """Build a DSL condition string from an operators.py StrategyGene."""
-    op = gene.condition.value  # ConditionType enum value
-    thr = gene.threshold
-    thr_str = str(int(thr)) if thr == int(thr) else f"{thr:g}"
-    return f"{name} {op} {thr_str}"
-
-
-def _gene_to_indicator_config(gene: Any) -> dict[str, Any]:
-    """Build DSL indicator config dict from an operators.py StrategyGene."""
-    cfg: dict[str, Any] = {"type": gene.indicator_type}
-    for pname, val in gene.parameters.items():
-        # Integer-valued params
-        if val == int(val):
-            cfg[pname] = int(val)
-        else:
-            cfg[pname] = round(val, 4)
-    return cfg
-
-
-def _chromosome_to_dsl_dict(
-    chrom: StrategyChromosome,
-    config: DiscoveryConfig,
-) -> dict[str, Any]:
-    """Convert an operators.py StrategyChromosome to a DSL YAML dict."""
-    indicators: dict[str, Any] = {}
-    entry_long: list[str] = []
-    entry_short: list[str] = []
-    exit_long: list[str] = []
-    exit_short: list[str] = []
-
-    direction = chrom.direction.value  # Direction enum -> str
-
-    for i, gene in enumerate(chrom.entry_genes):
-        name = f"{gene.indicator_type.lower()}_entry_{i}"
-        indicators[name] = _gene_to_indicator_config(gene)
-        cond = _gene_to_condition_str(gene, name)
-        if direction in ("long", "both"):
-            entry_long.append(cond)
-        if direction in ("short", "both"):
-            entry_short.append(cond)
-
-    for i, gene in enumerate(chrom.exit_genes):
-        name = f"{gene.indicator_type.lower()}_exit_{i}"
-        indicators[name] = _gene_to_indicator_config(gene)
-        cond = _gene_to_condition_str(gene, name)
-        if direction in ("long", "both"):
-            exit_long.append(cond)
-        if direction in ("short", "both"):
-            exit_short.append(cond)
-
-    entry_conditions: dict[str, list[str]] = {}
-    if entry_long:
-        entry_conditions["long"] = entry_long
-    if entry_short:
-        entry_conditions["short"] = entry_short
-
-    exit_conditions: dict[str, list[str]] = {}
-    if exit_long:
-        exit_conditions["long"] = exit_long
-    if exit_short:
-        exit_conditions["short"] = exit_short
-
-    sl_pct = round(chrom.stop_loss_pct, 2)
-    tp_pct = round(chrom.take_profit_pct, 2)
-
-    return {
-        "name": f"discovered_{id(chrom)}",
-        "timeframe": config.timeframe,
-        "indicators": indicators,
-        "entry_conditions": entry_conditions,
-        "exit_conditions": exit_conditions,
-        "stop_loss": {"type": "fixed_pct", "percent": sl_pct},
-        "take_profit": {"type": "fixed_pct", "percent": tp_pct},
-    }

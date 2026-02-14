@@ -201,11 +201,14 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
             self._halt_strategy("drawdown", self._state.current_drawdown_pct)
             return RiskState.HALTED
 
-        if self._state.daily_start_equity > Decimal("0"):
-            daily_loss_pct = abs(self._state.daily_pnl) / self._state.daily_start_equity
-            if self._state.daily_pnl < Decimal("0") and daily_loss_pct >= self._risk_config.max_daily_loss_pct:
-                self._halt_strategy("daily_loss", daily_loss_pct)
-                return RiskState.HALTED
+        if self._state.daily_start_equity <= Decimal("0"):
+            self._halt_strategy("equity_depleted", Decimal("0"))
+            return RiskState.HALTED
+
+        daily_loss_pct = abs(self._state.daily_pnl) / self._state.daily_start_equity
+        if self._state.daily_pnl < Decimal("0") and daily_loss_pct >= self._risk_config.max_daily_loss_pct:
+            self._halt_strategy("daily_loss", daily_loss_pct)
+            return RiskState.HALTED
 
         if self._state.consecutive_losses >= self._risk_config.max_consecutive_losses:
             self._halt_strategy(
@@ -217,8 +220,10 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
         self._update_position_scale_factor()
 
         if self._state.position_count >= self._risk_config.max_position_count:
-            self._state.state = RiskState.WARNING
-            return RiskState.WARNING
+            self._halt_strategy(
+                "position_count", Decimal(str(self._state.position_count))
+            )
+            return RiskState.HALTED
 
         self._state.state = RiskState.ACTIVE
         return RiskState.ACTIVE
@@ -294,7 +299,8 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
         try:
             positions = self.cache.positions_open(strategy_id=self._get_strategy_id())
             self._state.position_count = len(positions)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to update position count: %s", exc)
             self._state.position_count = 0
 
     def _get_current_equity(self) -> Decimal:

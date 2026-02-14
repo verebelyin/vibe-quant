@@ -337,13 +337,19 @@ def _validate_sweep_parameters(
         field = parts[1] if len(parts) > 1 else None
 
         if root in indicator_names:
-            # Indicator parameter sweep
-            valid_indicator_fields = {
-                "period", "source", "fast_period", "slow_period",
-                "signal_period", "std_dev", "atr_multiplier"
-            }
-            if field and field not in valid_indicator_fields:
-                errors.append(f"sweep.{param_path}: Invalid indicator field '{field}'")
+            # Look up actual indicator type and validate against its param_schema
+            ind_config = strategy.indicators.get(root)
+            if ind_config is not None:
+                spec = indicator_registry.get(ind_config.type)
+                if spec is not None and field:
+                    # Accept param_schema keys plus common DSL config fields
+                    valid_fields = set(spec.param_schema.keys()) | {"source"}
+                    if field not in valid_fields:
+                        valid_list = ", ".join(sorted(valid_fields))
+                        errors.append(
+                            f"sweep.{param_path}: Invalid field '{field}' "
+                            f"for {ind_config.type}. Valid: {valid_list}"
+                        )
         elif root == "stop_loss":
             valid_fields = {"percent", "atr_multiplier"}
             if field and field not in valid_fields:

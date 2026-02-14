@@ -15,10 +15,14 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
+
+if TYPE_CHECKING:
+    import sqlite3
 
 import streamlit as st
 
@@ -30,6 +34,7 @@ from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence, reco
 SESSION_TRADER_ID = "paper_trading_trader_id"
 SESSION_PERSISTENCE = "paper_trading_persistence"
 SESSION_LAST_REFRESH = "paper_trading_last_refresh"
+SESSION_CONFIG_PATH = "paper_trading_config_path"
 
 
 class ValidatedStrategyRow(TypedDict):
@@ -65,15 +70,24 @@ def _get_persistence(db_path: Path | None = None) -> StatePersistence | None:
     return persistence
 
 
-def _get_validated_strategies(db_path: Path | None = None) -> list[ValidatedStrategyRow]:
+def _get_validated_strategies(
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[ValidatedStrategyRow]:
     """Get strategies with completed validation backtests.
+
+    Args:
+        db_path: Database path (ignored if conn provided).
+        conn: Optional shared connection.
 
     Returns strategies from backtest_results that have:
     - run_mode = 'validation'
     - status = 'completed'
     - sharpe_ratio IS NOT NULL
     """
-    conn = get_connection(db_path)
+    own_conn = conn is None
+    if conn is None:
+        conn = get_connection(db_path)
     try:
         cursor = conn.execute(
             """
@@ -101,12 +115,23 @@ def _get_validated_strategies(db_path: Path | None = None) -> list[ValidatedStra
         rows = cursor.fetchall()
         return [cast("ValidatedStrategyRow", dict(row)) for row in rows]
     finally:
-        conn.close()
+        if own_conn:
+            conn.close()
 
 
-def _get_active_paper_jobs(db_path: Path | None = None) -> list[ActivePaperJobRow]:
-    """Get currently running paper trading jobs."""
-    conn = get_connection(db_path)
+def _get_active_paper_jobs(
+    db_path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[ActivePaperJobRow]:
+    """Get currently running paper trading jobs.
+
+    Args:
+        db_path: Database path (ignored if conn provided).
+        conn: Optional shared connection.
+    """
+    own_conn = conn is None
+    if conn is None:
+        conn = get_connection(db_path)
     try:
         cursor = conn.execute(
             """
@@ -117,7 +142,8 @@ def _get_active_paper_jobs(db_path: Path | None = None) -> list[ActivePaperJobRo
         rows = cursor.fetchall()
         return [cast("ActivePaperJobRow", dict(row)) for row in rows]
     finally:
-        conn.close()
+        if own_conn:
+            conn.close()
 
 
 def _create_paper_config_file(
@@ -132,6 +158,8 @@ def _create_paper_config_file(
     API credentials are NOT written to disk -- they are passed via
     environment variables at subprocess launch time.
     """
+    # Read defaults from session_state if overridden, otherwise use safe defaults
+    sess = st.session_state
     config_data = {
         "trader_id": trader_id,
         "strategy_id": strategy_id,
@@ -141,37 +169,43 @@ def _create_paper_config_file(
             "account_type": "USDT_FUTURES",
         },
         "sizing": {
-            "method": "fixed_fractional",
-            "max_leverage": "10",
-            "max_position_pct": "0.3",
-            "risk_per_trade": "0.02",
+            "method": str(sess.get("paper_sizing_method", "fixed_fractional")),
+            "max_leverage": str(sess.get("paper_max_leverage", "10")),
+            "max_position_pct": str(sess.get("paper_max_position_pct", "0.3")),
+            "risk_per_trade": str(sess.get("paper_risk_per_trade", "0.02")),
         },
         "risk": {
-            "max_drawdown_pct": "0.15",
-            "max_daily_loss_pct": "0.05",
-            "max_consecutive_losses": 5,
-            "max_position_count": 3,
+            "max_drawdown_pct": str(sess.get("paper_max_drawdown_pct", "0.15")),
+            "max_daily_loss_pct": str(sess.get("paper_max_daily_loss_pct", "0.05")),
+            "max_consecutive_losses": int(sess.get("paper_max_consecutive_losses", 5)),
+            "max_position_count": int(sess.get("paper_max_position_count", 3)),
         },
         "db_path": str(db_path) if db_path else None,
         "logs_path": f"logs/paper/{trader_id}",
         "state_persistence_interval": 60,
     }
 
-    config_path = Path(f"/tmp/paper_{trader_id}.json")
-    with config_path.open("w") as f:
-        json.dump(config_data, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(prefix=f"paper_{trader_id}_", suffix=".json")
+    config_path = Path(tmp_path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(config_data, f, indent=2)
+    except Exception:
+        config_path.unlink(missing_ok=True)
+        raise
 
     return config_path
 
 
-def _cleanup_paper_config_file(trader_id: str) -> None:
-    """Remove paper trading config file from /tmp.
+def _cleanup_paper_config_file(config_path: Path | str | None) -> None:
+    """Remove paper trading config file.
 
     Safe to call even if file doesn't exist.
     """
-    config_path = Path(f"/tmp/paper_{trader_id}.json")
+    if config_path is None:
+        return
     with contextlib.suppress(FileNotFoundError, OSError):
-        config_path.unlink()
+        Path(config_path).unlink()
 
 
 def _render_start_session(db_path: Path | None = None) -> None:
@@ -185,10 +219,8 @@ def _render_start_session(db_path: Path | None = None) -> None:
         if st.button("Stop Active Session", type="secondary"):
             manager = get_job_manager(db_path)
             manager.kill_job(active_jobs[0]["run_id"])
-            # Clean up config file from /tmp
-            trader_id = st.session_state.get(SESSION_TRADER_ID)
-            if trader_id:
-                _cleanup_paper_config_file(trader_id)
+            # Clean up config file
+            _cleanup_paper_config_file(st.session_state.get(SESSION_CONFIG_PATH))
             st.success("Session stopped")
             st.rerun()
         return
@@ -228,18 +260,22 @@ def _render_start_session(db_path: Path | None = None) -> None:
 
     # Binance config (collapsible)
     with st.expander("Binance Configuration", expanded=False):
+        _has_key = bool(os.environ.get("BINANCE_API_KEY"))
+        _has_secret = bool(os.environ.get("BINANCE_API_SECRET"))
         api_key = st.text_input(
             "API Key",
             type="password",
-            value=os.environ.get("BINANCE_API_KEY", ""),
-            help="Binance API key (from env BINANCE_API_KEY if set)",
-        )
+            value="",
+            placeholder="*** (from env)" if _has_key else "Enter API key",
+            help="Binance API key (leave blank to use env BINANCE_API_KEY)",
+        ) or os.environ.get("BINANCE_API_KEY", "")
         api_secret = st.text_input(
             "API Secret",
             type="password",
-            value=os.environ.get("BINANCE_API_SECRET", ""),
-            help="Binance API secret (from env BINANCE_API_SECRET if set)",
-        )
+            value="",
+            placeholder="*** (from env)" if _has_secret else "Enter API secret",
+            help="Binance API secret (leave blank to use env BINANCE_API_SECRET)",
+        ) or os.environ.get("BINANCE_API_SECRET", "")
         testnet = st.checkbox("Use Testnet", value=True, help="Paper trade on Binance testnet")
 
     # Parse symbols from JSON
@@ -309,8 +345,9 @@ def _render_start_session(db_path: Path | None = None) -> None:
             env=env,
         )
 
-        # Update session state with new trader ID
+        # Update session state with new trader ID and config path
         st.session_state[SESSION_TRADER_ID] = trader_id
+        st.session_state[SESSION_CONFIG_PATH] = str(config_path)
 
         st.success(f"Paper trading started! Trader ID: {trader_id} (PID: {pid})")
         st.rerun()
@@ -584,10 +621,8 @@ def _handle_actions(actions: dict[str, bool], db_path: Path | None = None) -> No
 
         if actions["close_all"]:
             os.kill(pid, sig.SIGTERM)
-            # Clean up config file from /tmp
-            trader_id = st.session_state.get(SESSION_TRADER_ID)
-            if trader_id:
-                _cleanup_paper_config_file(trader_id)
+            # Clean up config file
+            _cleanup_paper_config_file(st.session_state.get(SESSION_CONFIG_PATH))
             st.warning("CLOSE ALL / graceful shutdown signal sent")
     except ProcessLookupError:
         st.error("Paper trading process not found (may have already stopped)")

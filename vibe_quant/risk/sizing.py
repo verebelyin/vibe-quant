@@ -265,6 +265,7 @@ class FixedFractionalSizer(PositionSizer):
             raw_size, account_equity, entry_price, instrument.size_precision
         )
 
+        # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)
 
 
@@ -365,6 +366,7 @@ class KellySizer(PositionSizer):
             raw_size, account_equity, entry_price, instrument.size_precision
         )
 
+        # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)
 
 
@@ -443,4 +445,5 @@ class ATRSizer(PositionSizer):
             raw_size, account_equity, entry_price, instrument.size_precision
         )
 
+        # NautilusTrader Quantity requires float, not Decimal
         return Quantity(float(final_size), precision=instrument.size_precision)

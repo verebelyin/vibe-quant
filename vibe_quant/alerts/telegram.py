@@ -6,6 +6,7 @@ with rate limiting to prevent notification spam.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,8 @@ from decimal import Decimal
 from enum import StrEnum
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Environment variable names
 ENV_TELEGRAM_BOT_TOKEN = "TELEGRAM_BOT_TOKEN"
@@ -110,20 +113,22 @@ class DailySummary:
         Returns:
             Formatted message string.
         """
+        q2 = Decimal("0.01")
+        q4 = Decimal("0.0001")
         pnl_emoji = "+" if self.total_pnl >= 0 else ""
         date_str = self.date.strftime("%Y-%m-%d")
 
         return (
             f"Daily Summary - {date_str}\n"
             f"{'=' * 25}\n"
-            f"P&L: {pnl_emoji}{self.total_pnl:.2f} USDT\n"
-            f"  Realized: {self.realized_pnl:.2f}\n"
-            f"  Unrealized: {self.unrealized_pnl:.2f}\n"
+            f"P&L: {pnl_emoji}{self.total_pnl.quantize(q2)} USDT\n"
+            f"  Realized: {self.realized_pnl.quantize(q2)}\n"
+            f"  Unrealized: {self.unrealized_pnl.quantize(q2)}\n"
             f"Positions: {self.open_positions}\n"
             f"Trades: {self.trades_executed}\n"
             f"Win Rate: {self.win_rate:.1f}%\n"
             f"Max DD: {self.max_drawdown:.2f}%\n"
-            f"Fees: {self.total_fees:.4f} USDT"
+            f"Fees: {self.total_fees.quantize(q4)} USDT"
         )
 
 
@@ -166,6 +171,8 @@ class TelegramBot:
             httpx.AsyncClient instance.
         """
         if self._client is None or self._client.is_closed:
+            if self._client is not None:
+                logger.info("Recreating Telegram client (previous was closed)")
             self._client = httpx.AsyncClient(timeout=10.0)
         return self._client
 
@@ -244,17 +251,30 @@ class TelegramBot:
             "parse_mode": "HTML",
         }
 
-        try:
-            client = await self._get_client()
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            self._update_rate_limit(alert_type)
-            return True
-        except (httpx.HTTPStatusError, httpx.RequestError):
-            # Reset client on transport/protocol failures so next send starts
-            # from a known-good connection state.
-            await self.close()
-            return False
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                client = await self._get_client()
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                self._update_rate_limit(alert_type)
+                return True
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                # Reset client on transport/protocol failures so next send
+                # starts from a known-good connection state.
+                await self.close()
+                if attempt < max_attempts - 1:
+                    delay = 1.0 * (2 ** attempt)  # 1s, 2s
+                    logger.warning(
+                        "Alert send attempt %d/%d failed: %s, retrying in %.0fs",
+                        attempt + 1, max_attempts, exc, delay,
+                    )
+                    import asyncio
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning("Alert send failed after %d attempts: %s", max_attempts, exc)
+                    return False
+        return False
 
     async def send_error(self, message: str, *, bypass_rate_limit: bool = False) -> bool:
         """Send error alert.
@@ -313,9 +333,12 @@ class TelegramBot:
             bypass_rate_limit: If True, skip rate limit check.
 
         Returns:
-            True if sent successfully.
+            True if sent successfully, False if invalid or failed.
         """
-        message = f"{side} {quantity} {symbol} @ {price:.2f}"
+        if quantity <= 0 or price <= 0:
+            logger.warning("Invalid trade alert: quantity=%s price=%s", quantity, price)
+            return False
+        message = f"{side} {quantity} {symbol} @ {price.quantize(Decimal('0.01'))}"
         return await self.send_alert(
             AlertType.TRADE, message, bypass_rate_limit=bypass_rate_limit
         )

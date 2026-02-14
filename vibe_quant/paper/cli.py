@@ -12,6 +12,7 @@ import contextlib
 import json
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,15 +28,12 @@ from vibe_quant.paper.node import run_paper_trading
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from decimal import Decimal
 
     from vibe_quant.jobs.manager import BacktestJobManager
 
 
 def _decimal_from_str(value: str | float | int) -> Decimal:
     """Convert value to Decimal."""
-    from decimal import Decimal
-
     return Decimal(str(value))
 
 

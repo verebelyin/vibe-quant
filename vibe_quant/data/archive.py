@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import calendar
-import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    import sqlite3
     from collections.abc import Iterable
 
 DEFAULT_ARCHIVE_PATH = Path("data/archive/raw_data.db")
@@ -86,12 +86,9 @@ class RawDataArchive:
     def conn(self) -> sqlite3.Connection:
         """Get or create database connection."""
         if self._conn is None:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self._db_path)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL;")
-            self._conn.execute("PRAGMA busy_timeout=5000;")
-            self._conn.execute("PRAGMA foreign_keys=ON;")
+            from vibe_quant.db.connection import get_connection
+
+            self._conn = get_connection(self._db_path)
             self._conn.executescript(ARCHIVE_SCHEMA)
             self._conn.commit()
         return self._conn

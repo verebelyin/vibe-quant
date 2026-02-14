@@ -88,6 +88,9 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             max_portfolio_heat_pct=config.max_portfolio_heat_pct,
         )
         self._state = PortfolioRiskState()
+        # TODO: populate _halted_strategies per-strategy instead of halting ALL
+        # trading when a single strategy violates risk limits. Requires strategy-level
+        # halt propagation (currently only portfolio-wide halt is implemented).
         self._halted_strategies: set[str] = set()
 
     @property

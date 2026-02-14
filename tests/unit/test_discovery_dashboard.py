@@ -354,14 +354,14 @@ class TestChromosomeYaml:
         assert parsed["stop_loss"]["type"] == "fixed_pct"
 
     def test_name_prefix(self) -> None:
-        """Strategy name starts with discovered_."""
+        """Strategy name starts with genome_ (canonical naming from genome.chromosome_to_dsl)."""
         import yaml as _yaml
 
         chrom = _make_ops_chromosome()
         yaml_str = chromosome_to_yaml(chrom)
         parsed = _yaml.safe_load(yaml_str)
 
-        assert parsed["name"].startswith("discovered_")
+        assert parsed["name"].startswith("genome_")
 
 
 # ---------------------------------------------------------------------------

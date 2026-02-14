@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.operators import (
     StrategyChromosome,
     initialize_population,
@@ -16,7 +17,6 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryPipeline,
     DiscoveryResult,
     GenerationResult,
-    _chromosome_to_dsl_dict,
 )
 
 # ---------------------------------------------------------------------------
@@ -319,9 +319,8 @@ class TestExportTopStrategies:
             assert d["take_profit"]["type"] == "fixed_pct"
 
     def test_export_dsl_has_indicators(self) -> None:
-        cfg = _make_config()
         pop = initialize_population(4)
-        dsl = _chromosome_to_dsl_dict(pop[0], cfg)
+        dsl = chromosome_to_dsl(pop[0])
         # Should have at least entry + exit indicators
         assert len(dsl["indicators"]) >= 2
 

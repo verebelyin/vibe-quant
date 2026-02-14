@@ -418,6 +418,7 @@ class StrategyCompiler:
         lines.append("    # Condition thresholds (can be overridden)")
         seen_thresholds: dict[str, float | int] = {}
         self._threshold_map = {}
+        threshold_counter = 0
         for cond_str in (
             dsl.entry_conditions.long
             + dsl.entry_conditions.short
@@ -433,11 +434,13 @@ class StrategyCompiler:
                     seen_thresholds[short_name] = cond.right.value
                     self._threshold_map[(left_name, float(cond.right.value))] = short_name
                 elif seen_thresholds[short_name] != cond.right.value:
-                    op_name = cond.operator.name.lower()
-                    long_name = f"{left_name}_{op_name}_{value_str}_threshold"
-                    if long_name not in seen_thresholds:
-                        seen_thresholds[long_name] = cond.right.value
-                    self._threshold_map[(left_name, float(cond.right.value))] = long_name
+                    # Disambiguate with counter to avoid collisions when 3+
+                    # conditions use the same indicator with different values
+                    threshold_counter += 1
+                    unique_name = f"{left_name}_{value_str}_{threshold_counter}_threshold"
+                    if unique_name not in seen_thresholds:
+                        seen_thresholds[unique_name] = cond.right.value
+                    self._threshold_map[(left_name, float(cond.right.value))] = unique_name
 
         for param_name, default_val in seen_thresholds.items():
             lines.append(f"    {param_name}: float = {default_val}")

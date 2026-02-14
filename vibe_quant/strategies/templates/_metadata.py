@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import yaml
 
 _TEMPLATE_DIR = Path(__file__).parent
+
+VALID_CATEGORIES: frozenset[str] = frozenset({
+    "Momentum", "Trend", "Volatility", "Multi-Timeframe", "Volume",
+})
+VALID_DIFFICULTIES: frozenset[str] = frozenset({
+    "Beginner", "Intermediate", "Advanced",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,12 +23,18 @@ class TemplateMeta:
 
     file_name: str
     display_name: str
-    category: str  # "Momentum", "Trend", "Volatility", "Multi-Timeframe"
-    difficulty: str  # "Beginner", "Intermediate", "Advanced"
+    category: str
+    difficulty: str
     description: str
     market_conditions: str
     instruments: str
     tags: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(f"Invalid category '{self.category}', must be one of {sorted(VALID_CATEGORIES)}")
+        if self.difficulty not in VALID_DIFFICULTIES:
+            raise ValueError(f"Invalid difficulty '{self.difficulty}', must be one of {sorted(VALID_DIFFICULTIES)}")
 
     @property
     def path(self) -> Path:
@@ -32,7 +44,7 @@ class TemplateMeta:
         """Load the template YAML content as a string."""
         return self.path.read_text()
 
-    def load_dict(self) -> dict[str, Any]:
+    def load_dict(self) -> dict[str, object]:
         """Load the template as a parsed dict.
 
         Raises:

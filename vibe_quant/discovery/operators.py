@@ -17,30 +17,49 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 # ---------------------------------------------------------------------------
-# Genome types (stub -- will be replaced by genome.py when available)
+# Indicator pool -- canonical source is genome.INDICATOR_POOL (IndicatorDef).
+# This flat dict is derived at import time for operators that only need
+# param ranges. Extra indicators not in genome are appended below.
 # ---------------------------------------------------------------------------
 
-# Indicator pool: maps indicator type -> {param_name: (min, max)}
-INDICATOR_POOL: dict[str, dict[str, tuple[float, float]]] = {
-    "RSI": {"period": (5, 50)},
-    "EMA": {"period": (5, 200)},
-    "SMA": {"period": (5, 200)},
-    "WMA": {"period": (5, 200)},
-    "DEMA": {"period": (5, 200)},
-    "TEMA": {"period": (5, 200)},
-    "MACD": {"fast_period": (5, 30), "slow_period": (15, 60), "signal_period": (3, 20)},
-    "STOCH": {"k_period": (5, 30), "d_period": (2, 10)},
-    "CCI": {"period": (10, 50)},
-    "WILLR": {"period": (5, 30)},
-    "ROC": {"period": (5, 30)},
-    "ATR": {"period": (5, 50)},
-    "BBANDS": {"period": (10, 50), "std_dev": (1.0, 4.0)},
-    "KC": {"period": (10, 50), "atr_multiplier": (0.5, 5.0)},
-    "DONCHIAN": {"period": (10, 50)},
-    "MFI": {"period": (5, 50)},
-}
+def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
+    """Build flat indicator pool from genome's IndicatorDef objects + extras."""
+    # Lazy import to avoid circular dependency (genome imports from operators)
+    from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
 
-_INDICATOR_NAMES = list(INDICATOR_POOL.keys())
+    pool: dict[str, dict[str, tuple[float, float]]] = {
+        name: dict(ind_def.param_ranges) for name, ind_def in _GENOME_POOL.items()
+    }
+    # Extra indicators not yet in genome (operators-only for now)
+    _extras: dict[str, dict[str, tuple[float, float]]] = {
+        "SMA": {"period": (5, 200)},
+        "WMA": {"period": (5, 200)},
+        "DEMA": {"period": (5, 200)},
+        "TEMA": {"period": (5, 200)},
+        "CCI": {"period": (10, 50)},
+        "WILLR": {"period": (5, 30)},
+        "ROC": {"period": (5, 30)},
+        "KC": {"period": (10, 50), "atr_multiplier": (0.5, 5.0)},
+        "DONCHIAN": {"period": (10, 50)},
+        "MFI": {"period": (5, 50)},
+    }
+    for name, ranges in _extras.items():
+        if name not in pool:
+            pool[name] = ranges
+    return pool
+
+
+# Deferred initialization to break circular import
+INDICATOR_POOL: dict[str, dict[str, tuple[float, float]]] = {}
+_INDICATOR_NAMES: list[str] = []
+
+
+def _ensure_pool() -> None:
+    """Populate INDICATOR_POOL on first use (breaks circular import)."""
+    global _INDICATOR_NAMES  # noqa: PLW0603
+    if not INDICATOR_POOL:
+        INDICATOR_POOL.update(_build_indicator_pool())
+        _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
 
 
 class ConditionType(Enum):
@@ -143,8 +162,6 @@ class StrategyChromosome:
         )
 
 
-type Chromosome = StrategyChromosome
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -152,6 +169,7 @@ type Chromosome = StrategyChromosome
 
 def _random_params(indicator_type: str) -> dict[str, float]:
     """Generate random parameters for an indicator type."""
+    _ensure_pool()
     ranges = INDICATOR_POOL[indicator_type]
     params: dict[str, float] = {}
     for name, (lo, hi) in ranges.items():
@@ -176,6 +194,7 @@ def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) ->
 
 def _random_gene() -> StrategyGene:
     """Generate a single random gene."""
+    _ensure_pool()
     ind = random.choice(_INDICATOR_NAMES)
     return StrategyGene(
         indicator_type=ind,
@@ -216,8 +235,9 @@ def _clamp_genes(genes: list[StrategyGene], min_count: int, max_count: int) -> l
     return genes
 
 
-def is_valid_chromosome(chrom: Chromosome) -> bool:
+def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
     """Check chromosome satisfies all constraints."""
+    _ensure_pool()
     if not (MIN_ENTRY_GENES <= len(chrom.entry_genes) <= MAX_ENTRY_GENES):
         return False
     if not (MIN_EXIT_GENES <= len(chrom.exit_genes) <= MAX_EXIT_GENES):
@@ -242,7 +262,7 @@ def is_valid_chromosome(chrom: Chromosome) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def crossover(parent_a: Chromosome, parent_b: Chromosome) -> tuple[Chromosome, Chromosome]:
+def crossover(parent_a: StrategyChromosome, parent_b: StrategyChromosome) -> tuple[StrategyChromosome, StrategyChromosome]:
     """Uniform crossover producing two offspring.
 
     For each gene position, randomly pick from parent A or B.
@@ -329,7 +349,7 @@ def _crossover_genes(
     return _clamp_genes(result, min_count, max_count)
 
 
-def mutate(chromosome: Chromosome, mutation_rate: float = 0.1) -> Chromosome:
+def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> StrategyChromosome:
     """Mutate a chromosome in-place-style (returns new chromosome).
 
     For each gene, with probability mutation_rate:
@@ -345,7 +365,7 @@ def mutate(chromosome: Chromosome, mutation_rate: float = 0.1) -> Chromosome:
       - Mutate SL/TP values (+/-20%)
 
     Args:
-        chromosome: Chromosome to mutate.
+        chromosome: StrategyChromosome to mutate.
         mutation_rate: Per-gene mutation probability [0, 1].
 
     Returns:
@@ -424,10 +444,10 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
 
 
 def tournament_select(
-    population: list[Chromosome],
+    population: list[StrategyChromosome],
     fitness_scores: Sequence[float],
     tournament_size: int = 3,
-) -> Chromosome:
+) -> StrategyChromosome:
     """Tournament selection: pick best from a random subset.
 
     Args:
@@ -436,7 +456,7 @@ def tournament_select(
         tournament_size: Number of contenders per tournament.
 
     Returns:
-        Chromosome with the highest fitness among contenders.
+        StrategyChromosome with the highest fitness among contenders.
 
     Raises:
         ValueError: If population is empty or sizes mismatch.
@@ -454,10 +474,10 @@ def tournament_select(
 
 
 def apply_elitism(
-    population: list[Chromosome],
+    population: list[StrategyChromosome],
     fitness_scores: Sequence[float],
     elite_count: int = 2,
-) -> list[Chromosome]:
+) -> list[StrategyChromosome]:
     """Return top elite_count individuals unchanged.
 
     Uses heapq.nlargest for O(n log k) instead of O(n log n) full sort
@@ -486,7 +506,7 @@ def apply_elitism(
     return [population[i].clone() for i in top_indices]
 
 
-def initialize_population(size: int = 50) -> list[Chromosome]:
+def initialize_population(size: int = 50) -> list[StrategyChromosome]:
     """Generate a population of random valid chromosomes.
 
     Args:
@@ -495,13 +515,13 @@ def initialize_population(size: int = 50) -> list[Chromosome]:
     Returns:
         List of valid random chromosomes.
     """
-    population: list[Chromosome] = []
+    population: list[StrategyChromosome] = []
     for _ in range(size):
         population.append(_random_chromosome())
     return population
 
 
-def _random_chromosome() -> Chromosome:
+def _random_chromosome() -> StrategyChromosome:
     """Generate a single random valid chromosome."""
     n_entry = random.randint(MIN_ENTRY_GENES, MAX_ENTRY_GENES)
     n_exit = random.randint(MIN_EXIT_GENES, MAX_EXIT_GENES)

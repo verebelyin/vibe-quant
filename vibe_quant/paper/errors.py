@@ -81,6 +81,12 @@ def classify_error(exception: BaseException) -> ErrorCategory:
     error_msg = str(exception).lower()
     exc_type = type(exception).__name__.lower()
 
+    # Check fatal patterns FIRST so e.g. "authentication failed" isn't
+    # caught by the "connection" transient pattern.
+    for pattern in _FATAL_PATTERNS:
+        if pattern in error_msg:
+            return ErrorCategory.FATAL
+
     # Check for transient patterns
     for pattern in _TRANSIENT_PATTERNS:
         if pattern in error_msg or pattern in exc_type:
@@ -97,11 +103,6 @@ def classify_error(exception: BaseException) -> ErrorCategory:
     )
     if any(t in exc_type for t in transient_types):
         return ErrorCategory.TRANSIENT
-
-    # Check for fatal patterns
-    for pattern in _FATAL_PATTERNS:
-        if pattern in error_msg:
-            return ErrorCategory.FATAL
 
     # Default to strategy error (safe default - halts strategy but doesn't alert)
     return ErrorCategory.STRATEGY

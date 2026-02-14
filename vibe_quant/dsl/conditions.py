@@ -6,6 +6,7 @@ into structured Condition objects for evaluation.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -13,6 +14,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+logger = logging.getLogger(__name__)
 
 
 class Operator(Enum):
@@ -360,7 +363,7 @@ def extract_indicator_refs(conditions: Sequence[str]) -> set[str]:
             ):
                 refs.add(cond.right2.value)
         except ConditionParseError:
-            # Skip unparseable conditions - they'll be caught later
-            pass
+            # Skip unparseable conditions - they'll be caught during validation
+            logger.debug("Skipping unparseable condition ref: %s", cond_str)
 
     return refs

@@ -687,6 +687,10 @@ class StateManager:
         self.conn.commit()
 
     # --- Background Jobs CRUD ---
+    # NOTE: Job operations are also implemented in jobs/manager.py (BacktestJobManager).
+    # StateManager provides low-level CRUD; BacktestJobManager adds subprocess lifecycle,
+    # heartbeat, and process management. Both operate on the same background_jobs table.
+    # Callers should prefer BacktestJobManager for new code.
 
     def register_job(
         self, run_id: int, pid: int, job_type: str, log_file: str | None = None

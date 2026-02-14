@@ -21,6 +21,7 @@ from vibe_quant.paper.errors import (
     classify_error,
 )
 from vibe_quant.paper.node import PaperTradingNode
+from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence, recover_state
 
 __all__ = [
     "BinanceTestnetConfig",
@@ -30,6 +31,9 @@ __all__ = [
     "PaperTradingConfig",
     "PaperTradingNode",
     "RetryConfig",
+    "StateCheckpoint",
+    "StatePersistence",
     "classify_error",
     "create_trading_node_config",
+    "recover_state",
 ]

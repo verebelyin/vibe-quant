@@ -127,7 +127,8 @@ def _get_data_status() -> dict[str, Any]:
             status["symbols"][symbol] = sym_status
 
         archive.close()
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
+        _LOGGER.exception("Failed to load data status")
         status["error"] = str(e)
 
     return status
@@ -142,7 +143,8 @@ def _get_download_sessions() -> list[dict[str, Any]]:
         sessions = archive.get_download_sessions(limit=20)
         archive.close()
         return [dict(s) for s in sessions]
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
+        _LOGGER.exception("Failed to load download sessions")
         return []
 
 
@@ -524,7 +526,8 @@ def render_data_browser() -> None:
             23, 59, 59, tzinfo=UTC,
         )
         bars = catalog.get_bars(symbol, interval, start=start_dt, end=end_dt)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
+        _LOGGER.exception("Error loading data for browser")
         st.error(f"Error loading data: {e}")
         return
 

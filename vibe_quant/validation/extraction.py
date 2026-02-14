@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ns_to_isoformat(ns_timestamp: Any) -> str:
+def _ns_to_isoformat(ns_timestamp: object) -> str:
     """Convert a nanosecond Unix timestamp to ISO 8601 string.
 
     NautilusTrader Position.ts_opened / ts_closed are uint64
@@ -253,6 +253,19 @@ def extract_trades(
             entry_fee = abs(pos_fees) / 2.0
             exit_fee = abs(pos_fees) / 2.0
 
+        # TODO: NT Position does not expose which child order (SL/TP/signal)
+        # triggered the close. Detecting exit_reason from price vs SL/TP
+        # levels requires correlating with OrderFilled events, which is not
+        # readily available from the Position object alone. Defaulting to
+        # "signal" for now.
+        exit_reason = "signal"
+
+        # TODO: NT Position does not expose cumulative funding fees paid
+        # during the position lifetime. The funding_fees field defaults
+        # to 0.0 until NT provides this data or we accumulate it from
+        # FundingRate events during the backtest.
+        funding_fees = 0.0
+
         trade = TradeRecord(
             symbol=instrument_id,
             direction=direction,
@@ -264,11 +277,12 @@ def extract_trades(
             quantity=quantity,
             entry_fee=entry_fee,
             exit_fee=exit_fee,
+            funding_fees=funding_fees,
             slippage_cost=slippage_cost,
             gross_pnl=realized_pnl + abs(pos_fees),
             net_pnl=realized_pnl,
             roi_percent=roi_pct,
-            exit_reason="signal",
+            exit_reason=exit_reason,
         )
         result.trades.append(trade)
 
@@ -457,11 +471,17 @@ def compute_extended_metrics(result: ValidationResult) -> None:
             # total_return is stored as a decimal fraction from NT stats
             # (e.g. 0.12 = 12%). Use directly — no heuristic conversion.
             total_return_frac = result.total_return
-            if total_return_frac > -1.0:
+            if total_return_frac == -1.0:
+                # 100% loss: CAGR is -1.0 regardless of duration
+                result.cagr = -1.0
+            elif total_return_frac > -1.0:
                 result.cagr = ((1.0 + total_return_frac) ** (365.0 / days)) - 1.0
         except (ValueError, TypeError):
             pass
 
+    # Note: computes volatility from individual trade returns, not daily
+    # equity returns. This may differ from standard annual volatility
+    # measures that use daily mark-to-market returns.
     if len(result.trades) >= 2:
         trade_returns = [t.roi_percent / 100.0 for t in result.trades if t.roi_percent != 0.0]
         if len(trade_returns) >= 2:
