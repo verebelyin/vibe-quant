@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import random
 import time
 from pathlib import Path
@@ -11,12 +12,19 @@ from typing import TYPE_CHECKING, Any
 
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 
 def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, Any]:
-    """Generate deterministic pseudo-backtest metrics for discovery evolution."""
+    """PLACEHOLDER: Generate deterministic pseudo-backtest metrics.
+
+    WARNING: This does NOT run actual backtests. It produces fake metrics
+    derived from chromosome structure for testing the genetic evolution loop.
+    Replace with real screening backtest integration before production use.
+    """
     seed_bytes = repr(chromosome).encode("utf-8")
     seed = int.from_bytes(hashlib.blake2b(seed_bytes, digest_size=8).digest(), "big")
     rng = random.Random(seed)
@@ -90,6 +98,10 @@ def main() -> int:
             timeframe=args.timeframe,
             start_date=args.start_date,
             end_date=args.end_date,
+        )
+        logger.warning(
+            "Using MOCK backtest function — results are synthetic. "
+            "Replace _mock_backtest with real screening integration for production."
         )
         pipeline = DiscoveryPipeline(config=config, backtest_fn=_mock_backtest)
         result = pipeline.run()

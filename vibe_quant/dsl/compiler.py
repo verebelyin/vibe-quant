@@ -37,6 +37,8 @@ _ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "typing",
     "zoneinfo",
     "nautilus_trader",
+    "pandas",
+    "pandas_ta_classic",
     "vibe_quant",
 )
 

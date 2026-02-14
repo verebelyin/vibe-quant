@@ -370,43 +370,65 @@ class ValidationRunner:
         strategy_name: str,
         window_results: list[ValidationResult],
     ) -> ValidationResult:
-        """Aggregate per-window validation results into one persisted result."""
+        """Aggregate per-window validation results into one persisted result.
+
+        Uses compounded returns (not averaged), trade-weighted averages for
+        ratios, and additive sums for counts/costs.
+        """
         if not window_results:
             msg = "Cannot aggregate empty walk-forward result set"
             raise ValidationRunnerError(msg)
 
-        n = float(len(window_results))
+        total_trades = sum(r.total_trades for r in window_results)
+        winning_trades = sum(r.winning_trades for r in window_results)
+        losing_trades = sum(r.losing_trades for r in window_results)
+
+        # Compound returns: prod(1 + r_i) - 1
+        compounded = 1.0
+        for r in window_results:
+            compounded *= 1.0 + r.total_return
+        compounded_return = compounded - 1.0
+
+        # Trade-weighted average for ratios (avoids bias from low-trade windows)
+        def _trade_weighted_avg(attr: str) -> float:
+            if total_trades == 0:
+                return 0.0
+            return sum(
+                getattr(r, attr) * r.total_trades for r in window_results
+            ) / total_trades
+
+        # Win rate from actual counts, not averaged percentages
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
+
         aggregate = ValidationResult(
             run_id=run_id,
             strategy_name=strategy_name,
-            total_return=sum(r.total_return for r in window_results) / n,
-            sharpe_ratio=sum(r.sharpe_ratio for r in window_results) / n,
-            sortino_ratio=sum(r.sortino_ratio for r in window_results) / n,
+            total_return=compounded_return,
+            sharpe_ratio=_trade_weighted_avg("sharpe_ratio"),
+            sortino_ratio=_trade_weighted_avg("sortino_ratio"),
             max_drawdown=max(r.max_drawdown for r in window_results),
-            profit_factor=sum(r.profit_factor for r in window_results) / n,
-            win_rate=sum(r.win_rate for r in window_results) / n,
-            total_trades=sum(r.total_trades for r in window_results),
+            profit_factor=_trade_weighted_avg("profit_factor"),
+            win_rate=win_rate,
+            total_trades=total_trades,
             total_fees=sum(r.total_fees for r in window_results),
             total_funding=sum(r.total_funding for r in window_results),
             total_slippage=sum(r.total_slippage for r in window_results),
             trades=[trade for result in window_results for trade in result.trades],
-            cagr=sum(r.cagr for r in window_results) / n,
-            calmar_ratio=sum(r.calmar_ratio for r in window_results) / n,
-            volatility_annual=sum(r.volatility_annual for r in window_results) / n,
+            cagr=_trade_weighted_avg("cagr"),
+            calmar_ratio=_trade_weighted_avg("calmar_ratio"),
+            volatility_annual=_trade_weighted_avg("volatility_annual"),
             max_drawdown_duration_days=max(
                 r.max_drawdown_duration_days for r in window_results
             ),
-            winning_trades=sum(r.winning_trades for r in window_results),
-            losing_trades=sum(r.losing_trades for r in window_results),
-            avg_trade_duration_hours=sum(
-                r.avg_trade_duration_hours for r in window_results
-            ) / n,
+            winning_trades=winning_trades,
+            losing_trades=losing_trades,
+            avg_trade_duration_hours=_trade_weighted_avg("avg_trade_duration_hours"),
             max_consecutive_wins=max(r.max_consecutive_wins for r in window_results),
             max_consecutive_losses=max(r.max_consecutive_losses for r in window_results),
             largest_win=max(r.largest_win for r in window_results),
             largest_loss=min(r.largest_loss for r in window_results),
-            avg_win=sum(r.avg_win for r in window_results) / n,
-            avg_loss=sum(r.avg_loss for r in window_results) / n,
+            avg_win=_trade_weighted_avg("avg_win"),
+            avg_loss=_trade_weighted_avg("avg_loss"),
             starting_balance=window_results[0].starting_balance,
         )
         return aggregate

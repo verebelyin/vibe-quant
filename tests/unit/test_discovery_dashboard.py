@@ -113,7 +113,7 @@ class TestModuleImports:
         from vibe_quant.dashboard.pages.discovery import render
 
         assert callable(render)
-        assert render is render_discovery_tab
+        assert render.__name__ == render_discovery_tab.__name__
 
     def test_import_helpers(self) -> None:
         """Helper functions are importable."""

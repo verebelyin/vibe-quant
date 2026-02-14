@@ -85,9 +85,14 @@ class Operand:
         if s.lower() in price_refs:
             return cls(value=s.lower(), is_indicator=False, is_price=True)
 
-        # Try to parse as numeric (only if no dot-notation indicator)
-        # A pure numeric like "3.5" has no alpha chars; "macd.histogram" does
-        if not any(c.isalpha() for c in s) or "." not in s:
+        # Try to parse as numeric. We skip only when the string has BOTH
+        # alpha chars AND a dot — that pattern is a dot-notation indicator
+        # like "macd.histogram". Pure numbers ("3.5", "42") and plain alpha
+        # names ("rsi") both go through float() — the latter fails harmlessly
+        # and falls through to indicator resolution below.
+        has_alpha = any(c.isalpha() for c in s)
+        has_dot = "." in s
+        if not has_alpha or not has_dot:
             try:
                 return cls(value=float(s), is_indicator=False, is_price=False)
             except ValueError:

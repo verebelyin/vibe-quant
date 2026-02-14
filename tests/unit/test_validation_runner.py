@@ -483,7 +483,9 @@ class TestValidationRunner:
         assert stored_result is not None
         assert run is not None
         assert run["status"] == "completed"
-        assert stored_result["total_return"] == pytest.approx(0.02)
+        # Compounded: (1+0.01)*(1+0.02)*(1+0.03) - 1 = 0.061106
+        assert stored_result["total_return"] == pytest.approx(0.061106, rel=1e-4)
+        # Trade-weighted avg (equal trades per window): (2+3+4)*15/45 = 3.0
         assert stored_result["sharpe_ratio"] == pytest.approx(3.0)
         assert stored_result["total_trades"] == 45
         assert len(trades) == 6

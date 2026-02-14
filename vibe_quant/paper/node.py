@@ -310,18 +310,29 @@ class PaperTradingNode:
             raise ConfigurationError(f"Strategy compilation failed: {e}") from e
 
     def _create_live_trading_node(self) -> _TradingNodeLifecycle:
-        """Create and build a NautilusTrader TradingNode instance."""
-        from nautilus_trader.adapters.binance import config as binance_config
-        from nautilus_trader.adapters.binance.config import (
-            BinanceDataClientConfig,
-            BinanceExecClientConfig,
-        )
-        from nautilus_trader.adapters.binance.factories import (
-            BinanceLiveDataClientFactory,
-            BinanceLiveExecClientFactory,
-        )
-        from nautilus_trader.live.config import TradingNodeConfig
-        from nautilus_trader.live.node import TradingNode
+        """Create and build a NautilusTrader TradingNode instance.
+
+        Raises:
+            ConfigurationError: If NautilusTrader or Binance adapter
+                dependencies are not installed or incompatible.
+        """
+        try:
+            from nautilus_trader.adapters.binance import config as binance_config
+            from nautilus_trader.adapters.binance.config import (
+                BinanceDataClientConfig,
+                BinanceExecClientConfig,
+            )
+            from nautilus_trader.adapters.binance.factories import (
+                BinanceLiveDataClientFactory,
+                BinanceLiveExecClientFactory,
+            )
+            from nautilus_trader.live.config import TradingNodeConfig
+            from nautilus_trader.live.node import TradingNode
+        except ImportError as e:
+            raise ConfigurationError(
+                f"NautilusTrader live trading dependencies not installed: {e}. "
+                "Install nautilus_trader with Binance adapter support."
+            ) from e
 
         account_type_cls = getattr(binance_config, "BinanceAccountType", None)
         if account_type_cls is None:
