@@ -127,7 +127,7 @@ class StrategyCompiler:
 
         # Generate parts
         imports = self._generate_imports(dsl, indicators)
-        config_class = self._generate_config_class(dsl)
+        config_class = self._generate_config_class(dsl, indicator_names)
         strategy_class = self._generate_strategy_class(
             dsl, indicators, timeframes, indicator_names
         )
@@ -299,11 +299,14 @@ class StrategyCompiler:
 
         # Collect unique indicator classes
         nt_classes: dict[str, str] = {}  # class_name -> module_path
+        has_pta = False
         for info in indicators:
             if info.spec.nt_class is not None:
                 class_name = info.spec.nt_class.__name__
                 module_path = info.spec.nt_class.__module__
                 nt_classes[class_name] = module_path
+            elif info.spec.pandas_ta_func is not None:
+                has_pta = True
 
         # Add indicator imports
         if nt_classes:
@@ -312,17 +315,27 @@ class StrategyCompiler:
             for class_name, module_path in sorted(nt_classes.items()):
                 imports.append(f"from {module_path} import {class_name}")
 
+        # Add pandas-ta imports for fallback indicators
+        if has_pta:
+            imports.append("")
+            imports.append("# pandas-ta-classic fallback for indicators without NT class")
+            imports.append("import pandas as pd")
+            imports.append("import pandas_ta_classic as ta")
+
         imports.append("")
         imports.append("if TYPE_CHECKING:")
         imports.append("    pass")
 
         return "\n".join(imports)
 
-    def _generate_config_class(self, dsl: StrategyDSL) -> str:
+    def _generate_config_class(
+        self, dsl: StrategyDSL, indicator_names: list[str] | None = None
+    ) -> str:
         """Generate the Strategy config dataclass.
 
         Args:
             dsl: Parsed DSL
+            indicator_names: Expanded indicator names (includes sub-outputs)
 
         Returns:
             Config class source code
@@ -409,7 +422,7 @@ class StrategyCompiler:
             + dsl.exit_conditions.long
             + dsl.exit_conditions.short
         ):
-            cond = parse_condition(cond_str, list(dsl.indicators.keys()))
+            cond = parse_condition(cond_str, indicator_names or list(dsl.indicators.keys()))
             if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, (int, float)):
                 left_name = str(cond.left.value) if cond.left.is_indicator else str(cond.left.value)
                 value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
@@ -469,6 +482,20 @@ class StrategyCompiler:
             "        self._prev_values: dict[str, float] = {}",
             "",
         ]
+
+        # Add pandas-ta bar buffer if any indicators need it
+        has_pta = any(i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators)
+        if has_pta:
+            lines.extend([
+                "        # Bar data buffer for pandas-ta indicators",
+                "        self._pta_close: list[float] = []",
+                "        self._pta_high: list[float] = []",
+                "        self._pta_low: list[float] = []",
+                "        self._pta_open: list[float] = []",
+                "        self._pta_volume: list[float] = []",
+                "        self._pta_values: dict[str, float] = {}",
+                "",
+            ])
 
         # Add on_start method
         on_start = self._generate_on_start(dsl, indicators, timeframes)
@@ -596,12 +623,9 @@ class StrategyCompiler:
         config = info.config
         spec = info.spec
 
-        if spec.nt_class is None:
-            # TODO: Handle pandas-ta fallback
-            lines.append(
-                f"    # WARNING: {info.name} ({config.type}) has no NT class, using placeholder"
-            )
-            lines.append(f"    {info.indicator_var} = None")
+        if spec.nt_class is None and spec.pandas_ta_func is not None:
+            # pandas-ta fallback: store config for _update_pta_indicators()
+            lines.append(f"    # {info.name} ({config.type}): pandas-ta fallback via ta.{spec.pandas_ta_func}")
             return lines
 
         class_name = spec.nt_class.__name__
@@ -655,6 +679,8 @@ class StrategyCompiler:
         Returns:
             on_bar method source code
         """
+        has_pta = any(i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators)
+
         lines = [
             "def on_bar(self, bar: Bar) -> None:",
             '    """Handle bar updates."""',
@@ -662,11 +688,27 @@ class StrategyCompiler:
             "    if bar.bar_type != self.primary_bar_type:",
             "        return",
             "",
+        ]
+
+        # Feed bar data to pandas-ta buffer before indicators_ready check
+        if has_pta:
+            lines.extend([
+                "    # Feed bar data to pandas-ta buffer",
+                "    self._pta_close.append(float(bar.close))",
+                "    self._pta_high.append(float(bar.high))",
+                "    self._pta_low.append(float(bar.low))",
+                "    self._pta_open.append(float(bar.open))",
+                "    self._pta_volume.append(float(bar.volume))",
+                "    self._update_pta_indicators()",
+                "",
+            ])
+
+        lines.extend([
             "    # Check if indicators are ready",
             "    if not self._indicators_ready():",
             "        return",
             "",
-        ]
+        ])
 
         # Time filters
         if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
@@ -749,6 +791,15 @@ class StrategyCompiler:
             if info.spec.nt_class is not None:
                 lines.append(f"    if not {info.indicator_var}.initialized:")
                 lines.append("        return False")
+            elif info.spec.pandas_ta_func is not None:
+                # Check pandas-ta indicator has computed a value
+                lines.append(f'    if "{info.name}" not in self._pta_values:')
+                lines.append("        return False")
+                # Also check multi-output sub-names
+                if info.spec.output_names != ("value",):
+                    for output_name in info.spec.output_names:
+                        lines.append(f'    if "{info.name}_{output_name}" not in self._pta_values:')
+                        lines.append("        return False")
         lines.append("    return True")
         lines.append("")
 
@@ -759,6 +810,12 @@ class StrategyCompiler:
         # _update_prev_values
         lines.extend(self._generate_update_prev_values(indicators))
         lines.append("")
+
+        # _update_pta_indicators (if any pandas-ta indicators exist)
+        pta_indicators = [i for i in indicators if i.spec.nt_class is None and i.spec.pandas_ta_func is not None]
+        if pta_indicators:
+            lines.extend(self._generate_update_pta_indicators(pta_indicators))
+            lines.append("")
 
         # Time filter method
         lines.extend(self._generate_time_filter_method(dsl.time_filters))
@@ -834,9 +891,15 @@ class StrategyCompiler:
         ]
 
         for info in indicators:
-            if info.spec.nt_class is None:
+            if info.spec.nt_class is None and info.spec.pandas_ta_func is not None:
+                # pandas-ta fallback: read from _pta_values buffer
                 lines.append(f'    if name == "{info.name}":')
-                lines.append("        return 0.0  # Placeholder")
+                lines.append(f'        return self._pta_values.get("{info.name}", 0.0)')
+                # Multi-output sub-names
+                if info.spec.output_names != ("value",):
+                    for output_name in info.spec.output_names:
+                        lines.append(f'    if name == "{info.name}_{output_name}":')
+                        lines.append(f'        return self._pta_values.get("{info.name}_{output_name}", 0.0)')
                 continue
 
             nt_attr = self._get_default_output_attr(info)
@@ -892,10 +955,10 @@ class StrategyCompiler:
             '    """Store current indicator values for crossover detection."""',
         ]
 
-        has_nt = False
+        has_any = False
         for info in indicators:
             if info.spec.nt_class is not None:
-                has_nt = True
+                has_any = True
                 nt_attr = self._get_default_output_attr(info)
                 lines.append(
                     f'    self._prev_values["{info.name}"] = float({info.indicator_var}.{nt_attr})'
@@ -907,11 +970,126 @@ class StrategyCompiler:
                         lines.append(
                             f'    self._prev_values["{info.name}_{output_name}"] = float({info.indicator_var}.{attr})'
                         )
+            elif info.spec.pandas_ta_func is not None:
+                has_any = True
+                lines.append(
+                    f'    self._prev_values["{info.name}"] = self._pta_values.get("{info.name}", 0.0)'
+                )
+                if info.spec.output_names != ("value",):
+                    for output_name in info.spec.output_names:
+                        lines.append(
+                            f'    self._prev_values["{info.name}_{output_name}"] = self._pta_values.get("{info.name}_{output_name}", 0.0)'
+                        )
 
-        if not has_nt:
+        if not has_any:
             lines.append("    pass")
 
         return lines
+
+    def _generate_update_pta_indicators(
+        self, pta_indicators: list[IndicatorInfo]
+    ) -> list[str]:
+        """Generate _update_pta_indicators method for pandas-ta fallback.
+
+        Computes pandas-ta indicators from accumulated bar data buffer.
+        Called on each bar before _indicators_ready check.
+
+        Args:
+            pta_indicators: Indicators with nt_class=None and pandas_ta_func set
+
+        Returns:
+            Method source code as lines
+        """
+        lines = [
+            "def _update_pta_indicators(self) -> None:",
+            '    """Compute pandas-ta indicators from bar buffer."""',
+        ]
+
+        for info in pta_indicators:
+            spec = info.spec
+            config = info.config
+            func_name = spec.pandas_ta_func
+
+            # Determine minimum lookback from indicator params
+            lookback = self._get_pta_lookback(info)
+
+            lines.append(f"    # {info.name} ({config.type}) via ta.{func_name}")
+            lines.append(f"    if len(self._pta_close) >= {lookback}:")
+
+            if config.type == "ICHIMOKU":
+                # Ichimoku returns (ichimoku_df, span_df) tuple
+                tenkan = config.period or spec.default_params.get("tenkan", 9)
+                kijun = spec.default_params.get("kijun", 26)
+                senkou = spec.default_params.get("senkou", 52)
+                lines.extend([
+                    "        _high = pd.Series(self._pta_high)",
+                    "        _low = pd.Series(self._pta_low)",
+                    "        _close = pd.Series(self._pta_close)",
+                    f"        _ichi = ta.ichimoku(_high, _low, _close, tenkan={tenkan}, kijun={kijun}, senkou={senkou})",
+                    "        if _ichi is not None and isinstance(_ichi, tuple) and len(_ichi) >= 1:",
+                    "            _df = _ichi[0]",
+                    "            if _df is not None and len(_df) > 0:",
+                    "                _last = _df.iloc[-1]",
+                    f'                if not pd.isna(_last.iloc[0]):',
+                    f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
+                    f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
+                    f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',
+                    "                    if len(_last) > 2:",
+                    f'                        self._pta_values["{info.name}_span_a"] = float(_last.iloc[2])',
+                    "                    if len(_last) > 3:",
+                    f'                        self._pta_values["{info.name}_span_b"] = float(_last.iloc[3])',
+                ])
+            elif config.type == "VOLSMA":
+                # SMA applied to volume
+                period = config.period or spec.default_params.get("period", 20)
+                lines.extend([
+                    "        _vol = pd.Series(self._pta_volume)",
+                    f"        _result = ta.sma(_vol, length={period})",
+                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                ])
+            elif config.type == "WILLR":
+                # Williams %R needs high, low, close
+                period = config.period or spec.default_params.get("period", 14)
+                lines.extend([
+                    "        _high = pd.Series(self._pta_high)",
+                    "        _low = pd.Series(self._pta_low)",
+                    "        _close = pd.Series(self._pta_close)",
+                    f"        _result = ta.willr(_high, _low, _close, length={period})",
+                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                ])
+            else:
+                # Generic single-output indicator (TEMA, etc.) on close series
+                period = config.period or spec.default_params.get("period", 14)
+                source = config.source or "close"
+                source_var = f"self._pta_{source}" if source in ("close", "high", "low", "open", "volume") else "self._pta_close"
+                lines.extend([
+                    f"        _series = pd.Series({source_var})",
+                    f"        _result = ta.{func_name}(_series, length={period})",
+                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                ])
+
+        return lines
+
+    @staticmethod
+    def _get_pta_lookback(info: IndicatorInfo) -> int:
+        """Get minimum lookback bars needed for a pandas-ta indicator."""
+        config = info.config
+        spec = info.spec
+        if config.type == "ICHIMOKU":
+            return max(
+                spec.default_params.get("tenkan", 9),
+                spec.default_params.get("kijun", 26),
+                spec.default_params.get("senkou", 52),
+            )
+        if config.type == "TEMA":
+            # TEMA needs ~3x period for convergence
+            period = config.period or spec.default_params.get("period", 14)
+            return period * 3
+        period = config.period or spec.default_params.get("period", 14)
+        return period
 
     def _generate_time_filter_method(self, time_filters: TimeFilterConfig) -> list[str]:
         """Generate _check_time_filters method.

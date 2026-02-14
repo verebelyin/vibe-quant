@@ -29,8 +29,8 @@ class TestTemaFallback:
         assert spec is not None
         assert spec.nt_class is None
 
-    def test_tema_strategy_compiles_without_none_indicator(self) -> None:
-        """Strategy with TEMA should compile; generated code should not assign None."""
+    def test_tema_strategy_compiles_with_pandas_ta_fallback(self) -> None:
+        """Strategy with TEMA should compile with pandas-ta fallback wired in."""
         yaml_content = """
 name: tema_test
 timeframe: 5m
@@ -54,8 +54,98 @@ take_profit:
         # Should be valid Python
         compile(source, "<generated>", "exec")
         # Should NOT contain assignment to None that would crash at runtime
-        # (the placeholder comment is acceptable, but using .initialized on None is not)
+        assert "self.ind_tema = None" not in source
         assert "self.ind_tema.initialized" not in source
+        # Should have pandas-ta imports
+        assert "import pandas_ta_classic as ta" in source
+        assert "import pandas as pd" in source
+        # Should have bar buffer init
+        assert "self._pta_close" in source
+        assert "self._pta_values" in source
+        # Should compute TEMA via ta.tema
+        assert "ta.tema" in source
+        # Should read from _pta_values not return hardcoded 0.0
+        assert '_pta_values.get("tema"' in source
+        # Should check readiness via _pta_values
+        assert '"tema" not in self._pta_values' in source
+
+    def test_willr_strategy_compiles_with_pandas_ta(self) -> None:
+        """Strategy with WILLR should compile with pandas-ta fallback."""
+        yaml_content = """
+name: willr_test
+timeframe: 5m
+indicators:
+  willr:
+    type: WILLR
+    period: 14
+entry_conditions:
+  long:
+    - willr < -80
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0
+"""
+        dsl = parse_strategy_string(yaml_content)
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        compile(source, "<generated>", "exec")
+        assert "ta.willr" in source
+        assert '_pta_values.get("willr"' in source
+
+    def test_ichimoku_strategy_compiles_with_multi_output(self) -> None:
+        """Strategy with ICHIMOKU should compile with multi-output pandas-ta."""
+        yaml_content = """
+name: ichi_test
+timeframe: 5m
+indicators:
+  ichimoku:
+    type: ICHIMOKU
+entry_conditions:
+  long:
+    - ichimoku.conversion > ichimoku.base
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0
+"""
+        dsl = parse_strategy_string(yaml_content)
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        compile(source, "<generated>", "exec")
+        assert "ta.ichimoku" in source
+        assert '"ichimoku_conversion"' in source
+        assert '"ichimoku_base"' in source
+
+    def test_volsma_uses_volume_series(self) -> None:
+        """VOLSMA should apply SMA to volume, not close price."""
+        yaml_content = """
+name: volsma_test
+timeframe: 5m
+indicators:
+  volsma:
+    type: VOLSMA
+    period: 20
+entry_conditions:
+  long:
+    - volsma > 0
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0
+"""
+        dsl = parse_strategy_string(yaml_content)
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        compile(source, "<generated>", "exec")
+        assert "self._pta_volume" in source
+        assert "ta.sma" in source
 
 
 # =============================================================================
