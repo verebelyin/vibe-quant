@@ -207,10 +207,11 @@ class TestFilterByMetrics:
         filters = MetricFilters()
         result = filter_by_metrics(sample_metrics, filters)
 
-        # First two should pass, third fails drawdown, fourth fails min_trades
-        assert len(result) == 2
+        # First two and fourth pass; third fails drawdown (0.35 > 0.3)
+        assert len(result) == 3
         assert result[0].parameters == {"p1": 1}
         assert result[1].parameters == {"p1": 2}
+        assert result[2].parameters == {"p1": 4}
 
     def test_min_sharpe_filter(self) -> None:
         """Results below min_sharpe should be filtered out."""
@@ -254,7 +255,7 @@ class TestFilterByMetrics:
             BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, total_trades=30),
             BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, total_trades=100),
         ]
-        filters = MetricFilters(max_drawdown=1.0)
+        filters = MetricFilters(min_trades=50, max_drawdown=1.0)
         result = filter_by_metrics(metrics, filters)
 
         assert len(result) == 1

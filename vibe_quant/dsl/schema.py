@@ -80,13 +80,13 @@ class IndicatorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: str = Field(..., description="Indicator type (RSI, EMA, etc.)")
-    period: int | None = Field(default=None, ge=1, le=500, description="Lookback period")
+    period: int | None = Field(default=None, ge=1, le=2000, description="Lookback period")
     source: str = Field(default="close", description="Price source")
     timeframe: str | None = Field(default=None, description="Timeframe override")
 
     # MACD-specific
-    fast_period: int | None = Field(default=None, ge=1, le=200)
-    slow_period: int | None = Field(default=None, ge=1, le=500)
+    fast_period: int | None = Field(default=None, ge=1, le=500)
+    slow_period: int | None = Field(default=None, ge=1, le=2000)
     signal_period: int | None = Field(default=None, ge=1, le=100)
 
     # Bollinger Bands / Keltner

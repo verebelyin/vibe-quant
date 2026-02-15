@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import logging
 import sys
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
@@ -361,6 +364,7 @@ class StrategyCompiler:
         # Add risk/sizing parameter (overridable via strategy config or sweep params)
         lines.append("    # Position sizing (override via ImportableStrategyConfig.config)")
         lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
+        lines.append("    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)")
         lines.append("")
 
         # Add indicator parameters
@@ -736,7 +740,10 @@ class StrategyCompiler:
             lines.append("        if self._check_long_entry(bar):")
             lines.append("            self._submit_long_entry(bar)")
         if dsl.entry_conditions.short:
-            lines.append("        elif self._check_short_entry(bar):")
+            if dsl.entry_conditions.long:
+                lines.append("        elif self._check_short_entry(bar):")
+            else:
+                lines.append("        if self._check_short_entry(bar):")
             lines.append("            self._submit_short_entry(bar)")
 
         # Exit conditions
@@ -915,6 +922,13 @@ class StrategyCompiler:
             if info.spec.output_names != ("value",):
                 for output_name in info.spec.output_names:
                     attr = self._output_to_nt_attr(info.config.type, output_name)
+                    if info.config.type == "MACD" and output_name in ("signal", "histogram"):
+                        logger.warning(
+                            "MACD %s output '%s' not available in NT — "
+                            "returns MACD line (.value) instead. "
+                            "Use pandas-ta fallback for signal/histogram.",
+                            info.name, output_name,
+                        )
                     lines.append(f'    if name == "{info.name}_{output_name}":')
                     lines.append(f"        return float({info.indicator_var}.{attr})")
 
@@ -924,6 +938,14 @@ class StrategyCompiler:
     @staticmethod
     def _output_to_nt_attr(indicator_type: str, output_name: str) -> str:
         """Map DSL output name to NautilusTrader attribute name."""
+        # MACD: NT only exposes .value (the MACD line = fast_ema - slow_ema).
+        # Signal line and histogram are NOT available in NT's MACD class.
+        if indicator_type == "MACD":
+            if output_name == "macd":
+                return "value"
+            # signal/histogram not available — map to value to prevent crash,
+            # but log warning at codegen time (caller should prefer pandas-ta fallback)
+            return "value"
         # STOCH outputs use value_ prefix in NT
         if indicator_type == "STOCH":
             return f"value_{output_name}"  # k -> value_k, d -> value_d

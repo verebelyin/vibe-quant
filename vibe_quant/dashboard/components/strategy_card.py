@@ -25,6 +25,14 @@ def render_strategy_card(manager: StateManager, strategy: dict[str, Any]) -> Non
     )
 
     dsl = strategy.get("dsl_config", {})
+    if isinstance(dsl, str):
+        import json
+        try:
+            dsl = json.loads(dsl)
+        except (json.JSONDecodeError, TypeError):
+            dsl = {}
+    if not isinstance(dsl, dict):
+        dsl = {}
     is_active = strategy["is_active"]
     indicators = dsl.get("indicators", {})
     entry = dsl.get("entry_conditions", {})

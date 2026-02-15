@@ -28,7 +28,7 @@ class MetricFilters:
     min_sharpe: float = 0.0
     min_profit_factor: float = 1.0
     max_drawdown: float = 0.3
-    min_trades: int = 50
+    min_trades: int = 10
 
 
 @dataclass
