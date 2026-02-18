@@ -1,0 +1,5072 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "vibe-quant API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/backtest/screening": {
+      "post": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Launch Screening",
+        "operationId": "launch_screening_api_backtest_screening_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BacktestLaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/validation": {
+      "post": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Launch Validation",
+        "operationId": "launch_validation_api_backtest_validation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BacktestLaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs": {
+      "get": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "List Jobs",
+        "operationId": "list_jobs_api_backtest_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobStatusResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Jobs Api Backtest Jobs Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}": {
+      "get": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Get Job",
+        "operationId": "get_job_api_backtest_jobs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Kill Job",
+        "operationId": "kill_job_api_backtest_jobs__run_id__delete",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/sync": {
+      "post": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Sync Job",
+        "operationId": "sync_job_api_backtest_jobs__run_id__sync_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/validate-coverage": {
+      "post": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Validate Coverage",
+        "operationId": "validate_coverage_api_backtest_validate_coverage_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/cleanup-stale": {
+      "post": {
+        "tags": [
+          "backtest"
+        ],
+        "summary": "Cleanup Stale Jobs",
+        "operationId": "cleanup_stale_jobs_api_backtest_jobs_cleanup_stale_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Cleanup Stale Jobs Api Backtest Jobs Cleanup Stale Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/status": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Data Status",
+        "operationId": "data_status_api_data_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/coverage": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Data Coverage",
+        "operationId": "data_coverage_api_data_coverage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataCoverageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/symbols": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "List Symbols",
+        "operationId": "list_symbols_api_data_symbols_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Symbols Api Data Symbols Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/ingest/preview": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Ingest Preview",
+        "operationId": "ingest_preview_api_data_ingest_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestPreviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/ingest": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Start Ingest",
+        "operationId": "start_ingest_api_data_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Start Ingest Api Data Ingest Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/update": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Start Update",
+        "operationId": "start_update_api_data_update_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Start Update Api Data Update Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/rebuild": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Rebuild Catalog",
+        "operationId": "rebuild_catalog_api_data_rebuild_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rebuild Catalog Api Data Rebuild Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/browse/{symbol}": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Browse Data",
+        "operationId": "browse_data_api_data_browse__symbol__get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1m",
+              "title": "Interval"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseDataResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/quality/{symbol}": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Data Quality",
+        "operationId": "data_quality_api_data_quality__symbol__get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataQualityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/history": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Download History",
+        "operationId": "download_history_api_data_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Download History Api Data History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/launch": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Launch Discovery",
+        "operationId": "launch_discovery_api_discovery_launch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryLaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/jobs": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "List Discovery Jobs",
+        "operationId": "list_discovery_jobs_api_discovery_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiscoveryJobResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Discovery Jobs Api Discovery Jobs Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/jobs/{run_id}": {
+      "delete": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Kill Discovery Job",
+        "operationId": "kill_discovery_job_api_discovery_jobs__run_id__delete",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/results/latest": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Get Latest Results",
+        "operationId": "get_latest_results_api_discovery_results_latest_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryResultResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/results/{run_id}": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Get Discovery Results",
+        "operationId": "get_discovery_results_api_discovery_results__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/results/{run_id}/export/{strategy_index}": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Export Discovered Strategy",
+        "operationId": "export_discovered_strategy_api_discovery_results__run_id__export__strategy_index__post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "strategy_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Index"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Export Discovered Strategy Api Discovery Results  Run Id  Export  Strategy Index  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/indicator-pool": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Get Indicator Pool",
+        "operationId": "get_indicator_pool_api_discovery_indicator_pool_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Indicator Pool Api Discovery Indicator Pool Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/heartbeat": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Heartbeat",
+        "operationId": "heartbeat_api_backtest_jobs__run_id__heartbeat_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Heartbeat Api Backtest Jobs  Run Id  Heartbeat Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/trades": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Save Trades",
+        "operationId": "save_trades_api_backtest_jobs__run_id__trades_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradesBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "title": "Response Save Trades Api Backtest Jobs  Run Id  Trades Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/sweep-results": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Save Sweep Results",
+        "operationId": "save_sweep_results_api_backtest_jobs__run_id__sweep_results_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SweepResultsBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "title": "Response Save Sweep Results Api Backtest Jobs  Run Id  Sweep Results Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/mark-pareto": {
+      "post": {
+        "tags": [
+          "internal"
+        ],
+        "summary": "Mark Pareto",
+        "operationId": "mark_pareto_api_backtest_jobs__run_id__mark_pareto_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParetoMarkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "title": "Response Mark Pareto Api Backtest Jobs  Run Id  Mark Pareto Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/start": {
+      "post": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Start Paper",
+        "operationId": "start_paper_api_paper_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/halt": {
+      "post": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Halt Paper",
+        "operationId": "halt_paper_api_paper_halt_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Halt Paper Api Paper Halt Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/resume": {
+      "post": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Resume Paper",
+        "operationId": "resume_paper_api_paper_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Resume Paper Api Paper Resume Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/stop": {
+      "post": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Stop Paper",
+        "operationId": "stop_paper_api_paper_stop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Stop Paper Api Paper Stop Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/status": {
+      "get": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Get Status",
+        "operationId": "get_status_api_paper_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/positions": {
+      "get": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Get Positions",
+        "operationId": "get_positions_api_paper_positions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PaperPositionResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Get Positions Api Paper Positions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/orders": {
+      "get": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Get Orders",
+        "operationId": "get_orders_api_paper_orders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Orders Api Paper Orders Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/checkpoints": {
+      "get": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Get Checkpoints",
+        "operationId": "get_checkpoints_api_paper_checkpoints_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CheckpointResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Get Checkpoints Api Paper Checkpoints Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/paper/sessions/{trader_id}": {
+      "get": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Get Session",
+        "operationId": "get_session_api_paper_sessions__trader_id__get",
+        "parameters": [
+          {
+            "name": "trader_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trader Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CheckpointResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Session Api Paper Sessions  Trader Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "List Runs",
+        "operationId": "list_runs_api_results_runs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Id"
+            }
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start Date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/compare": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Compare Runs",
+        "operationId": "compare_runs_api_results_compare_get",
+        "parameters": [
+          {
+            "name": "run_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated run IDs",
+              "default": "",
+              "title": "Run Ids"
+            },
+            "description": "Comma-separated run IDs"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Run Summary",
+        "operationId": "get_run_summary_api_results_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/trades": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Trades",
+        "operationId": "get_trades_api_results_runs__run_id__trades_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TradeResponse"
+                  },
+                  "title": "Response Get Trades Api Results Runs  Run Id  Trades Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/sweeps": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Sweeps",
+        "operationId": "get_sweeps_api_results_runs__run_id__sweeps_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "pareto_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Pareto Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SweepResultResponse"
+                  },
+                  "title": "Response Get Sweeps Api Results Runs  Run Id  Sweeps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/equity-curve": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Equity Curve",
+        "operationId": "get_equity_curve_api_results_runs__run_id__equity_curve_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EquityCurvePoint"
+                  },
+                  "title": "Response Get Equity Curve Api Results Runs  Run Id  Equity Curve Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/drawdown": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Drawdown",
+        "operationId": "get_drawdown_api_results_runs__run_id__drawdown_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DrawdownPoint"
+                  },
+                  "title": "Response Get Drawdown Api Results Runs  Run Id  Drawdown Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/monthly-returns": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Monthly Returns",
+        "operationId": "get_monthly_returns_api_results_runs__run_id__monthly_returns_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonthlyReturn"
+                  },
+                  "title": "Response Get Monthly Returns Api Results Runs  Run Id  Monthly Returns Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/notes": {
+      "put": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Update Notes",
+        "operationId": "update_notes_api_results_runs__run_id__notes_put",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotesUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestResultResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/export/csv": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Export Csv",
+        "operationId": "export_csv_api_results_runs__run_id__export_csv_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/sizing": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "List Sizing Configs",
+        "operationId": "list_sizing_configs_api_settings_sizing_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SizingConfigResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Sizing Configs Api Settings Sizing Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Create Sizing Config",
+        "operationId": "create_sizing_config_api_settings_sizing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SizingConfigCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SizingConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/sizing/{config_id}": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Sizing Config",
+        "operationId": "get_sizing_config_api_settings_sizing__config_id__get",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SizingConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Sizing Config",
+        "operationId": "update_sizing_config_api_settings_sizing__config_id__put",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SizingConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SizingConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Delete Sizing Config",
+        "operationId": "delete_sizing_config_api_settings_sizing__config_id__delete",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/risk": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "List Risk Configs",
+        "operationId": "list_risk_configs_api_settings_risk_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RiskConfigResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Risk Configs Api Settings Risk Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Create Risk Config",
+        "operationId": "create_risk_config_api_settings_risk_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskConfigCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/risk/{config_id}": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Risk Config",
+        "operationId": "get_risk_config_api_settings_risk__config_id__get",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Risk Config",
+        "operationId": "update_risk_config_api_settings_risk__config_id__put",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RiskConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Delete Risk Config",
+        "operationId": "delete_risk_config_api_settings_risk__config_id__delete",
+        "parameters": [
+          {
+            "name": "config_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/latency-presets": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "List Latency Presets",
+        "operationId": "list_latency_presets_api_settings_latency_presets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LatencyPreset"
+                  },
+                  "type": "array",
+                  "title": "Response List Latency Presets Api Settings Latency Presets Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/system-info": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get System Info",
+        "operationId": "get_system_info_api_settings_system_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemInfoResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/database": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Database Info",
+        "operationId": "get_database_info_api_settings_database_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseInfoResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Switch Database",
+        "operationId": "switch_database_api_settings_database_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatabaseSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseInfoResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/strategies": {
+      "get": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "List Strategies",
+        "operationId": "list_strategies_api_strategies_get",
+        "parameters": [
+          {
+            "name": "active_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Active Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Create Strategy",
+        "operationId": "create_strategy_api_strategies_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/strategies/templates": {
+      "get": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "List Templates",
+        "operationId": "list_templates_api_strategies_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Templates Api Strategies Templates Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/strategies/{strategy_id}": {
+      "get": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Get Strategy",
+        "operationId": "get_strategy_api_strategies__strategy_id__get",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Update Strategy",
+        "operationId": "update_strategy_api_strategies__strategy_id__put",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Delete Strategy",
+        "operationId": "delete_strategy_api_strategies__strategy_id__delete",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/strategies/{strategy_id}/validate": {
+      "post": {
+        "tags": [
+          "strategies"
+        ],
+        "summary": "Validate Strategy",
+        "operationId": "validate_strategy_api_strategies__strategy_id__validate_post",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backtest/jobs/{run_id}/progress": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "Backtest Progress",
+        "operationId": "backtest_progress_api_backtest_jobs__run_id__progress_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/data/ingest/{job_id}/progress": {
+      "get": {
+        "tags": [
+          "progress"
+        ],
+        "summary": "Data Ingest Progress",
+        "operationId": "data_ingest_progress_api_data_ingest__job_id__progress_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BacktestLaunchRequest": {
+        "properties": {
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "start_date": {
+            "type": "string",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "title": "End Date"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "sizing_config_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Config Id"
+          },
+          "risk_config_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Config Id"
+          },
+          "latency_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Preset"
+          },
+          "overfitting_filters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overfitting Filters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_id",
+          "symbols",
+          "timeframe",
+          "start_date",
+          "end_date",
+          "parameters"
+        ],
+        "title": "BacktestLaunchRequest"
+      },
+      "BacktestResultResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "total_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return"
+          },
+          "cagr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cagr"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "sortino_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sortino Ratio"
+          },
+          "calmar_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calmar Ratio"
+          },
+          "max_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown"
+          },
+          "max_drawdown_duration_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Duration Days"
+          },
+          "volatility_annual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volatility Annual"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "winning_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winning Trades"
+          },
+          "losing_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Losing Trades"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "avg_win": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Win"
+          },
+          "avg_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Loss"
+          },
+          "largest_win": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Largest Win"
+          },
+          "largest_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Largest Loss"
+          },
+          "avg_trade_duration_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Trade Duration Hours"
+          },
+          "max_consecutive_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Consecutive Wins"
+          },
+          "max_consecutive_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Consecutive Losses"
+          },
+          "total_fees": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Fees"
+          },
+          "total_funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Funding"
+          },
+          "total_slippage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Slippage"
+          },
+          "deflated_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deflated Sharpe"
+          },
+          "walk_forward_efficiency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Walk Forward Efficiency"
+          },
+          "purged_kfold_mean_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purged Kfold Mean Sharpe"
+          },
+          "execution_time_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Time Seconds"
+          },
+          "starting_balance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Balance"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "total_return",
+          "cagr",
+          "sharpe_ratio",
+          "sortino_ratio",
+          "calmar_ratio",
+          "max_drawdown",
+          "max_drawdown_duration_days",
+          "volatility_annual",
+          "total_trades",
+          "winning_trades",
+          "losing_trades",
+          "win_rate",
+          "profit_factor",
+          "avg_win",
+          "avg_loss",
+          "largest_win",
+          "largest_loss",
+          "avg_trade_duration_hours",
+          "max_consecutive_wins",
+          "max_consecutive_losses",
+          "total_fees",
+          "total_funding",
+          "total_slippage",
+          "deflated_sharpe",
+          "walk_forward_efficiency",
+          "purged_kfold_mean_sharpe",
+          "execution_time_seconds",
+          "starting_balance",
+          "notes",
+          "created_at"
+        ],
+        "title": "BacktestResultResponse"
+      },
+      "BacktestRunResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "run_mode": {
+            "type": "string",
+            "title": "Run Mode"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "start_date": {
+            "type": "string",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "title": "End Date"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "strategy_id",
+          "run_mode",
+          "symbols",
+          "timeframe",
+          "start_date",
+          "end_date",
+          "parameters",
+          "status",
+          "started_at",
+          "completed_at",
+          "error_message",
+          "created_at"
+        ],
+        "title": "BacktestRunResponse"
+      },
+      "BrowseDataResponse": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "interval": {
+            "type": "string",
+            "title": "Interval"
+          },
+          "data": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "interval",
+          "data"
+        ],
+        "title": "BrowseDataResponse"
+      },
+      "CheckpointResponse": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "halt_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Halt Reason"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "state"
+        ],
+        "title": "CheckpointResponse"
+      },
+      "ComparisonResponse": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestResultResponse"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "title": "ComparisonResponse"
+      },
+      "CoverageCheckRequest": {
+        "properties": {
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "start_date": {
+            "type": "string",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "title": "End Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbols",
+          "timeframe",
+          "start_date",
+          "end_date"
+        ],
+        "title": "CoverageCheckRequest"
+      },
+      "CoverageCheckResponse": {
+        "properties": {
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coverage"
+        ],
+        "title": "CoverageCheckResponse"
+      },
+      "DataCoverageItem": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "start_date": {
+            "type": "string",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "title": "End Date"
+          },
+          "kline_count": {
+            "type": "integer",
+            "title": "Kline Count"
+          },
+          "bar_count": {
+            "type": "integer",
+            "title": "Bar Count"
+          },
+          "funding_rate_count": {
+            "type": "integer",
+            "title": "Funding Rate Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "start_date",
+          "end_date",
+          "kline_count",
+          "bar_count",
+          "funding_rate_count"
+        ],
+        "title": "DataCoverageItem"
+      },
+      "DataCoverageResponse": {
+        "properties": {
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/DataCoverageItem"
+            },
+            "type": "array",
+            "title": "Coverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coverage"
+        ],
+        "title": "DataCoverageResponse"
+      },
+      "DataQualityResponse": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "gaps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "quality_score": {
+            "type": "number",
+            "title": "Quality Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "gaps",
+          "quality_score"
+        ],
+        "title": "DataQualityResponse"
+      },
+      "DataStatusResponse": {
+        "properties": {
+          "archive_size_bytes": {
+            "type": "integer",
+            "title": "Archive Size Bytes"
+          },
+          "catalog_size_bytes": {
+            "type": "integer",
+            "title": "Catalog Size Bytes"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "title": "Total Size Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archive_size_bytes",
+          "catalog_size_bytes",
+          "total_size_bytes"
+        ],
+        "title": "DataStatusResponse"
+      },
+      "DatabaseInfoResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "tables"
+        ],
+        "title": "DatabaseInfoResponse"
+      },
+      "DatabaseSwitchRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "DatabaseSwitchRequest"
+      },
+      "DiscoveryJobResponse": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "started_at"
+        ],
+        "title": "DiscoveryJobResponse"
+      },
+      "DiscoveryLaunchRequest": {
+        "properties": {
+          "population": {
+            "type": "integer",
+            "title": "Population"
+          },
+          "generations": {
+            "type": "integer",
+            "title": "Generations"
+          },
+          "mutation_rate": {
+            "type": "number",
+            "title": "Mutation Rate"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Timeframes"
+          },
+          "indicator_pool": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indicator Pool"
+          }
+        },
+        "type": "object",
+        "required": [
+          "population",
+          "generations",
+          "mutation_rate",
+          "symbols",
+          "timeframes"
+        ],
+        "title": "DiscoveryLaunchRequest"
+      },
+      "DiscoveryResultResponse": {
+        "properties": {
+          "strategies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Strategies"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies"
+        ],
+        "title": "DiscoveryResultResponse"
+      },
+      "DrawdownPoint": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "drawdown": {
+            "type": "number",
+            "title": "Drawdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "drawdown"
+        ],
+        "title": "DrawdownPoint"
+      },
+      "EquityCurvePoint": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "equity": {
+            "type": "number",
+            "title": "Equity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "equity"
+        ],
+        "title": "EquityCurvePoint"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IngestPreviewResponse": {
+        "properties": {
+          "total_months": {
+            "type": "integer",
+            "title": "Total Months"
+          },
+          "archived_months": {
+            "type": "integer",
+            "title": "Archived Months"
+          },
+          "new_months": {
+            "type": "integer",
+            "title": "New Months"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_months",
+          "archived_months",
+          "new_months"
+        ],
+        "title": "IngestPreviewResponse"
+      },
+      "IngestRequest": {
+        "properties": {
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "start_date": {
+            "type": "string",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "title": "End Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbols",
+          "start_date",
+          "end_date"
+        ],
+        "title": "IngestRequest"
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "job_type": {
+            "type": "string",
+            "title": "Job Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "is_stale": {
+            "type": "boolean",
+            "title": "Is Stale"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "pid",
+          "job_type",
+          "status",
+          "heartbeat_at",
+          "started_at",
+          "completed_at",
+          "is_stale"
+        ],
+        "title": "JobStatusResponse"
+      },
+      "LatencyPreset": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "base_latency_ms": {
+            "type": "integer",
+            "title": "Base Latency Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "base_latency_ms"
+        ],
+        "title": "LatencyPreset"
+      },
+      "MonthlyReturn": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "month": {
+            "type": "integer",
+            "title": "Month"
+          },
+          "return_pct": {
+            "type": "number",
+            "title": "Return Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "month",
+          "return_pct"
+        ],
+        "title": "MonthlyReturn"
+      },
+      "NotesUpdateRequest": {
+        "properties": {
+          "notes": {
+            "type": "string",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notes"
+        ],
+        "title": "NotesUpdateRequest"
+      },
+      "PaperPositionResponse": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "entry_price": {
+            "type": "number",
+            "title": "Entry Price"
+          },
+          "unrealized_pnl": {
+            "type": "number",
+            "title": "Unrealized Pnl"
+          },
+          "leverage": {
+            "type": "number",
+            "title": "Leverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "direction",
+          "quantity",
+          "entry_price",
+          "unrealized_pnl",
+          "leverage"
+        ],
+        "title": "PaperPositionResponse"
+      },
+      "PaperStartRequest": {
+        "properties": {
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "testnet": {
+            "type": "boolean",
+            "title": "Testnet",
+            "default": false
+          },
+          "sizing_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizing Method"
+          },
+          "max_leverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Leverage"
+          },
+          "max_position_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Position Pct"
+          },
+          "risk_per_trade": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "max_daily_loss_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Daily Loss Pct"
+          },
+          "max_consecutive_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Consecutive Losses"
+          },
+          "max_position_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Position Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_id"
+        ],
+        "title": "PaperStartRequest"
+      },
+      "PaperStatusResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "pnl_metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Metrics"
+          },
+          "trades_count": {
+            "type": "integer",
+            "title": "Trades Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "trades_count"
+        ],
+        "title": "PaperStatusResponse"
+      },
+      "ParetoMarkRequest": {
+        "properties": {
+          "result_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Result Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result_ids"
+        ],
+        "title": "ParetoMarkRequest"
+      },
+      "RiskConfigCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "strategy_level": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Strategy Level"
+          },
+          "portfolio_level": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Portfolio Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "strategy_level",
+          "portfolio_level"
+        ],
+        "title": "RiskConfigCreate"
+      },
+      "RiskConfigResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "strategy_level": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Strategy Level"
+          },
+          "portfolio_level": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Portfolio Level"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "strategy_level",
+          "portfolio_level",
+          "created_at"
+        ],
+        "title": "RiskConfigResponse"
+      },
+      "RiskConfigUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "strategy_level": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Level"
+          },
+          "portfolio_level": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Portfolio Level"
+          }
+        },
+        "type": "object",
+        "title": "RiskConfigUpdate"
+      },
+      "RunListResponse": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestRunResponse"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "title": "RunListResponse"
+      },
+      "SizingConfigCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "method",
+          "config"
+        ],
+        "title": "SizingConfigCreate"
+      },
+      "SizingConfigResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "method",
+          "config",
+          "created_at"
+        ],
+        "title": "SizingConfigResponse"
+      },
+      "SizingConfigUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          }
+        },
+        "type": "object",
+        "title": "SizingConfigUpdate"
+      },
+      "StrategyCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dsl_config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Dsl Config"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "strategy_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "dsl_config"
+        ],
+        "title": "StrategyCreate"
+      },
+      "StrategyListResponse": {
+        "properties": {
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyResponse"
+            },
+            "type": "array",
+            "title": "Strategies"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategies"
+        ],
+        "title": "StrategyListResponse"
+      },
+      "StrategyResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "dsl_config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Dsl Config"
+          },
+          "strategy_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Type"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "dsl_config",
+          "strategy_type",
+          "created_at",
+          "updated_at",
+          "is_active",
+          "version"
+        ],
+        "title": "StrategyResponse"
+      },
+      "StrategyUpdate": {
+        "properties": {
+          "dsl_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dsl Config"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "StrategyUpdate"
+      },
+      "SweepResultResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "sortino_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sortino Ratio"
+          },
+          "max_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown"
+          },
+          "total_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "total_fees": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Fees"
+          },
+          "total_funding": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Funding"
+          },
+          "execution_time_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Time Seconds"
+          },
+          "is_pareto_optimal": {
+            "type": "boolean",
+            "title": "Is Pareto Optimal"
+          },
+          "passed_deflated_sharpe": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed Deflated Sharpe"
+          },
+          "passed_walk_forward": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed Walk Forward"
+          },
+          "passed_purged_kfold": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed Purged Kfold"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "parameters",
+          "sharpe_ratio",
+          "sortino_ratio",
+          "max_drawdown",
+          "total_return",
+          "profit_factor",
+          "win_rate",
+          "total_trades",
+          "total_fees",
+          "total_funding",
+          "execution_time_seconds",
+          "is_pareto_optimal",
+          "passed_deflated_sharpe",
+          "passed_walk_forward",
+          "passed_purged_kfold"
+        ],
+        "title": "SweepResultResponse"
+      },
+      "SweepResultsBatchRequest": {
+        "properties": {
+          "results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "SweepResultsBatchRequest"
+      },
+      "SystemInfoResponse": {
+        "properties": {
+          "nt_version": {
+            "type": "string",
+            "title": "Nt Version"
+          },
+          "python_version": {
+            "type": "string",
+            "title": "Python Version"
+          },
+          "catalog_size_bytes": {
+            "type": "integer",
+            "title": "Catalog Size Bytes"
+          },
+          "db_size_bytes": {
+            "type": "integer",
+            "title": "Db Size Bytes"
+          },
+          "table_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Table Counts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nt_version",
+          "python_version",
+          "catalog_size_bytes",
+          "db_size_bytes",
+          "table_counts"
+        ],
+        "title": "SystemInfoResponse"
+      },
+      "TradeResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "leverage": {
+            "type": "integer",
+            "title": "Leverage"
+          },
+          "entry_time": {
+            "type": "string",
+            "title": "Entry Time"
+          },
+          "exit_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Time"
+          },
+          "entry_price": {
+            "type": "number",
+            "title": "Entry Price"
+          },
+          "exit_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Price"
+          },
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "entry_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Fee"
+          },
+          "exit_fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Fee"
+          },
+          "funding_fees": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funding Fees"
+          },
+          "slippage_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Cost"
+          },
+          "gross_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gross Pnl"
+          },
+          "net_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Pnl"
+          },
+          "roi_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Percent"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "symbol",
+          "direction",
+          "leverage",
+          "entry_time",
+          "exit_time",
+          "entry_price",
+          "exit_price",
+          "quantity",
+          "entry_fee",
+          "exit_fee",
+          "funding_fees",
+          "slippage_cost",
+          "gross_pnl",
+          "net_pnl",
+          "roi_percent",
+          "exit_reason"
+        ],
+        "title": "TradeResponse"
+      },
+      "TradesBatchRequest": {
+        "properties": {
+          "trades": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Trades"
+          }
+        },
+        "type": "object",
+        "required": [
+          "trades"
+        ],
+        "title": "TradesBatchRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidationResult": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid",
+          "errors"
+        ],
+        "title": "ValidationResult"
+      }
+    }
+  }
+}

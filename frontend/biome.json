@@ -1,8 +1,5 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
-  "organizeImports": {
-    "enabled": true
-  },
   "linter": {
     "enabled": true,
     "rules": {
@@ -13,6 +10,9 @@
       },
       "style": {
         "noNonNullAssertion": "off"
+      },
+      "a11y": {
+        "noSvgWithoutTitle": "warn"
       }
     }
   },
@@ -29,6 +29,6 @@
     }
   },
   "files": {
-    "ignore": ["dist", "node_modules", "src/generated"]
+    "includes": ["src/**", "!src/api/generated/**"]
   }
 }
