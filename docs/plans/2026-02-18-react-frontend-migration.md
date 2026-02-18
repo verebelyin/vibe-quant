@@ -2,7 +2,7 @@
 
 > **Status:** Draft — pending approval
 > **Date:** 2026-02-18
-> **Scope:** Replace the Streamlit dashboard (~8,310 LOC) with a React SPA + FastAPI backend
+> **Scope:** Replace the Streamlit dashboard (~8,331 LOC) with a React SPA + FastAPI backend
 > **Approach:** Phased migration with parallel operation — Streamlit continues to work until React reaches feature parity
 
 ---
@@ -36,7 +36,7 @@ The Streamlit dashboard has served well for prototyping but has accumulated **8 
 1. **Real-time WebSocket data** for paper trading (instant position/PnL updates vs 5s polling)
 2. **A reusable API layer** (enables CLI tools, mobile, third-party integrations)
 3. **Component-level rendering** (only changed elements update, not entire pages)
-4. **Professional UI quality** (shadcn/ui provides 200+ polished components)
+4. **Professional UI quality** (shadcn/ui provides 50+ polished accessible components + charts + data tables)
 5. **Elimination of all 8 documented workarounds** in the current codebase
 6. **End-to-end type safety** (Pydantic → OpenAPI → generated TypeScript types)
 
@@ -59,16 +59,16 @@ The Streamlit dashboard has served well for prototyping but has accumulated **8 
 
 | Page | LOC | Complexity | Key Features |
 |------|-----|------------|-------------|
-| Strategy Management | 638 + ~1,150 components | High | Visual/YAML/Split editor, condition builder, indicator catalog, templates, sweep config |
+| Strategy Management | 637 + ~2,769 components | High | Visual/YAML/Split editor, condition builder, indicator catalog, templates, sweep config, **strategy wizard (6-step guided)**, validation summary |
 | Discovery | 573 | High | GA config, real-time fitness chart, top strategies table, export to strategy |
 | Backtest Launch | 286 | Medium | Strategy selector, sweep config, overfitting toggles, job monitoring |
 | Results Analysis | 740 | Very High | 15+ chart types, comparison view, 3D Pareto, trade log, CSV export |
 | Paper Trading | 713 | High | Real-time status, positions table, OS signal controls, checkpoint timeline |
 | Data Management | 760 | High | Ingest form, streaming progress, TradingView candlestick, data quality |
-| Settings | ~200 | Low | Sizing/risk config CRUD, latency presets |
-| App shell + utils | 192 + charts 529 + data_builders 318 | Medium | Navigation, keyboard hack, chart builders, data transforms |
+| Settings | 603 | Medium | Sizing/risk config CRUD, latency presets, **database path switcher**, system info (NT version, Python version, catalog/DB sizes), 5 tabs |
+| App shell + utils | 124 + charts 528 + data_builders 317 | Medium | Navigation, keyboard hack, chart builders, data transforms |
 
-**Total: ~8,310 LOC** across 8 pages, 15 component files, shared utilities, and chart builders.
+**Total: ~8,331 LOC** across 8 pages, 15 component files (2,769 LOC), shared utilities, and chart builders.
 
 ### Backend API Surface (existing, no HTTP layer)
 
@@ -149,7 +149,7 @@ The Streamlit dashboard has served well for prototyping but has accumulated **8 
 | Protocol | Use Case | Direction |
 |----------|----------|-----------|
 | **REST** (TanStack Query) | CRUD operations, data queries, job launch | Request/Response |
-| **WebSocket** (Zustand store) | Job status, paper trading positions, discovery progress | Bidirectional push |
+| **WebSocket** (→ TanStack Query cache) | Job status, paper trading positions, discovery progress | Bidirectional push; updates query cache via `setQueryData` |
 | **SSE** (EventSource) | Backtest progress bars, data ingest log streaming | Server → Client |
 
 ---
@@ -160,30 +160,31 @@ The Streamlit dashboard has served well for prototyping but has accumulated **8 
 
 | Layer | Technology | Version | Rationale |
 |-------|-----------|---------|-----------|
-| Build/Dev | Vite | 6.x | Fastest DX; no SSR needed for internal dashboard |
-| Framework | React | 19.x | Component model; largest ecosystem |
+| Build/Dev | Vite | 7.x | Fastest DX; no SSR needed for internal dashboard (requires Node 20+) |
+| Framework | React | 19.x | Component model; largest ecosystem (19.2.4 current) |
 | Language | TypeScript | 5.x | Type safety; auto-generated from Pydantic |
-| Styling | Tailwind CSS | 4.x | Utility-first; pairs with shadcn/ui |
-| Components | shadcn/ui | latest | 200+ accessible components; copy-paste ownership |
-| Routing | React Router | 7.x | File-based routing; nested layouts |
-| Price Charts | TradingView Lightweight Charts | 4.x | Canvas-based; purpose-built for financial data |
-| Charts | Recharts | 2.x | Simple JSX API for equity curves, histograms, heatmaps |
+| Styling | Tailwind CSS | 4.x | Utility-first; pairs with shadcn/ui; CSS-first config (no `tailwind.config.js`) |
+| Components | shadcn/ui | latest | 50+ accessible components + charts + data tables; copy-paste ownership |
+| Routing | TanStack Router | 1.x | File-based routing for Vite SPA; full TypeScript route param inference |
+| Price Charts | TradingView Lightweight Charts | 5.x | Canvas-based; purpose-built for financial data; multi-pane support |
+| Charts | Recharts | 3.x | Simple JSX API for equity curves, histograms (used by shadcn/ui charts) |
+| 3D Charts | Plotly.js (react-plotly.js) | latest | 3D Pareto surface + heatmaps; ~3MB bundle (code-split, lazy-loaded) |
 | Tables | TanStack Table (via shadcn) | 8.x | Headless; free; integrates with Tailwind |
-| Server State | TanStack Query | 5.x | Caching, dedup, background refetch |
-| Client State | Zustand | 5.x | WebSocket store; UI preferences; lightweight |
-| WebSocket | react-use-websocket | 4.x | Connection lifecycle, reconnection, buffering |
-| Forms | React Hook Form + Zod | latest | Performant forms; schema validation |
-| Type Generation | openapi-typescript | latest | Auto-generate TS types from FastAPI OpenAPI spec |
+| Server State | TanStack Query | 5.x | Caching, dedup, background refetch; WS-driven cache invalidation |
+| Client State | Zustand | 5.x | UI preferences, theme, editor mode; lightweight (pure UI state only) |
+| WebSocket | Custom hooks | — | Thin wrapper over native WebSocket API; feeds TanStack Query cache via `queryClient.setQueryData` / `invalidateQueries` |
+| Forms | React Hook Form + Zod | 7.x + 4.x | Performant forms; schema validation (Zod v4 stable) |
+| API Client | orval | 8.x | Auto-generate TanStack Query hooks + TS types from FastAPI OpenAPI spec |
 
 ### Backend (new layer)
 
 | Layer | Technology | Version | Rationale |
 |-------|-----------|---------|-----------|
-| Framework | FastAPI | 0.115+ | Async; native WebSocket; auto OpenAPI; Pydantic |
-| Server | uvicorn | 0.34+ | ASGI server with --workers for multiprocess |
+| Framework | FastAPI | 0.129+ | Async; native WebSocket; auto OpenAPI; Pydantic |
+| Server | uvicorn | 0.41+ | ASGI server; **single worker for WS** (see Architecture Notes) |
 | Validation | Pydantic v2 | 2.x | Already used by FastAPI; generates OpenAPI schema |
-| WebSocket | Starlette WebSocket | (via FastAPI) | Built-in; clean async pattern |
-| SSE | sse-starlette | 2.x | StreamingResponse for progress updates |
+| WebSocket | Starlette WebSocket | (via FastAPI) | Built-in; clean async pattern; per-channel `ConnectionManager` |
+| SSE | sse-starlette | 3.x | EventSourceResponse for progress updates; add `X-Accel-Buffering: no` header if behind Nginx |
 | Testing | httpx + pytest | latest | Async test client for FastAPI |
 
 ### Development Tools
@@ -192,10 +193,27 @@ The Streamlit dashboard has served well for prototyping but has accumulated **8 
 |------|---------|
 | `uv` | Python package management (existing) |
 | `pnpm` | Node.js package management (faster than npm) |
-| `orval` or `openapi-typescript` | Auto-generate TypeScript API client from OpenAPI |
-| `vitest` | Unit testing for React components |
-| `Playwright` | E2E testing (replaces agent-browser for automated tests) |
-| `Biome` | Linting + formatting for TypeScript (replaces ESLint + Prettier) |
+| `orval` 8.x | Auto-generate TanStack Query hooks + TS types from OpenAPI |
+| `vitest` 4.x | Unit testing for React components (stable browser mode) |
+| `Playwright` 1.58+ | E2E testing (replaces agent-browser for automated tests) |
+| `Biome` 2.x | Linting + formatting for TypeScript (replaces ESLint + Prettier; 423+ rules) |
+
+### Architecture Notes
+
+**WebSocket data ownership — TanStack Query, not Zustand:**
+Real-time WS data (job status, positions, discovery progress) flows into the TanStack Query cache via `queryClient.setQueryData()` or `invalidateQueries()` from custom WS hooks. This keeps a single source of truth. Zustand is reserved for pure UI state only (sidebar collapse, theme, editor mode). See [TkDodo's canonical pattern](https://tkdodo.eu/blog/using-web-sockets-with-react-query). Set `staleTime: Infinity` in QueryClient defaults so data only re-fetches when WS explicitly invalidates.
+
+**Single-worker uvicorn constraint:**
+In-memory `ConnectionManager` (one per WS channel) is process-local. Running `uvicorn --workers N` with N>1 means a message from worker A never reaches clients on worker B. For this internal dashboard, single-worker is fine. If scaling is needed later, add Redis pub/sub for cross-worker broadcast.
+
+**SSE behind reverse proxy:**
+If FastAPI is ever behind Nginx, add `X-Accel-Buffering: no` header to `EventSourceResponse` to prevent event batching.
+
+**3D charts and heatmaps — Recharts gap:**
+Recharts has no 3D or native heatmap support. The 3D Pareto surface (US-4.5) and monthly returns heatmap (US-4.4) use Plotly.js via `react-plotly.js`, lazy-loaded and code-split to avoid impacting initial bundle size.
+
+**TradingView Lightweight Charts v5 migration:**
+v5 rewrites the series API: `chart.addLineSeries()` → `chart.addSeries(LineSeries, options)`. Markers moved to `createSeriesMarkers()`. Watermarks moved to `createTextWatermark()` plugin. ESM-only (no CJS). All v4 example code must be adapted.
 
 ---
 
@@ -271,7 +289,14 @@ vibe_quant/
 - `GET /api/backtest/jobs/{run_id}` — get single job status + heartbeat info
 - `DELETE /api/backtest/jobs/{run_id}` — kill a running job (SIGTERM)
 - `POST /api/backtest/jobs/{run_id}/sync` — force sync stale job status
+- `POST /api/backtest/validate-coverage` — check catalog data coverage for given symbols/timeframe/date range (returns per-symbol gap warnings)
 - Request bodies validated with Pydantic (strategy_id, symbols, timeframe, date_range, sweep_params, overfitting_filters, sizing_config, risk_config, latency_preset)
+- **Subprocess-facing internal endpoints** (called by NT engine, not UI):
+  - `POST /api/backtest/jobs/{run_id}/heartbeat` — subprocess heartbeat update
+  - `POST /api/backtest/jobs/{run_id}/trades` — save trade batch from subprocess
+  - `POST /api/backtest/jobs/{run_id}/sweep-results` — save sweep result batch
+  - `POST /api/backtest/jobs/{run_id}/mark-pareto` — mark Pareto-optimal sweep results
+- `POST /api/backtest/jobs/cleanup-stale` — bulk cleanup stale jobs (>120s no heartbeat)
 
 #### US-0.3: Results & Analytics API
 > **As a** frontend application,
@@ -302,6 +327,7 @@ vibe_quant/
 - `GET /api/discovery/results/{run_id}` — get top strategies discovered
 - `POST /api/discovery/results/{run_id}/export/{strategy_index}` — export discovered strategy to strategy library
 - `GET /api/discovery/indicator-pool` — get available indicators with parameter ranges
+- `GET /api/discovery/results/latest` — get latest completed discovery run results (fallback when no active run)
 
 #### US-0.5: Paper Trading API
 > **As a** frontend application,
@@ -309,14 +335,15 @@ vibe_quant/
 > **so that** paper trading monitoring is not limited to Streamlit session state.
 
 **Acceptance Criteria:**
-- `POST /api/paper/start` — start paper trading session (strategy_id, Binance API creds via headers, testnet toggle)
+- `POST /api/paper/start` — start paper trading session (strategy_id, Binance API creds via headers, testnet toggle, **inline sizing/risk params**: sizing_method, max_leverage, max_position_pct, risk_per_trade, max_drawdown_pct, max_daily_loss_pct, max_consecutive_losses, max_position_count)
 - `POST /api/paper/halt` — halt trading (SIGUSR1)
 - `POST /api/paper/resume` — resume trading (SIGUSR2)
 - `POST /api/paper/stop` — graceful shutdown (SIGTERM, close positions)
 - `GET /api/paper/status` — current state (running/halted/stopped/error), PnL metrics, trades count
 - `GET /api/paper/positions` — open positions
 - `GET /api/paper/orders` — pending orders
-- `GET /api/paper/checkpoints` — recent checkpoint timeline
+- `GET /api/paper/checkpoints` — recent checkpoint timeline (includes halt_reason, error_message if present)
+- `GET /api/paper/sessions/{trader_id}` — look up existing session state by Trader ID (session reattachment)
 
 #### US-0.6: Data Management API
 > **As a** frontend application,
@@ -325,8 +352,9 @@ vibe_quant/
 
 **Acceptance Criteria:**
 - `GET /api/data/status` — storage metrics (archive size, catalog size, total)
-- `GET /api/data/coverage` — data coverage table (symbols, date ranges, kline/bar counts)
-- `POST /api/data/ingest` — start data ingest (symbols, date range)
+- `GET /api/data/coverage` — data coverage table (symbols, date ranges, kline/bar counts, **funding rate counts**)
+- `POST /api/data/ingest/preview` — preview download (check archive for existing month coverage, return total/archived/new month counts)
+- `POST /api/data/ingest` — start data ingest (symbols, date range); **1-hour timeout** with graceful SIGTERM then SIGKILL
 - `POST /api/data/update` — update existing data
 - `POST /api/data/rebuild` — rebuild catalog from archive
 - `GET /api/data/browse/{symbol}?interval={interval}&start={date}&end={date}` — OHLCV data for browser
@@ -343,7 +371,9 @@ vibe_quant/
 - `GET/POST/PUT/DELETE /api/settings/sizing` — sizing config CRUD
 - `GET/POST/PUT/DELETE /api/settings/risk` — risk config CRUD
 - `GET /api/settings/latency-presets` — list available latency presets
-- `GET /api/settings/system-info` — system diagnostics (table row counts, versions)
+- `GET /api/settings/system-info` — system diagnostics (table row counts, NT version, Python version, catalog size, DB file size)
+- `GET /api/settings/database` — current database path and table inventory
+- `PUT /api/settings/database` — switch database path (validate suffix/parent dir, close/reopen StateManager)
 
 #### US-0.8: WebSocket Channels
 > **As a** frontend application,
@@ -376,7 +406,7 @@ vibe_quant/
 **Acceptance Criteria:**
 - `GET /api/openapi.json` — full OpenAPI 3.1 spec
 - `GET /docs` — Swagger UI for interactive testing
-- CI script: `pnpm run generate-api-types` → generates `frontend/src/api/types.ts`
+- CI script: `pnpm run generate-api` → runs orval to generate `frontend/src/api/generated/` (TanStack Query hooks + TS types)
 - All request/response bodies have Pydantic models (no `dict[str, Any]` in API boundaries)
 
 ### Phase 0 Tests
@@ -411,10 +441,9 @@ frontend/                         # NEW - React application
 │   ├── main.tsx                  # App entry point
 │   ├── App.tsx                   # Root component + providers
 │   ├── api/
-│   │   ├── client.ts             # Base fetch/axios config
-│   │   ├── types.ts              # Auto-generated from OpenAPI
-│   │   ├── queries/              # TanStack Query hooks per domain
-│   │   │   ├── strategies.ts
+│   │   ├── client.ts             # Base fetch config (orval-generated)
+│   │   ├── generated/            # Auto-generated by orval from OpenAPI
+│   │   │   ├── strategies.ts     # useStrategies(), useCreateStrategy(), etc.
 │   │   │   ├── backtest.ts
 │   │   │   ├── results.ts
 │   │   │   ├── discovery.ts
@@ -422,13 +451,11 @@ frontend/                         # NEW - React application
 │   │   │   ├── data.ts
 │   │   │   └── settings.ts
 │   │   └── websocket/
-│   │       ├── useJobsSocket.ts
-│   │       ├── useTradingSocket.ts
-│   │       └── useDiscoverySocket.ts
-│   ├── stores/                   # Zustand stores
-│   │   ├── ui.ts                 # Sidebar, theme, layout prefs
-│   │   ├── trading.ts            # Live positions, PnL (from WS)
-│   │   └── jobs.ts               # Active jobs (from WS)
+│   │       ├── useJobsSocket.ts      # Custom hook → queryClient.setQueryData
+│   │       ├── useTradingSocket.ts   # Custom hook → queryClient.setQueryData
+│   │       └── useDiscoverySocket.ts # Custom hook → queryClient.setQueryData
+│   ├── stores/                   # Zustand stores (UI state ONLY)
+│   │   └── ui.ts                 # Sidebar, theme, layout prefs, editor mode
 │   ├── components/
 │   │   ├── ui/                   # shadcn/ui components (auto-added)
 │   │   ├── layout/
@@ -450,14 +477,15 @@ frontend/                         # NEW - React application
 │   │       ├── MetricCard.tsx
 │   │       ├── StrategyCard.tsx
 │   │       └── DateRangePicker.tsx
-│   ├── pages/
-│   │   ├── StrategyManagement.tsx
-│   │   ├── Discovery.tsx
-│   │   ├── BacktestLaunch.tsx
-│   │   ├── ResultsAnalysis.tsx
-│   │   ├── PaperTrading.tsx
-│   │   ├── DataManagement.tsx
-│   │   └── Settings.tsx
+│   ├── routes/                   # TanStack Router file-based routing
+│   │   ├── __root.tsx            # Root layout (sidebar, header, providers)
+│   │   ├── strategies.tsx
+│   │   ├── discovery.tsx
+│   │   ├── backtest.tsx
+│   │   ├── results.tsx
+│   │   ├── paper-trading.tsx
+│   │   ├── data.tsx
+│   │   └── settings.tsx
 │   └── lib/
 │       ├── utils.ts              # Shared utilities (cn, formatters)
 │       └── constants.ts          # API URLs, default values
@@ -477,10 +505,12 @@ frontend/                         # NEW - React application
 > **so that** I have a working development environment.
 
 **Acceptance Criteria:**
-- `pnpm create vite frontend --template react-ts`
-- Tailwind CSS 4 configured
+- `pnpm create vite frontend --template react-ts` (Vite 7.x, requires Node 20+)
+- Tailwind CSS 4.x configured (CSS-first config via `@theme`, no `tailwind.config.js`)
 - shadcn/ui initialized with "New York" style, dark mode default
-- Biome configured for linting + formatting
+- TanStack Router with file-based routing (`@tanstack/router-plugin` in `vite.config.ts`)
+- Biome 2.x configured for linting + formatting
+- orval 8.x configured for API client generation from OpenAPI spec
 - `pnpm dev` starts dev server at `localhost:3000`
 - Proxy to FastAPI backend at `localhost:8000` configured in `vite.config.ts`
 
@@ -493,7 +523,7 @@ frontend/                         # NEW - React application
 - Collapsible sidebar with category groups: Strategies, Backtesting, Trading, System
 - Pages: Strategy Management, Discovery, Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings
 - Active page highlighted in sidebar
-- URL-based routing (e.g., `/strategies`, `/discovery`, `/backtest`, `/results`, `/paper-trading`, `/data`, `/settings`)
+- TanStack Router file-based routing (e.g., `/strategies`, `/discovery`, `/backtest`, `/results`, `/paper-trading`, `/data`, `/settings`) with type-safe navigation
 - Dark/light theme toggle in header
 - Responsive: sidebar collapses to hamburger on narrow screens
 
@@ -503,12 +533,14 @@ frontend/                         # NEW - React application
 > **so that** every API call is type-checked at compile time.
 
 **Acceptance Criteria:**
-- `pnpm run generate-api` fetches `http://localhost:8000/api/openapi.json` and generates `src/api/types.ts`
-- Base API client with:
+- `pnpm run generate-api` runs orval against `http://localhost:8000/api/openapi.json`
+- Generates TanStack Query hooks + TypeScript types into `src/api/generated/`
+- Base API client (orval custom instance) with:
   - Automatic JSON serialization/deserialization
   - Error handling (toast notifications for 4xx/5xx)
   - Request cancellation on component unmount
-- TanStack Query wrapper for each endpoint domain (e.g., `useStrategies()`, `useBacktestRun(id)`)
+- Auto-generated hooks per domain (e.g., `useGetStrategies()`, `useCreateStrategy()`, `useGetBacktestRun(id)`)
+- TanStack Query client configured with `staleTime: Infinity` for WS-driven data (jobs, positions, discovery)
 
 #### US-1.4: WebSocket Infrastructure
 > **As a** developer,
@@ -516,12 +548,14 @@ frontend/                         # NEW - React application
 > **so that** real-time data flows to components without manual polling.
 
 **Acceptance Criteria:**
-- `useJobsSocket()` hook: connects to `/ws/jobs`, updates `jobsStore` on message
-- `useTradingSocket()` hook: connects to `/ws/trading`, updates `tradingStore` on message
-- `useDiscoverySocket()` hook: connects to `/ws/discovery`, updates discovery state on message
+- Custom `useJobsSocket()` hook: connects to `/ws/jobs`, calls `queryClient.setQueryData(['jobs', runId], ...)` on message
+- Custom `useTradingSocket()` hook: connects to `/ws/trading`, calls `queryClient.setQueryData(['positions'], ...)` and `queryClient.setQueryData(['pnl'], ...)` on message
+- Custom `useDiscoverySocket()` hook: connects to `/ws/discovery`, calls `queryClient.setQueryData(['discovery', runId], ...)` on message
+- No external WS library — thin custom hooks wrapping native `WebSocket` API (~30-50 LOC each)
 - Auto-reconnect with exponential backoff (1s, 2s, 4s, 8s, max 30s)
 - Connection status indicator in header (green/yellow/red dot)
 - Heartbeat ping every 30s
+- High-frequency updates (paper trading): batch `setQueryData` calls or throttle to 60fps to prevent UI jank
 
 #### US-1.5: Shared Chart Components
 > **As a** developer,
@@ -529,14 +563,14 @@ frontend/                         # NEW - React application
 > **so that** charts are consistent across all pages.
 
 **Acceptance Criteria:**
-- `<CandlestickChart data={bars} />` — TradingView Lightweight Charts wrapper
-- `<EquityCurve data={points} />` — Recharts line chart with proper formatting
-- `<DrawdownChart data={points} periods={topN} />` — area chart with period overlays
-- `<MonthlyReturnsHeatmap data={matrix} />` — red-white-green diverging heatmap
-- `<TradeDistribution trades={trades} />` — histogram with profit/loss split
-- `<ParetoScatter points={sweeps} />` — Sharpe vs MaxDD scatter
-- `<RadarProfile metrics={normalized} />` — radar/spider chart
-- All charts support dark/light theme via CSS variables
+- `<CandlestickChart data={bars} />` — TradingView Lightweight Charts v5 wrapper (use `chart.addSeries(CandlestickSeries, options)` API)
+- `<EquityCurve data={points} />` — Recharts 3.x line chart with proper formatting (via shadcn/ui chart)
+- `<DrawdownChart data={points} periods={topN} />` — area chart with period overlays (Recharts)
+- `<MonthlyReturnsHeatmap data={matrix} />` — Plotly.js heatmap, lazy-loaded (Recharts has no native heatmap)
+- `<TradeDistribution trades={trades} />` — histogram with profit/loss split (Recharts)
+- `<ParetoScatter points={sweeps} />` — 2D: Recharts scatter; 3D surface: Plotly.js, lazy-loaded
+- `<RadarProfile metrics={normalized} />` — radar/spider chart (Recharts)
+- All charts support dark/light theme via CSS variables (shadcn/ui chart theming)
 - All charts are responsive (fill parent container)
 
 ---
@@ -557,7 +591,7 @@ frontend/                         # NEW - React application
 
 **Acceptance Criteria:**
 - Three metric cards: Archive size, Catalog size, Total size
-- Data coverage table: symbol, date range, kline count, bar count per interval
+- Data coverage table: symbol, date range, kline count, bar count per interval, **funding rate count**
 - Auto-refresh every 60 seconds (TanStack Query `refetchInterval`)
 - Supported symbols list
 
@@ -567,7 +601,8 @@ frontend/                         # NEW - React application
 > **so that** I know the status of long-running data operations.
 
 **Acceptance Criteria:**
-- Ingest form: date range picker, multi-symbol select, preview (archived vs new months)
+- Ingest form: date range picker, multi-symbol select
+- **Download preview button**: check archive for existing month coverage, show table (total months, already-archived, to-download count)
 - Three action buttons: Ingest, Update, Rebuild
 - SSE-connected log viewer showing real-time subprocess output (last 50 lines)
 - Progress indicator with elapsed time
@@ -581,7 +616,8 @@ frontend/                         # NEW - React application
 
 **Acceptance Criteria:**
 - Symbol selector → date range selector → interval buttons (1m, 5m, 15m, 1h, 4h)
-- TradingView Lightweight Charts candlestick with volume
+- **Max candles slider** (1K/5K/10K/25K) with truncation warning
+- TradingView Lightweight Charts v5 candlestick with volume (dark theme, custom candle colors, crosshair, watermark)
 - Data quality verification panel (gaps, OHLC errors)
 - OHLCV table view with formatted datetime (TanStack Table)
 
@@ -591,12 +627,12 @@ frontend/                         # NEW - React application
 > **so that** I can create/edit/delete configs for backtesting.
 
 **Acceptance Criteria:**
-- Sizing config list with create/edit/delete
-- Dynamic form: fields change based on method (fixed_fractional / kelly / atr)
-- Risk config list with create/edit/delete
-- Strategy-level and portfolio-level limit fields
-- Latency preset selector (read-only display)
-- System info diagnostics (table row counts)
+- 5 tabs: Sizing, Risk, Latency, Database, System (matching current 603-LOC page)
+- **Sizing tab:** config list with create/edit/delete; dynamic form (fields change based on method: fixed_fractional / kelly / atr)
+- **Risk tab:** config list with create/edit/delete; strategy-level and portfolio-level limit fields
+- **Latency tab:** preset selector with total latency calculation display; **custom latency mode** (base + insert latency number inputs in ms)
+- **Database tab:** live SQLite path switcher (validate suffix/parent dir, close/reopen StateManager); table list with row counts per table
+- **System tab:** NautilusTrader version, Python version, Catalog size, DB file size metrics
 
 ---
 
@@ -682,6 +718,77 @@ frontend/                         # NEW - React application
 - Drag to reorder (optional — nice to have)
 - Validates against available indicators
 
+#### US-3.7: Strategy Creation Wizard
+> **As a** user,
+> **I want to** create strategies through a guided step-by-step wizard,
+> **so that** I can build a complete strategy without being overwhelmed by the full editor.
+
+**Acceptance Criteria:**
+- 6-step guided wizard: Template → Basic Info → Indicators → Rules → Risk → Review
+- Step progress bar with color-coded step indicators (incomplete/current/complete)
+- Contextual help tips at each step
+- "Edit in Full Editor" exit button at any step (preserves state, hands off to full editor)
+- "Start from Scratch" option (blank-slate creation, no template)
+- Review step shows full strategy summary before save
+- Wizard state managed by React Hook Form multi-step pattern
+
+#### US-3.8: YAML File Upload & Cross-Mode Actions
+> **As a** user,
+> **I want to** upload YAML files and switch between editor modes seamlessly,
+> **so that** I can import strategies from files and work in my preferred mode.
+
+**Acceptance Criteria:**
+- YAML file upload (.yaml/.yml) in YAML editor mode
+- "View as YAML" button in Visual editor (builds DSL from form, switches to YAML mode)
+- "Copy to Visual Editor" button in YAML mode (parses YAML, populates visual form)
+- Bidirectional sync without state leakage on mode switch
+
+#### US-3.9: Validation Summary Panel
+> **As a** user,
+> **I want to** see real-time validation feedback while editing a strategy,
+> **so that** I can catch issues before launching a backtest.
+
+**Acceptance Criteria:**
+- Complexity Score (1-10 scale: Simple/Moderate/Complex)
+- Overfitting Risk indicator (Low/Medium/High with false-positive probability)
+- Smart warnings (10+ types): orphan indicators, one-sided strategies, no exit conditions, funding avoidance disabled, stop loss too wide, R:R < 1, sweep too large, single conditions
+- Backtest Readiness checklist (9 items)
+- Panel updates live as strategy is edited
+
+#### US-3.10: Sweep Builder Detail
+> **As a** user,
+> **I want to** configure parameter sweeps with fine-grained control,
+> **so that** I can explore the parameter space efficiently.
+
+**Acceptance Criteria:**
+- Per-parameter value list editors (add/remove individual values)
+- Combination counter with color-coded warnings (green <50, orange 50-500, red >500)
+- Quick presets: Narrow (3 values), Medium (5 values), Wide (7 values) per parameter
+- Estimated sweep duration based on combination count
+
+#### US-3.11: Indicator Card Detail
+> **As a** user,
+> **I want to** configure indicators with type-specific parameters and per-indicator timeframe overrides,
+> **so that** I have full control over indicator behavior.
+
+**Acceptance Criteria:**
+- Type-specific parameter fields per indicator type (e.g., RSI: period+source; MACD: fast+slow+signal)
+- Per-indicator timeframe override selector (multi-timeframe support)
+- Duplicate indicator button with auto-suggested unique name
+- Indicator catalog browser: searchable, type-grouped
+
+#### US-3.12: Risk Management Detail
+> **As a** user,
+> **I want to** configure stop loss, take profit, and risk presets with visual feedback,
+> **so that** I can quickly set appropriate risk parameters.
+
+**Acceptance Criteria:**
+- Quick risk presets: Conservative, Moderate, Aggressive
+- R:R visualization (visual representation of stop loss vs take profit ratio)
+- ATR-based stop loss option (links to a named ATR indicator in the strategy)
+- Stop loss types: pct, atr, indicator
+- Take profit types: pct, atr, indicator, risk-reward ratio
+
 ---
 
 ## Phase 4: Backtest Launch & Results Analysis
@@ -700,15 +807,16 @@ frontend/                         # NEW - React application
 
 **Acceptance Criteria:**
 - Strategy selector with summary card (name, indicators, conditions)
-- Symbol multi-select (BTC, ETH, SOL, etc.)
+- Symbol multi-select (BTC, ETH, SOL, etc.) + **custom symbol text input** (add arbitrary symbols not in default list)
 - Timeframe selector
-- Date range with presets (1M, 3M, 6M, 1Y, 2Y, custom)
+- Date range with presets (1M, 3M, 6M, 1Y, 2Y, custom) + duration metric (days in selected range)
 - Auto-generated parameter sweep fields (from strategy DSL)
 - Overfitting filter toggles (Deflated Sharpe, Walk-Forward, Purged K-Fold)
 - Sizing config selector (dropdown from settings)
 - Risk config selector (dropdown from settings)
-- Latency preset selector (co-located, retail, etc.)
-- Preflight summary (estimated combinations, time estimate)
+- Latency preset selector (co-located, retail, etc.) + **custom latency mode** (base + insert latency number inputs in ms)
+- **Catalog data coverage validation**: before launch, check ParquetDataCatalog for selected symbols/timeframe/date range; show per-symbol warnings if data missing or date range exceeds catalog bounds
+- Preflight summary (estimated combinations, time estimate based on combos + latency mode + CPU count)
 - "Run Screening" / "Run Validation" buttons
 - Button disabled while another job of same type is running
 
@@ -722,7 +830,9 @@ frontend/                         # NEW - React application
 - Per job: type (screening/validation/discovery), status badge, elapsed time, heartbeat indicator
 - Stale job detection (>120s no heartbeat) with warning icon
 - Kill button per job (confirmation dialog)
-- Recent completed/failed runs list
+- **"Cleanup Stale Jobs" bulk action button** (appears when stale jobs detected, calls cleanup API)
+- **Manual "Refresh Jobs" button** in addition to real-time WS updates
+- Recent completed/failed runs list (last 10, with status icons: clock/hourglass/checkmark/X/octagon)
 
 #### US-4.3: Results — Single Run Analysis
 > **As a** user,
@@ -730,14 +840,16 @@ frontend/                         # NEW - React application
 > **so that** I can evaluate strategy performance in detail.
 
 **Acceptance Criteria:**
-- Run selector dropdown (cached, sorted by date)
-- Metrics panel: 20+ metrics across 5 categories (returns, risk, trades, costs, perpetual)
+- Run selector dropdown (cached, sorted by date) + **manual cache-invalidation button**
+- Run details panel: strategy name, mode, symbols, timeframe, date range, status, created_at, latency preset
+- Metrics panel: 20+ metrics across 5 categories (returns, risk, trades, costs, perpetual), including derived Payoff Ratio and Expectancy
 - Win/loss analysis (counts, P&L, ratio, consecutive streaks)
 - Cost breakdown (fees, funding, slippage, drag %)
 - Perpetual futures analytics (gross P&L breakdown pie chart)
 - Long vs short performance split
 - Liquidation event summary
 - Overfitting filter results (PASS/FAIL badges with values)
+- **Raw NautilusTrader Statistics** expander (show persisted `raw_nt_stats` JSON)
 
 #### US-4.4: Results — Charts
 > **As a** user,
@@ -761,9 +873,11 @@ frontend/                         # NEW - React application
 
 **Acceptance Criteria:**
 - Sweep results table (TanStack Table with sort/filter/pagination)
-- 2D Pareto scatter (Sharpe vs MaxDD, diamond markers for optimal)
-- 3D Pareto surface (Sharpe × MaxDD × PF) with rotation/zoom
-- Filter: show only Pareto-optimal, filter by overfitting pass/fail
+- 2D Pareto scatter (Sharpe vs MaxDD, diamond markers for optimal) — Recharts
+- 3D Pareto surface (Sharpe × MaxDD × PF) with rotation/zoom — Plotly.js, lazy-loaded
+- Filter: show only Pareto-optimal, filter by overfitting pass/fail, **min Sharpe number input**, **max Drawdown % number input**
+- **Sweep individual drill-down**: select a specific sweep result to see its parameters JSON and per-filter PASS/FAIL badges
+- **"Run Validation for this candidate" button**: saves sweep params to navigation state, links to Backtest Launch page pre-filled
 
 #### US-4.6: Results — Trade Log
 > **As a** user,
@@ -829,9 +943,10 @@ frontend/                         # NEW - React application
 
 **Acceptance Criteria:**
 - Fitness evolution chart: best/mean/worst per generation (updates live via WebSocket)
-- Generation counter: current / total
+- Generation counter: current / total + **convergence info** (convergence generation, total candidates evaluated)
 - Chart updates incrementally (append new data points, don't redraw)
 - Kill button per active discovery job
+- **DB discovery results fallback**: when no active run, load latest completed discovery run from API and display its metrics
 
 #### US-5.3: Discovery — Results & Export
 > **As a** user,
@@ -841,7 +956,7 @@ frontend/                         # NEW - React application
 **Acceptance Criteria:**
 - Top strategies table: rank, Sharpe, MaxDD, PF, trades, genes, fitness score
 - Expandable row: full strategy detail with DSL YAML
-- "Export to Strategy" button → creates strategy in library via API
+- "Export to Strategy" button → creates strategy in library via API, then navigates to Strategy Management with exported strategy pre-loaded
 - Copy YAML to clipboard button
 
 #### US-5.4: Paper Trading — Session Control
@@ -853,7 +968,9 @@ frontend/                         # NEW - React application
 - Strategy selector: only shows validated strategies (passed overfitting filters)
 - Binance API credential input (password-masked, sent via secure header, never stored in frontend)
 - Testnet toggle
+- **Inline sizing/risk parameters**: sizing method, max leverage, max position %, risk per trade, max drawdown %, max daily loss %, max consecutive losses, max position count
 - Control buttons: START, HALT (amber), RESUME (green), STOP (red)
+- **"Stop Active Session" pre-check**: if an active paper job already exists, show Stop button before the Start form
 - Confirmation dialog for STOP (closes all positions)
 - Button states match session state (can't halt if not running, etc.)
 
@@ -863,7 +980,9 @@ frontend/                         # NEW - React application
 > **so that** I can monitor trading performance live.
 
 **Acceptance Criteria:**
+- **Trader ID text input** for session reattachment (view an existing session's state)
 - Status indicator: colored dot + label (running/paused/halted/stopped/error/initializing)
+- **Halt reason and error message display** (shown in red when present on checkpoint)
 - P&L metrics: total balance, available margin, margin used, daily P&L, total P&L
 - Metrics update instantly via WebSocket (no 5s polling)
 - Trades today / consecutive losses counter
@@ -926,8 +1045,8 @@ frontend/                         # NEW - React application
 **Acceptance Criteria:**
 - `make dev` — starts both FastAPI (port 8000) and Vite dev server (port 3000) concurrently
 - `make build` — builds React SPA and configures FastAPI to serve it as static files
-- `make test` — runs pytest (backend) + vitest (frontend) + playwright (E2E)
-- `make generate-api` — regenerates TypeScript types from OpenAPI spec
+- `make test` — runs pytest (backend) + vitest 4.x (frontend) + playwright (E2E)
+- `make generate-api` — runs orval to regenerate TanStack Query hooks + TS types from OpenAPI spec
 - API changes detected by CI (OpenAPI spec diff check)
 
 #### US-6.5: Streamlit Retirement
@@ -962,16 +1081,19 @@ frontend/                         # NEW - React application
 
 | # | Decision | Rationale | Alternatives Considered |
 |---|----------|-----------|------------------------|
-| D1 | **Vite over Next.js** | Internal dashboard; no SSR/SEO needed. Simpler deployment (static files). | Next.js (adds unnecessary server complexity) |
-| D2 | **shadcn/ui over MUI/Ant Design** | Copy-paste ownership; no dependency lock-in; native Tailwind. 200+ components including charts and data tables. | Material UI (heavy, opinionated), Ant Design (large bundle) |
-| D3 | **TanStack Query + Zustand over Redux** | Split by state type: server state (Query) vs client state (Zustand). Less boilerplate than Redux Toolkit. | Redux Toolkit (overkill), Recoil (abandoned), Jotai (too granular) |
-| D4 | **TradingView Lightweight Charts over Plotly.js** | Canvas-based (not SVG); purpose-built for financial data; 10x smaller bundle; native real-time update API. | Plotly.js (heavier, SVG-based), Highcharts (commercial license) |
-| D5 | **Recharts for supplementary charts** | Simplest JSX API; good enough for equity curves, histograms, heatmaps. | visx (too low-level), Nivo (heavy), Chart.js (imperative API) |
+| D1 | **Vite 7 over Next.js** | Internal dashboard; no SSR/SEO needed. Simpler deployment (static files). Requires Node 20+. | Next.js (adds unnecessary server complexity) |
+| D2 | **shadcn/ui over MUI/Ant Design** | Copy-paste ownership; no dependency lock-in; native Tailwind. 50+ components including charts (Recharts) and data tables (TanStack Table). | Material UI (heavy, opinionated), Ant Design (large bundle) |
+| D3 | **TanStack Query as single server-state cache** | All server state (REST + WebSocket) flows through TanStack Query cache. WS hooks call `setQueryData`/`invalidateQueries`. Zustand only for pure UI state (sidebar, theme, editor mode). Single source of truth. | Zustand for WS data (dual cache risk), Redux Toolkit (overkill) |
+| D4 | **TradingView Lightweight Charts v5 for price data** | Canvas-based; purpose-built for financial data; multi-pane support in v5; 35kB bundle. Use new `addSeries()` API. | Plotly.js (heavier, SVG-based), Highcharts (commercial license) |
+| D5 | **Recharts 3 + Plotly.js for supplementary charts** | Recharts 3 (via shadcn/ui) for equity curves, histograms, radar, scatter. Plotly.js (lazy-loaded) for 3D Pareto surface and monthly returns heatmap — Recharts has no 3D or native heatmap. | visx (too low-level), ECharts (alternative for heatmap) |
 | D6 | **FastAPI over Flask/Django** | Async-native; auto-OpenAPI; Pydantic validation; native WebSocket support. Already familiar from Python ecosystem. | Flask (no async), Django (too heavy), Litestar (less ecosystem) |
-| D7 | **pnpm over npm/yarn** | Fastest installs; strictest dependency resolution; disk-efficient. | npm (slower), yarn (no significant advantage over pnpm) |
-| D8 | **Biome over ESLint+Prettier** | Single tool for lint+format; 10-100x faster than ESLint; fewer config files. | ESLint+Prettier (two tools, slower, more config) |
-| D9 | **React Router over TanStack Router** | More mature; larger community; simpler for SPA routing. | TanStack Router (newer, type-safe but less ecosystem) |
+| D7 | **pnpm over npm/yarn** | Fastest installs; strictest dependency resolution; disk-efficient. | npm (slower), yarn (no significant advantage over pnpm), bun (faster but less mature) |
+| D8 | **Biome 2.x over ESLint+Prettier** | Single tool for lint+format; 423+ rules; 10-100x faster; type-aware linting without TS compiler. | ESLint+Prettier (two tools, slower, more config) |
+| D9 | **TanStack Router over React Router 7** | File-based routing works natively in Vite SPA mode. Full TypeScript route param/search param inference. React Router 7 file-based routing requires framework (Remix) mode — incompatible with pure Vite SPA target. | React Router 7 library mode (no file-based routing), React Router 7 framework mode (adds SSR/Remix complexity) |
 | D10 | **Parallel operation during migration** | Zero disruption risk. Both UIs work simultaneously. | Big-bang cutover (high risk), iframe embedding (hacky) |
+| D11 | **orval over openapi-typescript** | Auto-generates TanStack Query hooks + types from OpenAPI spec — eliminates manual `useQuery`/`useMutation` wiring. openapi-typescript only generates types (no client/hooks). | openapi-typescript + openapi-fetch (types only, manual hooks) |
+| D12 | **Custom WS hooks over react-use-websocket** | `react-use-websocket` has no updates in ~1 year, single maintainer, 129 dependents. Custom hooks (30-50 LOC each) wrapping native `WebSocket` API with exponential backoff are simpler and zero-dependency. | react-use-websocket (stale), Socket.IO (adds server protocol) |
+| D13 | **Single uvicorn worker for WS** | In-memory `ConnectionManager` is process-local. Multi-worker breaks WS broadcast. Single worker is fine for internal dashboard. Redis pub/sub is the upgrade path if scaling needed. | Multi-worker + Redis pub/sub (premature complexity) |
 
 ---
 
