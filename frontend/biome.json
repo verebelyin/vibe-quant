@@ -6,13 +6,15 @@
       "recommended": true,
       "correctness": {
         "noUnusedImports": "warn",
-        "noUnusedVariables": "warn"
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "warn"
       },
       "style": {
         "noNonNullAssertion": "off"
       },
       "a11y": {
-        "noSvgWithoutTitle": "warn"
+        "noSvgWithoutTitle": "warn",
+        "noLabelWithoutControl": "warn"
       }
     }
   },
