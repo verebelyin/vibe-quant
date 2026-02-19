@@ -1,5 +1,6 @@
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
-import { LoadingSpinner, MetricCard } from "@/components/ui";
+import { MetricCard } from "@/components/ui";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface MetricsPanelProps {
   runId: number;
@@ -15,24 +16,30 @@ function trend(value: number | null | undefined): "up" | "down" | "neutral" {
   return value > 0 ? "up" : "down";
 }
 
+function MetricsSkeleton() {
+  return (
+    <div>
+      <Skeleton className="mb-3 h-4 w-40" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 12 }).map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders have no stable key
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function MetricsPanel({ runId }: MetricsPanelProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
   const data = query.data?.data;
 
   if (query.isLoading) {
-    return (
-      <div className="flex items-center justify-center py-8">
-        <LoadingSpinner size="md" />
-      </div>
-    );
+    return <MetricsSkeleton />;
   }
 
   if (query.isError || !data) {
-    return (
-      <p className="py-4 text-sm" style={{ color: "hsl(var(--destructive))" }}>
-        Failed to load run metrics.
-      </p>
-    );
+    return <p className="py-4 text-sm text-destructive">Failed to load run metrics.</p>;
   }
 
   const expectancy =
@@ -42,10 +49,7 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
 
   return (
     <div>
-      <h3
-        className="mb-3 text-sm font-semibold uppercase tracking-wide"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Performance Metrics
       </h3>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">

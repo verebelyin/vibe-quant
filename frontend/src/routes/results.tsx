@@ -10,9 +10,7 @@ export function ResultsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold" style={{ color: "hsl(var(--foreground))" }}>
-        Results Analysis
-      </h1>
+      <h1 className="text-2xl font-bold text-foreground">Results Analysis</h1>
 
       <RunSelector selectedRunId={selectedRunId} onSelectRun={setSelectedRunId} />
 

@@ -1,10 +1,29 @@
-import { useId, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   useBrowseDataApiDataBrowseSymbolGet,
   useListSymbolsApiDataSymbolsGet,
 } from "@/api/generated/data/data";
 import type { CandlestickData, VolumeData } from "@/components/charts/CandlestickChart";
 import CandlestickChart from "@/components/charts/CandlestickChart";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
@@ -38,48 +57,6 @@ function formatTimestamp(iso: string): string {
     minute: "2-digit",
     hour12: false,
   });
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  const id = useId();
-  return (
-    <div className="flex flex-col gap-1">
-      <label
-        htmlFor={id}
-        className="text-xs font-medium uppercase tracking-wider"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        {label}
-      </label>
-      <select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border px-3 py-1.5 text-sm"
-        style={{
-          backgroundColor: "hsl(var(--card))",
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--foreground))",
-        }}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
 }
 
 export function DataBrowser() {
@@ -129,162 +106,120 @@ export function DataBrowser() {
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-end gap-4">
-        <SelectField
-          label="Symbol"
-          value={symbol}
-          onChange={setSymbol}
-          options={[
-            { value: "", label: "Select symbol..." },
-            ...symbols.map((s) => ({ value: s, label: s })),
-          ]}
-        />
-        <SelectField
-          label="Interval"
-          value={interval}
-          onChange={setInterval}
-          options={INTERVALS.map((i) => ({ value: i, label: i }))}
-        />
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs uppercase tracking-wider text-muted-foreground">Symbol</Label>
+          <Select value={symbol} onValueChange={setSymbol}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Select symbol..." />
+            </SelectTrigger>
+            <SelectContent>
+              {symbols.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs uppercase tracking-wider text-muted-foreground">Interval</Label>
+          <Select value={interval} onValueChange={setInterval}>
+            <SelectTrigger className="w-24">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {INTERVALS.map((i) => (
+                <SelectItem key={i} value={i}>
+                  {i}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {!symbol && (
-        <div
-          className="rounded-lg border p-8 text-center text-sm"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--muted-foreground))",
-          }}
-        >
+        <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
           Select a symbol to browse data
         </div>
       )}
 
-      {symbol && browseQuery.isLoading && (
-        <div
-          className="h-[400px] animate-pulse rounded-lg"
-          style={{ backgroundColor: "hsl(var(--muted))" }}
-        />
-      )}
+      {symbol && browseQuery.isLoading && <Skeleton className="h-[400px] rounded-lg" />}
 
       {symbol && browseQuery.isError && (
-        <div
-          className="rounded-lg border p-4"
-          style={{
-            borderColor: "hsl(0 84% 60%)",
-            backgroundColor: "hsl(0 84% 60% / 0.1)",
-            color: "hsl(0 84% 60%)",
-          }}
-        >
+        <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-destructive">
           Failed to load browse data
         </div>
       )}
 
       {/* Chart */}
       {symbol && rows.length > 0 && (
-        <div
-          className="rounded-lg border p-2"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-          }}
-        >
-          <CandlestickChart data={candlestickData} volume={volumeData} height={400} />
-        </div>
+        <Card className="p-2">
+          <CardContent className="p-0">
+            <CandlestickChart data={candlestickData} volume={volumeData} height={400} />
+          </CardContent>
+        </Card>
       )}
 
       {/* OHLCV Table */}
       {symbol && rows.length > 0 && (
         <div>
-          <h4 className="mb-2 text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
+          <h4 className="mb-2 text-sm font-semibold text-foreground">
             OHLCV Data ({rows.length} bars)
           </h4>
-          <div
-            className="overflow-auto rounded-lg border"
-            style={{
-              maxHeight: "400px",
-              borderColor: "hsl(var(--border))",
-            }}
-          >
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 z-10" style={{ backgroundColor: "hsl(var(--muted))" }}>
-                <tr>
+          <div className="max-h-[400px] overflow-auto rounded-lg border">
+            <Table className="text-xs">
+              <TableHeader className="sticky top-0 z-10 bg-muted">
+                <TableRow className="hover:bg-muted">
                   {["Timestamp", "Open", "High", "Low", "Close", "Volume"].map((col) => (
-                    <th
+                    <TableHead
                       key={col}
-                      className={`px-3 py-2 font-medium ${
-                        col === "Timestamp" ? "text-left" : "text-right"
-                      }`}
-                      style={{ color: "hsl(var(--muted-foreground))" }}
+                      className={cn("px-3", col !== "Timestamp" && "text-right")}
                     >
                       {col}
-                    </th>
+                    </TableHead>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row, i) => {
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => {
                   const isUp = row.close >= row.open;
                   return (
-                    <tr
-                      key={row.timestamp}
-                      style={{
-                        backgroundColor:
-                          i % 2 === 0 ? "hsl(var(--card))" : "hsl(var(--muted) / 0.3)",
-                        borderTop: i > 0 ? "1px solid hsl(var(--border))" : undefined,
-                      }}
-                    >
-                      <td
-                        className="whitespace-nowrap px-3 py-1.5 font-mono"
-                        style={{ color: "hsl(var(--foreground))" }}
-                      >
+                    <TableRow key={row.timestamp}>
+                      <TableCell className="whitespace-nowrap px-3 py-1.5 font-mono">
                         {formatTimestamp(row.timestamp)}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right font-mono"
-                        style={{ color: "hsl(var(--foreground))" }}
-                      >
+                      </TableCell>
+                      <TableCell className="px-3 py-1.5 text-right font-mono">
                         {row.open.toFixed(2)}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right font-mono"
-                        style={{ color: "hsl(var(--foreground))" }}
-                      >
+                      </TableCell>
+                      <TableCell className="px-3 py-1.5 text-right font-mono">
                         {row.high.toFixed(2)}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right font-mono"
-                        style={{ color: "hsl(var(--foreground))" }}
-                      >
+                      </TableCell>
+                      <TableCell className="px-3 py-1.5 text-right font-mono">
                         {row.low.toFixed(2)}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right font-mono"
-                        style={{ color: isUp ? "hsl(142 71% 45%)" : "hsl(0 84% 60%)" }}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "px-3 py-1.5 text-right font-mono",
+                          isUp ? "text-green-500" : "text-destructive",
+                        )}
                       >
                         {row.close.toFixed(2)}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right font-mono"
-                        style={{ color: "hsl(var(--muted-foreground))" }}
-                      >
+                      </TableCell>
+                      <TableCell className="px-3 py-1.5 text-right font-mono text-muted-foreground">
                         {row.volume.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         </div>
       )}
 
       {symbol && !browseQuery.isLoading && !browseQuery.isError && rows.length === 0 && (
-        <div
-          className="rounded-lg border p-8 text-center text-sm"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--muted-foreground))",
-          }}
-        >
+        <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
           No data available for {symbol} at {interval}
         </div>
       )}

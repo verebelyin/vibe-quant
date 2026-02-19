@@ -1,5 +1,15 @@
 import { useMemo, useState } from "react";
 import { useDownloadHistoryApiDataHistoryGet } from "@/api/generated/data/data";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 type SortDir = "asc" | "desc";
 
@@ -72,24 +82,12 @@ export function DownloadHistory() {
   }
 
   if (historyQuery.isLoading) {
-    return (
-      <div
-        className="h-32 animate-pulse rounded-lg"
-        style={{ backgroundColor: "hsl(var(--muted))" }}
-      />
-    );
+    return <Skeleton className="h-32 rounded-lg" />;
   }
 
   if (historyQuery.isError) {
     return (
-      <div
-        className="rounded-lg border p-4 text-sm"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
         Failed to load download history.
       </div>
     );
@@ -97,85 +95,53 @@ export function DownloadHistory() {
 
   if (items.length === 0) {
     return (
-      <div
-        className="rounded-lg border p-8 text-center"
-        style={{
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--muted-foreground))",
-        }}
-      >
+      <div className="rounded-lg border p-8 text-center text-muted-foreground">
         No download history yet.
       </div>
     );
   }
 
   return (
-    <div
-      className="overflow-x-auto rounded-lg border"
-      style={{ borderColor: "hsl(var(--border))" }}
-    >
-      <table className="w-full text-sm">
-        <thead>
-          <tr
-            style={{
-              backgroundColor: "hsl(var(--muted))",
-              color: "hsl(var(--muted-foreground))",
-            }}
-          >
+    <div className="rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted hover:bg-muted">
             {COLUMNS.map((col) => (
-              <th
+              <TableHead
                 key={col.key}
-                className={`cursor-pointer select-none px-4 py-2.5 font-medium ${
-                  col.align === "right" ? "text-right" : "text-left"
-                }`}
+                className={cn(
+                  "cursor-pointer select-none px-4",
+                  col.align === "right" && "text-right",
+                )}
                 onClick={() => handleSort(col.key)}
               >
                 {col.label}
                 {sortIndicator(col.key)}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {sorted.map((item, idx) => (
-            <tr
-              key={`${String(item.symbol)}-${String(item.timestamp)}-${idx}`}
-              className="transition-colors hover:opacity-80"
-              style={{
-                backgroundColor: idx % 2 === 0 ? "hsl(var(--card))" : "hsl(var(--muted) / 0.3)",
-                borderTop: idx > 0 ? "1px solid hsl(var(--border))" : undefined,
-              }}
-            >
-              <td
-                className="px-4 py-2 font-mono font-medium"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
+            <TableRow key={`${String(item.symbol)}-${String(item.timestamp)}-${idx}`}>
+              <TableCell className="px-4 font-mono font-medium">
                 {String(item.symbol ?? "--")}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--foreground))" }}>
-                {String(item.interval ?? "--")}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--foreground))" }}>
-                {formatDate(item.start_date)}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--foreground))" }}>
-                {formatDate(item.end_date)}
-              </td>
-              <td
-                className="px-4 py-2 text-right font-mono"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
+              </TableCell>
+              <TableCell className="px-4">{String(item.interval ?? "--")}</TableCell>
+              <TableCell className="px-4">{formatDate(item.start_date)}</TableCell>
+              <TableCell className="px-4">{formatDate(item.end_date)}</TableCell>
+              <TableCell className="px-4 text-right font-mono">
                 {typeof item.rows === "number"
                   ? item.rows.toLocaleString()
                   : String(item.rows ?? "--")}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--muted-foreground))" }}>
+              </TableCell>
+              <TableCell className="px-4 text-muted-foreground">
                 {formatTimestamp(item.timestamp)}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

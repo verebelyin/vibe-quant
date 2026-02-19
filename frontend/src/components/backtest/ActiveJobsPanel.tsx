@@ -7,17 +7,39 @@ import {
 } from "@/api/generated/backtest/backtest";
 import type { JobStatusResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useJobsWS } from "@/hooks/useJobsWS";
 import type { WsStatus } from "@/hooks/useWebSocket";
-import { JobStatusBadge } from "../ui/JobStatusBadge";
+import { cn } from "@/lib/utils";
 
 const STALE_THRESHOLD_MS = 60_000;
 
-const WS_INDICATOR: Record<WsStatus, { color: string; label: string }> = {
-  connected: { color: "#22c55e", label: "Connected" },
-  connecting: { color: "#eab308", label: "Connecting" },
-  disconnected: { color: "#ef4444", label: "Disconnected" },
+const WS_INDICATOR: Record<WsStatus, { className: string; label: string }> = {
+  connected: { className: "bg-green-500", label: "Connected" },
+  connecting: { className: "bg-yellow-500", label: "Connecting" },
+  disconnected: { className: "bg-red-500", label: "Disconnected" },
 };
+
+const STATUS_BADGE_VARIANTS: Record<string, { className: string }> = {
+  queued: { className: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
+  running: {
+    className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 animate-pulse",
+  },
+  completed: { className: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" },
+  failed: { className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
+  cancelled: { className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" },
+};
+
+const FALLBACK_BADGE = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
 
 function formatElapsed(startedAt: string | null): string {
   if (!startedAt) return "--";
@@ -73,118 +95,91 @@ export function ActiveJobsPanel() {
   const indicator = WS_INDICATOR[wsStatus];
 
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{ borderColor: "hsl(var(--border))", backgroundColor: "hsl(var(--background))" }}
-    >
+    <div className="rounded-lg border border-border bg-background p-4">
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-            Active Jobs
-          </h2>
-          <span
-            className="flex items-center gap-1 text-xs"
-            style={{ color: "hsl(var(--muted-foreground))" }}
-          >
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ backgroundColor: indicator.color }}
-            />
+          <h2 className="text-sm font-semibold text-foreground">Active Jobs</h2>
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span className={cn("inline-block h-2 w-2 rounded-full", indicator.className)} />
             {indicator.label}
           </span>
         </div>
 
         {hasStale && (
-          <button
+          <Button
             type="button"
-            className="rounded px-2 py-1 text-xs font-medium text-white"
-            style={{ backgroundColor: "hsl(var(--destructive))" }}
+            variant="destructive"
+            size="xs"
             disabled={cleanupMutation.isPending}
             onClick={() => cleanupMutation.mutate()}
           >
             {cleanupMutation.isPending ? "Cleaning..." : "Cleanup Stale"}
-          </button>
+          </Button>
         )}
       </div>
 
       {/* Table */}
       {isLoading ? (
-        <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-          Loading jobs...
-        </p>
+        <p className="text-xs text-muted-foreground">Loading jobs...</p>
       ) : jobs.length === 0 ? (
-        <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-          No active jobs.
-        </p>
+        <p className="text-xs text-muted-foreground">No active jobs.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr
-                className="border-b text-left"
-                style={{ borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}
-              >
-                <th className="pb-1 pr-3 font-medium">Run ID</th>
-                <th className="pb-1 pr-3 font-medium">Type</th>
-                <th className="pb-1 pr-3 font-medium">Status</th>
-                <th className="pb-1 pr-3 font-medium">Elapsed</th>
-                <th className="pb-1 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => {
-                const stale = isStaleJob(job);
-                return (
-                  <tr
-                    key={job.run_id}
-                    className="border-b"
-                    style={{ borderColor: "hsl(var(--border))" }}
-                  >
-                    <td
-                      className="py-1.5 pr-3 font-mono"
-                      style={{ color: "hsl(var(--foreground))" }}
-                    >
-                      {job.run_id}
-                    </td>
-                    <td className="py-1.5 pr-3" style={{ color: "hsl(var(--foreground))" }}>
-                      {job.job_type}
-                    </td>
-                    <td className="py-1.5 pr-3">
-                      <div className="flex items-center gap-1.5">
-                        <JobStatusBadge status={job.status} />
-                        {stale && (
-                          <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                            stale
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td
-                      className="py-1.5 pr-3 font-mono"
-                      style={{ color: "hsl(var(--foreground))" }}
-                    >
-                      {formatElapsed(job.started_at)}
-                    </td>
-                    <td className="py-1.5">
-                      {(job.status === "running" || job.status === "queued") && (
-                        <button
-                          type="button"
-                          className="rounded px-1.5 py-0.5 text-[10px] font-medium text-white"
-                          style={{ backgroundColor: "hsl(var(--destructive))" }}
-                          disabled={killMutation.isPending}
-                          onClick={() => killMutation.mutate({ runId: job.run_id })}
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-xs">Run ID</TableHead>
+              <TableHead className="text-xs">Type</TableHead>
+              <TableHead className="text-xs">Status</TableHead>
+              <TableHead className="text-xs">Elapsed</TableHead>
+              <TableHead className="text-xs">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {jobs.map((job) => {
+              const stale = isStaleJob(job);
+              const normalized = job.status.toLowerCase();
+              const badgeCls = STATUS_BADGE_VARIANTS[normalized]?.className ?? FALLBACK_BADGE;
+              return (
+                <TableRow key={job.run_id}>
+                  <TableCell className="font-mono text-xs text-foreground">{job.run_id}</TableCell>
+                  <TableCell className="text-xs text-foreground">{job.job_type}</TableCell>
+                  <TableCell className="text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline" className={cn("border-transparent", badgeCls)}>
+                        {job.status}
+                      </Badge>
+                      {stale && (
+                        <Badge
+                          variant="outline"
+                          className="border-transparent bg-amber-100 text-[10px] text-amber-700"
                         >
-                          Kill
-                        </button>
+                          stale
+                        </Badge>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-foreground">
+                    {formatElapsed(job.started_at)}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {(job.status === "running" || job.status === "queued") && (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="xs"
+                        disabled={killMutation.isPending}
+                        onClick={() => killMutation.mutate({ runId: job.run_id })}
+                      >
+                        Kill
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       )}
     </div>
   );

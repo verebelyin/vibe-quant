@@ -1,59 +1,30 @@
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface OverfittingBadgesProps {
   runId: number;
 }
 
-type BadgeStatus = "pass" | "fail" | "na";
+type CheckStatus = "pass" | "fail" | "na";
 
-interface BadgeInfo {
+interface CheckInfo {
   label: string;
-  status: BadgeStatus;
+  status: CheckStatus;
   detail?: string;
 }
 
-const statusStyles: Record<BadgeStatus, { bg: string; text: string; border: string }> = {
-  pass: {
-    bg: "hsl(142, 70%, 45%, 0.15)",
-    text: "hsl(142, 70%, 45%)",
-    border: "hsl(142, 70%, 45%, 0.3)",
-  },
-  fail: {
-    bg: "hsl(0, 70%, 55%, 0.15)",
-    text: "hsl(0, 70%, 55%)",
-    border: "hsl(0, 70%, 55%, 0.3)",
-  },
-  na: {
-    bg: "hsl(var(--muted))",
-    text: "hsl(var(--muted-foreground))",
-    border: "hsl(var(--border))",
-  },
-};
-
-function Badge({ label, status, detail }: BadgeInfo) {
-  const style = statusStyles[status];
-  const statusLabel = status === "pass" ? "PASS" : status === "fail" ? "FAIL" : "N/A";
-
+function CheckRow({ label, status, detail }: CheckInfo) {
   return (
-    <div
-      className="flex items-center gap-2 rounded-md border px-3 py-2"
-      style={{
-        backgroundColor: style.bg,
-        borderColor: style.border,
-      }}
-    >
-      <span className="text-xs font-bold uppercase" style={{ color: style.text }}>
-        {statusLabel}
-      </span>
-      <span className="text-xs font-medium" style={{ color: "hsl(var(--foreground))" }}>
-        {label}
-      </span>
-      {detail && (
-        <span className="ml-auto text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-          {detail}
-        </span>
-      )}
+    <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+      <Badge
+        variant={status === "pass" ? "default" : status === "fail" ? "destructive" : "secondary"}
+      >
+        {status === "pass" ? "PASS" : status === "fail" ? "FAIL" : "N/A"}
+      </Badge>
+      <span className="text-xs font-medium text-foreground">{label}</span>
+      {detail && <span className="ml-auto text-xs text-muted-foreground">{detail}</span>}
     </div>
   );
 }
@@ -71,24 +42,20 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
   }
 
   if (query.isError || !data) {
-    return (
-      <p className="py-4 text-sm" style={{ color: "hsl(var(--destructive))" }}>
-        Failed to load overfitting data.
-      </p>
-    );
+    return <p className="py-4 text-sm text-destructive">Failed to load overfitting data.</p>;
   }
 
-  function sharpeStatus(value: number | null): BadgeStatus {
+  function sharpeStatus(value: number | null): CheckStatus {
     if (value == null) return "na";
     return value > 0 ? "pass" : "fail";
   }
 
-  function efficiencyStatus(value: number | null): BadgeStatus {
+  function efficiencyStatus(value: number | null): CheckStatus {
     if (value == null) return "na";
     return value >= 0.5 ? "pass" : "fail";
   }
 
-  const badges: BadgeInfo[] = [
+  const checks: CheckInfo[] = [
     {
       label: "Walk-Forward",
       status: efficiencyStatus(data.walk_forward_efficiency),
@@ -112,56 +79,35 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
     },
   ];
 
-  const passCount = badges.filter((b) => b.status === "pass").length;
-  const failCount = badges.filter((b) => b.status === "fail").length;
-  const naCount = badges.filter((b) => b.status === "na").length;
+  const passCount = checks.filter((b) => b.status === "pass").length;
+  const failCount = checks.filter((b) => b.status === "fail").length;
+  const naCount = checks.filter((b) => b.status === "na").length;
 
-  const allNa = naCount === badges.length;
+  const allNa = naCount === checks.length;
   const overallPass = failCount === 0 && !allNa;
 
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <h3
-          className="text-sm font-semibold uppercase tracking-wide"
-          style={{ color: "hsl(var(--muted-foreground))" }}
-        >
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Overfitting Filters
-        </h3>
-        <span
-          className="rounded-full px-2 py-0.5 text-xs font-bold uppercase"
-          style={{
-            backgroundColor: allNa
-              ? statusStyles.na.bg
+        </CardTitle>
+        <CardAction>
+          <Badge variant={allNa ? "secondary" : overallPass ? "default" : "destructive"}>
+            {allNa
+              ? "Not Run"
               : overallPass
-                ? statusStyles.pass.bg
-                : statusStyles.fail.bg,
-            color: allNa
-              ? statusStyles.na.text
-              : overallPass
-                ? statusStyles.pass.text
-                : statusStyles.fail.text,
-          }}
-        >
-          {allNa
-            ? "Not Run"
-            : overallPass
-              ? `All Passed (${passCount}/${badges.length})`
-              : `${failCount} Failed`}
-        </span>
-      </div>
+                ? `All Passed (${passCount}/${checks.length})`
+                : `${failCount} Failed`}
+          </Badge>
+        </CardAction>
+      </CardHeader>
 
-      <div className="flex flex-col gap-2">
-        {badges.map((badge) => (
-          <Badge key={badge.label} {...badge} />
+      <CardContent className="flex flex-col gap-2">
+        {checks.map((check) => (
+          <CheckRow key={check.label} {...check} />
         ))}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

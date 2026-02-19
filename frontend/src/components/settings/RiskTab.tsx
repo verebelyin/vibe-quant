@@ -8,8 +8,12 @@ import {
   useListRiskConfigsApiSettingsRiskGet,
   useUpdateRiskConfigApiSettingsRiskConfigIdPut,
 } from "@/api/generated/settings/settings";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Label } from "@/components/ui/label";
 
 interface RiskFormState {
   name: string;
@@ -55,26 +59,10 @@ function NumberField({
   onChange: (v: string) => void;
 }) {
   return (
-    <label className="block">
-      <span
-        className="mb-1 block text-xs font-medium"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        {label}
-      </span>
-      <input
-        type="number"
-        step="any"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border px-3 py-1.5 text-sm outline-none transition-colors focus:ring-1"
-        style={{
-          backgroundColor: "hsl(var(--background))",
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--foreground))",
-        }}
-      />
-    </label>
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input type="number" step="any" value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
   );
 }
 
@@ -95,107 +83,69 @@ function RiskForm({
   const set = (k: keyof RiskFormState, v: string) => setForm((prev) => ({ ...prev, [k]: v }));
 
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <label className="mb-3 block">
-        <span
-          className="mb-1 block text-xs font-medium"
-          style={{ color: "hsl(var(--muted-foreground))" }}
-        >
-          Name
-        </span>
-        <input
-          type="text"
-          value={form.name}
-          onChange={(e) => set("name", e.target.value)}
-          className="w-full rounded-md border px-3 py-1.5 text-sm outline-none transition-colors focus:ring-1"
-          style={{
-            backgroundColor: "hsl(var(--background))",
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        />
-      </label>
+    <Card className="py-4">
+      <CardContent>
+        <div className="space-y-1 mb-3">
+          <Label className="text-xs text-muted-foreground">Name</Label>
+          <Input type="text" value={form.name} onChange={(e) => set("name", e.target.value)} />
+        </div>
 
-      <p
-        className="mb-2 text-xs font-semibold uppercase tracking-wider"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        Strategy Level
-      </p>
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <NumberField
-          label="Max Position Size"
-          value={form.max_position_size}
-          onChange={(v) => set("max_position_size", v)}
-        />
-        <NumberField
-          label="Max Drawdown %"
-          value={form.max_drawdown_pct}
-          onChange={(v) => set("max_drawdown_pct", v)}
-        />
-        <NumberField
-          label="Stop Loss %"
-          value={form.stop_loss_pct}
-          onChange={(v) => set("stop_loss_pct", v)}
-        />
-      </div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Strategy Level
+        </p>
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <NumberField
+            label="Max Position Size"
+            value={form.max_position_size}
+            onChange={(v) => set("max_position_size", v)}
+          />
+          <NumberField
+            label="Max Drawdown %"
+            value={form.max_drawdown_pct}
+            onChange={(v) => set("max_drawdown_pct", v)}
+          />
+          <NumberField
+            label="Stop Loss %"
+            value={form.stop_loss_pct}
+            onChange={(v) => set("stop_loss_pct", v)}
+          />
+        </div>
 
-      <p
-        className="mb-2 text-xs font-semibold uppercase tracking-wider"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        Portfolio Level
-      </p>
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <NumberField
-          label="Max Total Exposure"
-          value={form.max_total_exposure}
-          onChange={(v) => set("max_total_exposure", v)}
-        />
-        <NumberField
-          label="Max Correlated Positions"
-          value={form.max_correlated_positions}
-          onChange={(v) => set("max_correlated_positions", v)}
-        />
-        <NumberField
-          label="Daily Loss Limit %"
-          value={form.daily_loss_limit_pct}
-          onChange={(v) => set("daily_loss_limit_pct", v)}
-        />
-      </div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Portfolio Level
+        </p>
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <NumberField
+            label="Max Total Exposure"
+            value={form.max_total_exposure}
+            onChange={(v) => set("max_total_exposure", v)}
+          />
+          <NumberField
+            label="Max Correlated Positions"
+            value={form.max_correlated_positions}
+            onChange={(v) => set("max_correlated_positions", v)}
+          />
+          <NumberField
+            label="Daily Loss Limit %"
+            value={form.daily_loss_limit_pct}
+            onChange={(v) => set("daily_loss_limit_pct", v)}
+          />
+        </div>
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={isPending || !form.name.trim()}
-          onClick={() => onSubmit(form)}
-          className="rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90 disabled:opacity-50"
-          style={{
-            backgroundColor: "hsl(var(--primary))",
-            color: "hsl(var(--primary-foreground))",
-          }}
-        >
-          {isPending ? "Saving..." : submitLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            disabled={isPending || !form.name.trim()}
+            onClick={() => onSubmit(form)}
+          >
+            {isPending ? "Saving..." : submitLabel}
+          </Button>
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -242,14 +192,7 @@ export function RiskTab() {
 
   if (query.isError) {
     return (
-      <div
-        className="rounded-lg border p-4"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         <p className="font-medium">Failed to load risk configs</p>
       </div>
     );
@@ -258,21 +201,13 @@ export function RiskTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
+        <p className="text-sm text-muted-foreground">
           {configs.length} config{configs.length !== 1 ? "s" : ""}
         </p>
         {!showCreate && (
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-            style={{
-              backgroundColor: "hsl(var(--primary))",
-              color: "hsl(var(--primary-foreground))",
-            }}
-          >
+          <Button size="sm" onClick={() => setShowCreate(true)}>
             New Config
-          </button>
+          </Button>
         )}
       </div>
 
@@ -325,63 +260,44 @@ export function RiskTab() {
             }}
           />
         ) : (
-          <div
-            key={cfg.id}
-            className="flex items-center justify-between rounded-lg border p-4"
-            style={{
-              backgroundColor: "hsl(var(--card))",
-              borderColor: "hsl(var(--border))",
-            }}
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-                {cfg.name}
-              </p>
-              <p className="mt-0.5 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                Created {new Date(cfg.created_at).toLocaleDateString()}
-              </p>
-              <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                <span className="text-[10px]" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  Strategy:{" "}
-                  {Object.entries(cfg.strategy_level as Record<string, unknown>)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join(", ")}
-                </span>
-                <span className="text-[10px]" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  Portfolio:{" "}
-                  {Object.entries(cfg.portfolio_level as Record<string, unknown>)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join(", ")}
-                </span>
+          <Card key={cfg.id} className="py-4">
+            <CardContent className="flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">{cfg.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Created {new Date(cfg.created_at).toLocaleDateString()}
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  <span className="text-[10px] text-muted-foreground">
+                    Strategy:{" "}
+                    {Object.entries(cfg.strategy_level as Record<string, unknown>)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    Portfolio:{" "}
+                    {Object.entries(cfg.portfolio_level as Record<string, unknown>)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+                  </span>
+                </div>
               </div>
-            </div>
-            <div className="ml-4 flex shrink-0 gap-1.5">
-              <button
-                type="button"
-                onClick={() => setEditingId(cfg.id)}
-                className="rounded border px-2 py-1 text-[10px] font-medium transition-colors hover:brightness-90"
-                style={{
-                  borderColor: "hsl(var(--border))",
-                  color: "hsl(var(--foreground))",
-                }}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
-                }}
-                className="rounded border px-2 py-1 text-[10px] font-medium transition-colors hover:brightness-90"
-                style={{
-                  borderColor: "hsl(0 84% 60% / 0.3)",
-                  color: "hsl(0 84% 60%)",
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
+              <div className="ml-4 flex shrink-0 gap-1.5">
+                <Button variant="outline" size="xs" onClick={() => setEditingId(cfg.id)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="xs"
+                  onClick={() => {
+                    deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ),
       )}
     </div>

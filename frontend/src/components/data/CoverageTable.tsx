@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react";
 import type { DataCoverageItem } from "@/api/generated/models";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 type SortKey = keyof DataCoverageItem;
 type SortDir = "asc" | "desc";
@@ -18,12 +27,12 @@ function formatDate(iso: string): string {
   });
 }
 
-function coverageColor(barCount: number, klineCount: number): string {
-  if (klineCount === 0) return "hsl(var(--muted-foreground))";
+function coverageColorClass(barCount: number, klineCount: number): string {
+  if (klineCount === 0) return "text-muted-foreground";
   const pct = (barCount / klineCount) * 100;
-  if (pct > 90) return "hsl(142 71% 45%)";
-  if (pct > 50) return "hsl(48 96% 53%)";
-  return "hsl(0 84% 60%)";
+  if (pct > 90) return "text-green-500";
+  if (pct > 50) return "text-yellow-500";
+  return "text-destructive";
 }
 
 function coveragePct(barCount: number, klineCount: number): string {
@@ -75,100 +84,62 @@ export function CoverageTable({ coverage }: CoverageTableProps) {
 
   if (coverage.length === 0) {
     return (
-      <div
-        className="rounded-lg border p-8 text-center"
-        style={{
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--muted-foreground))",
-        }}
-      >
+      <div className="rounded-lg border p-8 text-center text-muted-foreground">
         No coverage data available. Ingest data to see symbol coverage.
       </div>
     );
   }
 
   return (
-    <div
-      className="overflow-x-auto rounded-lg border"
-      style={{ borderColor: "hsl(var(--border))" }}
-    >
-      <table className="w-full text-sm">
-        <thead>
-          <tr
-            style={{
-              backgroundColor: "hsl(var(--muted))",
-              color: "hsl(var(--muted-foreground))",
-            }}
-          >
+    <div className="rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted hover:bg-muted">
             {COLUMNS.map((col) => (
-              <th
+              <TableHead
                 key={col.key}
-                className={`cursor-pointer select-none px-4 py-2.5 font-medium ${
-                  col.align === "right" ? "text-right" : "text-left"
-                }`}
+                className={cn(
+                  "cursor-pointer select-none px-4",
+                  col.align === "right" && "text-right",
+                )}
                 onClick={() => handleSort(col.key)}
               >
                 {col.label}
                 {sortIndicator(col.key)}
-              </th>
+              </TableHead>
             ))}
-            <th className="px-4 py-2.5 text-right font-medium">Coverage</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((item, idx) => (
-            <tr
-              key={item.symbol}
-              className="transition-colors hover:opacity-80"
-              style={{
-                backgroundColor: idx % 2 === 0 ? "hsl(var(--card))" : "hsl(var(--muted) / 0.3)",
-                borderTop: idx > 0 ? "1px solid hsl(var(--border))" : undefined,
-              }}
-            >
-              <td
-                className="px-4 py-2 font-mono font-medium"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
-                {item.symbol}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--foreground))" }}>
-                {formatDate(item.start_date)}
-              </td>
-              <td className="px-4 py-2" style={{ color: "hsl(var(--foreground))" }}>
-                {formatDate(item.end_date)}
-              </td>
-              <td
-                className="px-4 py-2 text-right font-mono"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
+            <TableHead className="px-4 text-right">Coverage</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sorted.map((item) => (
+            <TableRow key={item.symbol}>
+              <TableCell className="px-4 font-mono font-medium">{item.symbol}</TableCell>
+              <TableCell className="px-4">{formatDate(item.start_date)}</TableCell>
+              <TableCell className="px-4">{formatDate(item.end_date)}</TableCell>
+              <TableCell className="px-4 text-right font-mono">
                 {item.kline_count.toLocaleString()}
-              </td>
-              <td
-                className="px-4 py-2 text-right font-mono"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
+              </TableCell>
+              <TableCell className="px-4 text-right font-mono">
                 {item.bar_count.toLocaleString()}
-              </td>
-              <td
-                className="px-4 py-2 text-right font-mono"
-                style={{ color: "hsl(var(--foreground))" }}
-              >
+              </TableCell>
+              <TableCell className="px-4 text-right font-mono">
                 {item.funding_rate_count.toLocaleString()}
-              </td>
-              <td className="px-4 py-2 text-right">
+              </TableCell>
+              <TableCell className="px-4 text-right">
                 <span
-                  className="font-mono font-semibold"
-                  style={{
-                    color: coverageColor(item.bar_count, item.kline_count),
-                  }}
+                  className={cn(
+                    "font-mono font-semibold",
+                    coverageColorClass(item.bar_count, item.kline_count),
+                  )}
                 >
                   {coveragePct(item.bar_count, item.kline_count)}
                 </span>
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

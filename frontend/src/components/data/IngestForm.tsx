@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   useIngestPreviewApiDataIngestPreviewPost,
   useListSymbolsApiDataSymbolsGet,
@@ -7,7 +8,19 @@ import {
   useStartUpdateApiDataUpdatePost,
 } from "@/api/generated/data/data";
 import type { IngestPreviewResponse } from "@/api/generated/models";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DateRangePicker } from "@/components/ui/DateRangePicker";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
@@ -58,6 +71,9 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
             setPreview(res.data);
           }
         },
+        onError: () => {
+          toast.error("Failed to load preview");
+        },
       },
     );
   }
@@ -71,6 +87,10 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
           const data = res.data as Record<string, unknown>;
           const jobId = String(data?.job_id ?? data?.task_id ?? "");
           if (jobId) onIngestStarted(jobId);
+          toast.success("Download started");
+        },
+        onError: () => {
+          toast.error("Failed to start download");
         },
       },
     );
@@ -82,6 +102,10 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
         const data = res.data as Record<string, unknown>;
         const jobId = String(data?.job_id ?? data?.task_id ?? "");
         if (jobId) onIngestStarted(jobId);
+        toast.success("Update started");
+      },
+      onError: () => {
+        toast.error("Failed to start update");
       },
     });
   }
@@ -92,25 +116,13 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
         const data = res.data as Record<string, unknown>;
         const jobId = String(data?.job_id ?? data?.task_id ?? "");
         if (jobId) onIngestStarted(jobId);
+        toast.success("Catalog rebuild started");
+      },
+      onError: () => {
+        toast.error("Failed to start catalog rebuild");
       },
     });
   }
-
-  const inputStyle = {
-    backgroundColor: "hsl(var(--input))",
-    borderColor: "hsl(var(--border))",
-    color: "hsl(var(--foreground))",
-  };
-
-  const btnPrimary = {
-    backgroundColor: "hsl(var(--primary))",
-    color: "hsl(var(--primary-foreground))",
-  };
-
-  const btnSecondary = {
-    backgroundColor: "hsl(var(--secondary))",
-    color: "hsl(var(--secondary-foreground))",
-  };
 
   const isAnyMutating =
     previewMutation.isPending ||
@@ -119,44 +131,26 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
     rebuildMutation.isPending;
 
   return (
-    <div
-      className="rounded-lg border p-5"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <h2 className="mb-4 text-lg font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-        Data Ingest
-      </h2>
-
-      <div className="space-y-4">
+    <Card>
+      <CardHeader>
+        <CardTitle>Data Ingest</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
         {/* Symbol multi-select */}
         <div>
           <div className="mb-1.5 flex items-center justify-between">
-            <label
-              className="text-xs font-medium uppercase tracking-wider"
-              style={{ color: "hsl(var(--muted-foreground))" }}
-            >
-              Symbols
-            </label>
+            <Label className="text-xs uppercase tracking-wider">Symbols</Label>
             <button
               type="button"
               onClick={handleSelectAll}
-              className="text-xs font-medium hover:underline"
-              style={{ color: "hsl(var(--primary))" }}
+              className="text-xs font-medium text-primary hover:underline"
             >
               {selectedSymbols.length === symbols.length ? "Deselect all" : "Select all"}
             </button>
           </div>
-          <div
-            className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2"
-            style={{ borderColor: "hsl(var(--border))", backgroundColor: "hsl(var(--input))" }}
-          >
+          <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-input bg-transparent p-2 dark:bg-input/30">
             {symbols.length === 0 && (
-              <span className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                No symbols available
-              </span>
+              <span className="text-xs text-muted-foreground">No symbols available</span>
             )}
             {symbols.map((sym) => {
               const selected = selectedSymbols.includes(sym);
@@ -165,18 +159,12 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
                   key={sym}
                   type="button"
                   onClick={() => handleToggleSymbol(sym)}
-                  className="rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors"
-                  style={
+                  className={cn(
+                    "rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors",
                     selected
-                      ? {
-                          backgroundColor: "hsl(var(--primary))",
-                          color: "hsl(var(--primary-foreground))",
-                        }
-                      : {
-                          backgroundColor: "hsl(var(--accent))",
-                          color: "hsl(var(--accent-foreground))",
-                        }
-                  }
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-accent text-accent-foreground",
+                  )}
                 >
                   {sym}
                 </button>
@@ -184,9 +172,7 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
             })}
           </div>
           {selectedSymbols.length > 0 && (
-            <p className="mt-1 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-              {selectedSymbols.length} selected
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{selectedSymbols.length} selected</p>
           )}
         </div>
 
@@ -205,67 +191,38 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
             }}
           />
           <div className="flex flex-col gap-1">
-            <label
-              htmlFor="ingest-interval"
-              className="text-xs font-medium"
-              style={{ color: "hsl(var(--muted-foreground))" }}
-            >
-              Interval
-            </label>
-            <select
-              id="ingest-interval"
-              value={interval}
-              onChange={(e) => setInterval(e.target.value)}
-              className="rounded-md border px-2.5 py-1.5 text-sm outline-none focus:ring-2"
-              style={
-                { ...inputStyle, "--tw-ring-color": "hsl(var(--ring))" } as React.CSSProperties
-              }
-            >
-              {INTERVALS.map((iv) => (
-                <option key={iv} value={iv}>
-                  {iv}
-                </option>
-              ))}
-            </select>
+            <Label className="text-xs text-muted-foreground">Interval</Label>
+            <Select value={interval} onValueChange={setInterval}>
+              <SelectTrigger className="w-24">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INTERVALS.map((iv) => (
+                  <SelectItem key={iv} value={iv}>
+                    {iv}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
         {/* Preview result */}
         {preview && (
-          <div
-            className="rounded-md border p-3"
-            style={{
-              borderColor: "hsl(var(--border))",
-              backgroundColor: "hsl(var(--muted) / 0.3)",
-            }}
-          >
-            <p className="text-sm font-medium" style={{ color: "hsl(var(--foreground))" }}>
-              Download Preview
-            </p>
+          <div className="rounded-md border bg-muted/30 p-3">
+            <p className="text-sm font-medium text-foreground">Download Preview</p>
             <div className="mt-2 grid grid-cols-3 gap-4 text-center">
               <div>
-                <p className="text-xl font-bold" style={{ color: "hsl(var(--foreground))" }}>
-                  {preview.total_months}
-                </p>
-                <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  Total months
-                </p>
+                <p className="text-xl font-bold text-foreground">{preview.total_months}</p>
+                <p className="text-xs text-muted-foreground">Total months</p>
               </div>
               <div>
-                <p className="text-xl font-bold" style={{ color: "hsl(142 71% 45%)" }}>
-                  {preview.archived_months}
-                </p>
-                <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  Already archived
-                </p>
+                <p className="text-xl font-bold text-green-500">{preview.archived_months}</p>
+                <p className="text-xs text-muted-foreground">Already archived</p>
               </div>
               <div>
-                <p className="text-xl font-bold" style={{ color: "hsl(48 96% 53%)" }}>
-                  {preview.new_months}
-                </p>
-                <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  New to download
-                </p>
+                <p className="text-xl font-bold text-yellow-500">{preview.new_months}</p>
+                <p className="text-xs text-muted-foreground">New to download</p>
               </div>
             </div>
           </div>
@@ -273,14 +230,7 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
 
         {/* Error display */}
         {(previewMutation.isError || ingestMutation.isError) && (
-          <div
-            className="rounded-md border p-3 text-sm"
-            style={{
-              borderColor: "hsl(0 84% 60%)",
-              backgroundColor: "hsl(0 84% 60% / 0.1)",
-              color: "hsl(0 84% 60%)",
-            }}
-          >
+          <div className="rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
             {previewMutation.error instanceof Error
               ? previewMutation.error.message
               : ingestMutation.error instanceof Error
@@ -290,61 +240,26 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
         )}
 
         {/* Action buttons */}
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
             onClick={handlePreview}
             disabled={!canPreview || isAnyMutating}
-            className="rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-            style={btnSecondary}
           >
             {previewMutation.isPending ? "Loading..." : "Preview"}
-          </button>
-          <button
-            type="button"
-            onClick={handleStartDownload}
-            disabled={!canPreview || isAnyMutating}
-            className="rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-            style={btnPrimary}
-          >
+          </Button>
+          <Button onClick={handleStartDownload} disabled={!canPreview || isAnyMutating}>
             {ingestMutation.isPending ? "Starting..." : "Start Download"}
-          </button>
-          <div
-            className="mx-2 self-stretch"
-            style={{ borderLeft: "1px solid hsl(var(--border))" }}
-          />
-          <button
-            type="button"
-            onClick={handleUpdateAll}
-            disabled={isAnyMutating}
-            className="rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-            style={btnSecondary}
-          >
+          </Button>
+          <Separator orientation="vertical" className="mx-2 h-6" />
+          <Button variant="secondary" onClick={handleUpdateAll} disabled={isAnyMutating}>
             {updateMutation.isPending ? "Starting..." : "Update All"}
-          </button>
-          <button
-            type="button"
-            onClick={handleRebuild}
-            disabled={isAnyMutating}
-            className="rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-            style={btnSecondary}
-          >
+          </Button>
+          <Button variant="secondary" onClick={handleRebuild} disabled={isAnyMutating}>
             {rebuildMutation.isPending ? "Rebuilding..." : "Rebuild Catalog"}
-          </button>
+          </Button>
         </div>
-
-        {/* Success messages for update/rebuild */}
-        {updateMutation.isSuccess && (
-          <p className="text-sm" style={{ color: "hsl(142 71% 45%)" }}>
-            Update started successfully.
-          </p>
-        )}
-        {rebuildMutation.isSuccess && (
-          <p className="text-sm" style={{ color: "hsl(142 71% 45%)" }}>
-            Catalog rebuild started successfully.
-          </p>
-        )}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

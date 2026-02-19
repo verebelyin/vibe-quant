@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { StrategyResponse } from "@/api/generated/models";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { StrategyCard } from "@/components/ui/StrategyCard";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const STRATEGY_TYPES = [
   "momentum",
@@ -44,18 +53,17 @@ function StrategyCardWithDelete({
         version={strategy.version}
         onClick={onSelect}
       />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={(e) => {
           e.stopPropagation();
           onDelete();
         }}
-        className="absolute right-2 top-2 hidden cursor-pointer rounded p-1 text-xs opacity-70 transition-opacity hover:opacity-100 group-hover:block"
-        style={{ color: "hsl(0 84% 60%)" }}
-        title="Delete strategy"
+        className="absolute right-2 top-2 hidden text-destructive opacity-70 hover:opacity-100 group-hover:block"
       >
         Delete
-      </button>
+      </Button>
     </div>
   );
 }
@@ -63,7 +71,7 @@ function StrategyCardWithDelete({
 export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string>("");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortKey>("updated_at");
   const timerRef = useRef<ReturnType<typeof setTimeout>>(null);
 
@@ -91,7 +99,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
       );
     }
 
-    if (typeFilter) {
+    if (typeFilter && typeFilter !== "all") {
       items = items.filter((s) => s.strategy_type === typeFilter);
     }
 
@@ -118,20 +126,12 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
       <div className="space-y-4">
         <div className="flex gap-3">
           {(["a", "b", "c"] as const).map((id) => (
-            <div
-              key={id}
-              className="h-10 w-48 animate-pulse rounded-lg"
-              style={{ backgroundColor: "hsl(var(--muted))" }}
-            />
+            <div key={id} className="h-10 w-48 animate-pulse rounded-lg bg-muted" />
           ))}
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {(["a", "b", "c", "d", "e", "f"] as const).map((id) => (
-            <div
-              key={id}
-              className="h-32 animate-pulse rounded-lg"
-              style={{ backgroundColor: "hsl(var(--muted))" }}
-            />
+            <div key={id} className="h-32 animate-pulse rounded-lg bg-muted" />
           ))}
         </div>
       </div>
@@ -140,14 +140,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
 
   if (query.isError) {
     return (
-      <div
-        className="rounded-lg border p-6"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive bg-destructive/10 p-6 text-destructive">
         <p className="font-medium">Failed to load strategies</p>
         <p className="mt-1 text-sm opacity-80">
           {query.error instanceof Error ? query.error.message : "Unknown error"}
@@ -160,66 +153,46 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <input
+        <Input
           type="text"
           placeholder="Search strategies..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-10 rounded-lg border px-3 text-sm outline-none focus:ring-2"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-            minWidth: "220px",
-          }}
+          className="min-w-[220px] max-w-xs"
         />
-        <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          className="h-10 rounded-lg border px-3 text-sm outline-none"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        >
-          <option value="">All types</option>
-          {STRATEGY_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortKey)}
-          className="h-10 rounded-lg border px-3 text-sm outline-none"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        >
-          {SORT_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              Sort: {opt.label}
-            </option>
-          ))}
-        </select>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="All types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All types</SelectItem>
+            {STRATEGY_TYPES.map((t) => (
+              <SelectItem key={t} value={t}>
+                {t.replace(/_/g, " ")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SORT_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                Sort: {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Grid */}
       {filtered.length === 0 ? (
-        <div
-          className="flex flex-col items-center justify-center rounded-lg border py-16"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--muted-foreground))",
-          }}
-        >
+        <div className="flex flex-col items-center justify-center rounded-lg border border-border py-16 text-muted-foreground">
           <p className="text-lg font-medium">No strategies found</p>
           <p className="mt-1 text-sm">
-            {debouncedSearch || typeFilter
+            {debouncedSearch || (typeFilter && typeFilter !== "all")
               ? "Try adjusting your search or filters."
               : "Create your first strategy to get started."}
           </p>

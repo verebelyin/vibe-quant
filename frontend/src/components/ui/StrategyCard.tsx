@@ -1,3 +1,6 @@
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
 interface StrategyCardProps {
   name: string;
   description?: string;
@@ -15,57 +18,47 @@ export function StrategyCard({
   onClick,
   className = "",
 }: StrategyCardProps) {
-  const cardStyle = {
-    backgroundColor: "hsl(var(--card))",
-    color: "hsl(var(--card-foreground))",
-    borderColor: "hsl(var(--border))",
-  };
-
-  const inner = (
+  const content = (
     <>
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-bold leading-tight">{name}</h3>
-        {version !== undefined && (
-          <span className="shrink-0 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-            v{version}
+      <CardHeader className="pb-0">
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-sm leading-tight">{name}</CardTitle>
+          {version !== undefined && (
+            <span className="shrink-0 text-xs text-muted-foreground">v{version}</span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {strategyType && (
+          <span className="mt-1.5 inline-block rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+            {strategyType}
           </span>
         )}
-      </div>
-      {strategyType && (
-        <span
-          className="mt-1.5 inline-block rounded-full px-2 py-0.5 text-xs font-medium"
-          style={{
-            backgroundColor: "hsl(var(--accent))",
-            color: "hsl(var(--accent-foreground))",
-          }}
-        >
-          {strategyType}
-        </span>
-      )}
-      {description && (
-        <p className="mt-2 line-clamp-2 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-          {description}
-        </p>
-      )}
+        {description && (
+          <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{description}</p>
+        )}
+      </CardContent>
     </>
   );
 
   if (onClick) {
     return (
-      <button
-        type="button"
+      <Card
+        className={cn("cursor-pointer transition-colors hover:bg-accent/50", className)}
         onClick={onClick}
-        className={`rounded-lg border p-4 text-left transition-colors cursor-pointer hover:brightness-95 dark:hover:brightness-110 ${className}`}
-        style={cardStyle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
       >
-        {inner}
-      </button>
+        {content}
+      </Card>
     );
   }
 
-  return (
-    <div className={`rounded-lg border p-4 transition-colors ${className}`} style={cardStyle}>
-      {inner}
-    </div>
-  );
+  return <Card className={cn("transition-colors", className)}>{content}</Card>;
 }

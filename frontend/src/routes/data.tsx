@@ -33,9 +33,7 @@ export function DataPage() {
             />
           )}
           <div>
-            <h2 className="mb-3 text-lg font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-              Download History
-            </h2>
+            <h2 className="mb-3 text-lg font-semibold text-foreground">Download History</h2>
             <DownloadHistory />
           </div>
         </div>

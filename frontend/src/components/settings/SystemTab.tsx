@@ -1,4 +1,6 @@
 import { useGetSystemInfoApiSettingsSystemInfoGet } from "@/api/generated/settings/settings";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 
 function formatBytes(bytes: number): string {
@@ -12,12 +14,10 @@ function formatBytes(bytes: number): string {
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between py-2">
-      <span className="text-xs font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>
-        {label}
-      </span>
-      <span className="font-mono text-xs" style={{ color: "hsl(var(--foreground))" }}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <Badge variant="secondary" className="font-mono">
         {value}
-      </span>
+      </Badge>
     </div>
   );
 }
@@ -36,14 +36,7 @@ export function SystemTab() {
 
   if (query.isError) {
     return (
-      <div
-        className="rounded-lg border p-4"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         <p className="font-medium">Failed to load system info</p>
       </div>
     );
@@ -56,68 +49,47 @@ export function SystemTab() {
   return (
     <div className="space-y-6">
       {/* Runtime info */}
-      <div
-        className="rounded-lg border p-5"
-        style={{
-          backgroundColor: "hsl(var(--card))",
-          borderColor: "hsl(var(--border))",
-        }}
-      >
-        <p
-          className="mb-3 text-xs font-semibold uppercase tracking-wider"
-          style={{ color: "hsl(var(--muted-foreground))" }}
-        >
-          Runtime
-        </p>
-        <div className="divide-y" style={{ borderColor: "hsl(var(--border))" }}>
-          <InfoRow label="Python Version" value={info.python_version} />
-          <InfoRow label="NautilusTrader Version" value={info.nt_version} />
-        </div>
-      </div>
+      <Card className="py-4">
+        <CardContent>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Runtime
+          </p>
+          <div className="divide-y divide-border">
+            <InfoRow label="Python Version" value={info.python_version} />
+            <InfoRow label="NautilusTrader Version" value={info.nt_version} />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Storage */}
-      <div
-        className="rounded-lg border p-5"
-        style={{
-          backgroundColor: "hsl(var(--card))",
-          borderColor: "hsl(var(--border))",
-        }}
-      >
-        <p
-          className="mb-3 text-xs font-semibold uppercase tracking-wider"
-          style={{ color: "hsl(var(--muted-foreground))" }}
-        >
-          Storage
-        </p>
-        <div className="divide-y" style={{ borderColor: "hsl(var(--border))" }}>
-          <InfoRow label="Database Size" value={formatBytes(info.db_size_bytes)} />
-          <InfoRow label="Catalog Size" value={formatBytes(info.catalog_size_bytes)} />
-        </div>
-      </div>
+      <Card className="py-4">
+        <CardContent>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Storage
+          </p>
+          <div className="divide-y divide-border">
+            <InfoRow label="Database Size" value={formatBytes(info.db_size_bytes)} />
+            <InfoRow label="Catalog Size" value={formatBytes(info.catalog_size_bytes)} />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Table counts */}
       {Object.keys(tableCounts).length > 0 && (
-        <div
-          className="rounded-lg border p-5"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-          }}
-        >
-          <p
-            className="mb-3 text-xs font-semibold uppercase tracking-wider"
-            style={{ color: "hsl(var(--muted-foreground))" }}
-          >
-            Table Row Counts
-          </p>
-          <div className="divide-y" style={{ borderColor: "hsl(var(--border))" }}>
-            {Object.entries(tableCounts)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([table, count]) => (
-                <InfoRow key={table} label={table} value={count.toLocaleString()} />
-              ))}
-          </div>
-        </div>
+        <Card className="py-4">
+          <CardContent>
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Table Row Counts
+            </p>
+            <div className="divide-y divide-border">
+              {Object.entries(tableCounts)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([table, count]) => (
+                  <InfoRow key={table} label={table} value={count.toLocaleString()} />
+                ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

@@ -5,7 +5,12 @@ import {
   useGetDatabaseInfoApiSettingsDatabaseGet,
   useSwitchDatabaseApiSettingsDatabasePut,
 } from "@/api/generated/settings/settings";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Label } from "@/components/ui/label";
 
 export function DatabaseTab() {
   const qc = useQueryClient();
@@ -32,14 +37,7 @@ export function DatabaseTab() {
 
   if (query.isError) {
     return (
-      <div
-        className="rounded-lg border p-4"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         <p className="font-medium">Failed to load database info</p>
       </div>
     );
@@ -48,151 +46,94 @@ export function DatabaseTab() {
   return (
     <div className="space-y-6">
       {/* Current DB info */}
-      <div
-        className="rounded-lg border p-5"
-        style={{
-          backgroundColor: "hsl(var(--card))",
-          borderColor: "hsl(var(--border))",
-        }}
-      >
-        <p
-          className="mb-3 text-xs font-semibold uppercase tracking-wider"
-          style={{ color: "hsl(var(--muted-foreground))" }}
-        >
-          Current Database
-        </p>
-        <div className="space-y-2">
-          <div className="flex items-start justify-between gap-4">
-            <span className="shrink-0 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-              Path
-            </span>
-            <span
-              className="break-all text-right font-mono text-xs"
-              style={{ color: "hsl(var(--foreground))" }}
-            >
-              {info?.path ?? "N/A"}
-            </span>
-          </div>
-        </div>
-
-        {info?.tables && info.tables.length > 0 && (
-          <div className="mt-4">
-            <p
-              className="mb-2 text-xs font-medium"
-              style={{ color: "hsl(var(--muted-foreground))" }}
-            >
-              Tables ({info.tables.length})
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {info.tables.map((t) => (
-                <span
-                  key={t}
-                  className="rounded px-1.5 py-0.5 font-mono text-[10px]"
-                  style={{
-                    backgroundColor: "hsl(var(--muted))",
-                    color: "hsl(var(--muted-foreground))",
-                  }}
-                >
-                  {t}
-                </span>
-              ))}
+      <Card className="py-4">
+        <CardContent>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Current Database
+          </p>
+          <div className="space-y-2">
+            <div className="flex items-start justify-between gap-4">
+              <span className="shrink-0 text-xs text-muted-foreground">Path</span>
+              <span className="break-all text-right font-mono text-xs text-foreground">
+                {info?.path ?? "N/A"}
+              </span>
             </div>
           </div>
-        )}
-      </div>
+
+          {info?.tables && info.tables.length > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">
+                Tables ({info.tables.length})
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {info.tables.map((t) => (
+                  <Badge key={t} variant="secondary" className="font-mono text-[10px]">
+                    {t}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Switch DB */}
       {!showSwitch ? (
-        <button
-          type="button"
-          onClick={() => setShowSwitch(true)}
-          className="rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        >
+        <Button variant="outline" size="sm" onClick={() => setShowSwitch(true)}>
           Switch Database
-        </button>
+        </Button>
       ) : (
-        <div
-          className="rounded-lg border p-4"
-          style={{
-            backgroundColor: "hsl(var(--card))",
-            borderColor: "hsl(var(--border))",
-          }}
-        >
-          <p
-            className="mb-2 text-xs font-semibold uppercase tracking-wider"
-            style={{ color: "hsl(var(--muted-foreground))" }}
-          >
-            Switch Database
-          </p>
-          <label className="block">
-            <span
-              className="mb-1 block text-xs font-medium"
-              style={{ color: "hsl(var(--muted-foreground))" }}
-            >
-              New DB Path
-            </span>
-            <input
-              type="text"
-              value={newPath}
-              onChange={(e) => setNewPath(e.target.value)}
-              placeholder="/path/to/database.db"
-              className="w-full rounded-md border px-3 py-1.5 text-sm outline-none transition-colors focus:ring-1"
-              style={{
-                backgroundColor: "hsl(var(--background))",
-                borderColor: "hsl(var(--border))",
-                color: "hsl(var(--foreground))",
-              }}
-            />
-          </label>
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              disabled={switchMut.isPending || !newPath.trim()}
-              onClick={() => {
-                switchMut.mutate(
-                  { data: { path: newPath.trim() } },
-                  {
-                    onSuccess: () => {
-                      invalidate();
-                      setShowSwitch(false);
-                      setNewPath("");
-                    },
-                  },
-                );
-              }}
-              className="rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90 disabled:opacity-50"
-              style={{
-                backgroundColor: "hsl(var(--primary))",
-                color: "hsl(var(--primary-foreground))",
-              }}
-            >
-              {switchMut.isPending ? "Switching..." : "Switch"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowSwitch(false);
-                setNewPath("");
-              }}
-              className="rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-              style={{
-                borderColor: "hsl(var(--border))",
-                color: "hsl(var(--foreground))",
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          {switchMut.isError && (
-            <p className="mt-2 text-xs" style={{ color: "hsl(0 84% 60%)" }}>
-              Failed to switch database. Check the path is valid.
+        <Card className="py-4">
+          <CardContent>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Switch Database
             </p>
-          )}
-        </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">New DB Path</Label>
+              <Input
+                type="text"
+                value={newPath}
+                onChange={(e) => setNewPath(e.target.value)}
+                placeholder="/path/to/database.db"
+              />
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Button
+                size="sm"
+                disabled={switchMut.isPending || !newPath.trim()}
+                onClick={() => {
+                  switchMut.mutate(
+                    { data: { path: newPath.trim() } },
+                    {
+                      onSuccess: () => {
+                        invalidate();
+                        setShowSwitch(false);
+                        setNewPath("");
+                      },
+                    },
+                  );
+                }}
+              >
+                {switchMut.isPending ? "Switching..." : "Switch"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowSwitch(false);
+                  setNewPath("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+            {switchMut.isError && (
+              <p className="mt-2 text-xs text-destructive">
+                Failed to switch database. Check the path is valid.
+              </p>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

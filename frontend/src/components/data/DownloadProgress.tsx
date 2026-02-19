@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 interface ProgressEvent {
   progress?: number;
@@ -103,101 +107,60 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
     onCancel();
   }
 
-  const barColor =
-    status === "error"
-      ? "hsl(0 84% 60%)"
-      : status === "complete"
-        ? "hsl(142 71% 45%)"
-        : "hsl(var(--primary))";
-
   return (
-    <div
-      className="rounded-lg border p-5"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-          Download Progress
-        </h2>
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>Download Progress</CardTitle>
         <div className="flex items-center gap-3">
-          <span
-            className="text-xs font-medium uppercase tracking-wider"
-            style={{
-              color:
-                status === "complete"
-                  ? "hsl(142 71% 45%)"
-                  : status === "error"
-                    ? "hsl(0 84% 60%)"
-                    : "hsl(var(--muted-foreground))",
-            }}
+          <Badge
+            variant={
+              status === "complete" ? "default" : status === "error" ? "destructive" : "secondary"
+            }
           >
             {status === "connecting" && "Connecting..."}
             {status === "running" && `${progress.toFixed(0)}%`}
             {status === "complete" && "Complete"}
             {status === "error" && "Failed"}
-          </span>
+          </Badge>
           {(status === "connecting" || status === "running") && (
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="rounded-md px-3 py-1 text-xs font-medium transition-colors"
-              style={{
-                backgroundColor: "hsl(0 84% 60% / 0.1)",
-                color: "hsl(0 84% 60%)",
-              }}
-            >
+            <Button variant="destructive" size="xs" onClick={handleCancel}>
               Cancel
-            </button>
+            </Button>
           )}
         </div>
-      </div>
-
-      {/* Progress bar */}
-      <div
-        className="h-2.5 w-full overflow-hidden rounded-full"
-        style={{ backgroundColor: "hsl(var(--muted))" }}
-      >
-        <div
-          className="h-full rounded-full transition-all duration-300"
-          style={{
-            width: `${progress}%`,
-            backgroundColor: barColor,
-          }}
-        />
-      </div>
-
-      {/* Error message */}
-      {status === "error" && errorMsg && (
-        <div
-          className="mt-3 rounded-md border p-2 text-sm"
-          style={{
-            borderColor: "hsl(0 84% 60%)",
-            backgroundColor: "hsl(0 84% 60% / 0.1)",
-            color: "hsl(0 84% 60%)",
-          }}
-        >
-          {errorMsg}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Progress bar */}
+        <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn(
+              "h-full rounded-full transition-all duration-300",
+              status === "error"
+                ? "bg-destructive"
+                : status === "complete"
+                  ? "bg-green-500"
+                  : "bg-primary",
+            )}
+            style={{ width: `${progress}%` }}
+          />
         </div>
-      )}
 
-      {/* Log output */}
-      <div
-        className="mt-3 max-h-48 overflow-y-auto rounded-md border p-3 font-mono text-xs"
-        style={{
-          borderColor: "hsl(var(--border))",
-          backgroundColor: "hsl(var(--muted) / 0.3)",
-          color: "hsl(var(--muted-foreground))",
-        }}
-      >
-        {logs.length === 0 && <span>Waiting for progress events...</span>}
-        {logs.map((line, i) => (
-          <div key={`${i}-${line.slice(0, 20)}`}>{line}</div>
-        ))}
-        <div ref={logsEndRef} />
-      </div>
-    </div>
+        {/* Error message */}
+        {status === "error" && errorMsg && (
+          <div className="rounded-md border border-destructive bg-destructive/10 p-2 text-sm text-destructive">
+            {errorMsg}
+          </div>
+        )}
+
+        {/* Log output */}
+        <div className="max-h-48 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs text-muted-foreground">
+          {logs.length === 0 && <span>Waiting for progress events...</span>}
+          {logs.map((line, i) => (
+            <div key={`${i}-${line.slice(0, 20)}`}>{line}</div>
+          ))}
+          <div ref={logsEndRef} />
+        </div>
+      </CardContent>
+    </Card>
   );
 }

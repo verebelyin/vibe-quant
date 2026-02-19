@@ -8,8 +8,20 @@ import {
   useListSizingConfigsApiSettingsSizingGet,
   useUpdateSizingConfigApiSettingsSizingConfigIdPut,
 } from "@/api/generated/settings/settings";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type SizingMethod = "fixed_fractional" | "kelly" | "atr";
 
@@ -85,26 +97,10 @@ function NumberField({
   onChange: (v: string) => void;
 }) {
   return (
-    <label className="block">
-      <span
-        className="mb-1 block text-xs font-medium"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        {label}
-      </span>
-      <input
-        type="number"
-        step="any"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border px-3 py-1.5 text-sm outline-none transition-colors focus:ring-1"
-        style={{
-          backgroundColor: "hsl(var(--background))",
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--foreground))",
-        }}
-      />
-    </label>
+    <div className="space-y-1">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input type="number" step="any" value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
   );
 }
 
@@ -125,132 +121,95 @@ function SizingForm({
   const set = (k: keyof SizingFormState, v: string) => setForm((prev) => ({ ...prev, [k]: v }));
 
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block sm:col-span-2">
-          <span
-            className="mb-1 block text-xs font-medium"
-            style={{ color: "hsl(var(--muted-foreground))" }}
-          >
-            Name
-          </span>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
-            className="w-full rounded-md border px-3 py-1.5 text-sm outline-none transition-colors focus:ring-1"
-            style={{
-              backgroundColor: "hsl(var(--background))",
-              borderColor: "hsl(var(--border))",
-              color: "hsl(var(--foreground))",
-            }}
-          />
-        </label>
+    <Card className="py-4">
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1 sm:col-span-2">
+            <Label className="text-xs text-muted-foreground">Name</Label>
+            <Input type="text" value={form.name} onChange={(e) => set("name", e.target.value)} />
+          </div>
 
-        <label className="block sm:col-span-2">
-          <span
-            className="mb-1 block text-xs font-medium"
-            style={{ color: "hsl(var(--muted-foreground))" }}
-          >
-            Method
-          </span>
-          <select
-            value={form.method}
-            onChange={(e) => set("method", e.target.value)}
-            className="w-full rounded-md border px-3 py-1.5 text-sm outline-none"
-            style={{
-              backgroundColor: "hsl(var(--background))",
-              borderColor: "hsl(var(--border))",
-              color: "hsl(var(--foreground))",
-            }}
-          >
-            <option value="fixed_fractional">Fixed Fractional</option>
-            <option value="kelly">Kelly Criterion</option>
-            <option value="atr">ATR-based</option>
-          </select>
-        </label>
+          <div className="space-y-1 sm:col-span-2">
+            <Label className="text-xs text-muted-foreground">Method</Label>
+            <Select value={form.method} onValueChange={(v) => set("method", v)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed_fractional">Fixed Fractional</SelectItem>
+                <SelectItem value="kelly">Kelly Criterion</SelectItem>
+                <SelectItem value="atr">ATR-based</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-        <NumberField
-          label="Max Leverage"
-          value={form.max_leverage}
-          onChange={(v) => set("max_leverage", v)}
-        />
-        <NumberField
-          label="Max Position %"
-          value={form.max_position_pct}
-          onChange={(v) => set("max_position_pct", v)}
-        />
-
-        {(form.method === "fixed_fractional" || form.method === "atr") && (
           <NumberField
-            label="Risk per Trade"
-            value={form.risk_per_trade}
-            onChange={(v) => set("risk_per_trade", v)}
+            label="Max Leverage"
+            value={form.max_leverage}
+            onChange={(v) => set("max_leverage", v)}
           />
-        )}
-
-        {form.method === "kelly" && (
-          <>
-            <NumberField
-              label="Win Rate"
-              value={form.win_rate}
-              onChange={(v) => set("win_rate", v)}
-            />
-            <NumberField label="Avg Win" value={form.avg_win} onChange={(v) => set("avg_win", v)} />
-            <NumberField
-              label="Avg Loss"
-              value={form.avg_loss}
-              onChange={(v) => set("avg_loss", v)}
-            />
-            <NumberField
-              label="Kelly Fraction"
-              value={form.kelly_fraction}
-              onChange={(v) => set("kelly_fraction", v)}
-            />
-          </>
-        )}
-
-        {form.method === "atr" && (
           <NumberField
-            label="ATR Multiplier"
-            value={form.atr_multiplier}
-            onChange={(v) => set("atr_multiplier", v)}
+            label="Max Position %"
+            value={form.max_position_pct}
+            onChange={(v) => set("max_position_pct", v)}
           />
-        )}
-      </div>
 
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          disabled={isPending || !form.name.trim()}
-          onClick={() => onSubmit(form)}
-          className="rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90 disabled:opacity-50"
-          style={{
-            backgroundColor: "hsl(var(--primary))",
-            color: "hsl(var(--primary-foreground))",
-          }}
-        >
-          {isPending ? "Saving..." : submitLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-          style={{
-            borderColor: "hsl(var(--border))",
-            color: "hsl(var(--foreground))",
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+          {(form.method === "fixed_fractional" || form.method === "atr") && (
+            <NumberField
+              label="Risk per Trade"
+              value={form.risk_per_trade}
+              onChange={(v) => set("risk_per_trade", v)}
+            />
+          )}
+
+          {form.method === "kelly" && (
+            <>
+              <NumberField
+                label="Win Rate"
+                value={form.win_rate}
+                onChange={(v) => set("win_rate", v)}
+              />
+              <NumberField
+                label="Avg Win"
+                value={form.avg_win}
+                onChange={(v) => set("avg_win", v)}
+              />
+              <NumberField
+                label="Avg Loss"
+                value={form.avg_loss}
+                onChange={(v) => set("avg_loss", v)}
+              />
+              <NumberField
+                label="Kelly Fraction"
+                value={form.kelly_fraction}
+                onChange={(v) => set("kelly_fraction", v)}
+              />
+            </>
+          )}
+
+          {form.method === "atr" && (
+            <NumberField
+              label="ATR Multiplier"
+              value={form.atr_multiplier}
+              onChange={(v) => set("atr_multiplier", v)}
+            />
+          )}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <Button
+            size="sm"
+            disabled={isPending || !form.name.trim()}
+            onClick={() => onSubmit(form)}
+          >
+            {isPending ? "Saving..." : submitLabel}
+          </Button>
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -281,14 +240,7 @@ export function SizingTab() {
 
   if (query.isError) {
     return (
-      <div
-        className="rounded-lg border p-4"
-        style={{
-          borderColor: "hsl(0 84% 60%)",
-          backgroundColor: "hsl(0 84% 60% / 0.1)",
-          color: "hsl(0 84% 60%)",
-        }}
-      >
+      <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
         <p className="font-medium">Failed to load sizing configs</p>
       </div>
     );
@@ -297,21 +249,13 @@ export function SizingTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
+        <p className="text-sm text-muted-foreground">
           {configs.length} config{configs.length !== 1 ? "s" : ""}
         </p>
         {!showCreate && (
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-90"
-            style={{
-              backgroundColor: "hsl(var(--primary))",
-              color: "hsl(var(--primary-foreground))",
-            }}
-          >
+          <Button size="sm" onClick={() => setShowCreate(true)}>
             New Config
-          </button>
+          </Button>
         )}
       </div>
 
@@ -377,63 +321,37 @@ export function SizingTab() {
             }}
           />
         ) : (
-          <div
-            key={cfg.id}
-            className="flex items-center justify-between rounded-lg border p-4"
-            style={{
-              backgroundColor: "hsl(var(--card))",
-              borderColor: "hsl(var(--border))",
-            }}
-          >
-            <div>
-              <p className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-                {cfg.name}
-              </p>
-              <p className="mt-0.5 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                {cfg.method} | Created {new Date(cfg.created_at).toLocaleDateString()}
-              </p>
-              <div className="mt-1 flex flex-wrap gap-2">
-                {Object.entries(cfg.config as Record<string, unknown>).map(([k, v]) => (
-                  <span
-                    key={k}
-                    className="rounded px-1.5 py-0.5 text-[10px]"
-                    style={{
-                      backgroundColor: "hsl(var(--muted))",
-                      color: "hsl(var(--muted-foreground))",
-                    }}
-                  >
-                    {k}: {String(v)}
-                  </span>
-                ))}
+          <Card key={cfg.id} className="py-4">
+            <CardContent className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-foreground">{cfg.name}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {cfg.method} | Created {new Date(cfg.created_at).toLocaleDateString()}
+                </p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {Object.entries(cfg.config as Record<string, unknown>).map(([k, v]) => (
+                    <Badge key={k} variant="secondary" className="text-[10px]">
+                      {k}: {String(v)}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => setEditingId(cfg.id)}
-                className="rounded border px-2 py-1 text-[10px] font-medium transition-colors hover:brightness-90"
-                style={{
-                  borderColor: "hsl(var(--border))",
-                  color: "hsl(var(--foreground))",
-                }}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
-                }}
-                className="rounded border px-2 py-1 text-[10px] font-medium transition-colors hover:brightness-90"
-                style={{
-                  borderColor: "hsl(0 84% 60% / 0.3)",
-                  color: "hsl(0 84% 60%)",
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
+              <div className="flex gap-1.5">
+                <Button variant="outline" size="xs" onClick={() => setEditingId(cfg.id)}>
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="xs"
+                  onClick={() => {
+                    deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ),
       )}
     </div>

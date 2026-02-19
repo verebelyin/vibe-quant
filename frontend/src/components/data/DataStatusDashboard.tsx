@@ -3,6 +3,8 @@ import {
   useDataStatusApiDataStatusGet,
   useListSymbolsApiDataSymbolsGet,
 } from "@/api/generated/data/data";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { CoverageTable } from "./CoverageTable";
 
 interface MetricCardProps {
@@ -13,28 +15,15 @@ interface MetricCardProps {
 
 function MetricCard({ label, value, subtitle }: MetricCardProps) {
   return (
-    <div
-      className="rounded-lg border p-5"
-      style={{
-        backgroundColor: "hsl(var(--card))",
-        borderColor: "hsl(var(--border))",
-      }}
-    >
-      <p
-        className="text-xs font-medium uppercase tracking-wider"
-        style={{ color: "hsl(var(--muted-foreground))" }}
-      >
-        {label}
-      </p>
-      <p className="mt-1 text-2xl font-bold" style={{ color: "hsl(var(--foreground))" }}>
-        {value}
-      </p>
-      {subtitle && (
-        <p className="mt-0.5 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-          {subtitle}
+    <Card className="gap-0 py-0">
+      <CardContent className="p-5">
+        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
         </p>
-      )}
-    </div>
+        <p className="mt-1 text-2xl font-bold text-foreground">{value}</p>
+        {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -51,31 +40,17 @@ function LoadingSkeleton() {
     <div className="space-y-6 p-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {(["a", "b", "c", "d"] as const).map((id) => (
-          <div
-            key={id}
-            className="h-24 animate-pulse rounded-lg"
-            style={{ backgroundColor: "hsl(var(--muted))" }}
-          />
+          <Skeleton key={id} className="h-24 rounded-lg" />
         ))}
       </div>
-      <div
-        className="h-64 animate-pulse rounded-lg"
-        style={{ backgroundColor: "hsl(var(--muted))" }}
-      />
+      <Skeleton className="h-64 rounded-lg" />
     </div>
   );
 }
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div
-      className="mx-6 rounded-lg border p-6"
-      style={{
-        borderColor: "hsl(0 84% 60%)",
-        backgroundColor: "hsl(0 84% 60% / 0.1)",
-        color: "hsl(0 84% 60%)",
-      }}
-    >
+    <div className="mx-6 rounded-lg border border-destructive bg-destructive/10 p-6 text-destructive">
       <p className="font-medium">Failed to load data status</p>
       <p className="mt-1 text-sm opacity-80">{message}</p>
     </div>
@@ -98,9 +73,7 @@ export function DataStatusDashboard() {
     const errMsg = statusQuery.error instanceof Error ? statusQuery.error.message : "Unknown error";
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold" style={{ color: "hsl(var(--foreground))" }}>
-          Data Management
-        </h1>
+        <h1 className="text-2xl font-bold text-foreground">Data Management</h1>
         <div className="mt-4">
           <ErrorState message={errMsg} />
         </div>
@@ -132,9 +105,7 @@ export function DataStatusDashboard() {
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-2xl font-bold" style={{ color: "hsl(var(--foreground))" }}>
-        Data Management
-      </h1>
+      <h1 className="text-2xl font-bold text-foreground">Data Management</h1>
 
       {/* Status overview metrics */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -166,9 +137,7 @@ export function DataStatusDashboard() {
 
       {/* Coverage table */}
       <div>
-        <h2 className="mb-3 text-lg font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-          Symbol Coverage
-        </h2>
+        <h2 className="mb-3 text-lg font-semibold text-foreground">Symbol Coverage</h2>
         <CoverageTable coverage={coverage} />
       </div>
     </div>

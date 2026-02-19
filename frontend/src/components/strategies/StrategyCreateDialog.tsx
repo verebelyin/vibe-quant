@@ -1,10 +1,21 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   getListStrategiesApiStrategiesGetQueryKey,
   useCreateStrategyApiStrategiesPost,
   useListTemplatesApiStrategiesTemplatesGet,
 } from "@/api/generated/strategies/strategies";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 interface StrategyCreateDialogProps {
   open: boolean;
@@ -26,8 +37,6 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
   const templates = (templatesQuery.data?.data ?? []) as TemplateItem[];
   const createMutation = useCreateStrategyApiStrategiesPost();
 
-  if (!open) return null;
-
   const handleCreate = () => {
     if (selected === "blank") {
       createMutation.mutate(
@@ -42,6 +51,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
             queryClient.invalidateQueries({
               queryKey: getListStrategiesApiStrategiesGetQueryKey(),
             });
+            toast.success("Strategy created");
             onCreated(res.data.id);
           },
         },
@@ -62,6 +72,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
             queryClient.invalidateQueries({
               queryKey: getListStrategiesApiStrategiesGetQueryKey(),
             });
+            toast.success("Strategy created");
             onCreated(res.data.id);
           },
         },
@@ -70,112 +81,62 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
   };
 
   return (
-    // biome-ignore lint/a11y/useSemanticElements: backdrop overlay
-    <div
-      role="button"
-      tabIndex={-1}
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ backgroundColor: "hsl(0 0% 0% / 0.5)" }}
-      onClick={onClose}
-      onKeyDown={(e) => e.key === "Escape" && onClose()}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        tabIndex={-1}
-        className="mx-4 w-full max-w-lg rounded-xl border p-6 shadow-lg"
-        style={{
-          backgroundColor: "hsl(var(--card))",
-          borderColor: "hsl(var(--border))",
-          color: "hsl(var(--card-foreground))",
-        }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-lg font-bold">Create Strategy</h2>
-        <p className="mt-1 text-sm" style={{ color: "hsl(var(--muted-foreground))" }}>
-          Choose a template or start from scratch.
-        </p>
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Create Strategy</DialogTitle>
+          <DialogDescription>Choose a template or start from scratch.</DialogDescription>
+        </DialogHeader>
 
-        <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
+        <div className="max-h-64 space-y-2 overflow-y-auto">
           {/* Blank option */}
           <button
             type="button"
             onClick={() => setSelected("blank")}
-            className="w-full cursor-pointer rounded-lg border p-3 text-left transition-colors"
-            style={{
-              borderColor: selected === "blank" ? "hsl(var(--primary))" : "hsl(var(--border))",
-              backgroundColor:
-                selected === "blank" ? "hsl(var(--primary) / 0.1)" : "hsl(var(--card))",
-            }}
+            className={cn(
+              "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors",
+              selected === "blank" ? "border-primary bg-primary/10" : "border-border bg-card",
+            )}
           >
             <p className="text-sm font-medium">Blank Strategy</p>
-            <p className="mt-0.5 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
+            <p className="mt-0.5 text-xs text-muted-foreground">
               Start with an empty DSL configuration.
             </p>
           </button>
 
           {/* Templates */}
-          {templatesQuery.isLoading && (
-            <div
-              className="h-16 animate-pulse rounded-lg"
-              style={{ backgroundColor: "hsl(var(--muted))" }}
-            />
-          )}
+          {templatesQuery.isLoading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
           {templates.map((tmpl, idx) => (
             <button
               key={tmpl.name ?? idx}
               type="button"
               onClick={() => setSelected(idx)}
-              className="w-full cursor-pointer rounded-lg border p-3 text-left transition-colors"
-              style={{
-                borderColor: selected === idx ? "hsl(var(--primary))" : "hsl(var(--border))",
-                backgroundColor:
-                  selected === idx ? "hsl(var(--primary) / 0.1)" : "hsl(var(--card))",
-              }}
+              className={cn(
+                "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors",
+                selected === idx ? "border-primary bg-primary/10" : "border-border bg-card",
+              )}
             >
               <p className="text-sm font-medium">{tmpl.name ?? `Template ${idx + 1}`}</p>
               {tmpl.description && (
-                <p className="mt-0.5 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  {tmpl.description}
-                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{tmpl.description}</p>
               )}
             </button>
           ))}
         </div>
 
         {createMutation.isError && (
-          <p className="mt-3 text-sm" style={{ color: "hsl(0 84% 60%)" }}>
-            Failed to create strategy. Please try again.
-          </p>
+          <p className="text-sm text-destructive">Failed to create strategy. Please try again.</p>
         )}
 
-        <div className="mt-5 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="cursor-pointer rounded-lg border px-4 py-2 text-sm font-medium transition-colors hover:brightness-95"
-            style={{
-              borderColor: "hsl(var(--border))",
-              color: "hsl(var(--foreground))",
-            }}
-          >
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleCreate}
-            disabled={createMutation.isPending}
-            className="cursor-pointer rounded-lg px-4 py-2 text-sm font-medium transition-colors hover:brightness-95 disabled:opacity-50"
-            style={{
-              backgroundColor: "hsl(var(--primary))",
-              color: "hsl(var(--primary-foreground))",
-            }}
-          >
+          </Button>
+          <Button onClick={handleCreate} disabled={createMutation.isPending}>
             {createMutation.isPending ? "Creating..." : "Create"}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
