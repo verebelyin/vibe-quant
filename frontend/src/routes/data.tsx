@@ -34,11 +34,15 @@ export function DataPage() {
             />
           )}
           <div>
-            <h2 className="mb-3 text-lg font-semibold text-foreground">Data Browser & Quality</h2>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Data Browser & Quality
+            </h2>
             <DataBrowserTab />
           </div>
           <div>
-            <h2 className="mb-3 text-lg font-semibold text-foreground">Download History</h2>
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Download History
+            </h2>
             <DownloadHistory />
           </div>
         </div>

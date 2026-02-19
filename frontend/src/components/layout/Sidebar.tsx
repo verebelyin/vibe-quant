@@ -216,22 +216,27 @@ export function Sidebar() {
     <ShadcnSidebar collapsible="icon">
       <SidebarHeader className="p-0">
         <div className="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
-          <div className="relative">
+          <div className="relative flex items-center justify-center">
             <svg
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
-              className="relative z-10 size-6 shrink-0 text-primary"
+              strokeWidth="2.5"
+              className="relative z-10 size-6 shrink-0 text-primary drop-shadow-[0_0_3px_oklch(0.72_0.19_230/40%)]"
             >
               <title>vibe-quant logo</title>
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
             </svg>
-            <div className="absolute inset-0 blur-md bg-primary/30" />
+            <div className="absolute inset-[-4px] rounded-full bg-primary/15 blur-lg" />
           </div>
-          <span className="text-lg font-bold tracking-tight text-foreground group-data-[collapsible=icon]:hidden">
-            vibe-quant
-          </span>
+          <div className="flex flex-col group-data-[collapsible=icon]:hidden">
+            <span className="text-sm font-bold tracking-tight text-foreground">
+              vibe-quant
+            </span>
+            <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground/50">
+              Trading Engine
+            </span>
+          </div>
         </div>
       </SidebarHeader>
 

@@ -48,9 +48,9 @@ export function DiscoveryPage() {
         </p>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <DiscoveryConfig onConvergenceChange={setConvergence} />
-        <div className="rounded-lg border border-border bg-background p-4">
+        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
           <DiscoveryJobList selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
         </div>
       </div>

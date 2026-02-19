@@ -130,6 +130,16 @@
     font-family: var(--font-sans);
   }
 
+  /* ── Atmospheric background ──────────────────────────────
+     Subtle noise + ambient glow breaks the flat-color look.
+     The radial gradients create depth like ambient lighting. */
+  main {
+    background:
+      radial-gradient(ellipse 80% 50% at 80% 0%, oklch(0.72 0.19 230 / 4%) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 10% 100%, oklch(0.65 0.24 300 / 3%) 0%, transparent 50%),
+      var(--background);
+  }
+
   /* ── Global transitions ─────────────────────────────────── */
   a,
   button,
@@ -137,10 +147,35 @@
   input,
   select,
   textarea,
-  [data-slot="card"],
   [data-slot="sidebar-menu-button"] {
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
+  [data-slot="card"] {
+    transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+  }
+
+  /* ── Staggered entrance animation ────────────────────────
+     Cards, sections, and grids fade up on mount. Pure CSS. */
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  main > div > * {
+    animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  main > div > *:nth-child(1) { animation-delay: 0ms; }
+  main > div > *:nth-child(2) { animation-delay: 60ms; }
+  main > div > *:nth-child(3) { animation-delay: 120ms; }
+  main > div > *:nth-child(4) { animation-delay: 180ms; }
+  main > div > *:nth-child(5) { animation-delay: 240ms; }
+  main > div > *:nth-child(6) { animation-delay: 300ms; }
+  main > div > *:nth-child(n+7) { animation-delay: 350ms; }
 
   /* ── Card glass-morphism ────────────────────────────────── */
   [data-slot="card"] {
@@ -154,6 +189,7 @@
   }
   [data-slot="card"]:hover {
     border-color: oklch(1 0 0 / 14%);
+    transform: translateY(-1px);
     box-shadow:
       0 0 0 1px oklch(1 0 0 / 6%),
       0 8px 32px -4px oklch(0 0 0 / 50%),
@@ -181,6 +217,15 @@
     border-bottom-color: oklch(1 0 0 / 6%);
     background: oklch(0.12 0.008 260 / 80%);
     backdrop-filter: blur(12px);
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(90deg, oklch(0.72 0.19 230 / 0%) 0%, oklch(0.72 0.19 230 / 4%) 50%, oklch(0.72 0.19 230 / 0%) 100%);
+    mask: linear-gradient(to bottom, transparent 80%, black 100%);
+    -webkit-mask: linear-gradient(to bottom, transparent 80%, black 100%);
   }
 
   /* ── Input focus glow ───────────────────────────────────── */
@@ -212,11 +257,38 @@
   [data-slot="badge"] {
     font-weight: 500;
     letter-spacing: 0.02em;
+    font-size: 0.65rem;
+  }
+
+  /* ── Tabs refinement ─────────────────────────────────────
+     Active tab gets a bottom accent line instead of default bg */
+  [data-slot="tabs-trigger"][data-state="active"] {
+    box-shadow: inset 0 -2px 0 oklch(0.72 0.19 230);
   }
 
   /* ── Table row hover ────────────────────────────────────── */
   [data-slot="table-row"]:hover td {
     background: oklch(1 0 0 / 3%);
+  }
+  [data-slot="table-row"] td {
+    transition: background 0.15s ease;
+  }
+
+  /* ── Skeleton shimmer ────────────────────────────────────
+     Animated gradient pass for loading placeholders */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  [data-slot="skeleton"] {
+    background: linear-gradient(
+      90deg,
+      oklch(1 0 0 / 4%) 25%,
+      oklch(1 0 0 / 8%) 50%,
+      oklch(1 0 0 / 4%) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
   }
 
   /* ── Selection highlight ────────────────────────────────── */
@@ -228,5 +300,35 @@
   /* ── Monospace for data values ──────────────────────────── */
   .font-mono {
     font-family: var(--font-mono);
+  }
+
+  /* ── Section heading accent line ─────────────────────────
+     Adds a thin primary-colored underline to section labels */
+  h3.uppercase {
+    position: relative;
+    padding-bottom: 8px;
+  }
+  h3.uppercase::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 24px;
+    height: 2px;
+    background: oklch(0.72 0.19 230 / 60%);
+    border-radius: 1px;
+  }
+
+  /* ── Focus-visible ring ──────────────────────────────────
+     Consistent ring for keyboard navigation */
+  :focus-visible {
+    outline: 2px solid oklch(0.72 0.19 230 / 40%);
+    outline-offset: 2px;
+  }
+
+  /* ── Page title treatment ────────────────────────────────
+     h1 inside main gets subtle letter spacing */
+  main h1 {
+    letter-spacing: -0.02em;
   }
 }

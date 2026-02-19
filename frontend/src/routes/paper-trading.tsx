@@ -43,11 +43,11 @@ export function PaperTradingPage() {
 
       {isActive && <LiveDashboard />}
 
-      <div className="grid gap-8 lg:grid-cols-2">
-        <div className="rounded-lg border border-border bg-background p-4">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
           <PositionsTable />
         </div>
-        <div className="rounded-lg border border-border bg-background p-4">
+        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
           <CheckpointsList />
         </div>
       </div>
