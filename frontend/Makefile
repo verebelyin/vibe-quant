@@ -1,4 +1,4 @@
-.PHONY: dev build test lint typecheck check generate-api clean install
+.PHONY: dev build test e2e lint typecheck check generate-api clean install
 
 dev:
 	pnpm dev
@@ -8,6 +8,9 @@ build:
 
 test:
 	pnpm vitest run
+
+e2e:
+	pnpm playwright test
 
 lint:
 	pnpm biome check src/
