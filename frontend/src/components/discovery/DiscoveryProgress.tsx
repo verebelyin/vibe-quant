@@ -30,10 +30,12 @@ interface BestStrategy {
 interface DiscoveryProgressProps {
   runId: number;
   totalGenerations: number;
+  convergenceWindow?: number;
+  convergenceThreshold?: number;
 }
 
-const CONVERGENCE_WINDOW = 5;
-const CONVERGENCE_THRESHOLD = 0.001;
+const DEFAULT_CONVERGENCE_WINDOW = 5;
+const DEFAULT_CONVERGENCE_THRESHOLD = 0.001;
 
 interface FitnessTooltipPayload {
   name: string;
@@ -63,7 +65,12 @@ function FitnessTooltip({
   );
 }
 
-export function DiscoveryProgress({ runId, totalGenerations }: DiscoveryProgressProps) {
+export function DiscoveryProgress({
+  runId,
+  totalGenerations,
+  convergenceWindow = DEFAULT_CONVERGENCE_WINDOW,
+  convergenceThreshold = DEFAULT_CONVERGENCE_THRESHOLD,
+}: DiscoveryProgressProps) {
   const ws = useWebSocket("discovery");
   const [history, setHistory] = useState<GenerationData[]>([]);
   const [bestStrategy, setBestStrategy] = useState<BestStrategy>({
@@ -114,12 +121,12 @@ export function DiscoveryProgress({ runId, totalGenerations }: DiscoveryProgress
   const progressPct = totalGenerations > 0 ? Math.round((currentGen / totalGenerations) * 100) : 0;
 
   const isConverging = useMemo(() => {
-    if (history.length < CONVERGENCE_WINDOW + 1) return false;
-    const recent = history.slice(-CONVERGENCE_WINDOW);
+    if (history.length < convergenceWindow + 1) return false;
+    const recent = history.slice(-convergenceWindow);
     const firstBest = recent[0].best;
     const lastBest = recent[recent.length - 1].best;
-    return Math.abs(lastBest - firstBest) < CONVERGENCE_THRESHOLD;
-  }, [history]);
+    return Math.abs(lastBest - firstBest) < convergenceThreshold;
+  }, [history, convergenceWindow, convergenceThreshold]);
 
   const currentBestFitness = history.length > 0 ? history[history.length - 1].best : null;
 

@@ -43,6 +43,7 @@ const FALLBACK = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
 
 export function SessionControl() {
   // Start form state
+  const [traderId, setTraderId] = useState(() => `PAPER-${crypto.randomUUID().slice(0, 8).toUpperCase()}`);
   const [strategyId, setStrategyId] = useState("");
   const [testnet, setTestnet] = useState(true);
   const [sizingMethod, setSizingMethod] = useState("");
@@ -114,6 +115,7 @@ export function SessionControl() {
           max_leverage: maxLeverage === "" ? null : maxLeverage,
           max_position_pct: maxPositionPct === "" ? null : maxPositionPct,
           risk_per_trade: riskPerTrade === "" ? null : riskPerTrade,
+          ...(traderId && { trader_id: traderId }),
           ...(apiKey && { api_key: apiKey }),
           ...(apiSecret && { api_secret: apiSecret }),
         } as Record<string, unknown>,
@@ -269,6 +271,27 @@ export function SessionControl() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
             Start Paper Trading
           </h3>
+
+          <div className="space-y-2">
+            <Label htmlFor="trader-id">Trader ID</Label>
+            <div className="flex gap-2">
+              <Input
+                id="trader-id"
+                value={traderId}
+                onChange={(e) => setTraderId(e.target.value)}
+                placeholder="PAPER-XXXXXXXX"
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setTraderId(`PAPER-${crypto.randomUUID().slice(0, 8).toUpperCase()}`)}
+              >
+                Regenerate
+              </Button>
+            </div>
+          </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">

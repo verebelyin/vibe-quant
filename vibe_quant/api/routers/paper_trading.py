@@ -89,6 +89,8 @@ async def start_paper(
     ]
     if body.testnet:
         command.append("--testnet")
+    if body.trader_id:
+        command.extend(["--trader-id", body.trader_id])
 
     try:
         pid = jobs.start_job(run_id, "paper", command, log_file=log_file)

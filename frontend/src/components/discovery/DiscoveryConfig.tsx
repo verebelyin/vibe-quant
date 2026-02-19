@@ -17,7 +17,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export function DiscoveryConfig() {
+export interface DiscoveryConvergenceConfig {
+  convergenceWindow: number;
+  convergenceThreshold: number;
+}
+
+interface DiscoveryConfigProps {
+  onConvergenceChange?: (config: DiscoveryConvergenceConfig) => void;
+}
+
+export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // GA parameters
   const [population, setPopulation] = useState(50);
   const [generations, setGenerations] = useState(100);
@@ -25,6 +34,8 @@ export function DiscoveryConfig() {
   const [mutationRate, setMutationRate] = useState(0.1);
   const [eliteCount, setEliteCount] = useState(5);
   const [tournamentSize, setTournamentSize] = useState(3);
+  const [convergenceWindow, setConvergenceWindow] = useState(5);
+  const [convergenceThreshold, setConvergenceThreshold] = useState(0.001);
 
   // Target config
   const [symbols, setSymbols] = useState("BTCUSDT");
@@ -166,6 +177,37 @@ export function DiscoveryConfig() {
               min={2}
               value={tournamentSize}
               onChange={(e) => setTournamentSize(Number(e.target.value))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="convergence-window">Convergence Window</Label>
+            <Input
+              id="convergence-window"
+              type="number"
+              min={2}
+              max={50}
+              value={convergenceWindow}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setConvergenceWindow(v);
+                onConvergenceChange?.({ convergenceWindow: v, convergenceThreshold });
+              }}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="convergence-threshold">Convergence Threshold</Label>
+            <Input
+              id="convergence-threshold"
+              type="number"
+              min={0}
+              max={1}
+              step={0.0001}
+              value={convergenceThreshold}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setConvergenceThreshold(v);
+                onConvergenceChange?.({ convergenceWindow, convergenceThreshold: v });
+              }}
             />
           </div>
         </div>

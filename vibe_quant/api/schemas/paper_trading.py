@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 class PaperStartRequest(BaseModel):
     strategy_id: int
     testnet: bool = False
+    trader_id: str | None = None
     sizing_method: str | None = None
     max_leverage: float | None = None
     max_position_pct: float | None = None

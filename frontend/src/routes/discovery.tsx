@@ -1,13 +1,17 @@
 import { useMemo, useState } from "react";
 import { useListDiscoveryJobsApiDiscoveryJobsGet } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
-import { DiscoveryConfig } from "@/components/discovery/DiscoveryConfig";
+import { DiscoveryConfig, type DiscoveryConvergenceConfig } from "@/components/discovery/DiscoveryConfig";
 import { DiscoveryJobList } from "@/components/discovery/DiscoveryJobList";
 import { DiscoveryProgress } from "@/components/discovery/DiscoveryProgress";
 import { DiscoveryResults } from "@/components/discovery/DiscoveryResults";
 
 export function DiscoveryPage() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [convergence, setConvergence] = useState<DiscoveryConvergenceConfig>({
+    convergenceWindow: 5,
+    convergenceThreshold: 0.001,
+  });
 
   const { data: jobsResp } = useListDiscoveryJobsApiDiscoveryJobsGet({
     query: { refetchInterval: 10_000 },
@@ -45,13 +49,20 @@ export function DiscoveryPage() {
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
-        <DiscoveryConfig />
+        <DiscoveryConfig onConvergenceChange={setConvergence} />
         <div className="rounded-lg border border-border bg-background p-4">
           <DiscoveryJobList selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
         </div>
       </div>
 
-      {runningJob && <DiscoveryProgress runId={runningJob.run_id} totalGenerations={totalGens} />}
+      {runningJob && (
+        <DiscoveryProgress
+          runId={runningJob.run_id}
+          totalGenerations={totalGens}
+          convergenceWindow={convergence.convergenceWindow}
+          convergenceThreshold={convergence.convergenceThreshold}
+        />
+      )}
 
       <DiscoveryResults runId={effectiveRunId} />
     </div>
