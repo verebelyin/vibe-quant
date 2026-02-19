@@ -29,6 +29,8 @@ export function DiscoveryConfig() {
   // Target config
   const [symbols, setSymbols] = useState("BTCUSDT");
   const [timeframe, setTimeframe] = useState("1h");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   // Indicator pool
   const [selectedIndicators, setSelectedIndicators] = useState<string[]>([]);
@@ -74,7 +76,9 @@ export function DiscoveryConfig() {
           symbols: symbolList,
           timeframes: [timeframe],
           indicator_pool: selectedIndicators.length > 0 ? selectedIndicators : null,
-        },
+          ...(startDate && { start_date: startDate }),
+          ...(endDate && { end_date: endDate }),
+        } as Record<string, unknown>,
       },
       {
         onSuccess: (resp) => {
@@ -245,6 +249,26 @@ export function DiscoveryConfig() {
                 <SelectItem value="1d">1 day</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="disc-start-date">Start Date</Label>
+            <Input
+              id="disc-start-date"
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="disc-end-date">End Date</Label>
+            <Input
+              id="disc-end-date"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
           </div>
         </div>
       </div>

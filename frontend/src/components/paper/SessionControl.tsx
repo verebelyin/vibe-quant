@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { customInstance } from "@/api/client";
 import {
   useGetStatusApiPaperStatusGet,
   useHaltPaperApiPaperHaltPost,
@@ -49,6 +50,8 @@ export function SessionControl() {
   const [maxPositionPct, setMaxPositionPct] = useState<number | "">(25);
   const [riskPerTrade, setRiskPerTrade] = useState<number | "">(2);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [closeAllPending, setCloseAllPending] = useState(false);
+  const [closeAllConfirmOpen, setCloseAllConfirmOpen] = useState(false);
   // API credentials state
   const [showCredentials, setShowCredentials] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -162,6 +165,20 @@ export function SessionControl() {
     });
   }
 
+  async function handleCloseAll() {
+    setCloseAllConfirmOpen(false);
+    setCloseAllPending(true);
+    try {
+      await customInstance("/api/paper/close-all-positions", { method: "POST" });
+      toast.success("Closing all positions");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Close all failed";
+      toast.error("Failed to close positions", { description: msg });
+    } finally {
+      setCloseAllPending(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Status display */}
@@ -222,6 +239,16 @@ export function SessionControl() {
                   {resumeMutation.isPending ? "Resuming..." : "Resume"}
                 </Button>
               )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-warning text-warning hover:bg-warning/10"
+                disabled={closeAllPending}
+                onClick={() => setCloseAllConfirmOpen(true)}
+              >
+                {closeAllPending ? "Closing..." : "Close All Positions"}
+              </Button>
               <Button
                 type="button"
                 variant="destructive"
@@ -434,6 +461,26 @@ export function SessionControl() {
             </Button>
             <Button variant="destructive" onClick={handleStop}>
               Stop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Close all positions confirmation dialog */}
+      <Dialog open={closeAllConfirmOpen} onOpenChange={setCloseAllConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Close All Positions</DialogTitle>
+            <DialogDescription>
+              This will close all open positions at market price.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCloseAllConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="default" onClick={handleCloseAll}>
+              Close All
             </Button>
           </DialogFooter>
         </DialogContent>

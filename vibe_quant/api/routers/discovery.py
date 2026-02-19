@@ -77,8 +77,8 @@ async def launch_discovery(
         run_mode="discovery",
         symbols=body.symbols,
         timeframe=body.timeframes[0] if body.timeframes else "1h",
-        start_date="",
-        end_date="",
+        start_date=body.start_date or "",
+        end_date=body.end_date or "",
         parameters=params,
     )
 

@@ -151,6 +151,22 @@ async def stop_paper(jobs: JobMgr, ws: WsMgr) -> dict[str, str]:
     return {"status": "stopped", "run_id": str(run_id)}
 
 
+@router.post("/close-all-positions", status_code=200)
+async def close_all_positions(jobs: JobMgr, ws: WsMgr) -> dict[str, str]:
+    """Signal the paper trading process to close all open positions."""
+    run_id, pid = _find_active_paper_job(jobs)
+    try:
+        os.kill(pid, signal.SIGWINCH)  # Use SIGWINCH as close-all signal
+    except ProcessLookupError as exc:
+        raise HTTPException(status_code=410, detail="Process no longer running") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Signal failed: {exc}") from exc
+
+    logger.info("paper trading close-all-positions run_id=%d pid=%d", run_id, pid)
+    await ws.broadcast("trading", {"type": "paper_close_all", "run_id": run_id})
+    return {"status": "closing_positions", "run_id": str(run_id)}
+
+
 # --- Read-only queries ---
 
 
