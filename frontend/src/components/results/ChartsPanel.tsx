@@ -10,6 +10,11 @@ import EquityCurveChart from "@/components/charts/EquityCurveChart";
 import type { PerformanceMetric } from "@/components/charts/PerformanceRadar";
 import PerformanceRadar from "@/components/charts/PerformanceRadar";
 import TradeDistributionChart from "@/components/charts/TradeDistributionChart";
+import { DailyReturnsChart } from "@/components/results/DailyReturnsChart";
+import { MonthlyReturnsHeatmap } from "@/components/results/MonthlyReturnsHeatmap";
+import { RollingSharpeChart } from "@/components/results/RollingSharpeChart";
+import { TradeScatterPlots } from "@/components/results/TradeScatterPlots";
+import { YearlyReturnsChart } from "@/components/results/YearlyReturnsChart";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -56,11 +61,16 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
 
   return (
     <Tabs defaultValue="equity">
-      <TabsList>
+      <TabsList className="flex-wrap">
         <TabsTrigger value="equity">Equity</TabsTrigger>
         <TabsTrigger value="drawdown">Drawdown</TabsTrigger>
         <TabsTrigger value="distribution">Distribution</TabsTrigger>
         <TabsTrigger value="performance">Performance</TabsTrigger>
+        <TabsTrigger value="rolling-sharpe">Rolling Sharpe</TabsTrigger>
+        <TabsTrigger value="yearly">Yearly</TabsTrigger>
+        <TabsTrigger value="monthly">Monthly</TabsTrigger>
+        <TabsTrigger value="daily">Daily</TabsTrigger>
+        <TabsTrigger value="scatter">Scatter</TabsTrigger>
       </TabsList>
 
       <TabsContent value="equity" className="pt-4">
@@ -108,6 +118,58 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
           </p>
         ) : (
           <PerformanceRadar metrics={radarMetrics} height={350} />
+        )}
+      </TabsContent>
+
+      <TabsContent value="rolling-sharpe" className="pt-4">
+        {equityQuery.isLoading ? (
+          <ChartSkeleton />
+        ) : equityData.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No equity data for rolling Sharpe.
+          </p>
+        ) : (
+          <RollingSharpeChart data={equityData} height={350} />
+        )}
+      </TabsContent>
+
+      <TabsContent value="yearly" className="pt-4">
+        {equityQuery.isLoading ? (
+          <ChartSkeleton />
+        ) : equityData.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No equity data for yearly returns.
+          </p>
+        ) : (
+          <YearlyReturnsChart data={equityData} height={350} />
+        )}
+      </TabsContent>
+
+      <TabsContent value="monthly" className="pt-4">
+        <MonthlyReturnsHeatmap runId={runId} height={400} />
+      </TabsContent>
+
+      <TabsContent value="daily" className="pt-4">
+        {equityQuery.isLoading ? (
+          <ChartSkeleton />
+        ) : equityData.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No equity data for daily returns.
+          </p>
+        ) : (
+          <DailyReturnsChart data={equityData} height={350} />
+        )}
+      </TabsContent>
+
+      <TabsContent value="scatter" className="pt-4">
+        {tradesQuery.isLoading ? (
+          <ChartSkeleton />
+        ) : !trades || trades.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No trade data for scatter plots.
+          </p>
+        ) : (
+          <TradeScatterPlots trades={trades} height={300} />
         )}
       </TabsContent>
     </Tabs>

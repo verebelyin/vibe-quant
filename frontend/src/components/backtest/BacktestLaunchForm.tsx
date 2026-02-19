@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { PreflightStatus } from "./PreflightStatus";
 import { SweepBuilder, type SweepConfig, sweepToPayload } from "./SweepBuilder";
@@ -49,6 +50,12 @@ export function BacktestLaunchForm() {
   // Sweep state
   const [sweepEnabled, setSweepEnabled] = useState(false);
   const [sweepConfig, setSweepConfig] = useState<SweepConfig>({ params: [] });
+  // Overfitting filter state
+  const [dsrEnabled, setDsrEnabled] = useState(false);
+  const [wfaEnabled, setWfaEnabled] = useState(false);
+  const [wfaSplits, setWfaSplits] = useState(5);
+  const [purgedKfoldEnabled, setPurgedKfoldEnabled] = useState(false);
+  const [purgeEmbargoPct, setPurgeEmbargoPct] = useState(1);
 
   // Preflight / launch result state
   const [coverageResult, setCoverageResult] = useState<CoverageCheckResponseCoverage | null>(null);
@@ -99,6 +106,14 @@ export function BacktestLaunchForm() {
     );
   }
 
+  function applyDatePreset(months: number) {
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - months);
+    setEndDate(end.toISOString().slice(0, 10));
+    setStartDate(start.toISOString().slice(0, 10));
+  }
+
   function handleSelectAllSymbols() {
     if (selectedSymbols.length === symbols.length) {
       setSelectedSymbols([]);
@@ -133,6 +148,11 @@ export function BacktestLaunchForm() {
     if (strategyId === "" || selectedSymbols.length === 0) return;
     setLaunchResult(null);
 
+    const overfittingFilters: Record<string, boolean> = {};
+    if (dsrEnabled) overfittingFilters.deflated_sharpe_ratio = true;
+    if (wfaEnabled) overfittingFilters.walk_forward_analysis = true;
+    if (purgedKfoldEnabled) overfittingFilters.purged_kfold_cv = true;
+
     const payload = {
       strategy_id: Number(strategyId),
       symbols: selectedSymbols,
@@ -146,7 +166,12 @@ export function BacktestLaunchForm() {
           sweepConfig.params.length > 0 && {
             sweep: sweepToPayload(sweepConfig),
           }),
+        ...(wfaEnabled && { wfa_splits: wfaSplits }),
+        ...(purgedKfoldEnabled && { purge_embargo_pct: purgeEmbargoPct }),
       },
+      ...(Object.keys(overfittingFilters).length > 0 && {
+        overfitting_filters: overfittingFilters,
+      }),
       ...(mode === "validation" && {
         latency_preset: latencyPreset || null,
         sizing_config_id: sizingConfigId === "" ? null : Number(sizingConfigId),
@@ -262,24 +287,49 @@ export function BacktestLaunchForm() {
           )}
 
           {/* Date range */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="start-date">Start Date</Label>
-              <Input
-                id="start-date"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="start-date">Start Date</Label>
+                <Input
+                  id="start-date"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="end-date">End Date</Label>
+                <Input
+                  id="end-date"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="end-date">End Date</Label>
-              <Input
-                id="end-date"
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+            <div className="flex items-center gap-1">
+              <span className="mr-1 text-xs text-muted-foreground">Presets:</span>
+              {(
+                [
+                  { label: "1M", months: 1 },
+                  { label: "3M", months: 3 },
+                  { label: "6M", months: 6 },
+                  { label: "1Y", months: 12 },
+                  { label: "2Y", months: 24 },
+                ] as const
+              ).map((p) => (
+                <Button
+                  key={p.label}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => applyDatePreset(p.months)}
+                >
+                  {p.label}
+                </Button>
+              ))}
             </div>
           </div>
 
@@ -324,6 +374,75 @@ export function BacktestLaunchForm() {
                 value={leverage}
                 onChange={(e) => setLeverage(Number(e.target.value))}
               />
+            </div>
+          </div>
+
+          {/* Overfitting Filters */}
+          <div className="space-y-3 rounded-lg border border-border bg-card p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+              Overfitting Filters
+            </h3>
+
+            <div className="flex items-center justify-between">
+              <Label htmlFor="dsr-toggle" className="cursor-pointer">
+                Deflated Sharpe Ratio (DSR)
+              </Label>
+              <Switch id="dsr-toggle" checked={dsrEnabled} onCheckedChange={setDsrEnabled} />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="wfa-toggle" className="cursor-pointer">
+                  Walk-Forward Analysis (WFA)
+                </Label>
+                <Switch id="wfa-toggle" checked={wfaEnabled} onCheckedChange={setWfaEnabled} />
+              </div>
+              {wfaEnabled && (
+                <div className="ml-4 space-y-1">
+                  <Label htmlFor="wfa-splits" className="text-xs">
+                    Splits
+                  </Label>
+                  <Input
+                    id="wfa-splits"
+                    type="number"
+                    min={2}
+                    max={20}
+                    value={wfaSplits}
+                    onChange={(e) => setWfaSplits(Number(e.target.value))}
+                    className="h-8 w-24"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="kfold-toggle" className="cursor-pointer">
+                  Purged K-Fold CV
+                </Label>
+                <Switch
+                  id="kfold-toggle"
+                  checked={purgedKfoldEnabled}
+                  onCheckedChange={setPurgedKfoldEnabled}
+                />
+              </div>
+              {purgedKfoldEnabled && (
+                <div className="ml-4 space-y-1">
+                  <Label htmlFor="purge-embargo" className="text-xs">
+                    Purge embargo %
+                  </Label>
+                  <Input
+                    id="purge-embargo"
+                    type="number"
+                    min={0}
+                    max={50}
+                    step={0.5}
+                    value={purgeEmbargoPct}
+                    onChange={(e) => setPurgeEmbargoPct(Number(e.target.value))}
+                    className="h-8 w-24"
+                  />
+                </div>
+              )}
             </div>
           </div>
 

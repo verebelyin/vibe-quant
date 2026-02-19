@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   useGetStatusApiPaperStatusGet,
@@ -7,9 +7,11 @@ import {
   useStartPaperApiPaperStartPost,
   useStopPaperApiPaperStopPost,
 } from "@/api/generated/paper/paper";
+import { useListRunsApiResultsRunsGet } from "@/api/generated/results/results";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -47,12 +49,21 @@ export function SessionControl() {
   const [maxPositionPct, setMaxPositionPct] = useState<number | "">(25);
   const [riskPerTrade, setRiskPerTrade] = useState<number | "">(2);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  // API credentials state
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [showApiSecret, setShowApiSecret] = useState(false);
+  // Filter state
+  const [validatedOnly, setValidatedOnly] = useState(false);
 
   // Queries
   const strategiesQuery = useListStrategiesApiStrategiesGet();
   const statusQuery = useGetStatusApiPaperStatusGet({
     query: { refetchInterval: 5_000 },
   });
+  const runsQuery = useListRunsApiResultsRunsGet();
 
   // Mutations
   const startMutation = useStartPaperApiPaperStartPost();
@@ -60,8 +71,23 @@ export function SessionControl() {
   const resumeMutation = useResumePaperApiPaperResumePost();
   const stopMutation = useStopPaperApiPaperStopPost();
 
-  const strategies =
+  const allStrategies =
     strategiesQuery.data?.status === 200 ? strategiesQuery.data.data.strategies : [];
+  const allRuns = runsQuery.data?.status === 200 ? runsQuery.data.data.runs : [];
+
+  const validatedStrategyIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const run of allRuns) {
+      if (run.run_mode === "validation" && run.status === "completed") {
+        ids.add(run.strategy_id);
+      }
+    }
+    return ids;
+  }, [allRuns]);
+
+  const strategies = validatedOnly
+    ? allStrategies.filter((s) => validatedStrategyIds.has(s.id))
+    : allStrategies;
 
   const status = statusQuery.data?.status === 200 ? statusQuery.data.data : null;
 
@@ -85,7 +111,9 @@ export function SessionControl() {
           max_leverage: maxLeverage === "" ? null : maxLeverage,
           max_position_pct: maxPositionPct === "" ? null : maxPositionPct,
           risk_per_trade: riskPerTrade === "" ? null : riskPerTrade,
-        },
+          ...(apiKey && { api_key: apiKey }),
+          ...(apiSecret && { api_secret: apiSecret }),
+        } as Record<string, unknown>,
       },
       {
         onSuccess: (resp) => {
@@ -216,7 +244,19 @@ export function SessionControl() {
           </h3>
 
           <div className="space-y-2">
-            <Label htmlFor="paper-strategy">Strategy</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="paper-strategy">Strategy</Label>
+              <Label className="flex items-center gap-2 text-xs font-normal">
+                <Checkbox
+                  checked={validatedOnly}
+                  onCheckedChange={(v) => {
+                    setValidatedOnly(v === true);
+                    setStrategyId("");
+                  }}
+                />
+                Validated only
+              </Label>
+            </div>
             <Select value={strategyId} onValueChange={setStrategyId}>
               <SelectTrigger id="paper-strategy" className="w-full">
                 <SelectValue placeholder="Select a strategy..." />
@@ -231,6 +271,11 @@ export function SessionControl() {
             </Select>
             {strategiesQuery.isLoading && (
               <p className="text-xs text-muted-foreground">Loading strategies...</p>
+            )}
+            {validatedOnly && strategies.length === 0 && !strategiesQuery.isLoading && (
+              <p className="text-xs text-muted-foreground">
+                No validated strategies found. Run a validation backtest first.
+              </p>
             )}
           </div>
 
@@ -300,6 +345,67 @@ export function SessionControl() {
                 }
               />
             </div>
+          </div>
+
+          {/* API Credentials */}
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setShowCredentials((v) => !v)}
+            >
+              {showCredentials ? "Hide" : "Show"} API Credentials
+            </Button>
+            {showCredentials && (
+              <div className="space-y-3 rounded-md border border-border p-3">
+                <div className="space-y-2">
+                  <Label htmlFor="api-key">API Key</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="api-key"
+                      type={showApiKey ? "text" : "password"}
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="Binance API key"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowApiKey((v) => !v)}
+                    >
+                      {showApiKey ? "Hide" : "Show"}
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="api-secret">API Secret</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="api-secret"
+                      type={showApiSecret ? "text" : "password"}
+                      value={apiSecret}
+                      onChange={(e) => setApiSecret(e.target.value)}
+                      placeholder="Binance API secret"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowApiSecret((v) => !v)}
+                    >
+                      {showApiSecret ? "Hide" : "Show"}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Required for live testnet trading. Keys are sent to the backend and not stored in
+                  the browser.
+                </p>
+              </div>
+            )}
           </div>
 
           <Button

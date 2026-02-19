@@ -4,12 +4,18 @@ import { ChartsPanel } from "@/components/results/ChartsPanel";
 import { ComparisonView } from "@/components/results/ComparisonView";
 import { CostBreakdown } from "@/components/results/CostBreakdown";
 import { ExportPanel } from "@/components/results/ExportPanel";
+import { FuturesAnalytics } from "@/components/results/FuturesAnalytics";
+import { LiquidationSummary } from "@/components/results/LiquidationSummary";
+import { LongShortSplit } from "@/components/results/LongShortSplit";
 import { MetricsPanel } from "@/components/results/MetricsPanel";
 import { NotesPanel } from "@/components/results/NotesPanel";
 import { OverfittingBadges } from "@/components/results/OverfittingBadges";
+import { RawStatsPanel } from "@/components/results/RawStatsPanel";
+import { RunDetailsExpander } from "@/components/results/RunDetailsExpander";
 import { RunSelector } from "@/components/results/RunSelector";
 import { SweepAnalysis } from "@/components/results/SweepAnalysis";
 import { TradeLog } from "@/components/results/TradeLog";
+import { WinLossPanel } from "@/components/results/WinLossPanel";
 import { EmptyState } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -63,6 +69,8 @@ export function ResultsPage() {
             />
           ) : (
             <>
+              <RunDetailsExpander runId={selectedRunId} />
+
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                   Run #{selectedRunId}
@@ -76,6 +84,15 @@ export function ResultsPage() {
                 <CostBreakdown runId={selectedRunId} />
                 <OverfittingBadges runId={selectedRunId} />
               </div>
+
+              <WinLossPanel runId={selectedRunId} />
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <FuturesAnalytics runId={selectedRunId} />
+                <LongShortSplit runId={selectedRunId} />
+              </div>
+
+              <LiquidationSummary runId={selectedRunId} />
 
               <Tabs defaultValue="charts">
                 <TabsList>
@@ -98,6 +115,8 @@ export function ResultsPage() {
                   </TabsContent>
                 )}
               </Tabs>
+
+              <RawStatsPanel runId={selectedRunId} />
 
               <NotesPanel runId={selectedRunId} />
             </>
