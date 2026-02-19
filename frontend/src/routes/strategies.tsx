@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import type { StrategyResponse } from "@/api/generated/models";
 import { StrategyCreateDialog } from "@/components/strategies/StrategyCreateDialog";
@@ -6,16 +7,17 @@ import { StrategyList } from "@/components/strategies/StrategyList";
 import { Button } from "@/components/ui/button";
 
 export function StrategiesPage() {
+  const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<StrategyResponse | null>(null);
 
-  const handleSelect = (_strategy: StrategyResponse) => {
-    // TODO: navigate to edit view (future task)
+  const handleSelect = (strategy: StrategyResponse) => {
+    navigate({ to: "/strategies/$strategyId", params: { strategyId: String(strategy.id) } });
   };
 
-  const handleCreated = (_strategyId: number) => {
+  const handleCreated = (strategyId: number) => {
     setCreateOpen(false);
-    // TODO: navigate to edit view (future task)
+    navigate({ to: "/strategies/$strategyId", params: { strategyId: String(strategyId) } });
   };
 
   return (

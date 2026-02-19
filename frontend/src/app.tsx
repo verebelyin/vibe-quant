@@ -11,6 +11,7 @@ import { PaperTradingPage } from "./routes/paper-trading";
 import { ResultsPage } from "./routes/results";
 import { SettingsPage } from "./routes/settings";
 import { StrategiesPage } from "./routes/strategies";
+import { StrategyEditPage } from "./routes/strategies.$strategyId";
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -24,6 +25,15 @@ const strategiesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/strategies",
   component: StrategiesPage,
+});
+
+const strategyEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/strategies/$strategyId",
+  component: function StrategyEditRouteComponent() {
+    const { strategyId } = strategyEditRoute.useParams();
+    return <StrategyEditPage strategyId={Number(strategyId)} />;
+  },
 });
 
 const discoveryRoute = createRoute({
@@ -65,6 +75,7 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   strategiesRoute,
+  strategyEditRoute,
   discoveryRoute,
   backtestRoute,
   resultsRoute,
