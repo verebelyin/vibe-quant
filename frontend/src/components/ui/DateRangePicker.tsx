@@ -1,3 +1,8 @@
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+
 interface DateRangePickerProps {
   startDate: string;
   endDate: string;
@@ -44,7 +49,7 @@ export function DateRangePicker({
   endDate,
   onStartChange,
   onEndChange,
-  className = "",
+  className,
 }: DateRangePickerProps) {
   const handlePreset = (key: string) => {
     const [start, end] = getPresetRange(key);
@@ -52,54 +57,33 @@ export function DateRangePicker({
     onEndChange(end);
   };
 
-  const inputStyle = {
-    backgroundColor: "hsl(var(--input))",
-    borderColor: "hsl(var(--border))",
-    color: "hsl(var(--foreground))",
-  };
-
   return (
-    <div className={`flex flex-col gap-2 ${className}`}>
+    <div className={cn("flex flex-col gap-2", className)}>
       <div className="flex items-end gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>
-            Start
-          </label>
-          <input
+          <Label htmlFor="date-start">Start</Label>
+          <Input
+            id="date-start"
             type="date"
             value={startDate}
             onChange={(e) => onStartChange(e.target.value)}
-            className="rounded-md border px-2.5 py-1.5 text-sm outline-none focus:ring-2"
-            style={{ ...inputStyle, "--tw-ring-color": "hsl(var(--ring))" } as React.CSSProperties}
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>
-            End
-          </label>
-          <input
+          <Label htmlFor="date-end">End</Label>
+          <Input
+            id="date-end"
             type="date"
             value={endDate}
             onChange={(e) => onEndChange(e.target.value)}
-            className="rounded-md border px-2.5 py-1.5 text-sm outline-none focus:ring-2"
-            style={{ ...inputStyle, "--tw-ring-color": "hsl(var(--ring))" } as React.CSSProperties}
           />
         </div>
       </div>
       <div className="flex gap-1.5">
         {presets.map((p) => (
-          <button
-            key={p.key}
-            type="button"
-            onClick={() => handlePreset(p.key)}
-            className="rounded-md px-2 py-1 text-xs font-medium transition-colors hover:brightness-90 dark:hover:brightness-110"
-            style={{
-              backgroundColor: "hsl(var(--accent))",
-              color: "hsl(var(--accent-foreground))",
-            }}
-          >
+          <Button key={p.key} variant="secondary" size="sm" onClick={() => handlePreset(p.key)}>
             {p.label}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

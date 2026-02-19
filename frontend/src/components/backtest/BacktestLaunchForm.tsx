@@ -367,7 +367,10 @@ export function BacktestLaunchForm() {
                 </p>
               )}
               {symbols.map((sym) => (
-                <div key={sym} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-foreground transition-colors hover:opacity-80">
+                <div
+                  key={sym}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-foreground transition-colors hover:opacity-80"
+                >
                   <Checkbox
                     id={`sym-${sym}`}
                     checked={selectedSymbols.includes(sym)}
