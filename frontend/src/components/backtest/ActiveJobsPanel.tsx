@@ -83,7 +83,10 @@ export function ActiveJobsPanel() {
           <h2 className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
             Active Jobs
           </h2>
-          <span className="flex items-center gap-1 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
+          <span
+            className="flex items-center gap-1 text-xs"
+            style={{ color: "hsl(var(--muted-foreground))" }}
+          >
             <span
               className="inline-block h-2 w-2 rounded-full"
               style={{ backgroundColor: indicator.color }}
@@ -138,7 +141,10 @@ export function ActiveJobsPanel() {
                     className="border-b"
                     style={{ borderColor: "hsl(var(--border))" }}
                   >
-                    <td className="py-1.5 pr-3 font-mono" style={{ color: "hsl(var(--foreground))" }}>
+                    <td
+                      className="py-1.5 pr-3 font-mono"
+                      style={{ color: "hsl(var(--foreground))" }}
+                    >
                       {job.run_id}
                     </td>
                     <td className="py-1.5 pr-3" style={{ color: "hsl(var(--foreground))" }}>
@@ -154,7 +160,10 @@ export function ActiveJobsPanel() {
                         )}
                       </div>
                     </td>
-                    <td className="py-1.5 pr-3 font-mono" style={{ color: "hsl(var(--foreground))" }}>
+                    <td
+                      className="py-1.5 pr-3 font-mono"
+                      style={{ color: "hsl(var(--foreground))" }}
+                    >
                       {formatElapsed(job.started_at)}
                     </td>
                     <td className="py-1.5">
