@@ -59,10 +59,12 @@
 * **Overfitting-aware** — DSR correction for total candidates tested, WFA required for final promotion.
 
 ### 📊 Dashboard & Analytics
-* Streamlit UI: strategy management, backtest launch, results analysis, paper trading monitor, data management
-* Pareto front scatter plots, equity curves, drawdown charts, monthly returns heatmaps
-* Download audit log — see when data was fetched and how much was inserted
-* Background job management with heartbeat tracking
+* **React frontend** (Vite + shadcn/ui + Recharts) — 7 pages: strategy management, backtest launch, results analysis, paper trading, discovery, data management, settings
+* Visual strategy editor with YAML sync, split view, and 6-step wizard
+* Equity curves, drawdown charts, trade distribution, Pareto scatter, performance radar
+* Real-time WebSocket dashboards for discovery and paper trading
+* Multi-run comparison, CSV/JSON export, auto-save notes
+* Code-split bundle: 87KB initial load, lazy-loaded routes
 
 ---
 
@@ -77,7 +79,8 @@
 | 🗄️ **Raw Archive** | SQLite (immutable CSV/API data archive) |
 | 📋 **State** | SQLite (WAL mode) — configs, results, trade logs |
 | 🔍 **Analytics** | DuckDB (ad-hoc queries on Parquet + SQLite) |
-| 📈 **Dashboard** | Streamlit + Plotly |
+| 📈 **Frontend** | React 19 + Vite 7 + shadcn/ui + Recharts |
+| 🌐 **API** | FastAPI + Uvicorn |
 | 📱 **Alerts** | Telegram Bot API |
 
 ---
@@ -88,6 +91,7 @@
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) package manager
+- Node.js 20+ and `pnpm` (for frontend)
 
 ### Install
 
@@ -95,7 +99,34 @@
 # Clone the vibes
 git clone https://github.com/verebelyin/vibe-quant.git
 cd vibe-quant
+
+# Backend
 uv pip install -e ".[dev]"
+
+# Frontend
+cd frontend && pnpm install && cd ..
+```
+
+### Start the Application
+
+```bash
+# Terminal 1: Start the FastAPI backend
+uvicorn vibe_quant.api.app:app --reload --port 8000
+
+# Terminal 2: Start the React frontend
+cd frontend && pnpm dev
+# Opens at http://localhost:5173 (proxies /api to backend)
+```
+
+Or use the Makefile:
+```bash
+cd frontend
+make dev       # Start Vite dev server
+make build     # Production build
+make test      # Run vitest
+make lint      # Run biome check
+make typecheck # Run tsc --noEmit
+make e2e       # Run Playwright E2E tests
 ```
 
 ### Download Market Data
@@ -117,18 +148,16 @@ vibe-quant data status
 vibe-quant screening --run-id 1
 ```
 
-Or use the dashboard for a GUI workflow:
-
-```bash
-streamlit run vibe_quant/dashboard/app.py
-```
-
 ### Run Tests
 
 ```bash
+# Backend
 pytest
 ./scripts/check_quality_blocking.sh
 ./scripts/check_quality_style_debt.sh
+
+# Frontend
+cd frontend && pnpm test
 ```
 
 `check_quality_blocking.sh` is the CI-blocking runtime gate.
@@ -158,9 +187,10 @@ graph TD
     I --> D
     J[🗄️ SQLite State] --> B
     J --> D
-    K[📈 Streamlit Dashboard] --> B
-    K --> D
-    K --> F
+    K[📈 React Dashboard] --> L[🌐 FastAPI]
+    L --> B
+    L --> D
+    L --> F
 ```
 
 ---
@@ -179,11 +209,22 @@ vibe_quant/
 ├── discovery/      # Genetic/evolutionary strategy optimizer
 ├── paper/          # Paper trading on Binance testnet
 ├── ethereal/       # Ethereal DEX adapter (EIP-712)
-├── dashboard/      # Streamlit UI (7 pages)
+├── api/            # FastAPI backend (routers, models)
+├── dashboard/      # Streamlit UI (legacy, being retired)
 ├── jobs/           # Background job management
 ├── logging/        # Structured event logging
 ├── alerts/         # Telegram notifications
 └── strategies/     # Example YAML strategies
+
+frontend/               # React frontend (Vite + shadcn/ui)
+├── src/
+│   ├── routes/         # Page components (7 pages)
+│   ├── components/     # UI components by domain
+│   ├── api/generated/  # Auto-generated API hooks (Orval)
+│   ├── hooks/          # WebSocket + custom hooks
+│   └── stores/         # UI state
+├── e2e/                # Playwright E2E tests
+└── Makefile            # Dev workflow targets
 ```
 
 ---
@@ -208,8 +249,9 @@ python -m vibe_quant.overfitting run --run-id <N> --filters wfa,dsr,pkfold
 # Paper trading
 python -m vibe_quant.paper --config paper_config.json
 
-# Dashboard
-streamlit run vibe_quant/dashboard/app.py
+# Dashboard (React frontend + FastAPI backend)
+uvicorn vibe_quant.api.app:app --port 8000 &
+cd frontend && pnpm dev
 ```
 
 ---
@@ -222,7 +264,7 @@ Development follows an **8-phase implementation plan** detailed in [`SPEC.md`](S
 - [x] **Phase 2: Strategy DSL & Screening Pipeline** — YAML parser, compiler, parallel sweeps
 - [x] **Phase 3: Validation Backtesting & Risk** — custom fills, latency, sizing, risk actors
 - [x] **Phase 4: Overfitting Prevention** — DSR, Walk-Forward, Purged K-Fold
-- [x] **Phase 5: Streamlit Dashboard** — full lifecycle UI
+- [x] **Phase 5: Dashboard** — React frontend (migrated from Streamlit)
 - [x] **Phase 6: Paper Trading & Alerts** — Binance testnet, Telegram
 - [x] **Phase 7: Ethereal DEX Integration** — custom adapter, EIP-712
 - [x] **Phase 8: Automated Strategy Discovery** — genetic optimization
