@@ -19,10 +19,11 @@ export const customInstance = async <T>(url: string, init?: RequestInit): Promis
 
   // Handle 204 No Content
   if (response.status === 204) {
-    return undefined as T;
+    return { data: undefined, status: 204 } as T;
   }
 
-  return response.json();
+  const data = await response.json();
+  return { data, status: response.status } as T;
 };
 
 export default customInstance;
