@@ -44,7 +44,7 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
 
   const expectancy =
     data.win_rate != null && data.avg_win != null && data.avg_loss != null
-      ? (data.win_rate / 100) * data.avg_win - (1 - data.win_rate / 100) * Math.abs(data.avg_loss)
+      ? data.win_rate * data.avg_win - (1 - data.win_rate) * Math.abs(data.avg_loss)
       : null;
 
   return (
@@ -55,7 +55,7 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <MetricCard
           label="Total Return"
-          value={fmt(data.total_return, 2, "%")}
+          value={data.total_return != null ? fmt(data.total_return * 100, 2, "%") : "N/A"}
           trend={trend(data.total_return)}
         />
         <MetricCard
@@ -65,9 +65,9 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
         />
         <MetricCard
           label="Max Drawdown"
-          value={fmt(data.max_drawdown, 2, "%")}
+          value={data.max_drawdown != null ? fmt(data.max_drawdown * 100, 2, "%") : "N/A"}
           trend={
-            data.max_drawdown != null ? (data.max_drawdown < -10 ? "down" : "neutral") : "neutral"
+            data.max_drawdown != null ? (data.max_drawdown > 0.1 ? "down" : "neutral") : "neutral"
           }
           subtitle={
             data.max_drawdown_duration_days != null
@@ -77,8 +77,8 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
         />
         <MetricCard
           label="Win Rate"
-          value={fmt(data.win_rate, 1, "%")}
-          trend={data.win_rate != null ? (data.win_rate >= 50 ? "up" : "down") : "neutral"}
+          value={data.win_rate != null ? fmt(data.win_rate * 100, 1, "%") : "N/A"}
+          trend={data.win_rate != null ? (data.win_rate >= 0.5 ? "up" : "down") : "neutral"}
         />
         <MetricCard
           label="Profit Factor"
@@ -113,13 +113,13 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
           value={fmt(data.calmar_ratio)}
           trend={trend(data.calmar_ratio)}
         />
-        <MetricCard label="CAGR" value={fmt(data.cagr, 2, "%")} trend={trend(data.cagr)} />
+        <MetricCard label="CAGR" value={data.cagr != null ? fmt(data.cagr * 100, 2, "%") : "N/A"} trend={trend(data.cagr)} />
         <MetricCard
           label="Annual Volatility"
-          value={fmt(data.volatility_annual, 2, "%")}
+          value={data.volatility_annual != null ? fmt(data.volatility_annual * 100, 2, "%") : "N/A"}
           trend={
             data.volatility_annual != null
-              ? data.volatility_annual > 50
+              ? data.volatility_annual > 0.5
                 ? "down"
                 : "neutral"
               : "neutral"

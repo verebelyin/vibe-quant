@@ -162,7 +162,13 @@ def extract_trades(
         venue_config: Venue config for default leverage.
     """
     try:
-        positions = engine.kernel.cache.positions()
+        # NT netting mode reuses position IDs: when a position closes and reopens,
+        # it's removed from _index_positions_closed. The closed state is preserved
+        # as a "snapshot". We must combine positions() + position_snapshots() and
+        # filter by is_closed, exactly as NT's own "Total positions" log does.
+        cache = engine.kernel.cache
+        all_positions = list(cache.positions()) + list(cache.position_snapshots())
+        positions = [p for p in all_positions if p.is_closed]
     except Exception:
         logger.warning("Could not read positions from engine cache", exc_info=True)
         return
@@ -200,9 +206,6 @@ def extract_trades(
     avg_bar_volume, bar_volatility = estimate_market_stats(engine)
 
     for pos in positions:
-        if not pos.is_closed:
-            continue
-
         realized_pnl = float(pos.realized_pnl)
         entry_price = float(pos.avg_px_open)
         exit_price = float(pos.avg_px_close)
@@ -238,7 +241,7 @@ def extract_trades(
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
 
-        direction = "LONG" if str(pos.entry).upper() == "BUY" else "SHORT"
+        direction = "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
         instrument_id = str(pos.instrument_id)
 
         # Split fees by maker/taker rates instead of 50/50.

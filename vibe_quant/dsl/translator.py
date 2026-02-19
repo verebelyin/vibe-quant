@@ -66,29 +66,78 @@ def _translate_indicators(indicators_raw: list[dict[str, Any]]) -> dict[str, dic
     return result
 
 
-def _condition_to_str(cond: dict[str, Any] | str) -> str:
+def _build_ref_map(
+    indicators_raw: list[dict[str, Any]], canonical_names: list[str]
+) -> dict[str, str]:
+    """Map human-readable refs like 'RSI(14)' or 'EMA(50)' to canonical names."""
+    ref_map: dict[str, str] = {}
+    for ind, canonical in zip(indicators_raw, canonical_names):
+        ind_type = str(ind.get("type", "EMA")).upper()
+        params = ind.get("params", {}) or {}
+
+        # Bare type name (e.g. "RSI", "EMA")
+        ref_map[ind_type] = canonical
+        ref_map[ind_type.lower()] = canonical
+
+        # TYPE(period) e.g. "EMA(50)", "RSI(14)"
+        if "period" in params:
+            ref_map[f"{ind_type}({int(params['period'])})"] = canonical
+
+        # STOCH(k,d) e.g. "STOCH(14,3)"
+        if ind_type == "STOCH" and "k_period" in params and "d_period" in params:
+            ref_map[f"STOCH({int(params['k_period'])},{int(params['d_period'])})"] = canonical
+            ref_map[f"STOCH({int(params['k_period'])}, {int(params['d_period'])})"] = canonical
+
+        # MACD(fast,slow,signal) e.g. "MACD(12,26,9)"
+        if ind_type == "MACD" and "fast" in params and "slow" in params:
+            sig = params.get("signal", 9)
+            ref_map[f"MACD({int(params['fast'])},{int(params['slow'])},{int(sig)})"] = canonical
+
+        # Canonical name always maps to itself
+        ref_map[canonical] = canonical
+
+    return ref_map
+
+
+_PRICE_ALIASES = {"price": "close", "Price": "close", "PRICE": "close"}
+
+
+def _resolve_ref(token: str, ref_map: dict[str, str]) -> str:
+    """Replace a human-readable indicator ref with its canonical name."""
+    token = _PRICE_ALIASES.get(token, token)
+    return ref_map.get(token, token)
+
+
+def _condition_to_str(
+    cond: dict[str, Any] | str, ref_map: dict[str, str] | None = None
+) -> str:
     """Convert a DslCondition object or raw string to expression string."""
     if isinstance(cond, str):
         return cond
-    left = cond.get("left", "price")
+    left = str(cond.get("left", "price"))
     op = cond.get("operator", ">")
-    right = cond.get("right", "price")
+    right = str(cond.get("right", "price"))
+    if ref_map:
+        left = _resolve_ref(left, ref_map)
+        right = _resolve_ref(right, ref_map)
     return f"{left} {op} {right}"
 
 
-def _translate_conditions(conditions: dict[str, Any]) -> tuple[list[str], list[str]]:
+def _translate_conditions(
+    conditions: dict[str, Any], ref_map: dict[str, str] | None = None
+) -> tuple[list[str], list[str]]:
     """Return (long_entry_conditions, short_entry_conditions)."""
     long_conds: list[str] = []
     short_conds: list[str] = []
 
     if isinstance(conditions.get("long_entry"), list):
-        long_conds = [_condition_to_str(c) for c in conditions["long_entry"]]
+        long_conds = [_condition_to_str(c, ref_map) for c in conditions["long_entry"]]
     if isinstance(conditions.get("short_entry"), list):
-        short_conds = [_condition_to_str(c) for c in conditions["short_entry"]]
+        short_conds = [_condition_to_str(c, ref_map) for c in conditions["short_entry"]]
 
     # Fall back: generic entry → long
     if not long_conds and not short_conds and isinstance(conditions.get("entry"), list):
-        long_conds = [_condition_to_str(c) for c in conditions["entry"]]
+        long_conds = [_condition_to_str(c, ref_map) for c in conditions["entry"]]
 
     return long_conds, short_conds
 
@@ -144,12 +193,14 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
     indicators_raw = raw.get("indicators", []) or []
     if isinstance(indicators_raw, list):
         indicators = _translate_indicators(indicators_raw)
+        ref_map = _build_ref_map(indicators_raw, list(indicators.keys()))
     else:
         indicators = indicators_raw  # already dict
+        ref_map = None
 
     # Conditions
     conditions_raw = raw.get("conditions", {}) or {}
-    long_entry, short_entry = _translate_conditions(conditions_raw)
+    long_entry, short_entry = _translate_conditions(conditions_raw, ref_map)
 
     # Ensure at least one condition (StrategyDSL requires it)
     if not long_entry and not short_entry:
