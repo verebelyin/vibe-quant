@@ -1,5 +1,6 @@
 import yaml from "js-yaml";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { DslConfig } from "./types";
@@ -118,6 +119,27 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
     URL.revokeObjectURL(url);
   }, [text]);
 
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(
+      () => toast.success("YAML copied to clipboard"),
+      () => toast.error("Failed to copy to clipboard"),
+    );
+  }, [text]);
+
+  const handlePaste = useCallback(() => {
+    navigator.clipboard.readText().then(
+      (clipText) => {
+        if (clipText.trim()) {
+          handleTextChange(clipText);
+          toast.success("YAML pasted from clipboard");
+        } else {
+          toast.error("Clipboard is empty");
+        }
+      },
+      () => toast.error("Failed to read clipboard"),
+    );
+  }, [handleTextChange]);
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -125,6 +147,12 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
           Edit strategy config as YAML. Changes sync bidirectionally with the visual editor.
         </Label>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleCopy}>
+            Copy
+          </Button>
+          <Button variant="outline" size="sm" onClick={handlePaste}>
+            Paste
+          </Button>
           <Button variant="outline" size="sm" onClick={handleFormat}>
             Format
           </Button>
