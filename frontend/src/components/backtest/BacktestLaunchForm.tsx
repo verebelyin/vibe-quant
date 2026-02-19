@@ -1,5 +1,5 @@
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import {
   useLaunchScreeningApiBacktestScreeningPost,
   useLaunchValidationApiBacktestValidationPost,

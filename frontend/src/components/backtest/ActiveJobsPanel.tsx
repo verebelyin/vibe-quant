@@ -9,7 +9,7 @@ import type { JobStatusResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
 import { useJobsWS } from "@/hooks/useJobsWS";
 import type { WsStatus } from "@/hooks/useWebSocket";
-import { JobStatusBadge } from "./JobStatusBadge";
+import { JobStatusBadge } from "../ui/JobStatusBadge";
 
 const STALE_THRESHOLD_MS = 60_000;
 
@@ -75,15 +75,15 @@ export function ActiveJobsPanel() {
   return (
     <div
       className="rounded-lg border p-4"
-      style={{ borderColor: "var(--border)", backgroundColor: "var(--background)" }}
+      style={{ borderColor: "hsl(var(--border))", backgroundColor: "hsl(var(--background))" }}
     >
       {/* Header */}
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>
             Active Jobs
           </h2>
-          <span className="flex items-center gap-1 text-xs" style={{ color: "var(--muted)" }}>
+          <span className="flex items-center gap-1 text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
             <span
               className="inline-block h-2 w-2 rounded-full"
               style={{ backgroundColor: indicator.color }}
@@ -96,7 +96,7 @@ export function ActiveJobsPanel() {
           <button
             type="button"
             className="rounded px-2 py-1 text-xs font-medium text-white"
-            style={{ backgroundColor: "var(--destructive)" }}
+            style={{ backgroundColor: "hsl(var(--destructive))" }}
             disabled={cleanupMutation.isPending}
             onClick={() => cleanupMutation.mutate()}
           >
@@ -107,11 +107,11 @@ export function ActiveJobsPanel() {
 
       {/* Table */}
       {isLoading ? (
-        <p className="text-xs" style={{ color: "var(--muted)" }}>
+        <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
           Loading jobs...
         </p>
       ) : jobs.length === 0 ? (
-        <p className="text-xs" style={{ color: "var(--muted)" }}>
+        <p className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>
           No active jobs.
         </p>
       ) : (
@@ -120,7 +120,7 @@ export function ActiveJobsPanel() {
             <thead>
               <tr
                 className="border-b text-left"
-                style={{ borderColor: "var(--border)", color: "var(--muted)" }}
+                style={{ borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}
               >
                 <th className="pb-1 pr-3 font-medium">Run ID</th>
                 <th className="pb-1 pr-3 font-medium">Type</th>
@@ -136,12 +136,12 @@ export function ActiveJobsPanel() {
                   <tr
                     key={job.run_id}
                     className="border-b"
-                    style={{ borderColor: "var(--border)" }}
+                    style={{ borderColor: "hsl(var(--border))" }}
                   >
-                    <td className="py-1.5 pr-3 font-mono" style={{ color: "var(--foreground)" }}>
+                    <td className="py-1.5 pr-3 font-mono" style={{ color: "hsl(var(--foreground))" }}>
                       {job.run_id}
                     </td>
-                    <td className="py-1.5 pr-3" style={{ color: "var(--foreground)" }}>
+                    <td className="py-1.5 pr-3" style={{ color: "hsl(var(--foreground))" }}>
                       {job.job_type}
                     </td>
                     <td className="py-1.5 pr-3">
@@ -154,7 +154,7 @@ export function ActiveJobsPanel() {
                         )}
                       </div>
                     </td>
-                    <td className="py-1.5 pr-3 font-mono" style={{ color: "var(--foreground)" }}>
+                    <td className="py-1.5 pr-3 font-mono" style={{ color: "hsl(var(--foreground))" }}>
                       {formatElapsed(job.started_at)}
                     </td>
                     <td className="py-1.5">
@@ -162,7 +162,7 @@ export function ActiveJobsPanel() {
                         <button
                           type="button"
                           className="rounded px-1.5 py-0.5 text-[10px] font-medium text-white"
-                          style={{ backgroundColor: "var(--destructive)" }}
+                          style={{ backgroundColor: "hsl(var(--destructive))" }}
                           disabled={killMutation.isPending}
                           onClick={() => killMutation.mutate({ runId: job.run_id })}
                         >
