@@ -18,22 +18,30 @@ import { Label } from "@/components/ui/label";
 
 interface RiskFormState {
   name: string;
-  max_position_size: string;
+  // Strategy-level
+  risk_per_trade: string;
+  max_position_pct: string;
+  max_leverage: string;
   max_drawdown_pct: string;
   stop_loss_pct: string;
+  // Portfolio-level
   max_total_exposure: string;
   max_correlated_positions: string;
   daily_loss_limit_pct: string;
+  max_drawdown_halt_pct: string;
 }
 
 const EMPTY_FORM: RiskFormState = {
   name: "",
-  max_position_size: "0.1",
+  risk_per_trade: "0.02",
+  max_position_pct: "0.10",
+  max_leverage: "20",
   max_drawdown_pct: "0.15",
   stop_loss_pct: "0.05",
   max_total_exposure: "1.0",
   max_correlated_positions: "3",
   daily_loss_limit_pct: "0.05",
+  max_drawdown_halt_pct: "0.15",
 };
 
 function formFromConfig(cfg: RiskConfigResponse): RiskFormState {
@@ -41,12 +49,15 @@ function formFromConfig(cfg: RiskConfigResponse): RiskFormState {
   const pl = cfg.portfolio_level as Record<string, unknown>;
   return {
     name: cfg.name,
-    max_position_size: String(sl.max_position_size ?? "0.1"),
+    risk_per_trade: String(sl.risk_per_trade ?? "0.02"),
+    max_position_pct: String(sl.max_position_pct ?? sl.max_position_size ?? "0.10"),
+    max_leverage: String(sl.max_leverage ?? "20"),
     max_drawdown_pct: String(sl.max_drawdown_pct ?? "0.15"),
     stop_loss_pct: String(sl.stop_loss_pct ?? "0.05"),
     max_total_exposure: String(pl.max_total_exposure ?? "1.0"),
     max_correlated_positions: String(pl.max_correlated_positions ?? "3"),
     daily_loss_limit_pct: String(pl.daily_loss_limit_pct ?? "0.05"),
+    max_drawdown_halt_pct: String(pl.max_drawdown_halt_pct ?? "0.15"),
   };
 }
 
@@ -96,17 +107,27 @@ function RiskForm({
         </p>
         <div className="mb-4 grid gap-3 sm:grid-cols-3">
           <NumberField
-            label="Max Position Size"
-            value={form.max_position_size}
-            onChange={(v) => set("max_position_size", v)}
+            label="Risk Per Trade (fraction)"
+            value={form.risk_per_trade}
+            onChange={(v) => set("risk_per_trade", v)}
           />
           <NumberField
-            label="Max Drawdown %"
+            label="Max Position % (fraction)"
+            value={form.max_position_pct}
+            onChange={(v) => set("max_position_pct", v)}
+          />
+          <NumberField
+            label="Max Leverage"
+            value={form.max_leverage}
+            onChange={(v) => set("max_leverage", v)}
+          />
+          <NumberField
+            label="Max Drawdown % (fraction)"
             value={form.max_drawdown_pct}
             onChange={(v) => set("max_drawdown_pct", v)}
           />
           <NumberField
-            label="Stop Loss %"
+            label="Stop Loss % (fraction)"
             value={form.stop_loss_pct}
             onChange={(v) => set("stop_loss_pct", v)}
           />
@@ -127,9 +148,14 @@ function RiskForm({
             onChange={(v) => set("max_correlated_positions", v)}
           />
           <NumberField
-            label="Daily Loss Limit %"
+            label="Daily Loss Limit % (fraction)"
             value={form.daily_loss_limit_pct}
             onChange={(v) => set("daily_loss_limit_pct", v)}
+          />
+          <NumberField
+            label="Drawdown Halt % (fraction)"
+            value={form.max_drawdown_halt_pct}
+            onChange={(v) => set("max_drawdown_halt_pct", v)}
           />
         </div>
 
@@ -154,7 +180,9 @@ function formToPayload(form: RiskFormState) {
   return {
     name: form.name,
     strategy_level: {
-      max_position_size: Number(form.max_position_size),
+      risk_per_trade: Number(form.risk_per_trade),
+      max_position_pct: Number(form.max_position_pct),
+      max_leverage: Number(form.max_leverage),
       max_drawdown_pct: Number(form.max_drawdown_pct),
       stop_loss_pct: Number(form.stop_loss_pct),
     },
@@ -162,6 +190,7 @@ function formToPayload(form: RiskFormState) {
       max_total_exposure: Number(form.max_total_exposure),
       max_correlated_positions: Number(form.max_correlated_positions),
       daily_loss_limit_pct: Number(form.daily_loss_limit_pct),
+      max_drawdown_halt_pct: Number(form.max_drawdown_halt_pct),
     },
   };
 }

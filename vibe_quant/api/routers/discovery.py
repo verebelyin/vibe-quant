@@ -67,6 +67,10 @@ async def launch_discovery(
         "population": body.population,
         "generations": body.generations,
         "mutation_rate": body.mutation_rate,
+        "crossover_rate": body.crossover_rate,
+        "elite_count": body.elite_count,
+        "tournament_size": body.tournament_size,
+        "convergence_generations": body.convergence_generations,
     }
     if body.indicator_pool is not None:
         params["indicator_pool"] = body.indicator_pool
@@ -90,6 +94,20 @@ async def launch_discovery(
         "discovery",
         "--run-id",
         str(run_id),
+        "--population-size",
+        str(body.population),
+        "--max-generations",
+        str(body.generations),
+        "--mutation-rate",
+        str(body.mutation_rate),
+        "--crossover-rate",
+        str(body.crossover_rate),
+        "--elite-count",
+        str(body.elite_count),
+        "--tournament-size",
+        str(body.tournament_size),
+        "--convergence-generations",
+        str(body.convergence_generations),
     ]
 
     try:

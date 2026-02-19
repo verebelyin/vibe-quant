@@ -77,6 +77,10 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       toast.error("Enter at least one symbol");
       return;
     }
+    if (eliteCount >= population) {
+      toast.error("Elite count must be less than population size");
+      return;
+    }
 
     launchMutation.mutate(
       {
@@ -84,6 +88,10 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           population,
           generations,
           mutation_rate: mutationRate,
+          crossover_rate: crossoverRate,
+          elite_count: eliteCount,
+          tournament_size: tournamentSize,
+          convergence_generations: convergenceWindow,
           symbols: symbolList,
           timeframes: [timeframe],
           indicator_pool: selectedIndicators.length > 0 ? selectedIndicators : null,

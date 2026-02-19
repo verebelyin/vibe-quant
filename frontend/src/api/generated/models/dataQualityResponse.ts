@@ -5,9 +5,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DataQualityResponseGapsItem } from './dataQualityResponseGapsItem';
+import type { OhlcError } from './ohlcError';
 
 export interface DataQualityResponse {
   symbol: string;
   gaps: DataQualityResponseGapsItem[];
   quality_score: number;
+  ohlc_errors?: OhlcError[];
+  ohlc_error_count?: number;
 }

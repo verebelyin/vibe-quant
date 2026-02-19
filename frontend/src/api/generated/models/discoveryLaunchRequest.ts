@@ -9,6 +9,10 @@ export interface DiscoveryLaunchRequest {
   population: number;
   generations: number;
   mutation_rate: number;
+  crossover_rate?: number;
+  elite_count?: number;
+  tournament_size?: number;
+  convergence_generations?: number;
   symbols: string[];
   timeframes: string[];
   indicator_pool?: string[] | null;

@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -233,6 +234,38 @@ export function RiskTab({ config, onConfigChange }: RiskTabProps) {
             />
           </div>
         </div>
+      </div>
+
+      {/* Trailing Stop */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">Trailing Stop</h3>
+        <div className="flex items-center gap-3">
+          <Checkbox
+            id="trailing-stop-enabled"
+            checked={config.risk.trailing_stop_pct != null}
+            onCheckedChange={(v) =>
+              updateRisk({ trailing_stop_pct: v === true ? 1.5 : undefined })
+            }
+          />
+          <Label htmlFor="trailing-stop-enabled" className="text-sm font-normal">
+            Enable trailing stop
+          </Label>
+        </div>
+        {config.risk.trailing_stop_pct != null && (
+          <div className="space-y-1.5">
+            <Label className="text-xs">Trail Distance (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0.1"
+              value={config.risk.trailing_stop_pct}
+              onChange={(e) => updateRisk({ trailing_stop_pct: Number(e.target.value) })}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Stop moves with price by {config.risk.trailing_stop_pct}%.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Position Sizing */}

@@ -86,6 +86,8 @@ export function LiveDashboard() {
   const [pnl, setPnl] = useState<number | null>(null);
   const [prevPnl, setPrevPnl] = useState<number | null>(null);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
+  const [winRate, setWinRate] = useState<number | null>(null);
+  const [drawdown, setDrawdown] = useState<number | null>(null);
   const [flashedSymbols, setFlashedSymbols] = useState<Set<string>>(new Set());
   const flashTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -116,6 +118,10 @@ export function LiveDashboard() {
         const newPnl = Number(msg.total_pnl ?? msg.pnl ?? 0);
         setPrevPnl(pnl);
         setPnl(newPnl);
+
+        // Strategy metrics
+        if (msg.win_rate != null) setWinRate(Number(msg.win_rate));
+        if (msg.max_drawdown != null) setDrawdown(Number(msg.max_drawdown));
 
         // Add equity point
         const equity = Number(msg.equity ?? msg.account_equity ?? 0);
@@ -178,26 +184,45 @@ export function LiveDashboard() {
         </Badge>
       </div>
 
-      {/* PnL display */}
-      <div className="flex items-center gap-4">
+      {/* PnL + strategy metrics */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="flex items-center gap-2">
+          <div>
+            <p className="text-xs text-muted-foreground">Total PnL</p>
+            <p
+              className={cn(
+                "font-mono text-2xl font-bold tracking-tight",
+                pnl == null && "text-muted-foreground",
+                pnl != null && pnl >= 0 && "text-green-600",
+                pnl != null && pnl < 0 && "text-red-600",
+              )}
+            >
+              {pnl != null ? (pnl >= 0 ? "+" : "") + formatCurrency(pnl) : "--"}
+            </p>
+          </div>
+          {pnlTrend && (
+            <span className={cn("text-lg", pnlTrend === "up" ? "text-green-500" : "text-red-500")}>
+              {pnlTrend === "up" ? "\u2191" : "\u2193"}
+            </span>
+          )}
+        </div>
         <div>
-          <p className="text-xs text-muted-foreground">Total PnL</p>
-          <p
-            className={cn(
-              "font-mono text-3xl font-bold tracking-tight",
-              pnl == null && "text-muted-foreground",
-              pnl != null && pnl >= 0 && "text-green-600",
-              pnl != null && pnl < 0 && "text-red-600",
-            )}
-          >
-            {pnl != null ? (pnl >= 0 ? "+" : "") + formatCurrency(pnl) : "--"}
+          <p className="text-xs text-muted-foreground">Win Rate</p>
+          <p className="font-mono text-lg font-semibold text-foreground">
+            {winRate != null ? `${(winRate * 100).toFixed(1)}%` : "--"}
           </p>
         </div>
-        {pnlTrend && (
-          <span className={cn("text-lg", pnlTrend === "up" ? "text-green-500" : "text-red-500")}>
-            {pnlTrend === "up" ? "\u2191" : "\u2193"}
-          </span>
-        )}
+        <div>
+          <p className="text-xs text-muted-foreground">Max Drawdown</p>
+          <p
+            className={cn(
+              "font-mono text-lg font-semibold",
+              drawdown != null && drawdown > 0.1 ? "text-red-600" : "text-foreground",
+            )}
+          >
+            {drawdown != null ? `-${(drawdown * 100).toFixed(1)}%` : "--"}
+          </p>
+        </div>
       </div>
 
       {/* Equity mini chart */}

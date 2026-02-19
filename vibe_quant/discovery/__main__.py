@@ -55,7 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--population-size", type=int, default=50)
     parser.add_argument("--max-generations", type=int, default=100)
     parser.add_argument("--mutation-rate", type=float, default=0.1)
+    parser.add_argument("--crossover-rate", type=float, default=0.8)
     parser.add_argument("--elite-count", type=int, default=2)
+    parser.add_argument("--tournament-size", type=int, default=3)
+    parser.add_argument("--convergence-generations", type=int, default=10)
     parser.add_argument("--symbols", type=str, default="BTCUSDT")
     parser.add_argument("--timeframe", type=str, default="1h")
     parser.add_argument("--start-date", type=str, required=True)
@@ -93,7 +96,10 @@ def main() -> int:
             population_size=args.population_size,
             max_generations=args.max_generations,
             mutation_rate=args.mutation_rate,
+            crossover_rate=args.crossover_rate,
             elite_count=args.elite_count,
+            tournament_size=args.tournament_size,
+            convergence_generations=args.convergence_generations,
             symbols=symbols,
             timeframe=args.timeframe,
             start_date=args.start_date,

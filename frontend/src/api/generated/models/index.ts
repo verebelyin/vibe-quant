@@ -27,6 +27,7 @@ export * from './dataCoverageItem';
 export * from './dataCoverageResponse';
 export * from './dataQualityResponse';
 export * from './dataQualityResponseGapsItem';
+export * from './ohlcError';
 export * from './dataStatusResponse';
 export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';

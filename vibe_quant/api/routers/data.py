@@ -20,6 +20,7 @@ from vibe_quant.api.schemas.data import (
     DataStatusResponse,
     IngestPreviewResponse,
     IngestRequest,
+    OhlcError,
 )
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.jobs.manager import BacktestJobManager
@@ -277,11 +278,53 @@ async def browse_data(
 
 
 @router.get("/quality/{symbol}", response_model=DataQualityResponse)
-async def data_quality(symbol: str) -> DataQualityResponse:
+async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
+    ohlc_errors: list[OhlcError] = []
+    try:
+        bars = catalog.get_bars(symbol, limit=10000)
+        for bar in bars:
+            o = float(bar.get("open", 0) or 0)
+            h = float(bar.get("high", 0) or 0)
+            lo = float(bar.get("low", 0) or 0)
+            c = float(bar.get("close", 0) or 0)
+            v = float(bar.get("volume", 0) or 0)
+            ts = str(bar.get("timestamp", ""))
+            if h < lo:
+                ohlc_errors.append(OhlcError(
+                    timestamp=ts,
+                    error_type="high_lt_low",
+                    values={"high": h, "low": lo},
+                ))
+            if c <= 0:
+                ohlc_errors.append(OhlcError(
+                    timestamp=ts,
+                    error_type="zero_close",
+                    values={"close": c},
+                ))
+            if v < 0:
+                ohlc_errors.append(OhlcError(
+                    timestamp=ts,
+                    error_type="negative_volume",
+                    values={"volume": v},
+                ))
+            if o <= 0:
+                ohlc_errors.append(OhlcError(
+                    timestamp=ts,
+                    error_type="zero_open",
+                    values={"open": o},
+                ))
+    except Exception:
+        pass
+
+    error_count = len(ohlc_errors)
+    quality_score = max(0.0, 1.0 - min(1.0, error_count / 100.0)) if error_count > 0 else 1.0
+
     return DataQualityResponse(
         symbol=symbol,
         gaps=[],
-        quality_score=1.0,
+        quality_score=quality_score,
+        ohlc_errors=ohlc_errors[:50],  # Cap to 50 for response size
+        ohlc_error_count=error_count,
     )
 
 

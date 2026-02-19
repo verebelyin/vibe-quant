@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -212,6 +214,14 @@ function ConditionSection({
 
 export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
   const operandOptions = buildOperandOptions(config.indicators);
+  const [separateLongShort, setSeparateLongShort] = useState(
+    !!(
+      config.conditions.long_entry?.length ||
+      config.conditions.long_exit?.length ||
+      config.conditions.short_entry?.length ||
+      config.conditions.short_exit?.length
+    ),
+  );
 
   const updateConditions = (patch: Partial<DslConfig["conditions"]>) => {
     onConfigChange({
@@ -227,18 +237,58 @@ export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
           Add indicators first to populate operand dropdowns.
         </div>
       )}
-      <ConditionSection
-        title="Entry Conditions"
-        conditions={config.conditions.entry}
-        operandOptions={operandOptions}
-        onChange={(entry) => updateConditions({ entry })}
-      />
-      <ConditionSection
-        title="Exit Conditions"
-        conditions={config.conditions.exit}
-        operandOptions={operandOptions}
-        onChange={(exit) => updateConditions({ exit })}
-      />
+
+      <Label className="flex items-center gap-2 text-sm">
+        <Checkbox
+          checked={separateLongShort}
+          onCheckedChange={(v) => setSeparateLongShort(v === true)}
+        />
+        Separate long/short conditions
+      </Label>
+
+      {separateLongShort ? (
+        <>
+          <ConditionSection
+            title="Long Entry"
+            conditions={config.conditions.long_entry ?? []}
+            operandOptions={operandOptions}
+            onChange={(long_entry) => updateConditions({ long_entry })}
+          />
+          <ConditionSection
+            title="Long Exit"
+            conditions={config.conditions.long_exit ?? []}
+            operandOptions={operandOptions}
+            onChange={(long_exit) => updateConditions({ long_exit })}
+          />
+          <ConditionSection
+            title="Short Entry"
+            conditions={config.conditions.short_entry ?? []}
+            operandOptions={operandOptions}
+            onChange={(short_entry) => updateConditions({ short_entry })}
+          />
+          <ConditionSection
+            title="Short Exit"
+            conditions={config.conditions.short_exit ?? []}
+            operandOptions={operandOptions}
+            onChange={(short_exit) => updateConditions({ short_exit })}
+          />
+        </>
+      ) : (
+        <>
+          <ConditionSection
+            title="Entry Conditions"
+            conditions={config.conditions.entry}
+            operandOptions={operandOptions}
+            onChange={(entry) => updateConditions({ entry })}
+          />
+          <ConditionSection
+            title="Exit Conditions"
+            conditions={config.conditions.exit}
+            operandOptions={operandOptions}
+            onChange={(exit) => updateConditions({ exit })}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -43,7 +43,15 @@ class BrowseDataResponse(BaseModel):
     data: list[dict[str, object]]
 
 
+class OhlcError(BaseModel):
+    timestamp: str
+    error_type: str  # 'high_lt_low', 'zero_close', 'negative_volume', 'zero_open'
+    values: dict[str, object]
+
+
 class DataQualityResponse(BaseModel):
     symbol: str
     gaps: list[dict[str, object]]
     quality_score: float
+    ohlc_errors: list[OhlcError] = []
+    ohlc_error_count: int = 0

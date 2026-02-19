@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLaunchValidationApiBacktestValidationPost } from "@/api/generated/backtest/backtest";
 import type { BacktestRunResponse } from "@/api/generated/models";
@@ -7,9 +7,12 @@ import {
   useGetSweepsApiResultsRunsRunIdSweepsGet,
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
+import ParetoSurface3D from "@/components/charts/ParetoSurface3D";
 import SweepScatterChart from "@/components/charts/SweepScatterChart";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -147,7 +150,13 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
   const runsQuery = useListRunsApiResultsRunsGet();
   const run = runsQuery.data?.data?.runs?.find((r: BacktestRunResponse) => r.id === runId);
 
-  const scatterData = useMemo(() => {
+  // Filter state
+  const [minSharpe, setMinSharpe] = useState("");
+  const [maxDrawdown, setMaxDrawdown] = useState("");
+  const [paretoOnly, setParetoOnly] = useState(false);
+  const [show3D, setShow3D] = useState(false);
+
+  const chartData = useMemo(() => {
     if (!sweeps) return [];
     return sweeps
       .filter(
@@ -167,6 +176,16 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
       }));
   }, [sweeps]);
 
+  const filteredSweeps = useMemo(() => {
+    if (!sweeps) return [];
+    return sweeps.filter((s) => {
+      if (paretoOnly && !s.is_pareto_optimal) return false;
+      if (minSharpe !== "" && (s.sharpe_ratio ?? 0) < Number(minSharpe)) return false;
+      if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown)) return false;
+      return true;
+    });
+  }, [sweeps, paretoOnly, minSharpe, maxDrawdown]);
+
   if (query.isLoading) return <SweepSkeleton />;
 
   if (query.isError || !sweeps) {
@@ -183,17 +202,83 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
 
   return (
     <div className="space-y-6">
-      {scatterData.length > 0 && (
+      {/* Chart toggle */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant={show3D ? "outline" : "secondary"}
+          size="sm"
+          onClick={() => setShow3D(false)}
+        >
+          2D Scatter
+        </Button>
+        <Button
+          variant={show3D ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => setShow3D(true)}
+        >
+          3D Pareto
+        </Button>
+      </div>
+
+      {chartData.length > 0 && (
         <div>
           <h4 className="mb-2 text-sm font-medium text-muted-foreground">
-            Sharpe vs Drawdown ({scatterData.length} combos, {paretoCount} Pareto optimal)
+            {show3D
+              ? `3D Pareto Surface (${chartData.length} combos, ${paretoCount} Pareto optimal)`
+              : `Sharpe vs Drawdown (${chartData.length} combos, ${paretoCount} Pareto optimal)`}
           </h4>
-          <SweepScatterChart data={scatterData} height={350} />
+          {show3D ? (
+            <ParetoSurface3D data={chartData} height={450} />
+          ) : (
+            <SweepScatterChart data={chartData} height={350} />
+          )}
         </div>
       )}
 
+      {/* Sweep filters */}
+      <div className="rounded-lg border border-border bg-card/50 p-3">
+        <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Filters
+        </h4>
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-1">
+            <Label className="text-xs">Min Sharpe</Label>
+            <Input
+              type="number"
+              step="0.1"
+              placeholder="e.g. 0.5"
+              value={minSharpe}
+              onChange={(e) => setMinSharpe(e.target.value)}
+              className="h-7 w-28 text-xs"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Max Drawdown</Label>
+            <Input
+              type="number"
+              step="0.01"
+              placeholder="e.g. 0.20"
+              value={maxDrawdown}
+              onChange={(e) => setMaxDrawdown(e.target.value)}
+              className="h-7 w-28 text-xs"
+            />
+          </div>
+          <Label className="flex cursor-pointer items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={paretoOnly}
+              onChange={(e) => setParetoOnly(e.target.checked)}
+            />
+            Pareto optimal only
+          </Label>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {filteredSweeps.length} / {sweeps.length} shown
+          </span>
+        </div>
+      </div>
+
       <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={() => exportSweepCsv(sweeps, runId)}>
+        <Button variant="outline" size="sm" onClick={() => exportSweepCsv(filteredSweeps, runId)}>
           Export CSV
         </Button>
       </div>
@@ -215,7 +300,7 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sweeps.map((sweep) => (
+            {filteredSweeps.map((sweep) => (
               <TableRow key={sweep.id} className={cn(sweep.is_pareto_optimal && "bg-blue-500/5")}>
                 <TableCell className="max-w-[240px] truncate text-xs font-mono">
                   {formatParams(sweep.parameters)}

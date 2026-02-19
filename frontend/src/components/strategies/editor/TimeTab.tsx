@@ -112,6 +112,21 @@ export function TimeTab({ config, onConfigChange }: TimeTabProps) {
           ))}
         </div>
       </div>
+
+      {/* Funding avoidance */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium">Funding Rate</h3>
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="funding-avoidance"
+            checked={config.time.funding_avoidance ?? false}
+            onCheckedChange={(v) => updateTime({ funding_avoidance: v === true })}
+          />
+          <Label htmlFor="funding-avoidance" className="text-sm font-normal">
+            Avoid trades within 15 min of funding windows (00:00, 08:00, 16:00 UTC)
+          </Label>
+        </div>
+      </div>
     </div>
   );
 }

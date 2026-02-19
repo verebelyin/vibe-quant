@@ -8,6 +8,7 @@ strategy candidates expressed as DSL YAML dicts.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -46,6 +47,8 @@ class DiscoveryConfig:
         population_size: Number of individuals per generation.
         max_generations: Maximum evolutionary generations.
         mutation_rate: Per-gene mutation probability.
+        crossover_rate: Probability of crossover per pair (0-1). If < 1, parents
+            are copied directly with probability (1 - crossover_rate).
         elite_count: Number of top individuals preserved unchanged.
         tournament_size: Tournament selection pool size.
         convergence_generations: Stop after N generations with no improvement.
@@ -60,6 +63,7 @@ class DiscoveryConfig:
     population_size: int = 50
     max_generations: int = 100
     mutation_rate: float = 0.1
+    crossover_rate: float = 0.8
     elite_count: int = 2
     tournament_size: int = 3
     convergence_generations: int = 10
@@ -78,6 +82,8 @@ class DiscoveryConfig:
             errors.append("max_generations must be >= 1")
         if not (0.0 <= self.mutation_rate <= 1.0):
             errors.append("mutation_rate must be in [0, 1]")
+        if not (0.0 <= self.crossover_rate <= 1.0):
+            errors.append("crossover_rate must be in [0, 1]")
         if self.elite_count < 0:
             errors.append("elite_count must be >= 0")
         if self.elite_count >= self.population_size:
@@ -273,7 +279,10 @@ class DiscoveryPipeline:
         while remaining > 0:
             parent_a = tournament_select(population, scores, cfg.tournament_size)
             parent_b = tournament_select(population, scores, cfg.tournament_size)
-            child_a, child_b = crossover(parent_a, parent_b)
+            if random.random() < cfg.crossover_rate:
+                child_a, child_b = crossover(parent_a, parent_b)
+            else:
+                child_a, child_b = parent_a, parent_b
             child_a = mutate(child_a, cfg.mutation_rate)
             child_b = mutate(child_b, cfg.mutation_rate)
 

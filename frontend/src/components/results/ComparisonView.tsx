@@ -4,6 +4,10 @@ import {
   Legend,
   Line,
   LineChart,
+  PolarAngleAxis,
+  PolarGrid,
+  Radar,
+  RadarChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -12,6 +16,7 @@ import {
 import type { BacktestResultResponse, BacktestRunResponse } from "@/api/generated/models";
 import {
   useCompareRunsApiResultsCompareGet,
+  useGetDrawdownApiResultsRunsRunIdDrawdownGet,
   useGetEquityCurveApiResultsRunsRunIdEquityCurveGet,
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
@@ -387,6 +392,184 @@ function EquityCurveOverlay({ runIds }: { runIds: number[] }) {
   );
 }
 
+// Radar chart for normalized metric comparison
+const RADAR_METRICS: Array<{
+  key: keyof BacktestResultResponse;
+  label: string;
+  higherIsBetter: boolean;
+}> = [
+  { key: "sharpe_ratio", label: "Sharpe", higherIsBetter: true },
+  { key: "total_return", label: "Return", higherIsBetter: true },
+  { key: "win_rate", label: "Win Rate", higherIsBetter: true },
+  { key: "profit_factor", label: "PF", higherIsBetter: true },
+  { key: "sortino_ratio", label: "Sortino", higherIsBetter: true },
+  { key: "max_drawdown", label: "Drawdown", higherIsBetter: false },
+];
+
+function normalize(val: number, min: number, max: number, higherIsBetter: boolean): number {
+  if (max === min) return 0.5;
+  const ratio = (val - min) / (max - min);
+  return higherIsBetter ? ratio : 1 - ratio;
+}
+
+function RadarOverlay({ runs }: { runs: BacktestResultResponse[] }) {
+  if (runs.length === 0) return null;
+
+  const radarData = RADAR_METRICS.map(({ key, label, higherIsBetter }) => {
+    const values = runs.map((r) => (typeof r[key] === "number" ? (r[key] as number) : 0));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const entry: Record<string, number | string> = { metric: label };
+    runs.forEach((r, i) => {
+      const val = typeof r[key] === "number" ? (r[key] as number) : 0;
+      entry[`run_${r.run_id}`] = Number((normalize(val, min, max, higherIsBetter) * 100).toFixed(1));
+    });
+    return entry;
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Radar Chart (Normalized)
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={320}>
+          <RadarChart data={radarData}>
+            <PolarGrid stroke="hsl(var(--border))" />
+            <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
+            {runs.map((run, i) => (
+              <Radar
+                key={run.run_id}
+                name={`Run #${run.run_id}`}
+                dataKey={`run_${run.run_id}`}
+                stroke={COLORS[i % COLORS.length]}
+                fill={COLORS[i % COLORS.length]}
+                fillOpacity={0.12}
+                strokeWidth={2}
+              />
+            ))}
+            <Legend />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "hsl(var(--background))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: "6px",
+                fontSize: "12px",
+              }}
+            />
+          </RadarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DrawdownOverlay({ runIds }: { runIds: number[] }) {
+  const q0 = useGetDrawdownApiResultsRunsRunIdDrawdownGet(runIds[0] ?? 0, {
+    query: { enabled: (runIds[0] ?? 0) > 0 },
+  });
+  const q1 = useGetDrawdownApiResultsRunsRunIdDrawdownGet(runIds[1] ?? 0, {
+    query: { enabled: (runIds[1] ?? 0) > 0 },
+  });
+  const q2 = useGetDrawdownApiResultsRunsRunIdDrawdownGet(runIds[2] ?? 0, {
+    query: { enabled: (runIds[2] ?? 0) > 0 },
+  });
+  const q3 = useGetDrawdownApiResultsRunsRunIdDrawdownGet(runIds[3] ?? 0, {
+    query: { enabled: (runIds[3] ?? 0) > 0 },
+  });
+  const q4 = useGetDrawdownApiResultsRunsRunIdDrawdownGet(runIds[4] ?? 0, {
+    query: { enabled: (runIds[4] ?? 0) > 0 },
+  });
+
+  const queries = [q0, q1, q2, q3, q4].slice(0, runIds.length);
+  const isLoading = queries.some((q) => q.isLoading);
+
+  const mergedData = useMemo(() => {
+    const map = new Map<string, Record<string, number>>();
+    for (let i = 0; i < runIds.length; i++) {
+      const points = queries[i]?.data?.data ?? [];
+      for (const pt of points) {
+        const ts = (pt as Record<string, unknown>).timestamp as string;
+        const dd = (pt as Record<string, unknown>).drawdown as number;
+        const existing = map.get(ts) ?? {};
+        existing[`run_${runIds[i]}`] = dd;
+        map.set(ts, existing);
+      }
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([timestamp, values]) => ({ timestamp, ...values }));
+  }, [runIds, queries]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <LoadingSpinner size="sm" />
+      </div>
+    );
+  }
+
+  if (mergedData.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Drawdown Overlay
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={250}>
+          <LineChart data={mergedData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={formatChartDate}
+              stroke="hsl(var(--muted-foreground))"
+              fontSize={12}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+              stroke="hsl(var(--muted-foreground))"
+              fontSize={12}
+              tickLine={false}
+              axisLine={false}
+              width={50}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "hsl(var(--background))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: "6px",
+                fontSize: "12px",
+              }}
+              labelFormatter={formatChartDate}
+              formatter={(value: number) => [`${(value * 100).toFixed(2)}%`, ""]}
+            />
+            <Legend />
+            {runIds.map((id, i) => (
+              <Line
+                key={id}
+                type="monotone"
+                dataKey={`run_${id}`}
+                name={`Run #${id}`}
+                stroke={COLORS[i % COLORS.length]}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ComparisonView() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [comparing, setComparing] = useState(false);
@@ -443,7 +626,9 @@ export function ComparisonView() {
         ) : (
           <>
             <MetricsTable runs={comparedRuns} />
+            <RadarOverlay runs={comparedRuns} />
             <EquityCurveOverlay runIds={runIdsArray} />
+            <DrawdownOverlay runIds={runIdsArray} />
           </>
         )}
       </div>

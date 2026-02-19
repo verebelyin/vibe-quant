@@ -137,6 +137,33 @@ export function GeneralTab({
           </div>
         )}
       </div>
+
+      {/* Additional timeframes for multi-TF strategies */}
+      <div className="space-y-1.5">
+        <Label>Additional Timeframes</Label>
+        <p className="text-xs text-muted-foreground">
+          Select extra timeframes for multi-timeframe indicator evaluation.
+        </p>
+        <div className="flex flex-wrap gap-2 pt-1">
+          {TIMEFRAMES.filter((tf) => tf !== config.general.timeframe).map((tf) => {
+            const selected = (config.general.additional_timeframes ?? []).includes(tf);
+            return (
+              <Badge
+                key={tf}
+                variant={selected ? "default" : "outline"}
+                className="cursor-pointer"
+                onClick={() => {
+                  const current = config.general.additional_timeframes ?? [];
+                  const next = selected ? current.filter((t) => t !== tf) : [...current, tf];
+                  updateGeneral({ additional_timeframes: next.length > 0 ? next : undefined });
+                }}
+              >
+                {tf}
+              </Badge>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

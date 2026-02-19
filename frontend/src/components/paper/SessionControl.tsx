@@ -50,6 +50,11 @@ export function SessionControl() {
   const [maxLeverage, setMaxLeverage] = useState<number | "">(10);
   const [maxPositionPct, setMaxPositionPct] = useState<number | "">(25);
   const [riskPerTrade, setRiskPerTrade] = useState<number | "">(2);
+  // Drawdown limits
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState<number | "">(20);
+  const [maxDailyLossPct, setMaxDailyLossPct] = useState<number | "">(5);
+  const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState<number | "">(5);
+  const [maxPositionCount, setMaxPositionCount] = useState<number | "">(3);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [closeAllPending, setCloseAllPending] = useState(false);
   const [closeAllConfirmOpen, setCloseAllConfirmOpen] = useState(false);
@@ -106,6 +111,12 @@ export function SessionControl() {
       toast.error("Select a strategy");
       return;
     }
+    if (!testnet && (!apiKey.trim() || !apiSecret.trim())) {
+      toast.error("API credentials required for live trading", {
+        description: "Expand 'Show API Credentials' and enter your Binance API key and secret.",
+      });
+      return;
+    }
     startMutation.mutate(
       {
         data: {
@@ -115,6 +126,10 @@ export function SessionControl() {
           max_leverage: maxLeverage === "" ? null : maxLeverage,
           max_position_pct: maxPositionPct === "" ? null : maxPositionPct,
           risk_per_trade: riskPerTrade === "" ? null : riskPerTrade,
+          max_drawdown_pct: maxDrawdownPct === "" ? null : maxDrawdownPct,
+          max_daily_loss_pct: maxDailyLossPct === "" ? null : maxDailyLossPct,
+          max_consecutive_losses: maxConsecutiveLosses === "" ? null : maxConsecutiveLosses,
+          max_position_count: maxPositionCount === "" ? null : maxPositionCount,
           ...(traderId && { trader_id: traderId }),
           ...(apiKey && { api_key: apiKey }),
           ...(apiSecret && { api_secret: apiSecret }),
@@ -394,6 +409,72 @@ export function SessionControl() {
                   setRiskPerTrade(e.target.value === "" ? "" : Number(e.target.value))
                 }
               />
+            </div>
+          </div>
+
+          {/* Drawdown Limits */}
+          <div className="space-y-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Auto-Stop Limits
+            </h4>
+            <p className="text-xs text-muted-foreground">
+              Paper trading halts automatically when any limit is breached.
+            </p>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div className="space-y-2">
+                <Label htmlFor="max-drawdown-pct">Max Drawdown %</Label>
+                <Input
+                  id="max-drawdown-pct"
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={0.5}
+                  value={maxDrawdownPct}
+                  onChange={(e) =>
+                    setMaxDrawdownPct(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="max-daily-loss-pct">Max Daily Loss %</Label>
+                <Input
+                  id="max-daily-loss-pct"
+                  type="number"
+                  min={0.1}
+                  max={100}
+                  step={0.5}
+                  value={maxDailyLossPct}
+                  onChange={(e) =>
+                    setMaxDailyLossPct(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="max-consecutive-losses">Max Consec. Losses</Label>
+                <Input
+                  id="max-consecutive-losses"
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={maxConsecutiveLosses}
+                  onChange={(e) =>
+                    setMaxConsecutiveLosses(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="max-position-count">Max Positions</Label>
+                <Input
+                  id="max-position-count"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={maxPositionCount}
+                  onChange={(e) =>
+                    setMaxPositionCount(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                />
+              </div>
             </div>
           </div>
 

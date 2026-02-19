@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -48,6 +50,23 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
 }
 
 export default function EquityCurveChart({ data, height = 300, className }: EquityCurveChartProps) {
+  // Find max drawdown trough: track running peak and find min equity/peak ratio
+  const maxDrawdownPoint = useMemo(() => {
+    if (data.length < 2) return null;
+    let peak = data[0].equity;
+    let maxDd = 0;
+    let troughIdx = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].equity > peak) peak = data[i].equity;
+      const dd = (peak - data[i].equity) / peak;
+      if (dd > maxDd) {
+        maxDd = dd;
+        troughIdx = i;
+      }
+    }
+    return troughIdx >= 0 ? data[troughIdx] : null;
+  }, [data]);
+
   return (
     <div className={className}>
       <ResponsiveContainer width="100%" height={height}>
@@ -76,6 +95,20 @@ export default function EquityCurveChart({ data, height = 300, className }: Equi
             width={80}
           />
           <Tooltip content={<CustomTooltip />} />
+          {maxDrawdownPoint && (
+            <ReferenceLine
+              x={maxDrawdownPoint.timestamp}
+              stroke="#ef4444"
+              strokeDasharray="4 3"
+              strokeWidth={1.5}
+              label={{
+                value: "Max DD",
+                position: "insideTopRight",
+                fontSize: 10,
+                fill: "#ef4444",
+              }}
+            />
+          )}
           <Area
             type="monotone"
             dataKey="equity"

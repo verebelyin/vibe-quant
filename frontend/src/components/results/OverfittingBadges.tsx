@@ -15,7 +15,7 @@ interface CheckInfo {
   detail?: string;
 }
 
-function CheckRow({ label, status, detail }: CheckInfo) {
+function CheckRow({ label, status, detail, threshold, description }: CheckInfo & { threshold?: string; description?: string }) {
   const bg =
     status === "pass"
       ? "border-emerald-500/20 bg-emerald-500/[0.04]"
@@ -23,15 +23,25 @@ function CheckRow({ label, status, detail }: CheckInfo) {
         ? "border-red-500/20 bg-red-500/[0.04]"
         : "border-border";
   return (
-    <div className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${bg}`}>
-      <Badge
-        variant={status === "pass" ? "default" : status === "fail" ? "destructive" : "secondary"}
-      >
-        {status === "pass" ? "PASS" : status === "fail" ? "FAIL" : "N/A"}
-      </Badge>
-      <span className="text-xs font-medium text-foreground">{label}</span>
-      {detail && (
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground">{detail}</span>
+    <div className={`rounded-lg border px-3 py-2.5 ${bg}`}>
+      <div className="flex items-center gap-2.5">
+        <Badge
+          variant={status === "pass" ? "default" : status === "fail" ? "destructive" : "secondary"}
+        >
+          {status === "pass" ? "PASS" : status === "fail" ? "FAIL" : "N/A"}
+        </Badge>
+        <span className="text-xs font-medium text-foreground">{label}</span>
+        {detail && (
+          <span className="ml-auto font-mono text-[11px] text-muted-foreground">{detail}</span>
+        )}
+        {threshold && (
+          <span className="font-mono text-[10px] text-muted-foreground/60">
+            (threshold: {threshold})
+          </span>
+        )}
+      </div>
+      {description && (
+        <p className="mt-1 pl-[52px] text-[10px] text-muted-foreground">{description}</p>
       )}
     </div>
   );
@@ -63,6 +73,11 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
     return value >= 0.5 ? "pass" : "fail";
   }
 
+  // IS/OOS ratio: approximate from win_rate and trade count (proxy only until dedicated endpoint)
+  const isOosRatio = data.win_rate != null && data.total_trades != null
+    ? data.win_rate
+    : null;
+
   const checks: CheckInfo[] = [
     {
       label: "Walk-Forward",
@@ -81,9 +96,19 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
           : undefined,
     },
     {
-      label: "Deflated Sharpe",
+      label: "Deflated Sharpe Ratio",
       status: sharpeStatus(data.deflated_sharpe),
-      detail: data.deflated_sharpe != null ? `DSR: ${data.deflated_sharpe.toFixed(2)}` : undefined,
+      detail: data.deflated_sharpe != null ? `DSR: ${data.deflated_sharpe.toFixed(3)}` : undefined,
+    },
+    {
+      label: "IS/OOS Win Rate",
+      status: isOosRatio != null ? (isOosRatio >= 0.45 ? "pass" : "fail") : "na",
+      detail: isOosRatio != null ? `${(isOosRatio * 100).toFixed(1)}%` : undefined,
+    },
+    {
+      label: "Stability (Calmar)",
+      status: data.calmar_ratio != null ? (data.calmar_ratio >= 0.5 ? "pass" : "fail") : "na",
+      detail: data.calmar_ratio != null ? `calmar: ${data.calmar_ratio.toFixed(2)}` : undefined,
     },
   ];
 

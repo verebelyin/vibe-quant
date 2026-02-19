@@ -101,12 +101,14 @@ export interface DslRisk {
   stop_loss: DslStopLoss;
   take_profit: DslTakeProfit;
   position_sizing: DslPositionSizing;
+  trailing_stop_pct?: number;
 }
 
 export interface DslTime {
   trading_hours?: { start: string; end: string };
   trading_days?: string[];
   sessions?: string[];
+  funding_avoidance?: boolean;
 }
 
 export interface DslConfig {
@@ -114,11 +116,16 @@ export interface DslConfig {
     strategy_type: string;
     symbols: string[];
     timeframe: string;
+    additional_timeframes?: string[];
   };
   indicators: DslIndicator[];
   conditions: {
     entry: DslCondition[];
     exit: DslCondition[];
+    long_entry?: DslCondition[];
+    long_exit?: DslCondition[];
+    short_entry?: DslCondition[];
+    short_exit?: DslCondition[];
   };
   risk: DslRisk;
   time: DslTime;
@@ -231,6 +238,10 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
   if (conds) {
     if (Array.isArray(conds.entry)) base.conditions.entry = conds.entry as DslCondition[];
     if (Array.isArray(conds.exit)) base.conditions.exit = conds.exit as DslCondition[];
+    if (Array.isArray(conds.long_entry)) base.conditions.long_entry = conds.long_entry as DslCondition[];
+    if (Array.isArray(conds.long_exit)) base.conditions.long_exit = conds.long_exit as DslCondition[];
+    if (Array.isArray(conds.short_entry)) base.conditions.short_entry = conds.short_entry as DslCondition[];
+    if (Array.isArray(conds.short_exit)) base.conditions.short_exit = conds.short_exit as DslCondition[];
   }
 
   const risk = raw.risk as Record<string, unknown> | undefined;
@@ -238,6 +249,7 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
     if (risk.stop_loss) base.risk.stop_loss = risk.stop_loss as DslStopLoss;
     if (risk.take_profit) base.risk.take_profit = risk.take_profit as DslTakeProfit;
     if (risk.position_sizing) base.risk.position_sizing = risk.position_sizing as DslPositionSizing;
+    if (typeof risk.trailing_stop_pct === "number") base.risk.trailing_stop_pct = risk.trailing_stop_pct;
   }
 
   const time = raw.time as Record<string, unknown> | undefined;
@@ -246,6 +258,13 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
       base.time.trading_hours = time.trading_hours as { start: string; end: string };
     if (Array.isArray(time.trading_days)) base.time.trading_days = time.trading_days as string[];
     if (Array.isArray(time.sessions)) base.time.sessions = time.sessions as string[];
+    if (typeof time.funding_avoidance === "boolean")
+      base.time.funding_avoidance = time.funding_avoidance;
+  }
+
+  const gen = raw.general as Record<string, unknown> | undefined;
+  if (gen && Array.isArray(gen.additional_timeframes)) {
+    base.general.additional_timeframes = gen.additional_timeframes as string[];
   }
 
   return base;

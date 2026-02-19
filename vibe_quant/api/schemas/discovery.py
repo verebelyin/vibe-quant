@@ -8,6 +8,10 @@ class DiscoveryLaunchRequest(BaseModel):
     population: int
     generations: int
     mutation_rate: float
+    crossover_rate: float = 0.8
+    elite_count: int = 2
+    tournament_size: int = 3
+    convergence_generations: int = 10
     symbols: list[str]
     timeframes: list[str]
     indicator_pool: list[str] | None = None

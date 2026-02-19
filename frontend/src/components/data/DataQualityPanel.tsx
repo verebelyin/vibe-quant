@@ -71,6 +71,8 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
   const gaps = (data.gaps ?? []) as GapItem[];
   const gapCount = gaps.length;
   const missingBars = gaps.reduce((sum, g) => sum + (g.missing_bars ?? 0), 0);
+  const ohlcErrors = data.ohlc_errors ?? [];
+  const ohlcErrorCount = data.ohlc_error_count ?? ohlcErrors.length;
 
   return (
     <div className="space-y-4">
@@ -95,11 +97,12 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
       </div>
 
       {/* Metrics row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         {[
           { label: "Quality Score", value: `${score.toFixed(1)}%` },
           { label: "Gap Count", value: String(gapCount) },
           { label: "Missing Bars", value: String(missingBars) },
+          { label: "OHLC Errors", value: String(ohlcErrorCount) },
         ].map((m) => (
           <Card key={m.label} className="gap-0 py-0">
             <CardContent className="p-3">
@@ -130,6 +133,44 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
                     <TableCell className="px-3 py-1.5 font-mono">{gap.end}</TableCell>
                     <TableCell className="px-3 py-1.5 text-right font-mono">
                       {gap.missing_bars ?? "--"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* OHLC errors */}
+      {ohlcErrors.length > 0 && (
+        <div>
+          <h4 className="mb-2 text-sm font-semibold text-foreground">
+            OHLC Errors
+            {ohlcErrorCount > ohlcErrors.length && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                (showing {ohlcErrors.length} of {ohlcErrorCount})
+              </span>
+            )}
+          </h4>
+          <div className="max-h-48 overflow-y-auto rounded-lg border border-destructive/30">
+            <Table className="text-xs">
+              <TableHeader>
+                <TableRow className="bg-muted hover:bg-muted">
+                  <TableHead className="px-3">Timestamp</TableHead>
+                  <TableHead className="px-3">Error</TableHead>
+                  <TableHead className="px-3">Values</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ohlcErrors.map((err, i) => (
+                  <TableRow key={i} className="text-destructive">
+                    <TableCell className="px-3 py-1.5 font-mono">{err.timestamp}</TableCell>
+                    <TableCell className="px-3 py-1.5">{err.error_type}</TableCell>
+                    <TableCell className="px-3 py-1.5 font-mono text-xs">
+                      {Object.entries(err.values)
+                        .map(([k, v]) => `${k}=${v}`)
+                        .join(", ")}
                     </TableCell>
                   </TableRow>
                 ))}

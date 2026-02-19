@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TradeResponse } from "@/api/generated/models/tradeResponse";
 import { useGetTradesApiResultsRunsRunIdTradesGet } from "@/api/generated/results/results";
 import { Button } from "@/components/ui/button";
@@ -120,13 +121,13 @@ function TradeLogSkeleton() {
 
 const ALL_SYMBOLS = "__all__";
 const ALL_SIDES = "__all__";
-
-const PAGE_SIZE = 100;
+const ROW_HEIGHT = 40;
+const CONTAINER_HEIGHT = 600;
 
 export function TradeLog({ runId }: TradeLogProps) {
   const [symbolFilter, setSymbolFilter] = useState(ALL_SYMBOLS);
   const [sideFilter, setSideFilter] = useState(ALL_SIDES);
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const query = useGetTradesApiResultsRunsRunIdTradesGet(runId);
   const trades = query.data?.data;
@@ -138,7 +139,6 @@ export function TradeLog({ runId }: TradeLogProps) {
 
   const filteredTrades = useMemo(() => {
     if (!trades) return [];
-    setVisibleCount(PAGE_SIZE);
     return trades.filter((t) => {
       if (symbolFilter !== ALL_SYMBOLS && t.symbol !== symbolFilter) return false;
       if (sideFilter !== ALL_SIDES && t.direction !== sideFilter) return false;
@@ -146,8 +146,12 @@ export function TradeLog({ runId }: TradeLogProps) {
     });
   }, [trades, symbolFilter, sideFilter]);
 
-  const visibleTrades = filteredTrades.slice(0, visibleCount);
-  const hasMore = visibleCount < filteredTrades.length;
+  const virtualizer = useVirtualizer({
+    count: filteredTrades.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
+  });
 
   if (query.isLoading) return <TradeLogSkeleton />;
 
@@ -158,6 +162,14 @@ export function TradeLog({ runId }: TradeLogProps) {
   if (trades.length === 0) {
     return <p className="py-8 text-center text-sm text-muted-foreground">No trades recorded.</p>;
   }
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+  const paddingTop = virtualItems.length > 0 ? (virtualItems[0]?.start ?? 0) : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? totalHeight - (virtualItems[virtualItems.length - 1]?.end ?? 0)
+      : 0;
 
   return (
     <div className="space-y-4">
@@ -196,7 +208,11 @@ export function TradeLog({ runId }: TradeLogProps) {
         </Button>
       </div>
 
-      <div className="max-h-[600px] overflow-auto rounded-md border">
+      <div
+        ref={scrollRef}
+        style={{ height: CONTAINER_HEIGHT }}
+        className="overflow-auto rounded-md border"
+      >
         <Table>
           <TableHeader>
             <TableRow>
@@ -205,68 +221,106 @@ export function TradeLog({ runId }: TradeLogProps) {
               <TableHead className="text-right">Entry Price</TableHead>
               <TableHead className="text-right">Exit Price</TableHead>
               <TableHead className="text-right">PnL</TableHead>
+              <TableHead className="text-right">ROI %</TableHead>
+              <TableHead className="text-right">Lev</TableHead>
+              <TableHead className="text-right">Fees</TableHead>
+              <TableHead>Exit Reason</TableHead>
               <TableHead className="text-right">Duration</TableHead>
               <TableHead>Entry Time</TableHead>
               <TableHead>Exit Time</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visibleTrades.map((trade) => (
-              <TableRow key={trade.id} className={cn(isLiquidation(trade) && "bg-destructive/10")}>
-                <TableCell className="font-medium">
-                  {trade.symbol}
-                  {isLiquidation(trade) && (
-                    <span className="ml-1.5 text-[10px] font-semibold uppercase text-destructive">
-                      LIQ
+            {paddingTop > 0 && (
+              <tr aria-hidden>
+                <td style={{ height: paddingTop }} colSpan={12} />
+              </tr>
+            )}
+            {virtualItems.map((vItem) => {
+              const trade = filteredTrades[vItem.index];
+              if (!trade) return null;
+              return (
+                <TableRow
+                  key={trade.id}
+                  data-index={vItem.index}
+                  style={{ height: ROW_HEIGHT }}
+                  className={cn(isLiquidation(trade) && "bg-destructive/10")}
+                >
+                  <TableCell className="font-medium">
+                    {trade.symbol}
+                    {isLiquidation(trade) && (
+                      <span className="ml-1.5 text-[10px] font-semibold uppercase text-destructive">
+                        LIQ
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        "text-xs font-medium uppercase",
+                        trade.direction === "long" ? "text-green-500" : "text-red-500",
+                      )}
+                    >
+                      {trade.direction}
                     </span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <span
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatPrice(trade.entry_price)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatPrice(trade.exit_price)}
+                  </TableCell>
+                  <TableCell
                     className={cn(
-                      "text-xs font-medium uppercase",
-                      trade.direction === "long" ? "text-green-500" : "text-red-500",
+                      "text-right font-medium tabular-nums",
+                      trade.net_pnl != null && trade.net_pnl >= 0 ? "text-green-500" : "text-red-500",
                     )}
                   >
-                    {trade.direction}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatPrice(trade.entry_price)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatPrice(trade.exit_price)}
-                </TableCell>
-                <TableCell
-                  className={cn(
-                    "text-right font-medium tabular-nums",
-                    trade.net_pnl != null && trade.net_pnl >= 0 ? "text-green-500" : "text-red-500",
-                  )}
-                >
-                  {formatPnl(trade.net_pnl)}
-                </TableCell>
-                <TableCell className="text-right text-xs text-muted-foreground">
-                  {formatDuration(trade.entry_time, trade.exit_time)}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {formatTime(trade.entry_time)}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {formatTime(trade.exit_time)}
-                </TableCell>
-              </TableRow>
-            ))}
+                    {formatPnl(trade.net_pnl)}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right tabular-nums text-xs",
+                      trade.roi_percent != null && trade.roi_percent >= 0
+                        ? "text-green-500"
+                        : "text-red-500",
+                    )}
+                  >
+                    {trade.roi_percent != null ? `${trade.roi_percent.toFixed(2)}%` : "-"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                    {trade.leverage}x
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                    {trade.entry_fee != null || trade.exit_fee != null || trade.funding_fees != null
+                      ? formatPnl(
+                          (trade.entry_fee ?? 0) + (trade.exit_fee ?? 0) + (trade.funding_fees ?? 0),
+                        )
+                      : "-"}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {trade.exit_reason ?? "-"}
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">
+                    {formatDuration(trade.entry_time, trade.exit_time)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatTime(trade.entry_time)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatTime(trade.exit_time)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {paddingBottom > 0 && (
+              <tr aria-hidden>
+                <td style={{ height: paddingBottom }} colSpan={12} />
+              </tr>
+            )}
           </TableBody>
         </Table>
       </div>
-
-      {hasMore && (
-        <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-            Show more ({filteredTrades.length - visibleCount} remaining)
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
