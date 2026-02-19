@@ -121,9 +121,12 @@ function TradeLogSkeleton() {
 const ALL_SYMBOLS = "__all__";
 const ALL_SIDES = "__all__";
 
+const PAGE_SIZE = 100;
+
 export function TradeLog({ runId }: TradeLogProps) {
   const [symbolFilter, setSymbolFilter] = useState(ALL_SYMBOLS);
   const [sideFilter, setSideFilter] = useState(ALL_SIDES);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const query = useGetTradesApiResultsRunsRunIdTradesGet(runId);
   const trades = query.data?.data;
@@ -135,12 +138,16 @@ export function TradeLog({ runId }: TradeLogProps) {
 
   const filteredTrades = useMemo(() => {
     if (!trades) return [];
+    setVisibleCount(PAGE_SIZE);
     return trades.filter((t) => {
       if (symbolFilter !== ALL_SYMBOLS && t.symbol !== symbolFilter) return false;
       if (sideFilter !== ALL_SIDES && t.direction !== sideFilter) return false;
       return true;
     });
   }, [trades, symbolFilter, sideFilter]);
+
+  const visibleTrades = filteredTrades.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredTrades.length;
 
   if (query.isLoading) return <TradeLogSkeleton />;
 
@@ -204,7 +211,7 @@ export function TradeLog({ runId }: TradeLogProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredTrades.map((trade) => (
+            {visibleTrades.map((trade) => (
               <TableRow key={trade.id} className={cn(isLiquidation(trade) && "bg-destructive/10")}>
                 <TableCell className="font-medium">
                   {trade.symbol}
@@ -252,6 +259,14 @@ export function TradeLog({ runId }: TradeLogProps) {
           </TableBody>
         </Table>
       </div>
+
+      {hasMore && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
+            Show more ({filteredTrades.length - visibleCount} remaining)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

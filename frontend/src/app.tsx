@@ -1,17 +1,38 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRoute, createRouter, RouterProvider, redirect } from "@tanstack/react-router";
+import { lazy, Suspense } from "react";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "./api/query-client";
 import { rootRoute } from "./routes/__root";
-import { BacktestPage } from "./routes/backtest";
-import { DataPage } from "./routes/data";
-import { DiscoveryPage } from "./routes/discovery";
-import { PaperTradingPage } from "./routes/paper-trading";
-import { ResultsPage } from "./routes/results";
-import { SettingsPage } from "./routes/settings";
-import { StrategiesPage } from "./routes/strategies";
-import { StrategyEditPage } from "./routes/strategies.$strategyId";
+
+const DataPage = lazy(() => import("./routes/data").then((m) => ({ default: m.DataPage })));
+const StrategiesPage = lazy(() =>
+  import("./routes/strategies").then((m) => ({ default: m.StrategiesPage })),
+);
+const StrategyEditPage = lazy(() =>
+  import("./routes/strategies.$strategyId").then((m) => ({ default: m.StrategyEditPage })),
+);
+const BacktestPage = lazy(() =>
+  import("./routes/backtest").then((m) => ({ default: m.BacktestPage })),
+);
+const ResultsPage = lazy(() =>
+  import("./routes/results").then((m) => ({ default: m.ResultsPage })),
+);
+const DiscoveryPage = lazy(() =>
+  import("./routes/discovery").then((m) => ({ default: m.DiscoveryPage })),
+);
+const PaperTradingPage = lazy(() =>
+  import("./routes/paper-trading").then((m) => ({ default: m.PaperTradingPage })),
+);
+const SettingsPage = lazy(() =>
+  import("./routes/settings").then((m) => ({ default: m.SettingsPage })),
+);
+
+function SuspensePage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
+}
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -24,7 +45,13 @@ const indexRoute = createRoute({
 const strategiesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/strategies",
-  component: StrategiesPage,
+  component: function StrategiesRouteComponent() {
+    return (
+      <SuspensePage>
+        <StrategiesPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const strategyEditRoute = createRoute({
@@ -32,44 +59,84 @@ const strategyEditRoute = createRoute({
   path: "/strategies/$strategyId",
   component: function StrategyEditRouteComponent() {
     const { strategyId } = strategyEditRoute.useParams();
-    return <StrategyEditPage strategyId={Number(strategyId)} />;
+    return (
+      <SuspensePage>
+        <StrategyEditPage strategyId={Number(strategyId)} />
+      </SuspensePage>
+    );
   },
 });
 
 const discoveryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/discovery",
-  component: DiscoveryPage,
+  component: function DiscoveryRouteComponent() {
+    return (
+      <SuspensePage>
+        <DiscoveryPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const backtestRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/backtest",
-  component: BacktestPage,
+  component: function BacktestRouteComponent() {
+    return (
+      <SuspensePage>
+        <BacktestPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const resultsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/results",
-  component: ResultsPage,
+  component: function ResultsRouteComponent() {
+    return (
+      <SuspensePage>
+        <ResultsPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const paperTradingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/paper-trading",
-  component: PaperTradingPage,
+  component: function PaperTradingRouteComponent() {
+    return (
+      <SuspensePage>
+        <PaperTradingPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const dataRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/data",
-  component: DataPage,
+  component: function DataRouteComponent() {
+    return (
+      <SuspensePage>
+        <DataPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: SettingsPage,
+  component: function SettingsRouteComponent() {
+    return (
+      <SuspensePage>
+        <SettingsPage />
+      </SuspensePage>
+    );
+  },
 });
 
 const routeTree = rootRoute.addChildren([

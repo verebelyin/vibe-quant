@@ -1,11 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useListDiscoveryJobsApiDiscoveryJobsGet } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
 import { DiscoveryConfig } from "@/components/discovery/DiscoveryConfig";
 import { DiscoveryJobList } from "@/components/discovery/DiscoveryJobList";
 import { DiscoveryProgress } from "@/components/discovery/DiscoveryProgress";
+import { DiscoveryResults } from "@/components/discovery/DiscoveryResults";
 
 export function DiscoveryPage() {
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+
   const { data: jobsResp } = useListDiscoveryJobsApiDiscoveryJobsGet({
     query: { refetchInterval: 10_000 },
   });
@@ -17,6 +20,11 @@ export function DiscoveryPage() {
   }, [jobsResp]);
 
   const runningJob = jobs.find((j) => j.status.toLowerCase() === "running");
+
+  // Auto-select latest completed job if none selected
+  const completedJobs = jobs.filter((j) => j.status.toLowerCase() === "completed");
+  const effectiveRunId =
+    selectedRunId ?? (completedJobs.length > 0 ? completedJobs[0].run_id : null);
 
   // Extract total generations from progress or fallback to 100
   const totalGens = runningJob
@@ -39,11 +47,13 @@ export function DiscoveryPage() {
       <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
         <DiscoveryConfig />
         <div className="rounded-lg border border-border bg-background p-4">
-          <DiscoveryJobList />
+          <DiscoveryJobList selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
         </div>
       </div>
 
       {runningJob && <DiscoveryProgress runId={runningJob.run_id} totalGenerations={totalGens} />}
+
+      <DiscoveryResults runId={effectiveRunId} />
     </div>
   );
 }

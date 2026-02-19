@@ -44,7 +44,12 @@ function progressInfo(job: DiscoveryJobResponse): { generation: string; bestFitn
   };
 }
 
-export function DiscoveryJobList() {
+interface DiscoveryJobListProps {
+  selectedRunId?: number | null;
+  onSelectRun?: (runId: number) => void;
+}
+
+export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobListProps = {}) {
   const { data: jobsResp, isLoading } = useListDiscoveryJobsApiDiscoveryJobsGet({
     query: { refetchInterval: 10_000 },
   });
@@ -95,8 +100,17 @@ export function DiscoveryJobList() {
               const normalized = job.status.toLowerCase();
               const badgeCls = STATUS_BADGE[normalized] ?? FALLBACK_BADGE;
               const info = progressInfo(job);
+              const isSelected = selectedRunId === job.run_id;
+              const isClickable = normalized === "completed";
               return (
-                <TableRow key={job.run_id}>
+                <TableRow
+                  key={job.run_id}
+                  className={cn(
+                    isClickable && "cursor-pointer hover:bg-muted/50",
+                    isSelected && "bg-muted/40",
+                  )}
+                  onClick={isClickable && onSelectRun ? () => onSelectRun(job.run_id) : undefined}
+                >
                   <TableCell className="font-mono text-xs text-foreground">{job.run_id}</TableCell>
                   <TableCell className="text-xs">
                     <Badge variant="outline" className={cn("border-transparent", badgeCls)}>

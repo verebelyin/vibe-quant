@@ -10,6 +10,35 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes("node_modules/react-dom/") || id.includes("node_modules/react/")) {
+            return "vendor-react";
+          }
+          if (id.includes("node_modules/recharts/") || id.includes("node_modules/d3-")) {
+            return "vendor-recharts";
+          }
+          if (id.includes("node_modules/radix-ui/")) {
+            return "vendor-radix";
+          }
+          if (
+            id.includes("node_modules/@tanstack/react-router/") ||
+            id.includes("node_modules/@tanstack/react-query/")
+          ) {
+            return "vendor-tanstack";
+          }
+          if (
+            id.includes("node_modules/plotly.js-dist-min/") ||
+            id.includes("node_modules/react-plotly.js/")
+          ) {
+            return "vendor-plotly";
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
