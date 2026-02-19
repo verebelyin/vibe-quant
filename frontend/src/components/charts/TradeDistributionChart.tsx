@@ -67,9 +67,9 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
   if (!active || !payload?.length) return null;
   const bin = payload[0].payload;
   return (
-    <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm shadow-md">
-      <p className="text-[hsl(var(--muted-foreground))]">{bin.range}</p>
-      <p className="font-medium text-[hsl(var(--foreground))]">
+    <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
+      <p className="text-muted-foreground">{bin.range}</p>
+      <p className="font-medium text-foreground">
         {bin.count} trade{bin.count !== 1 ? "s" : ""}
       </p>
     </div>

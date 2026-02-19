@@ -20,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
@@ -140,13 +139,15 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <Label className="text-xs uppercase tracking-wider">Symbols</Label>
-            <button
+            <Button
               type="button"
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
               onClick={handleSelectAll}
-              className="text-xs font-medium text-primary hover:underline"
             >
               {selectedSymbols.length === symbols.length ? "Deselect all" : "Select all"}
-            </button>
+            </Button>
           </div>
           <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-input bg-transparent p-2 dark:bg-input/30">
             {symbols.length === 0 && (
@@ -155,19 +156,16 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
             {symbols.map((sym) => {
               const selected = selectedSymbols.includes(sym);
               return (
-                <button
+                <Button
                   key={sym}
                   type="button"
+                  variant={selected ? "default" : "secondary"}
+                  size="xs"
                   onClick={() => handleToggleSymbol(sym)}
-                  className={cn(
-                    "rounded-md px-2 py-0.5 font-mono text-xs font-medium transition-colors",
-                    selected
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-accent text-accent-foreground",
-                  )}
+                  className="font-mono"
                 >
                   {sym}
-                </button>
+                </Button>
               );
             })}
           </div>

@@ -7,6 +7,7 @@ import {
   useListTemplatesApiStrategiesTemplatesGet,
 } from "@/api/generated/strategies/strategies";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 interface StrategyCreateDialogProps {
@@ -90,37 +92,55 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
 
         <div className="max-h-64 space-y-2 overflow-y-auto">
           {/* Blank option */}
-          <button
-            type="button"
-            onClick={() => setSelected("blank")}
+          <Card
             className={cn(
-              "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors",
-              selected === "blank" ? "border-primary bg-primary/10" : "border-border bg-card",
+              "cursor-pointer gap-0 py-0 transition-colors",
+              selected === "blank" ? "border-primary bg-primary/10" : "",
             )}
+            onClick={() => setSelected("blank")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setSelected("blank");
+              }
+            }}
           >
-            <p className="text-sm font-medium">Blank Strategy</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Start with an empty DSL configuration.
-            </p>
-          </button>
+            <CardContent className="p-3">
+              <p className="text-sm font-medium">Blank Strategy</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Start with an empty DSL configuration.
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Templates */}
-          {templatesQuery.isLoading && <div className="h-16 animate-pulse rounded-lg bg-muted" />}
+          {templatesQuery.isLoading && <Skeleton className="h-16 rounded-lg" />}
           {templates.map((tmpl, idx) => (
-            <button
+            <Card
               key={tmpl.name ?? idx}
-              type="button"
-              onClick={() => setSelected(idx)}
               className={cn(
-                "w-full cursor-pointer rounded-lg border p-3 text-left transition-colors",
-                selected === idx ? "border-primary bg-primary/10" : "border-border bg-card",
+                "cursor-pointer gap-0 py-0 transition-colors",
+                selected === idx ? "border-primary bg-primary/10" : "",
               )}
+              onClick={() => setSelected(idx)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSelected(idx);
+                }
+              }}
             >
-              <p className="text-sm font-medium">{tmpl.name ?? `Template ${idx + 1}`}</p>
-              {tmpl.description && (
-                <p className="mt-0.5 text-xs text-muted-foreground">{tmpl.description}</p>
-              )}
-            </button>
+              <CardContent className="p-3">
+                <p className="text-sm font-medium">{tmpl.name ?? `Template ${idx + 1}`}</p>
+                {tmpl.description && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{tmpl.description}</p>
+                )}
+              </CardContent>
+            </Card>
           ))}
         </div>
 

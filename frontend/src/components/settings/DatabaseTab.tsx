@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   getGetDatabaseInfoApiSettingsDatabaseGetQueryKey,
   useGetDatabaseInfoApiSettingsDatabaseGet,
@@ -109,6 +110,7 @@ export function DatabaseTab() {
                         invalidate();
                         setShowSwitch(false);
                         setNewPath("");
+                        toast.success("Database switched");
                       },
                     },
                   );

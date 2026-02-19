@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import type { SizingConfigResponse } from "@/api/generated/models";
 import {
   getListSizingConfigsApiSettingsSizingGetQueryKey,
@@ -278,6 +279,7 @@ export function SizingTab() {
                 onSuccess: () => {
                   invalidate();
                   setShowCreate(false);
+                  toast.success("Sizing config created");
                 },
               },
             );
@@ -315,6 +317,7 @@ export function SizingTab() {
                   onSuccess: () => {
                     invalidate();
                     setEditingId(null);
+                    toast.success("Sizing config updated");
                   },
                 },
               );
@@ -344,7 +347,15 @@ export function SizingTab() {
                   variant="destructive"
                   size="xs"
                   onClick={() => {
-                    deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
+                    deleteMut.mutate(
+                      { configId: cfg.id },
+                      {
+                        onSuccess: () => {
+                          invalidate();
+                          toast.success("Sizing config deleted");
+                        },
+                      },
+                    );
                   }}
                 >
                   Delete

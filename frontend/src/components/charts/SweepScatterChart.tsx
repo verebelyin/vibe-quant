@@ -30,14 +30,14 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
-    <div className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-sm shadow-md">
-      <p className="text-[hsl(var(--foreground))]">
+    <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
+      <p className="text-foreground">
         Sharpe: <span className="font-medium">{p.sharpe_ratio.toFixed(2)}</span>
       </p>
-      <p className="text-[hsl(var(--foreground))]">
+      <p className="text-foreground">
         Max DD: <span className="font-medium">{(p.max_drawdown * 100).toFixed(1)}%</span>
       </p>
-      <p className="text-[hsl(var(--foreground))]">
+      <p className="text-foreground">
         Return: <span className="font-medium">{(p.total_return * 100).toFixed(1)}%</span>
       </p>
       {p.is_pareto_optimal && <p className="mt-1 font-medium text-[#3b82f6]">Pareto Optimal</p>}

@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import type { RiskConfigResponse } from "@/api/generated/models";
 import {
   getListRiskConfigsApiSettingsRiskGetQueryKey,
@@ -224,6 +225,7 @@ export function RiskTab() {
                 onSuccess: () => {
                   invalidate();
                   setShowCreate(false);
+                  toast.success("Risk config created");
                 },
               },
             );
@@ -254,6 +256,7 @@ export function RiskTab() {
                   onSuccess: () => {
                     invalidate();
                     setEditingId(null);
+                    toast.success("Risk config updated");
                   },
                 },
               );
@@ -290,7 +293,15 @@ export function RiskTab() {
                   variant="destructive"
                   size="xs"
                   onClick={() => {
-                    deleteMut.mutate({ configId: cfg.id }, { onSuccess: invalidate });
+                    deleteMut.mutate(
+                      { configId: cfg.id },
+                      {
+                        onSuccess: () => {
+                          invalidate();
+                          toast.success("Risk config deleted");
+                        },
+                      },
+                    );
                   }}
                 >
                   Delete

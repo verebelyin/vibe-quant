@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -30,9 +31,9 @@ export function StrategyCard({
       </CardHeader>
       <CardContent className="pt-0">
         {strategyType && (
-          <span className="mt-1.5 inline-block rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+          <Badge variant="secondary" className="mt-1.5">
             {strategyType}
-          </span>
+          </Badge>
         )}
         {description && (
           <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{description}</p>

@@ -5,7 +5,7 @@ const Plot = lazy(() => import("react-plotly.js"));
 
 function PlotFallback() {
   return (
-    <div className="flex items-center justify-center rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))] p-8 text-sm text-[hsl(var(--muted-foreground))]">
+    <div className="flex items-center justify-center rounded-md border border-border bg-muted p-8 text-sm text-muted-foreground">
       Loading chart...
     </div>
   );
