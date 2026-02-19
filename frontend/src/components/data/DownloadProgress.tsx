@@ -26,9 +26,15 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
   const [errorMsg, setErrorMsg] = useState("");
   const esRef = useRef<EventSource | null>(null);
   const logsEndRef = useRef<HTMLDivElement | null>(null);
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const addLog = useCallback((msg: string) => {
     setLogs((prev) => [...prev.slice(-200), msg]);
+    // Defer scroll to after render
+    requestAnimationFrame(() => {
+      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
   }, []);
 
   useEffect(() => {
@@ -74,7 +80,7 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
     es.onerror = () => {
       // EventSource auto-reconnects on error, but if readyState is CLOSED it won't
       if (es.readyState === EventSource.CLOSED) {
-        if (status !== "complete") {
+        if (statusRef.current !== "complete") {
           setStatus("error");
           setErrorMsg("Connection lost");
           addLog("Connection to progress stream lost.");
@@ -86,13 +92,7 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
       es.close();
       esRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, addLog]);
-
-  // Auto-scroll logs
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
 
   // Notify parent on complete
   useEffect(() => {

@@ -84,7 +84,8 @@ export default function CandlestickChart({
   const volumeSeriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const theme = useUIStore((s) => s.theme);
 
-  // Create chart + series
+  // Create chart + series — mount-only; theme/height/volume handled in separate effects
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional mount-only effect
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -129,8 +130,6 @@ export default function CandlestickChart({
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
     };
-    // Intentionally only run on mount/unmount; theme + data handled below
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update theme

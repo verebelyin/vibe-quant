@@ -25,6 +25,7 @@ export function useWebSocket(channel: string): UseWebSocketReturn {
   const retryRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const connectRef = useRef<() => void>(null);
 
   const [status, setStatus] = useState<WsStatus>("disconnected");
   const [lastMessage, setLastMessage] = useState<WsMessage | null>(null);
@@ -65,7 +66,10 @@ export function useWebSocket(channel: string): UseWebSocketReturn {
     ws.onclose = () => {
       if (unmountedRef.current) return;
       setStatus("disconnected");
-      scheduleReconnect();
+      // Schedule reconnect inline to avoid circular dependency
+      const delay = Math.min(1000 * 2 ** retryRef.current, MAX_BACKOFF_MS);
+      retryRef.current += 1;
+      timerRef.current = setTimeout(() => connectRef.current?.(), delay);
     };
 
     ws.onerror = () => {
@@ -74,12 +78,8 @@ export function useWebSocket(channel: string): UseWebSocketReturn {
     };
   }, [channel]);
 
-  const scheduleReconnect = useCallback(() => {
-    if (unmountedRef.current) return;
-    const delay = Math.min(1000 * 2 ** retryRef.current, MAX_BACKOFF_MS);
-    retryRef.current += 1;
-    timerRef.current = setTimeout(connect, delay);
-  }, [connect]);
+  // Keep ref in sync so reconnect timer calls the latest connect
+  connectRef.current = connect;
 
   const send = useCallback((data: unknown) => {
     const ws = wsRef.current;
