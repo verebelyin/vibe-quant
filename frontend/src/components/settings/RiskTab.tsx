@@ -176,6 +176,22 @@ function RiskForm({
   );
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  risk_per_trade: "Risk/Trade",
+  max_position_pct: "Max Pos %",
+  max_leverage: "Max Lev",
+  max_drawdown_pct: "Max DD %",
+  stop_loss_pct: "Stop Loss %",
+  max_total_exposure: "Max Exposure",
+  max_correlated_positions: "Max Corr Pos",
+  daily_loss_limit_pct: "Daily Loss Lim",
+  max_drawdown_halt_pct: "DD Halt %",
+};
+
+function labelKey(k: string): string {
+  return FIELD_LABELS[k] ?? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function formToPayload(form: RiskFormState) {
   return {
     name: form.name,
@@ -303,13 +319,13 @@ export function RiskTab() {
                   <span className="text-[10px] text-muted-foreground">
                     Strategy:{" "}
                     {Object.entries(cfg.strategy_level as Record<string, unknown>)
-                      .map(([k, v]) => `${k}=${v}`)
+                      .map(([k, v]) => `${labelKey(k)}=${v}`)
                       .join(", ")}
                   </span>
                   <span className="text-[10px] text-muted-foreground">
                     Portfolio:{" "}
                     {Object.entries(cfg.portfolio_level as Record<string, unknown>)
-                      .map(([k, v]) => `${k}=${v}`)
+                      .map(([k, v]) => `${labelKey(k)}=${v}`)
                       .join(", ")}
                   </span>
                 </div>

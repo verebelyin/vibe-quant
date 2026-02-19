@@ -100,6 +100,7 @@ async def launch_screening(
         "-m",
         "vibe_quant",
         "screening",
+        "run",
         "--run-id",
         str(run_id),
     ]
@@ -146,6 +147,7 @@ async def launch_validation(
         "-m",
         "vibe_quant",
         "validation",
+        "run",
         "--run-id",
         str(run_id),
     ]
@@ -211,16 +213,60 @@ async def sync_job(run_id: int, jobs: JobMgr, ws: WsMgr) -> JobStatusResponse:
 
 @router.post("/validate-coverage", response_model=CoverageCheckResponse)
 async def validate_coverage(body: CoverageCheckRequest) -> CoverageCheckResponse:
-    # Stub: actual catalog coverage check wired later
+    from datetime import UTC, datetime
+
+    from vibe_quant.data.catalog import CatalogManager
+
+    try:
+        req_start = datetime.fromisoformat(body.start_date).replace(tzinfo=UTC)
+        req_end = datetime.fromisoformat(body.end_date).replace(tzinfo=UTC)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format; use YYYY-MM-DD")
+
+    catalog = CatalogManager()
     coverage: dict[str, object] = {}
+
     for symbol in body.symbols:
-        coverage[symbol] = {
-            "available": False,
-            "timeframe": body.timeframe,
-            "start_date": body.start_date,
-            "end_date": body.end_date,
-            "message": "Coverage check not yet implemented",
-        }
+        try:
+            bars = catalog.get_bars(symbol, body.timeframe, start=req_start, end=req_end)
+        except Exception:
+            coverage[symbol] = {
+                "has_data": False,
+                "start_date": body.start_date,
+                "end_date": body.end_date,
+                "bars": 0,
+                "message": "Symbol or timeframe not available in catalog",
+            }
+            continue
+
+        if not bars:
+            date_range = catalog.get_bar_date_range(symbol, body.timeframe)
+            if date_range:
+                avail_start, avail_end = date_range
+                message = (
+                    f"No data in requested range; catalog has "
+                    f"{avail_start.date()} to {avail_end.date()}"
+                )
+            else:
+                message = "No data for this symbol/timeframe in catalog"
+            coverage[symbol] = {
+                "has_data": False,
+                "start_date": body.start_date,
+                "end_date": body.end_date,
+                "bars": 0,
+                "message": message,
+            }
+        else:
+            actual_start = datetime.fromtimestamp(bars[0].ts_event / 1e9, tz=UTC)
+            actual_end = datetime.fromtimestamp(bars[-1].ts_event / 1e9, tz=UTC)
+            coverage[symbol] = {
+                "has_data": True,
+                "start_date": actual_start.date().isoformat(),
+                "end_date": actual_end.date().isoformat(),
+                "bars": len(bars),
+                "message": f"{len(bars):,} bars available",
+            }
+
     return CoverageCheckResponse(coverage=coverage)
 
 

@@ -119,7 +119,7 @@ class ValidationRunner:
         dsl_config = strategy_data["dsl_config"]
 
         # Validate strategy DSL (compilation happens in _run_backtest)
-        dsl = self._validate_dsl(dsl_config)
+        dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
         # Determine latency preset
         effective_latency = self._resolve_latency(run_config, latency_preset)
@@ -212,7 +212,7 @@ class ValidationRunner:
 
         strategy_name = str(strategy_data["name"])
         dsl_config = strategy_data["dsl_config"]
-        dsl = self._validate_dsl(dsl_config)
+        dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
         effective_latency = self._resolve_latency(run_config, latency_preset)
         venue_config = self._create_venue_config(run_config, effective_latency)
@@ -457,11 +457,14 @@ class ValidationRunner:
 
         return run_config
 
-    def _validate_dsl(self, dsl_config: dict[str, object]) -> StrategyDSL:
-        """Validate DSL configuration.
+    def _validate_dsl(
+        self, dsl_config: dict[str, object], strategy_name: str = "strategy"
+    ) -> StrategyDSL:
+        """Validate DSL configuration, translating frontend format if needed.
 
         Args:
             dsl_config: DSL config dict from database.
+            strategy_name: Strategy name used when translating frontend format.
 
         Returns:
             Validated StrategyDSL.
@@ -469,8 +472,11 @@ class ValidationRunner:
         Raises:
             ValidationRunnerError: If validation fails.
         """
+        from vibe_quant.dsl.translator import translate_dsl_config
+
         try:
-            return validate_strategy_dict(dsl_config)
+            translated = translate_dsl_config(dsl_config, strategy_name=strategy_name)
+            return validate_strategy_dict(translated)
         except Exception as e:
             msg = f"Strategy DSL validation failed: {e}"
             raise ValidationRunnerError(msg) from e

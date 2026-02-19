@@ -52,6 +52,21 @@ const EMPTY_FORM: SizingFormState = {
   atr_multiplier: "2.0",
 };
 
+const SIZING_FIELD_LABELS: Record<string, string> = {
+  max_leverage: "Max Lev",
+  max_position_pct: "Max Pos %",
+  risk_per_trade: "Risk/Trade",
+  win_rate: "Win Rate",
+  avg_win: "Avg Win",
+  avg_loss: "Avg Loss",
+  kelly_fraction: "Kelly Frac",
+  atr_multiplier: "ATR Mult",
+};
+
+function labelKey(k: string): string {
+  return SIZING_FIELD_LABELS[k] ?? k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function buildConfig(form: SizingFormState): Record<string, unknown> {
   const base: Record<string, unknown> = {
     max_leverage: Number(form.max_leverage),
@@ -334,7 +349,7 @@ export function SizingTab() {
                 <div className="mt-1 flex flex-wrap gap-2">
                   {Object.entries(cfg.config as Record<string, unknown>).map(([k, v]) => (
                     <Badge key={k} variant="secondary" className="text-[10px]">
-                      {k}: {String(v)}
+                      {labelKey(k)}: {String(v)}
                     </Badge>
                   ))}
                 </div>

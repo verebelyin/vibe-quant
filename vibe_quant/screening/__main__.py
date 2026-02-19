@@ -40,9 +40,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
 
         from vibe_quant.dsl.schema import StrategyDSL
+        from vibe_quant.dsl.translator import translate_dsl_config
         from vibe_quant.screening.pipeline import create_screening_pipeline
 
-        dsl = StrategyDSL.model_validate(strategy["dsl_config"])
+        raw_config = translate_dsl_config(
+            strategy["dsl_config"], strategy_name=str(strategy["name"])
+        )
+        dsl = StrategyDSL.model_validate(raw_config)
 
         # Extract run parameters
         symbols = run_config["symbols"]

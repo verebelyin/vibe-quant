@@ -99,5 +99,16 @@ async def validate_strategy(strategy_id: int, mgr: StateMgr) -> ValidationResult
     row = mgr.get_strategy(strategy_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    # TODO: wire up DSL validator when available
-    return ValidationResult(valid=True, errors=[])
+    from vibe_quant.dsl.parser import DSLValidationError, validate_strategy_dict
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    try:
+        translated = translate_dsl_config(
+            row["dsl_config"], strategy_name=str(row["name"])
+        )
+        validate_strategy_dict(translated)
+        return ValidationResult(valid=True, errors=[])
+    except DSLValidationError as exc:
+        return ValidationResult(valid=False, errors=exc.details if exc.details else [str(exc)])
+    except Exception as exc:
+        return ValidationResult(valid=False, errors=[str(exc)])

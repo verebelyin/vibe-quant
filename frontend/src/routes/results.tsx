@@ -1,5 +1,12 @@
-import { useState } from "react";
-import { useGetSweepsApiResultsRunsRunIdSweepsGet } from "@/api/generated/results/results";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  getGetRunSummaryApiResultsRunsRunIdGetQueryKey,
+  getGetSweepsApiResultsRunsRunIdSweepsGetQueryKey,
+  getGetTradesApiResultsRunsRunIdTradesGetQueryKey,
+  useGetSweepsApiResultsRunsRunIdSweepsGet,
+  useListRunsApiResultsRunsGet,
+} from "@/api/generated/results/results";
 import { ChartsPanel } from "@/components/results/ChartsPanel";
 import { ComparisonView } from "@/components/results/ComparisonView";
 import { CostBreakdown } from "@/components/results/CostBreakdown";
@@ -21,11 +28,53 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type ViewMode = "single" | "compare";
 
+const POLL_INTERVAL_MS = 3000;
+
+/** Poll runs list while selected run is "running"; invalidate result queries on completion. */
+function useRunPolling(selectedRunId: number | null) {
+  const queryClient = useQueryClient();
+  const prevStatus = useRef<string | null>(null);
+
+  const runsQuery = useListRunsApiResultsRunsGet(undefined, {
+    query: {
+      enabled: selectedRunId != null,
+      refetchInterval: (query) => {
+        const runs = query.state.data?.data?.runs ?? [];
+        const run = runs.find((r) => r.id === selectedRunId);
+        return run?.status === "running" ? POLL_INTERVAL_MS : false;
+      },
+    },
+  });
+
+  useEffect(() => {
+    if (selectedRunId == null) return;
+    const runs = runsQuery.data?.data?.runs ?? [];
+    const run = runs.find((r) => r.id === selectedRunId);
+    const status = run?.status ?? null;
+
+    if (
+      prevStatus.current === "running" &&
+      (status === "completed" || status === "failed")
+    ) {
+      // Invalidate all result-related queries for this run
+      queryClient.invalidateQueries({
+        queryKey: getGetRunSummaryApiResultsRunsRunIdGetQueryKey(selectedRunId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetSweepsApiResultsRunsRunIdSweepsGetQueryKey(selectedRunId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetTradesApiResultsRunsRunIdTradesGetQueryKey(selectedRunId),
+      });
+    }
+    prevStatus.current = status;
+  }, [runsQuery.data, selectedRunId, queryClient]);
+}
+
 function SweepTab({ runId }: { runId: number }) {
   const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId);
   const sweeps = query.data?.data;
 
-  // Hide tab content until we know sweep data exists
   if (query.isLoading || query.isError || !sweeps || sweeps.length === 0) return null;
 
   return <SweepAnalysis runId={runId} />;
@@ -43,6 +92,8 @@ export function ResultsPage() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("single");
   const hasSweeps = useSweepAvailable(selectedRunId);
+
+  useRunPolling(selectedRunId);
 
   return (
     <div className="flex flex-col gap-6">

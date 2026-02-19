@@ -33,14 +33,10 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 
 _LATENCY_PRESETS: list[LatencyPreset] = [
-    LatencyPreset(name="colocated", description="Co-located server (1ms)", base_latency_ms=1),
-    LatencyPreset(
-        name="cloud_same_region", description="Same-region cloud (5ms)", base_latency_ms=5
-    ),
-    LatencyPreset(
-        name="cloud_cross_region", description="Cross-region cloud (50ms)", base_latency_ms=50
-    ),
-    LatencyPreset(name="retail", description="Retail connection (200ms)", base_latency_ms=200),
+    LatencyPreset(name="co_located", description="Co-located server (1ms)", base_latency_ms=1),
+    LatencyPreset(name="domestic", description="Domestic / same-region (20ms)", base_latency_ms=20),
+    LatencyPreset(name="international", description="International / cross-region (100ms)", base_latency_ms=100),
+    LatencyPreset(name="retail", description="Retail home connection (200ms)", base_latency_ms=200),
 ]
 
 # ---------------------------------------------------------------------------

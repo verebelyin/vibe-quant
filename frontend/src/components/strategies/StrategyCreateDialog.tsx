@@ -39,12 +39,15 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
   const templates = (templatesQuery.data?.data ?? []) as TemplateItem[];
   const createMutation = useCreateStrategyApiStrategiesPost();
 
+  const uniqueName = (base: string) =>
+    `${base}_${Date.now().toString(36)}`;
+
   const handleCreate = () => {
     if (selected === "blank") {
       createMutation.mutate(
         {
           data: {
-            name: "Untitled Strategy",
+            name: uniqueName("untitled_strategy"),
             dsl_config: {},
           },
         },
@@ -56,6 +59,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
             toast.success("Strategy created");
             onCreated(res.data.id);
           },
+          onError: () => toast.error("Failed to create strategy"),
         },
       );
     } else {
@@ -63,7 +67,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
       createMutation.mutate(
         {
           data: {
-            name: tmpl.name ?? "Untitled Strategy",
+            name: uniqueName(tmpl.name ?? "strategy"),
             description: tmpl.description,
             strategy_type: tmpl.strategy_type,
             dsl_config: tmpl.dsl_config ?? {},
@@ -77,6 +81,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
             toast.success("Strategy created");
             onCreated(res.data.id);
           },
+          onError: () => toast.error("Failed to create strategy"),
         },
       );
     }

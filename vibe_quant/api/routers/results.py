@@ -69,9 +69,55 @@ async def compare_runs(
 @router.get("/runs/{run_id}", response_model=BacktestResultResponse)
 async def get_run_summary(run_id: int, mgr: StateMgr) -> BacktestResultResponse:
     row = mgr.get_backtest_result(run_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return BacktestResultResponse(**row)
+    if row is not None:
+        return BacktestResultResponse(**row)
+
+    # Screening runs don't populate backtest_results — synthesize from best sweep
+    sweeps = mgr.get_sweep_results(run_id, pareto_only=True)
+    if not sweeps:
+        sweeps = mgr.get_sweep_results(run_id)
+    if not sweeps:
+        # Ensure run exists at all
+        run = mgr.get_backtest_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail="No results available for this run yet")
+
+    best = sweeps[0]  # already ordered by sharpe DESC
+    return BacktestResultResponse(
+        id=best["id"],
+        run_id=run_id,
+        total_return=best.get("total_return"),
+        cagr=None,
+        sharpe_ratio=best.get("sharpe_ratio"),
+        sortino_ratio=best.get("sortino_ratio"),
+        calmar_ratio=None,
+        max_drawdown=best.get("max_drawdown"),
+        max_drawdown_duration_days=None,
+        volatility_annual=None,
+        total_trades=best.get("total_trades"),
+        winning_trades=None,
+        losing_trades=None,
+        win_rate=best.get("win_rate"),
+        profit_factor=best.get("profit_factor"),
+        avg_win=None,
+        avg_loss=None,
+        largest_win=None,
+        largest_loss=None,
+        avg_trade_duration_hours=None,
+        max_consecutive_wins=None,
+        max_consecutive_losses=None,
+        total_fees=best.get("total_fees"),
+        total_funding=best.get("total_funding"),
+        total_slippage=None,
+        deflated_sharpe=None,
+        walk_forward_efficiency=None,
+        purged_kfold_mean_sharpe=None,
+        execution_time_seconds=best.get("execution_time_seconds"),
+        starting_balance=None,
+        notes=None,
+        created_at=None,
+    )
 
 
 @router.get("/runs/{run_id}/trades", response_model=list[TradeResponse])
