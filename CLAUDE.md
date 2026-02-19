@@ -10,25 +10,28 @@ Algorithmic trading engine for crypto perpetual futures using NautilusTrader (Ru
 - **Tests:** `pytest` (target 80% coverage on core modules)
 - **Lint:** `ruff check`
 - **Type check:** `mypy`
-- **Dashboard:** `.venv/bin/streamlit run vibe_quant/dashboard/app.py --server.port 8501 --server.headless true`
+- **Backend:** `.venv/bin/uvicorn vibe_quant.api.main:app --port 8000`
+- **Frontend:** `cd frontend && pnpm dev` (Vite on port 5173)
+- **Frontend build:** `cd frontend && pnpm build`
 
 ## UI Testing (agent-browser)
 
-Start the dashboard then test with `agent-browser`. **Always use `dangerouslyDisableSandbox: true`** for agent-browser commands (it needs `~/.agent-browser` socket dir).
+Start backend + frontend then test with `agent-browser`. **Always use `dangerouslyDisableSandbox: true`** for agent-browser commands (it needs `~/.agent-browser` socket dir).
 
 **Quick start:**
 ```bash
-# Start app (background)
-.venv/bin/streamlit run vibe_quant/dashboard/app.py --server.port 8501 --server.headless true &
+# Start backend + frontend (background)
+.venv/bin/uvicorn vibe_quant.api.main:app --port 8000 &
+cd frontend && pnpm dev --port 5173 &
 
 # Open and take initial screenshot
-agent-browser open http://localhost:8501 && agent-browser screenshot /tmp/claude/page.png
+agent-browser open http://localhost:5173 && agent-browser screenshot /tmp/claude/page.png
 ```
 
 **Chain commands with `&&`** to reduce round-trips:
 ```bash
 # Navigate + snapshot in one call
-agent-browser open http://localhost:8501 && agent-browser snapshot -i
+agent-browser open http://localhost:5173 && agent-browser snapshot -i
 
 # Click + wait + screenshot in one call
 agent-browser click @e5 && agent-browser wait 2000 && agent-browser screenshot /tmp/claude/result.png
