@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   useLaunchScreeningApiBacktestScreeningPost,
@@ -14,6 +14,7 @@ import {
   useListSizingConfigsApiSettingsSizingGet,
 } from "@/api/generated/settings/settings";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
+import { parseDslConfig } from "@/components/strategies/editor/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { PreflightStatus } from "./PreflightStatus";
+import { SweepBuilder, type SweepConfig, sweepToPayload } from "./SweepBuilder";
 
 type BacktestMode = "screening" | "validation";
 
@@ -44,6 +46,9 @@ export function BacktestLaunchForm() {
   const [latencyPreset, setLatencyPreset] = useState("");
   const [sizingConfigId, setSizingConfigId] = useState<string>("");
   const [riskConfigId, setRiskConfigId] = useState<string>("");
+  // Sweep state
+  const [sweepEnabled, setSweepEnabled] = useState(false);
+  const [sweepConfig, setSweepConfig] = useState<SweepConfig>({ params: [] });
 
   // Preflight / launch result state
   const [coverageResult, setCoverageResult] = useState<CoverageCheckResponseCoverage | null>(null);
@@ -70,6 +75,14 @@ export function BacktestLaunchForm() {
   const latencyPresets = latencyQuery.data?.status === 200 ? latencyQuery.data.data : [];
   const sizingConfigs = sizingQuery.data?.status === 200 ? sizingQuery.data.data : [];
   const riskConfigs = riskQuery.data?.status === 200 ? riskQuery.data.data : [];
+
+  // Extract indicators from selected strategy for sweep builder
+  const selectedStrategy = strategies.find((s) => String(s.id) === strategyId);
+  const strategyIndicators = useMemo(() => {
+    if (!selectedStrategy) return [];
+    const dsl = parseDslConfig(selectedStrategy.dsl_config as Record<string, unknown>);
+    return dsl.indicators;
+  }, [selectedStrategy]);
 
   const isLaunching = screeningMutation.isPending || validationMutation.isPending;
 
@@ -129,6 +142,10 @@ export function BacktestLaunchForm() {
       parameters: {
         initial_balance: initialBalance,
         leverage,
+        ...(sweepEnabled &&
+          sweepConfig.params.length > 0 && {
+            sweep: sweepToPayload(sweepConfig),
+          }),
       },
       ...(mode === "validation" && {
         latency_preset: latencyPreset || null,
@@ -216,6 +233,33 @@ export function BacktestLaunchForm() {
               ))}
             </div>
           </div>
+
+          {/* Parameter sweep toggle */}
+          {strategyId !== "" && strategyIndicators.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>Parameter Sweep</Label>
+                <Button
+                  type="button"
+                  variant={sweepEnabled ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setSweepEnabled((v) => !v);
+                    if (!sweepEnabled) setSweepConfig({ params: [] });
+                  }}
+                >
+                  {sweepEnabled ? "Enabled" : "Disabled"}
+                </Button>
+              </div>
+              {sweepEnabled && (
+                <SweepBuilder
+                  indicators={strategyIndicators}
+                  value={sweepConfig}
+                  onChange={setSweepConfig}
+                />
+              )}
+            </div>
+          )}
 
           {/* Date range */}
           <div className="grid grid-cols-2 gap-4">

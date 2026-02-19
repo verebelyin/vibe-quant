@@ -12,12 +12,17 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { ConditionsTab } from "./editor/ConditionsTab";
 import { GeneralTab } from "./editor/GeneralTab";
 import { IndicatorsTab } from "./editor/IndicatorsTab";
 import { RiskTab } from "./editor/RiskTab";
 import { TimeTab } from "./editor/TimeTab";
 import { type DslConfig, emptyDslConfig, parseDslConfig } from "./editor/types";
+import { ValidationPanel } from "./editor/ValidationPanel";
+import { YamlEditor } from "./editor/YamlEditor";
+
+type EditorMode = "visual" | "yaml";
 
 interface StrategyEditorProps {
   strategy: StrategyResponse;
@@ -38,6 +43,8 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
     Object.keys(strategy.dsl_config).length > 0 ? initialConfig : emptyDslConfig(),
   );
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [showValidationPanel, setShowValidationPanel] = useState(false);
+  const [editorMode, setEditorMode] = useState<EditorMode>("visual");
 
   const updateMutation = useUpdateStrategyApiStrategiesStrategyIdPut();
   const validateMutation = useValidateStrategyApiStrategiesStrategyIdValidatePost();
@@ -87,6 +94,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
               onSuccess: (res) => {
                 const result = res.data;
                 setValidation(result);
+                setShowValidationPanel(true);
                 if (result.valid) {
                   toast.success("Strategy is valid");
                 } else {
@@ -147,43 +155,72 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
         </div>
       )}
 
-      {/* Tabs */}
-      <Tabs defaultValue="general">
-        <TabsList>
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="indicators">Indicators</TabsTrigger>
-          <TabsTrigger value="conditions">Conditions</TabsTrigger>
-          <TabsTrigger value="risk">Risk</TabsTrigger>
-          <TabsTrigger value="time">Time</TabsTrigger>
-        </TabsList>
+      {/* Editor mode toggle */}
+      <div className="mb-4 inline-flex rounded-md border border-border">
+        {(["visual", "yaml"] as const).map((m) => (
+          <Button
+            key={m}
+            type="button"
+            variant={editorMode === m ? "default" : "ghost"}
+            size="sm"
+            className={cn(
+              "capitalize first:rounded-r-none last:rounded-l-none",
+              editorMode !== m && "text-foreground",
+            )}
+            onClick={() => setEditorMode(m)}
+          >
+            {m === "yaml" ? "YAML" : "Visual"}
+          </Button>
+        ))}
+      </div>
 
-        <TabsContent value="general" className="mt-4">
-          <GeneralTab
-            name={name}
-            description={description}
-            config={config}
-            onNameChange={setName}
-            onDescriptionChange={setDescription}
-            onConfigChange={setConfig}
-          />
-        </TabsContent>
+      {editorMode === "yaml" ? (
+        <YamlEditor config={config} onConfigChange={setConfig} />
+      ) : (
+        <Tabs defaultValue="general">
+          <TabsList>
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="indicators">Indicators</TabsTrigger>
+            <TabsTrigger value="conditions">Conditions</TabsTrigger>
+            <TabsTrigger value="risk">Risk</TabsTrigger>
+            <TabsTrigger value="time">Time</TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="indicators" className="mt-4">
-          <IndicatorsTab config={config} onConfigChange={setConfig} />
-        </TabsContent>
+          <TabsContent value="general" className="mt-4">
+            <GeneralTab
+              name={name}
+              description={description}
+              config={config}
+              onNameChange={setName}
+              onDescriptionChange={setDescription}
+              onConfigChange={setConfig}
+            />
+          </TabsContent>
 
-        <TabsContent value="conditions" className="mt-4">
-          <ConditionsTab config={config} onConfigChange={setConfig} />
-        </TabsContent>
+          <TabsContent value="indicators" className="mt-4">
+            <IndicatorsTab config={config} onConfigChange={setConfig} />
+          </TabsContent>
 
-        <TabsContent value="risk" className="mt-4">
-          <RiskTab config={config} onConfigChange={setConfig} />
-        </TabsContent>
+          <TabsContent value="conditions" className="mt-4">
+            <ConditionsTab config={config} onConfigChange={setConfig} />
+          </TabsContent>
 
-        <TabsContent value="time" className="mt-4">
-          <TimeTab config={config} onConfigChange={setConfig} />
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="risk" className="mt-4">
+            <RiskTab config={config} onConfigChange={setConfig} />
+          </TabsContent>
+
+          <TabsContent value="time" className="mt-4">
+            <TimeTab config={config} onConfigChange={setConfig} />
+          </TabsContent>
+        </Tabs>
+      )}
+
+      {/* Validation summary panel */}
+      {showValidationPanel && (
+        <div className="mt-6">
+          <ValidationPanel config={config} />
+        </div>
+      )}
     </div>
   );
 }

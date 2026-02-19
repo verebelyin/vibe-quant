@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -9,81 +8,131 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type DslCondition, type DslConfig, OPERATORS } from "./types";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { buildOperandOptions, type DslCondition, type DslConfig, OPERATORS } from "./types";
 
 interface ConditionsTabProps {
   config: DslConfig;
   onConfigChange: (config: DslConfig) => void;
 }
 
+function OperandSelect({
+  value,
+  operandOptions,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  operandOptions: string[];
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const isCustom = value !== "" && !operandOptions.includes(value);
+
+  return (
+    <Select
+      value={isCustom ? "__custom__" : value}
+      onValueChange={(v) => {
+        if (v !== "__custom__") onChange(v);
+      }}
+    >
+      <SelectTrigger className="h-8 text-xs">
+        <SelectValue placeholder={placeholder}>{isCustom ? value : undefined}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {operandOptions.map((opt) => (
+          <SelectItem key={opt} value={opt}>
+            {opt}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function ConditionRow({
   condition,
   onChange,
   onRemove,
-  showLogic,
+  operandOptions,
 }: {
   condition: DslCondition;
   onChange: (c: DslCondition) => void;
   onRemove: () => void;
-  showLogic: boolean;
+  operandOptions: string[];
 }) {
   return (
-    <div className="space-y-2">
-      {showLogic && (
+    <div className="flex items-end gap-2">
+      <div className="flex-1 space-y-1">
+        <Label className="text-xs">Left</Label>
+        <OperandSelect
+          value={condition.left}
+          operandOptions={operandOptions}
+          onChange={(v) => onChange({ ...condition, left: v })}
+          placeholder="e.g. SMA(20)"
+        />
+      </div>
+      <div className="w-[140px] space-y-1">
+        <Label className="text-xs">Operator</Label>
         <Select
-          value={condition.logic ?? "and"}
-          onValueChange={(v) => onChange({ ...condition, logic: v as "and" | "or" })}
+          value={condition.operator}
+          onValueChange={(v) => onChange({ ...condition, operator: v })}
         >
-          <SelectTrigger className="w-[80px]">
+          <SelectTrigger className="h-8 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="and">AND</SelectItem>
-            <SelectItem value="or">OR</SelectItem>
+            {OPERATORS.map((op) => (
+              <SelectItem key={op.value} value={op.value}>
+                {op.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
-      )}
-      <div className="flex items-end gap-2">
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs">Left</Label>
-          <Input
-            value={condition.left}
-            onChange={(e) => onChange({ ...condition, left: e.target.value })}
-            placeholder="e.g. SMA_20"
-            className="h-8 text-xs"
-          />
-        </div>
-        <div className="w-[140px] space-y-1">
-          <Label className="text-xs">Operator</Label>
-          <Select
-            value={condition.operator}
-            onValueChange={(v) => onChange({ ...condition, operator: v })}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {OPERATORS.map((op) => (
-                <SelectItem key={op.value} value={op.value}>
-                  {op.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs">Right</Label>
-          <Input
-            value={condition.right}
-            onChange={(e) => onChange({ ...condition, right: e.target.value })}
-            placeholder="e.g. price or 70"
-            className="h-8 text-xs"
-          />
-        </div>
-        <Button variant="ghost" size="sm" className="h-8 text-destructive" onClick={onRemove}>
-          x
-        </Button>
       </div>
+      <div className="flex-1 space-y-1">
+        <Label className="text-xs">Right</Label>
+        <OperandSelect
+          value={condition.right}
+          operandOptions={operandOptions}
+          onChange={(v) => onChange({ ...condition, right: v })}
+          placeholder="e.g. price or 70"
+        />
+      </div>
+      <Button variant="ghost" size="sm" className="h-8 text-destructive" onClick={onRemove}>
+        x
+      </Button>
+    </div>
+  );
+}
+
+function LogicToggle({
+  value,
+  onChange,
+}: {
+  value: "and" | "or";
+  onChange: (v: "and" | "or") => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 pl-2">
+      <div className="h-4 w-px bg-border" />
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
+        value={value}
+        onValueChange={(v) => {
+          if (v === "and" || v === "or") onChange(v);
+        }}
+      >
+        <ToggleGroupItem value="and" className="h-6 px-2 text-xs">
+          AND
+        </ToggleGroupItem>
+        <ToggleGroupItem value="or" className="h-6 px-2 text-xs">
+          OR
+        </ToggleGroupItem>
+      </ToggleGroup>
+      <div className="h-4 w-px bg-border" />
     </div>
   );
 }
@@ -91,10 +140,12 @@ function ConditionRow({
 function ConditionSection({
   title,
   conditions,
+  operandOptions,
   onChange,
 }: {
   title: string;
   conditions: DslCondition[];
+  operandOptions: string[];
   onChange: (conditions: DslCondition[]) => void;
 }) {
   const add = () => {
@@ -119,6 +170,12 @@ function ConditionSection({
     onChange(updated);
   };
 
+  const updateLogic = (idx: number, logic: "and" | "or") => {
+    const updated = [...conditions];
+    updated[idx] = { ...updated[idx], logic };
+    onChange(updated);
+  };
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -129,18 +186,24 @@ function ConditionSection({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-1">
         {conditions.length === 0 && (
           <p className="py-4 text-center text-xs text-muted-foreground">No conditions defined.</p>
         )}
         {conditions.map((cond, idx) => (
-          <ConditionRow
-            key={`cond-${idx.toString()}`}
-            condition={cond}
-            onChange={(c) => update(idx, c)}
-            onRemove={() => remove(idx)}
-            showLogic={idx > 0}
-          />
+          <div key={`cond-${idx.toString()}`}>
+            {idx > 0 && (
+              <LogicToggle value={cond.logic ?? "and"} onChange={(v) => updateLogic(idx, v)} />
+            )}
+            <div className={idx > 0 ? "ml-4 border-l-2 border-muted pl-3" : ""}>
+              <ConditionRow
+                condition={cond}
+                onChange={(c) => update(idx, c)}
+                onRemove={() => remove(idx)}
+                operandOptions={operandOptions}
+              />
+            </div>
+          </div>
         ))}
       </CardContent>
     </Card>
@@ -148,6 +211,8 @@ function ConditionSection({
 }
 
 export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
+  const operandOptions = buildOperandOptions(config.indicators);
+
   const updateConditions = (patch: Partial<DslConfig["conditions"]>) => {
     onConfigChange({
       ...config,
@@ -157,14 +222,21 @@ export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
 
   return (
     <div className="space-y-4">
+      {config.indicators.length === 0 && (
+        <div className="rounded-md border border-dashed bg-muted/50 p-3 text-center text-xs text-muted-foreground">
+          Add indicators first to populate operand dropdowns.
+        </div>
+      )}
       <ConditionSection
         title="Entry Conditions"
         conditions={config.conditions.entry}
+        operandOptions={operandOptions}
         onChange={(entry) => updateConditions({ entry })}
       />
       <ConditionSection
         title="Exit Conditions"
         conditions={config.conditions.exit}
+        operandOptions={operandOptions}
         onChange={(exit) => updateConditions({ exit })}
       />
     </div>
