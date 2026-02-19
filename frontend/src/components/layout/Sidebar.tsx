@@ -215,18 +215,21 @@ export function Sidebar() {
   return (
     <ShadcnSidebar collapsible="icon">
       <SidebarHeader className="p-0">
-        <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className="size-6 shrink-0"
-          >
-            <title>vibe-quant logo</title>
-            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-          </svg>
-          <span className="text-lg font-bold tracking-tight group-data-[collapsible=icon]:hidden">
+        <div className="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
+          <div className="relative">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="relative z-10 size-6 shrink-0 text-primary"
+            >
+              <title>vibe-quant logo</title>
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+            <div className="absolute inset-0 blur-md bg-primary/30" />
+          </div>
+          <span className="text-lg font-bold tracking-tight text-foreground group-data-[collapsible=icon]:hidden">
             vibe-quant
           </span>
         </div>

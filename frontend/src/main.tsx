@@ -1,17 +1,16 @@
-import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { queryClient } from "./api/query-client";
 import { App } from "./app";
 import "./index.css";
+
+// Force dark mode — no light theme support
+document.documentElement.classList.add("dark");
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Root element not found");
 
 createRoot(rootElement).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
+    <App />
   </StrictMode>,
 );

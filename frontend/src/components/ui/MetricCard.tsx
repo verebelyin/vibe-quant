@@ -10,18 +10,20 @@ interface MetricCardProps {
 }
 
 const trendConfig = {
-  up: { symbol: "\u2191", color: "text-green-500" },
-  down: { symbol: "\u2193", color: "text-red-500" },
-  neutral: { symbol: "\u2014", color: "text-gray-400" },
+  up: { symbol: "\u2191", color: "text-profit" },
+  down: { symbol: "\u2193", color: "text-loss" },
+  neutral: { symbol: "\u2014", color: "text-muted-foreground" },
 } as const;
 
 export function MetricCard({ label, value, subtitle, trend, className }: MetricCardProps) {
   return (
-    <Card className={cn("gap-0 py-4", className)}>
+    <Card className={cn("gap-0 py-4 group", className)}>
       <CardContent>
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </p>
         <div className="mt-2 flex items-baseline gap-2">
-          <span className="text-2xl font-bold">{value}</span>
+          <span className="text-2xl font-bold tracking-tight font-mono">{value}</span>
           {trend && (
             <span className={cn("text-sm font-semibold", trendConfig[trend].color)}>
               {trendConfig[trend].symbol}
