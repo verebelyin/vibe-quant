@@ -12,15 +12,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const STRATEGY_TYPES = [
-  { value: "momentum",        label: "Momentum",       short: "MOM"   },
-  { value: "mean_reversion",  label: "Mean Reversion", short: "MR"    },
-  { value: "breakout",        label: "Breakout",       short: "BRK"   },
-  { value: "trend_following", label: "Trend",          short: "TRD"   },
-  { value: "arbitrage",       label: "Arbitrage",      short: "ARB"   },
-  { value: "volatility",      label: "Volatility",     short: "VOL"   },
-] as const;
-
 const SORT_OPTIONS = [
   { value: "updated_at", label: "Last Updated" },
   { value: "created_at", label: "Created"      },
@@ -29,6 +20,13 @@ const SORT_OPTIONS = [
 ] as const;
 
 type SortKey = (typeof SORT_OPTIONS)[number]["value"];
+
+/** Derive a short display label from a strategy_type value */
+function typeShortLabel(type: string): string {
+  const meta = TYPE_META[type.toLowerCase()];
+  if (meta) return meta.label.length <= 5 ? meta.label : meta.label.slice(0, 4).toUpperCase();
+  return type.replace(/_/g, " ").toUpperCase().slice(0, 5);
+}
 
 interface StrategyListProps {
   onSelect: (s: StrategyResponse) => void;
@@ -69,7 +67,7 @@ function StrategyCardWithDelete({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute bottom-2.5 right-2.5 hidden group-hover:flex items-center justify-center w-6 h-6 rounded-sm text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors duration-100"
+        className="absolute bottom-2.5 right-2.5 hidden group-hover:flex cursor-pointer items-center justify-center w-6 h-6 rounded-sm text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors duration-100"
         aria-label="Delete strategy"
       >
         <Trash2 className="w-3 h-3" />
@@ -94,6 +92,16 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
   const query = useListStrategiesApiStrategiesGet();
   const data = query.data?.data;
 
+  // Derive unique types actually present in the data
+  const presentTypes = useMemo(() => {
+    if (!data?.strategies) return [];
+    const seen = new Set<string>();
+    for (const s of data.strategies) {
+      if (s.strategy_type) seen.add(s.strategy_type.toLowerCase());
+    }
+    return Array.from(seen).sort();
+  }, [data?.strategies]);
+
   const filtered = useMemo(() => {
     if (!data?.strategies) return [];
     let items = [...data.strategies];
@@ -102,7 +110,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
       items = items.filter(s => s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q));
     }
     if (typeFilter !== "all") {
-      items = items.filter(s => s.strategy_type === typeFilter);
+      items = items.filter(s => (s.strategy_type?.toLowerCase() ?? "") === typeFilter);
     }
     items.sort((a, b) => {
       switch (sortBy) {
@@ -121,12 +129,12 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
       <div className="space-y-4">
         <div className="flex gap-2">
           {(["a","b","c","d"] as const).map(id => (
-            <div key={id} className="h-7 w-16 animate-pulse rounded-sm bg-white/[0.05]" />
+            <div key={id} className="h-8 w-16 animate-pulse rounded-sm bg-white/[0.05]" />
           ))}
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {(["a","b","c","d","e","f","g","h"] as const).map(id => (
-            <div key={id} className="h-[192px] animate-pulse rounded-sm bg-white/[0.04]" />
+            <div key={id} className="h-[172px] animate-pulse rounded-sm bg-white/[0.04]" />
           ))}
         </div>
       </div>
@@ -162,47 +170,44 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
             value={search}
             onChange={e => setSearch(e.target.value)}
             className={cn(
-              "w-full pl-7 pr-3 h-8 rounded-sm font-mono text-[11px]",
+              "w-full pl-7 pr-3 h-8 rounded-sm font-mono text-[11px] cursor-text",
               "bg-white/[0.04] border border-white/[0.07] text-white/70 placeholder:text-white/20",
               "focus:outline-none focus:border-white/20 transition-colors duration-150",
             )}
           />
         </div>
 
-        {/* ── Type pill tabs ─────────────────────────────────── */}
+        {/* ── Type tabs — built from actual data ────────────── */}
         <div className="flex items-center gap-[3px]">
           <button
+            type="button"
             onClick={() => setTypeFilter("all")}
             className={cn(
-              "h-8 px-3 rounded-sm font-mono text-[9px] font-bold tracking-[0.15em] uppercase transition-all duration-100",
+              "cursor-pointer h-8 px-3 rounded-sm font-mono text-[10px] font-bold tracking-[0.15em] uppercase transition-all duration-100",
               typeFilter === "all"
                 ? "bg-white/[0.09] text-white/80"
-                : "text-white/25 hover:text-white/50 hover:bg-white/[0.04]",
+                : "text-white/30 hover:text-white/55 hover:bg-white/[0.04]",
             )}
           >
             ALL
           </button>
-          {STRATEGY_TYPES.map(t => {
-            const meta = TYPE_META[t.value];
-            const active = typeFilter === t.value;
+          {presentTypes.map(type => {
+            const meta = TYPE_META[type];
+            const color = meta?.color ?? "#22d3ee";
+            const active = typeFilter === type;
             return (
               <button
-                key={t.value}
-                onClick={() => setTypeFilter(t.value)}
-                className="h-8 px-2.5 rounded-sm font-mono text-[9px] font-bold tracking-[0.13em] uppercase transition-all duration-100"
+                key={type}
+                type="button"
+                onClick={() => setTypeFilter(type)}
+                className="cursor-pointer h-8 px-2.5 rounded-sm font-mono text-[10px] font-bold tracking-[0.13em] uppercase transition-all duration-100"
                 style={
                   active
-                    ? { color: meta?.color, background: `${meta?.color}18`, border: `1px solid ${meta?.color}30` }
-                    : { color: "rgba(255,255,255,0.25)", border: "1px solid transparent" }
+                    ? { color, background: `${color}18`, border: `1px solid ${color}35` }
+                    : { color: "rgba(255,255,255,0.28)", border: "1px solid transparent" }
                 }
-                onMouseEnter={e => {
-                  if (!active) (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.5)";
-                }}
-                onMouseLeave={e => {
-                  if (!active) (e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.25)";
-                }}
               >
-                {t.short}
+                {typeShortLabel(type)}
               </button>
             );
           })}
@@ -211,17 +216,17 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
         {/* Sort + count */}
         <div className="flex items-center gap-2 ml-auto">
           {total > 0 && (
-            <span className="font-mono text-[9px] tabular-nums text-white/20">
+            <span className="font-mono text-[10px] tabular-nums text-white/22">
               {shown < total ? `${shown}/${total}` : total} strat{total !== 1 ? "s" : ""}
             </span>
           )}
           <Select value={sortBy} onValueChange={v => setSortBy(v as SortKey)}>
-            <SelectTrigger className="w-[130px] h-8 rounded-sm font-mono text-[10px] bg-white/[0.03] border-white/[0.07] text-white/50">
+            <SelectTrigger className="w-[130px] h-8 rounded-sm font-mono text-[10px] bg-white/[0.03] border-white/[0.07] text-white/50 cursor-pointer">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {SORT_OPTIONS.map(opt => (
-                <SelectItem key={opt.value} value={opt.value} className="font-mono text-xs">
+                <SelectItem key={opt.value} value={opt.value} className="font-mono text-xs cursor-pointer">
                   {opt.label}
                 </SelectItem>
               ))}
@@ -232,14 +237,15 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
 
       {/* ── Grid ─────────────────────────────────────────────── */}
       {filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 border border-white/[0.05] rounded-sm"
+        <div
+          className="flex flex-col items-center justify-center py-20 border border-white/[0.05] rounded-sm"
           style={{
             backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.01) 2px, rgba(255,255,255,0.01) 3px)",
           }}
         >
           <span className="font-mono text-[28px] text-white/[0.07] mb-3">◈</span>
           <p className="font-mono text-[11px] text-white/30 tracking-widest uppercase">No strategies found</p>
-          <p className="font-mono text-[9px] text-white/15 mt-1.5">
+          <p className="font-mono text-[10px] text-white/15 mt-1.5">
             {debouncedSearch || typeFilter !== "all"
               ? "adjust search or filter"
               : "create your first strategy"}

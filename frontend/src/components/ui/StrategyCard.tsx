@@ -70,7 +70,7 @@ export function StrategyCard({
         // Stagger entrance
         "animate-in fade-in-0 slide-in-from-bottom-2 fill-mode-both",
         // Base shape — sharp corners for terminal aesthetic
-        "group relative flex h-[192px] flex-col overflow-hidden rounded-sm",
+        "group relative flex h-[172px] flex-col overflow-hidden rounded-sm",
         // Border: thin all-around + thicker left accent
         "border border-white/[0.07] border-l-[2px]",
         "transition-all duration-150 ease-out",
@@ -214,12 +214,12 @@ export function StrategyCard({
         {/* Footer — description · timestamp */}
         <div className="mt-auto pt-1.5">
           {description && (
-            <p className="font-mono text-[11px] leading-snug line-clamp-1 mb-1" style={{ color: "rgba(255,255,255,0.32)" }}>
+            <p className="font-mono text-[12px] leading-snug line-clamp-1 mb-0.5" style={{ color: "rgba(255,255,255,0.38)" }}>
               {description}
             </p>
           )}
           {updatedAt && (
-            <p className="font-mono text-[10px] tabular-nums" style={{ color: "rgba(255,255,255,0.17)" }}>
+            <p className="font-mono text-[11px] tabular-nums" style={{ color: "rgba(255,255,255,0.22)" }}>
               {relativeTime(updatedAt)}
             </p>
           )}
