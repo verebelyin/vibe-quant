@@ -157,6 +157,88 @@ Work is NOT complete until `git push` succeeds.
    ```
 5. If push fails, resolve and retry
 
+## Directory Structure
+
+```
+vibe-quant/
+├── vibe_quant/                    # Backend Python package
+│   ├── api/
+│   │   ├── app.py                 # FastAPI app factory
+│   │   ├── deps.py                # DI dependencies (DB session etc.)
+│   │   ├── routers/               # Route handlers: strategies, backtest, data, discovery, paper_trading, results, settings
+│   │   ├── schemas/               # Pydantic request/response models (same domains as routers)
+│   │   ├── sse/progress.py        # Server-sent events for progress
+│   │   └── ws/                    # WebSocket handlers: discovery, jobs, trading
+│   ├── data/                      # Data pipeline: downloader, archive (SQLite), catalog (Parquet)
+│   ├── db/                        # SQLite: connection (WAL), schema, state_manager
+│   ├── discovery/                 # Genetic algo strategy discovery: genome, operators, fitness, pipeline
+│   ├── dsl/                       # Strategy DSL: parser, compiler, schema, indicators, conditions, translator
+│   ├── overfitting/               # Overfitting filters: WFA, purged k-fold, DSR
+│   ├── paper/                     # Paper trading: node (NT engine), persistence, config, CLI
+│   ├── risk/                      # Risk actors, portfolio/strategy actors, sizing
+│   ├── screening/                 # Screening pipeline: NT runner, grid sweep, consistency checks
+│   ├── strategies/                # Strategy templates + examples
+│   ├── validation/                # Validation pipeline: NT runner, fill/latency models, results extraction
+│   ├── alerts/telegram.py         # Telegram notifications
+│   └── logging/                   # Structured logging
+│
+├── frontend/                      # React/TypeScript SPA (Vite + TailwindCSS 4 + shadcn)
+│   ├── src/
+│   │   ├── api/                   # API client + generated hooks (orval from OpenAPI)
+│   │   │   ├── client.ts          # Axios instance with /api proxy
+│   │   │   └── generated/         # Auto-generated: models + per-router hooks (DO NOT EDIT)
+│   │   ├── components/
+│   │   │   ├── backtest/          # BacktestLaunchForm, SweepBuilder, ActiveJobsPanel, PreflightStatus
+│   │   │   ├── charts/            # Recharts/Plotly charts: CandlestickChart, EquityCurve, Drawdown, Heatmap, etc.
+│   │   │   ├── data/              # DataBrowser, IngestForm, CoverageTable, DownloadProgress
+│   │   │   ├── discovery/         # DiscoveryConfig, DiscoveryJobList, DiscoveryResults, DiscoveryProgress
+│   │   │   ├── layout/            # Header, Sidebar, PageLayout
+│   │   │   ├── paper/             # LiveDashboard, SessionControl, PositionsTable, CheckpointsList
+│   │   │   ├── results/           # MetricsPanel, TradeLog, ChartsPanel, SweepAnalysis, WinLossPanel, etc.
+│   │   │   ├── settings/          # DatabaseTab, LatencyTab, RiskTab, SizingTab, SystemTab
+│   │   │   ├── strategies/        # StrategyList, StrategyCreateDialog, StrategyWizard, StrategyEditor, StrategyDeleteDialog
+│   │   │   │   └── editor/        # GeneralTab, IndicatorsTab, ConditionsTab, RiskTab, TimeTab, YamlEditor, types.ts
+│   │   │   └── ui/                # shadcn primitives + StrategyCard, etc.
+│   │   ├── hooks/                 # Custom React hooks
+│   │   ├── lib/utils.ts           # cn() and other helpers
+│   │   ├── routes/                # TanStack Router file-based routes
+│   │   │   ├── __root.tsx         # Root layout
+│   │   │   ├── index.tsx          # Dashboard/home
+│   │   │   ├── strategies.tsx     # Strategy management list page
+│   │   │   ├── strategies.$strategyId.tsx  # Strategy editor page
+│   │   │   ├── backtest.tsx, discovery.tsx, results.tsx
+│   │   │   ├── paper-trading.tsx, data.tsx, settings.tsx
+│   │   ├── stores/                # Zustand global stores
+│   │   ├── app.tsx                # Router setup + providers
+│   │   └── index.css              # TailwindCSS 4 theme (dark-only, OKLch colors, Geist/JetBrains fonts)
+│   ├── e2e/                       # Playwright E2E tests
+│   └── orval.config.ts            # API codegen config
+│
+├── tests/                         # Python unit tests (pytest)
+│   ├── unit/api/                  # API route tests
+│   └── fixtures/                  # Test data + known_results
+├── data/                          # Runtime data (gitignored)
+│   ├── archive/                   # SQLite raw data archive
+│   ├── catalog/                   # ParquetDataCatalog
+│   └── state/                     # Paper trading state
+├── docs/
+│   ├── claude/conventions.md      # Coding conventions (authoritative)
+│   ├── plans/                     # Implementation plans
+│   └── reviews/                   # Code review notes
+├── scripts/                       # Utility scripts
+├── SPEC.md                        # Authoritative implementation spec
+└── CLAUDE.md                      # This file
+```
+
+**Key paths to remember:**
+- Strategy card: `frontend/src/components/ui/StrategyCard.tsx`
+- Strategy list/page: `frontend/src/components/strategies/StrategyList.tsx`, `frontend/src/routes/strategies.tsx`
+- Theme/CSS vars: `frontend/src/index.css`
+- API hooks: `frontend/src/api/generated/` (auto-generated, don't edit)
+- Backend entry: `vibe_quant/api/app.py` → `main.py` entrypoint via uvicorn
+- DB schema: `vibe_quant/db/schema.py`
+- DSL types: `vibe_quant/dsl/schema.py`, frontend mirror: `frontend/src/components/strategies/editor/types.ts`
+
 ## Historical Documentation
 
 The files in `docs/` predate `SPEC.md` and contain **outdated architectural decisions** (FreqTrade, VectorBT, PostgreSQL, TimescaleDB, Redis, 5-year data). They are retained as research context only. When any `docs/*.md` file contradicts `SPEC.md`, **SPEC.md wins**.
