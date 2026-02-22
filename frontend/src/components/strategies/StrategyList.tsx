@@ -126,7 +126,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {(["a","b","c","d","e","f","g","h"] as const).map(id => (
-            <div key={id} className="h-[164px] animate-pulse rounded-sm bg-white/[0.04]" />
+            <div key={id} className="h-[192px] animate-pulse rounded-sm bg-white/[0.04]" />
           ))}
         </div>
       </div>
