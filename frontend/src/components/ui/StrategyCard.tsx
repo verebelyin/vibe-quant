@@ -10,38 +10,33 @@ interface StrategyCardProps {
   symbols?: string[];
   indicatorCount?: number;
   updatedAt?: string;
+  index?: number;
   onClick?: () => void;
   className?: string;
 }
 
-interface TypeMeta {
-  color: string;
-  label: string;
-  symbol: string;
-}
-
-const TYPE_META: Record<string, TypeMeta> = {
-  momentum:       { color: "#06b6d4", label: "MOMENTUM",    symbol: "◆" },
-  mean_reversion: { color: "#8b5cf6", label: "MEAN REV",    symbol: "◆" },
-  breakout:       { color: "#f59e0b", label: "BREAKOUT",    symbol: "◆" },
-  trend_following:{ color: "#10b981", label: "TREND",       symbol: "◆" },
-  arbitrage:      { color: "#3b82f6", label: "ARBITRAGE",   symbol: "◆" },
-  volatility:     { color: "#f43f5e", label: "VOLATILITY",  symbol: "◆" },
-  dsl:            { color: "#06b6d4", label: "DSL",         symbol: "◆" },
-  discovery:      { color: "#a78bfa", label: "DISCOVERY",   symbol: "◆" },
-  strategy:       { color: "#06b6d4", label: "STRATEGY",    symbol: "◆" },
+export const TYPE_META: Record<string, { color: string; label: string }> = {
+  momentum:        { color: "#0ff",    label: "MOMENTUM"   },
+  mean_reversion:  { color: "#a78bfa", label: "MEAN·REV"   },
+  breakout:        { color: "#fbbf24", label: "BREAKOUT"   },
+  trend_following: { color: "#34d399", label: "TREND"      },
+  arbitrage:       { color: "#60a5fa", label: "ARB"        },
+  volatility:      { color: "#fb7185", label: "VOL"        },
+  dsl:             { color: "#22d3ee", label: "DSL"        },
+  discovery:       { color: "#c4b5fd", label: "DISCOVERY"  },
+  strategy:        { color: "#22d3ee", label: "STRATEGY"   },
 };
 
-const DEFAULT_COLOR = "#22d3ee";
+const DEFAULT: typeof TYPE_META[string] = { color: "#22d3ee", label: "STRATEGY" };
 
 function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 2) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
+  const d = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(d / 60000);
+  if (m < 2) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
@@ -56,131 +51,159 @@ export function StrategyCard({
   symbols = [],
   indicatorCount,
   updatedAt,
+  index = 0,
   onClick,
   className,
 }: StrategyCardProps) {
-  const typeKey = strategyType?.toLowerCase() ?? "";
-  const meta = TYPE_META[typeKey];
-  const color = meta?.color ?? DEFAULT_COLOR;
-  const label = meta?.label ?? strategyType?.replace(/_/g, " ").toUpperCase() ?? "STRATEGY";
+  const key = strategyType?.toLowerCase() ?? "";
+  const { color, label } = TYPE_META[key] ?? DEFAULT;
 
-  const symbolLabel =
-    symbols.length === 0
-      ? null
-      : symbols.length <= 2
-        ? symbols.map((s) => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")
-        : `${symbols.slice(0, 2).map((s) => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")} +${symbols.length - 2}`;
+  const symbolStr =
+    symbols.length === 0 ? null
+    : symbols.length <= 2
+      ? symbols.map(s => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")
+      : `${symbols.slice(0, 2).map(s => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")} +${symbols.length - 2}`;
 
   return (
     <div
-      style={{ "--type-color": color } as React.CSSProperties}
       className={cn(
-        "group relative flex h-[164px] flex-col overflow-hidden rounded-xl",
-        "border border-white/[0.07]",
-        "transition-all duration-200 ease-out",
-        onClick && "cursor-pointer hover:border-white/[0.14] hover:-translate-y-[2px] hover:shadow-2xl hover:shadow-black/50",
+        // Stagger entrance
+        "animate-in fade-in-0 slide-in-from-bottom-2 fill-mode-both",
+        // Base shape — sharp corners for terminal aesthetic
+        "group relative flex h-[164px] flex-col overflow-hidden rounded-sm",
+        // Border: thin all-around + thicker left accent
+        "border border-white/[0.07] border-l-[2px]",
+        "transition-all duration-150 ease-out",
+        onClick && "cursor-pointer hover:-translate-y-[2px]",
         className,
       )}
+      style={{
+        borderLeftColor: color,
+        animationDelay: `${index * 45}ms`,
+        animationDuration: "320ms",
+      }}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
     >
-      {/* Base background */}
-      <div className="absolute inset-0 bg-card" />
+      {/* ── Base bg ─────────────────────────────────────────── */}
+      <div className="absolute inset-0 bg-[oklch(0.16_0.01_260)]" />
 
-      {/* Radial type-color wash — always present, subtle */}
+      {/* ── CRT scan-line texture — the terminal signature ──── */}
       <div
-        style={{
-          background: `radial-gradient(ellipse at 0% -20%, ${color}18 0%, transparent 65%)`,
-        }}
         className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.013) 2px, rgba(255,255,255,0.013) 3px)",
+        }}
       />
 
-      {/* Hover: intensify the wash */}
+      {/* ── Left-edge glow: bleeds in on hover ───────────────── */}
       <div
-        style={{
-          background: `radial-gradient(ellipse at 0% -20%, ${color}28 0%, transparent 65%)`,
-        }}
         className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-      />
-
-      {/* Bottom accent line — gradient from type color, left to right */}
-      <div
         style={{
-          background: `linear-gradient(to right, ${color}90, ${color}20, transparent)`,
+          background: `linear-gradient(to right, ${color}20 0%, transparent 55%)`,
         }}
-        className="absolute bottom-0 left-0 right-0 h-[2px] pointer-events-none"
       />
 
-      {/* Content */}
-      <div className="relative flex flex-1 flex-col px-4 py-3.5 z-10">
+      {/* ── Top-edge accent line ─────────────────────────────── */}
+      <div
+        className="absolute top-0 left-0 right-0 h-px pointer-events-none"
+        style={{ background: `linear-gradient(to right, ${color}50, transparent 70%)` }}
+      />
 
-        {/* Row 1: type label + live indicator + version */}
-        <div className="flex items-center justify-between gap-2 mb-2.5">
+      {/* ── Hover border brightening ─────────────────────────── */}
+      <div
+        className="absolute inset-0 rounded-[inherit] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+        style={{ boxShadow: `0 0 0 1px rgba(255,255,255,0.09)` }}
+      />
+
+      {/* ── Content ──────────────────────────────────────────── */}
+      <div className="relative z-10 flex flex-1 flex-col px-4 py-3.5">
+
+        {/* Row 1 — type label · live · version */}
+        <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-1.5">
             <span
+              className="font-mono text-[8.5px] font-black tracking-[0.22em] uppercase"
               style={{ color }}
-              className="text-[9px] font-black tracking-[0.2em] uppercase"
             >
               {label}
             </span>
             {isActive && (
-              <span className="inline-flex items-center gap-0.5 rounded-sm px-1 py-[1px] text-[7px] font-bold tracking-widest uppercase"
-                style={{ color, border: `1px solid ${color}40`, background: `${color}14` }}
+              <span
+                className="inline-flex items-center gap-[3px] rounded-[2px] px-[5px] py-[2px] font-mono text-[7px] font-bold tracking-[0.15em] uppercase"
+                style={{
+                  color,
+                  background: `${color}14`,
+                  border: `1px solid ${color}30`,
+                }}
               >
-                <span className="relative flex h-1 w-1 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ backgroundColor: color }} />
-                  <span className="relative inline-flex rounded-full h-1 w-1" style={{ backgroundColor: color }} />
+                <span className="relative flex h-[5px] w-[5px] shrink-0">
+                  <span
+                    className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-70"
+                    style={{ backgroundColor: color }}
+                  />
+                  <span
+                    className="relative inline-flex rounded-full h-[5px] w-[5px]"
+                    style={{ backgroundColor: color }}
+                  />
                 </span>
                 live
               </span>
             )}
           </div>
           {version !== undefined && (
-            <span className="font-mono text-[10px] text-white/25 tabular-nums shrink-0">
+            <span className="font-mono text-[9px] tabular-nums" style={{ color: "rgba(255,255,255,0.2)" }}>
               v{version}
             </span>
           )}
         </div>
 
-        {/* Row 2: strategy name — the focal point */}
-        <h3 className="text-[13px] font-bold leading-snug text-white/88 line-clamp-1 tracking-tight">
+        {/* Row 2 — strategy name */}
+        <h3
+          className="text-[13px] font-semibold leading-snug line-clamp-1 transition-colors duration-150"
+          style={{ color: "rgba(255,255,255,0.88)" }}
+        >
           {name}
         </h3>
 
-        {/* Row 3: meta pills */}
-        {(timeframe || symbolLabel || (indicatorCount !== undefined && indicatorCount > 0)) && (
-          <div className="flex flex-wrap items-center gap-1 mt-2">
+        {/* Row 3 — meta chips */}
+        {(timeframe || symbolStr || (indicatorCount !== undefined && indicatorCount > 0)) && (
+          <div className="flex flex-wrap items-center gap-[5px] mt-[9px]">
             {timeframe && (
               <span
-                className="font-mono text-[9px] px-1.5 py-0.5 rounded-sm border border-white/[0.08] text-white/40"
-                style={{ backgroundColor: `${color}0a` }}
+                className="font-mono text-[8.5px] px-1.5 py-0.5 rounded-[2px] border"
+                style={{
+                  color: `${color}99`,
+                  borderColor: `${color}22`,
+                  background: `${color}0a`,
+                }}
               >
                 {timeframe}
               </span>
             )}
-            {symbolLabel && (
+            {symbolStr && (
               <span
-                className="font-mono text-[9px] px-1.5 py-0.5 rounded-sm border border-white/[0.08] text-white/40"
-                style={{ backgroundColor: `${color}0a` }}
+                className="font-mono text-[8.5px] px-1.5 py-0.5 rounded-[2px] border"
+                style={{
+                  color: `${color}99`,
+                  borderColor: `${color}22`,
+                  background: `${color}0a`,
+                }}
               >
-                {symbolLabel}
+                {symbolStr}
               </span>
             )}
             {indicatorCount !== undefined && indicatorCount > 0 && (
               <span
-                className="font-mono text-[9px] px-1.5 py-0.5 rounded-sm border border-white/[0.08] text-white/40"
-                style={{ backgroundColor: `${color}0a` }}
+                className="font-mono text-[8.5px] px-1.5 py-0.5 rounded-[2px] border"
+                style={{
+                  color: `${color}99`,
+                  borderColor: `${color}22`,
+                  background: `${color}0a`,
+                }}
               >
                 {indicatorCount} ind{indicatorCount !== 1 ? "s" : ""}
               </span>
@@ -188,15 +211,15 @@ export function StrategyCard({
           </div>
         )}
 
-        {/* Footer: description + updated time */}
+        {/* Footer — description · timestamp */}
         <div className="mt-auto pt-1.5">
           {description && (
-            <p className="text-[10px] leading-snug text-white/38 line-clamp-1 mb-0.5">
+            <p className="font-mono text-[9px] leading-snug line-clamp-1 mb-1" style={{ color: "rgba(255,255,255,0.32)" }}>
               {description}
             </p>
           )}
           {updatedAt && (
-            <p className="text-[9px] font-mono text-white/20 tabular-nums">
+            <p className="font-mono text-[8.5px] tabular-nums" style={{ color: "rgba(255,255,255,0.17)" }}>
               {relativeTime(updatedAt)}
             </p>
           )}
