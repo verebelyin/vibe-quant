@@ -58,6 +58,18 @@ data/logs/
 .beads/*.db-shm
 .beads/daemon-error
 
+# Runtime data
+data/vibe_quant.db
+logs/
+
+# Build/cache
+.vite/
+.pnpm-store/
+
+# Review notes
+gpt-review.md
+new-gpt-review*.md
+
 # uv
 .uv/
 uv.lock

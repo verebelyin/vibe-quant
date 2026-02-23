@@ -26,5 +26,16 @@ export function StrategyEditPage({ strategyId }: { strategyId: number }) {
     );
   }
 
-  return <StrategyEditor strategy={query.data.data} />;
+  const resp = query.data;
+  if (!resp || resp.status !== 200) {
+    return (
+      <div className="p-6">
+        <div className="rounded-lg border border-destructive bg-destructive/10 p-6 text-destructive">
+          <p className="font-medium">Failed to load strategy</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <StrategyEditor strategy={resp.data} />;
 }

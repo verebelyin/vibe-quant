@@ -29,6 +29,9 @@ const PaperTradingPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("./routes/settings").then((m) => ({ default: m.SettingsPage })),
 );
+const GuidePage = lazy(() =>
+  import("./routes/guide").then((m) => ({ default: m.GuidePage })),
+);
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
@@ -139,6 +142,18 @@ const settingsRoute = createRoute({
   },
 });
 
+const guideRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/guide",
+  component: function GuideRouteComponent() {
+    return (
+      <SuspensePage>
+        <GuidePage />
+      </SuspensePage>
+    );
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   strategiesRoute,
@@ -149,6 +164,7 @@ const routeTree = rootRoute.addChildren([
   paperTradingRoute,
   dataRoute,
   settingsRoute,
+  guideRoute,
 ]);
 
 const router = createRouter({ routeTree });

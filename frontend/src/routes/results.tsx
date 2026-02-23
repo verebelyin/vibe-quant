@@ -39,8 +39,9 @@ function useRunPolling(selectedRunId: number | null) {
     query: {
       enabled: selectedRunId != null,
       refetchInterval: (query) => {
-        const runs = query.state.data?.data?.runs ?? [];
-        const run = runs.find((r) => r.id === selectedRunId);
+        const resp = query.state.data;
+        const runs = resp && resp.status === 200 ? resp.data.runs : [];
+        const run = runs.find((r: { id: number }) => r.id === selectedRunId);
         return run?.status === "running" ? POLL_INTERVAL_MS : false;
       },
     },
@@ -48,8 +49,9 @@ function useRunPolling(selectedRunId: number | null) {
 
   useEffect(() => {
     if (selectedRunId == null) return;
-    const runs = runsQuery.data?.data?.runs ?? [];
-    const run = runs.find((r) => r.id === selectedRunId);
+    const resp = runsQuery.data;
+    const runs = resp && resp.status === 200 ? resp.data.runs : [];
+    const run = runs.find((r: { id: number; status: string }) => r.id === selectedRunId);
     const status = run?.status ?? null;
 
     if (
@@ -73,7 +75,8 @@ function useRunPolling(selectedRunId: number | null) {
 
 function SweepTab({ runId }: { runId: number }) {
   const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId);
-  const sweeps = query.data?.data;
+  const resp = query.data;
+  const sweeps = resp && resp.status === 200 ? resp.data : null;
 
   if (query.isLoading || query.isError || !sweeps || sweeps.length === 0) return null;
 
@@ -81,10 +84,11 @@ function SweepTab({ runId }: { runId: number }) {
 }
 
 function useSweepAvailable(runId: number | null) {
-  const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId ?? 0, {
+  const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId ?? 0, undefined, {
     query: { enabled: runId != null },
   });
-  const sweeps = query.data?.data;
+  const resp = query.data;
+  const sweeps = resp && resp.status === 200 ? resp.data : null;
   return !query.isLoading && sweeps != null && sweeps.length > 0;
 }
 

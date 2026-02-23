@@ -8,6 +8,7 @@ const routeTitles: Record<string, string> = {
   "/paper-trading": "Paper Trading",
   "/data": "Data Management",
   "/settings": "Settings",
+  "/guide": "Guide",
 };
 
 export function Header() {
