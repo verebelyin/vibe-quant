@@ -152,6 +152,29 @@ def cmd_overfitting(_args: argparse.Namespace, extra: list[str] | None = None) -
     return overfitting_main(extra or [])
 
 
+def cmd_discovery(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
+    """Forward to discovery module CLI.
+
+    Args:
+        _args: Parsed CLI arguments (unused, forwarding via extra).
+        extra: Remaining arguments for submodule.
+
+    Returns:
+        Exit code.
+    """
+    import sys as _sys
+
+    from vibe_quant.discovery.__main__ import main as discovery_main
+
+    # Override sys.argv so discovery's argparse picks up the extra args
+    old_argv = _sys.argv
+    _sys.argv = ["vibe-quant discovery", *(extra or [])]
+    try:
+        return discovery_main()
+    finally:
+        _sys.argv = old_argv
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser.
 
@@ -189,6 +212,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overfitting prevention pipeline",
     )
     overfitting_parser.set_defaults(func=cmd_overfitting)
+
+    # Discovery command - uses parse_known_args forwarding
+    discovery_parser = subparsers.add_parser(
+        "discovery",
+        help="Genetic algorithm strategy discovery",
+    )
+    discovery_parser.set_defaults(func=cmd_discovery)
 
     # Validation command
     validation_parser = subparsers.add_parser(
@@ -259,7 +289,7 @@ def main() -> int:
 
     if hasattr(args, "func"):
         # Forward extra args to submodule commands (data, screening)
-        if args.command in ("data", "screening", "overfitting"):
+        if args.command in ("data", "screening", "overfitting", "discovery"):
             result: int = args.func(args, extra=extra)
         else:
             result = args.func(args)

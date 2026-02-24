@@ -75,9 +75,9 @@ async def launch_discovery(
     if body.indicator_pool is not None:
         params["indicator_pool"] = body.indicator_pool
 
-    # Use strategy_id=0 as placeholder for discovery (no pre-existing strategy)
+    # Use strategy_id=None for discovery (no pre-existing strategy)
     run_id = state.create_backtest_run(
-        strategy_id=0,
+        strategy_id=None,
         run_mode="discovery",
         symbols=body.symbols,
         timeframe=body.timeframes[0] if body.timeframes else "1h",
@@ -87,6 +87,10 @@ async def launch_discovery(
     )
 
     log_file = f"logs/discovery_{run_id}.log"
+    symbols_str = ",".join(body.symbols)
+    timeframe = body.timeframes[0] if body.timeframes else "1h"
+    start_date = body.start_date or "2024-01-01"
+    end_date = body.end_date or "2026-02-24"
     command = [
         sys.executable,
         "-m",
@@ -108,6 +112,14 @@ async def launch_discovery(
         str(body.tournament_size),
         "--convergence-generations",
         str(body.convergence_generations),
+        "--symbols",
+        symbols_str,
+        "--timeframe",
+        timeframe,
+        "--start-date",
+        start_date,
+        "--end-date",
+        end_date,
     ]
 
     try:
@@ -151,25 +163,81 @@ async def kill_discovery_job(run_id: int, jobs: JobMgr, ws: WsMgr) -> None:
     await ws.broadcast("jobs", {"type": "job_killed", "run_id": run_id})
 
 
-# --- Results (stubs) ---
+# --- Results ---
+
+
+def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[str, object]]:
+    """Load discovered strategies from backtest_results notes JSON."""
+    import json
+
+    result = state.get_backtest_result(run_id)
+    if result is None:
+        return []
+    notes = result.get("notes", "")
+    if not notes or not isinstance(notes, str):
+        return []
+    try:
+        data = json.loads(notes)
+        if isinstance(data, dict) and "top_strategies" in data:
+            return data["top_strategies"]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
 
 
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
-async def get_latest_results() -> DiscoveryResultResponse:
-    return DiscoveryResultResponse(strategies=[])
+async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
+    # Find latest completed discovery run
+    conn = state.conn
+    row = conn.execute(
+        "SELECT id FROM backtest_runs WHERE run_mode='discovery' AND status='completed' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return DiscoveryResultResponse(strategies=[])
+    return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, row[0]))
 
 
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)
-async def get_discovery_results(run_id: int) -> DiscoveryResultResponse:  # noqa: ARG001
-    return DiscoveryResultResponse(strategies=[])
+async def get_discovery_results(run_id: int, state: StateMgr) -> DiscoveryResultResponse:
+    return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, run_id))
 
 
 @router.post("/results/{run_id}/export/{strategy_index}", status_code=201)
 async def export_discovered_strategy(
-    run_id: int,  # noqa: ARG001
-    strategy_index: int,  # noqa: ARG001
-) -> dict[str, str]:
-    return {"status": "stub", "message": "Export not yet implemented"}
+    run_id: int,
+    strategy_index: int,
+    state: StateMgr,
+) -> dict[str, object]:
+    """Export a discovered strategy to the strategies table."""
+    strategies = _load_discovery_strategies(state, run_id)
+    if strategy_index < 0 or strategy_index >= len(strategies):
+        raise HTTPException(status_code=404, detail="Strategy index out of range")
+
+    entry = strategies[strategy_index]
+    dsl = entry.get("dsl", {})
+    name = dsl.get("name", f"discovery_{run_id}_{strategy_index}")
+
+    # Check if strategy name already exists
+    existing = state.conn.execute(
+        "SELECT id FROM strategies WHERE name = ?", (name,)
+    ).fetchone()
+    if existing:
+        return {"status": "exists", "strategy_id": existing[0], "name": name}
+
+    import json
+
+    cursor = state.conn.execute(
+        "INSERT INTO strategies (name, description, dsl_config, strategy_type) VALUES (?, ?, ?, ?)",
+        (
+            name,
+            f"Discovered via GA run {run_id} (score={entry.get('score', 0):.4f})",
+            json.dumps(dsl),
+            dsl.get("strategy_type", "momentum"),
+        ),
+    )
+    state.conn.commit()
+    return {"status": "created", "strategy_id": cursor.lastrowid, "name": name}
 
 
 # --- Indicator pool ---

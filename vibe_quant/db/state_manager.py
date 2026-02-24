@@ -326,7 +326,7 @@ class StateManager:
 
     def create_backtest_run(
         self,
-        strategy_id: int,
+        strategy_id: int | None,
         run_mode: str,
         symbols: Sequence[str],
         timeframe: str,
@@ -340,7 +340,7 @@ class StateManager:
         """Create a backtest run record.
 
         Args:
-            strategy_id: Strategy ID.
+            strategy_id: Strategy ID (None for discovery runs).
             run_mode: 'screening' or 'validation'.
             symbols: List of symbols to backtest.
             timeframe: Primary timeframe.

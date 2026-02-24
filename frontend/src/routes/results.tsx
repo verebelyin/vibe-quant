@@ -266,12 +266,6 @@ export function ResultsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-end">
-        <span className="text-sm text-muted-foreground">
-          {filteredRuns.length} run{filteredRuns.length !== 1 ? "s" : ""}
-        </span>
-      </div>
-
       <Card className="flex-row flex-wrap items-center gap-3 px-4 py-3">
         <Select value={modeFilter} onValueChange={setModeFilter}>
           <SelectTrigger size="sm" className="w-[150px]">

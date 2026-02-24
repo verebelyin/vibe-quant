@@ -30,7 +30,7 @@ export function StrategiesPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Action buttons */}
-      <div className="flex items-center justify-end gap-2 pb-4">
+      <div className="flex items-center justify-start gap-2 pb-4">
         <Button
           variant="outline"
           size="sm"
