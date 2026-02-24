@@ -33,14 +33,142 @@ import type {
   GetTradesApiResultsRunsRunIdTradesGetParams,
   HTTPValidationError,
   ListRunsApiResultsRunsGetParams,
+  ListRunsSummaryApiResultsRunsSummaryGetParams,
   MonthlyReturn,
   NotesUpdateRequest,
   RunListResponse,
+  RunSummaryResponse,
   SweepResultResponse,
   TradeResponse
 } from '.././models';
 
 import { customInstance } from '../../client';
+
+
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
+
+
+/**
+ * @summary List Runs Summary
+ */
+export type listRunsSummaryApiResultsRunsSummaryGetResponse200 = {
+  data: RunSummaryResponse
+  status: 200
+}
+
+export type listRunsSummaryApiResultsRunsSummaryGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type listRunsSummaryApiResultsRunsSummaryGetResponseSuccess = (listRunsSummaryApiResultsRunsSummaryGetResponse200) & {
+  headers: Headers;
+};
+export type listRunsSummaryApiResultsRunsSummaryGetResponseError = (listRunsSummaryApiResultsRunsSummaryGetResponse422) & {
+  headers: Headers;
+};
+
+export type listRunsSummaryApiResultsRunsSummaryGetResponse = (listRunsSummaryApiResultsRunsSummaryGetResponseSuccess | listRunsSummaryApiResultsRunsSummaryGetResponseError)
+
+export const getListRunsSummaryApiResultsRunsSummaryGetUrl = (params?: ListRunsSummaryApiResultsRunsSummaryGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/results/runs/summary?${stringifiedParams}` : `/api/results/runs/summary`
+}
+
+export const listRunsSummaryApiResultsRunsSummaryGet = async (params?: ListRunsSummaryApiResultsRunsSummaryGetParams, options?: RequestInit): Promise<listRunsSummaryApiResultsRunsSummaryGetResponse> => {
+  
+  return customInstance<listRunsSummaryApiResultsRunsSummaryGetResponse>(getListRunsSummaryApiResultsRunsSummaryGetUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getListRunsSummaryApiResultsRunsSummaryGetQueryKey = (params?: ListRunsSummaryApiResultsRunsSummaryGetParams,) => {
+    return [
+    `/api/results/runs/summary`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+    
+export const getListRunsSummaryApiResultsRunsSummaryGetQueryOptions = <TData = Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError = HTTPValidationError>(params?: ListRunsSummaryApiResultsRunsSummaryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListRunsSummaryApiResultsRunsSummaryGetQueryKey(params);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>> = ({ signal }) => listRunsSummaryApiResultsRunsSummaryGet(params, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListRunsSummaryApiResultsRunsSummaryGetQueryResult = NonNullable<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>>
+export type ListRunsSummaryApiResultsRunsSummaryGetQueryError = HTTPValidationError
+
+
+export function useListRunsSummaryApiResultsRunsSummaryGet<TData = Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError = HTTPValidationError>(
+ params: undefined |  ListRunsSummaryApiResultsRunsSummaryGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>,
+          TError,
+          Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListRunsSummaryApiResultsRunsSummaryGet<TData = Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError = HTTPValidationError>(
+ params?: ListRunsSummaryApiResultsRunsSummaryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>,
+          TError,
+          Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListRunsSummaryApiResultsRunsSummaryGet<TData = Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError = HTTPValidationError>(
+ params?: ListRunsSummaryApiResultsRunsSummaryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List Runs Summary
+ */
+
+export function useListRunsSummaryApiResultsRunsSummaryGet<TData = Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError = HTTPValidationError>(
+ params?: ListRunsSummaryApiResultsRunsSummaryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsSummaryApiResultsRunsSummaryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListRunsSummaryApiResultsRunsSummaryGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 
 
@@ -104,16 +232,16 @@ export const getListRunsApiResultsRunsGetQueryKey = (params?: ListRunsApiResults
     }
 
     
-export const getListRunsApiResultsRunsGetQueryOptions = <TData = Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError = HTTPValidationError>(params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, }
+export const getListRunsApiResultsRunsGetQueryOptions = <TData = Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError = HTTPValidationError>(params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListRunsApiResultsRunsGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>> = ({ signal }) => listRunsApiResultsRunsGet(params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>> = ({ signal }) => listRunsApiResultsRunsGet(params, { signal, ...requestOptions });
 
       
 
@@ -133,7 +261,7 @@ export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof l
           TError,
           Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError = HTTPValidationError>(
@@ -143,11 +271,11 @@ export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof l
           TError,
           Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError = HTTPValidationError>(
- params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, }
+ params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -155,7 +283,7 @@ export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof l
  */
 
 export function useListRunsApiResultsRunsGet<TData = Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError = HTTPValidationError>(
- params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, }
+ params?: ListRunsApiResultsRunsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRunsApiResultsRunsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -228,16 +356,16 @@ export const getCompareRunsApiResultsCompareGetQueryKey = (params?: CompareRunsA
     }
 
     
-export const getCompareRunsApiResultsCompareGetQueryOptions = <TData = Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError = HTTPValidationError>(params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, }
+export const getCompareRunsApiResultsCompareGetQueryOptions = <TData = Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError = HTTPValidationError>(params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getCompareRunsApiResultsCompareGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>> = ({ signal }) => compareRunsApiResultsCompareGet(params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>> = ({ signal }) => compareRunsApiResultsCompareGet(params, { signal, ...requestOptions });
 
       
 
@@ -257,7 +385,7 @@ export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<ty
           TError,
           Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError = HTTPValidationError>(
@@ -267,11 +395,11 @@ export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<ty
           TError,
           Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError = HTTPValidationError>(
- params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, }
+ params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -279,7 +407,7 @@ export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<ty
  */
 
 export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError = HTTPValidationError>(
- params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, }
+ params?: CompareRunsApiResultsCompareGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof compareRunsApiResultsCompareGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -345,16 +473,16 @@ export const getGetRunSummaryApiResultsRunsRunIdGetQueryKey = (runId: number,) =
     }
 
     
-export const getGetRunSummaryApiResultsRunsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, }
+export const getGetRunSummaryApiResultsRunsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetRunSummaryApiResultsRunsRunIdGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>> = ({ signal }) => getRunSummaryApiResultsRunsRunIdGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>> = ({ signal }) => getRunSummaryApiResultsRunsRunIdGet(runId, { signal, ...requestOptions });
 
       
 
@@ -374,7 +502,7 @@ export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnTyp
           TError,
           Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError = HTTPValidationError>(
@@ -384,11 +512,11 @@ export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnTyp
           TError,
           Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -396,7 +524,7 @@ export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnTyp
  */
 
 export function useGetRunSummaryApiResultsRunsRunIdGet<TData = Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunSummaryApiResultsRunsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -473,16 +601,16 @@ export const getGetTradesApiResultsRunsRunIdTradesGetQueryKey = (runId: number,
 
     
 export const getGetTradesApiResultsRunsRunIdTradesGetQueryOptions = <TData = Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError = HTTPValidationError>(runId: number,
-    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, }
+    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetTradesApiResultsRunsRunIdTradesGetQueryKey(runId,params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>> = ({ signal }) => getTradesApiResultsRunsRunIdTradesGet(runId,params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>> = ({ signal }) => getTradesApiResultsRunsRunIdTradesGet(runId,params, { signal, ...requestOptions });
 
       
 
@@ -503,7 +631,7 @@ export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError = HTTPValidationError>(
@@ -514,12 +642,12 @@ export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError = HTTPValidationError>(
  runId: number,
-    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, }
+    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -528,7 +656,7 @@ export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnT
 
 export function useGetTradesApiResultsRunsRunIdTradesGet<TData = Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError = HTTPValidationError>(
  runId: number,
-    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, }
+    params?: GetTradesApiResultsRunsRunIdTradesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTradesApiResultsRunsRunIdTradesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -605,16 +733,16 @@ export const getGetSweepsApiResultsRunsRunIdSweepsGetQueryKey = (runId: number,
 
     
 export const getGetSweepsApiResultsRunsRunIdSweepsGetQueryOptions = <TData = Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError = HTTPValidationError>(runId: number,
-    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, }
+    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetSweepsApiResultsRunsRunIdSweepsGetQueryKey(runId,params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>> = ({ signal }) => getSweepsApiResultsRunsRunIdSweepsGet(runId,params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>> = ({ signal }) => getSweepsApiResultsRunsRunIdSweepsGet(runId,params, { signal, ...requestOptions });
 
       
 
@@ -635,7 +763,7 @@ export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError = HTTPValidationError>(
@@ -646,12 +774,12 @@ export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError = HTTPValidationError>(
  runId: number,
-    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, }
+    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -660,7 +788,7 @@ export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnT
 
 export function useGetSweepsApiResultsRunsRunIdSweepsGet<TData = Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError = HTTPValidationError>(
  runId: number,
-    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, }
+    params?: GetSweepsApiResultsRunsRunIdSweepsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSweepsApiResultsRunsRunIdSweepsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -726,16 +854,16 @@ export const getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryKey = (runId
     }
 
     
-export const getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryOptions = <TData = Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, }
+export const getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryOptions = <TData = Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>> = ({ signal }) => getEquityCurveApiResultsRunsRunIdEquityCurveGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>> = ({ signal }) => getEquityCurveApiResultsRunsRunIdEquityCurveGet(runId, { signal, ...requestOptions });
 
       
 
@@ -755,7 +883,7 @@ export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Await
           TError,
           Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError = HTTPValidationError>(
@@ -765,11 +893,11 @@ export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Await
           TError,
           Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -777,7 +905,7 @@ export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Await
  */
 
 export function useGetEquityCurveApiResultsRunsRunIdEquityCurveGet<TData = Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getEquityCurveApiResultsRunsRunIdEquityCurveGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -843,16 +971,16 @@ export const getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryKey = (runId: numb
     }
 
     
-export const getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryOptions = <TData = Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, }
+export const getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryOptions = <TData = Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>> = ({ signal }) => getDrawdownApiResultsRunsRunIdDrawdownGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>> = ({ signal }) => getDrawdownApiResultsRunsRunIdDrawdownGet(runId, { signal, ...requestOptions });
 
       
 
@@ -872,7 +1000,7 @@ export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<Ret
           TError,
           Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError = HTTPValidationError>(
@@ -882,11 +1010,11 @@ export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<Ret
           TError,
           Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -894,7 +1022,7 @@ export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<Ret
  */
 
 export function useGetDrawdownApiResultsRunsRunIdDrawdownGet<TData = Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDrawdownApiResultsRunsRunIdDrawdownGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -960,16 +1088,16 @@ export const getGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGetQueryKey = 
     }
 
     
-export const getGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGetQueryOptions = <TData = Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, }
+export const getGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGetQueryOptions = <TData = Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>> = ({ signal }) => getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>> = ({ signal }) => getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet(runId, { signal, ...requestOptions });
 
       
 
@@ -989,7 +1117,7 @@ export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData =
           TError,
           Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData = Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError = HTTPValidationError>(
@@ -999,11 +1127,11 @@ export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData =
           TError,
           Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData = Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1011,7 +1139,7 @@ export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData =
  */
 
 export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData = Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -1072,15 +1200,15 @@ export const updateNotesApiResultsRunsRunIdNotesPut = async (runId: number,
 
 
 export const getUpdateNotesApiResultsRunsRunIdNotesPutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, TError,{runId: number;data: NotesUpdateRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, TError,{runId: number;data: NotesUpdateRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, TError,{runId: number;data: NotesUpdateRequest}, TContext> => {
 
 const mutationKey = ['updateNotesApiResultsRunsRunIdNotesPut'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -1088,7 +1216,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, {runId: number;data: NotesUpdateRequest}> = (props) => {
           const {runId,data} = props ?? {};
 
-          return  updateNotesApiResultsRunsRunIdNotesPut(runId,data,)
+          return  updateNotesApiResultsRunsRunIdNotesPut(runId,data,requestOptions)
         }
 
 
@@ -1106,7 +1234,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Update Notes
  */
 export const useUpdateNotesApiResultsRunsRunIdNotesPut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, TError,{runId: number;data: NotesUpdateRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>, TError,{runId: number;data: NotesUpdateRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof updateNotesApiResultsRunsRunIdNotesPut>>,
         TError,
@@ -1167,16 +1295,16 @@ export const getExportCsvApiResultsRunsRunIdExportCsvGetQueryKey = (runId: numbe
     }
 
     
-export const getExportCsvApiResultsRunsRunIdExportCsvGetQueryOptions = <TData = Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, }
+export const getExportCsvApiResultsRunsRunIdExportCsvGetQueryOptions = <TData = Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getExportCsvApiResultsRunsRunIdExportCsvGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>> = ({ signal }) => exportCsvApiResultsRunsRunIdExportCsvGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>> = ({ signal }) => exportCsvApiResultsRunsRunIdExportCsvGet(runId, { signal, ...requestOptions });
 
       
 
@@ -1196,7 +1324,7 @@ export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<Retu
           TError,
           Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError = HTTPValidationError>(
@@ -1206,11 +1334,11 @@ export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<Retu
           TError,
           Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1218,7 +1346,7 @@ export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<Retu
  */
 
 export function useExportCsvApiResultsRunsRunIdExportCsvGet<TData = Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof exportCsvApiResultsRunsRunIdExportCsvGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 

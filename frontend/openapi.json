@@ -1264,6 +1264,32 @@
         }
       }
     },
+    "/api/paper/close-all-positions": {
+      "post": {
+        "tags": [
+          "paper"
+        ],
+        "summary": "Close All Positions",
+        "description": "Signal the paper trading process to close all open positions.",
+        "operationId": "close_all_positions_api_paper_close_all_positions_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Close All Positions Api Paper Close All Positions Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/paper/status": {
       "get": {
         "tags": [
@@ -1394,6 +1420,87 @@
                     }
                   ],
                   "title": "Response Get Session Api Paper Sessions  Trader Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/summary": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "List Runs Summary",
+        "operationId": "list_runs_summary_api_results_runs_summary_get",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Id"
+            }
+          },
+          {
+            "name": "run_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Mode"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryResponse"
                 }
               }
             }
@@ -3587,6 +3694,19 @@
           "quality_score": {
             "type": "number",
             "title": "Quality Score"
+          },
+          "ohlc_errors": {
+            "items": {
+              "$ref": "#/components/schemas/OhlcError"
+            },
+            "type": "array",
+            "title": "Ohlc Errors",
+            "default": []
+          },
+          "ohlc_error_count": {
+            "type": "integer",
+            "title": "Ohlc Error Count",
+            "default": 0
           }
         },
         "type": "object",
@@ -3710,6 +3830,26 @@
             "type": "number",
             "title": "Mutation Rate"
           },
+          "crossover_rate": {
+            "type": "number",
+            "title": "Crossover Rate",
+            "default": 0.8
+          },
+          "elite_count": {
+            "type": "integer",
+            "title": "Elite Count",
+            "default": 2
+          },
+          "tournament_size": {
+            "type": "integer",
+            "title": "Tournament Size",
+            "default": 3
+          },
+          "convergence_generations": {
+            "type": "integer",
+            "title": "Convergence Generations",
+            "default": 10
+          },
           "symbols": {
             "items": {
               "type": "string"
@@ -3737,6 +3877,28 @@
               }
             ],
             "title": "Indicator Pool"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
           }
         },
         "type": "object",
@@ -3999,6 +4161,30 @@
         ],
         "title": "NotesUpdateRequest"
       },
+      "OhlcError": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "error_type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "error_type",
+          "values"
+        ],
+        "title": "OhlcError"
+      },
       "PaperPositionResponse": {
         "properties": {
           "symbol": {
@@ -4047,6 +4233,17 @@
             "type": "boolean",
             "title": "Testnet",
             "default": false
+          },
+          "trader_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trader Id"
           },
           "sizing_method": {
             "anyOf": [
@@ -4305,6 +4502,185 @@
           "runs"
         ],
         "title": "RunListResponse"
+      },
+      "RunSummaryItem": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "strategy_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Name"
+          },
+          "run_mode": {
+            "type": "string",
+            "title": "Run Mode"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "type": "string",
+            "title": "Timeframe"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "total_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "max_drawdown": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "winning_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winning Trades"
+          },
+          "losing_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Losing Trades"
+          },
+          "win_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "strategy_id",
+          "strategy_name",
+          "run_mode",
+          "symbols",
+          "timeframe",
+          "status"
+        ],
+        "title": "RunSummaryItem"
+      },
+      "RunSummaryResponse": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryItem"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "title": "RunSummaryResponse"
       },
       "SizingConfigCreate": {
         "properties": {

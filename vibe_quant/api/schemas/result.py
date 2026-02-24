@@ -88,6 +88,32 @@ class SweepResultResponse(BaseModel):
     passed_purged_kfold: bool | None
 
 
+class RunSummaryItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: int
+    strategy_id: int
+    strategy_name: str | None
+    run_mode: str
+    symbols: list[str]
+    timeframe: str
+    status: str
+    total_return: float | None = None
+    sharpe_ratio: float | None = None
+    max_drawdown: float | None = None
+    total_trades: int | None = None
+    winning_trades: int | None = None
+    losing_trades: int | None = None
+    win_rate: float | None = None
+    profit_factor: float | None = None
+    created_at: str | None = None
+    completed_at: str | None = None
+
+
+class RunSummaryResponse(BaseModel):
+    runs: list[RunSummaryItem]
+
+
 class RunListResponse(BaseModel):
     runs: list[BacktestRunResponse]
 

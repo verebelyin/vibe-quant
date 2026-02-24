@@ -42,6 +42,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -89,16 +91,16 @@ export const getDataStatusApiDataStatusGetQueryKey = () => {
     }
 
     
-export const getDataStatusApiDataStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, }
+export const getDataStatusApiDataStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getDataStatusApiDataStatusGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>> = ({ signal }) => dataStatusApiDataStatusGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>> = ({ signal }) => dataStatusApiDataStatusGet({ signal, ...requestOptions });
 
       
 
@@ -118,7 +120,7 @@ export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError = unknown>(
@@ -128,11 +130,11 @@ export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -140,7 +142,7 @@ export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof 
  */
 
 export function useDataStatusApiDataStatusGet<TData = Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataStatusApiDataStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -199,16 +201,16 @@ export const getDataCoverageApiDataCoverageGetQueryKey = () => {
     }
 
     
-export const getDataCoverageApiDataCoverageGetQueryOptions = <TData = Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, }
+export const getDataCoverageApiDataCoverageGetQueryOptions = <TData = Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getDataCoverageApiDataCoverageGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>> = ({ signal }) => dataCoverageApiDataCoverageGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>> = ({ signal }) => dataCoverageApiDataCoverageGet({ signal, ...requestOptions });
 
       
 
@@ -228,7 +230,7 @@ export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typ
           TError,
           Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError = unknown>(
@@ -238,11 +240,11 @@ export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typ
           TError,
           Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -250,7 +252,7 @@ export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typ
  */
 
 export function useDataCoverageApiDataCoverageGet<TData = Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataCoverageApiDataCoverageGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -309,16 +311,16 @@ export const getListSymbolsApiDataSymbolsGetQueryKey = () => {
     }
 
     
-export const getListSymbolsApiDataSymbolsGetQueryOptions = <TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, }
+export const getListSymbolsApiDataSymbolsGetQueryOptions = <TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListSymbolsApiDataSymbolsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>> = ({ signal }) => listSymbolsApiDataSymbolsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>> = ({ signal }) => listSymbolsApiDataSymbolsGet({ signal, ...requestOptions });
 
       
 
@@ -338,7 +340,7 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
           TError,
           Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
@@ -348,11 +350,11 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
           TError,
           Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -360,7 +362,7 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
  */
 
 export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSymbolsApiDataSymbolsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -420,15 +422,15 @@ export const ingestPreviewApiDataIngestPreviewPost = async (ingestRequest: Inges
 
 
 export const getIngestPreviewApiDataIngestPreviewPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, TError,{data: IngestRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, TError,{data: IngestRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, TError,{data: IngestRequest}, TContext> => {
 
 const mutationKey = ['ingestPreviewApiDataIngestPreviewPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -436,7 +438,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, {data: IngestRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  ingestPreviewApiDataIngestPreviewPost(data,)
+          return  ingestPreviewApiDataIngestPreviewPost(data,requestOptions)
         }
 
 
@@ -454,7 +456,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Ingest Preview
  */
 export const useIngestPreviewApiDataIngestPreviewPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, TError,{data: IngestRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>, TError,{data: IngestRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof ingestPreviewApiDataIngestPreviewPost>>,
         TError,
@@ -509,15 +511,15 @@ export const startIngestApiDataIngestPost = async (ingestRequest: IngestRequest,
 
 
 export const getStartIngestApiDataIngestPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, TError,{data: IngestRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, TError,{data: IngestRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, TError,{data: IngestRequest}, TContext> => {
 
 const mutationKey = ['startIngestApiDataIngestPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -525,7 +527,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, {data: IngestRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  startIngestApiDataIngestPost(data,)
+          return  startIngestApiDataIngestPost(data,requestOptions)
         }
 
 
@@ -543,7 +545,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Start Ingest
  */
 export const useStartIngestApiDataIngestPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, TError,{data: IngestRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startIngestApiDataIngestPost>>, TError,{data: IngestRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof startIngestApiDataIngestPost>>,
         TError,
@@ -590,15 +592,15 @@ export const startUpdateApiDataUpdatePost = async ( options?: RequestInit): Prom
 
 
 export const getStartUpdateApiDataUpdatePostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, TError,void, TContext> => {
 
 const mutationKey = ['startUpdateApiDataUpdatePost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -606,7 +608,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, void> = () => {
           
 
-          return  startUpdateApiDataUpdatePost()
+          return  startUpdateApiDataUpdatePost(requestOptions)
         }
 
 
@@ -624,7 +626,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Start Update
  */
 export const useStartUpdateApiDataUpdatePost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof startUpdateApiDataUpdatePost>>,
         TError,
@@ -671,15 +673,15 @@ export const rebuildCatalogApiDataRebuildPost = async ( options?: RequestInit): 
 
 
 export const getRebuildCatalogApiDataRebuildPostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, TError,void, TContext> => {
 
 const mutationKey = ['rebuildCatalogApiDataRebuildPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -687,7 +689,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, void> = () => {
           
 
-          return  rebuildCatalogApiDataRebuildPost()
+          return  rebuildCatalogApiDataRebuildPost(requestOptions)
         }
 
 
@@ -705,7 +707,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Rebuild Catalog
  */
 export const useRebuildCatalogApiDataRebuildPost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof rebuildCatalogApiDataRebuildPost>>,
         TError,
@@ -777,16 +779,16 @@ export const getBrowseDataApiDataBrowseSymbolGetQueryKey = (symbol: string,
 
     
 export const getBrowseDataApiDataBrowseSymbolGetQueryOptions = <TData = Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError = HTTPValidationError>(symbol: string,
-    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, }
+    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getBrowseDataApiDataBrowseSymbolGetQueryKey(symbol,params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>> = ({ signal }) => browseDataApiDataBrowseSymbolGet(symbol,params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>> = ({ signal }) => browseDataApiDataBrowseSymbolGet(symbol,params, { signal, ...requestOptions });
 
       
 
@@ -807,7 +809,7 @@ export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError = HTTPValidationError>(
@@ -818,12 +820,12 @@ export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError = HTTPValidationError>(
  symbol: string,
-    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, }
+    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -832,7 +834,7 @@ export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<t
 
 export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError = HTTPValidationError>(
  symbol: string,
-    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, }
+    params?: BrowseDataApiDataBrowseSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof browseDataApiDataBrowseSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -898,16 +900,16 @@ export const getDataQualityApiDataQualitySymbolGetQueryKey = (symbol: string,) =
     }
 
     
-export const getDataQualityApiDataQualitySymbolGetQueryOptions = <TData = Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError = HTTPValidationError>(symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, }
+export const getDataQualityApiDataQualitySymbolGetQueryOptions = <TData = Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError = HTTPValidationError>(symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getDataQualityApiDataQualitySymbolGetQueryKey(symbol);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>> = ({ signal }) => dataQualityApiDataQualitySymbolGet(symbol, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>> = ({ signal }) => dataQualityApiDataQualitySymbolGet(symbol, { signal, ...requestOptions });
 
       
 
@@ -927,7 +929,7 @@ export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType
           TError,
           Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError = HTTPValidationError>(
@@ -937,11 +939,11 @@ export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType
           TError,
           Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError = HTTPValidationError>(
- symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, }
+ symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -949,7 +951,7 @@ export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType
  */
 
 export function useDataQualityApiDataQualitySymbolGet<TData = Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError = HTTPValidationError>(
- symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, }
+ symbol: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataQualityApiDataQualitySymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -1022,16 +1024,16 @@ export const getDownloadHistoryApiDataHistoryGetQueryKey = (params?: DownloadHis
     }
 
     
-export const getDownloadHistoryApiDataHistoryGetQueryOptions = <TData = Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError = HTTPValidationError>(params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, }
+export const getDownloadHistoryApiDataHistoryGetQueryOptions = <TData = Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError = HTTPValidationError>(params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getDownloadHistoryApiDataHistoryGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>> = ({ signal }) => downloadHistoryApiDataHistoryGet(params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>> = ({ signal }) => downloadHistoryApiDataHistoryGet(params, { signal, ...requestOptions });
 
       
 
@@ -1051,7 +1053,7 @@ export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError = HTTPValidationError>(
@@ -1061,11 +1063,11 @@ export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError = HTTPValidationError>(
- params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, }
+ params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1073,7 +1075,7 @@ export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<t
  */
 
 export function useDownloadHistoryApiDataHistoryGet<TData = Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError = HTTPValidationError>(
- params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, }
+ params?: DownloadHistoryApiDataHistoryGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof downloadHistoryApiDataHistoryGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 

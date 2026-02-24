@@ -63,9 +63,10 @@ function getChartOptions(theme: "light" | "dark", height: number) {
 
 interface TradeChartProps {
   runId: number;
+  highlightedTradeId?: number | null;
 }
 
-export function TradeChart({ runId }: TradeChartProps) {
+export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const theme = useUIStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -149,15 +150,11 @@ export function TradeChart({ runId }: TradeChartProps) {
     [candles],
   );
 
-  const markers = useMemo(() => {
-    const resp = tradesQuery.data;
-    if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return [];
-    const trades = resp.data.filter((t) => t.symbol.startsWith(selectedSymbol));
-    const result: SeriesMarker<UTCTimestamp>[] = [];
-
-    // Snap a timestamp to the nearest candle time
-    function snapToCandle(ts: number): UTCTimestamp {
+  // Snap a timestamp to the nearest candle time
+  const snapToCandle = useMemo(() => {
+    return (ts: number): UTCTimestamp => {
       const times = sortedCandleTimes;
+      if (times.length === 0) return ts as UTCTimestamp;
       let lo = 0;
       let hi = times.length - 1;
       while (lo < hi) {
@@ -165,48 +162,85 @@ export function TradeChart({ runId }: TradeChartProps) {
         if (times[mid] < ts) lo = mid + 1;
         else hi = mid;
       }
-      // lo is the first time >= ts; check if lo-1 is closer
       if (lo > 0 && ts - times[lo - 1] < times[lo] - ts) {
         return times[lo - 1] as UTCTimestamp;
       }
       return times[lo] as UTCTimestamp;
+    };
+  }, [sortedCandleTimes]);
+
+  // Map trade id → snapped entry/exit times
+  const tradeTimeMap = useMemo(() => {
+    const resp = tradesQuery.data;
+    if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
+    const map = new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
+    for (const trade of resp.data.filter((t) => t.symbol.startsWith(selectedSymbol))) {
+      const entryTs = Math.floor(new Date(trade.entry_time).getTime() / 1000);
+      const exitTs = trade.exit_time ? Math.floor(new Date(trade.exit_time).getTime() / 1000) : null;
+      map.set(trade.id, {
+        entry: snapToCandle(entryTs),
+        exit: exitTs != null ? snapToCandle(exitTs) : null,
+      });
     }
+    return map;
+  }, [tradesQuery.data, selectedSymbol, sortedCandleTimes, snapToCandle]);
+
+  const markers = useMemo(() => {
+    const resp = tradesQuery.data;
+    if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return [];
+    const trades = resp.data.filter((t) => t.symbol.startsWith(selectedSymbol));
+    const result: SeriesMarker<UTCTimestamp>[] = [];
+    const hlId = highlightedTradeId;
+    const hasFocus = hlId != null;
 
     for (const trade of trades) {
-      const entryTs = Math.floor(new Date(trade.entry_time).getTime() / 1000);
+      const times = tradeTimeMap.get(trade.id);
+      if (!times) continue;
       const isLong = trade.direction?.toLowerCase() !== "short";
+      const isHighlighted = trade.id === hlId;
+      const dimmed = hasFocus && !isHighlighted;
 
       result.push({
-        time: snapToCandle(entryTs),
+        time: times.entry,
         position: "belowBar" as const,
         shape: "arrowUp" as const,
-        color: "#26a69a",
-        text: isLong ? "Long" : "Short",
-        size: 5,
+        color: dimmed ? "#26a69a40" : isHighlighted ? "#00ffcc" : "#26a69a",
+        text: isHighlighted ? (isLong ? "Long" : "Short") : dimmed ? "" : isLong ? "Long" : "Short",
+        size: isHighlighted ? 3 : 2,
       });
 
-      if (trade.exit_time && trade.exit_price != null) {
-        const exitTs = Math.floor(new Date(trade.exit_time).getTime() / 1000);
+      if (times.exit != null && trade.exit_price != null) {
         result.push({
-          time: snapToCandle(exitTs),
+          time: times.exit,
           position: "aboveBar" as const,
           shape: "arrowDown" as const,
-          color: "#ef5350",
-          text: "Close",
-          size: 5,
+          color: dimmed ? "#ef535040" : isHighlighted ? "#ff6b6b" : "#ef5350",
+          text: isHighlighted ? "Close" : dimmed ? "" : "Close",
+          size: isHighlighted ? 3 : 2,
         });
       }
     }
 
     result.sort((a, b) => (a.time as number) - (b.time as number));
     return result;
-  }, [tradesQuery.data, selectedSymbol, sortedCandleTimes]);
+  }, [tradesQuery.data, selectedSymbol, sortedCandleTimes, highlightedTradeId, tradeTimeMap]);
 
-  // Create chart on mount
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only
+  const hasCandles = candles.length > 0;
+
+  // Create/recreate chart when candles become available (container must be visible)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recreate on data availability
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || !hasCandles) return;
+
+    // Tear down previous chart if any
+    if (chartRef.current) {
+      chartRef.current.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      markersRef.current = null;
+    }
 
     const chart = createChart(container, getChartOptions(theme, 450));
     chartRef.current = chart;
@@ -249,45 +283,35 @@ export function TradeChart({ runId }: TradeChartProps) {
       volumeSeriesRef.current = null;
       markersRef.current = null;
     };
-  }, []);
+  }, [hasCandles, theme]);
 
-  // Update theme
-  useEffect(() => {
-    chartRef.current?.applyOptions(getChartOptions(theme, 450));
-  }, [theme]);
-
-  // Update candle + volume + markers together, reset scale on data change
+  // Set candle + volume data and initial range (only when data changes, NOT on highlight)
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
     const chart = chartRef.current;
-    if (!candleSeries || !volumeSeries || !chart) return;
+    const container = containerRef.current;
+    if (!candleSeries || !volumeSeries || !chart || !container) return;
 
     if (candles.length === 0) {
       candleSeries.setData([]);
       volumeSeries.setData([]);
-      markersRef.current?.setMarkers([]);
       return;
     }
 
+    // Force chart to match container width (container may have been hidden on mount)
+    chart.applyOptions({ width: container.clientWidth });
+
     candleSeries.setData(candles);
     volumeSeries.setData(volumeData);
-    markersRef.current?.setMarkers(markers);
 
-    // If we have markers, zoom to show the first trade with context; otherwise fit all
-    if (markers.length > 0) {
-      const firstMarkerTime = markers[0].time as number;
-      const lastMarkerTime = markers[markers.length - 1].time as number;
-      const span = Math.max(lastMarkerTime - firstMarkerTime, 3600 * 24); // min 1 day
-      const padding = span * 0.2;
-      chart.timeScale().setVisibleRange({
-        from: (firstMarkerTime - padding) as UTCTimestamp,
-        to: (lastMarkerTime + padding) as UTCTimestamp,
-      });
-    } else {
-      chart.timeScale().fitContent();
-    }
-  }, [candles, volumeData, markers]);
+    chart.timeScale().fitContent();
+  }, [candles, volumeData]);
+
+  // Update markers separately (runs on highlight change without touching zoom)
+  useEffect(() => {
+    markersRef.current?.setMarkers(markers);
+  }, [markers]);
 
   const isLoading = candleQuery.isLoading || tradesQuery.isLoading;
 
@@ -343,7 +367,7 @@ export function TradeChart({ runId }: TradeChartProps) {
       )}
       <div
         ref={containerRef}
-        className={isLoading || candles.length === 0 ? "hidden" : ""}
+        className={isLoading || candles.length === 0 ? "hidden" : "h-[450px]"}
       />
       {!isLoading && candles.length === 0 && selectedSymbol && (
         <div className="flex h-[450px] items-center justify-center text-muted-foreground">

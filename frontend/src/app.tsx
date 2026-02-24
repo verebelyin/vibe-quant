@@ -22,6 +22,9 @@ const BacktestPage = lazy(() =>
 const ResultsPage = lazy(() =>
   import("./routes/results").then((m) => ({ default: m.ResultsPage })),
 );
+const ResultsDetailPage = lazy(() =>
+  import("./routes/results.$runId").then((m) => ({ default: m.ResultsDetailPage })),
+);
 const DiscoveryPage = lazy(() =>
   import("./routes/discovery").then((m) => ({ default: m.DiscoveryPage })),
 );
@@ -108,6 +111,19 @@ const resultsRoute = createRoute({
   },
 });
 
+const resultsDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/results/$runId",
+  component: function ResultsDetailRouteComponent() {
+    const { runId } = resultsDetailRoute.useParams();
+    return (
+      <SuspensePage>
+        <ResultsDetailPage runId={Number(runId)} />
+      </SuspensePage>
+    );
+  },
+});
+
 const paperTradingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/paper-trading",
@@ -163,6 +179,7 @@ const routeTree = rootRoute.addChildren([
   discoveryRoute,
   backtestRoute,
   resultsRoute,
+  resultsDetailRoute,
   paperTradingRoute,
   dataRoute,
   settingsRoute,

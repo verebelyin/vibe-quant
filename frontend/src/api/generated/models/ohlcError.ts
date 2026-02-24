@@ -4,9 +4,10 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { OhlcErrorValues } from './ohlcErrorValues';
 
 export interface OhlcError {
   timestamp: string;
   error_type: string;
-  values: { [key: string]: unknown };
+  values: OhlcErrorValues;
 }

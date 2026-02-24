@@ -25,6 +25,7 @@ import type {
 
 import type {
   CheckpointResponse,
+  CloseAllPositionsApiPaperCloseAllPositionsPost200,
   GetOrdersApiPaperOrdersGet200Item,
   HTTPValidationError,
   HaltPaperApiPaperHaltPost200,
@@ -37,6 +38,8 @@ import type {
 
 import { customInstance } from '../../client';
 
+
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 
@@ -86,15 +89,15 @@ export const startPaperApiPaperStartPost = async (paperStartRequest: PaperStartR
 
 
 export const getStartPaperApiPaperStartPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, TError,{data: PaperStartRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, TError,{data: PaperStartRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, TError,{data: PaperStartRequest}, TContext> => {
 
 const mutationKey = ['startPaperApiPaperStartPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -102,7 +105,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, {data: PaperStartRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  startPaperApiPaperStartPost(data,)
+          return  startPaperApiPaperStartPost(data,requestOptions)
         }
 
 
@@ -120,7 +123,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Start Paper
  */
 export const useStartPaperApiPaperStartPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, TError,{data: PaperStartRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof startPaperApiPaperStartPost>>, TError,{data: PaperStartRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof startPaperApiPaperStartPost>>,
         TError,
@@ -167,15 +170,15 @@ export const haltPaperApiPaperHaltPost = async ( options?: RequestInit): Promise
 
 
 export const getHaltPaperApiPaperHaltPostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext> => {
 
 const mutationKey = ['haltPaperApiPaperHaltPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -183,7 +186,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, void> = () => {
           
 
-          return  haltPaperApiPaperHaltPost()
+          return  haltPaperApiPaperHaltPost(requestOptions)
         }
 
 
@@ -201,7 +204,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Halt Paper
  */
 export const useHaltPaperApiPaperHaltPost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>,
         TError,
@@ -248,15 +251,15 @@ export const resumePaperApiPaperResumePost = async ( options?: RequestInit): Pro
 
 
 export const getResumePaperApiPaperResumePostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, TError,void, TContext> => {
 
 const mutationKey = ['resumePaperApiPaperResumePost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -264,7 +267,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, void> = () => {
           
 
-          return  resumePaperApiPaperResumePost()
+          return  resumePaperApiPaperResumePost(requestOptions)
         }
 
 
@@ -282,7 +285,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Resume Paper
  */
 export const useResumePaperApiPaperResumePost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof resumePaperApiPaperResumePost>>,
         TError,
@@ -329,15 +332,15 @@ export const stopPaperApiPaperStopPost = async ( options?: RequestInit): Promise
 
 
 export const getStopPaperApiPaperStopPostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, TError,void, TContext> => {
 
 const mutationKey = ['stopPaperApiPaperStopPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -345,7 +348,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, void> = () => {
           
 
-          return  stopPaperApiPaperStopPost()
+          return  stopPaperApiPaperStopPost(requestOptions)
         }
 
 
@@ -363,7 +366,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Stop Paper
  */
 export const useStopPaperApiPaperStopPost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof stopPaperApiPaperStopPost>>,
         TError,
@@ -371,6 +374,88 @@ export const useStopPaperApiPaperStopPost = <TError = unknown,
         TContext
       > => {
       return useMutation(getStopPaperApiPaperStopPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Signal the paper trading process to close all open positions.
+ * @summary Close All Positions
+ */
+export type closeAllPositionsApiPaperCloseAllPositionsPostResponse200 = {
+  data: CloseAllPositionsApiPaperCloseAllPositionsPost200
+  status: 200
+}
+
+export type closeAllPositionsApiPaperCloseAllPositionsPostResponseSuccess = (closeAllPositionsApiPaperCloseAllPositionsPostResponse200) & {
+  headers: Headers;
+};
+;
+
+export type closeAllPositionsApiPaperCloseAllPositionsPostResponse = (closeAllPositionsApiPaperCloseAllPositionsPostResponseSuccess)
+
+export const getCloseAllPositionsApiPaperCloseAllPositionsPostUrl = () => {
+
+
+  
+
+  return `/api/paper/close-all-positions`
+}
+
+export const closeAllPositionsApiPaperCloseAllPositionsPost = async ( options?: RequestInit): Promise<closeAllPositionsApiPaperCloseAllPositionsPostResponse> => {
+  
+  return customInstance<closeAllPositionsApiPaperCloseAllPositionsPostResponse>(getCloseAllPositionsApiPaperCloseAllPositionsPostUrl(),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getCloseAllPositionsApiPaperCloseAllPositionsPostMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>, TError,void, TContext> => {
+
+const mutationKey = ['closeAllPositionsApiPaperCloseAllPositionsPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>, void> = () => {
+          
+
+          return  closeAllPositionsApiPaperCloseAllPositionsPost(requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CloseAllPositionsApiPaperCloseAllPositionsPostMutationResult = NonNullable<Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>>
+    
+    export type CloseAllPositionsApiPaperCloseAllPositionsPostMutationError = unknown
+
+    /**
+ * @summary Close All Positions
+ */
+export const useCloseAllPositionsApiPaperCloseAllPositionsPost = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof closeAllPositionsApiPaperCloseAllPositionsPost>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getCloseAllPositionsApiPaperCloseAllPositionsPostMutationOptions(options), queryClient);
     }
     /**
  * @summary Get Status
@@ -417,16 +502,16 @@ export const getGetStatusApiPaperStatusGetQueryKey = () => {
     }
 
     
-export const getGetStatusApiPaperStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, }
+export const getGetStatusApiPaperStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetStatusApiPaperStatusGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>> = ({ signal }) => getStatusApiPaperStatusGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>> = ({ signal }) => getStatusApiPaperStatusGet({ signal, ...requestOptions });
 
       
 
@@ -446,7 +531,7 @@ export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError = unknown>(
@@ -456,11 +541,11 @@ export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -468,7 +553,7 @@ export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof 
  */
 
 export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStatusApiPaperStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -527,16 +612,16 @@ export const getGetPositionsApiPaperPositionsGetQueryKey = () => {
     }
 
     
-export const getGetPositionsApiPaperPositionsGetQueryOptions = <TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, }
+export const getGetPositionsApiPaperPositionsGetQueryOptions = <TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetPositionsApiPaperPositionsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>> = ({ signal }) => getPositionsApiPaperPositionsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>> = ({ signal }) => getPositionsApiPaperPositionsGet({ signal, ...requestOptions });
 
       
 
@@ -556,7 +641,7 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
@@ -566,11 +651,11 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
           TError,
           Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -578,7 +663,7 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
  */
 
 export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -637,16 +722,16 @@ export const getGetOrdersApiPaperOrdersGetQueryKey = () => {
     }
 
     
-export const getGetOrdersApiPaperOrdersGetQueryOptions = <TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, }
+export const getGetOrdersApiPaperOrdersGetQueryOptions = <TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetOrdersApiPaperOrdersGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>> = ({ signal }) => getOrdersApiPaperOrdersGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>> = ({ signal }) => getOrdersApiPaperOrdersGet({ signal, ...requestOptions });
 
       
 
@@ -666,7 +751,7 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
@@ -676,11 +761,11 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -688,7 +773,7 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
  */
 
 export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -747,16 +832,16 @@ export const getGetCheckpointsApiPaperCheckpointsGetQueryKey = () => {
     }
 
     
-export const getGetCheckpointsApiPaperCheckpointsGetQueryOptions = <TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, }
+export const getGetCheckpointsApiPaperCheckpointsGetQueryOptions = <TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetCheckpointsApiPaperCheckpointsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>> = ({ signal }) => getCheckpointsApiPaperCheckpointsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>> = ({ signal }) => getCheckpointsApiPaperCheckpointsGet({ signal, ...requestOptions });
 
       
 
@@ -776,7 +861,7 @@ export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnTy
           TError,
           Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
@@ -786,11 +871,11 @@ export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnTy
           TError,
           Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -798,7 +883,7 @@ export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnTy
  */
 
 export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -864,16 +949,16 @@ export const getGetSessionApiPaperSessionsTraderIdGetQueryKey = (traderId: strin
     }
 
     
-export const getGetSessionApiPaperSessionsTraderIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError = HTTPValidationError>(traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, }
+export const getGetSessionApiPaperSessionsTraderIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError = HTTPValidationError>(traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetSessionApiPaperSessionsTraderIdGetQueryKey(traderId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>> = ({ signal }) => getSessionApiPaperSessionsTraderIdGet(traderId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>> = ({ signal }) => getSessionApiPaperSessionsTraderIdGet(traderId, { signal, ...requestOptions });
 
       
 
@@ -893,7 +978,7 @@ export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError = HTTPValidationError>(
@@ -903,11 +988,11 @@ export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError = HTTPValidationError>(
- traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, }
+ traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -915,7 +1000,7 @@ export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnT
  */
 
 export function useGetSessionApiPaperSessionsTraderIdGet<TData = Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError = HTTPValidationError>(
- traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, }
+ traderId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSessionApiPaperSessionsTraderIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 

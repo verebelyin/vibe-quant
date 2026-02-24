@@ -37,6 +37,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -98,16 +100,16 @@ export const getListStrategiesApiStrategiesGetQueryKey = (params?: ListStrategie
     }
 
     
-export const getListStrategiesApiStrategiesGetQueryOptions = <TData = Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError = HTTPValidationError>(params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, }
+export const getListStrategiesApiStrategiesGetQueryOptions = <TData = Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError = HTTPValidationError>(params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListStrategiesApiStrategiesGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>> = ({ signal }) => listStrategiesApiStrategiesGet(params, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>> = ({ signal }) => listStrategiesApiStrategiesGet(params, { signal, ...requestOptions });
 
       
 
@@ -127,7 +129,7 @@ export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typ
           TError,
           Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError = HTTPValidationError>(
@@ -137,11 +139,11 @@ export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typ
           TError,
           Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError = HTTPValidationError>(
- params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, }
+ params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -149,7 +151,7 @@ export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typ
  */
 
 export function useListStrategiesApiStrategiesGet<TData = Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError = HTTPValidationError>(
- params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, }
+ params?: ListStrategiesApiStrategiesGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listStrategiesApiStrategiesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -209,15 +211,15 @@ export const createStrategyApiStrategiesPost = async (strategyCreate: StrategyCr
 
 
 export const getCreateStrategyApiStrategiesPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, TError,{data: StrategyCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, TError,{data: StrategyCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, TError,{data: StrategyCreate}, TContext> => {
 
 const mutationKey = ['createStrategyApiStrategiesPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -225,7 +227,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, {data: StrategyCreate}> = (props) => {
           const {data} = props ?? {};
 
-          return  createStrategyApiStrategiesPost(data,)
+          return  createStrategyApiStrategiesPost(data,requestOptions)
         }
 
 
@@ -243,7 +245,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Create Strategy
  */
 export const useCreateStrategyApiStrategiesPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, TError,{data: StrategyCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>, TError,{data: StrategyCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createStrategyApiStrategiesPost>>,
         TError,
@@ -297,16 +299,16 @@ export const getListTemplatesApiStrategiesTemplatesGetQueryKey = () => {
     }
 
     
-export const getListTemplatesApiStrategiesTemplatesGetQueryOptions = <TData = Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, }
+export const getListTemplatesApiStrategiesTemplatesGetQueryOptions = <TData = Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListTemplatesApiStrategiesTemplatesGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>> = ({ signal }) => listTemplatesApiStrategiesTemplatesGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>> = ({ signal }) => listTemplatesApiStrategiesTemplatesGet({ signal, ...requestOptions });
 
       
 
@@ -326,7 +328,7 @@ export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<Return
           TError,
           Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError = unknown>(
@@ -336,11 +338,11 @@ export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<Return
           TError,
           Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -348,7 +350,7 @@ export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<Return
  */
 
 export function useListTemplatesApiStrategiesTemplatesGet<TData = Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listTemplatesApiStrategiesTemplatesGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -414,16 +416,16 @@ export const getGetStrategyApiStrategiesStrategyIdGetQueryKey = (strategyId: num
     }
 
     
-export const getGetStrategyApiStrategiesStrategyIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError = HTTPValidationError>(strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, }
+export const getGetStrategyApiStrategiesStrategyIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError = HTTPValidationError>(strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetStrategyApiStrategiesStrategyIdGetQueryKey(strategyId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>> = ({ signal }) => getStrategyApiStrategiesStrategyIdGet(strategyId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>> = ({ signal }) => getStrategyApiStrategiesStrategyIdGet(strategyId, { signal, ...requestOptions });
 
       
 
@@ -443,7 +445,7 @@ export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError = HTTPValidationError>(
@@ -453,11 +455,11 @@ export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError = HTTPValidationError>(
- strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, }
+ strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -465,7 +467,7 @@ export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnT
  */
 
 export function useGetStrategyApiStrategiesStrategyIdGet<TData = Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError = HTTPValidationError>(
- strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, }
+ strategyId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getStrategyApiStrategiesStrategyIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -526,15 +528,15 @@ export const updateStrategyApiStrategiesStrategyIdPut = async (strategyId: numbe
 
 
 export const getUpdateStrategyApiStrategiesStrategyIdPutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, TError,{strategyId: number;data: StrategyUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, TError,{strategyId: number;data: StrategyUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, TError,{strategyId: number;data: StrategyUpdate}, TContext> => {
 
 const mutationKey = ['updateStrategyApiStrategiesStrategyIdPut'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -542,7 +544,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, {strategyId: number;data: StrategyUpdate}> = (props) => {
           const {strategyId,data} = props ?? {};
 
-          return  updateStrategyApiStrategiesStrategyIdPut(strategyId,data,)
+          return  updateStrategyApiStrategiesStrategyIdPut(strategyId,data,requestOptions)
         }
 
 
@@ -560,7 +562,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Update Strategy
  */
 export const useUpdateStrategyApiStrategiesStrategyIdPut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, TError,{strategyId: number;data: StrategyUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>, TError,{strategyId: number;data: StrategyUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof updateStrategyApiStrategiesStrategyIdPut>>,
         TError,
@@ -614,15 +616,15 @@ export const deleteStrategyApiStrategiesStrategyIdDelete = async (strategyId: nu
 
 
 export const getDeleteStrategyApiStrategiesStrategyIdDeleteMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, TError,{strategyId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, TError,{strategyId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, TError,{strategyId: number}, TContext> => {
 
 const mutationKey = ['deleteStrategyApiStrategiesStrategyIdDelete'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -630,7 +632,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, {strategyId: number}> = (props) => {
           const {strategyId} = props ?? {};
 
-          return  deleteStrategyApiStrategiesStrategyIdDelete(strategyId,)
+          return  deleteStrategyApiStrategiesStrategyIdDelete(strategyId,requestOptions)
         }
 
 
@@ -648,7 +650,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Delete Strategy
  */
 export const useDeleteStrategyApiStrategiesStrategyIdDelete = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, TError,{strategyId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>, TError,{strategyId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof deleteStrategyApiStrategiesStrategyIdDelete>>,
         TError,
@@ -702,15 +704,15 @@ export const validateStrategyApiStrategiesStrategyIdValidatePost = async (strate
 
 
 export const getValidateStrategyApiStrategiesStrategyIdValidatePostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, TError,{strategyId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, TError,{strategyId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, TError,{strategyId: number}, TContext> => {
 
 const mutationKey = ['validateStrategyApiStrategiesStrategyIdValidatePost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -718,7 +720,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, {strategyId: number}> = (props) => {
           const {strategyId} = props ?? {};
 
-          return  validateStrategyApiStrategiesStrategyIdValidatePost(strategyId,)
+          return  validateStrategyApiStrategiesStrategyIdValidatePost(strategyId,requestOptions)
         }
 
 
@@ -736,7 +738,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Validate Strategy
  */
 export const useValidateStrategyApiStrategiesStrategyIdValidatePost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, TError,{strategyId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>, TError,{strategyId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof validateStrategyApiStrategiesStrategyIdValidatePost>>,
         TError,

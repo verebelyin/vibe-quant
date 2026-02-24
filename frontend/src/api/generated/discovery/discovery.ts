@@ -35,6 +35,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -83,15 +85,15 @@ export const launchDiscoveryApiDiscoveryLaunchPost = async (discoveryLaunchReque
 
 
 export const getLaunchDiscoveryApiDiscoveryLaunchPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, TError,{data: DiscoveryLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, TError,{data: DiscoveryLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, TError,{data: DiscoveryLaunchRequest}, TContext> => {
 
 const mutationKey = ['launchDiscoveryApiDiscoveryLaunchPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -99,7 +101,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, {data: DiscoveryLaunchRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  launchDiscoveryApiDiscoveryLaunchPost(data,)
+          return  launchDiscoveryApiDiscoveryLaunchPost(data,requestOptions)
         }
 
 
@@ -117,7 +119,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Launch Discovery
  */
 export const useLaunchDiscoveryApiDiscoveryLaunchPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, TError,{data: DiscoveryLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>, TError,{data: DiscoveryLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof launchDiscoveryApiDiscoveryLaunchPost>>,
         TError,
@@ -171,16 +173,16 @@ export const getListDiscoveryJobsApiDiscoveryJobsGetQueryKey = () => {
     }
 
     
-export const getListDiscoveryJobsApiDiscoveryJobsGetQueryOptions = <TData = Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, }
+export const getListDiscoveryJobsApiDiscoveryJobsGetQueryOptions = <TData = Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListDiscoveryJobsApiDiscoveryJobsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>> = ({ signal }) => listDiscoveryJobsApiDiscoveryJobsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>> = ({ signal }) => listDiscoveryJobsApiDiscoveryJobsGet({ signal, ...requestOptions });
 
       
 
@@ -200,7 +202,7 @@ export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnTy
           TError,
           Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError = unknown>(
@@ -210,11 +212,11 @@ export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnTy
           TError,
           Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -222,7 +224,7 @@ export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnTy
  */
 
 export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listDiscoveryJobsApiDiscoveryJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -281,15 +283,15 @@ export const killDiscoveryJobApiDiscoveryJobsRunIdDelete = async (runId: number,
 
 
 export const getKillDiscoveryJobApiDiscoveryJobsRunIdDeleteMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, TError,{runId: number}, TContext> => {
 
 const mutationKey = ['killDiscoveryJobApiDiscoveryJobsRunIdDelete'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -297,7 +299,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, {runId: number}> = (props) => {
           const {runId} = props ?? {};
 
-          return  killDiscoveryJobApiDiscoveryJobsRunIdDelete(runId,)
+          return  killDiscoveryJobApiDiscoveryJobsRunIdDelete(runId,requestOptions)
         }
 
 
@@ -315,7 +317,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Kill Discovery Job
  */
 export const useKillDiscoveryJobApiDiscoveryJobsRunIdDelete = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof killDiscoveryJobApiDiscoveryJobsRunIdDelete>>,
         TError,
@@ -369,16 +371,16 @@ export const getGetLatestResultsApiDiscoveryResultsLatestGetQueryKey = () => {
     }
 
     
-export const getGetLatestResultsApiDiscoveryResultsLatestGetQueryOptions = <TData = Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, }
+export const getGetLatestResultsApiDiscoveryResultsLatestGetQueryOptions = <TData = Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetLatestResultsApiDiscoveryResultsLatestGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>> = ({ signal }) => getLatestResultsApiDiscoveryResultsLatestGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>> = ({ signal }) => getLatestResultsApiDiscoveryResultsLatestGet({ signal, ...requestOptions });
 
       
 
@@ -398,7 +400,7 @@ export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<
           TError,
           Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError = unknown>(
@@ -408,11 +410,11 @@ export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<
           TError,
           Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -420,7 +422,7 @@ export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<
  */
 
 export function useGetLatestResultsApiDiscoveryResultsLatestGet<TData = Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getLatestResultsApiDiscoveryResultsLatestGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -486,16 +488,16 @@ export const getGetDiscoveryResultsApiDiscoveryResultsRunIdGetQueryKey = (runId:
     }
 
     
-export const getGetDiscoveryResultsApiDiscoveryResultsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, }
+export const getGetDiscoveryResultsApiDiscoveryResultsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetDiscoveryResultsApiDiscoveryResultsRunIdGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>> = ({ signal }) => getDiscoveryResultsApiDiscoveryResultsRunIdGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>> = ({ signal }) => getDiscoveryResultsApiDiscoveryResultsRunIdGet(runId, { signal, ...requestOptions });
 
       
 
@@ -515,7 +517,7 @@ export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaite
           TError,
           Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError = HTTPValidationError>(
@@ -525,11 +527,11 @@ export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaite
           TError,
           Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -537,7 +539,7 @@ export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaite
  */
 
 export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryResultsApiDiscoveryResultsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -598,15 +600,15 @@ export const exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndex
 
 
 export const getExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext> => {
 
 const mutationKey = ['exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -614,7 +616,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, {runId: number;strategyIndex: number}> = (props) => {
           const {runId,strategyIndex} = props ?? {};
 
-          return  exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost(runId,strategyIndex,)
+          return  exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost(runId,strategyIndex,requestOptions)
         }
 
 
@@ -632,7 +634,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Export Discovered Strategy
  */
 export const useExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost>>,
         TError,
@@ -686,16 +688,16 @@ export const getGetIndicatorPoolApiDiscoveryIndicatorPoolGetQueryKey = () => {
     }
 
     
-export const getGetIndicatorPoolApiDiscoveryIndicatorPoolGetQueryOptions = <TData = Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, }
+export const getGetIndicatorPoolApiDiscoveryIndicatorPoolGetQueryOptions = <TData = Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetIndicatorPoolApiDiscoveryIndicatorPoolGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>> = ({ signal }) => getIndicatorPoolApiDiscoveryIndicatorPoolGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>> = ({ signal }) => getIndicatorPoolApiDiscoveryIndicatorPoolGet({ signal, ...requestOptions });
 
       
 
@@ -715,7 +717,7 @@ export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<
           TError,
           Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError = unknown>(
@@ -725,11 +727,11 @@ export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<
           TError,
           Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -737,7 +739,7 @@ export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<
  */
 
 export function useGetIndicatorPoolApiDiscoveryIndicatorPoolGet<TData = Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getIndicatorPoolApiDiscoveryIndicatorPoolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 

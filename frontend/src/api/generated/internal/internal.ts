@@ -28,6 +28,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -75,15 +77,15 @@ export const heartbeatApiBacktestJobsRunIdHeartbeatPost = async (runId: number, 
 
 
 export const getHeartbeatApiBacktestJobsRunIdHeartbeatPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, TError,{runId: number}, TContext> => {
 
 const mutationKey = ['heartbeatApiBacktestJobsRunIdHeartbeatPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -91,7 +93,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, {runId: number}> = (props) => {
           const {runId} = props ?? {};
 
-          return  heartbeatApiBacktestJobsRunIdHeartbeatPost(runId,)
+          return  heartbeatApiBacktestJobsRunIdHeartbeatPost(runId,requestOptions)
         }
 
 
@@ -109,7 +111,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Heartbeat
  */
 export const useHeartbeatApiBacktestJobsRunIdHeartbeatPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof heartbeatApiBacktestJobsRunIdHeartbeatPost>>,
         TError,
@@ -165,15 +167,15 @@ export const saveTradesApiBacktestJobsRunIdTradesPost = async (runId: number,
 
 
 export const getSaveTradesApiBacktestJobsRunIdTradesPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, TError,{runId: number;data: TradesBatchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, TError,{runId: number;data: TradesBatchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, TError,{runId: number;data: TradesBatchRequest}, TContext> => {
 
 const mutationKey = ['saveTradesApiBacktestJobsRunIdTradesPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -181,7 +183,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, {runId: number;data: TradesBatchRequest}> = (props) => {
           const {runId,data} = props ?? {};
 
-          return  saveTradesApiBacktestJobsRunIdTradesPost(runId,data,)
+          return  saveTradesApiBacktestJobsRunIdTradesPost(runId,data,requestOptions)
         }
 
 
@@ -199,7 +201,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Save Trades
  */
 export const useSaveTradesApiBacktestJobsRunIdTradesPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, TError,{runId: number;data: TradesBatchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>, TError,{runId: number;data: TradesBatchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof saveTradesApiBacktestJobsRunIdTradesPost>>,
         TError,
@@ -255,15 +257,15 @@ export const saveSweepResultsApiBacktestJobsRunIdSweepResultsPost = async (runId
 
 
 export const getSaveSweepResultsApiBacktestJobsRunIdSweepResultsPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, TError,{runId: number;data: SweepResultsBatchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, TError,{runId: number;data: SweepResultsBatchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, TError,{runId: number;data: SweepResultsBatchRequest}, TContext> => {
 
 const mutationKey = ['saveSweepResultsApiBacktestJobsRunIdSweepResultsPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -271,7 +273,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, {runId: number;data: SweepResultsBatchRequest}> = (props) => {
           const {runId,data} = props ?? {};
 
-          return  saveSweepResultsApiBacktestJobsRunIdSweepResultsPost(runId,data,)
+          return  saveSweepResultsApiBacktestJobsRunIdSweepResultsPost(runId,data,requestOptions)
         }
 
 
@@ -289,7 +291,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Save Sweep Results
  */
 export const useSaveSweepResultsApiBacktestJobsRunIdSweepResultsPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, TError,{runId: number;data: SweepResultsBatchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>, TError,{runId: number;data: SweepResultsBatchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof saveSweepResultsApiBacktestJobsRunIdSweepResultsPost>>,
         TError,
@@ -345,15 +347,15 @@ export const markParetoApiBacktestJobsRunIdMarkParetoPost = async (runId: number
 
 
 export const getMarkParetoApiBacktestJobsRunIdMarkParetoPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, TError,{runId: number;data: ParetoMarkRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, TError,{runId: number;data: ParetoMarkRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, TError,{runId: number;data: ParetoMarkRequest}, TContext> => {
 
 const mutationKey = ['markParetoApiBacktestJobsRunIdMarkParetoPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -361,7 +363,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, {runId: number;data: ParetoMarkRequest}> = (props) => {
           const {runId,data} = props ?? {};
 
-          return  markParetoApiBacktestJobsRunIdMarkParetoPost(runId,data,)
+          return  markParetoApiBacktestJobsRunIdMarkParetoPost(runId,data,requestOptions)
         }
 
 
@@ -379,7 +381,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Mark Pareto
  */
 export const useMarkParetoApiBacktestJobsRunIdMarkParetoPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, TError,{runId: number;data: ParetoMarkRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>, TError,{runId: number;data: ParetoMarkRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof markParetoApiBacktestJobsRunIdMarkParetoPost>>,
         TError,

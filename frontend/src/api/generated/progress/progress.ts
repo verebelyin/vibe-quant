@@ -26,6 +26,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -80,16 +82,16 @@ export const getBacktestProgressApiBacktestJobsRunIdProgressGetQueryKey = (runId
     }
 
     
-export const getBacktestProgressApiBacktestJobsRunIdProgressGetQueryOptions = <TData = Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, }
+export const getBacktestProgressApiBacktestJobsRunIdProgressGetQueryOptions = <TData = Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getBacktestProgressApiBacktestJobsRunIdProgressGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>> = ({ signal }) => backtestProgressApiBacktestJobsRunIdProgressGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>> = ({ signal }) => backtestProgressApiBacktestJobsRunIdProgressGet(runId, { signal, ...requestOptions });
 
       
 
@@ -109,7 +111,7 @@ export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Await
           TError,
           Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError = HTTPValidationError>(
@@ -119,11 +121,11 @@ export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Await
           TError,
           Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -131,7 +133,7 @@ export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Await
  */
 
 export function useBacktestProgressApiBacktestJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof backtestProgressApiBacktestJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -197,16 +199,16 @@ export const getDataIngestProgressApiDataIngestJobIdProgressGetQueryKey = (jobId
     }
 
     
-export const getDataIngestProgressApiDataIngestJobIdProgressGetQueryOptions = <TData = Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError = HTTPValidationError>(jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, }
+export const getDataIngestProgressApiDataIngestJobIdProgressGetQueryOptions = <TData = Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError = HTTPValidationError>(jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getDataIngestProgressApiDataIngestJobIdProgressGetQueryKey(jobId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>> = ({ signal }) => dataIngestProgressApiDataIngestJobIdProgressGet(jobId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>> = ({ signal }) => dataIngestProgressApiDataIngestJobIdProgressGet(jobId, { signal, ...requestOptions });
 
       
 
@@ -226,7 +228,7 @@ export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Await
           TError,
           Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError = HTTPValidationError>(
@@ -236,11 +238,11 @@ export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Await
           TError,
           Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError = HTTPValidationError>(
- jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, }
+ jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -248,7 +250,7 @@ export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Await
  */
 
 export function useDataIngestProgressApiDataIngestJobIdProgressGet<TData = Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError = HTTPValidationError>(
- jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, }
+ jobId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof dataIngestProgressApiDataIngestJobIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
