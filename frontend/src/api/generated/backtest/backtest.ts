@@ -36,6 +36,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -84,15 +86,15 @@ export const launchScreeningApiBacktestScreeningPost = async (backtestLaunchRequ
 
 
 export const getLaunchScreeningApiBacktestScreeningPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, TError,{data: BacktestLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, TError,{data: BacktestLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, TError,{data: BacktestLaunchRequest}, TContext> => {
 
 const mutationKey = ['launchScreeningApiBacktestScreeningPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -100,7 +102,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, {data: BacktestLaunchRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  launchScreeningApiBacktestScreeningPost(data,)
+          return  launchScreeningApiBacktestScreeningPost(data,requestOptions)
         }
 
 
@@ -118,7 +120,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Launch Screening
  */
 export const useLaunchScreeningApiBacktestScreeningPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, TError,{data: BacktestLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>, TError,{data: BacktestLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof launchScreeningApiBacktestScreeningPost>>,
         TError,
@@ -173,15 +175,15 @@ export const launchValidationApiBacktestValidationPost = async (backtestLaunchRe
 
 
 export const getLaunchValidationApiBacktestValidationPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, TError,{data: BacktestLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, TError,{data: BacktestLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, TError,{data: BacktestLaunchRequest}, TContext> => {
 
 const mutationKey = ['launchValidationApiBacktestValidationPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -189,7 +191,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, {data: BacktestLaunchRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  launchValidationApiBacktestValidationPost(data,)
+          return  launchValidationApiBacktestValidationPost(data,requestOptions)
         }
 
 
@@ -207,7 +209,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Launch Validation
  */
 export const useLaunchValidationApiBacktestValidationPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, TError,{data: BacktestLaunchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>, TError,{data: BacktestLaunchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof launchValidationApiBacktestValidationPost>>,
         TError,
@@ -261,16 +263,16 @@ export const getListJobsApiBacktestJobsGetQueryKey = () => {
     }
 
     
-export const getListJobsApiBacktestJobsGetQueryOptions = <TData = Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, }
+export const getListJobsApiBacktestJobsGetQueryOptions = <TData = Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListJobsApiBacktestJobsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>> = ({ signal }) => listJobsApiBacktestJobsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>> = ({ signal }) => listJobsApiBacktestJobsGet({ signal, ...requestOptions });
 
       
 
@@ -290,7 +292,7 @@ export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError = unknown>(
@@ -300,11 +302,11 @@ export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof 
           TError,
           Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -312,7 +314,7 @@ export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof 
  */
 
 export function useListJobsApiBacktestJobsGet<TData = Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listJobsApiBacktestJobsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -378,16 +380,16 @@ export const getGetJobApiBacktestJobsRunIdGetQueryKey = (runId: number,) => {
     }
 
     
-export const getGetJobApiBacktestJobsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, }
+export const getGetJobApiBacktestJobsRunIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetJobApiBacktestJobsRunIdGetQueryKey(runId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>> = ({ signal }) => getJobApiBacktestJobsRunIdGet(runId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>> = ({ signal }) => getJobApiBacktestJobsRunIdGet(runId, { signal, ...requestOptions });
 
       
 
@@ -407,7 +409,7 @@ export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<type
           TError,
           Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError = HTTPValidationError>(
@@ -417,11 +419,11 @@ export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<type
           TError,
           Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -429,7 +431,7 @@ export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<type
  */
 
 export function useGetJobApiBacktestJobsRunIdGet<TData = Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError = HTTPValidationError>(
- runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, }
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getJobApiBacktestJobsRunIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -488,15 +490,15 @@ export const killJobApiBacktestJobsRunIdDelete = async (runId: number, options?:
 
 
 export const getKillJobApiBacktestJobsRunIdDeleteMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, TError,{runId: number}, TContext> => {
 
 const mutationKey = ['killJobApiBacktestJobsRunIdDelete'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -504,7 +506,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, {runId: number}> = (props) => {
           const {runId} = props ?? {};
 
-          return  killJobApiBacktestJobsRunIdDelete(runId,)
+          return  killJobApiBacktestJobsRunIdDelete(runId,requestOptions)
         }
 
 
@@ -522,7 +524,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Kill Job
  */
 export const useKillJobApiBacktestJobsRunIdDelete = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof killJobApiBacktestJobsRunIdDelete>>,
         TError,
@@ -576,15 +578,15 @@ export const syncJobApiBacktestJobsRunIdSyncPost = async (runId: number, options
 
 
 export const getSyncJobApiBacktestJobsRunIdSyncPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, TError,{runId: number}, TContext> => {
 
 const mutationKey = ['syncJobApiBacktestJobsRunIdSyncPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -592,7 +594,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, {runId: number}> = (props) => {
           const {runId} = props ?? {};
 
-          return  syncJobApiBacktestJobsRunIdSyncPost(runId,)
+          return  syncJobApiBacktestJobsRunIdSyncPost(runId,requestOptions)
         }
 
 
@@ -610,7 +612,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Sync Job
  */
 export const useSyncJobApiBacktestJobsRunIdSyncPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, TError,{runId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>, TError,{runId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof syncJobApiBacktestJobsRunIdSyncPost>>,
         TError,
@@ -665,15 +667,15 @@ export const validateCoverageApiBacktestValidateCoveragePost = async (coverageCh
 
 
 export const getValidateCoverageApiBacktestValidateCoveragePostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, TError,{data: CoverageCheckRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, TError,{data: CoverageCheckRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, TError,{data: CoverageCheckRequest}, TContext> => {
 
 const mutationKey = ['validateCoverageApiBacktestValidateCoveragePost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -681,7 +683,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, {data: CoverageCheckRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  validateCoverageApiBacktestValidateCoveragePost(data,)
+          return  validateCoverageApiBacktestValidateCoveragePost(data,requestOptions)
         }
 
 
@@ -699,7 +701,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Validate Coverage
  */
 export const useValidateCoverageApiBacktestValidateCoveragePost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, TError,{data: CoverageCheckRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>, TError,{data: CoverageCheckRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof validateCoverageApiBacktestValidateCoveragePost>>,
         TError,
@@ -746,15 +748,15 @@ export const cleanupStaleJobsApiBacktestJobsCleanupStalePost = async ( options?:
 
 
 export const getCleanupStaleJobsApiBacktestJobsCleanupStalePostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, TError,void, TContext> => {
 
 const mutationKey = ['cleanupStaleJobsApiBacktestJobsCleanupStalePost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -762,7 +764,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, void> = () => {
           
 
-          return  cleanupStaleJobsApiBacktestJobsCleanupStalePost()
+          return  cleanupStaleJobsApiBacktestJobsCleanupStalePost(requestOptions)
         }
 
 
@@ -780,7 +782,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Cleanup Stale Jobs
  */
 export const useCleanupStaleJobsApiBacktestJobsCleanupStalePost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, TError,void, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof cleanupStaleJobsApiBacktestJobsCleanupStalePost>>,
         TError,

@@ -21,6 +21,8 @@ from vibe_quant.api.schemas.result import (
     MonthlyReturn,
     NotesUpdateRequest,
     RunListResponse,
+    RunSummaryItem,
+    RunSummaryResponse,
     SweepResultResponse,
     TradeResponse,
 )
@@ -31,6 +33,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/results", tags=["results"])
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
+
+
+@router.get("/runs/summary", response_model=RunSummaryResponse)
+async def list_runs_summary(
+    mgr: StateMgr,
+    strategy_id: int | None = None,
+    run_mode: str | None = None,
+    status: str | None = None,
+) -> RunSummaryResponse:
+    rows = mgr.list_runs_with_results(
+        strategy_id=strategy_id, run_mode=run_mode, status=status
+    )
+    runs = [RunSummaryItem(**r) for r in rows]
+    return RunSummaryResponse(runs=runs)
 
 
 @router.get("/runs", response_model=RunListResponse)

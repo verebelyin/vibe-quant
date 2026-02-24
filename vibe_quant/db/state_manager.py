@@ -753,6 +753,72 @@ class StateManager:
             )
         self.conn.commit()
 
+    def list_runs_with_results(
+        self,
+        strategy_id: int | None = None,
+        run_mode: str | None = None,
+        status: str | None = None,
+    ) -> list[JsonDict]:
+        """List runs joined with strategy name + key result metrics.
+
+        LEFT JOINs so pending/running/failed runs still appear.
+        """
+        query = """
+            SELECT
+                r.id AS run_id,
+                r.strategy_id,
+                s.name AS strategy_name,
+                r.run_mode,
+                r.symbols,
+                r.timeframe,
+                r.status,
+                r.created_at,
+                r.completed_at,
+                COALESCE(br.total_return, sw.total_return) AS total_return,
+                COALESCE(br.sharpe_ratio, sw.sharpe_ratio) AS sharpe_ratio,
+                COALESCE(br.max_drawdown, sw.max_drawdown) AS max_drawdown,
+                COALESCE(br.total_trades, sw.total_trades) AS total_trades,
+                br.winning_trades,
+                br.losing_trades,
+                COALESCE(br.win_rate, sw.win_rate) AS win_rate,
+                COALESCE(br.profit_factor, sw.profit_factor) AS profit_factor
+            FROM backtest_runs r
+            LEFT JOIN strategies s ON r.strategy_id = s.id
+            LEFT JOIN backtest_results br ON r.id = br.run_id
+            LEFT JOIN (
+                SELECT run_id,
+                       total_return, sharpe_ratio, max_drawdown,
+                       total_trades, win_rate, profit_factor,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY run_id ORDER BY sharpe_ratio DESC
+                       ) AS rn
+                FROM sweep_results
+            ) sw ON r.id = sw.run_id AND sw.rn = 1
+            WHERE 1=1
+        """
+        params: list[Any] = []
+
+        if strategy_id is not None:
+            query += " AND r.strategy_id = ?"
+            params.append(strategy_id)
+        if run_mode is not None:
+            query += " AND r.run_mode = ?"
+            params.append(run_mode)
+        if status is not None:
+            query += " AND r.status = ?"
+            params.append(status)
+
+        query += " ORDER BY r.created_at DESC"
+
+        cursor = self.conn.execute(query, params)
+        results = []
+        for row in cursor:
+            result = dict(row)
+            if result.get("symbols") is not None:
+                result["symbols"] = json.loads(result["symbols"])
+            results.append(result)
+        return results
+
     def update_job_heartbeat(self, run_id: int) -> None:
         """Update job heartbeat timestamp."""
         self.conn.execute(

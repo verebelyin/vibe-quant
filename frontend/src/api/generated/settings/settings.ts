@@ -40,6 +40,8 @@ import type {
 import { customInstance } from '../../client';
 
 
+type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
 
 
 /**
@@ -87,16 +89,16 @@ export const getListSizingConfigsApiSettingsSizingGetQueryKey = () => {
     }
 
     
-export const getListSizingConfigsApiSettingsSizingGetQueryOptions = <TData = Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, }
+export const getListSizingConfigsApiSettingsSizingGetQueryOptions = <TData = Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListSizingConfigsApiSettingsSizingGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>> = ({ signal }) => listSizingConfigsApiSettingsSizingGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>> = ({ signal }) => listSizingConfigsApiSettingsSizingGet({ signal, ...requestOptions });
 
       
 
@@ -116,7 +118,7 @@ export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError = unknown>(
@@ -126,11 +128,11 @@ export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -138,7 +140,7 @@ export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnT
  */
 
 export function useListSizingConfigsApiSettingsSizingGet<TData = Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSizingConfigsApiSettingsSizingGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -198,15 +200,15 @@ export const createSizingConfigApiSettingsSizingPost = async (sizingConfigCreate
 
 
 export const getCreateSizingConfigApiSettingsSizingPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, TError,{data: SizingConfigCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, TError,{data: SizingConfigCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, TError,{data: SizingConfigCreate}, TContext> => {
 
 const mutationKey = ['createSizingConfigApiSettingsSizingPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -214,7 +216,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, {data: SizingConfigCreate}> = (props) => {
           const {data} = props ?? {};
 
-          return  createSizingConfigApiSettingsSizingPost(data,)
+          return  createSizingConfigApiSettingsSizingPost(data,requestOptions)
         }
 
 
@@ -232,7 +234,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Create Sizing Config
  */
 export const useCreateSizingConfigApiSettingsSizingPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, TError,{data: SizingConfigCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>, TError,{data: SizingConfigCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createSizingConfigApiSettingsSizingPost>>,
         TError,
@@ -293,16 +295,16 @@ export const getGetSizingConfigApiSettingsSizingConfigIdGetQueryKey = (configId:
     }
 
     
-export const getGetSizingConfigApiSettingsSizingConfigIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError = HTTPValidationError>(configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, }
+export const getGetSizingConfigApiSettingsSizingConfigIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError = HTTPValidationError>(configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetSizingConfigApiSettingsSizingConfigIdGetQueryKey(configId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>> = ({ signal }) => getSizingConfigApiSettingsSizingConfigIdGet(configId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>> = ({ signal }) => getSizingConfigApiSettingsSizingConfigIdGet(configId, { signal, ...requestOptions });
 
       
 
@@ -322,7 +324,7 @@ export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<R
           TError,
           Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError = HTTPValidationError>(
@@ -332,11 +334,11 @@ export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<R
           TError,
           Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError = HTTPValidationError>(
- configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, }
+ configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -344,7 +346,7 @@ export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<R
  */
 
 export function useGetSizingConfigApiSettingsSizingConfigIdGet<TData = Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError = HTTPValidationError>(
- configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, }
+ configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSizingConfigApiSettingsSizingConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -405,15 +407,15 @@ export const updateSizingConfigApiSettingsSizingConfigIdPut = async (configId: n
 
 
 export const getUpdateSizingConfigApiSettingsSizingConfigIdPutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, TError,{configId: number;data: SizingConfigUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, TError,{configId: number;data: SizingConfigUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, TError,{configId: number;data: SizingConfigUpdate}, TContext> => {
 
 const mutationKey = ['updateSizingConfigApiSettingsSizingConfigIdPut'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -421,7 +423,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, {configId: number;data: SizingConfigUpdate}> = (props) => {
           const {configId,data} = props ?? {};
 
-          return  updateSizingConfigApiSettingsSizingConfigIdPut(configId,data,)
+          return  updateSizingConfigApiSettingsSizingConfigIdPut(configId,data,requestOptions)
         }
 
 
@@ -439,7 +441,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Update Sizing Config
  */
 export const useUpdateSizingConfigApiSettingsSizingConfigIdPut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, TError,{configId: number;data: SizingConfigUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>, TError,{configId: number;data: SizingConfigUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof updateSizingConfigApiSettingsSizingConfigIdPut>>,
         TError,
@@ -493,15 +495,15 @@ export const deleteSizingConfigApiSettingsSizingConfigIdDelete = async (configId
 
 
 export const getDeleteSizingConfigApiSettingsSizingConfigIdDeleteMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, TError,{configId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, TError,{configId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, TError,{configId: number}, TContext> => {
 
 const mutationKey = ['deleteSizingConfigApiSettingsSizingConfigIdDelete'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -509,7 +511,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, {configId: number}> = (props) => {
           const {configId} = props ?? {};
 
-          return  deleteSizingConfigApiSettingsSizingConfigIdDelete(configId,)
+          return  deleteSizingConfigApiSettingsSizingConfigIdDelete(configId,requestOptions)
         }
 
 
@@ -527,7 +529,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Delete Sizing Config
  */
 export const useDeleteSizingConfigApiSettingsSizingConfigIdDelete = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, TError,{configId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>, TError,{configId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof deleteSizingConfigApiSettingsSizingConfigIdDelete>>,
         TError,
@@ -581,16 +583,16 @@ export const getListRiskConfigsApiSettingsRiskGetQueryKey = () => {
     }
 
     
-export const getListRiskConfigsApiSettingsRiskGetQueryOptions = <TData = Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, }
+export const getListRiskConfigsApiSettingsRiskGetQueryOptions = <TData = Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListRiskConfigsApiSettingsRiskGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>> = ({ signal }) => listRiskConfigsApiSettingsRiskGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>> = ({ signal }) => listRiskConfigsApiSettingsRiskGet({ signal, ...requestOptions });
 
       
 
@@ -610,7 +612,7 @@ export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<
           TError,
           Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError = unknown>(
@@ -620,11 +622,11 @@ export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<
           TError,
           Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -632,7 +634,7 @@ export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<
  */
 
 export function useListRiskConfigsApiSettingsRiskGet<TData = Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listRiskConfigsApiSettingsRiskGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -692,15 +694,15 @@ export const createRiskConfigApiSettingsRiskPost = async (riskConfigCreate: Risk
 
 
 export const getCreateRiskConfigApiSettingsRiskPostMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, TError,{data: RiskConfigCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, TError,{data: RiskConfigCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, TError,{data: RiskConfigCreate}, TContext> => {
 
 const mutationKey = ['createRiskConfigApiSettingsRiskPost'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -708,7 +710,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, {data: RiskConfigCreate}> = (props) => {
           const {data} = props ?? {};
 
-          return  createRiskConfigApiSettingsRiskPost(data,)
+          return  createRiskConfigApiSettingsRiskPost(data,requestOptions)
         }
 
 
@@ -726,7 +728,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Create Risk Config
  */
 export const useCreateRiskConfigApiSettingsRiskPost = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, TError,{data: RiskConfigCreate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>, TError,{data: RiskConfigCreate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createRiskConfigApiSettingsRiskPost>>,
         TError,
@@ -787,16 +789,16 @@ export const getGetRiskConfigApiSettingsRiskConfigIdGetQueryKey = (configId: num
     }
 
     
-export const getGetRiskConfigApiSettingsRiskConfigIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError = HTTPValidationError>(configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, }
+export const getGetRiskConfigApiSettingsRiskConfigIdGetQueryOptions = <TData = Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError = HTTPValidationError>(configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetRiskConfigApiSettingsRiskConfigIdGetQueryKey(configId);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>> = ({ signal }) => getRiskConfigApiSettingsRiskConfigIdGet(configId, { signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>> = ({ signal }) => getRiskConfigApiSettingsRiskConfigIdGet(configId, { signal, ...requestOptions });
 
       
 
@@ -816,7 +818,7 @@ export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<Retur
           TError,
           Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError = HTTPValidationError>(
@@ -826,11 +828,11 @@ export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<Retur
           TError,
           Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError = HTTPValidationError>(
- configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, }
+ configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -838,7 +840,7 @@ export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<Retur
  */
 
 export function useGetRiskConfigApiSettingsRiskConfigIdGet<TData = Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError = HTTPValidationError>(
- configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, }
+ configId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRiskConfigApiSettingsRiskConfigIdGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -899,15 +901,15 @@ export const updateRiskConfigApiSettingsRiskConfigIdPut = async (configId: numbe
 
 
 export const getUpdateRiskConfigApiSettingsRiskConfigIdPutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, TError,{configId: number;data: RiskConfigUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, TError,{configId: number;data: RiskConfigUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, TError,{configId: number;data: RiskConfigUpdate}, TContext> => {
 
 const mutationKey = ['updateRiskConfigApiSettingsRiskConfigIdPut'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -915,7 +917,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, {configId: number;data: RiskConfigUpdate}> = (props) => {
           const {configId,data} = props ?? {};
 
-          return  updateRiskConfigApiSettingsRiskConfigIdPut(configId,data,)
+          return  updateRiskConfigApiSettingsRiskConfigIdPut(configId,data,requestOptions)
         }
 
 
@@ -933,7 +935,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Update Risk Config
  */
 export const useUpdateRiskConfigApiSettingsRiskConfigIdPut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, TError,{configId: number;data: RiskConfigUpdate}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>, TError,{configId: number;data: RiskConfigUpdate}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof updateRiskConfigApiSettingsRiskConfigIdPut>>,
         TError,
@@ -987,15 +989,15 @@ export const deleteRiskConfigApiSettingsRiskConfigIdDelete = async (configId: nu
 
 
 export const getDeleteRiskConfigApiSettingsRiskConfigIdDeleteMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, TError,{configId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, TError,{configId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, TError,{configId: number}, TContext> => {
 
 const mutationKey = ['deleteRiskConfigApiSettingsRiskConfigIdDelete'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -1003,7 +1005,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, {configId: number}> = (props) => {
           const {configId} = props ?? {};
 
-          return  deleteRiskConfigApiSettingsRiskConfigIdDelete(configId,)
+          return  deleteRiskConfigApiSettingsRiskConfigIdDelete(configId,requestOptions)
         }
 
 
@@ -1021,7 +1023,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Delete Risk Config
  */
 export const useDeleteRiskConfigApiSettingsRiskConfigIdDelete = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, TError,{configId: number}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>, TError,{configId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof deleteRiskConfigApiSettingsRiskConfigIdDelete>>,
         TError,
@@ -1075,16 +1077,16 @@ export const getListLatencyPresetsApiSettingsLatencyPresetsGetQueryKey = () => {
     }
 
     
-export const getListLatencyPresetsApiSettingsLatencyPresetsGetQueryOptions = <TData = Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, }
+export const getListLatencyPresetsApiSettingsLatencyPresetsGetQueryOptions = <TData = Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getListLatencyPresetsApiSettingsLatencyPresetsGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>> = ({ signal }) => listLatencyPresetsApiSettingsLatencyPresetsGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>> = ({ signal }) => listLatencyPresetsApiSettingsLatencyPresetsGet({ signal, ...requestOptions });
 
       
 
@@ -1104,7 +1106,7 @@ export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaite
           TError,
           Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError = unknown>(
@@ -1114,11 +1116,11 @@ export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaite
           TError,
           Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1126,7 +1128,7 @@ export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaite
  */
 
 export function useListLatencyPresetsApiSettingsLatencyPresetsGet<TData = Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listLatencyPresetsApiSettingsLatencyPresetsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -1185,16 +1187,16 @@ export const getGetSystemInfoApiSettingsSystemInfoGetQueryKey = () => {
     }
 
     
-export const getGetSystemInfoApiSettingsSystemInfoGetQueryOptions = <TData = Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, }
+export const getGetSystemInfoApiSettingsSystemInfoGetQueryOptions = <TData = Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetSystemInfoApiSettingsSystemInfoGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>> = ({ signal }) => getSystemInfoApiSettingsSystemInfoGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>> = ({ signal }) => getSystemInfoApiSettingsSystemInfoGet({ signal, ...requestOptions });
 
       
 
@@ -1214,7 +1216,7 @@ export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError = unknown>(
@@ -1224,11 +1226,11 @@ export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1236,7 +1238,7 @@ export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnT
  */
 
 export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSystemInfoApiSettingsSystemInfoGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -1295,16 +1297,16 @@ export const getGetDatabaseInfoApiSettingsDatabaseGetQueryKey = () => {
     }
 
     
-export const getGetDatabaseInfoApiSettingsDatabaseGetQueryOptions = <TData = Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, }
+export const getGetDatabaseInfoApiSettingsDatabaseGetQueryOptions = <TData = Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
-const {query: queryOptions} = options ?? {};
+const {query: queryOptions, request: requestOptions} = options ?? {};
 
   const queryKey =  queryOptions?.queryKey ?? getGetDatabaseInfoApiSettingsDatabaseGetQueryKey();
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>> = ({ signal }) => getDatabaseInfoApiSettingsDatabaseGet({ signal });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>> = ({ signal }) => getDatabaseInfoApiSettingsDatabaseGet({ signal, ...requestOptions });
 
       
 
@@ -1324,7 +1326,7 @@ export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError = unknown>(
@@ -1334,11 +1336,11 @@ export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnT
           TError,
           Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>
         > , 'initialData'
-      >, }
+      >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1346,7 +1348,7 @@ export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnT
  */
 
 export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, }
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDatabaseInfoApiSettingsDatabaseGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
@@ -1406,15 +1408,15 @@ export const switchDatabaseApiSettingsDatabasePut = async (databaseSwitchRequest
 
 
 export const getSwitchDatabaseApiSettingsDatabasePutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
 ): UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext> => {
 
 const mutationKey = ['switchDatabaseApiSettingsDatabasePut'];
-const {mutation: mutationOptions} = options ?
+const {mutation: mutationOptions, request: requestOptions} = options ?
       options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
       options
       : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }};
+      : {mutation: { mutationKey, }, request: undefined};
 
       
 
@@ -1422,7 +1424,7 @@ const {mutation: mutationOptions} = options ?
       const mutationFn: MutationFunction<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, {data: DatabaseSwitchRequest}> = (props) => {
           const {data} = props ?? {};
 
-          return  switchDatabaseApiSettingsDatabasePut(data,)
+          return  switchDatabaseApiSettingsDatabasePut(data,requestOptions)
         }
 
 
@@ -1440,7 +1442,7 @@ const {mutation: mutationOptions} = options ?
  * @summary Switch Database
  */
 export const useSwitchDatabaseApiSettingsDatabasePut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, }
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>,
         TError,

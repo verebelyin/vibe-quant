@@ -8,6 +8,7 @@
 export interface PaperStartRequest {
   strategy_id: number;
   testnet?: boolean;
+  trader_id?: string | null;
   sizing_method?: string | null;
   max_leverage?: number | null;
   max_position_pct?: number | null;

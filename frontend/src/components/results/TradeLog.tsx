@@ -23,6 +23,9 @@ import { cn } from "@/lib/utils";
 
 interface TradeLogProps {
   runId: number;
+  onTradeHover?: (tradeId: number | null) => void;
+  onTradeClick?: (tradeId: number) => void;
+  highlightedTradeId?: number | null;
 }
 
 function formatPrice(value: number | null | undefined): string {
@@ -124,7 +127,7 @@ const ALL_SIDES = "__all__";
 const ROW_HEIGHT = 40;
 const CONTAINER_HEIGHT = 600;
 
-export function TradeLog({ runId }: TradeLogProps) {
+export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId }: TradeLogProps) {
   const [symbolFilter, setSymbolFilter] = useState(ALL_SYMBOLS);
   const [sideFilter, setSideFilter] = useState(ALL_SIDES);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -141,7 +144,7 @@ export function TradeLog({ runId }: TradeLogProps) {
     if (!trades) return [];
     return trades.filter((t) => {
       if (symbolFilter !== ALL_SYMBOLS && t.symbol !== symbolFilter) return false;
-      if (sideFilter !== ALL_SIDES && t.direction !== sideFilter) return false;
+      if (sideFilter !== ALL_SIDES && t.direction.toLowerCase() !== sideFilter) return false;
       return true;
     });
   }, [trades, symbolFilter, sideFilter]);
@@ -244,7 +247,14 @@ export function TradeLog({ runId }: TradeLogProps) {
                   key={trade.id}
                   data-index={vItem.index}
                   style={{ height: ROW_HEIGHT }}
-                  className={cn(isLiquidation(trade) && "bg-destructive/10")}
+                  className={cn(
+                    "cursor-pointer transition-colors",
+                    isLiquidation(trade) && "bg-destructive/10",
+                    highlightedTradeId === trade.id && "!bg-primary/15 ring-1 ring-primary/30",
+                  )}
+                  onMouseEnter={() => onTradeHover?.(trade.id)}
+                  onMouseLeave={() => onTradeHover?.(null)}
+                  onClick={() => onTradeClick?.(trade.id)}
                 >
                   <TableCell className="font-medium">
                     {trade.symbol}

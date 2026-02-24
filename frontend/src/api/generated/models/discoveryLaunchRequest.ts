@@ -16,4 +16,6 @@ export interface DiscoveryLaunchRequest {
   symbols: string[];
   timeframes: string[];
   indicator_pool?: string[] | null;
+  start_date?: string | null;
+  end_date?: string | null;
 }
