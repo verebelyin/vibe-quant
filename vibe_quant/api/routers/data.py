@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
+_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+
+
+def _parse_interval_minutes(interval: str) -> int:
+    """Convert interval string to minutes."""
+    if interval in _INTERVAL_MINUTES:
+        return _INTERVAL_MINUTES[interval]
+    return 1
+
 CatMgr = Annotated[CatalogManager, Depends(get_catalog_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 
@@ -256,18 +265,53 @@ async def browse_data(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid end date: {exc}") from exc
 
-        rows = archive.get_klines(symbol, interval, start_ts, end_ts)
+        # Always fetch 1m from archive, resample if needed
+        rows = archive.get_klines(symbol, "1m", start_ts, end_ts)
+
+        interval_minutes = _parse_interval_minutes(interval)
         data: list[dict[str, object]] = []
-        for row in rows:
-            data.append({
-                "open_time": row["open_time"],
-                "open": row["open"],
-                "high": row["high"],
-                "low": row["low"],
-                "close": row["close"],
-                "volume": row["volume"],
-                "close_time": row["close_time"],
-            })
+
+        if interval_minutes <= 1:
+            # No resampling needed
+            for row in rows:
+                data.append({
+                    "open_time": row["open_time"],
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
+                    "close_time": row["close_time"],
+                })
+        else:
+            # Resample 1m candles to requested interval
+            bucket_ms = interval_minutes * 60 * 1000
+            bucket: dict[str, object] | None = None
+            for row in rows:
+                ot = row["open_time"]
+                bucket_start = (ot // bucket_ms) * bucket_ms
+                if bucket is None or bucket["open_time"] != bucket_start:
+                    if bucket is not None:
+                        data.append(bucket)
+                    bucket = {
+                        "open_time": bucket_start,
+                        "open": row["open"],
+                        "high": row["high"],
+                        "low": row["low"],
+                        "close": row["close"],
+                        "volume": row["volume"],
+                        "close_time": bucket_start + bucket_ms - 1,
+                    }
+                else:
+                    h = bucket["high"]
+                    lo = bucket["low"]
+                    bucket["high"] = max(h, row["high"])  # type: ignore[arg-type]
+                    bucket["low"] = min(lo, row["low"])  # type: ignore[arg-type]
+                    bucket["close"] = row["close"]
+                    bucket["volume"] = bucket["volume"] + row["volume"]  # type: ignore[operator]
+                    bucket["close_time"] = row["close_time"]
+            if bucket is not None:
+                data.append(bucket)
 
         return BrowseDataResponse(symbol=symbol, interval=interval, data=data)
     finally:
@@ -281,7 +325,7 @@ async def browse_data(
 async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
     ohlc_errors: list[OhlcError] = []
     try:
-        bars = catalog.get_bars(symbol, limit=10000)
+        bars = catalog.get_bars(symbol, "1m")
         for bar in bars:
             o = float(bar.get("open", 0) or 0)
             h = float(bar.get("high", 0) or 0)

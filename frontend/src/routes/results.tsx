@@ -21,6 +21,7 @@ import { RawStatsPanel } from "@/components/results/RawStatsPanel";
 import { RunDetailsExpander } from "@/components/results/RunDetailsExpander";
 import { RunSelector } from "@/components/results/RunSelector";
 import { SweepAnalysis } from "@/components/results/SweepAnalysis";
+import { TradeChart } from "@/components/results/TradeChart";
 import { TradeLog } from "@/components/results/TradeLog";
 import { WinLossPanel } from "@/components/results/WinLossPanel";
 import { EmptyState } from "@/components/ui";
@@ -134,6 +135,8 @@ export function ResultsPage() {
               </div>
 
               <MetricsPanel runId={selectedRunId} />
+
+              <TradeChart runId={selectedRunId} />
 
               <div className="grid gap-6 lg:grid-cols-2">
                 <CostBreakdown runId={selectedRunId} />

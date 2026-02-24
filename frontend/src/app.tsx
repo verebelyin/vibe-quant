@@ -1,6 +1,8 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRoute, createRouter, RouterProvider, redirect } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { RouteErrorComponent } from "@/components/RouteErrorComponent";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -167,7 +169,10 @@ const routeTree = rootRoute.addChildren([
   guideRoute,
 ]);
 
-const router = createRouter({ routeTree });
+const router = createRouter({
+  routeTree,
+  defaultErrorComponent: RouteErrorComponent,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -177,11 +182,13 @@ declare module "@tanstack/react-router" {
 
 export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <RouterProvider router={router} />
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
