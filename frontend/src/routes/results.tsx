@@ -266,8 +266,7 @@ export function ResultsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-foreground">Results Analysis</h1>
+      <div className="flex items-center justify-end">
         <span className="text-sm text-muted-foreground">
           {filteredRuns.length} run{filteredRuns.length !== 1 ? "s" : ""}
         </span>

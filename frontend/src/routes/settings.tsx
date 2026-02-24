@@ -7,10 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function SettingsPage() {
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold text-foreground">Settings</h1>
-
-      <Tabs defaultValue="sizing" className="mt-4">
+    <div>
+      <Tabs defaultValue="sizing">
         <TabsList variant="line">
           <TabsTrigger value="sizing">Sizing</TabsTrigger>
           <TabsTrigger value="risk">Risk</TabsTrigger>

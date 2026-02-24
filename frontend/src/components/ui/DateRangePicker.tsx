@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +12,7 @@ interface DateRangePickerProps {
 }
 
 function toISODate(date: Date): string {
-  return date.toISOString().split("T")[0];
+  return date.toISOString().slice(0, 10);
 }
 
 function getPresetRange(preset: string): [string, string] {
@@ -62,20 +62,20 @@ export function DateRangePicker({
       <div className="flex items-end gap-3">
         <div className="flex flex-col gap-1">
           <Label htmlFor="date-start">Start</Label>
-          <Input
+          <DatePicker
             id="date-start"
-            type="date"
             value={startDate}
-            onChange={(e) => onStartChange(e.target.value)}
+            onChange={onStartChange}
+            placeholder="Start date"
           />
         </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor="date-end">End</Label>
-          <Input
+          <DatePicker
             id="date-end"
-            type="date"
             value={endDate}
-            onChange={(e) => onEndChange(e.target.value)}
+            onChange={onEndChange}
+            placeholder="End date"
           />
         </div>
       </div>

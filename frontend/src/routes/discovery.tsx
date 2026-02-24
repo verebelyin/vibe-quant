@@ -40,13 +40,7 @@ export function DiscoveryPage() {
     : 100;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Discovery</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Use genetic algorithms to discover new trading strategies.
-        </p>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-8">
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <DiscoveryConfig onConvergenceChange={setConvergence} />

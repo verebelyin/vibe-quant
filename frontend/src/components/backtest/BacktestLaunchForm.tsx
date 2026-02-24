@@ -17,6 +17,7 @@ import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/st
 import { parseDslConfig } from "@/components/strategies/editor/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -206,14 +207,7 @@ export function BacktestLaunchForm() {
   const sectionClass = "space-y-4";
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Backtest Launch</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Configure and launch screening or validation backtests.
-        </p>
-      </div>
-
+    <div className="mx-auto max-w-5xl space-y-8">
       <div className="grid gap-8 md:grid-cols-2">
         {/* Left column */}
         <div className={sectionClass}>
@@ -291,20 +285,20 @@ export function BacktestLaunchForm() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="start-date">Start Date</Label>
-                <Input
+                <DatePicker
                   id="start-date"
-                  type="date"
                   value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
+                  onChange={setStartDate}
+                  placeholder="Start date"
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="end-date">End Date</Label>
-                <Input
+                <DatePicker
                   id="end-date"
-                  type="date"
                   value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  onChange={setEndDate}
+                  placeholder="End date"
                 />
               </div>
             </div>

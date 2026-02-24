@@ -7,6 +7,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -304,20 +305,20 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="disc-start-date">Start Date</Label>
-            <Input
+            <DatePicker
               id="disc-start-date"
-              type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              onChange={setStartDate}
+              placeholder="Start date"
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="disc-end-date">End Date</Label>
-            <Input
+            <DatePicker
               id="disc-end-date"
-              type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              onChange={setEndDate}
+              placeholder="End date"
             />
           </div>
         </div>

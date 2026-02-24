@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   getListJobsApiBacktestJobsGetQueryKey,
   useCleanupStaleJobsApiBacktestJobsCleanupStalePost,
@@ -63,7 +63,9 @@ function isStaleJob(job: JobStatusResponse): boolean {
 
 export function ActiveJobsPanel() {
   const { status: wsStatus } = useJobsWS();
-  const { data: jobsResp, isLoading } = useListJobsApiBacktestJobsGet();
+  const { data: jobsResp, isLoading } = useListJobsApiBacktestJobsGet({
+    query: { refetchInterval: 15_000 },
+  });
 
   const killMutation = useKillJobApiBacktestJobsRunIdDelete({
     mutation: {
@@ -93,6 +95,18 @@ export function ActiveJobsPanel() {
 
   const hasStale = useMemo(() => jobs.some(isStaleJob), [jobs]);
   const indicator = WS_INDICATOR[wsStatus];
+
+  // Auto-cleanup stale jobs
+  const cleanupTriggered = useRef(false);
+  useEffect(() => {
+    if (hasStale && !cleanupMutation.isPending && !cleanupTriggered.current) {
+      cleanupTriggered.current = true;
+      cleanupMutation.mutate();
+    }
+    if (!hasStale) {
+      cleanupTriggered.current = false;
+    }
+  }, [hasStale, cleanupMutation]);
 
   return (
     <div className="rounded-lg border border-border bg-background p-4">

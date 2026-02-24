@@ -8,7 +8,7 @@ export function PageLayout({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <SidebarInset>
         <Header />
-        <main className="flex-1 overflow-y-auto bg-background">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-background p-4">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

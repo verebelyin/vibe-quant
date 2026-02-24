@@ -23,7 +23,7 @@ export function DataPage() {
   return (
     <div className="space-y-6">
       <DataStatusDashboard />
-      <div className="px-6 pb-6">
+      <div>
         <div className="space-y-6">
           <IngestForm onIngestStarted={handleIngestStarted} />
           {activeJobId && (
