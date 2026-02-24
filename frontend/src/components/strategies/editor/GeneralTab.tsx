@@ -128,7 +128,7 @@ export function GeneralTab({
               <Badge
                 key={sym}
                 variant="secondary"
-                className="cursor-pointer"
+                className="cursor-pointer hover:bg-destructive/20 hover:text-destructive"
                 onClick={() => removeSymbol(sym)}
               >
                 {sym} x
@@ -151,7 +151,7 @@ export function GeneralTab({
               <Badge
                 key={tf}
                 variant={selected ? "default" : "outline"}
-                className="cursor-pointer"
+                className="cursor-pointer hover:bg-accent"
                 onClick={() => {
                   const current = config.general.additional_timeframes ?? [];
                   const next = selected ? current.filter((t) => t !== tf) : [...current, tf];

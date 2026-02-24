@@ -99,7 +99,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
           {/* Blank option */}
           <Card
             className={cn(
-              "cursor-pointer gap-0 py-0 transition-colors",
+              "cursor-pointer gap-0 py-0 transition-colors hover:bg-muted/50",
               selected === "blank" ? "border-primary bg-primary/10" : "",
             )}
             onClick={() => setSelected("blank")}
@@ -126,7 +126,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
             <Card
               key={tmpl.name ?? idx}
               className={cn(
-                "cursor-pointer gap-0 py-0 transition-colors",
+                "cursor-pointer gap-0 py-0 transition-colors hover:bg-muted/50",
                 selected === idx ? "border-primary bg-primary/10" : "",
               )}
               onClick={() => setSelected(idx)}

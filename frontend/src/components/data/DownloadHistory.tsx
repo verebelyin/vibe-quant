@@ -110,7 +110,7 @@ export function DownloadHistory() {
               <TableHead
                 key={col.key}
                 className={cn(
-                  "cursor-pointer select-none px-4",
+                  "cursor-pointer select-none px-4 hover:bg-muted/70",
                   col.align === "right" && "text-right",
                 )}
                 onClick={() => handleSort(col.key)}

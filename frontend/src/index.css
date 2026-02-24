@@ -131,6 +131,7 @@
     font-family: var(--font-sans);
   }
 
+
   /* ── Atmospheric background ──────────────────────────────
      Subtle noise + ambient glow breaks the flat-color look.
      The radial gradients create depth like ambient lighting. */
@@ -332,4 +333,25 @@
   main h1 {
     letter-spacing: -0.02em;
   }
+}
+
+/* ── Restore cursor: pointer for interactive elements ──────────
+   Tailwind 4 preflight removed cursor:pointer from buttons.
+   This MUST live outside @layer so it wins over all layers. */
+button:not(:disabled),
+[type="button"]:not(:disabled),
+[type="reset"]:not(:disabled),
+[type="submit"]:not(:disabled),
+[role="button"]:not(:disabled),
+a[href],
+label[for],
+select:not(:disabled),
+summary,
+[data-slot="tabs-trigger"],
+[data-slot="sidebar-menu-button"],
+[data-slot="select-trigger"],
+[data-slot="checkbox"],
+[data-slot="switch"],
+[data-slot="dialog-close"] {
+  cursor: pointer;
 }

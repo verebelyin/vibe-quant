@@ -177,6 +177,11 @@ export function RouteErrorComponent({ error, reset }: ErrorComponentProps) {
         </div>
 
         {/* Actions */}
+        <style>{`
+          .rec-btn { transition: filter 150ms, opacity 150ms; }
+          .rec-btn:hover { filter: brightness(1.3); }
+          .rec-btn-primary:hover { opacity: 0.85; }
+        `}</style>
         <div
           style={{
             padding: "16px 24px",
@@ -190,6 +195,7 @@ export function RouteErrorComponent({ error, reset }: ErrorComponentProps) {
           <button
             onClick={reset}
             type="button"
+            className="rec-btn"
             style={{
               padding: "8px 16px",
               fontSize: "13px",
@@ -206,6 +212,7 @@ export function RouteErrorComponent({ error, reset }: ErrorComponentProps) {
           <button
             onClick={handleCopy}
             type="button"
+            className="rec-btn"
             style={{
               padding: "8px 16px",
               fontSize: "13px",
@@ -245,6 +252,7 @@ export function RouteErrorComponent({ error, reset }: ErrorComponentProps) {
           <button
             onClick={() => window.location.reload()}
             type="button"
+            className="rec-btn rec-btn-primary"
             style={{
               padding: "8px 16px",
               fontSize: "13px",

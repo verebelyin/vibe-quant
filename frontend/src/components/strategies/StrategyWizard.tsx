@@ -126,7 +126,7 @@ function StepNameType({
             <Card
               key={t}
               className={cn(
-                "cursor-pointer gap-0 py-0 transition-colors",
+                "cursor-pointer gap-0 py-0 transition-colors hover:bg-muted/50",
                 strategyType === t ? "border-primary bg-primary/10" : "",
               )}
               onClick={() => onStrategyTypeChange(t)}
@@ -212,7 +212,7 @@ function StepMarkets({
               <Badge
                 key={sym}
                 variant="secondary"
-                className="cursor-pointer"
+                className="cursor-pointer hover:bg-destructive/20 hover:text-destructive"
                 onClick={() => removeSymbol(sym)}
               >
                 {sym} x

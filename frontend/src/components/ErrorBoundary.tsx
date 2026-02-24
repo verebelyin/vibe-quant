@@ -244,6 +244,11 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
 
           {/* Actions */}
+          <style>{`
+            .eb-btn { transition: filter 150ms, opacity 150ms; }
+            .eb-btn:hover { filter: brightness(1.3); }
+            .eb-btn-primary:hover { opacity: 0.85; }
+          `}</style>
           <div
             style={{
               padding: "16px 24px",
@@ -256,6 +261,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleDismiss}
               type="button"
+              className="eb-btn"
               style={{
                 padding: "8px 16px",
                 fontSize: "13px",
@@ -272,6 +278,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleCopy}
               type="button"
+              className="eb-btn"
               style={{
                 padding: "8px 16px",
                 fontSize: "13px",
@@ -302,6 +309,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleReload}
               type="button"
+              className="eb-btn eb-btn-primary"
               style={{
                 padding: "8px 16px",
                 fontSize: "13px",

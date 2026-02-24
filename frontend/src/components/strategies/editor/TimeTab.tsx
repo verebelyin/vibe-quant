@@ -67,7 +67,7 @@ export function TimeTab({ config, onConfigChange }: TimeTabProps) {
         {config.time.trading_hours && (
           <button
             type="button"
-            className="text-xs text-muted-foreground underline"
+            className="text-xs text-muted-foreground underline hover:text-foreground"
             onClick={() => updateTime({ trading_hours: undefined })}
           >
             Clear hours filter

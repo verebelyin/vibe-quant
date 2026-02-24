@@ -50,7 +50,7 @@ function IndicatorCatalog({ onAdd }: { onAdd: (type: string) => void }) {
         <div className="flex gap-1">
           <Badge
             variant={filterCategory === "all" ? "default" : "outline"}
-            className="cursor-pointer text-xs"
+            className="cursor-pointer text-xs hover:bg-accent"
             onClick={() => setFilterCategory("all")}
           >
             All
@@ -59,7 +59,7 @@ function IndicatorCatalog({ onAdd }: { onAdd: (type: string) => void }) {
             <Badge
               key={cat}
               variant={filterCategory === cat ? "default" : "outline"}
-              className="cursor-pointer text-xs"
+              className="cursor-pointer text-xs hover:bg-accent"
               onClick={() => setFilterCategory(cat)}
             >
               {cat}
