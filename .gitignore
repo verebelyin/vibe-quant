@@ -3,6 +3,7 @@
 .venv/
 .env
 .env.local
+.worktrees/
 
 # Python
 __pycache__/
