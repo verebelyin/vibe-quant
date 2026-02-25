@@ -324,6 +324,36 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         </div>
       </div>
 
+      {/* ETA Estimate */}
+      {(() => {
+        const totalEvals = population * generations;
+        const secPerEval = 15; // empirical: ~15s per NT backtest
+        const serialSec = totalEvals * secPerEval;
+        const cores = 8;
+        const parallelSec = Math.ceil(totalEvals / cores) * secPerEval;
+        const fmt = (s: number) => {
+          if (s < 60) return `${s}s`;
+          if (s < 3600) return `${Math.round(s / 60)}m`;
+          const h = Math.floor(s / 3600);
+          const m = Math.round((s % 3600) / 60);
+          return m > 0 ? `${h}h ${m}m` : `${h}h`;
+        };
+        const warn = serialSec > 3600;
+        return (
+          <div className={`rounded-lg border p-3 text-xs ${warn ? "border-amber-500/50 bg-amber-500/10 text-amber-200" : "border-border bg-card text-muted-foreground"}`}>
+            <div className="flex items-center justify-between">
+              <span>Total evaluations: <span className="font-mono font-semibold text-foreground">{totalEvals.toLocaleString()}</span></span>
+              <span>~{fmt(secPerEval)}/eval</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span>Serial: <span className="font-mono font-semibold text-foreground">{fmt(serialSec)}</span></span>
+              <span>Parallel ({cores} cores): <span className="font-mono font-semibold text-foreground">{fmt(parallelSec)}</span></span>
+            </div>
+            {warn && <p className="mt-1 text-[10px]">Consider reducing population or generations for faster iteration.</p>}
+          </div>
+        );
+      })()}
+
       {/* Launch */}
       <Button
         type="button"

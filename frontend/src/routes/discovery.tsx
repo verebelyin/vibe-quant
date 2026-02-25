@@ -28,13 +28,13 @@ export function DiscoveryPage() {
   // Auto-select latest completed job if none selected
   const completedJobs = jobs.filter((j) => j.status.toLowerCase() === "completed");
   const effectiveRunId =
-    selectedRunId ?? (completedJobs.length > 0 ? completedJobs[0].run_id : null);
+    selectedRunId ?? (completedJobs[0]?.run_id ?? null);
 
   // Extract total generations from progress or fallback to 100
   const totalGens = runningJob
     ? Number(
-        (runningJob.progress as Record<string, unknown> | null)?.total_generations ??
-          (runningJob.progress as Record<string, unknown> | null)?.generations ??
+        (runningJob.progress as Record<string, unknown> | null)?.max_generations ??
+          (runningJob.progress as Record<string, unknown> | null)?.total_generations ??
           100,
       )
     : 100;

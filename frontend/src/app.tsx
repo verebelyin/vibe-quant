@@ -37,6 +37,9 @@ const SettingsPage = lazy(() =>
 const GuidePage = lazy(() =>
   import("./routes/guide").then((m) => ({ default: m.GuidePage })),
 );
+const BrowserPage = lazy(() =>
+  import("./routes/browser").then((m) => ({ default: m.BrowserPage })),
+);
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
@@ -136,6 +139,18 @@ const paperTradingRoute = createRoute({
   },
 });
 
+const browserRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/browser",
+  component: function BrowserRouteComponent() {
+    return (
+      <SuspensePage>
+        <BrowserPage />
+      </SuspensePage>
+    );
+  },
+});
+
 const dataRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/data",
@@ -181,6 +196,7 @@ const routeTree = rootRoute.addChildren([
   resultsRoute,
   resultsDetailRoute,
   paperTradingRoute,
+  browserRoute,
   dataRoute,
   settingsRoute,
   guideRoute,

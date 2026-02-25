@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import { DataBrowserTab } from "@/components/data/DataBrowserTab";
 import { DataStatusDashboard } from "@/components/data/DataStatusDashboard";
 import { DownloadHistory } from "@/components/data/DownloadHistory";
 import { DownloadProgress } from "@/components/data/DownloadProgress";
@@ -33,12 +32,6 @@ export function DataPage() {
               onCancel={handleCancel}
             />
           )}
-          <div>
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Data Browser & Quality
-            </h2>
-            <DataBrowserTab />
-          </div>
           <div>
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Download History

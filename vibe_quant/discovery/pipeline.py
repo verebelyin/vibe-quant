@@ -7,9 +7,12 @@ strategy candidates expressed as DSL YAML dicts.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
@@ -165,10 +168,12 @@ class DiscoveryPipeline:
         config: DiscoveryConfig,
         backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
         filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+        progress_file: str | Path | None = None,
     ) -> None:
         self.config = config
         self._backtest_fn = backtest_fn
         self._filter_fn = filter_fn
+        self._progress_file = Path(progress_file) if progress_file else None
 
     # -- public API ---------------------------------------------------------
 
@@ -189,8 +194,16 @@ class DiscoveryPipeline:
 
         converged = False
         convergence_gen: int | None = None
+        pipeline_start = time.monotonic()
+
+        logger.info(
+            "=== DISCOVERY START: pop=%d max_gen=%d symbols=%s tf=%s ===",
+            cfg.population_size, cfg.max_generations, cfg.symbols, cfg.timeframe,
+        )
 
         for gen in range(cfg.max_generations):
+            gen_start = time.monotonic()
+
             # Evaluate
             fitness_results = evaluate_population(
                 population,
@@ -199,6 +212,9 @@ class DiscoveryPipeline:
             )
             last_fitness_results = fitness_results
             total_evaluated += len(population)
+
+            gen_elapsed = time.monotonic() - gen_start
+            total_elapsed = time.monotonic() - pipeline_start
 
             # Record per-individual scores
             for chrom, fr in zip(population, fitness_results, strict=True):
@@ -218,20 +234,52 @@ class DiscoveryPipeline:
             )
             generation_results.append(gen_result)
 
+            # ETA calculation
+            avg_gen_time = total_elapsed / (gen + 1)
+            remaining_gens = cfg.max_generations - gen - 1
+            eta_seconds = avg_gen_time * remaining_gens
+
+            # Best metrics from top scorer
+            best_fr = fitness_results[best_idx]
+            best_trades = best_fr.raw_metrics.get("total_trades", 0) if best_fr.raw_metrics else 0
+            best_return = best_fr.raw_metrics.get("total_return", 0) if best_fr.raw_metrics else 0
+
             logger.info(
-                "gen=%d best=%.4f mean=%.4f pop=%d passed=%d",
-                gen,
+                "=== GEN %d/%d === best=%.4f mean=%.4f passed=%d | "
+                "trades=%s return=%.1f%% | gen_time=%.1fs total=%.0fs ETA=%.0fs",
+                gen + 1, cfg.max_generations,
                 gen_result.best_fitness,
                 gen_result.mean_fitness,
-                gen_result.population_size,
                 gen_result.num_passed_filters,
+                best_trades,
+                (best_return * 100) if isinstance(best_return, float) else 0,
+                gen_elapsed,
+                total_elapsed,
+                eta_seconds,
+            )
+
+            self._write_progress(
+                generation=gen + 1,
+                max_generations=cfg.max_generations,
+                best_fitness=gen_result.best_fitness,
+                mean_fitness=gen_result.mean_fitness,
+                worst_fitness=gen_result.worst_fitness,
+                best_trades=best_trades,
+                best_return=best_return,
+                gen_time=gen_elapsed,
+                total_elapsed=total_elapsed,
+                eta_seconds=eta_seconds,
+                total_evaluated=total_evaluated,
             )
 
             # Convergence check
             if self._check_convergence(generation_results):
                 converged = True
                 convergence_gen = gen
-                logger.info("Converged at generation %d", gen)
+                logger.info(
+                    "=== CONVERGED at gen %d/%d after %.0fs ===",
+                    gen + 1, cfg.max_generations, total_elapsed,
+                )
                 break
 
             # Evolve next generation (skip on last iteration)
@@ -251,6 +299,18 @@ class DiscoveryPipeline:
             converged=converged,
             convergence_generation=convergence_gen,
         )
+
+    def _write_progress(self, **kwargs: object) -> None:
+        """Write progress JSON file for API polling."""
+        if not self._progress_file:
+            return
+        try:
+            self._progress_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._progress_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(kwargs, default=str))
+            tmp.rename(self._progress_file)
+        except Exception:
+            logger.debug("Failed to write progress file", exc_info=True)
 
     # -- internal -----------------------------------------------------------
 

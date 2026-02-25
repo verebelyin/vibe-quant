@@ -265,51 +265,56 @@ async def browse_data(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid end date: {exc}") from exc
 
-        # Always fetch 1m from archive, resample if needed
-        rows = archive.get_klines(symbol, "1m", start_ts, end_ts)
-
         interval_minutes = _parse_interval_minutes(interval)
+        bucket_ms = interval_minutes * 60 * 1000
+
+        # Build WHERE clause
+        conditions = ["symbol = ?", "interval = '1m'"]
+        params: list[object] = [symbol]
+        if start_ts is not None:
+            conditions.append("open_time >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            conditions.append("open_time < ?")
+            params.append(end_ts)
+        where = " AND ".join(conditions)
+
+        # Single ordered scan, resample in Python (cursor streaming avoids full materialization)
+        sql = f"""
+            SELECT open_time, open, high, low, close, volume, close_time
+            FROM raw_klines
+            WHERE {where}
+            ORDER BY open_time
+        """
         data: list[dict[str, object]] = []
 
         if interval_minutes <= 1:
-            # No resampling needed
-            for row in rows:
+            for r in archive.conn.execute(sql, tuple(params)):
                 data.append({
-                    "open_time": row["open_time"],
-                    "open": row["open"],
-                    "high": row["high"],
-                    "low": row["low"],
-                    "close": row["close"],
-                    "volume": row["volume"],
-                    "close_time": row["close_time"],
+                    "open_time": r[0], "open": r[1], "high": r[2],
+                    "low": r[3], "close": r[4], "volume": r[5], "close_time": r[6],
                 })
         else:
-            # Resample 1m candles to requested interval
-            bucket_ms = interval_minutes * 60 * 1000
             bucket: dict[str, object] | None = None
-            for row in rows:
-                ot = row["open_time"]
+            for r in archive.conn.execute(sql, tuple(params)):
+                ot = r[0]
                 bucket_start = (ot // bucket_ms) * bucket_ms
                 if bucket is None or bucket["open_time"] != bucket_start:
                     if bucket is not None:
                         data.append(bucket)
                     bucket = {
-                        "open_time": bucket_start,
-                        "open": row["open"],
-                        "high": row["high"],
-                        "low": row["low"],
-                        "close": row["close"],
-                        "volume": row["volume"],
+                        "open_time": bucket_start, "open": r[1], "high": r[2],
+                        "low": r[3], "close": r[4], "volume": r[5],
                         "close_time": bucket_start + bucket_ms - 1,
                     }
                 else:
-                    h = bucket["high"]
-                    lo = bucket["low"]
-                    bucket["high"] = max(h, row["high"])  # type: ignore[arg-type]
-                    bucket["low"] = min(lo, row["low"])  # type: ignore[arg-type]
-                    bucket["close"] = row["close"]
-                    bucket["volume"] = bucket["volume"] + row["volume"]  # type: ignore[operator]
-                    bucket["close_time"] = row["close_time"]
+                    if r[2] > bucket["high"]:  # type: ignore[operator]
+                        bucket["high"] = r[2]
+                    if r[3] < bucket["low"]:  # type: ignore[operator]
+                        bucket["low"] = r[3]
+                    bucket["close"] = r[4]
+                    bucket["volume"] = bucket["volume"] + r[5]  # type: ignore[operator]
+                    bucket["close_time"] = r[6]
             if bucket is not None:
                 data.append(bucket)
 
@@ -379,19 +384,41 @@ async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
 async def download_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, object]]:
     archive = _get_archive()
     try:
-        sessions = archive.get_download_sessions(limit=limit)
+        rows = archive.conn.execute(
+            """
+            SELECT
+                symbol,
+                interval,
+                MIN(open_time) AS min_time,
+                MAX(open_time) AS max_time,
+                COUNT(*) AS row_count,
+                MAX(downloaded_at) AS last_downloaded
+            FROM raw_klines
+            GROUP BY symbol, interval
+            ORDER BY MAX(downloaded_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
         result: list[dict[str, object]] = []
-        for s in sessions:
+        for r in rows:
+            min_ts = r[2]
+            max_ts = r[3]
+            start_date = (
+                datetime.fromtimestamp(min_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
+                if min_ts else None
+            )
+            end_date = (
+                datetime.fromtimestamp(max_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
+                if max_ts else None
+            )
             result.append({
-                "id": s["id"],
-                "started_at": s["started_at"],
-                "completed_at": s["completed_at"],
-                "symbols": s["symbols"],
-                "source": s["source"],
-                "klines_fetched": s["klines_fetched"],
-                "klines_inserted": s["klines_inserted"],
-                "status": s["status"],
-                "error_message": s["error_message"],
+                "symbol": r[0],
+                "interval": r[1],
+                "start_date": start_date,
+                "end_date": end_date,
+                "rows": r[4],
+                "timestamp": r[5],
             })
         return result
     finally:

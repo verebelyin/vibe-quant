@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useBrowseDataApiDataBrowseSymbolGet,
   useListSymbolsApiDataSymbolsGet,
@@ -15,48 +15,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { cn } from "@/lib/utils";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
-interface OhlcvRow {
-  timestamp: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-function parseRow(item: Record<string, unknown>): OhlcvRow {
-  return {
-    timestamp: String(item.timestamp ?? ""),
-    open: Number(item.open ?? 0),
-    high: Number(item.high ?? 0),
-    low: Number(item.low ?? 0),
-    close: Number(item.close ?? 0),
-    volume: Number(item.volume ?? 0),
-  };
-}
-
-function formatTimestamp(iso: string): string {
-  if (!iso) return "--";
-  const d = new Date(iso);
-  return d.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+function parseChartData(raw: unknown[]): { candles: CandlestickData[]; volume: VolumeData[] } {
+  const candles: CandlestickData[] = [];
+  const volume: VolumeData[] = [];
+  for (const item of raw) {
+    const r = item as Record<string, unknown>;
+    const openTime = r.open_time;
+    if (typeof openTime !== "number") continue;
+    const time = Math.floor(openTime / 1000);
+    const o = Number(r.open ?? 0);
+    const h = Number(r.high ?? 0);
+    const l = Number(r.low ?? 0);
+    const c = Number(r.close ?? 0);
+    const v = Number(r.volume ?? 0);
+    candles.push({ time, open: o, high: h, low: l, close: c });
+    volume.push({ time, value: v, color: c >= o ? "#26a69a80" : "#ef535080" });
+  }
+  return { candles, volume };
 }
 
 export function DataBrowser() {
@@ -65,6 +43,14 @@ export function DataBrowser() {
 
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
   const symbols = symbolsQuery.data?.data ?? [];
+
+  // Auto-select BTCUSDT (or first symbol) when symbols load
+  useEffect(() => {
+    if (symbols.length > 0 && !symbol) {
+      const btc = symbols.find((s) => s === "BTCUSDT");
+      setSymbol(btc ?? symbols[0]);
+    }
+  }, [symbols, symbol]);
 
   const browseQuery = useBrowseDataApiDataBrowseSymbolGet(
     symbol || "__none__",
@@ -75,32 +61,10 @@ export function DataBrowser() {
   );
   const browseData = browseQuery.data?.data;
 
-  const rows = useMemo<OhlcvRow[]>(() => {
-    if (!browseData?.data) return [];
-    return browseData.data.map((item) => parseRow(item as Record<string, unknown>));
+  const { candles, volume } = useMemo(() => {
+    if (!browseData?.data) return { candles: [], volume: [] };
+    return parseChartData(browseData.data);
   }, [browseData]);
-
-  const candlestickData = useMemo<CandlestickData[]>(
-    () =>
-      rows.map((r) => ({
-        time: r.timestamp,
-        open: r.open,
-        high: r.high,
-        low: r.low,
-        close: r.close,
-      })),
-    [rows],
-  );
-
-  const volumeData = useMemo<VolumeData[]>(
-    () =>
-      rows.map((r) => ({
-        time: r.timestamp,
-        value: r.volume,
-        color: r.close >= r.open ? "#26a69a80" : "#ef535080",
-      })),
-    [rows],
-  );
 
   return (
     <div className="space-y-4">
@@ -136,6 +100,11 @@ export function DataBrowser() {
             </SelectContent>
           </Select>
         </div>
+        {candles.length > 0 && (
+          <span className="pb-2 text-xs text-muted-foreground">
+            {candles.length.toLocaleString()} bars
+          </span>
+        )}
       </div>
 
       {!symbol && (
@@ -144,7 +113,7 @@ export function DataBrowser() {
         </div>
       )}
 
-      {symbol && browseQuery.isLoading && <Skeleton className="h-[400px] rounded-lg" />}
+      {symbol && browseQuery.isLoading && <Skeleton className="h-[500px] rounded-lg" />}
 
       {symbol && browseQuery.isError && (
         <div className="rounded-lg border border-destructive bg-destructive/10 p-4 text-destructive">
@@ -153,72 +122,15 @@ export function DataBrowser() {
       )}
 
       {/* Chart */}
-      {symbol && rows.length > 0 && (
+      {symbol && candles.length > 0 && (
         <Card className="p-2">
           <CardContent className="p-0">
-            <CandlestickChart data={candlestickData} volume={volumeData} height={400} />
+            <CandlestickChart data={candles} volume={volume} height={600} />
           </CardContent>
         </Card>
       )}
 
-      {/* OHLCV Table */}
-      {symbol && rows.length > 0 && (
-        <div>
-          <h4 className="mb-2 text-sm font-semibold text-foreground">
-            OHLCV Data ({rows.length} bars)
-          </h4>
-          <div className="max-h-[400px] overflow-auto rounded-lg border">
-            <Table className="text-xs">
-              <TableHeader className="sticky top-0 z-10 bg-muted">
-                <TableRow className="hover:bg-muted">
-                  {["Timestamp", "Open", "High", "Low", "Close", "Volume"].map((col) => (
-                    <TableHead
-                      key={col}
-                      className={cn("px-3", col !== "Timestamp" && "text-right")}
-                    >
-                      {col}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => {
-                  const isUp = row.close >= row.open;
-                  return (
-                    <TableRow key={row.timestamp}>
-                      <TableCell className="whitespace-nowrap px-3 py-1.5 font-mono">
-                        {formatTimestamp(row.timestamp)}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-right font-mono">
-                        {row.open.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-right font-mono">
-                        {row.high.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-right font-mono">
-                        {row.low.toFixed(2)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "px-3 py-1.5 text-right font-mono",
-                          isUp ? "text-green-500" : "text-destructive",
-                        )}
-                      >
-                        {row.close.toFixed(2)}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-right font-mono text-muted-foreground">
-                        {row.volume.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-      )}
-
-      {symbol && !browseQuery.isLoading && !browseQuery.isError && rows.length === 0 && (
+      {symbol && !browseQuery.isLoading && !browseQuery.isError && candles.length === 0 && (
         <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
           No data available for {symbol} at {interval}
         </div>

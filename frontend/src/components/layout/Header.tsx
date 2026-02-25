@@ -6,6 +6,7 @@ const routeTitles: Record<string, string> = {
   "/backtest": "Backtest Launch",
   "/results": "Results Analysis",
   "/paper-trading": "Paper Trading",
+  "/browser": "Data Browser",
   "/data": "Data Management",
   "/settings": "Settings",
   "/guide": "Guide",
@@ -19,12 +20,6 @@ export function Header() {
     <header className="relative flex h-14 items-center justify-between border-b px-6">
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-        <span className="hidden text-xs font-medium text-muted-foreground/50 sm:inline">
-          /
-        </span>
-        <span className="hidden text-xs text-muted-foreground/60 sm:inline">
-          {pathname.slice(1) || "overview"}
-        </span>
       </div>
 
       <div className="flex items-center gap-4">

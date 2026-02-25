@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
 import { useUIStore } from "../../stores/ui";
 
 export type CandlestickData = {
-  time: string;
+  time: string | number;
   open: number;
   high: number;
   low: number;
@@ -18,7 +18,7 @@ export type CandlestickData = {
 };
 
 export type VolumeData = {
-  time: string;
+  time: string | number;
   value: number;
   color?: string;
 };
@@ -48,6 +48,36 @@ const CANDLE_COLORS = {
   down: "#ef5350",
 } as const;
 
+/** Format UTC unix seconds for crosshair label — shows date + time like TradingView */
+function formatCrosshairTime(unixSec: number | string): string {
+  if (typeof unixSec === "string") return unixSec;
+  const d = new Date(unixSec * 1000);
+  const year = d.getUTCFullYear();
+  const mon = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const hrs = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  // Omit time portion if midnight (daily bars)
+  if (hrs === "00" && min === "00") return `${year}-${mon}-${day}`;
+  return `${year}-${mon}-${day} ${hrs}:${min}`;
+}
+
+/** Format tick marks on the time axis — context-aware like TradingView */
+function formatTickMark(unixSec: number | string): string {
+  if (typeof unixSec === "string") return unixSec;
+  const d = new Date(unixSec * 1000);
+  const hrs = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  const day = d.getUTCDate();
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mon = months[d.getUTCMonth()];
+  // At midnight show "DD Mon", at month boundary show "Mon 'YY", otherwise show HH:MM
+  if (hrs === "00" && min === "00") {
+    return day === 1 ? `${mon} '${String(d.getUTCFullYear()).slice(2)}` : `${day} ${mon}`;
+  }
+  return `${hrs}:${min}`;
+}
+
 function getChartOptions(theme: "light" | "dark", height: number) {
   const colors = THEME_COLORS[theme];
   return {
@@ -63,8 +93,12 @@ function getChartOptions(theme: "light" | "dark", height: number) {
     crosshair: {
       mode: 0 as const,
     },
+    localization: {
+      timeFormatter: formatCrosshairTime,
+    },
     timeScale: {
       borderColor: colors.grid,
+      tickMarkFormatter: formatTickMark,
     },
     rightPriceScale: {
       borderColor: colors.grid,

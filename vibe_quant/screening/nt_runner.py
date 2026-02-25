@@ -202,9 +202,14 @@ class NTScreeningRunner:
         venue_config = create_venue_config_for_screening()
         bt_venue_config = create_backtest_venue_config(venue_config)
 
+        # Suppress NT's verbose INFO logging in discovery/screening mode
+        # (every order/fill/position logs at INFO, generating 100s of MB)
+        from nautilus_trader.config import LoggingConfig
+
         engine_config = BacktestEngineConfig(
             strategies=strategy_configs,
             run_analysis=True,
+            logging=LoggingConfig(log_level="WARNING"),
         )
 
         bt_run_config = BacktestRunConfig(

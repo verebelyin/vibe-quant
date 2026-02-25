@@ -44,12 +44,27 @@ _DEFAULT_INDICATOR_POOL: list[dict[str, object]] = [
 ]
 
 
+def _read_progress_file(run_id: int) -> dict[str, object] | None:
+    """Read progress JSON written by the discovery pipeline subprocess."""
+    import json
+    from pathlib import Path
+
+    path = Path(f"logs/discovery_{run_id}_progress.json")
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())  # type: ignore[return-value]
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _job_info_to_discovery_response(info: JobInfo) -> DiscoveryJobResponse:
+    progress = _read_progress_file(info.run_id)
     return DiscoveryJobResponse(
         run_id=info.run_id,
         status=info.status.value,
         started_at=info.started_at.isoformat() if info.started_at else None,
-        progress=None,
+        progress=progress,
     )
 
 

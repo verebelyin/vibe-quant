@@ -200,7 +200,10 @@ def main() -> int:
                 end_date=args.end_date,
             )
 
-        pipeline = DiscoveryPipeline(config=config, backtest_fn=backtest_fn)
+        progress_file = f"logs/discovery_{args.run_id}_progress.json"
+        pipeline = DiscoveryPipeline(
+            config=config, backtest_fn=backtest_fn, progress_file=progress_file,
+        )
         result = pipeline.run()
 
         if not result.top_strategies:
