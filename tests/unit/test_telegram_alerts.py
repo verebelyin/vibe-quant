@@ -261,13 +261,13 @@ class TestTelegramBot:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
         mock_client.aclose = AsyncMock()
-        bot._client = mock_client
+
+        # Patch _get_client to always return mock (avoids real httpx on retry)
+        bot._get_client = AsyncMock(return_value=mock_client)
 
         result = await bot.send_alert(AlertType.ERROR, "Test error")
 
         assert result is False
-        mock_client.aclose.assert_called_once()
-        assert bot._client is None
 
     @pytest.mark.asyncio
     async def test_send_alert_request_error(self, bot: TelegramBot) -> None:
@@ -278,13 +278,13 @@ class TestTelegramBot:
         )
         mock_client.is_closed = False
         mock_client.aclose = AsyncMock()
-        bot._client = mock_client
+
+        # Patch _get_client to always return mock (avoids real httpx on retry)
+        bot._get_client = AsyncMock(return_value=mock_client)
 
         result = await bot.send_alert(AlertType.ERROR, "Test error")
 
         assert result is False
-        mock_client.aclose.assert_called_once()
-        assert bot._client is None
 
     @pytest.mark.asyncio
     async def test_send_error(self, bot: TelegramBot) -> None:

@@ -163,8 +163,11 @@ class ScreeningPipeline:
             self._max_workers,
         )
 
-        # Run backtests in parallel
-        all_results = self._run_parallel(progress_callback)
+        # Run backtests: sequential if 1 worker, parallel otherwise
+        if self._max_workers == 1:
+            all_results = self._run_sequential(progress_callback)
+        else:
+            all_results = self._run_parallel(progress_callback)
 
         # Apply hard metric filters
         filtered = filter_by_metrics(all_results, filters)
@@ -223,6 +226,24 @@ class ScreeningPipeline:
             results=ranked_all,
             pareto_optimal_indices=pareto_indices,
         )
+
+    def _run_sequential(
+        self,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[BacktestMetrics]:
+        """Run backtests sequentially (single worker)."""
+        results: list[BacktestMetrics] = []
+        total = self.num_combinations
+        for i, params in enumerate(self._param_grid):
+            try:
+                result = self._runner(params)
+                results.append(result)
+            except Exception as e:
+                logger.warning("Backtest failed for params %s: %s", params, e)
+                results.append(BacktestMetrics(parameters=params, sharpe_ratio=-999.0))
+            if progress_callback:
+                progress_callback(i + 1, total)
+        return results
 
     def _run_parallel(
         self,

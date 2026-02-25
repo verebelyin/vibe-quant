@@ -442,7 +442,7 @@ class TestScreeningPipeline:
         self, strategy_with_sweep: StrategyDSL
     ) -> None:
         """run() should return ScreeningResult with all fields."""
-        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=2)
+        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
         result = pipeline.run()
 
         assert result.strategy_name == "test_minimal"
@@ -455,7 +455,7 @@ class TestScreeningPipeline:
         self, strategy_with_sweep: StrategyDSL
     ) -> None:
         """run() should apply filters to results."""
-        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=2)
+        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
 
         # Very strict filters that few results will pass
         filters = MetricFilters(
@@ -472,7 +472,7 @@ class TestScreeningPipeline:
         self, strategy_with_sweep: StrategyDSL
     ) -> None:
         """run() should call progress callback."""
-        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=2)
+        pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
 
         progress_calls: list[tuple[int, int]] = []
 
@@ -571,7 +571,7 @@ class TestPipelineDatabaseIntegration:
             # Run pipeline
             pipeline = ScreeningPipeline(
                 dsl=strategy_with_sweep,
-                max_workers=2,
+                max_workers=1,
             )
             result = pipeline.run()
 

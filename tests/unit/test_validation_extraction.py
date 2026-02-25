@@ -201,6 +201,9 @@ class TestSlippageModelSelection:
             def positions(self):
                 return [_Position()]
 
+            def position_snapshots(self):
+                return []
+
             def bars(self):
                 return []
 
