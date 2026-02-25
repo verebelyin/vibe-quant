@@ -138,6 +138,8 @@ async def launch_discovery(
         "--end-date",
         end_date,
     ]
+    if body.indicator_pool is not None:
+        command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)
@@ -204,15 +206,20 @@ def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[st
 
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
 async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
-    # Find latest completed discovery run
+    # Find latest completed discovery run that has strategies with trades > 0
     conn = state.conn
-    row = conn.execute(
+    rows = conn.execute(
         "SELECT id FROM backtest_runs WHERE run_mode='discovery' AND status='completed' "
-        "ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    if row is None:
-        return DiscoveryResultResponse(strategies=[])
-    return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, row[0]))
+        "ORDER BY id DESC LIMIT 10"
+    ).fetchall()
+    for row in rows:
+        strategies = _load_discovery_strategies(state, row[0])
+        if strategies and any(s.get("trades", 0) > 0 for s in strategies):
+            return DiscoveryResultResponse(strategies=strategies)
+    # Fallback: return latest even if 0 trades
+    if rows:
+        return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, rows[0][0]))
+    return DiscoveryResultResponse(strategies=[])
 
 
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)

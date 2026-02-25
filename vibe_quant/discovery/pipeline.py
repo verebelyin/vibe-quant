@@ -78,6 +78,7 @@ class DiscoveryConfig:
     timeframe: str = "4h"
     start_date: str = ""
     end_date: str = ""
+    indicator_pool: list[str] | None = None  # None = use all available
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -179,6 +180,27 @@ class DiscoveryPipeline:
 
     # -- public API ---------------------------------------------------------
 
+    def _apply_indicator_pool_filter(self) -> None:
+        """Filter operators.INDICATOR_POOL to only include configured indicators.
+
+        Safe to mutate module globals since discovery runs as a subprocess.
+        """
+        if self.config.indicator_pool is None:
+            return
+        from vibe_quant.discovery.operators import (
+            _INDICATOR_NAMES,
+            INDICATOR_POOL,
+            _ensure_pool,
+        )
+        _ensure_pool()
+        allowed = set(self.config.indicator_pool)
+        to_remove = [k for k in INDICATOR_POOL if k not in allowed]
+        for k in to_remove:
+            del INDICATOR_POOL[k]
+        _INDICATOR_NAMES.clear()
+        _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
+        logger.info("Indicator pool filtered to: %s", list(INDICATOR_POOL.keys()))
+
     def run(self) -> DiscoveryResult:
         """Execute the full evolutionary discovery loop.
 
@@ -186,6 +208,7 @@ class DiscoveryPipeline:
             DiscoveryResult containing generation history and top strategies.
         """
         cfg = self.config
+        self._apply_indicator_pool_filter()
         population = initialize_population(cfg.population_size)
         generation_results: list[GenerationResult] = []
         total_evaluated = 0

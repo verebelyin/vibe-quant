@@ -79,12 +79,8 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(20.0, 80.0),
         dsl_type="RSI",
     ),
-    "EMA": IndicatorDef(
-        name="EMA",
-        param_ranges={"period": (5, 200)},
-        default_threshold_range=(0.0, 0.0),  # EMA compared to price, not threshold
-        dsl_type="EMA",
-    ),
+    # EMA excluded: price-relative indicator, threshold=0 produces no trades
+    # Requires indicator-vs-indicator comparison (not yet supported)
     "MACD": IndicatorDef(
         name="MACD",
         param_ranges={
@@ -95,12 +91,7 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(-0.01, 0.01),
         dsl_type="MACD",
     ),
-    "BBANDS": IndicatorDef(
-        name="BBANDS",
-        param_ranges={"period": (10, 50), "std_dev": (1.0, 4.0)},
-        default_threshold_range=(0.0, 0.0),
-        dsl_type="BBANDS",
-    ),
+    # BBANDS excluded: price-relative indicator, threshold=0 produces no trades
     "ATR": IndicatorDef(
         name="ATR",
         param_ranges={"period": (5, 30)},

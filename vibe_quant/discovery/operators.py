@@ -30,18 +30,14 @@ def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
     pool: dict[str, dict[str, tuple[float, float]]] = {
         name: dict(ind_def.param_ranges) for name, ind_def in _GENOME_POOL.items()
     }
-    # Extra indicators not yet in genome (operators-only for now)
+    # Extra oscillator indicators with bounded output ranges.
+    # Price-relative indicators (SMA, WMA, DEMA, TEMA, BBANDS, KC, DONCHIAN)
+    # are excluded because they require indicator-vs-indicator comparison
+    # (not indicator-vs-threshold) to produce meaningful conditions.
     _extras: dict[str, dict[str, tuple[float, float]]] = {
-        "SMA": {"period": (5, 200)},
-        "WMA": {"period": (5, 200)},
-        "DEMA": {"period": (5, 200)},
-        "TEMA": {"period": (5, 200)},
         "CCI": {"period": (10, 50)},
         "WILLR": {"period": (5, 30)},
         "ROC": {"period": (5, 30)},
-        "KC": {"period": (10, 50), "atr_multiplier": (0.5, 5.0)},
-        "DONCHIAN": {"period": (10, 50)},
-        "MFI": {"period": (5, 50)},
     }
     for name, ranges in _extras.items():
         if name not in pool:
@@ -203,11 +199,11 @@ _THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
     "ROC": (-5.0, 5.0),
     "MACD": (-0.005, 0.005),
     "ATR": (0.001, 0.03),
-    # EMA/SMA/WMA/DEMA/TEMA/BBANDS/KC/DONCHIAN: price-relative, threshold = 0
-    # (compared against price, not a fixed number)
+    # EMA/BBANDS: price-relative, threshold = 0
+    # (compared against price, not a fixed number — these produce ~0 trades)
 }
 _PRICE_RELATIVE_INDICATORS = frozenset({
-    "EMA", "SMA", "WMA", "DEMA", "TEMA", "BBANDS", "KC", "DONCHIAN",
+    "EMA", "BBANDS",
 })
 
 

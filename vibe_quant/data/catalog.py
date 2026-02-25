@@ -121,6 +121,7 @@ def klines_to_bars(
     instrument_id: InstrumentId,
     bar_type: BarType,
     size_precision: int = 8,
+    price_precision: int = 2,
 ) -> list[Bar]:
     """Convert raw klines to NautilusTrader Bar objects.
 
@@ -131,6 +132,8 @@ def klines_to_bars(
         size_precision: Decimal places for volume (must match instrument).
             Default 8 kept for API compatibility; callers should pass
             instrument.size_precision explicitly for production use.
+        price_precision: Decimal places for prices (must match instrument).
+            Default 2; callers should pass instrument.price_precision.
 
     Returns:
         List of Bar objects.
@@ -145,12 +148,16 @@ def klines_to_bars(
         vol = round(float(k["volume"]), size_precision)
         vol_str = f"{vol:.{size_precision}f}"
 
+        # Format prices to exact instrument precision to avoid NT mismatch
+        # (e.g. "3500.1" -> "3500.10" for price_precision=2)
+        pp = price_precision
+
         bar = Bar(
             bar_type=bar_type,
-            open=Price.from_str(str(k["open"])),
-            high=Price.from_str(str(k["high"])),
-            low=Price.from_str(str(k["low"])),
-            close=Price.from_str(str(k["close"])),
+            open=Price.from_str(f"{float(k['open']):.{pp}f}"),
+            high=Price.from_str(f"{float(k['high']):.{pp}f}"),
+            low=Price.from_str(f"{float(k['low']):.{pp}f}"),
+            close=Price.from_str(f"{float(k['close']):.{pp}f}"),
             volume=Quantity.from_str(vol_str),
             ts_event=ts_event,
             ts_init=ts_init,

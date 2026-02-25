@@ -8,7 +8,6 @@ from vibe_quant.dsl import StrategyCompiler, parse_strategy_string
 from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.dsl.schema import VALID_INDICATOR_TYPES
 
-
 # =============================================================================
 # Bug 1: vibe-quant-nhy7 -- TEMA nt_class=None
 # =============================================================================

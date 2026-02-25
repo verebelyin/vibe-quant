@@ -1057,7 +1057,7 @@ class StrategyCompiler:
                     "            _df = _ichi[0]",
                     "            if _df is not None and len(_df) > 0:",
                     "                _last = _df.iloc[-1]",
-                    f'                if not pd.isna(_last.iloc[0]):',
+                    '                if not pd.isna(_last.iloc[0]):',
                     f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
                     f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
                     f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',

@@ -502,7 +502,7 @@ class TestStaleJobDetection:
 class TestRunWithHeartbeat:
     """Tests for run_with_heartbeat function."""
 
-    def test_returns_manager_and_stop_fn(self, tmp_path: "Path") -> None:
+    def test_returns_manager_and_stop_fn(self, tmp_path: Path) -> None:
         """run_with_heartbeat returns (manager, stop_fn) tuple."""
         from vibe_quant.jobs.manager import run_with_heartbeat
 
@@ -520,7 +520,7 @@ class TestRunWithHeartbeat:
         stop_fn()
         manager.close()
 
-    def test_stop_fn_terminates_thread(self, tmp_path: "Path") -> None:
+    def test_stop_fn_terminates_thread(self, tmp_path: Path) -> None:
         """stop_fn should terminate the heartbeat thread."""
         import threading
 

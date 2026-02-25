@@ -189,7 +189,8 @@ def update_symbol(
     # Convert to 1m bars
     bar_type_1m = get_bar_type(symbol, "1m")
     size_prec = instrument.size_precision
-    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
+    price_prec = instrument.price_precision
+    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec, price_prec)
     catalog.write_bars(bars_1m)
     counts["bars_1m"] = len(bars_1m)
     if verbose:
@@ -391,7 +392,8 @@ def ingest_symbol(
     # Convert to 1m bars and write
     bar_type_1m = get_bar_type(symbol, "1m")
     size_prec = instrument.size_precision
-    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
+    price_prec = instrument.price_precision
+    bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec, price_prec)
     catalog.write_bars(bars_1m)
     counts["bars_1m"] = len(bars_1m)
     if verbose:
@@ -735,7 +737,8 @@ def rebuild_from_archive(
         # Convert to 1m bars and write
         bar_type_1m = get_bar_type(symbol, "1m")
         size_prec = instrument.size_precision
-        bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec)
+        price_prec = instrument.price_precision
+        bars_1m = klines_to_bars(all_klines, instrument.id, bar_type_1m, size_prec, price_prec)
         catalog.write_bars(bars_1m)
         counts["bars_1m"] = len(bars_1m)
         if verbose:

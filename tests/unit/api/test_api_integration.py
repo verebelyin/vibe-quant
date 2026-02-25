@@ -119,7 +119,23 @@ async def test_delete_strategy(client: AsyncClient) -> None:
 
 
 async def test_validate_strategy(client: AsyncClient) -> None:
-    cr = await client.post("/api/strategies", json=_STRATEGY_BODY)
+    # Use a valid DSL config for validation (the default _STRATEGY_BODY has
+    # a placeholder dsl_config that doesn't pass schema validation)
+    valid_body = {
+        "name": "test_rsi_valid",
+        "description": "test strategy with valid DSL",
+        "strategy_type": "technical",
+        "dsl_config": {
+            "name": "test_rsi_valid",
+            "timeframe": "4h",
+            "indicators": {"rsi1": {"type": "RSI", "period": 14}},
+            "entry_conditions": {"long": ["rsi1 < 30"]},
+            "exit_conditions": {"long": ["rsi1 > 70"]},
+            "stop_loss": {"type": "fixed_pct", "percent": 5.0},
+            "take_profit": {"type": "fixed_pct", "percent": 10.0},
+        },
+    }
+    cr = await client.post("/api/strategies", json=valid_body)
     sid = cr.json()["id"]
     r = await client.post(f"/api/strategies/{sid}/validate")
     assert r.status_code == 200
@@ -185,7 +201,7 @@ async def test_latency_presets(client: AsyncClient) -> None:
     presets = r.json()
     assert len(presets) == 4
     names = {p["name"] for p in presets}
-    assert "colocated" in names
+    assert "co_located" in names
     assert "retail" in names
 
 

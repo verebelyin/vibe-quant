@@ -44,34 +44,38 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     }
 
 
-def _make_nt_backtest_fn(
-    symbols: list[str],
-    timeframe: str,
-    start_date: str,
-    end_date: str,
-) -> callable:
-    """Create a backtest function using real NautilusTrader screening runner.
+class _NTBacktestFn:
+    """Picklable backtest callable for ProcessPoolExecutor.
 
-    Returns a callable that takes a StrategyChromosome and returns metrics dict.
-    Falls back to mock if NT imports fail or data is unavailable.
+    Must be a top-level class (not a closure) so multiprocessing can pickle it.
     """
-    from vibe_quant.discovery.genome import chromosome_to_dsl
 
-    def _backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
+    def __init__(
+        self,
+        symbols: list[str],
+        timeframe: str,
+        start_date: str,
+        end_date: str,
+    ) -> None:
+        self.symbols = symbols
+        self.timeframe = timeframe
+        self.start_date = start_date
+        self.end_date = end_date
+
+    def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         try:
-            dsl_dict = chromosome_to_dsl(chromosome)
-            # Override timeframe to match what we have data for
-            dsl_dict["timeframe"] = timeframe
-
+            from vibe_quant.discovery.genome import chromosome_to_dsl
             from vibe_quant.screening.nt_runner import NTScreeningRunner
+
+            dsl_dict = chromosome_to_dsl(chromosome)
+            dsl_dict["timeframe"] = self.timeframe
 
             runner = NTScreeningRunner(
                 dsl_dict=dsl_dict,
-                symbols=symbols,
-                start_date=start_date,
-                end_date=end_date,
+                symbols=self.symbols,
+                start_date=self.start_date,
+                end_date=self.end_date,
             )
-            # Run with empty params (discovery doesn't sweep)
             result = runner({})
 
             return {
@@ -83,7 +87,6 @@ def _make_nt_backtest_fn(
             }
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
-            # Return poor metrics so GA deprioritizes failing strategies
             return {
                 "sharpe_ratio": -1.0,
                 "max_drawdown": 1.0,
@@ -91,7 +94,15 @@ def _make_nt_backtest_fn(
                 "total_trades": 0,
             }
 
-    return _backtest
+
+def _make_nt_backtest_fn(
+    symbols: list[str],
+    timeframe: str,
+    start_date: str,
+    end_date: str,
+) -> _NTBacktestFn:
+    """Create a picklable backtest function using real NautilusTrader screening runner."""
+    return _NTBacktestFn(symbols, timeframe, start_date, end_date)
 
 
 def _check_data_available(symbols: list[str]) -> bool:
@@ -140,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeframe", type=str, default="4h")
     parser.add_argument("--start-date", type=str, default="2024-01-01")
     parser.add_argument("--end-date", type=str, default="2026-02-24")
+    parser.add_argument("--indicator-pool", type=str, default=None, help="Comma-separated indicator names to use (default: all)")
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -176,6 +188,11 @@ def main() -> int:
             symbols = run.get("symbols", [])
 
         max_workers = args.max_workers if args.max_workers >= 0 else None
+        ind_pool = (
+            [s.strip() for s in args.indicator_pool.split(",") if s.strip()]
+            if args.indicator_pool
+            else None
+        )
         config = DiscoveryConfig(
             population_size=args.population_size,
             max_generations=args.max_generations,
@@ -189,6 +206,7 @@ def main() -> int:
             timeframe=args.timeframe,
             start_date=args.start_date,
             end_date=args.end_date,
+            indicator_pool=ind_pool,
         )
 
         # Choose backtest function: real NT if data available, else mock
@@ -221,8 +239,9 @@ def main() -> int:
         execution_time = time.perf_counter() - started_at
 
         # Save top strategies as DSL dicts in notes
-        from vibe_quant.discovery.genome import chromosome_to_dsl
         import json
+
+        from vibe_quant.discovery.genome import chromosome_to_dsl
 
         top_dsls = []
         for chrom, fitness in result.top_strategies[:5]:
