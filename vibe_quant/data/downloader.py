@@ -130,8 +130,12 @@ def download_funding_rates(
                 "limit": 1000,  # Max limit
             }
 
-            response = client.get(url, params=params)
-            response.raise_for_status()
+            try:
+                response = client.get(url, params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                logger.warning("Funding rate request failed for %s at %d: %s", symbol, current_start, response.status_code)
+                break
             data = response.json()
 
             if not data:
@@ -188,8 +192,12 @@ def download_recent_klines(
                 "limit": 1500,  # Max limit
             }
 
-            response = client.get(url, params=params)
-            response.raise_for_status()
+            try:
+                response = client.get(url, params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                logger.warning("Klines request failed for %s/%s at %d: %s", symbol, interval, current_start, response.status_code)
+                break
             data = response.json()
 
             if not data:

@@ -401,10 +401,15 @@ class PaperTradingNode:
             elif self._status.state == NodeState.HALTED:
                 self.resume_from_halt()
 
+        def close_all_handler(_sig: int) -> None:
+            if self._status.state == NodeState.RUNNING:
+                self._close_all_positions()
+
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, shutdown_handler, sig)
         loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
         loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
+        loop.add_signal_handler(signal.SIGWINCH, close_all_handler, signal.SIGWINCH)
 
     def _capture_checkpoint(self) -> StateCheckpoint:
         """Capture current node state for persistence."""
@@ -475,6 +480,28 @@ class PaperTradingNode:
                     )
 
         return cancelled_orders
+
+    def _close_all_positions(self) -> None:
+        """Close all open positions via strategy close_all_positions calls."""
+        if self._trading_node is None:
+            return
+        trader = getattr(self._trading_node, "trader", None)
+        if trader is None:
+            return
+        try:
+            for strategy in cast("_TraderRuntime", trader).strategies():
+                close_fn = getattr(strategy, "close_all_positions", None)
+                if close_fn is not None:
+                    close_fn()
+        except Exception as exc:
+            self._write_event(
+                EventType.RISK_CHECK,
+                {"action": "close_all_positions_failed", "error": str(exc)},
+            )
+        self._write_event(
+            EventType.SIGNAL,
+            {"action": "close_all_positions", "trader_id": self._config.trader_id},
+        )
 
     async def _initialize(self) -> None:
         """Initialize node components.
@@ -552,19 +579,23 @@ class PaperTradingNode:
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        if shutdown_task in done and not run_task.done():
-            self._trading_node.stop()
-            await run_task
-        elif run_task in done:
-            self._shutdown_event.set()
-            run_exc = run_task.exception()
-            if run_exc is not None:
-                raise run_exc
+        run_exc: BaseException | None = None
+        try:
+            if shutdown_task in done and not run_task.done():
+                self._trading_node.stop()
+                await run_task
+            elif run_task in done:
+                self._shutdown_event.set()
+                run_exc = run_task.exception()
+        finally:
+            # Always clean up pending tasks to prevent leaks
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
-        for task in pending:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        if run_exc is not None:
+            raise run_exc
 
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""

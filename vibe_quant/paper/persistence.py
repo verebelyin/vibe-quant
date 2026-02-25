@@ -142,12 +142,20 @@ class StatePersistence:
             self._conn.commit()
 
     def close(self) -> None:
-        """Close database connection and stop periodic checkpointing."""
+        """Close database connection and stop periodic checkpointing.
+
+        Note: For async contexts, prefer calling stop_periodic_checkpointing()
+        first to ensure clean task cancellation before closing.
+        """
         self._running = False
         if self._checkpoint_task is not None:
             self._checkpoint_task.cancel()
+            # Cannot await in sync method — caller should use stop_periodic_checkpointing() first
             self._checkpoint_task = None
         if self._conn is not None:
+            # Commit any pending writes before closing
+            with contextlib.suppress(Exception):
+                self._conn.commit()
             self._conn.close()
             self._conn = None
 

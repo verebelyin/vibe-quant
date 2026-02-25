@@ -242,9 +242,10 @@ class DiscoveryPipeline:
             gen_elapsed = time.monotonic() - gen_start
             total_elapsed = time.monotonic() - pipeline_start
 
-            # Record per-individual scores
+            # Record per-individual scores (skip zero-fitness to reduce memory)
             for chrom, fr in zip(population, fitness_results, strict=True):
-                all_scored.append((chrom.clone(), fr))
+                if fr.adjusted_score > 0:
+                    all_scored.append((chrom.clone(), fr))
 
             # Build generation metrics
             scores = [fr.adjusted_score for fr in fitness_results]

@@ -35,6 +35,10 @@ router = APIRouter(prefix="/api/results", tags=["results"])
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 
 
+_VALID_RUN_MODES = {"screening", "validation", "discovery"}
+_VALID_STATUSES = {"pending", "running", "completed", "failed", "killed"}
+
+
 @router.get("/runs/summary", response_model=RunSummaryResponse)
 async def list_runs_summary(
     mgr: StateMgr,
@@ -42,6 +46,10 @@ async def list_runs_summary(
     run_mode: str | None = None,
     status: str | None = None,
 ) -> RunSummaryResponse:
+    if run_mode and run_mode not in _VALID_RUN_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid run_mode '{run_mode}'. Must be one of: {', '.join(_VALID_RUN_MODES)}")
+    if status and status not in _VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}")
     rows = mgr.list_runs_with_results(
         strategy_id=strategy_id, run_mode=run_mode, status=status
     )
@@ -57,12 +65,15 @@ async def list_runs(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> RunListResponse:
+    if status and status not in _VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}")
     rows = mgr.list_backtest_runs(strategy_id=strategy_id, status=status)
     runs = [BacktestRunResponse(**r) for r in rows]
     if start_date:
         runs = [r for r in runs if r.created_at >= start_date]
     if end_date:
-        runs = [r for r in runs if r.created_at <= end_date]
+        # Include runs on end_date even if created_at has time component (e.g. "2024-01-15 14:30:00")
+        runs = [r for r in runs if r.created_at < end_date + "Z"]
     return RunListResponse(runs=runs)
 
 
@@ -80,6 +91,15 @@ async def compare_runs(
         if row is not None:
             results.append(BacktestResultResponse(**row))
     return ComparisonResponse(runs=results)
+
+
+@router.get("/runs/{run_id}/meta", response_model=BacktestRunResponse)
+async def get_run_meta(run_id: int, mgr: StateMgr) -> BacktestRunResponse:
+    """Get run metadata (strategy_id, symbols, timeframe, dates)."""
+    row = mgr.get_backtest_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    return BacktestRunResponse(**row)
 
 
 @router.get("/runs/{run_id}", response_model=BacktestResultResponse)
@@ -167,22 +187,73 @@ async def get_sweeps(
 @router.get("/runs/{run_id}/equity-curve", response_model=list[EquityCurvePoint])
 async def get_equity_curve(run_id: int, mgr: StateMgr) -> list[EquityCurvePoint]:
     _ensure_run_exists(mgr, run_id)
-    # Stub -- will compute from trades later
-    return []
+    rows = mgr.get_trades(run_id)
+    if not rows:
+        return []
+    # Sort by exit_time, skip open trades
+    closed = sorted(
+        (r for r in rows if r.get("exit_time")),
+        key=lambda r: r["exit_time"],
+    )
+    if not closed:
+        return []
+    equity = 10_000.0  # default starting equity
+    points = [EquityCurvePoint(timestamp=closed[0]["entry_time"], equity=equity)]
+    for t in closed:
+        equity += float(t.get("net_pnl") or 0)
+        points.append(EquityCurvePoint(timestamp=t["exit_time"], equity=round(equity, 2)))
+    return points
 
 
 @router.get("/runs/{run_id}/drawdown", response_model=list[DrawdownPoint])
 async def get_drawdown(run_id: int, mgr: StateMgr) -> list[DrawdownPoint]:
     _ensure_run_exists(mgr, run_id)
-    # Stub -- will compute from trades later
-    return []
+    rows = mgr.get_trades(run_id)
+    if not rows:
+        return []
+    closed = sorted(
+        (r for r in rows if r.get("exit_time")),
+        key=lambda r: r["exit_time"],
+    )
+    if not closed:
+        return []
+    equity = 10_000.0
+    peak = equity
+    points: list[DrawdownPoint] = []
+    for t in closed:
+        equity += float(t.get("net_pnl") or 0)
+        if equity > peak:
+            peak = equity
+        dd = (peak - equity) / peak if peak > 0 else 0.0
+        points.append(DrawdownPoint(timestamp=t["exit_time"], drawdown=round(dd, 6)))
+    return points
 
 
 @router.get("/runs/{run_id}/monthly-returns", response_model=list[MonthlyReturn])
 async def get_monthly_returns(run_id: int, mgr: StateMgr) -> list[MonthlyReturn]:
     _ensure_run_exists(mgr, run_id)
-    # Stub -- will compute from trades later
-    return []
+    rows = mgr.get_trades(run_id)
+    if not rows:
+        return []
+    closed = sorted(
+        (r for r in rows if r.get("exit_time")),
+        key=lambda r: r["exit_time"],
+    )
+    if not closed:
+        return []
+    monthly: dict[tuple[int, int], float] = {}
+    for t in closed:
+        ts = t["exit_time"][:7]  # "YYYY-MM"
+        parts = ts.split("-")
+        if len(parts) >= 2:
+            key = (int(parts[0]), int(parts[1]))
+            monthly[key] = monthly.get(key, 0.0) + float(t.get("net_pnl") or 0)
+    # Convert to percentage of starting equity
+    starting = 10_000.0
+    return [
+        MonthlyReturn(year=y, month=m, return_pct=round(pnl / starting * 100, 2))
+        for (y, m), pnl in sorted(monthly.items())
+    ]
 
 
 @router.put("/runs/{run_id}/notes", response_model=BacktestResultResponse)
@@ -192,6 +263,9 @@ async def update_notes(
     mgr: StateMgr,
 ) -> BacktestResultResponse:
     _ensure_run_exists(mgr, run_id)
+    row = mgr.get_backtest_result(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No results for this run — notes require completed results")
     mgr.update_result_notes(run_id, body.notes)
     row = mgr.get_backtest_result(run_id)
     if row is None:  # pragma: no cover

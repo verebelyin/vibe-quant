@@ -105,6 +105,7 @@ class StrategyGene:
     parameters: dict[str, float]
     condition: ConditionType
     threshold: float
+    sub_value: str | None = None  # e.g. "signal", "histogram" for MACD
 
     def clone(self) -> StrategyGene:
         """Deep-copy this gene."""
@@ -113,6 +114,7 @@ class StrategyGene:
             parameters=dict(self.parameters),
             condition=self.condition,
             threshold=self.threshold,
+            sub_value=self.sub_value,
         )
 
 
@@ -476,8 +478,8 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
         gene.condition = _CONDITION_COMPLEMENTS.get(gene.condition, random.choice(_CONDITION_TYPES))
 
     else:
-        # Perturb threshold
-        gene.threshold = _perturb(gene.threshold, 0.2, 0.0, None)
+        # Perturb threshold (no lower clamp — indicators like WILLR use negative thresholds)
+        gene.threshold = _perturb(gene.threshold, 0.2)
 
 
 def tournament_select(

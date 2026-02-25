@@ -236,6 +236,19 @@ async def switch_database(body: DatabaseSwitchRequest, request: Request) -> Data
     new_path = Path(body.path)
     if not new_path.suffix == ".db":
         raise HTTPException(status_code=400, detail="Database path must end in .db")
+
+    # Prevent path traversal — resolve to absolute and enforce allowed directory
+    allowed_dir = Path("data/state").resolve()
+    try:
+        resolved = new_path.resolve()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+    if not str(resolved).startswith(str(allowed_dir) + os.sep) and resolved != allowed_dir:
+        raise HTTPException(
+            status_code=400,
+            detail="Database path must be within data/state/ directory",
+        )
+
     if not new_path.parent.exists():
         raise HTTPException(status_code=400, detail="Parent directory does not exist")
 

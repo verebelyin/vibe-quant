@@ -326,16 +326,21 @@ def apply_guardrails(
             wfa_passed = False
             reasons.append("WFA required but WFA instance/dates not provided")
         else:
-            wfa_result, wfa_passed, wfa_reason = check_walk_forward(
-                wfa=wfa,
-                strategy_id=wfa_strategy_id,
-                data_start=wfa_data_start,
-                data_end=wfa_data_end,
-                param_grid=wfa_param_grid or {},
-                min_efficiency=config.wfa_min_efficiency,
-            )
-            if wfa_reason:
-                reasons.append(wfa_reason)
+            try:
+                wfa_result, wfa_passed, wfa_reason = check_walk_forward(
+                    wfa=wfa,
+                    strategy_id=wfa_strategy_id,
+                    data_start=wfa_data_start,
+                    data_end=wfa_data_end,
+                    param_grid=wfa_param_grid or {},
+                    min_efficiency=config.wfa_min_efficiency,
+                )
+                if wfa_reason:
+                    reasons.append(wfa_reason)
+            except (ValueError, RuntimeError) as exc:
+                wfa_passed = False
+                reasons.append(f"WFA failed with error: {exc}")
+                logger.warning("WFA guardrail error: %s", exc)
 
     # 5. Purged K-Fold
     kfold_passed: bool | None = None

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -79,18 +81,54 @@ async def start_paper(
         parameters=params,
     )
 
+    # Write config JSON for the CLI subprocess
+    config_dir = Path("data/state/paper_configs")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / f"paper_{run_id}.json"
+    config_data: dict[str, object] = {
+        "trader_id": body.trader_id or f"paper_{run_id}",
+        "strategy_id": body.strategy_id,
+        "binance": {"testnet": body.testnet},
+        "symbols": [],
+    }
+    if body.sizing_method is not None:
+        config_data.setdefault("sizing", {})
+        config_data["sizing"]["method"] = body.sizing_method  # type: ignore[index]
+    if body.max_leverage is not None:
+        config_data.setdefault("sizing", {})
+        config_data["sizing"]["max_leverage"] = str(body.max_leverage)  # type: ignore[index]
+    if body.max_position_pct is not None:
+        config_data.setdefault("sizing", {})
+        config_data["sizing"]["max_position_pct"] = str(body.max_position_pct)  # type: ignore[index]
+    if body.risk_per_trade is not None:
+        config_data.setdefault("sizing", {})
+        config_data["sizing"]["risk_per_trade"] = str(body.risk_per_trade)  # type: ignore[index]
+    if body.max_drawdown_pct is not None:
+        config_data.setdefault("risk", {})
+        config_data["risk"]["max_drawdown_pct"] = str(body.max_drawdown_pct)  # type: ignore[index]
+    if body.max_daily_loss_pct is not None:
+        config_data.setdefault("risk", {})
+        config_data["risk"]["max_daily_loss_pct"] = str(body.max_daily_loss_pct)  # type: ignore[index]
+    if body.max_consecutive_losses is not None:
+        config_data.setdefault("risk", {})
+        config_data["risk"]["max_consecutive_losses"] = body.max_consecutive_losses  # type: ignore[index]
+    if body.max_position_count is not None:
+        config_data.setdefault("risk", {})
+        config_data["risk"]["max_position_count"] = body.max_position_count  # type: ignore[index]
+    with config_path.open("w") as f:
+        json.dump(config_data, f, indent=2)
+
     log_file = f"logs/paper_{run_id}.log"
     command = [
         sys.executable,
         "-m",
         "vibe_quant.paper.cli",
-        "--strategy-id",
-        str(body.strategy_id),
+        "start",
+        "--config",
+        str(config_path),
+        "--run-id",
+        str(run_id),
     ]
-    if body.testnet:
-        command.append("--testnet")
-    if body.trader_id:
-        command.extend(["--trader-id", body.trader_id])
 
     try:
         pid = jobs.start_job(run_id, "paper", command, log_file=log_file)
@@ -198,14 +236,7 @@ async def get_orders() -> list[dict[str, object]]:
 
 @router.get("/checkpoints", response_model=list[CheckpointResponse])
 async def get_checkpoints() -> list[CheckpointResponse]:
-    try:
-        from vibe_quant.paper.persistence import StatePersistence
-
-        persistence = StatePersistence()
-        # list_checkpoints needs a trader_id; without active session return empty
-        _ = persistence
-    except (ImportError, Exception):
-        pass
+    # Stub — requires active paper session with trader_id for meaningful data
     return []
 
 
@@ -217,11 +248,12 @@ async def get_session(trader_id: str) -> CheckpointResponse | None:
         persistence = StatePersistence()
         checkpoint = persistence.load_latest_checkpoint(trader_id)
         if checkpoint is not None:
+            node_status = checkpoint.node_status or {}
             return CheckpointResponse(
                 timestamp=str(checkpoint.timestamp),
-                state=checkpoint.state,
-                halt_reason=getattr(checkpoint, "halt_reason", None),
-                error_message=getattr(checkpoint, "error_message", None),
+                state=node_status.get("state", "unknown"),
+                halt_reason=node_status.get("halt_reason"),
+                error_message=node_status.get("error_message"),
             )
     except (ImportError, Exception):
         logger.debug("paper persistence not available for trader_id=%s", trader_id)

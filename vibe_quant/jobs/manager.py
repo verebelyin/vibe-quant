@@ -6,6 +6,7 @@ import contextlib
 import os
 import signal
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -90,6 +91,7 @@ class BacktestJobManager:
         self._db_path = db_path
         self._log_handles: dict[int, Any] = {}  # run_id → file handle
         self._conn: sqlite3.Connection | None = None
+        self._start_lock = threading.Lock()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -128,32 +130,33 @@ class BacktestJobManager:
         Raises:
             ValueError: If run already has an active job.
         """
-        # Check for existing active job
-        existing = self._get_job_record(run_id)
-        if existing and existing["status"] == "running":
-            raise ValueError(f"Run {run_id} already has an active job (pid={existing['pid']})")
+        with self._start_lock:
+            # Check for existing active job
+            existing = self._get_job_record(run_id)
+            if existing and existing["status"] == "running":
+                raise ValueError(f"Run {run_id} already has an active job (pid={existing['pid']})")
 
-        # Create log directory if needed
-        log_handle = None
-        if log_file:
-            log_path = Path(log_file)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_handle = log_path.open("w")
+            # Create log directory if needed
+            log_handle = None
+            if log_file:
+                log_path = Path(log_file)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_handle = log_path.open("w")
 
-        # Spawn subprocess
-        proc = subprocess.Popen(
-            command,
-            stdout=log_handle or subprocess.DEVNULL,
-            stderr=subprocess.STDOUT if log_handle else subprocess.DEVNULL,
-            start_new_session=True,  # Detach from parent process group
-            env=env,
-        )
+            # Spawn subprocess
+            proc = subprocess.Popen(
+                command,
+                stdout=log_handle or subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if log_handle else subprocess.DEVNULL,
+                start_new_session=True,  # Detach from parent process group
+                env=env,
+            )
 
-        pid = proc.pid
+            pid = proc.pid
 
-        # Track log handle for cleanup
-        if log_handle is not None:
-            self._log_handles[run_id] = log_handle
+            # Track log handle for cleanup
+            if log_handle is not None:
+                self._log_handles[run_id] = log_handle
 
         # Register job in database (upsert: update if exists, insert otherwise)
         existing = self.conn.execute(
@@ -224,6 +227,26 @@ class BacktestJobManager:
         cursor = self.conn.execute(
             "SELECT * FROM background_jobs WHERE status = 'running'"
         )
+        return [self._record_to_info(dict(row)) for row in cursor]
+
+    def list_all_jobs(self, job_type: str | None = None) -> list[JobInfo]:
+        """List all jobs, optionally filtered by type.
+
+        Args:
+            job_type: Filter by job type (e.g. 'discovery'). None = all.
+
+        Returns:
+            List of JobInfo ordered by started_at descending.
+        """
+        if job_type:
+            cursor = self.conn.execute(
+                "SELECT * FROM background_jobs WHERE job_type = ? ORDER BY started_at DESC",
+                (job_type,),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT * FROM background_jobs ORDER BY started_at DESC"
+            )
         return [self._record_to_info(dict(row)) for row in cursor]
 
     def list_stale_jobs(self) -> list[JobInfo]:

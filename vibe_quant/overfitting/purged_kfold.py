@@ -5,12 +5,12 @@ leakage due to autocorrelation. Based on López de Prado's "Advances in Financia
 Machine Learning".
 
 Standard K-Fold CV leaks information in time series due to overlapping features
-(e.g., rolling indicators). Purged K-Fold adds gaps:
-- Purge: removes samples immediately after train set
-- Embargo: removes samples immediately before test set
+(e.g., rolling indicators). Purged K-Fold adds gaps (per AFML):
+- Purge: removes training samples at end of train fold that precedes test (prevents lookahead)
+- Embargo: removes training samples at start of train fold that follows test (prevents leakage)
 
-Example with purge_pct=0.01, embargo_pct=0.01, n_samples=1000:
-    Train: [0..189] | Purge: [190..199] | Embargo: [200..209] | Test: [210..399]
+Example with purge_pct=0.01, embargo_pct=0.01, n_samples=1000, fold 2 as test:
+    Train: [0..179] | Purge: [180..199] | Test: [200..399] | Embargo: [400..419] | Train: [420..999]
 """
 
 from __future__ import annotations

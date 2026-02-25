@@ -265,7 +265,12 @@ async def browse_data(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid end date: {exc}") from exc
 
-        interval_minutes = _parse_interval_minutes(interval)
+        if interval not in _INTERVAL_MINUTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid interval '{interval}'. Must be one of: {', '.join(_INTERVAL_MINUTES)}",
+            )
+        interval_minutes = _INTERVAL_MINUTES[interval]
         bucket_ms = interval_minutes * 60 * 1000
 
         # Build WHERE clause

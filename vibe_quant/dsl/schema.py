@@ -89,6 +89,9 @@ class IndicatorConfig(BaseModel):
     slow_period: int | None = Field(default=None, ge=1, le=2000)
     signal_period: int | None = Field(default=None, ge=1, le=100)
 
+    # STOCH-specific
+    d_period: int | None = Field(default=None, ge=1, le=100)
+
     # Bollinger Bands / Keltner
     std_dev: float | None = Field(default=None, ge=0.1, le=5.0)
     atr_multiplier: float | None = Field(default=None, ge=0.1, le=10.0)
@@ -146,6 +149,8 @@ class IndicatorConfig(BaseModel):
         elif self.type == "STOCH":
             if self.period is None:
                 self.period = 14
+            if self.d_period is None:
+                self.d_period = 3
         elif self.type == "ICHIMOKU":
             # Ichimoku uses its own param names; period not required
             pass
@@ -472,8 +477,8 @@ class StrategyDSL(BaseModel):
             if not name.replace("_", "").replace("0123456789", "").isalnum():
                 # More permissive check
                 pass
-            if name.startswith("_") or name[0].isdigit():
-                msg = f"Invalid indicator name '{name}'. Must start with a letter."
+            if not name or name.startswith("_") or name[0].isdigit():
+                msg = f"Invalid indicator name '{name!r}'. Must be non-empty and start with a letter."
                 raise ValueError(msg)
         return v
 

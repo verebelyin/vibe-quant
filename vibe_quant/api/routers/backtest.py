@@ -32,7 +32,8 @@ WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
 def _job_info_to_response(info: object) -> JobStatusResponse:
     from vibe_quant.jobs.manager import JobInfo
 
-    assert isinstance(info, JobInfo)
+    if not isinstance(info, JobInfo):
+        raise TypeError(f"Expected JobInfo, got {type(info).__name__}")
     return JobStatusResponse(
         run_id=info.run_id,
         pid=info.pid,

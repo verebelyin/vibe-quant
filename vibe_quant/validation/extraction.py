@@ -96,7 +96,11 @@ def extract_stats(
             if value is None:
                 continue
             key_lower = key.lower()
-            fval = float(value)
+            try:
+                fval = float(value)
+            except (ValueError, TypeError):
+                logger.debug("Non-numeric PnL stat skipped: %s = %r", key, value)
+                continue
             if key_lower == "pnl% (total)":
                 # NT reports as percentage (e.g. -13.06 for -13.06%);
                 # we store as fraction (e.g. -0.1306)
@@ -131,7 +135,11 @@ def extract_stats(
         if value is None:
             continue
         key_lower = key.lower()
-        fval = float(value)
+        try:
+            fval = float(value)
+        except (ValueError, TypeError):
+            logger.debug("Non-numeric returns stat skipped: %s = %r", key, value)
+            continue
         if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
             result.sharpe_ratio = fval
         elif "sortino" in key_lower and "sortino_ratio" not in _populated:

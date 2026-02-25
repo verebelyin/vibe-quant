@@ -195,7 +195,7 @@ class FixedFractionalSizer(PositionSizer):
     """Fixed fractional position sizing.
 
     Calculates position size to risk a fixed percentage of equity per trade.
-    Formula: size = (equity * risk_per_trade) / |entry - stop| / entry
+    Formula: size = (equity * risk_per_trade) / |entry - stop|
 
     Requires stop_price for risk calculation.
     """

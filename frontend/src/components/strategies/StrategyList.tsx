@@ -1,5 +1,5 @@
 import { Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StrategyResponse } from "@/api/generated/models";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
 import { cn } from "@/lib/utils";
@@ -33,7 +33,7 @@ interface StrategyListProps {
   onDelete: (s: StrategyResponse) => void;
 }
 
-function StrategyCardWithDelete({
+const StrategyCardWithDelete = memo(function StrategyCardWithDelete({
   strategy,
   index,
   onSelect,
@@ -73,6 +73,29 @@ function StrategyCardWithDelete({
         <Trash2 className="w-3 h-3" />
       </button>
     </div>
+  );
+});
+
+function MemoizedCardWrapper({
+  strategy,
+  index,
+  onSelect,
+  onDelete,
+}: {
+  strategy: StrategyResponse;
+  index: number;
+  onSelect: (s: StrategyResponse) => void;
+  onDelete: (s: StrategyResponse) => void;
+}) {
+  const handleSelect = useCallback(() => onSelect(strategy), [onSelect, strategy]);
+  const handleDelete = useCallback(() => onDelete(strategy), [onDelete, strategy]);
+  return (
+    <StrategyCardWithDelete
+      strategy={strategy}
+      index={index}
+      onSelect={handleSelect}
+      onDelete={handleDelete}
+    />
   );
 }
 
@@ -254,12 +277,12 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((strategy, i) => (
-            <StrategyCardWithDelete
+            <MemoizedCardWrapper
               key={strategy.id}
               strategy={strategy}
               index={i}
-              onSelect={() => onSelect(strategy)}
-              onDelete={() => onDelete(strategy)}
+              onSelect={onSelect}
+              onDelete={onDelete}
             />
           ))}
         </div>

@@ -162,11 +162,17 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
     tlo, thi = ind_def.default_threshold_range
     threshold = tlo if tlo == thi else round(r.uniform(tlo, thi), 4)
 
+    # MACD can use signal or histogram sub-values
+    sub_value = None
+    if ind_name == "MACD":
+        sub_value = r.choice([None, "signal", "histogram"])
+
     return StrategyGene(
         indicator_type=ind_name,
         parameters=params,
         condition=condition,
         threshold=threshold,
+        sub_value=sub_value,
     )
 
 
@@ -310,8 +316,8 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
         cfg["slow_period"] = int(gene.parameters.get("slow_period", 26))
         cfg["signal_period"] = int(gene.parameters.get("signal_period", 9))
     elif gene.indicator_type == "STOCH":
-        # DSL schema only supports 'period'; map k_period to it
         cfg["period"] = int(gene.parameters.get("k_period", 14))
+        cfg["d_period"] = int(gene.parameters.get("d_period", 3))
     elif gene.indicator_type == "BBANDS":
         cfg["period"] = int(gene.parameters.get("period", 20))
         cfg["std_dev"] = float(gene.parameters.get("std_dev", 2.0))
@@ -337,7 +343,9 @@ def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
     threshold = gene.threshold
     # Format threshold: drop trailing zeros but keep at least one decimal
     thr_str = str(int(threshold)) if threshold == int(threshold) else f"{threshold:g}"
-    return f"{indicator_name} {op} {thr_str}"
+    # MACD sub-value access (signal, histogram)
+    ref = f"{indicator_name}.{gene.sub_value}" if gene.sub_value else indicator_name
+    return f"{ref} {op} {thr_str}"
 
 
 def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:

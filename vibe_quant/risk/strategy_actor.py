@@ -141,7 +141,6 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
 
     def on_start(self) -> None:
         """Initialize actor on start."""
-        self.subscribe_order_book_deltas(instrument_id=None)
         self._reset_daily_state()
         self._log_info(f"StrategyRiskActor started for {self._strategy_id_str}")
 
@@ -202,8 +201,11 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
             return RiskState.HALTED
 
         if self._state.daily_start_equity <= Decimal("0"):
-            self._halt_strategy("equity_depleted", Decimal("0"))
-            return RiskState.HALTED
+            # Re-fetch equity — on startup the exchange may not have connected yet
+            self._state.daily_start_equity = self._get_current_equity()
+            if self._state.daily_start_equity <= Decimal("0"):
+                # Still zero — skip daily loss check rather than halt on missing data
+                return self._state.state
 
         daily_loss_pct = abs(self._state.daily_pnl) / self._state.daily_start_equity
         if self._state.daily_pnl < Decimal("0") and daily_loss_pct >= self._risk_config.max_daily_loss_pct:

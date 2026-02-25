@@ -366,11 +366,13 @@ def evaluate_population(
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
     *,
     max_workers: int | None = None,
+    executor: object | None = None,
 ) -> list[FitnessResult]:
     """Evaluate fitness for an entire population, optionally in parallel.
 
     When max_workers > 1, uses ProcessPoolExecutor for parallel evaluation.
     Falls back to sequential if parallelization fails.
+    Pass `executor` to reuse a long-lived pool across generations.
 
     Args:
         chromosomes: List of strategy chromosomes.
@@ -384,7 +386,7 @@ def evaluate_population(
     """
     if max_workers is not None and max_workers != 1:
         try:
-            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers)
+            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor)
         except Exception:
             logger.warning("Parallel evaluation failed, falling back to sequential", exc_info=True)
 
@@ -396,10 +398,15 @@ def _evaluate_parallel(
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None,
     max_workers: int | None,
+    executor: object | None = None,
 ) -> list[FitnessResult]:
-    """Evaluate population using ProcessPoolExecutor."""
+    """Evaluate population using ProcessPoolExecutor.
+
+    If `executor` is provided, it's reused (caller manages lifecycle).
+    Otherwise a temporary pool is created and destroyed.
+    """
     import os
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import Executor, ProcessPoolExecutor, as_completed
 
     workers = max_workers if max_workers and max_workers > 0 else os.cpu_count() or 4
     workers = min(workers, len(chromosomes))
@@ -413,9 +420,9 @@ def _evaluate_parallel(
 
     results: list[FitnessResult | None] = [None] * len(chromosomes)
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    def _run_with(pool: Executor) -> None:
         future_to_idx = {
-            executor.submit(_evaluate_single, chrom, backtest_fn, filter_fn): i
+            pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn): i
             for i, chrom in enumerate(chromosomes)
         }
         for future in as_completed(future_to_idx):
@@ -425,5 +432,11 @@ def _evaluate_parallel(
             except Exception:
                 logger.warning("Parallel eval failed for chromosome %d", idx, exc_info=True)
                 results[idx] = _zero
+
+    if executor is not None and isinstance(executor, Executor):
+        _run_with(executor)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            _run_with(pool)
 
     return [r if r is not None else _zero for r in results]

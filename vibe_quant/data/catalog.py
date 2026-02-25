@@ -384,6 +384,8 @@ class CatalogManager:
     def get_bar_count(self, symbol: str, interval: str) -> int:
         """Get count of bars for a symbol and interval.
 
+        Uses parquet metadata to count rows without loading data into RAM.
+
         Args:
             symbol: Trading symbol.
             interval: Candle interval.
@@ -392,8 +394,21 @@ class CatalogManager:
             Number of bars.
         """
         bar_type = get_bar_type(symbol, interval)
-        bars = self.catalog.bars(bar_types=[bar_type])
-        return len(bars)
+        bar_dir = self._catalog_path / "data" / "bar" / str(bar_type)
+        if not bar_dir.exists():
+            return 0
+        try:
+            import pyarrow.parquet as pq
+
+            total = 0
+            for pq_file in bar_dir.glob("*.parquet"):
+                meta = pq.read_metadata(pq_file)
+                total += meta.num_rows
+            return total
+        except Exception:
+            # Fallback to loading bars if parquet metadata read fails
+            bars = self.catalog.bars(bar_types=[bar_type])
+            return len(bars)
 
     def get_bars(
         self,

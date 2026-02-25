@@ -162,12 +162,22 @@ async def launch_discovery(
 
 @router.get("/jobs", response_model=list[DiscoveryJobResponse])
 async def list_discovery_jobs(jobs: JobMgr) -> list[DiscoveryJobResponse]:
-    active = jobs.list_active_jobs()
-    return [
-        _job_info_to_discovery_response(j)
-        for j in active
-        if j.job_type == "discovery"
-    ]
+    all_jobs = jobs.list_all_jobs(job_type="discovery")
+    return [_job_info_to_discovery_response(j) for j in all_jobs]
+
+
+@router.get("/jobs/{run_id}/progress")
+async def get_discovery_progress(run_id: int, jobs: JobMgr) -> dict[str, object]:
+    """Get discovery job progress from file written by subprocess."""
+    info = jobs.get_job_info(run_id)
+    if info is None or info.job_type != "discovery":
+        raise HTTPException(status_code=404, detail="Discovery job not found")
+    progress = _read_progress_file(run_id)
+    return {
+        "run_id": run_id,
+        "status": info.status.value,
+        "progress": progress,
+    }
 
 
 @router.delete("/jobs/{run_id}", status_code=204)
@@ -206,19 +216,34 @@ def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[st
 
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
 async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
-    # Find latest completed discovery run that has strategies with trades > 0
+    import json as _json
+
+    # Single query: join runs with results, get notes directly
     conn = state.conn
     rows = conn.execute(
-        "SELECT id FROM backtest_runs WHERE run_mode='discovery' AND status='completed' "
-        "ORDER BY id DESC LIMIT 10"
+        """SELECT br.notes FROM backtest_runs r
+           JOIN backtest_results br ON br.run_id = r.id
+           WHERE r.run_mode='discovery' AND r.status='completed'
+             AND br.notes IS NOT NULL AND br.notes != ''
+           ORDER BY r.id DESC LIMIT 10"""
     ).fetchall()
     for row in rows:
-        strategies = _load_discovery_strategies(state, row[0])
-        if strategies and any(s.get("trades", 0) > 0 for s in strategies):
-            return DiscoveryResultResponse(strategies=strategies)
-    # Fallback: return latest even if 0 trades
-    if rows:
-        return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, rows[0][0]))
+        try:
+            data = _json.loads(row[0])
+            if isinstance(data, dict) and "top_strategies" in data:
+                strategies = data["top_strategies"]
+                if strategies and any(s.get("trades", 0) > 0 for s in strategies):
+                    return DiscoveryResultResponse(strategies=strategies)
+        except (ValueError, TypeError):
+            continue
+    # Fallback: return first valid result even if 0 trades
+    for row in rows:
+        try:
+            data = _json.loads(row[0])
+            if isinstance(data, dict) and "top_strategies" in data:
+                return DiscoveryResultResponse(strategies=data["top_strategies"])
+        except (ValueError, TypeError):
+            continue
     return DiscoveryResultResponse(strategies=[])
 
 

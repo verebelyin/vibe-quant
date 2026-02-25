@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
@@ -65,20 +66,23 @@ class StateManager:
         """
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Get or create database connection."""
-        if self._conn is None:
-            self._conn = get_connection(self._db_path)
-            init_schema(self._conn)
-        return self._conn
+        """Get or create database connection (thread-safe)."""
+        with self._lock:
+            if self._conn is None:
+                self._conn = get_connection(self._db_path)
+                init_schema(self._conn)
+            return self._conn
 
     def close(self) -> None:
         """Close database connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     # --- Strategy CRUD ---
 

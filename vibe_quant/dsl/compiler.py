@@ -121,6 +121,29 @@ class StrategyCompiler:
         # Gather indicator info
         indicators = self._gather_indicator_info(dsl)
 
+        # Force MACD to pandas-ta when signal/histogram outputs are used in conditions
+        # (NT MACD only exposes .value = MACD line, not signal or histogram)
+        all_condition_text = " ".join(
+            dsl.entry_conditions.long + dsl.entry_conditions.short
+            + dsl.exit_conditions.long + dsl.exit_conditions.short
+        )
+        for info in indicators:
+            if (
+                info.config.type == "MACD"
+                and info.spec.nt_class is not None
+                and info.spec.pandas_ta_func is not None
+                and (f"{info.name}.signal" in all_condition_text
+                     or f"{info.name}.histogram" in all_condition_text
+                     or f"{info.name}_signal" in all_condition_text
+                     or f"{info.name}_histogram" in all_condition_text)
+            ):
+                from dataclasses import replace as _dc_replace
+                info.spec = _dc_replace(info.spec, nt_class=None)
+                logger.info(
+                    "MACD '%s' forced to pandas-ta: signal/histogram outputs referenced",
+                    info.name,
+                )
+
         # Add sub-output names for multi-output indicators (e.g., bbands_upper)
         for info in indicators:
             if info.spec.output_names != ("value",):
@@ -293,7 +316,7 @@ class StrategyCompiler:
             "",
             "from nautilus_trader.core.uuid import UUID4",
             "from nautilus_trader.model.data import Bar, BarType",
-            "from nautilus_trader.model.enums import OrderSide, TimeInForce",
+            "from nautilus_trader.model.enums import OrderSide, PositionSide, TimeInForce",
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
@@ -380,6 +403,8 @@ class StrategyCompiler:
                 lines.append(f"    {name}_signal_period: int = {config.signal_period}")
             if config.std_dev is not None:
                 lines.append(f"    {name}_std_dev: float = {config.std_dev}")
+            if config.d_period is not None:
+                lines.append(f"    {name}_d_period: int = {config.d_period}")
             if config.atr_multiplier is not None:
                 lines.append(
                     f"    {name}_atr_multiplier: float = {config.atr_multiplier}"
@@ -654,7 +679,7 @@ class StrategyCompiler:
             args.append(f"k=self.config.{info.name}_std_dev")
         elif config.type == "STOCH":
             args.append(f"period_k=self.config.{info.name}_period")
-            args.append("period_d=3")  # Default D period
+            args.append(f"period_d=self.config.{info.name}_d_period")
         elif config.type == "KC":
             args.append(f"period=self.config.{info.name}_period")
             args.append(f"k_multiplier=self.config.{info.name}_atr_multiplier")
@@ -1061,10 +1086,12 @@ class StrategyCompiler:
                     f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
                     f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
                     f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',
-                    "                    if len(_last) > 2:",
-                    f'                        self._pta_values["{info.name}_span_a"] = float(_last.iloc[2])',
-                    "                    if len(_last) > 3:",
-                    f'                        self._pta_values["{info.name}_span_b"] = float(_last.iloc[3])',
+                    "            # Span values are in _ichi[1] (span DataFrame)",
+                    "            if len(_ichi) >= 2 and _ichi[1] is not None and len(_ichi[1]) > 0:",
+                    "                _span_last = _ichi[1].iloc[-1]",
+                    "                if len(_span_last) >= 2 and not pd.isna(_span_last.iloc[0]):",
+                    f'                    self._pta_values["{info.name}_span_a"] = float(_span_last.iloc[0])',
+                    f'                    self._pta_values["{info.name}_span_b"] = float(_span_last.iloc[1])',
                 ])
             elif config.type == "VOLSMA":
                 # SMA applied to volume
@@ -1310,14 +1337,16 @@ class StrategyCompiler:
         elif cond.operator == Operator.CROSSES_ABOVE:
             prev_left = self._operand_to_prev_code(cond.left)
             prev_right = self._operand_to_prev_code(cond.right)
+            prev_guard = self._crossover_prev_guard(cond)
             return (
-                f"cond_{index} = ({left} > {right}) and ({prev_left} <= {prev_right})"
+                f"cond_{index} = ({prev_guard}) and ({left} > {right}) and ({prev_left} <= {prev_right})"
             )
         elif cond.operator == Operator.CROSSES_BELOW:
             prev_left = self._operand_to_prev_code(cond.left)
             prev_right = self._operand_to_prev_code(cond.right)
+            prev_guard = self._crossover_prev_guard(cond)
             return (
-                f"cond_{index} = ({left} < {right}) and ({prev_left} >= {prev_right})"
+                f"cond_{index} = ({prev_guard}) and ({left} < {right}) and ({prev_left} >= {prev_right})"
             )
         elif cond.operator == Operator.BETWEEN:
             right2 = self._operand_to_threshold_code(cond.left, cond.right2) if cond.right2 else "0"
@@ -1369,6 +1398,21 @@ class StrategyCompiler:
             if threshold_name:
                 return f"self.config.{threshold_name}"
         return self._operand_to_code(right_operand)
+
+    @staticmethod
+    def _crossover_prev_guard(cond: Condition) -> str:
+        """Generate guard expression ensuring prev values exist for crossover.
+
+        Returns 'True' if no indicators need guarding, otherwise an 'in' check
+        so the first bar after warmup doesn't fire a false crossover.
+        """
+        from vibe_quant.dsl.conditions import Operand
+
+        checks: list[str] = []
+        for operand in (cond.left, cond.right):
+            if isinstance(operand, Operand) and operand.is_indicator:
+                checks.append(f'"{operand.value}" in self._prev_values')
+        return " and ".join(checks) if checks else "True"
 
     def _operand_to_prev_code(self, operand: object) -> str:
         """Convert an Operand to Python code for previous value.
