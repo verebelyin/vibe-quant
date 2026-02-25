@@ -192,15 +192,56 @@ def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) ->
             params["slow_period"] = max(fast, slow) + 1
 
 
+# Indicator-specific threshold ranges to avoid impossible conditions
+# that produce 0 trades (the #1 cause of wasted evals)
+_THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
+    "RSI": (25.0, 75.0),
+    "STOCH": (20.0, 80.0),
+    "CCI": (-100.0, 100.0),
+    "WILLR": (-80.0, -20.0),
+    "MFI": (20.0, 80.0),
+    "ROC": (-5.0, 5.0),
+    "MACD": (-0.005, 0.005),
+    "ATR": (0.001, 0.03),
+    # EMA/SMA/WMA/DEMA/TEMA/BBANDS/KC/DONCHIAN: price-relative, threshold = 0
+    # (compared against price, not a fixed number)
+}
+_PRICE_RELATIVE_INDICATORS = frozenset({
+    "EMA", "SMA", "WMA", "DEMA", "TEMA", "BBANDS", "KC", "DONCHIAN",
+})
+
+
 def _random_gene() -> StrategyGene:
-    """Generate a single random gene."""
+    """Generate a single random gene with sensible thresholds.
+
+    Uses indicator-specific threshold ranges to avoid conditions
+    that are too restrictive to trigger trades.
+    """
     _ensure_pool()
     ind = random.choice(_INDICATOR_NAMES)
+
+    # Use indicator-specific threshold ranges
+    if ind in _PRICE_RELATIVE_INDICATORS:
+        # Price-relative indicators: use 0 threshold (compared to price)
+        threshold = 0.0
+        # Prefer crosses_above/crosses_below for price-relative indicators
+        condition = random.choice([
+            ConditionType.CROSSES_ABOVE, ConditionType.CROSSES_BELOW,
+            ConditionType.GT, ConditionType.LT,
+        ])
+    elif ind in _THRESHOLD_RANGES:
+        lo, hi = _THRESHOLD_RANGES[ind]
+        threshold = round(random.uniform(lo, hi), 4)
+        condition = random.choice(_CONDITION_TYPES)
+    else:
+        threshold = round(random.uniform(0, 100), 4)
+        condition = random.choice(_CONDITION_TYPES)
+
     return StrategyGene(
         indicator_type=ind,
         parameters=_random_params(ind),
-        condition=random.choice(_CONDITION_TYPES),
-        threshold=round(random.uniform(0, 100), 4),
+        condition=condition,
+        threshold=threshold,
     )
 
 
@@ -522,9 +563,16 @@ def initialize_population(size: int = 50) -> list[StrategyChromosome]:
 
 
 def _random_chromosome() -> StrategyChromosome:
-    """Generate a single random valid chromosome."""
-    n_entry = random.randint(MIN_ENTRY_GENES, MAX_ENTRY_GENES)
-    n_exit = random.randint(MIN_EXIT_GENES, MAX_EXIT_GENES)
+    """Generate a single random valid chromosome.
+
+    Biased toward simpler strategies (1-2 entry genes, 1 exit gene)
+    to reduce the 60-78% of genomes that produce 0 trades due to
+    overly restrictive multi-condition entries.
+    """
+    # Weighted toward fewer genes: 1 gene=50%, 2=30%, 3=15%, 4-5=5%
+    n_entry = random.choices([1, 2, 3, random.randint(4, MAX_ENTRY_GENES)],
+                              weights=[50, 30, 15, 5])[0]
+    n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     return StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],
         exit_genes=[_random_gene() for _ in range(n_exit)],

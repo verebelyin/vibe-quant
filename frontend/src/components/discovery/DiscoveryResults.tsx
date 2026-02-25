@@ -194,9 +194,9 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               <TableHead className="text-xs">Sharpe</TableHead>
               <TableHead className="text-xs">Return</TableHead>
               <TableHead className="text-xs">Max DD</TableHead>
-              <TableHead className="text-xs">Win Rate</TableHead>
+              <TableHead className="text-xs">Trades</TableHead>
+              <TableHead className="text-xs">PF</TableHead>
               <TableHead className="text-xs">Indicators</TableHead>
-              <TableHead className="text-xs">Conditions</TableHead>
               <TableHead className="w-20 text-xs">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -210,7 +210,14 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               const returnPct = num(s, "return_pct") ?? num(s, "total_return") ?? num(s, "return");
               const maxDD = num(s, "max_drawdown") ?? num(s, "max_dd");
               const winRate = num(s, "win_rate");
-              const indicators = str(s, "indicators");
+              const trades = num(s, "trades") ?? num(s, "total_trades");
+              const pf = num(s, "pf") ?? num(s, "profit_factor");
+              // Extract indicator info from DSL config
+              const dsl = s.dsl as Record<string, unknown> | undefined;
+              const dslIndicators = dsl?.indicators;
+              const indicators = dslIndicators
+                ? Object.keys(dslIndicators as Record<string, unknown>).map(k => k.split("_")[0].toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(", ")
+                : str(s, "indicators");
               const conditions =
                 num(s, "conditions") ?? num(s, "genes") ?? num(s, "total_conditions");
 
@@ -272,13 +279,13 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                     {fmtPct(maxDD)}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-foreground">
-                    {fmtPct(winRate)}
-                  </TableCell>
-                  <TableCell className="max-w-32 truncate text-xs text-foreground">
-                    {indicators}
+                    {trades != null ? String(trades) : "--"}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-foreground">
-                    {conditions != null ? String(conditions) : "--"}
+                    {fmtNum(pf, 2)}
+                  </TableCell>
+                  <TableCell className="max-w-40 truncate text-xs text-foreground" title={indicators}>
+                    {indicators}
                   </TableCell>
                   <TableCell className="text-xs" onClick={(e) => e.stopPropagation()}>
                     {runId != null && (

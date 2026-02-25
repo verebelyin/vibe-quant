@@ -80,15 +80,16 @@ def _make_config(**overrides: Any) -> DiscoveryConfig:
 class TestDiscoveryConfig:
     def test_defaults(self) -> None:
         cfg = DiscoveryConfig(symbols=["BTC/USDT"], start_date="2024-01-01", end_date="2024-06-01")
-        assert cfg.population_size == 50
-        assert cfg.max_generations == 100
+        assert cfg.population_size == 20
+        assert cfg.max_generations == 15
         assert cfg.mutation_rate == 0.1
         assert cfg.elite_count == 2
         assert cfg.tournament_size == 3
         assert cfg.convergence_generations == 10
         assert cfg.top_k == 5
         assert cfg.min_trades == 50
-        assert cfg.timeframe == "1h"
+        assert cfg.max_workers == 0
+        assert cfg.timeframe == "4h"
 
     def test_invalid_population_size(self) -> None:
         with pytest.raises(ValueError, match="population_size"):

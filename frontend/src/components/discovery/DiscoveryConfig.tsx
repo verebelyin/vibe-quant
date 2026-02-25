@@ -28,19 +28,19 @@ interface DiscoveryConfigProps {
 }
 
 export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
-  // GA parameters
-  const [population, setPopulation] = useState(50);
-  const [generations, setGenerations] = useState(100);
+  // GA parameters (sensible defaults for quick exploration)
+  const [population, setPopulation] = useState(20);
+  const [generations, setGenerations] = useState(15);
   const [crossoverRate, setCrossoverRate] = useState(0.8);
   const [mutationRate, setMutationRate] = useState(0.1);
-  const [eliteCount, setEliteCount] = useState(5);
+  const [eliteCount, setEliteCount] = useState(2);
   const [tournamentSize, setTournamentSize] = useState(3);
   const [convergenceWindow, setConvergenceWindow] = useState(5);
   const [convergenceThreshold, setConvergenceThreshold] = useState(0.001);
 
   // Target config
   const [symbols, setSymbols] = useState("BTCUSDT");
-  const [timeframe, setTimeframe] = useState("1h");
+  const [timeframe, setTimeframe] = useState("4h");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -324,11 +324,10 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         </div>
       </div>
 
-      {/* ETA Estimate */}
+      {/* ETA Estimate + Runtime Warning */}
       {(() => {
         const totalEvals = population * generations;
-        const secPerEval = 15; // empirical: ~15s per NT backtest
-        const serialSec = totalEvals * secPerEval;
+        const secPerEval = 15;
         const cores = 8;
         const parallelSec = Math.ceil(totalEvals / cores) * secPerEval;
         const fmt = (s: number) => {
@@ -338,18 +337,30 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           const m = Math.round((s % 3600) / 60);
           return m > 0 ? `${h}h ${m}m` : `${h}h`;
         };
-        const warn = serialSec > 3600;
+        const danger = totalEvals > 500;
+        const warn = totalEvals > 200;
+        const borderCls = danger
+          ? "border-red-500/50 bg-red-500/10 text-red-200"
+          : warn
+            ? "border-amber-500/50 bg-amber-500/10 text-amber-200"
+            : "border-border bg-card text-muted-foreground";
         return (
-          <div className={`rounded-lg border p-3 text-xs ${warn ? "border-amber-500/50 bg-amber-500/10 text-amber-200" : "border-border bg-card text-muted-foreground"}`}>
+          <div className={`rounded-lg border p-3 text-xs ${borderCls}`}>
             <div className="flex items-center justify-between">
               <span>Total evaluations: <span className="font-mono font-semibold text-foreground">{totalEvals.toLocaleString()}</span></span>
               <span>~{fmt(secPerEval)}/eval</span>
             </div>
             <div className="mt-1 flex items-center justify-between">
-              <span>Serial: <span className="font-mono font-semibold text-foreground">{fmt(serialSec)}</span></span>
               <span>Parallel ({cores} cores): <span className="font-mono font-semibold text-foreground">{fmt(parallelSec)}</span></span>
             </div>
-            {warn && <p className="mt-1 text-[10px]">Consider reducing population or generations for faster iteration.</p>}
+            {danger && (
+              <p className="mt-1.5 text-[10px] font-medium text-red-300">
+                {totalEvals.toLocaleString()} evals = ~{fmt(parallelSec)} runtime. Recommended: pop=20 x gen=15 = 300 evals for quick exploration.
+              </p>
+            )}
+            {warn && !danger && (
+              <p className="mt-1 text-[10px]">Consider reducing population or generations for faster iteration.</p>
+            )}
           </div>
         );
       })()}

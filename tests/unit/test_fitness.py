@@ -63,7 +63,9 @@ def _make_result(
         max_drawdown=max_dd,
         profit_factor=pf,
         total_trades=trades,
+        total_return=0.1,
         complexity_penalty=penalty,
+        overtrade_penalty=0.0,
         raw_score=raw,
         adjusted_score=adjusted,
         passed_filters=passed,
@@ -78,21 +80,22 @@ def _make_result(
 
 class TestComputeFitnessScore:
     def test_known_values(self) -> None:
-        # Sharpe=2.0 -> clamp [-1,4], norm = (2-(-1))/(4-(-1)) = 3/5 = 0.6
-        # MaxDD=0.2 -> dd_norm = 1 - 0.2 = 0.8
-        # PF=2.5 -> norm = 2.5/5 = 0.5
-        # Score = 0.4*0.6 + 0.3*0.8 + 0.3*0.5 = 0.24 + 0.24 + 0.15 = 0.63
-        score = compute_fitness_score(sharpe_ratio=2.0, max_drawdown=0.2, profit_factor=2.5)
-        assert score == pytest.approx(0.63, abs=1e-6)
+        # Sharpe=2.0 -> norm = (2+1)/5 = 0.6
+        # MaxDD=0.2 -> dd_norm = 0.8
+        # PF=2.5 -> norm = 0.5
+        # Return=0.5 -> norm = (0.5+1)/3 = 0.5
+        # Score = 0.35*0.6 + 0.25*0.8 + 0.20*0.5 + 0.20*0.5 = 0.21+0.20+0.10+0.10 = 0.61
+        score = compute_fitness_score(sharpe_ratio=2.0, max_drawdown=0.2, profit_factor=2.5, total_return=0.5)
+        assert score == pytest.approx(0.61, abs=1e-6)
 
     def test_perfect_scores(self) -> None:
-        # Sharpe=4, MaxDD=0, PF=5 => all components = 1.0 => score = 1.0
-        score = compute_fitness_score(sharpe_ratio=4.0, max_drawdown=0.0, profit_factor=5.0)
+        # Sharpe=4, MaxDD=0, PF=5, Return=2.0 => all components = 1.0 => score = 1.0
+        score = compute_fitness_score(sharpe_ratio=4.0, max_drawdown=0.0, profit_factor=5.0, total_return=2.0)
         assert score == pytest.approx(1.0, abs=1e-6)
 
     def test_worst_scores(self) -> None:
-        # Sharpe=-1, MaxDD=1.0, PF=0 => all components = 0.0 => score = 0.0
-        score = compute_fitness_score(sharpe_ratio=-1.0, max_drawdown=1.0, profit_factor=0.0)
+        # Sharpe=-1, MaxDD=1.0, PF=0, Return=-1.0 => all components = 0.0 => score = 0.0
+        score = compute_fitness_score(sharpe_ratio=-1.0, max_drawdown=1.0, profit_factor=0.0, total_return=-1.0)
         assert score == pytest.approx(0.0, abs=1e-6)
 
     def test_negative_sharpe_clamped(self) -> None:
@@ -301,6 +304,7 @@ class TestEvaluatePopulation:
                 "max_drawdown": 0.2,
                 "profit_factor": 2.5,
                 "total_trades": 100,
+                "total_return": 0.5,
             }
 
         results = evaluate_population([chrom], bt_fn)
@@ -310,9 +314,11 @@ class TestEvaluatePopulation:
         assert r.max_drawdown == 0.2
         assert r.profit_factor == 2.5
         assert r.total_trades == 100
+        assert r.total_return == 0.5
         assert r.complexity_penalty == pytest.approx(0.02)
-        assert r.raw_score == pytest.approx(0.63, abs=1e-6)
-        assert r.adjusted_score == pytest.approx(0.63 - 0.02, abs=1e-6)
+        # New weights: 0.35*0.6 + 0.25*0.8 + 0.20*0.5 + 0.20*0.5 = 0.61
+        assert r.raw_score == pytest.approx(0.61, abs=1e-6)
+        assert r.adjusted_score == pytest.approx(0.61 - 0.02, abs=1e-6)
         assert r.passed_filters is True
 
     def test_multiple_chromosomes(self) -> None:
@@ -413,10 +419,10 @@ class TestEdgeCases:
         assert 0.0 <= score <= 1.0
 
     def test_zero_everything(self) -> None:
-        score = compute_fitness_score(sharpe_ratio=0.0, max_drawdown=0.0, profit_factor=0.0)
-        # Sharpe=0 norm=(0-(-1))/5=0.2, DD=1.0, PF=0.0
-        # 0.4*0.2 + 0.3*1.0 + 0.3*0.0 = 0.08 + 0.3 = 0.38
-        assert score == pytest.approx(0.38, abs=1e-6)
+        score = compute_fitness_score(sharpe_ratio=0.0, max_drawdown=0.0, profit_factor=0.0, total_return=0.0)
+        # Sharpe=0 norm=1/5=0.2, DD=1.0, PF=0.0, Return=0 norm=1/3=0.333
+        # 0.35*0.2 + 0.25*1.0 + 0.20*0.0 + 0.20*0.333 = 0.07+0.25+0+0.0667 = 0.3867
+        assert score == pytest.approx(0.3867, abs=1e-3)
 
     def test_fitness_result_is_frozen(self) -> None:
         r = _make_result()

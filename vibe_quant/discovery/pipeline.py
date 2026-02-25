@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.genome import chromosome_to_dsl
+from vibe_quant.discovery.guardrails import GuardrailConfig, GuardrailResult, apply_guardrails
 from vibe_quant.discovery.operators import (
     StrategyChromosome,
     _random_chromosome,
@@ -63,8 +64,8 @@ class DiscoveryConfig:
         end_date: Backtest end date (ISO format).
     """
 
-    population_size: int = 50
-    max_generations: int = 100
+    population_size: int = 20
+    max_generations: int = 15
     mutation_rate: float = 0.1
     crossover_rate: float = 0.8
     elite_count: int = 2
@@ -72,8 +73,9 @@ class DiscoveryConfig:
     convergence_generations: int = 10
     top_k: int = 5
     min_trades: int = 50
+    max_workers: int | None = 0  # 0 = auto (cpu_count), None = sequential
     symbols: list[str] = field(default_factory=list)
-    timeframe: str = "1h"
+    timeframe: str = "4h"
     start_date: str = ""
     end_date: str = ""
 
@@ -204,11 +206,12 @@ class DiscoveryPipeline:
         for gen in range(cfg.max_generations):
             gen_start = time.monotonic()
 
-            # Evaluate
+            # Evaluate (parallel if max_workers configured)
             fitness_results = evaluate_population(
                 population,
                 self._backtest_fn,
                 self._filter_fn,
+                max_workers=cfg.max_workers,
             )
             last_fitness_results = fitness_results
             total_evaluated += len(population)
@@ -241,18 +244,18 @@ class DiscoveryPipeline:
 
             # Best metrics from top scorer
             best_fr = fitness_results[best_idx]
-            best_trades = best_fr.raw_metrics.get("total_trades", 0) if best_fr.raw_metrics else 0
-            best_return = best_fr.raw_metrics.get("total_return", 0) if best_fr.raw_metrics else 0
+            best_trades = best_fr.total_trades
+            best_return = best_fr.total_return
 
             logger.info(
                 "=== GEN %d/%d === best=%.4f mean=%.4f passed=%d | "
-                "trades=%s return=%.1f%% | gen_time=%.1fs total=%.0fs ETA=%.0fs",
+                "trades=%d return=%.1f%% | gen_time=%.1fs total=%.0fs ETA=%.0fs",
                 gen + 1, cfg.max_generations,
                 gen_result.best_fitness,
                 gen_result.mean_fitness,
                 gen_result.num_passed_filters,
                 best_trades,
-                (best_return * 100) if isinstance(best_return, float) else 0,
+                best_return * 100,
                 gen_elapsed,
                 total_elapsed,
                 eta_seconds,
@@ -291,6 +294,11 @@ class DiscoveryPipeline:
         if last_fitness_results:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
+
+        # Validate top strategies with guardrails (DSR + min trades + complexity)
+        validated = self._validate_top_strategies(top_strategies, total_evaluated)
+        if validated:
+            top_strategies = validated
 
         return DiscoveryResult(
             generations=generation_results,
@@ -385,6 +393,53 @@ class DiscoveryPipeline:
         )
         best_recent = max(gr.best_fitness for gr in recent)
         return best_recent <= best_before
+
+    def _validate_top_strategies(
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+        total_evaluated: int,
+    ) -> list[tuple[StrategyChromosome, FitnessResult]] | None:
+        """Apply guardrails (DSR, complexity, min trades) to top strategies.
+
+        Logs validation results and filters out strategies that fail.
+        Returns None if all fail (caller keeps original list).
+        """
+        guardrail_cfg = GuardrailConfig(
+            min_trades=self.config.min_trades,
+            max_complexity=8,
+            require_dsr=True,
+            require_wfa=False,  # WFA requires separate out-of-sample data
+            require_purged_kfold=False,
+        )
+
+        validated: list[tuple[StrategyChromosome, FitnessResult]] = []
+        for chrom, fitness in top_strategies:
+            num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+            result: GuardrailResult = apply_guardrails(
+                fitness=fitness,
+                num_genes=num_genes,
+                config=guardrail_cfg,
+                num_trials=total_evaluated,
+                num_observations=max(100, fitness.total_trades * 5),
+            )
+            if result.passed:
+                validated.append((chrom, fitness))
+                logger.info(
+                    "Guardrail PASS: %s score=%.4f sharpe=%.2f trades=%d",
+                    chrom.uid, fitness.adjusted_score, fitness.sharpe_ratio, fitness.total_trades,
+                )
+            else:
+                logger.info(
+                    "Guardrail FAIL: %s score=%.4f reasons=%s",
+                    chrom.uid, fitness.adjusted_score, result.reasons,
+                )
+
+        if not validated:
+            logger.warning("All top strategies failed guardrails, keeping unfiltered")
+            return None
+
+        logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
+        return validated
 
     def _export_top_strategies(
         self,

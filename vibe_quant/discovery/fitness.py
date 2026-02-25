@@ -1,7 +1,7 @@
 """Fitness evaluation for genetic strategy discovery.
 
-Multi-objective fitness: Sharpe, MaxDD, ProfitFactor with complexity penalty
-and Pareto ranking for selection.
+Multi-objective fitness: Sharpe, MaxDD, ProfitFactor with commission-aware
+overtrading penalty, complexity penalty, and Pareto ranking for selection.
 """
 
 from __future__ import annotations
@@ -21,16 +21,19 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-# Scoring weights
-SHARPE_WEIGHT: float = 0.4
-DRAWDOWN_WEIGHT: float = 0.3
-PROFIT_FACTOR_WEIGHT: float = 0.3
+# Scoring weights (must sum to 1.0)
+SHARPE_WEIGHT: float = 0.35
+DRAWDOWN_WEIGHT: float = 0.25
+PROFIT_FACTOR_WEIGHT: float = 0.20
+RETURN_WEIGHT: float = 0.20
 
 # Normalization bounds
 SHARPE_MIN: float = -1.0
 SHARPE_MAX: float = 4.0
 PF_MIN: float = 0.0
 PF_MAX: float = 5.0
+RETURN_MIN: float = -1.0  # -100%
+RETURN_MAX: float = 2.0   # +200%
 
 # Complexity penalty
 COMPLEXITY_PENALTY_PER_GENE: float = 0.02
@@ -39,6 +42,13 @@ COMPLEXITY_PENALTY_CAP: float = 0.1
 
 # Minimum trade threshold
 MIN_TRADES: int = 50
+
+# Overtrading penalty: commission-aware
+# Assumes ~0.1% round-trip commission (taker fees on crypto perps)
+COMMISSION_RATE_PER_TRADE: float = 0.001
+# Trades above this threshold incur escalating penalty
+OVERTRADE_THRESHOLD: int = 300
+OVERTRADE_PENALTY_SCALE: float = 0.05  # penalty per 100 excess trades
 
 
 # ---------------------------------------------------------------------------
@@ -55,9 +65,11 @@ class FitnessResult:
         max_drawdown: Max drawdown as fraction 0-1 (lower is better).
         profit_factor: Gross profit / gross loss.
         total_trades: Number of trades executed.
+        total_return: Total return as fraction (e.g. 0.45 = +45%).
         complexity_penalty: Penalty applied for strategy complexity.
-        raw_score: Weighted score before penalty.
-        adjusted_score: Final score after penalty.
+        overtrade_penalty: Penalty for excessive trading / commission drag.
+        raw_score: Weighted score before penalties.
+        adjusted_score: Final score after all penalties.
         passed_filters: Whether candidate passed overfitting filters.
         filter_results: Per-filter pass/fail results.
     """
@@ -66,7 +78,9 @@ class FitnessResult:
     max_drawdown: float
     profit_factor: float
     total_trades: int
+    total_return: float
     complexity_penalty: float
+    overtrade_penalty: float
     raw_score: float
     adjusted_score: float
     passed_filters: bool
@@ -76,6 +90,7 @@ class FitnessResult:
 # Pre-compute inverse ranges for normalization to avoid repeated division
 _SHARPE_INV_RANGE: float = 1.0 / (SHARPE_MAX - SHARPE_MIN)
 _PF_INV_RANGE: float = 1.0 / (PF_MAX - PF_MIN)
+_RETURN_INV_RANGE: float = 1.0 / (RETURN_MAX - RETURN_MIN)
 
 # ---------------------------------------------------------------------------
 # Core scoring functions
@@ -86,13 +101,15 @@ def compute_fitness_score(
     sharpe_ratio: float,
     max_drawdown: float,
     profit_factor: float,
+    total_return: float = 0.0,
 ) -> float:
     """Compute weighted multi-objective fitness score.
 
     Components normalized to [0,1] then combined:
-    - Sharpe: clamped to [-1, 4], normalized
-    - MaxDD: inverted (1 - MaxDD), already 0-1
-    - ProfitFactor: clamped to [0, 5], normalized
+    - Sharpe (35%): clamped to [-1, 4], normalized
+    - MaxDD (25%): inverted (1 - MaxDD), already 0-1
+    - ProfitFactor (20%): clamped to [0, 5], normalized
+    - TotalReturn (20%): clamped to [-100%, +200%], normalized
 
     Uses inlined clamp/normalize with pre-computed inverse ranges
     to eliminate function-call overhead in hot loops.
@@ -101,6 +118,7 @@ def compute_fitness_score(
         sharpe_ratio: Strategy Sharpe ratio.
         max_drawdown: Max drawdown as fraction 0-1.
         profit_factor: Gross profit / gross loss.
+        total_return: Total return as fraction (e.g. 0.45 = +45%).
 
     Returns:
         Weighted score in [0, 1].
@@ -129,11 +147,38 @@ def compute_fitness_score(
         pf = PF_MAX
     pf_norm = (pf - PF_MIN) * _PF_INV_RANGE
 
+    # Inline clamp + normalize for total return
+    r = total_return
+    if r < RETURN_MIN:
+        r = RETURN_MIN
+    elif r > RETURN_MAX:
+        r = RETURN_MAX
+    return_norm = (r - RETURN_MIN) * _RETURN_INV_RANGE
+
     return (
         SHARPE_WEIGHT * sharpe_norm
         + DRAWDOWN_WEIGHT * dd_norm
         + PROFIT_FACTOR_WEIGHT * pf_norm
+        + RETURN_WEIGHT * return_norm
     )
+
+
+def compute_overtrade_penalty(total_trades: int) -> float:
+    """Compute commission-aware overtrading penalty.
+
+    Strategies exceeding OVERTRADE_THRESHOLD trades get penalized
+    proportionally to excess trade count, simulating commission drag.
+
+    Args:
+        total_trades: Number of trades executed.
+
+    Returns:
+        Penalty value >= 0. Applied as subtraction from raw score.
+    """
+    if total_trades <= OVERTRADE_THRESHOLD:
+        return 0.0
+    excess = total_trades - OVERTRADE_THRESHOLD
+    return min(0.3, OVERTRADE_PENALTY_SCALE * (excess / 100.0))
 
 
 def compute_complexity_penalty(num_genes: int) -> float:
@@ -258,74 +303,127 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
+def _evaluate_single(
+    chrom: StrategyChromosome,
+    backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+) -> FitnessResult:
+    """Evaluate fitness for a single chromosome (picklable for multiprocessing)."""
+    _zero = FitnessResult(
+        sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0,
+        total_trades=0, total_return=-1.0, complexity_penalty=0.0,
+        overtrade_penalty=0.0, raw_score=0.0, adjusted_score=0.0,
+        passed_filters=False, filter_results={},
+    )
+
+    try:
+        bt = backtest_fn(chrom)
+    except Exception:
+        logger.warning("Backtest failed for chromosome, assigning zero fitness", exc_info=True)
+        return _zero
+
+    sharpe = float(bt["sharpe_ratio"])
+    max_dd = float(bt["max_drawdown"])
+    pf = float(bt["profit_factor"])
+    trades = int(bt["total_trades"])
+    total_return = float(bt.get("total_return", 0.0))
+
+    num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+    complexity_pen = compute_complexity_penalty(num_genes)
+    overtrade_pen = compute_overtrade_penalty(trades)
+
+    # Filter evaluation
+    filter_results = filter_fn(chrom, bt) if filter_fn is not None else {}
+    passed_filters = all(filter_results.values()) if filter_results else True
+
+    # Compute raw score including total return
+    raw = compute_fitness_score(sharpe, max_dd, pf, total_return)
+
+    # Apply minimum trade filter + all penalties
+    if trades < MIN_TRADES:
+        adjusted = 0.0
+    else:
+        adjusted = max(0.0, raw - complexity_pen - overtrade_pen)
+
+    return FitnessResult(
+        sharpe_ratio=sharpe,
+        max_drawdown=max_dd,
+        profit_factor=pf,
+        total_trades=trades,
+        total_return=total_return,
+        complexity_penalty=complexity_pen,
+        overtrade_penalty=overtrade_pen,
+        raw_score=raw,
+        adjusted_score=adjusted,
+        passed_filters=passed_filters,
+        filter_results=filter_results,
+    )
+
+
 def evaluate_population(
     chromosomes: list[StrategyChromosome],
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+    *,
+    max_workers: int | None = None,
 ) -> list[FitnessResult]:
-    """Evaluate fitness for an entire population sequentially.
+    """Evaluate fitness for an entire population, optionally in parallel.
 
-    This function is safe to call from multiple threads but shares no state.
-    Each call processes chromosomes in order and returns parallel results.
+    When max_workers > 1, uses ProcessPoolExecutor for parallel evaluation.
+    Falls back to sequential if parallelization fails.
 
     Args:
         chromosomes: List of strategy chromosomes.
         backtest_fn: Callable that runs a backtest and returns dict with keys:
-            sharpe_ratio, max_drawdown, profit_factor, total_trades.
+            sharpe_ratio, max_drawdown, profit_factor, total_trades, total_return.
         filter_fn: Optional callable that returns per-filter pass/fail dict.
-            If None, all filters considered passed.
+        max_workers: Max parallel workers. None = sequential. 0 = auto (cpu_count).
 
     Returns:
         FitnessResult for each chromosome, parallel to input.
     """
-    # TODO: parallelize with ProcessPoolExecutor when population sizes warrant it
-    results: list[FitnessResult] = []
+    if max_workers is not None and max_workers != 1:
+        try:
+            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers)
+        except Exception:
+            logger.warning("Parallel evaluation failed, falling back to sequential", exc_info=True)
 
-    # Zero-fitness result for failed evaluations
+    return [_evaluate_single(chrom, backtest_fn, filter_fn) for chrom in chromosomes]
+
+
+def _evaluate_parallel(
+    chromosomes: list[StrategyChromosome],
+    backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None,
+    max_workers: int | None,
+) -> list[FitnessResult]:
+    """Evaluate population using ProcessPoolExecutor."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    workers = max_workers if max_workers and max_workers > 0 else os.cpu_count() or 4
+    workers = min(workers, len(chromosomes))
+
     _zero = FitnessResult(
         sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0,
-        total_trades=0, complexity_penalty=0.0, raw_score=0.0,
-        adjusted_score=0.0, passed_filters=False, filter_results={},
+        total_trades=0, total_return=-1.0, complexity_penalty=0.0,
+        overtrade_penalty=0.0, raw_score=0.0, adjusted_score=0.0,
+        passed_filters=False, filter_results={},
     )
 
-    for chrom in chromosomes:
-        try:
-            bt = backtest_fn(chrom)
-        except Exception:
-            logger.warning("Backtest failed for chromosome, assigning zero fitness", exc_info=True)
-            results.append(_zero)
-            continue
+    results: list[FitnessResult | None] = [None] * len(chromosomes)
 
-        sharpe = float(bt["sharpe_ratio"])
-        max_dd = float(bt["max_drawdown"])
-        pf = float(bt["profit_factor"])
-        trades = int(bt["total_trades"])
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        future_to_idx = {
+            executor.submit(_evaluate_single, chrom, backtest_fn, filter_fn): i
+            for i, chrom in enumerate(chromosomes)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception:
+                logger.warning("Parallel eval failed for chromosome %d", idx, exc_info=True)
+                results[idx] = _zero
 
-        num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
-        penalty = compute_complexity_penalty(num_genes)
-
-        # Filter evaluation
-        filter_results = filter_fn(chrom, bt) if filter_fn is not None else {}
-        passed_filters = all(filter_results.values()) if filter_results else True
-
-        # Compute raw score
-        raw = compute_fitness_score(sharpe, max_dd, pf)
-
-        # Apply minimum trade filter and complexity penalty
-        adjusted = 0.0 if trades < MIN_TRADES else max(0.0, raw - penalty)
-
-        results.append(
-            FitnessResult(
-                sharpe_ratio=sharpe,
-                max_drawdown=max_dd,
-                profit_factor=pf,
-                total_trades=trades,
-                complexity_penalty=penalty,
-                raw_score=raw,
-                adjusted_score=adjusted,
-                passed_filters=passed_filters,
-                filter_results=filter_results,
-            )
-        )
-
-    return results
+    return [r if r is not None else _zero for r in results]

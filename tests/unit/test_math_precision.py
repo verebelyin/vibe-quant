@@ -13,11 +13,15 @@ import pytest
 
 from vibe_quant.discovery.fitness import (
     _PF_INV_RANGE,
+    _RETURN_INV_RANGE,
     _SHARPE_INV_RANGE,
     DRAWDOWN_WEIGHT,
     PF_MAX,
     PF_MIN,
     PROFIT_FACTOR_WEIGHT,
+    RETURN_MAX,
+    RETURN_MIN,
+    RETURN_WEIGHT,
     SHARPE_MAX,
     SHARPE_MIN,
     SHARPE_WEIGHT,
@@ -297,9 +301,10 @@ def _reference_normalize(value: float, lo: float, hi: float) -> float:
 
 
 def _reference_fitness_score(
-    sharpe_ratio: float, max_drawdown: float, profit_factor: float
+    sharpe_ratio: float, max_drawdown: float, profit_factor: float,
+    total_return: float = 0.0,
 ) -> float:
-    """Original compute_fitness_score with function calls."""
+    """Reference compute_fitness_score with function calls."""
     sharpe_norm = _reference_normalize(
         _reference_clamp(sharpe_ratio, SHARPE_MIN, SHARPE_MAX), SHARPE_MIN, SHARPE_MAX
     )
@@ -307,37 +312,45 @@ def _reference_fitness_score(
     pf_norm = _reference_normalize(
         _reference_clamp(profit_factor, PF_MIN, PF_MAX), PF_MIN, PF_MAX
     )
-    return SHARPE_WEIGHT * sharpe_norm + DRAWDOWN_WEIGHT * dd_norm + PROFIT_FACTOR_WEIGHT * pf_norm
+    return_norm = _reference_normalize(
+        _reference_clamp(total_return, RETURN_MIN, RETURN_MAX), RETURN_MIN, RETURN_MAX
+    )
+    return (
+        SHARPE_WEIGHT * sharpe_norm
+        + DRAWDOWN_WEIGHT * dd_norm
+        + PROFIT_FACTOR_WEIGHT * pf_norm
+        + RETURN_WEIGHT * return_norm
+    )
 
 
 class TestFitnessScorePrecision:
-    """Verify inlined fitness score matches original."""
+    """Verify inlined fitness score matches reference."""
 
     @pytest.mark.parametrize(
-        "sharpe,dd,pf",
+        "sharpe,dd,pf,ret",
         [
             # Normal ranges
-            (1.0, 0.1, 1.5),
-            (2.0, 0.05, 2.0),
-            (0.0, 0.5, 1.0),
-            (-0.5, 0.3, 0.8),
+            (1.0, 0.1, 1.5, 0.2),
+            (2.0, 0.05, 2.0, 0.5),
+            (0.0, 0.5, 1.0, 0.0),
+            (-0.5, 0.3, 0.8, -0.3),
             # At bounds
-            (SHARPE_MIN, 0.0, PF_MIN),
-            (SHARPE_MAX, 1.0, PF_MAX),
+            (SHARPE_MIN, 0.0, PF_MIN, RETURN_MIN),
+            (SHARPE_MAX, 1.0, PF_MAX, RETURN_MAX),
             # Beyond bounds (should clamp)
-            (-5.0, -0.1, -1.0),
-            (10.0, 1.5, 10.0),
+            (-5.0, -0.1, -1.0, -2.0),
+            (10.0, 1.5, 10.0, 5.0),
             # Typical crypto strategy values
-            (1.2, 0.15, 1.8),
-            (0.8, 0.25, 1.3),
-            (3.5, 0.02, 4.5),
+            (1.2, 0.15, 1.8, 0.45),
+            (0.8, 0.25, 1.3, -0.1),
+            (3.5, 0.02, 4.5, 1.5),
         ],
     )
-    def test_matches_reference(self, sharpe: float, dd: float, pf: float) -> None:
-        optimized = compute_fitness_score(sharpe, dd, pf)
-        reference = _reference_fitness_score(sharpe, dd, pf)
+    def test_matches_reference(self, sharpe: float, dd: float, pf: float, ret: float) -> None:
+        optimized = compute_fitness_score(sharpe, dd, pf, ret)
+        reference = _reference_fitness_score(sharpe, dd, pf, ret)
         assert optimized == pytest.approx(reference, abs=1e-15), (
-            f"sharpe={sharpe}, dd={dd}, pf={pf}: "
+            f"sharpe={sharpe}, dd={dd}, pf={pf}, ret={ret}: "
             f"optimized={optimized}, reference={reference}"
         )
 
@@ -349,6 +362,9 @@ class TestFitnessScorePrecision:
         assert pytest.approx(
             1.0 / (PF_MAX - PF_MIN), rel=1e-15
         ) == _PF_INV_RANGE
+        assert pytest.approx(
+            1.0 / (RETURN_MAX - RETURN_MIN), rel=1e-15
+        ) == _RETURN_INV_RANGE
 
 
 # ============================================================================
@@ -372,7 +388,9 @@ def _make_fitness(sharpe: float, dd: float, pf: float) -> FitnessResult:
         max_drawdown=dd,
         profit_factor=pf,
         total_trades=100,
+        total_return=0.1,
         complexity_penalty=0.0,
+        overtrade_penalty=0.0,
         raw_score=0.5,
         adjusted_score=0.5,
         passed_filters=True,

@@ -103,7 +103,7 @@ async def launch_discovery(
 
     log_file = f"logs/discovery_{run_id}.log"
     symbols_str = ",".join(body.symbols)
-    timeframe = body.timeframes[0] if body.timeframes else "1h"
+    timeframe = body.timeframes[0] if body.timeframes else "4h"
     start_date = body.start_date or "2024-01-01"
     end_date = body.end_date or "2026-02-24"
     command = [
@@ -127,6 +127,8 @@ async def launch_discovery(
         str(body.tournament_size),
         "--convergence-generations",
         str(body.convergence_generations),
+        "--max-workers",
+        "0",
         "--symbols",
         symbols_str,
         "--timeframe",

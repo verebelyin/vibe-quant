@@ -5,15 +5,15 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DiscoveryLaunchRequest(BaseModel):
-    population: int
-    generations: int
-    mutation_rate: float
+    population: int = 20
+    generations: int = 15
+    mutation_rate: float = 0.1
     crossover_rate: float = 0.8
     elite_count: int = 2
     tournament_size: int = 3
     convergence_generations: int = 10
-    symbols: list[str]
-    timeframes: list[str]
+    symbols: list[str] = ["BTCUSDT"]
+    timeframes: list[str] = ["4h"]
     indicator_pool: list[str] | None = None
     start_date: str | None = None
     end_date: str | None = None
