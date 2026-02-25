@@ -22,17 +22,17 @@ class BacktestRunResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    strategy_id: int
+    strategy_id: int | None = None
     run_mode: str
     symbols: list[str]
     timeframe: str
-    start_date: str
-    end_date: str
-    parameters: dict[str, object]
+    start_date: str | None = None
+    end_date: str | None = None
+    parameters: dict[str, object] | None = None
     status: str
-    started_at: str | None
-    completed_at: str | None
-    error_message: str | None
+    started_at: str | None = None
+    completed_at: str | None = None
+    error_message: str | None = None
     created_at: str
 
 

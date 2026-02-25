@@ -93,8 +93,8 @@ class RunSummaryItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     run_id: int
-    strategy_id: int
-    strategy_name: str | None
+    strategy_id: int | None = None
+    strategy_name: str | None = None
     run_mode: str
     symbols: list[str]
     timeframe: str
