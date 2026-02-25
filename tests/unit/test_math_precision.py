@@ -264,12 +264,18 @@ class TestDSREndToEnd:
         dsr = DeflatedSharpeRatio()
         # Use few trials so SR=3.0 > expected_max_sharpe (positive DSR)
         normal = dsr.calculate(
-            observed_sharpe=3.0, num_trials=5, num_observations=500,
-            skewness=0.0, kurtosis=3.0,
+            observed_sharpe=3.0,
+            num_trials=5,
+            num_observations=500,
+            skewness=0.0,
+            kurtosis=3.0,
         )
         fat_tails = dsr.calculate(
-            observed_sharpe=3.0, num_trials=5, num_observations=500,
-            skewness=-1.0, kurtosis=6.0,
+            observed_sharpe=3.0,
+            num_trials=5,
+            num_observations=500,
+            skewness=-1.0,
+            kurtosis=6.0,
         )
         # Fat tails + negative skew → higher variance
         assert fat_tails.sharpe_variance > normal.sharpe_variance
@@ -301,7 +307,9 @@ def _reference_normalize(value: float, lo: float, hi: float) -> float:
 
 
 def _reference_fitness_score(
-    sharpe_ratio: float, max_drawdown: float, profit_factor: float,
+    sharpe_ratio: float,
+    max_drawdown: float,
+    profit_factor: float,
     total_return: float = 0.0,
 ) -> float:
     """Reference compute_fitness_score with function calls."""
@@ -309,9 +317,7 @@ def _reference_fitness_score(
         _reference_clamp(sharpe_ratio, SHARPE_MIN, SHARPE_MAX), SHARPE_MIN, SHARPE_MAX
     )
     dd_norm = 1.0 - _reference_clamp(max_drawdown, 0.0, 1.0)
-    pf_norm = _reference_normalize(
-        _reference_clamp(profit_factor, PF_MIN, PF_MAX), PF_MIN, PF_MAX
-    )
+    pf_norm = _reference_normalize(_reference_clamp(profit_factor, PF_MIN, PF_MAX), PF_MIN, PF_MAX)
     return_norm = _reference_normalize(
         _reference_clamp(total_return, RETURN_MIN, RETURN_MAX), RETURN_MIN, RETURN_MAX
     )
@@ -356,15 +362,9 @@ class TestFitnessScorePrecision:
 
     def test_pre_computed_inverse_ranges(self) -> None:
         """Verify pre-computed constants match actual ranges."""
-        assert pytest.approx(
-            1.0 / (SHARPE_MAX - SHARPE_MIN), rel=1e-15
-        ) == _SHARPE_INV_RANGE
-        assert pytest.approx(
-            1.0 / (PF_MAX - PF_MIN), rel=1e-15
-        ) == _PF_INV_RANGE
-        assert pytest.approx(
-            1.0 / (RETURN_MAX - RETURN_MIN), rel=1e-15
-        ) == _RETURN_INV_RANGE
+        assert pytest.approx(1.0 / (SHARPE_MAX - SHARPE_MIN), rel=1e-15) == _SHARPE_INV_RANGE
+        assert pytest.approx(1.0 / (PF_MAX - PF_MIN), rel=1e-15) == _PF_INV_RANGE
+        assert pytest.approx(1.0 / (RETURN_MAX - RETURN_MIN), rel=1e-15) == _RETURN_INV_RANGE
 
 
 # ============================================================================
@@ -477,29 +477,31 @@ def _reference_pareto_front(results: list[BacktestMetrics]) -> list[int]:
 class TestParetoFrontPrecision:
     """Verify optimized Pareto front matches reference."""
 
-    def _make_results(
-        self, data: list[tuple[float, float, float]]
-    ) -> list[BacktestMetrics]:
+    def _make_results(self, data: list[tuple[float, float, float]]) -> list[BacktestMetrics]:
         return [
             BacktestMetrics(parameters={}, sharpe_ratio=s, max_drawdown=d, profit_factor=p)
             for s, d, p in data
         ]
 
     def test_simple_front(self) -> None:
-        results = self._make_results([
-            (2.0, 0.1, 2.0),  # Pareto
-            (1.0, 0.2, 1.5),  # Dominated
-            (1.5, 0.05, 1.0),  # Pareto (lower PF but better DD)
-        ])
+        results = self._make_results(
+            [
+                (2.0, 0.1, 2.0),  # Pareto
+                (1.0, 0.2, 1.5),  # Dominated
+                (1.5, 0.05, 1.0),  # Pareto (lower PF but better DD)
+            ]
+        )
         assert compute_pareto_front(results) == _reference_pareto_front(results)
 
     def test_all_pareto(self) -> None:
         """No dominance → all are Pareto optimal."""
-        results = self._make_results([
-            (2.0, 0.3, 1.0),
-            (1.0, 0.1, 2.0),
-            (1.5, 0.2, 1.5),
-        ])
+        results = self._make_results(
+            [
+                (2.0, 0.3, 1.0),
+                (1.0, 0.1, 2.0),
+                (1.5, 0.2, 1.5),
+            ]
+        )
         opt = compute_pareto_front(results)
         ref = _reference_pareto_front(results)
         assert sorted(opt) == sorted(ref)
@@ -521,11 +523,13 @@ class TestParetoFrontPrecision:
 
     def test_chain_dominance(self) -> None:
         """A > B > C → only A is Pareto."""
-        results = self._make_results([
-            (3.0, 0.05, 3.0),  # Best in all
-            (2.0, 0.10, 2.0),  # Dominated by [0]
-            (1.0, 0.20, 1.0),  # Dominated by [0] and [1]
-        ])
+        results = self._make_results(
+            [
+                (3.0, 0.05, 3.0),  # Best in all
+                (2.0, 0.10, 2.0),  # Dominated by [0]
+                (1.0, 0.20, 1.0),  # Dominated by [0] and [1]
+            ]
+        )
         assert compute_pareto_front(results) == _reference_pareto_front(results) == [0]
 
     def test_large_population(self) -> None:
@@ -673,8 +677,7 @@ class TestPurgedKFoldVariancePrecision:
         if len(set(sharpes)) > 1:
             expected_std = statistics.stdev(sharpes)
             assert result.std_oos_sharpe == pytest.approx(expected_std, rel=1e-10), (
-                f"sharpes={sharpes}: got std={result.std_oos_sharpe}, "
-                f"expected={expected_std}"
+                f"sharpes={sharpes}: got std={result.std_oos_sharpe}, expected={expected_std}"
             )
         else:
             # Constant values → std should be 0
@@ -726,9 +729,7 @@ def _make_wfa_window(
     )
 
 
-def _reference_aggregate_wfa(
-    windows: list[WFAWindow], config: WFAConfig
-) -> dict[str, float]:
+def _reference_aggregate_wfa(windows: list[WFAWindow], config: WFAConfig) -> dict[str, float]:
     """Reference multi-pass aggregation."""
     n = len(windows)
     oos_sharpes = [w.oos_sharpe for w in windows]
@@ -779,10 +780,7 @@ class TestWFAAggregationPrecision:
         assert result.consistency_ratio == pytest.approx(ref["consistency"], rel=1e-12)
 
     def test_all_profitable(self) -> None:
-        windows = [
-            _make_wfa_window(i, 1.5, 0.8, 10.0, 5.0)
-            for i in range(10)
-        ]
+        windows = [_make_wfa_window(i, 1.5, 0.8, 10.0, 5.0) for i in range(10)]
         config = WFAConfig.default()
         wfa = WalkForwardAnalysis(config=config)
         result = wfa._aggregate_results(windows)
@@ -792,10 +790,7 @@ class TestWFAAggregationPrecision:
         assert result.aggregated_oos_sharpe == pytest.approx(ref["oos_sharpe"], rel=1e-12)
 
     def test_all_losing(self) -> None:
-        windows = [
-            _make_wfa_window(i, 1.5, -0.5, 10.0, -3.0)
-            for i in range(8)
-        ]
+        windows = [_make_wfa_window(i, 1.5, -0.5, 10.0, -3.0) for i in range(8)]
         config = WFAConfig.default()
         wfa = WalkForwardAnalysis(config=config)
         result = wfa._aggregate_results(windows)

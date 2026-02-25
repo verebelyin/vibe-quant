@@ -85,17 +85,23 @@ class TestComputeFitnessScore:
         # PF=2.5 -> norm = 0.5
         # Return=0.5 -> norm = (0.5+1)/3 = 0.5
         # Score = 0.35*0.6 + 0.25*0.8 + 0.20*0.5 + 0.20*0.5 = 0.21+0.20+0.10+0.10 = 0.61
-        score = compute_fitness_score(sharpe_ratio=2.0, max_drawdown=0.2, profit_factor=2.5, total_return=0.5)
+        score = compute_fitness_score(
+            sharpe_ratio=2.0, max_drawdown=0.2, profit_factor=2.5, total_return=0.5
+        )
         assert score == pytest.approx(0.61, abs=1e-6)
 
     def test_perfect_scores(self) -> None:
         # Sharpe=4, MaxDD=0, PF=5, Return=2.0 => all components = 1.0 => score = 1.0
-        score = compute_fitness_score(sharpe_ratio=4.0, max_drawdown=0.0, profit_factor=5.0, total_return=2.0)
+        score = compute_fitness_score(
+            sharpe_ratio=4.0, max_drawdown=0.0, profit_factor=5.0, total_return=2.0
+        )
         assert score == pytest.approx(1.0, abs=1e-6)
 
     def test_worst_scores(self) -> None:
         # Sharpe=-1, MaxDD=1.0, PF=0, Return=-1.0 => all components = 0.0 => score = 0.0
-        score = compute_fitness_score(sharpe_ratio=-1.0, max_drawdown=1.0, profit_factor=0.0, total_return=-1.0)
+        score = compute_fitness_score(
+            sharpe_ratio=-1.0, max_drawdown=1.0, profit_factor=0.0, total_return=-1.0
+        )
         assert score == pytest.approx(0.0, abs=1e-6)
 
     def test_negative_sharpe_clamped(self) -> None:
@@ -353,9 +359,7 @@ class TestEvaluatePopulation:
 
         results = evaluate_population([chrom], bt_fn)
         assert results[0].complexity_penalty == pytest.approx(0.06)
-        assert results[0].adjusted_score == pytest.approx(
-            results[0].raw_score - 0.06, abs=1e-6
-        )
+        assert results[0].adjusted_score == pytest.approx(results[0].raw_score - 0.06, abs=1e-6)
 
     def test_filter_fn_integration(self) -> None:
         chrom = _make_chromosome()
@@ -419,7 +423,9 @@ class TestEdgeCases:
         assert 0.0 <= score <= 1.0
 
     def test_zero_everything(self) -> None:
-        score = compute_fitness_score(sharpe_ratio=0.0, max_drawdown=0.0, profit_factor=0.0, total_return=0.0)
+        score = compute_fitness_score(
+            sharpe_ratio=0.0, max_drawdown=0.0, profit_factor=0.0, total_return=0.0
+        )
         # Sharpe=0 norm=1/5=0.2, DD=1.0, PF=0.0, Return=0 norm=1/3=0.333
         # 0.35*0.2 + 0.25*1.0 + 0.20*0.0 + 0.20*0.333 = 0.07+0.25+0+0.0667 = 0.3867
         assert score == pytest.approx(0.3867, abs=1e-3)

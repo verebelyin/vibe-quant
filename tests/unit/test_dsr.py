@@ -95,31 +95,21 @@ class TestExpectedMaxSharpe:
 
     def test_more_trials_higher_expected_max(self, dsr: DeflatedSharpeRatio) -> None:
         """More trials means higher expected max Sharpe."""
-        result_10 = dsr.calculate(
-            observed_sharpe=1.0, num_trials=10, num_observations=252
-        )
-        result_100 = dsr.calculate(
-            observed_sharpe=1.0, num_trials=100, num_observations=252
-        )
-        result_1000 = dsr.calculate(
-            observed_sharpe=1.0, num_trials=1000, num_observations=252
-        )
+        result_10 = dsr.calculate(observed_sharpe=1.0, num_trials=10, num_observations=252)
+        result_100 = dsr.calculate(observed_sharpe=1.0, num_trials=100, num_observations=252)
+        result_1000 = dsr.calculate(observed_sharpe=1.0, num_trials=1000, num_observations=252)
 
         assert result_100.expected_max_sharpe > result_10.expected_max_sharpe
         assert result_1000.expected_max_sharpe > result_100.expected_max_sharpe
 
-    def test_expected_max_sharpe_reasonable_magnitude(
-        self, dsr: DeflatedSharpeRatio
-    ) -> None:
+    def test_expected_max_sharpe_reasonable_magnitude(self, dsr: DeflatedSharpeRatio) -> None:
         """Expected max Sharpe should be in reasonable range for typical N."""
         # For N=100, expected max ~= sqrt(2*ln(100)) ~= 3.03
         result = dsr.calculate(observed_sharpe=1.0, num_trials=100, num_observations=252)
         assert 2.5 < result.expected_max_sharpe < 3.5
 
         # For N=1000, expected max ~= sqrt(2*ln(1000)) ~= 3.72
-        result = dsr.calculate(
-            observed_sharpe=1.0, num_trials=1000, num_observations=252
-        )
+        result = dsr.calculate(observed_sharpe=1.0, num_trials=1000, num_observations=252)
         assert 3.0 < result.expected_max_sharpe < 4.0
 
 
@@ -133,12 +123,8 @@ class TestSharpeVariance:
 
     def test_more_observations_lower_variance(self, dsr: DeflatedSharpeRatio) -> None:
         """More observations = lower variance."""
-        result_100 = dsr.calculate(
-            observed_sharpe=1.0, num_trials=1, num_observations=100
-        )
-        result_1000 = dsr.calculate(
-            observed_sharpe=1.0, num_trials=1, num_observations=1000
-        )
+        result_100 = dsr.calculate(observed_sharpe=1.0, num_trials=1, num_observations=100)
+        result_1000 = dsr.calculate(observed_sharpe=1.0, num_trials=1, num_observations=1000)
 
         assert result_1000.sharpe_variance < result_100.sharpe_variance
 
@@ -202,9 +188,7 @@ class TestDSRCalculation:
         """Create DSR instance."""
         return DeflatedSharpeRatio()
 
-    def test_high_sharpe_single_trial_significant(
-        self, dsr: DeflatedSharpeRatio
-    ) -> None:
+    def test_high_sharpe_single_trial_significant(self, dsr: DeflatedSharpeRatio) -> None:
         """High Sharpe with single trial should be significant."""
         result = dsr.calculate(
             observed_sharpe=3.0,  # Very high
@@ -216,9 +200,7 @@ class TestDSRCalculation:
         assert result.is_significant
         assert result.p_value < 0.01
 
-    def test_high_sharpe_many_trials_not_significant(
-        self, dsr: DeflatedSharpeRatio
-    ) -> None:
+    def test_high_sharpe_many_trials_not_significant(self, dsr: DeflatedSharpeRatio) -> None:
         """High Sharpe from many trials may not be significant."""
         result = dsr.calculate(
             observed_sharpe=2.5,  # High but not extreme
@@ -292,9 +274,7 @@ class TestConvenienceMethods:
         """Create DSR instance."""
         return DeflatedSharpeRatio()
 
-    def test_confidence_level_inverse_of_pvalue(
-        self, dsr: DeflatedSharpeRatio
-    ) -> None:
+    def test_confidence_level_inverse_of_pvalue(self, dsr: DeflatedSharpeRatio) -> None:
         """Confidence level = 1 - p_value."""
         result = dsr.calculate(
             observed_sharpe=2.0,

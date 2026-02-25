@@ -14,32 +14,34 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 VALID_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h"})
 
 # Valid indicator types (MVP set from SPEC.md)
-VALID_INDICATOR_TYPES = frozenset({
-    # Trend
-    "EMA",
-    "SMA",
-    "WMA",
-    "DEMA",
-    "TEMA",
-    "ICHIMOKU",
-    # Momentum
-    "RSI",
-    "MACD",
-    "STOCH",
-    "CCI",
-    "WILLR",
-    "ROC",
-    # Volatility
-    "ATR",
-    "BBANDS",
-    "KC",
-    "DONCHIAN",
-    # Volume
-    "OBV",
-    "VWAP",
-    "MFI",
-    "VOLSMA",
-})
+VALID_INDICATOR_TYPES = frozenset(
+    {
+        # Trend
+        "EMA",
+        "SMA",
+        "WMA",
+        "DEMA",
+        "TEMA",
+        "ICHIMOKU",
+        # Momentum
+        "RSI",
+        "MACD",
+        "STOCH",
+        "CCI",
+        "WILLR",
+        "ROC",
+        # Volatility
+        "ATR",
+        "BBANDS",
+        "KC",
+        "DONCHIAN",
+        # Volume
+        "OBV",
+        "VWAP",
+        "MFI",
+        "VOLSMA",
+    }
+)
 
 # Valid price sources for indicators
 VALID_SOURCES = frozenset({"open", "high", "low", "close", "volume", "hl2", "hlc3", "ohlc4"})
@@ -51,15 +53,17 @@ VALID_STOP_LOSS_TYPES = frozenset({"fixed_pct", "atr_fixed", "atr_trailing"})
 VALID_TAKE_PROFIT_TYPES = frozenset({"fixed_pct", "atr_fixed", "risk_reward"})
 
 # Valid days of week
-VALID_DAYS = frozenset({
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-})
+VALID_DAYS = frozenset(
+    {
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    }
+)
 
 
 class IndicatorConfig(BaseModel):
@@ -138,7 +142,19 @@ class IndicatorConfig(BaseModel):
                 self.slow_period = 26
             if self.signal_period is None:
                 self.signal_period = 9
-        elif self.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "VOLSMA"}:
+        elif self.type in {
+            "RSI",
+            "EMA",
+            "SMA",
+            "WMA",
+            "DEMA",
+            "TEMA",
+            "ATR",
+            "CCI",
+            "ROC",
+            "MFI",
+            "VOLSMA",
+        }:
             if self.period is None:
                 self.period = 14  # Default period
         elif self.type == "BBANDS":
@@ -232,9 +248,7 @@ class TimeFilterConfig(BaseModel):
 
     allowed_sessions: list[SessionConfig] = Field(default_factory=list)
     blocked_days: list[str] = Field(default_factory=list)
-    avoid_around_funding: FundingAvoidanceConfig = Field(
-        default_factory=FundingAvoidanceConfig
-    )
+    avoid_around_funding: FundingAvoidanceConfig = Field(default_factory=FundingAvoidanceConfig)
 
     @field_validator("blocked_days")
     @classmethod
@@ -478,7 +492,9 @@ class StrategyDSL(BaseModel):
                 # More permissive check
                 pass
             if not name or name.startswith("_") or name[0].isdigit():
-                msg = f"Invalid indicator name '{name!r}'. Must be non-empty and start with a letter."
+                msg = (
+                    f"Invalid indicator name '{name!r}'. Must be non-empty and start with a letter."
+                )
                 raise ValueError(msg)
         return v
 

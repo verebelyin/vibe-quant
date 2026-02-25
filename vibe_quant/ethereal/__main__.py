@@ -42,9 +42,7 @@ def main() -> int:
         default=",".join(ETHEREAL_TIMEFRAMES),
         help="Comma-separated timeframes to ingest (default: all)",
     )
-    ingest_parser.add_argument(
-        "--years", type=int, default=2, help="Years of history to download"
-    )
+    ingest_parser.add_argument("--years", type=int, default=2, help="Years of history to download")
     ingest_parser.add_argument(
         "--no-funding", action="store_true", help="Skip funding rate ingestion"
     )
@@ -53,9 +51,7 @@ def main() -> int:
     subparsers.add_parser("status", help="Show data status")
 
     # Catalog command
-    catalog_parser = subparsers.add_parser(
-        "catalog", help="Convert archive to ParquetDataCatalog"
-    )
+    catalog_parser = subparsers.add_parser("catalog", help="Convert archive to ParquetDataCatalog")
     catalog_parser.add_argument(
         "--symbols",
         type=str,
@@ -106,9 +102,7 @@ def main() -> int:
 
     elif args.command == "catalog":
         cat_symbols: list[str] | None = (
-            [s.strip() for s in args.symbols.split(",")]
-            if args.symbols
-            else None
+            [s.strip() for s in args.symbols.split(",")] if args.symbols else None
         )
         timeframes = [t.strip() for t in args.timeframes.split(",")]
 

@@ -1,13 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import path from "node:path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      // @ts-expect-error -- import.meta.dirname is available in Node 21+ / Vite 7
+      "@": `${import.meta.dirname}/src`,
     },
   },
   build: {

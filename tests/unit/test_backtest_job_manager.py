@@ -522,12 +522,9 @@ class TestRunWithHeartbeat:
 
     def test_stop_fn_terminates_thread(self, tmp_path: Path) -> None:
         """stop_fn should terminate the heartbeat thread."""
-        import threading
-
         from vibe_quant.jobs.manager import run_with_heartbeat
 
         db_path = tmp_path / "hb2.db"
-        initial_threads = threading.active_count()
 
         manager, stop_fn = run_with_heartbeat(run_id=1, db_path=db_path, interval=1)
         # Thread should have been created

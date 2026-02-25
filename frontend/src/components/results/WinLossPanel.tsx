@@ -1,3 +1,4 @@
+import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { MetricCard } from "@/components/ui";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,7 +19,7 @@ function trend(value: number | null | undefined): "up" | "down" | "neutral" {
 
 export function WinLossPanel({ runId }: WinLossPanelProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
-  const data = query.data?.data;
+  const data = query.data?.data as BacktestResultResponse | undefined;
 
   if (query.isLoading) {
     return (

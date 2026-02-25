@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import type { PaperStartRequest } from "@/api/generated/models";
 import { customInstance } from "@/api/client";
 import {
   useGetStatusApiPaperStatusGet,
@@ -133,7 +134,7 @@ export function SessionControl() {
           ...(traderId && { trader_id: traderId }),
           ...(apiKey && { api_key: apiKey }),
           ...(apiSecret && { api_secret: apiSecret }),
-        } as Record<string, unknown>,
+        } as PaperStartRequest,
       },
       {
         onSuccess: (resp) => {

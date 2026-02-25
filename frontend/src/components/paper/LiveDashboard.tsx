@@ -72,7 +72,7 @@ function EquityTooltip({
   payload?: EquityTooltipPayload[];
 }) {
   if (!active || !payload?.length) return null;
-  const point = payload[0];
+  const point = payload[0]!;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">{point.payload.time}</p>

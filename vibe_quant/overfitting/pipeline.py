@@ -204,7 +204,11 @@ class OverfittingPipeline:
                 # Parse parameters for param_grid (may be JSON string or dict)
                 raw_params = candidate.get("parameters", "{}")
                 try:
-                    params = json.loads(raw_params) if isinstance(raw_params, str) else (raw_params or {})
+                    params = (
+                        json.loads(raw_params)
+                        if isinstance(raw_params, str)
+                        else (raw_params or {})
+                    )
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON in parameters for candidate %d", candidate["id"])
                     params = {}
@@ -265,7 +269,11 @@ class OverfittingPipeline:
 
             # Normalize types for CandidateResult (expects str parameters, float sharpe/return)
             raw_params_val = candidate.get("parameters", "{}")
-            norm_params = json.dumps(raw_params_val) if isinstance(raw_params_val, dict) else str(raw_params_val or "{}")
+            norm_params = (
+                json.dumps(raw_params_val)
+                if isinstance(raw_params_val, dict)
+                else str(raw_params_val or "{}")
+            )
             result = CandidateResult(
                 sweep_result_id=candidate["id"],
                 run_id=candidate["run_id"],
@@ -428,26 +436,44 @@ class OverfittingPipeline:
         ]
 
         if result.config.enable_dsr:
-            pct = (result.passed_dsr / result.total_candidates * 100) if result.total_candidates else 0
-            lines.append(f"  DSR (Deflated Sharpe):   {result.passed_dsr}/{result.total_candidates} ({pct:.1f}%)")
+            pct = (
+                (result.passed_dsr / result.total_candidates * 100)
+                if result.total_candidates
+                else 0
+            )
+            lines.append(
+                f"  DSR (Deflated Sharpe):   {result.passed_dsr}/{result.total_candidates} ({pct:.1f}%)"
+            )
         else:
             lines.append("  DSR (Deflated Sharpe):   DISABLED")
 
         if result.config.enable_wfa:
-            pct = (result.passed_wfa / result.total_candidates * 100) if result.total_candidates else 0
-            lines.append(f"  WFA (Walk-Forward):      {result.passed_wfa}/{result.total_candidates} ({pct:.1f}%)")
+            pct = (
+                (result.passed_wfa / result.total_candidates * 100)
+                if result.total_candidates
+                else 0
+            )
+            lines.append(
+                f"  WFA (Walk-Forward):      {result.passed_wfa}/{result.total_candidates} ({pct:.1f}%)"
+            )
         else:
             lines.append("  WFA (Walk-Forward):      DISABLED")
 
         if result.config.enable_purged_kfold:
-            pct = (result.passed_cv / result.total_candidates * 100) if result.total_candidates else 0
-            lines.append(f"  Purged K-Fold CV:        {result.passed_cv}/{result.total_candidates} ({pct:.1f}%)")
+            pct = (
+                (result.passed_cv / result.total_candidates * 100) if result.total_candidates else 0
+            )
+            lines.append(
+                f"  Purged K-Fold CV:        {result.passed_cv}/{result.total_candidates} ({pct:.1f}%)"
+            )
         else:
             lines.append("  Purged K-Fold CV:        DISABLED")
 
         lines.append("")
         pct = (result.passed_all / result.total_candidates * 100) if result.total_candidates else 0
-        lines.append(f"  PASSED ALL FILTERS:      {result.passed_all}/{result.total_candidates} ({pct:.1f}%)")
+        lines.append(
+            f"  PASSED ALL FILTERS:      {result.passed_all}/{result.total_candidates} ({pct:.1f}%)"
+        )
         lines.append("")
 
         if result.filtered_candidates:
@@ -456,11 +482,19 @@ class OverfittingPipeline:
             lines.append("-" * 70)
 
             for i, c in enumerate(result.filtered_candidates[:10]):
-                lines.append(f"\n  [{i+1}] {c.strategy_name}")
-                lines.append(f"      Sharpe: {c.sharpe_ratio:.3f}  Return: {c.total_return * 100:.2f}%")
-                lines.append(f"      DSR: {'PASS' if c.passed_dsr else ('FAIL' if c.passed_dsr is False else 'N/A')}")
-                lines.append(f"      WFA: {'PASS' if c.passed_wfa else ('FAIL' if c.passed_wfa is False else 'N/A')}")
-                lines.append(f"      CV:  {'PASS' if c.passed_cv else ('FAIL' if c.passed_cv is False else 'N/A')}")
+                lines.append(f"\n  [{i + 1}] {c.strategy_name}")
+                lines.append(
+                    f"      Sharpe: {c.sharpe_ratio:.3f}  Return: {c.total_return * 100:.2f}%"
+                )
+                lines.append(
+                    f"      DSR: {'PASS' if c.passed_dsr else ('FAIL' if c.passed_dsr is False else 'N/A')}"
+                )
+                lines.append(
+                    f"      WFA: {'PASS' if c.passed_wfa else ('FAIL' if c.passed_wfa is False else 'N/A')}"
+                )
+                lines.append(
+                    f"      CV:  {'PASS' if c.passed_cv else ('FAIL' if c.passed_cv is False else 'N/A')}"
+                )
 
         else:
             lines.append("-" * 70)

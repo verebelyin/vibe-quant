@@ -93,7 +93,7 @@ export function DiscoveryProgress({
 
       setHistory((prev) => {
         // avoid duplicates
-        if (prev.length > 0 && prev[prev.length - 1].generation === gen) return prev;
+        if (prev.length > 0 && prev[prev.length - 1]!.generation === gen) return prev;
         return [...prev, { generation: gen, best, avg, worst }];
       });
 
@@ -117,18 +117,18 @@ export function DiscoveryProgress({
     }
   }, [ws.lastMessage, handleMessage]);
 
-  const currentGen = history.length > 0 ? history[history.length - 1].generation : 0;
+  const currentGen = history.length > 0 ? history[history.length - 1]!.generation : 0;
   const progressPct = totalGenerations > 0 ? Math.round((currentGen / totalGenerations) * 100) : 0;
 
   const isConverging = useMemo(() => {
     if (history.length < convergenceWindow + 1) return false;
     const recent = history.slice(-convergenceWindow);
-    const firstBest = recent[0].best;
-    const lastBest = recent[recent.length - 1].best;
+    const firstBest = recent[0]!.best;
+    const lastBest = recent[recent.length - 1]!.best;
     return Math.abs(lastBest - firstBest) < convergenceThreshold;
   }, [history, convergenceWindow, convergenceThreshold]);
 
-  const currentBestFitness = history.length > 0 ? history[history.length - 1].best : null;
+  const currentBestFitness = history.length > 0 ? history[history.length - 1]!.best : null;
 
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">
@@ -261,7 +261,7 @@ function MetricItem({
 }: {
   label: string;
   value: string;
-  positive?: boolean;
+  positive?: boolean | undefined;
 }) {
   return (
     <div>

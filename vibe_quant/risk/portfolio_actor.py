@@ -155,9 +155,7 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
 
         for instrument_id, exposure in self._state.instrument_exposures.items():
             if exposure >= self._risk_config.max_single_instrument_pct:
-                self._halt_portfolio(
-                    f"instrument_concentration:{instrument_id}", exposure
-                )
+                self._halt_portfolio(f"instrument_concentration:{instrument_id}", exposure)
                 return RiskState.HALTED
 
         # Portfolio heat check

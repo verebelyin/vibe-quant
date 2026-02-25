@@ -70,13 +70,9 @@ class TelegramConfig:
         chat_id = os.getenv(ENV_TELEGRAM_CHAT_ID)
 
         if not bot_token:
-            raise ConfigurationError(
-                f"Missing {ENV_TELEGRAM_BOT_TOKEN} environment variable"
-            )
+            raise ConfigurationError(f"Missing {ENV_TELEGRAM_BOT_TOKEN} environment variable")
         if not chat_id:
-            raise ConfigurationError(
-                f"Missing {ENV_TELEGRAM_CHAT_ID} environment variable"
-            )
+            raise ConfigurationError(f"Missing {ENV_TELEGRAM_CHAT_ID} environment variable")
 
         return cls(bot_token=bot_token, chat_id=chat_id)
 
@@ -264,12 +260,16 @@ class TelegramBot:
                 # starts from a known-good connection state.
                 await self.close()
                 if attempt < max_attempts - 1:
-                    delay = 1.0 * (2 ** attempt)  # 1s, 2s
+                    delay = 1.0 * (2**attempt)  # 1s, 2s
                     logger.warning(
                         "Alert send attempt %d/%d failed: %s, retrying in %.0fs",
-                        attempt + 1, max_attempts, exc, delay,
+                        attempt + 1,
+                        max_attempts,
+                        exc,
+                        delay,
                     )
                     import asyncio
+
                     await asyncio.sleep(delay)
                 else:
                     logger.warning("Alert send failed after %d attempts: %s", max_attempts, exc)
@@ -286,9 +286,7 @@ class TelegramBot:
         Returns:
             True if sent successfully.
         """
-        return await self.send_alert(
-            AlertType.ERROR, message, bypass_rate_limit=bypass_rate_limit
-        )
+        return await self.send_alert(AlertType.ERROR, message, bypass_rate_limit=bypass_rate_limit)
 
     async def send_circuit_breaker(
         self,
@@ -339,9 +337,7 @@ class TelegramBot:
             logger.warning("Invalid trade alert: quantity=%s price=%s", quantity, price)
             return False
         message = f"{side} {quantity} {symbol} @ {price.quantize(Decimal('0.01'))}"
-        return await self.send_alert(
-            AlertType.TRADE, message, bypass_rate_limit=bypass_rate_limit
-        )
+        return await self.send_alert(AlertType.TRADE, message, bypass_rate_limit=bypass_rate_limit)
 
     async def send_daily_summary(
         self,

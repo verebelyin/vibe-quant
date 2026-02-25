@@ -362,7 +362,7 @@ export function StrategyWizard({ onCancel }: StrategyWizardProps) {
       {
         data: {
           name,
-          description: description || undefined,
+          description: description || null,
           strategy_type: config.general.strategy_type,
           dsl_config: config as unknown as Record<string, unknown>,
         },
@@ -375,7 +375,7 @@ export function StrategyWizard({ onCancel }: StrategyWizardProps) {
           toast.success("Strategy created");
           navigate({
             to: "/strategies/$strategyId",
-            params: { strategyId: String(res.data.id) },
+            params: { strategyId: String((res.data as { id: number }).id) },
           });
         },
         onError: () => toast.error("Failed to create strategy"),

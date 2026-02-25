@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { TradeResponse } from "@/api/generated/models";
 import { useGetTradesApiResultsRunsRunIdTradesGet } from "@/api/generated/results/results";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +10,7 @@ interface LiquidationSummaryProps {
 
 export function LiquidationSummary({ runId }: LiquidationSummaryProps) {
   const query = useGetTradesApiResultsRunsRunIdTradesGet(runId);
-  const trades = query.data?.data;
+  const trades = query.data?.data as TradeResponse[] | undefined;
 
   const stats = useMemo(() => {
     if (!trades || trades.length === 0) return null;

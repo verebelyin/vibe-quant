@@ -45,9 +45,7 @@ def _mock_backtest_few_trades(chrom: StrategyChromosome) -> dict[str, Any]:
     }
 
 
-def _mock_filter(
-    chrom: StrategyChromosome, bt: dict[str, Any]
-) -> dict[str, bool]:
+def _mock_filter(chrom: StrategyChromosome, bt: dict[str, Any]) -> dict[str, bool]:
     """Mock filter: pass if sharpe > 1."""
     return {"sharpe_check": bt["sharpe_ratio"] > 1.0}
 

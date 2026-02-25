@@ -1,12 +1,12 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-interface MetricCardProps {
+export interface MetricCardProps {
   label: string;
   value: string | number;
-  subtitle?: string;
-  trend?: "up" | "down" | "neutral";
-  className?: string;
+  subtitle?: string | undefined;
+  trend?: "up" | "down" | "neutral" | undefined;
+  className?: string | undefined;
 }
 
 const trendConfig = {

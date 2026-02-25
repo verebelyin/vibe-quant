@@ -159,9 +159,7 @@ class DeflatedSharpeRatio:
                 float("inf") if observed_sharpe > expected_max_sharpe else float("-inf")
             )
         else:
-            deflated_sharpe = (observed_sharpe - expected_max_sharpe) / math.sqrt(
-                sharpe_variance
-            )
+            deflated_sharpe = (observed_sharpe - expected_max_sharpe) / math.sqrt(sharpe_variance)
 
         # Compute p-value (probability of observing this DSR or higher under null)
         # Using survival function (1 - CDF) for upper tail
@@ -244,7 +242,9 @@ class DeflatedSharpeRatio:
 
         # Higher-order correction terms using pre-computed squared constant
         inv_log_n = 1.0 / log_n
-        correction = 1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
+        correction = (
+            1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
+        )
 
         return base * correction
 

@@ -108,8 +108,12 @@ class TestCrossover:
         b = _make_chromosome(n_entry=2, n_exit=1)
         for _ in range(50):
             c1, c2 = crossover(a, b)
-            assert is_valid_chromosome(c1), f"child1 invalid: {len(c1.entry_genes)} entry, {len(c1.exit_genes)} exit"
-            assert is_valid_chromosome(c2), f"child2 invalid: {len(c2.entry_genes)} entry, {len(c2.exit_genes)} exit"
+            assert is_valid_chromosome(c1), (
+                f"child1 invalid: {len(c1.entry_genes)} entry, {len(c1.exit_genes)} exit"
+            )
+            assert is_valid_chromosome(c2), (
+                f"child2 invalid: {len(c2.entry_genes)} entry, {len(c2.exit_genes)} exit"
+            )
 
     def test_offspring_entry_gene_count_in_bounds(self) -> None:
         random.seed(0)
@@ -196,7 +200,11 @@ class TestMutation:
             new_thresholds = [g.threshold for g in mutated.entry_genes + mutated.exit_genes]
             orig_conditions = [g.condition for g in chrom.entry_genes + chrom.exit_genes]
             new_conditions = [g.condition for g in mutated.entry_genes + mutated.exit_genes]
-            if orig_indicators != new_indicators or orig_thresholds != new_thresholds or orig_conditions != new_conditions:
+            if (
+                orig_indicators != new_indicators
+                or orig_thresholds != new_thresholds
+                or orig_conditions != new_conditions
+            ):
                 changed_count += 1
         # At high mutation rate, nearly all should change
         assert changed_count > 40, f"Only {changed_count}/50 changed at rate=1.0"

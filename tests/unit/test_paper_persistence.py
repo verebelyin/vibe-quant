@@ -159,9 +159,7 @@ class TestStatePersistence:
     def test_list_checkpoints(self, persistence: StatePersistence) -> None:
         """Should list checkpoints in order."""
         for i in range(5):
-            persistence.save_checkpoint(
-                StateCheckpoint(trader_id="PAPER-TEST", balance={"seq": i})
-            )
+            persistence.save_checkpoint(StateCheckpoint(trader_id="PAPER-TEST", balance={"seq": i}))
 
         checkpoints = persistence.list_checkpoints(limit=3)
         assert len(checkpoints) == 3
@@ -173,9 +171,7 @@ class TestStatePersistence:
     def test_delete_old_checkpoints(self, persistence: StatePersistence) -> None:
         """Should delete old checkpoints keeping recent."""
         for i in range(10):
-            persistence.save_checkpoint(
-                StateCheckpoint(trader_id="PAPER-TEST", balance={"seq": i})
-            )
+            persistence.save_checkpoint(StateCheckpoint(trader_id="PAPER-TEST", balance={"seq": i}))
 
         deleted = persistence.delete_old_checkpoints(keep_count=3)
         assert deleted == 7
@@ -207,9 +203,7 @@ class TestPeriodicCheckpointing:
         p.close()
 
     @pytest.mark.asyncio
-    async def test_periodic_checkpoint_creates_records(
-        self, persistence: StatePersistence
-    ) -> None:
+    async def test_periodic_checkpoint_creates_records(self, persistence: StatePersistence) -> None:
         """Periodic checkpointing should create records at interval."""
         counter = 0
 
@@ -233,9 +227,7 @@ class TestPeriodicCheckpointing:
         assert len(checkpoints) >= 2
 
     @pytest.mark.asyncio
-    async def test_periodic_checkpoint_async_callback(
-        self, persistence: StatePersistence
-    ) -> None:
+    async def test_periodic_checkpoint_async_callback(self, persistence: StatePersistence) -> None:
         """Should work with async state callback."""
 
         async def get_state_async() -> StateCheckpoint:
@@ -254,9 +246,7 @@ class TestPeriodicCheckpointing:
         assert checkpoints[0].balance["async"] is True
 
     @pytest.mark.asyncio
-    async def test_stop_periodic_checkpointing(
-        self, persistence: StatePersistence
-    ) -> None:
+    async def test_stop_periodic_checkpointing(self, persistence: StatePersistence) -> None:
         """Should stop checkpointing when requested."""
         call_count = 0
 

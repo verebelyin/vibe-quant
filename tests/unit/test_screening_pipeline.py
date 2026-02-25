@@ -200,9 +200,7 @@ class TestBuildParameterGrid:
 class TestFilterByMetrics:
     """Tests for filter_by_metrics function."""
 
-    def test_default_filters_pass_good_results(
-        self, sample_metrics: list[BacktestMetrics]
-    ) -> None:
+    def test_default_filters_pass_good_results(self, sample_metrics: list[BacktestMetrics]) -> None:
         """Default filters should pass results meeting all criteria."""
         filters = MetricFilters()
         result = filter_by_metrics(sample_metrics, filters)
@@ -240,8 +238,20 @@ class TestFilterByMetrics:
     def test_max_drawdown_filter(self) -> None:
         """Results above max_drawdown should be filtered out."""
         metrics = [
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.40, total_trades=100),
-            BacktestMetrics(parameters={}, sharpe_ratio=1.0, profit_factor=1.5, max_drawdown=0.20, total_trades=100),
+            BacktestMetrics(
+                parameters={},
+                sharpe_ratio=1.0,
+                profit_factor=1.5,
+                max_drawdown=0.40,
+                total_trades=100,
+            ),
+            BacktestMetrics(
+                parameters={},
+                sharpe_ratio=1.0,
+                profit_factor=1.5,
+                max_drawdown=0.20,
+                total_trades=100,
+            ),
         ]
         filters = MetricFilters(max_drawdown=0.30)
         result = filter_by_metrics(metrics, filters)
@@ -415,32 +425,24 @@ class TestComputeParetoFront:
 class TestScreeningPipeline:
     """Tests for ScreeningPipeline class."""
 
-    def test_init_builds_parameter_grid(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_init_builds_parameter_grid(self, strategy_with_sweep: StrategyDSL) -> None:
         """Pipeline should build parameter grid on init."""
         pipeline = ScreeningPipeline(dsl=strategy_with_sweep)
 
         # 3 * 3 = 9 combinations
         assert pipeline.num_combinations == 9
 
-    def test_init_no_sweep_has_one_combination(
-        self, strategy_no_sweep: StrategyDSL
-    ) -> None:
+    def test_init_no_sweep_has_one_combination(self, strategy_no_sweep: StrategyDSL) -> None:
         """Strategy without sweep should have 1 combination (empty params)."""
         pipeline = ScreeningPipeline(dsl=strategy_no_sweep)
         assert pipeline.num_combinations == 1
 
-    def test_strategy_name_from_dsl(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_strategy_name_from_dsl(self, strategy_with_sweep: StrategyDSL) -> None:
         """Strategy name should come from DSL."""
         pipeline = ScreeningPipeline(dsl=strategy_with_sweep)
         assert pipeline.strategy_name == "test_minimal"
 
-    def test_run_returns_screening_result(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_run_returns_screening_result(self, strategy_with_sweep: StrategyDSL) -> None:
         """run() should return ScreeningResult with all fields."""
         pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
         result = pipeline.run()
@@ -451,9 +453,7 @@ class TestScreeningPipeline:
         assert isinstance(result.results, list)
         assert isinstance(result.pareto_optimal_indices, list)
 
-    def test_run_with_filters(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_run_with_filters(self, strategy_with_sweep: StrategyDSL) -> None:
         """run() should apply filters to results."""
         pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
 
@@ -468,9 +468,7 @@ class TestScreeningPipeline:
         # Most mock results won't pass these strict filters
         assert result.passed_filters <= result.total_combinations
 
-    def test_run_calls_progress_callback(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_run_calls_progress_callback(self, strategy_with_sweep: StrategyDSL) -> None:
         """run() should call progress callback."""
         pipeline = ScreeningPipeline(dsl=strategy_with_sweep, max_workers=1)
 
@@ -485,9 +483,7 @@ class TestScreeningPipeline:
         # All calls should have total = 9
         assert all(total == 9 for _, total in progress_calls)
 
-    def test_custom_backtest_runner(
-        self, strategy_no_sweep: StrategyDSL
-    ) -> None:
+    def test_custom_backtest_runner(self, strategy_no_sweep: StrategyDSL) -> None:
         """Pipeline should use custom backtest runner.
 
         Note: ProcessPoolExecutor can't pickle local functions, so we test
@@ -510,9 +506,7 @@ class TestScreeningPipeline:
 class TestCreateScreeningPipeline:
     """Tests for create_screening_pipeline factory."""
 
-    def test_creates_pipeline_with_mock(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_creates_pipeline_with_mock(self, strategy_with_sweep: StrategyDSL) -> None:
         """Factory should create pipeline with mock runner."""
         pipeline = create_screening_pipeline(
             dsl=strategy_with_sweep,
@@ -522,9 +516,7 @@ class TestCreateScreeningPipeline:
         assert isinstance(pipeline, ScreeningPipeline)
         assert pipeline.num_combinations == 9
 
-    def test_respects_max_workers(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_respects_max_workers(self, strategy_with_sweep: StrategyDSL) -> None:
         """Factory should pass max_workers."""
         pipeline = create_screening_pipeline(
             dsl=strategy_with_sweep,
@@ -543,9 +535,7 @@ class TestCreateScreeningPipeline:
 class TestPipelineDatabaseIntegration:
     """Integration tests for pipeline with database."""
 
-    def test_save_results_to_database(
-        self, strategy_with_sweep: StrategyDSL
-    ) -> None:
+    def test_save_results_to_database(self, strategy_with_sweep: StrategyDSL) -> None:
         """Pipeline should save results to database."""
         from vibe_quant.db.state_manager import StateManager
 

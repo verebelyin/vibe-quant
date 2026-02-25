@@ -71,14 +71,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         pipeline.save_results(result, state, args.run_id)
         state.update_backtest_run_status(args.run_id, "completed")
         manager.mark_completed(args.run_id)
-        print(f"Screening complete: {result.total_combinations} combos, {len(result.pareto_optimal_indices)} Pareto-optimal")
+        print(
+            f"Screening complete: {result.total_combinations} combos, {len(result.pareto_optimal_indices)} Pareto-optimal"
+        )
         return 0
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         try:
-            state.update_backtest_run_status(
-                args.run_id, "failed", error_message=error_msg
-            )
+            state.update_backtest_run_status(args.run_id, "failed", error_message=error_msg)
             manager.mark_completed(args.run_id, error=error_msg)
         except Exception:
             pass
@@ -210,7 +210,9 @@ def build_parser() -> argparse.ArgumentParser:
     # run subcommand
     run_parser = subparsers.add_parser("run", help="Run screening pipeline")
     run_parser.add_argument("--run-id", type=int, required=True, help="Backtest run ID")
-    run_parser.add_argument("--strategy-id", type=int, default=None, help="Strategy ID (uses run's strategy if omitted)")
+    run_parser.add_argument(
+        "--strategy-id", type=int, default=None, help="Strategy ID (uses run's strategy if omitted)"
+    )
     run_parser.add_argument("--symbols", type=str, nargs="+", default=None, help="Override symbols")
     run_parser.add_argument("--timeframe", type=str, default=None, help="Override timeframe")
     run_parser.add_argument("--db", type=str, default=None, help="Database path")

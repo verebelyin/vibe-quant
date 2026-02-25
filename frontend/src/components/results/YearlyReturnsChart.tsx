@@ -56,11 +56,11 @@ function computeYearlyReturns(data: EquityCurvePoint[]): YearReturn[] {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const point = payload[0];
+  const point = payload[0]!;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">{point.payload.year}</p>
-      <p className="font-medium text-foreground">{point.value.toFixed(2)}%</p>
+      <p className="font-medium text-foreground">{(point.value as number).toFixed(2)}%</p>
     </div>
   );
 }

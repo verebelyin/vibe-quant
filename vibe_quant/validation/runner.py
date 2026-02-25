@@ -153,9 +153,7 @@ class ValidationRunner:
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
             try:
-                self._state.update_backtest_run_status(
-                    run_id, "failed", error_message=error_msg
-                )
+                self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
             except Exception:
                 logger.exception("Failed to update run %d status to failed", run_id)
             raise ValidationRunnerError(error_msg) from exc
@@ -304,9 +302,7 @@ class ValidationRunner:
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
             try:
-                self._state.update_backtest_run_status(
-                    run_id, "failed", error_message=error_msg
-                )
+                self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
             except Exception:
                 logger.exception("Failed to update run %d status to failed", run_id)
             raise ValidationRunnerError(error_msg) from exc
@@ -393,9 +389,10 @@ class ValidationRunner:
         def _trade_weighted_avg(attr: str) -> float:
             if total_trades == 0:
                 return 0.0
-            return sum(
-                getattr(r, attr) * r.total_trades for r in window_results
-            ) / total_trades
+            weighted_sum: float = sum(
+                float(getattr(r, attr)) * r.total_trades for r in window_results
+            )
+            return weighted_sum / total_trades
 
         # Win rate from actual counts, not averaged percentages
         win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
@@ -417,9 +414,7 @@ class ValidationRunner:
             cagr=_trade_weighted_avg("cagr"),
             calmar_ratio=_trade_weighted_avg("calmar_ratio"),
             volatility_annual=_trade_weighted_avg("volatility_annual"),
-            max_drawdown_duration_days=max(
-                r.max_drawdown_duration_days for r in window_results
-            ),
+            max_drawdown_duration_days=max(r.max_drawdown_duration_days for r in window_results),
             winning_trades=winning_trades,
             losing_trades=losing_trades,
             avg_trade_duration_hours=_trade_weighted_avg("avg_trade_duration_hours"),
@@ -603,8 +598,7 @@ class ValidationRunner:
         config_cls_name = f"{class_name}Config"
         if not hasattr(module, strategy_cls_name) or not hasattr(module, config_cls_name):
             msg = (
-                f"Compiled module missing expected classes: "
-                f"{strategy_cls_name}, {config_cls_name}"
+                f"Compiled module missing expected classes: {strategy_cls_name}, {config_cls_name}"
             )
             raise ValidationRunnerError(msg)
 
@@ -669,8 +663,7 @@ class ValidationRunner:
         )
 
         logger.info(
-            "Starting NautilusTrader backtest for run %d: "
-            "%d symbols, %d timeframes, %s to %s",
+            "Starting NautilusTrader backtest for run %d: %d symbols, %d timeframes, %s to %s",
             run_id,
             len(symbols),
             len(all_timeframes),

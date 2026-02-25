@@ -237,9 +237,7 @@ class PurgedKFold:
 
         # Minimum samples needed per fold after gaps
         min_samples_per_fold = 10
-        if n_samples < self.n_splits * min_samples_per_fold + total_gap * (
-            self.n_splits - 1
-        ):
+        if n_samples < self.n_splits * min_samples_per_fold + total_gap * (self.n_splits - 1):
             msg = (
                 f"Not enough samples ({n_samples}) for {self.n_splits} folds "
                 f"with purge={purge_len} and embargo={embargo_len}. "
@@ -250,8 +248,9 @@ class PurgedKFold:
         # Pre-compute fold boundaries once (avoid repeated multiplication)
         fold_size = n_samples // self.n_splits
         fold_starts = [i * fold_size for i in range(self.n_splits)]
-        fold_ends = [fold_starts[i + 1] if i < self.n_splits - 1 else n_samples
-                     for i in range(self.n_splits)]
+        fold_ends = [
+            fold_starts[i + 1] if i < self.n_splits - 1 else n_samples for i in range(self.n_splits)
+        ]
 
         for fold_idx in range(self.n_splits):
             # Test set is the current fold
@@ -288,7 +287,7 @@ class PurgedKFold:
             offset = 0
             for r in train_ranges:
                 rlen = len(r)
-                train_indices[offset:offset + rlen] = r
+                train_indices[offset : offset + rlen] = r
                 offset += rlen
 
             yield train_indices, test_indices
@@ -359,9 +358,7 @@ class PurgedKFoldCV:
 
         return self._aggregate_results(fold_results)
 
-    def run_with_results(
-        self, n_samples: int, fold_results: list[FoldResult]
-    ) -> CVResult:
+    def run_with_results(self, n_samples: int, fold_results: list[FoldResult]) -> CVResult:
         """Aggregate pre-computed fold results.
 
         Use when fold results are computed externally (e.g., parallel execution).
@@ -377,10 +374,7 @@ class PurgedKFoldCV:
             ValueError: If number of results doesn't match n_splits.
         """
         if len(fold_results) != self.config.n_splits:
-            msg = (
-                f"Expected {self.config.n_splits} fold results, "
-                f"got {len(fold_results)}"
-            )
+            msg = f"Expected {self.config.n_splits} fold results, got {len(fold_results)}"
             raise ValueError(msg)
 
         return self._aggregate_results(fold_results)
@@ -433,9 +427,7 @@ class PurgedKFoldCV:
         else:
             std_sharpe = 0.0
 
-        is_robust = (mean_sharpe > self.min_oos_sharpe) and (
-            std_sharpe < self.max_oos_sharpe_std
-        )
+        is_robust = (mean_sharpe > self.min_oos_sharpe) and (std_sharpe < self.max_oos_sharpe_std)
 
         return CVResult(
             fold_results=list(fold_results),

@@ -47,12 +47,16 @@ async def list_runs_summary(
     status: str | None = None,
 ) -> RunSummaryResponse:
     if run_mode and run_mode not in _VALID_RUN_MODES:
-        raise HTTPException(status_code=400, detail=f"Invalid run_mode '{run_mode}'. Must be one of: {', '.join(_VALID_RUN_MODES)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid run_mode '{run_mode}'. Must be one of: {', '.join(_VALID_RUN_MODES)}",
+        )
     if status and status not in _VALID_STATUSES:
-        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}")
-    rows = mgr.list_runs_with_results(
-        strategy_id=strategy_id, run_mode=run_mode, status=status
-    )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}",
+        )
+    rows = mgr.list_runs_with_results(strategy_id=strategy_id, run_mode=run_mode, status=status)
     runs = [RunSummaryItem(**r) for r in rows]
     return RunSummaryResponse(runs=runs)
 
@@ -66,7 +70,10 @@ async def list_runs(
     end_date: str | None = None,
 ) -> RunListResponse:
     if status and status not in _VALID_STATUSES:
-        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Must be one of: {', '.join(_VALID_STATUSES)}",
+        )
     rows = mgr.list_backtest_runs(strategy_id=strategy_id, status=status)
     runs = [BacktestRunResponse(**r) for r in rows]
     if start_date:
@@ -265,7 +272,9 @@ async def update_notes(
     _ensure_run_exists(mgr, run_id)
     row = mgr.get_backtest_result(run_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="No results for this run — notes require completed results")
+        raise HTTPException(
+            status_code=404, detail="No results for this run — notes require completed results"
+        )
     mgr.update_result_notes(run_id, body.notes)
     row = mgr.get_backtest_result(run_id)
     if row is None:  # pragma: no cover

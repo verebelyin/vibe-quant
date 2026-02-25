@@ -119,9 +119,7 @@ class NTScreeningRunner:
 
         self._compiled = True
 
-    def _run_backtest(
-        self, params: dict[str, float | int], start_time: float
-    ) -> BacktestMetrics:
+    def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
         """Execute the NautilusTrader backtest."""
         from nautilus_trader.backtest.node import BacktestNode
         from nautilus_trader.config import (
@@ -278,8 +276,15 @@ class NTScreeningRunner:
         metrics.total_trades = bt_result.total_positions
 
         # Extract from PnL stats first (more comprehensive, includes total return)
-        _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",
-                           "max drawdown", "win rate", "profit factor"}
+        _known_pnl_keys = {
+            "pnl (total)",
+            "pnl% (total)",
+            "sharpe",
+            "sortino",
+            "max drawdown",
+            "win rate",
+            "profit factor",
+        }
         # Track which fields were set by PnL stats so returns-stats fallback
         # doesn't overwrite legitimate zero values (bug: == 0.0 sentinel)
         _populated: set[str] = set()
@@ -319,8 +324,7 @@ class NTScreeningRunner:
                     logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
         # Fill from returns stats only if not already set by PnL stats
-        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate",
-                               "profit factor"}
+        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate", "profit factor"}
         stats_returns = bt_result.stats_returns or {}
         for key, value in stats_returns.items():
             if value is None:
@@ -345,8 +349,11 @@ class NTScreeningRunner:
                 logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
         # Warn if extraction produced no meaningful metrics
-        if (metrics.sharpe_ratio == 0.0 and metrics.total_return == 0.0
-                and metrics.total_trades == 0):
+        if (
+            metrics.sharpe_ratio == 0.0
+            and metrics.total_return == 0.0
+            and metrics.total_trades == 0
+        ):
             logger.warning(
                 "Metric extraction yielded no results for params %s "
                 "(stats_pnls keys: %s, stats_returns keys: %s)",

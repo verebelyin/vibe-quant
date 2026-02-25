@@ -103,7 +103,9 @@ class Event:
         try:
             event_type = EventType(str(event_type_raw))
         except ValueError:
-            logger.warning("Event.from_dict: invalid event type '%s', defaulting to SIGNAL", event_type_raw)
+            logger.warning(
+                "Event.from_dict: invalid event type '%s', defaulting to SIGNAL", event_type_raw
+            )
             event_type = EventType.SIGNAL
 
         data_raw = d.get("data")
@@ -406,9 +408,30 @@ _EVENT_SUBCLASS_FIELDS: dict[EventType, tuple[str, ...]] = {
     EventType.TIME_FILTER: ("filter_name", "passed", "reason"),
     EventType.ORDER: ("order_id", "side", "quantity", "price", "order_type", "reason"),
     EventType.FILL: ("order_id", "fill_price", "quantity", "fees", "slippage"),
-    EventType.POSITION_OPEN: ("position_id", "symbol", "side", "quantity", "entry_price", "leverage"),
-    EventType.POSITION_CLOSE: ("position_id", "symbol", "exit_price", "gross_pnl", "net_pnl", "exit_reason"),
-    EventType.RISK_CHECK: ("check_type", "metric", "current_value", "threshold", "action", "passed"),
+    EventType.POSITION_OPEN: (
+        "position_id",
+        "symbol",
+        "side",
+        "quantity",
+        "entry_price",
+        "leverage",
+    ),
+    EventType.POSITION_CLOSE: (
+        "position_id",
+        "symbol",
+        "exit_price",
+        "gross_pnl",
+        "net_pnl",
+        "exit_reason",
+    ),
+    EventType.RISK_CHECK: (
+        "check_type",
+        "metric",
+        "current_value",
+        "threshold",
+        "action",
+        "passed",
+    ),
     EventType.FUNDING: ("symbol", "funding_rate", "funding_payment", "position_value"),
     EventType.LIQUIDATION: ("position_id", "symbol", "liquidation_price", "quantity", "loss"),
 }

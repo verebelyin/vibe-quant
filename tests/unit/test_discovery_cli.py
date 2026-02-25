@@ -37,9 +37,12 @@ def test_build_parser_requires_run_id() -> None:
     parser = build_parser()
     args = parser.parse_args(
         [
-            "--run-id", "42",
-            "--start-date", "2025-01-01",
-            "--end-date", "2025-02-01",
+            "--run-id",
+            "42",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
         ]
     )
     assert args.run_id == 42
@@ -54,16 +57,27 @@ def test_main_runs_and_persists_result(tmp_path: Path, monkeypatch) -> None:
         "sys.argv",
         [
             "prog",
-            "--run-id", str(run_id),
-            "--population-size", "6",
-            "--max-generations", "2",
-            "--mutation-rate", "0.1",
-            "--elite-count", "1",
-            "--symbols", "BTCUSDT",
-            "--timeframe", "1h",
-            "--start-date", "2025-01-01",
-            "--end-date", "2025-02-01",
-            "--db", str(db_path),
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--mutation-rate",
+            "0.1",
+            "--elite-count",
+            "1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--db",
+            str(db_path),
+            "--mock",
         ],
     )
 

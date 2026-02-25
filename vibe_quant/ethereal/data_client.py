@@ -481,14 +481,8 @@ class EtherealDataClient:
         timestamp_ms = data.get("timestamp", 0)
         timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
 
-        bids = [
-            (Decimal(str(b[0])), Decimal(str(b[1])))
-            for b in data.get("bids", [])
-        ]
-        asks = [
-            (Decimal(str(a[0])), Decimal(str(a[1])))
-            for a in data.get("asks", [])
-        ]
+        bids = [(Decimal(str(b[0])), Decimal(str(b[1]))) for b in data.get("bids", [])]
+        asks = [(Decimal(str(a[0])), Decimal(str(a[1]))) for a in data.get("asks", [])]
 
         return BookDepthUpdate(
             symbol=symbol,

@@ -14,8 +14,7 @@ class TestScreeningCLIParser:
         # Parse help output to verify subcommands exist
         # argparse stores subparsers in _subparsers
         subparsers_actions = [
-            action for action in parser._subparsers._actions
-            if hasattr(action, '_parser_class')
+            action for action in parser._subparsers._actions if hasattr(action, "_parser_class")
         ]
         assert len(subparsers_actions) > 0
         choices = subparsers_actions[0].choices
@@ -33,12 +32,20 @@ class TestScreeningCLIParser:
     def test_run_subcommand_accepts_optional_args(self) -> None:
         """run subcommand should accept optional strategy/symbols/timeframe."""
         parser = build_parser()
-        args = parser.parse_args([
-            "run", "--run-id", "42",
-            "--strategy-id", "5",
-            "--symbols", "BTCUSDT-PERP", "ETHUSDT-PERP",
-            "--timeframe", "1h",
-        ])
+        args = parser.parse_args(
+            [
+                "run",
+                "--run-id",
+                "42",
+                "--strategy-id",
+                "5",
+                "--symbols",
+                "BTCUSDT-PERP",
+                "ETHUSDT-PERP",
+                "--timeframe",
+                "1h",
+            ]
+        )
         assert args.run_id == 42
         assert args.strategy_id == 5
         assert args.symbols == ["BTCUSDT-PERP", "ETHUSDT-PERP"]

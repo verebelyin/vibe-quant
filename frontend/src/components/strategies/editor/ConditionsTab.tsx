@@ -166,7 +166,7 @@ function ConditionSection({
   const remove = (idx: number) => {
     const updated = conditions.filter((_, i) => i !== idx);
     // Remove logic from first item
-    if (updated.length > 0 && updated[0].logic) {
+    if (updated.length > 0 && updated[0]?.logic) {
       updated[0] = { ...updated[0], logic: undefined };
     }
     onChange(updated);
@@ -174,7 +174,8 @@ function ConditionSection({
 
   const updateLogic = (idx: number, logic: "and" | "or") => {
     const updated = [...conditions];
-    updated[idx] = { ...updated[idx], logic };
+    const existing = updated[idx];
+    if (existing) updated[idx] = { ...existing, logic };
     onChange(updated);
   };
 

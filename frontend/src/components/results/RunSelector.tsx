@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { BacktestRunResponse } from "@/api/generated/models";
+import type { BacktestRunResponse, RunListResponse } from "@/api/generated/models";
 import { useListRunsApiResultsRunsGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +51,7 @@ export function RunSelector({ selectedRunId, onSelectRun }: RunSelectorProps) {
   const query = useListRunsApiResultsRunsGet(
     statusFilter === "all" ? undefined : { status: statusFilter },
   );
-  const data = query.data?.data;
+  const data = query.data?.data as RunListResponse | undefined;
   const runs = data?.runs ?? [];
 
   const sortedRuns = useMemo(

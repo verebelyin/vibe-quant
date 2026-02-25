@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 # param ranges. Extra indicators not in genome are appended below.
 # ---------------------------------------------------------------------------
 
+
 def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
     """Build flat indicator pool from genome's IndicatorDef objects + extras."""
     # Lazy import to avoid circular dependency (genome imports from operators)
@@ -204,9 +205,12 @@ _THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
     # EMA/BBANDS: price-relative, threshold = 0
     # (compared against price, not a fixed number — these produce ~0 trades)
 }
-_PRICE_RELATIVE_INDICATORS = frozenset({
-    "EMA", "BBANDS",
-})
+_PRICE_RELATIVE_INDICATORS = frozenset(
+    {
+        "EMA",
+        "BBANDS",
+    }
+)
 
 
 def _random_gene() -> StrategyGene:
@@ -223,10 +227,14 @@ def _random_gene() -> StrategyGene:
         # Price-relative indicators: use 0 threshold (compared to price)
         threshold = 0.0
         # Prefer crosses_above/crosses_below for price-relative indicators
-        condition = random.choice([
-            ConditionType.CROSSES_ABOVE, ConditionType.CROSSES_BELOW,
-            ConditionType.GT, ConditionType.LT,
-        ])
+        condition = random.choice(
+            [
+                ConditionType.CROSSES_ABOVE,
+                ConditionType.CROSSES_BELOW,
+                ConditionType.GT,
+                ConditionType.LT,
+            ]
+        )
     elif ind in _THRESHOLD_RANGES:
         lo, hi = _THRESHOLD_RANGES[ind]
         threshold = round(random.uniform(lo, hi), 4)
@@ -243,7 +251,9 @@ def _random_gene() -> StrategyGene:
     )
 
 
-def _perturb(value: float, frac: float = 0.2, lo: float | None = None, hi: float | None = None) -> float:
+def _perturb(
+    value: float, frac: float = 0.2, lo: float | None = None, hi: float | None = None
+) -> float:
     """Perturb a value by +/- frac fraction. Optionally clamp to [lo, hi].
 
     When value is exactly 0.0, ``frac`` is used as an absolute range
@@ -301,7 +311,9 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def crossover(parent_a: StrategyChromosome, parent_b: StrategyChromosome) -> tuple[StrategyChromosome, StrategyChromosome]:
+def crossover(
+    parent_a: StrategyChromosome, parent_b: StrategyChromosome
+) -> tuple[StrategyChromosome, StrategyChromosome]:
     """Uniform crossover producing two offspring.
 
     For each gene position, randomly pick from parent A or B.
@@ -541,7 +553,9 @@ def apply_elitism(
         raise ValueError(msg)
     elite_count = min(elite_count, len(population))
     # heapq.nlargest is O(n log k) vs sorted O(n log n)
-    top_indices = heapq.nlargest(elite_count, range(len(population)), key=lambda i: fitness_scores[i])
+    top_indices = heapq.nlargest(
+        elite_count, range(len(population)), key=lambda i: fitness_scores[i]
+    )
     return [population[i].clone() for i in top_indices]
 
 
@@ -568,8 +582,9 @@ def _random_chromosome() -> StrategyChromosome:
     overly restrictive multi-condition entries.
     """
     # Weighted toward fewer genes: 1 gene=50%, 2=30%, 3=15%, 4-5=5%
-    n_entry = random.choices([1, 2, 3, random.randint(4, MAX_ENTRY_GENES)],
-                              weights=[50, 30, 15, 5])[0]
+    n_entry = random.choices(
+        [1, 2, 3, random.randint(4, MAX_ENTRY_GENES)], weights=[50, 30, 15, 5]
+    )[0]
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     return StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],

@@ -113,9 +113,9 @@ class TestPurgedKFoldSplit:
             # 2. Greater than max_test + embargo_gap (after test)
             for t_idx in train_idx:
                 # Either before test (with purge gap) or after test (with embargo gap)
-                assert (
-                    t_idx < min_test or t_idx > max_test
-                ), f"Train index {t_idx} overlaps test range [{min_test}, {max_test}]"
+                assert t_idx < min_test or t_idx > max_test, (
+                    f"Train index {t_idx} overlaps test range [{min_test}, {max_test}]"
+                )
 
     def test_purge_gap_applied(self) -> None:
         """Purge creates gap between train and following test set."""
@@ -208,9 +208,9 @@ class TestPurgedKFoldNoLeakage:
             if train_before:
                 max_train_before = max(train_before)
                 # Gap should be at least purge_len
-                assert (
-                    test_start - max_train_before > purge_len
-                ), f"Fold {fold_idx}: insufficient purge gap"
+                assert test_start - max_train_before > purge_len, (
+                    f"Fold {fold_idx}: insufficient purge gap"
+                )
 
     def test_train_after_test_has_embargo(self) -> None:
         """Train data after test is embargoed at start."""
@@ -228,9 +228,9 @@ class TestPurgedKFoldNoLeakage:
             if train_after:
                 min_train_after = min(train_after)
                 # Gap should be at least embargo_len
-                assert (
-                    min_train_after - test_end > embargo_len
-                ), f"Fold {fold_idx}: insufficient embargo gap"
+                assert min_train_after - test_end > embargo_len, (
+                    f"Fold {fold_idx}: insufficient embargo gap"
+                )
 
 
 # --- CVConfig Tests ---
@@ -485,7 +485,6 @@ class TestPurgedKFoldCV:
         result = cv.run_with_results(n_samples=100, fold_results=fold_results)
 
         assert result.std_oos_sharpe == 0.0
-
 
     def test_indicator_lookback_bars_propagated(self) -> None:
         """CVConfig.indicator_lookback_bars propagated to PurgedKFold."""

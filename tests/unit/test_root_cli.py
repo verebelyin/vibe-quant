@@ -66,7 +66,9 @@ def test_cmd_validation_run_closes_runner_on_success(monkeypatch: Any, capsys: A
         pass
 
     _install_fake_validation_runner_module(
-        monkeypatch, FakeValidationRunner, FakeValidationRunnerError,
+        monkeypatch,
+        FakeValidationRunner,
+        FakeValidationRunnerError,
     )
 
     args = argparse.Namespace(run_id=123, latency=None)
@@ -79,7 +81,8 @@ def test_cmd_validation_run_closes_runner_on_success(monkeypatch: Any, capsys: A
 
 
 def test_cmd_validation_run_closes_runner_on_validation_error(
-    monkeypatch: Any, capsys: Any,
+    monkeypatch: Any,
+    capsys: Any,
 ) -> None:
     """Validation runner must close even when run() raises ValidationRunnerError."""
     state = {"closed": 0}
@@ -97,7 +100,9 @@ def test_cmd_validation_run_closes_runner_on_validation_error(
             state["closed"] += 1
 
     _install_fake_validation_runner_module(
-        monkeypatch, FakeValidationRunner, FakeValidationRunnerError,
+        monkeypatch,
+        FakeValidationRunner,
+        FakeValidationRunnerError,
     )
 
     args = argparse.Namespace(run_id=999, latency="retail")
@@ -107,7 +112,8 @@ def test_cmd_validation_run_closes_runner_on_validation_error(
 
 
 def test_cmd_validation_list_formats_fraction_as_percent(
-    monkeypatch: Any, capsys: Any,
+    monkeypatch: Any,
+    capsys: Any,
 ) -> None:
     """Validation list output should display fractional returns as percentages."""
 
@@ -123,15 +129,17 @@ def test_cmd_validation_list_formats_fraction_as_percent(
 
     def fake_list_validation_runs(*, limit: int) -> list[dict[str, object]]:
         assert limit == 5
-        return [{
-            "run_id": 7,
-            "strategy_id": 1,
-            "status": "completed",
-            "sharpe_ratio": 1.23,
-            "total_return": 0.056,
-            "total_trades": 12,
-            "created_at": "2026-02-13 10:30:00",
-        }]
+        return [
+            {
+                "run_id": 7,
+                "strategy_id": 1,
+                "status": "completed",
+                "sharpe_ratio": 1.23,
+                "total_return": 0.056,
+                "total_trades": 12,
+                "created_at": "2026-02-13 10:30:00",
+            }
+        ]
 
     _install_fake_validation_runner_module(
         monkeypatch,

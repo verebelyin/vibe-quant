@@ -1,3 +1,4 @@
+import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ type CheckStatus = "pass" | "fail" | "na";
 interface CheckInfo {
   label: string;
   status: CheckStatus;
-  detail?: string;
+  detail?: string | undefined;
 }
 
 function CheckRow({ label, status, detail, threshold, description }: CheckInfo & { threshold?: string; description?: string }) {
@@ -49,7 +50,7 @@ function CheckRow({ label, status, detail, threshold, description }: CheckInfo &
 
 export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
-  const data = query.data?.data;
+  const data = query.data?.data as BacktestResultResponse | undefined;
 
   if (query.isLoading) {
     return (

@@ -39,7 +39,7 @@ function RoiTooltip({
   payload?: { value: number; name: string; payload: RoiDurationPoint }[];
 }) {
   if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
+  const p = payload[0]!.payload;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">Duration: {p.duration.toFixed(1)}h</p>
@@ -56,7 +56,7 @@ function SizePnlTooltip({
   payload?: { value: number; name: string; payload: SizePnlPoint }[];
 }) {
   if (!active || !payload?.length) return null;
-  const p = payload[0].payload;
+  const p = payload[0]!.payload;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">Size: {p.size.toFixed(4)}</p>

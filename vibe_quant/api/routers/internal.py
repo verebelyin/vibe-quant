@@ -34,7 +34,9 @@ async def heartbeat(run_id: int, state: StateMgr, ws: WsMgr) -> dict[str, str]:
 
 @router.post("/{run_id}/trades")
 async def save_trades(
-    run_id: int, body: TradesBatchRequest, state: StateMgr,
+    run_id: int,
+    body: TradesBatchRequest,
+    state: StateMgr,
 ) -> dict[str, str | int]:
     state.save_trades_batch(run_id, body.trades)
     logger.info("saved %d trades for run_id=%d", len(body.trades), run_id)
@@ -43,7 +45,9 @@ async def save_trades(
 
 @router.post("/{run_id}/sweep-results")
 async def save_sweep_results(
-    run_id: int, body: SweepResultsBatchRequest, state: StateMgr,
+    run_id: int,
+    body: SweepResultsBatchRequest,
+    state: StateMgr,
 ) -> dict[str, str | int]:
     state.save_sweep_results_batch(run_id, body.results)
     logger.info("saved %d sweep results for run_id=%d", len(body.results), run_id)
@@ -52,7 +56,9 @@ async def save_sweep_results(
 
 @router.post("/{run_id}/mark-pareto")
 async def mark_pareto(
-    run_id: int, body: ParetoMarkRequest, state: StateMgr,
+    run_id: int,
+    body: ParetoMarkRequest,
+    state: StateMgr,
 ) -> dict[str, str | int]:
     state.mark_pareto_optimal(body.result_ids)
     logger.info(

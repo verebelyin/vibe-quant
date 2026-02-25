@@ -170,21 +170,15 @@ class TestFillModels:
         estimator = SlippageEstimator(impact_coefficient=0.1)
 
         # With volatility=1.0, spread=0: factor = 0 + 0.1 * 1.0 * sqrt(0.01) = 0.01
-        factor = estimator.calculate(
-            order_size=100, avg_volume=10000, volatility=1.0
-        )
+        factor = estimator.calculate(order_size=100, avg_volume=10000, volatility=1.0)
         assert abs(factor - 0.01) < 1e-9
 
         # Larger order: 0 + 0.1 * 1.0 * sqrt(0.25) = 0.05
-        factor = estimator.calculate(
-            order_size=2500, avg_volume=10000, volatility=1.0
-        )
+        factor = estimator.calculate(order_size=2500, avg_volume=10000, volatility=1.0)
         assert abs(factor - 0.05) < 1e-9
 
         # With spread: spread/2 + k * vol * sqrt(ratio) = 0.001/2 + 0.01 = 0.0105
-        factor = estimator.calculate(
-            order_size=100, avg_volume=10000, volatility=1.0, spread=0.001
-        )
+        factor = estimator.calculate(order_size=100, avg_volume=10000, volatility=1.0, spread=0.001)
         assert abs(factor - 0.0105) < 1e-9
 
     def test_slippage_estimator_zero_volume(self) -> None:
@@ -194,17 +188,18 @@ class TestFillModels:
         assert factor == 0.0
 
         # With spread, zero volume returns spread/2
-        factor = estimator.calculate(
-            order_size=100, avg_volume=0, spread=0.002
-        )
+        factor = estimator.calculate(order_size=100, avg_volume=0, spread=0.002)
         assert abs(factor - 0.001) < 1e-9
 
     def test_slippage_estimator_estimate_cost(self) -> None:
         """SlippageEstimator.estimate_cost returns cost in quote currency."""
         estimator = SlippageEstimator(impact_coefficient=0.1)
         cost = estimator.estimate_cost(
-            entry_price=50000.0, order_size=1.0, avg_volume=1000.0,
-            volatility=0.02, spread=0.0001,
+            entry_price=50000.0,
+            order_size=1.0,
+            avg_volume=1000.0,
+            volatility=0.02,
+            spread=0.0001,
         )
         assert cost > 0.0
 

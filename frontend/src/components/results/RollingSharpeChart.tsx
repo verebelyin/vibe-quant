@@ -33,8 +33,8 @@ function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpeP
   // compute daily returns
   const returns: number[] = [];
   for (let i = 1; i < data.length; i++) {
-    const prev = data[i - 1].equity;
-    const curr = data[i].equity;
+    const prev = data[i - 1]!.equity;
+    const curr = data[i]!.equity;
     returns.push(prev !== 0 ? (curr - prev) / prev : 0);
   }
 
@@ -46,7 +46,7 @@ function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpeP
     const std = Math.sqrt(variance);
     const sharpe = std !== 0 ? (mean / std) * Math.sqrt(252) : 0;
     result.push({
-      timestamp: data[i + 1].timestamp,
+      timestamp: data[i + 1]!.timestamp,
       sharpe: Number.parseFloat(sharpe.toFixed(3)),
     });
   }
@@ -60,7 +60,7 @@ function formatDate(ts: string): string {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const point = payload[0];
+  const point = payload[0]!;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">

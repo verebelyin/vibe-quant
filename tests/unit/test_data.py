@@ -179,8 +179,7 @@ class TestRawDataArchive:
         # We need >= 40176 (90%) klines. Use 41000.
         jan1_ms = 1704067200000  # 2024-01-01 00:00:00 UTC
         klines = [
-            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
-             jan1_ms + i * 60000 + 59999)
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0, jan1_ms + i * 60000 + 59999)
             for i in range(41000)
         ]
         archive.insert_klines("BTCUSDT", "1m", klines, "test")
@@ -196,8 +195,7 @@ class TestRawDataArchive:
         jan1_ms = 1704067200000
         # Only 100 klines for a month that needs ~44640
         klines = [
-            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
-             jan1_ms + i * 60000 + 59999)
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0, jan1_ms + i * 60000 + 59999)
             for i in range(100)
         ]
         archive.insert_klines("BTCUSDT", "1m", klines, "test")
@@ -215,7 +213,10 @@ class TestGetDownloadPreview:
         end = datetime(2024, 5, 1, tzinfo=UTC)
 
         preview = get_download_preview(
-            ["BTCUSDT"], start, end, archive=archive,
+            ["BTCUSDT"],
+            start,
+            end,
+            archive=archive,
         )
         archive.close()
 
@@ -230,8 +231,7 @@ class TestGetDownloadPreview:
         # Fill Jan 2024 with enough klines (>= 90% of 44640)
         jan1_ms = 1704067200000
         klines = [
-            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0,
-             jan1_ms + i * 60000 + 59999)
+            (jan1_ms + i * 60000, 100.0, 110.0, 90.0, 105.0, 50.0, jan1_ms + i * 60000 + 59999)
             for i in range(41000)
         ]
         archive.insert_klines("BTCUSDT", "1m", klines, "test")
@@ -240,7 +240,10 @@ class TestGetDownloadPreview:
         end = datetime(2024, 3, 1, tzinfo=UTC)
 
         preview = get_download_preview(
-            ["BTCUSDT"], start, end, archive=archive,
+            ["BTCUSDT"],
+            start,
+            end,
+            archive=archive,
         )
         archive.close()
 

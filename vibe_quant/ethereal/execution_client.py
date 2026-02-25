@@ -162,9 +162,7 @@ class EtherealConfig:
         private_key = os.getenv(ENV_ETHEREAL_PRIVATE_KEY)
 
         if not private_key:
-            raise ConfigurationError(
-                f"Missing {ENV_ETHEREAL_PRIVATE_KEY} environment variable"
-            )
+            raise ConfigurationError(f"Missing {ENV_ETHEREAL_PRIVATE_KEY} environment variable")
 
         return cls(private_key=private_key, testnet=testnet)
 

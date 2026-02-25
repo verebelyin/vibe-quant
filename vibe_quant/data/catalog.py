@@ -210,9 +210,7 @@ def aggregate_bars(
         if bar_key != group_key:
             # Aggregate current group
             if current_group:
-                aggregated.append(
-                    _aggregate_group(current_group, target_bar_type, size_precision)
-                )
+                aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision))
 
             # Start new group
             current_group = [bar]
@@ -222,9 +220,7 @@ def aggregate_bars(
 
     # Don't forget the last group
     if current_group:
-        aggregated.append(
-            _aggregate_group(current_group, target_bar_type, size_precision)
-        )
+        aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision))
 
     return aggregated
 
@@ -430,12 +426,12 @@ class CatalogManager:
         """
         bar_type = get_bar_type(symbol, interval)
         return self.catalog.bars(
-            bar_types=[bar_type], start=start, end=end,  # type: ignore[arg-type]
+            bar_types=[bar_type],
+            start=start,
+            end=end,  # type: ignore[arg-type]
         )
 
-    def get_bar_date_range(
-        self, symbol: str, interval: str
-    ) -> tuple[datetime, datetime] | None:
+    def get_bar_date_range(self, symbol: str, interval: str) -> tuple[datetime, datetime] | None:
         """Get date range of bars for a symbol and interval.
 
         Args:

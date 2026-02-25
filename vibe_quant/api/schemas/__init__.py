@@ -1,4 +1,5 @@
 """API request/response schemas."""
+
 from __future__ import annotations
 
 from vibe_quant.api.schemas.backtest import (

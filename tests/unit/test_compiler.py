@@ -659,9 +659,7 @@ take_profit:
         # Should reference bar.close
         assert "bar.close" in source or "bar." in source
 
-    def test_condition_helpers_receive_bar_parameter(
-        self, compiler: StrategyCompiler
-    ) -> None:
+    def test_condition_helpers_receive_bar_parameter(self, compiler: StrategyCompiler) -> None:
         """Condition check helpers must accept bar param for price operands."""
         yaml_content = """
 name: bar_scope_strategy
@@ -718,8 +716,6 @@ class TestCompiledModuleImports:
         module = compiler.compile_to_module(dsl)
 
         # Create config instance
-        config = module.TestMinimalConfig(
-            instrument_id="BTCUSDT.BINANCE"
-        )
+        config = module.TestMinimalConfig(instrument_id="BTCUSDT.BINANCE")
         assert config.instrument_id == "BTCUSDT.BINANCE"
         assert config.rsi_period == 14

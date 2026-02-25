@@ -64,7 +64,7 @@ function computeSummary(strategies: DiscoveryResultResponseStrategiesItem[]): Su
     fitnesses.length > 0 ? fitnesses.reduce((a, b) => a + b, 0) / fitnesses.length : null;
 
   // Try to find generation info from first strategy
-  const gen = num(strategies[0], "generations_completed") ?? num(strategies[0], "generation");
+  const gen = num(strategies[0]!, "generations_completed") ?? num(strategies[0]!, "generation");
 
   return {
     totalStrategies: strategies.length,
@@ -209,18 +209,14 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               const sharpe = num(s, "sharpe") ?? num(s, "sharpe_ratio");
               const returnPct = num(s, "return_pct") ?? num(s, "total_return") ?? num(s, "return");
               const maxDD = num(s, "max_drawdown") ?? num(s, "max_dd");
-              const winRate = num(s, "win_rate");
               const trades = num(s, "trades") ?? num(s, "total_trades");
               const pf = num(s, "pf") ?? num(s, "profit_factor");
               // Extract indicator info from DSL config
               const dsl = s.dsl as Record<string, unknown> | undefined;
               const dslIndicators = dsl?.indicators;
               const indicators = dslIndicators
-                ? Object.keys(dslIndicators as Record<string, unknown>).map(k => k.split("_")[0].toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(", ")
+                ? Object.keys(dslIndicators as Record<string, unknown>).map(k => k.split("_")[0]!.toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(", ")
                 : str(s, "indicators");
-              const conditions =
-                num(s, "conditions") ?? num(s, "genes") ?? num(s, "total_conditions");
-
               // Build a stable key from strategy identity fields
               const stableKey = `${str(s, "name") ?? ""}-${fitness ?? ""}-${sharpe ?? ""}-${idx}`;
 

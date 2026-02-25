@@ -136,11 +136,22 @@ def download_bars(
             except httpx.HTTPStatusError as exc:
                 logger.warning(
                     "HTTP %d downloading bars %s %s/%d-%02d: %s",
-                    exc.response.status_code, symbol, timeframe, year, month, exc,
+                    exc.response.status_code,
+                    symbol,
+                    timeframe,
+                    year,
+                    month,
+                    exc,
                 )
                 continue
             except Exception:
-                logger.exception("Unexpected error downloading bars %s %s/%s-%02d", symbol, timeframe, year, month)
+                logger.exception(
+                    "Unexpected error downloading bars %s %s/%s-%02d",
+                    symbol,
+                    timeframe,
+                    year,
+                    month,
+                )
                 continue
 
     # Sort by open_time
@@ -205,11 +216,17 @@ def download_funding_rates(
             except httpx.HTTPStatusError as exc:
                 logger.warning(
                     "HTTP %d downloading funding %s %d-%02d: %s",
-                    exc.response.status_code, symbol, year, month, exc,
+                    exc.response.status_code,
+                    symbol,
+                    year,
+                    month,
+                    exc,
                 )
                 continue
             except Exception:
-                logger.exception("Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month)
+                logger.exception(
+                    "Unexpected error downloading funding %s %s/%s-%02d", symbol, year, month
+                )
                 continue
 
     all_rates.sort(key=lambda x: x[0])
@@ -450,9 +467,9 @@ def ingest_all_ethereal(
 
     for symbol in symbols:
         if verbose:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Processing {symbol}")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
 
         counts: dict[str, int] = {}
 
@@ -473,9 +490,9 @@ def ingest_all_ethereal(
     archive.close()
 
     if verbose:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print("SUMMARY")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         for sym, cnts in results.items():
             print(f"{sym}: {cnts}")
 

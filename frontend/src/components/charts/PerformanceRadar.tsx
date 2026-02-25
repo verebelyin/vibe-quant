@@ -33,7 +33,7 @@ interface TooltipPayloadEntry {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const metric = payload[0].payload;
+  const metric = payload[0]!.payload;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">{metric.label}</p>

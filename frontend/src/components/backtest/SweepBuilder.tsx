@@ -128,7 +128,7 @@ function buildParamsFromIndicators(
 ): IndicatorParam[] {
   const result: IndicatorParam[] = [];
   for (let i = 0; i < indicators.length; i++) {
-    const ind = indicators[i];
+    const ind = indicators[i]!;
     for (const [paramName, value] of Object.entries(ind.params)) {
       result.push({
         indicatorType: ind.type,
@@ -211,7 +211,8 @@ export function SweepBuilder({ indicators, onChange, value }: SweepBuilderProps)
 
   const updateParam = (idx: number, updates: Partial<SweepParam>) => {
     const next = [...value.params];
-    next[idx] = { ...next[idx], ...updates };
+    const existing = next[idx]!;
+    next[idx] = { ...existing, ...updates } as SweepParam;
     setPreset("custom");
     onChange({ params: next });
   };

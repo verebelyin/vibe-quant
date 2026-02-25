@@ -33,7 +33,7 @@ SHARPE_MAX: float = 4.0
 PF_MIN: float = 0.0
 PF_MAX: float = 5.0
 RETURN_MIN: float = -1.0  # -100%
-RETURN_MAX: float = 2.0   # +200%
+RETURN_MAX: float = 2.0  # +200%
 
 # Complexity penalty
 COMPLEXITY_PENALTY_PER_GENE: float = 0.02
@@ -203,6 +203,7 @@ def compute_complexity_penalty(num_genes: int) -> float:
 # Pareto dominance
 # ---------------------------------------------------------------------------
 
+
 def pareto_dominates(a: FitnessResult, b: FitnessResult) -> bool:
     """Check if strategy A Pareto-dominates strategy B.
 
@@ -281,8 +282,12 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
                 p_j = pfs[j]
 
                 # Inline pareto_dominates: j dominates i
-                if (s_j >= s_i and d_j >= d_i and p_j >= p_i
-                        and (s_j > s_i or d_j > d_i or p_j > p_i)):
+                if (
+                    s_j >= s_i
+                    and d_j >= d_i
+                    and p_j >= p_i
+                    and (s_j > s_i or d_j > d_i or p_j > p_i)
+                ):
                     dominated = True
                     break
 
@@ -306,14 +311,22 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
 def _evaluate_single(
     chrom: StrategyChromosome,
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
-    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
+    | None = None,
 ) -> FitnessResult:
     """Evaluate fitness for a single chromosome (picklable for multiprocessing)."""
     _zero = FitnessResult(
-        sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0,
-        total_trades=0, total_return=-1.0, complexity_penalty=0.0,
-        overtrade_penalty=0.0, raw_score=0.0, adjusted_score=0.0,
-        passed_filters=False, filter_results={},
+        sharpe_ratio=0.0,
+        max_drawdown=1.0,
+        profit_factor=0.0,
+        total_trades=0,
+        total_return=-1.0,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        raw_score=0.0,
+        adjusted_score=0.0,
+        passed_filters=False,
+        filter_results={},
     )
 
     try:
@@ -340,10 +353,7 @@ def _evaluate_single(
     raw = compute_fitness_score(sharpe, max_dd, pf, total_return)
 
     # Apply minimum trade filter + all penalties
-    if trades < MIN_TRADES:
-        adjusted = 0.0
-    else:
-        adjusted = max(0.0, raw - complexity_pen - overtrade_pen)
+    adjusted = 0.0 if trades < MIN_TRADES else max(0.0, raw - complexity_pen - overtrade_pen)
 
     return FitnessResult(
         sharpe_ratio=sharpe,
@@ -363,7 +373,8 @@ def _evaluate_single(
 def evaluate_population(
     chromosomes: list[StrategyChromosome],
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
-    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+    filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
+    | None = None,
     *,
     max_workers: int | None = None,
     executor: object | None = None,
@@ -412,10 +423,17 @@ def _evaluate_parallel(
     workers = min(workers, len(chromosomes))
 
     _zero = FitnessResult(
-        sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0,
-        total_trades=0, total_return=-1.0, complexity_penalty=0.0,
-        overtrade_penalty=0.0, raw_score=0.0, adjusted_score=0.0,
-        passed_filters=False, filter_results={},
+        sharpe_ratio=0.0,
+        max_drawdown=1.0,
+        profit_factor=0.0,
+        total_trades=0,
+        total_return=-1.0,
+        complexity_penalty=0.0,
+        overtrade_penalty=0.0,
+        raw_score=0.0,
+        adjusted_score=0.0,
+        passed_filters=False,
+        filter_results={},
     )
 
     results: list[FitnessResult | None] = [None] * len(chromosomes)

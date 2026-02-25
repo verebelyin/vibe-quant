@@ -140,8 +140,7 @@ def compute_pareto_front(
             p_j = pfs[j]
 
             # Inlined dominance check: j >= i in all AND j > i in at least one
-            if (s_j >= s_i and d_j >= d_i and p_j >= p_i
-                    and (s_j > s_i or d_j > d_i or p_j > p_i)):
+            if s_j >= s_i and d_j >= d_i and p_j >= p_i and (s_j > s_i or d_j > d_i or p_j > p_i):
                 is_pareto[i] = False
                 break
 

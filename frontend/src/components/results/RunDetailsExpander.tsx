@@ -34,7 +34,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 export function RunDetailsExpander({ runId }: RunDetailsExpanderProps) {
   const [open, setOpen] = useState(false);
   const query = useListRunsApiResultsRunsGet();
-  const runs = query.data?.data?.runs;
+  const runs = (query.data?.data as { runs?: BacktestRunResponse[] } | undefined)?.runs;
   const run = runs?.find((r: BacktestRunResponse) => r.id === runId);
 
   if (!run) return null;

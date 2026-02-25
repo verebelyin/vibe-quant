@@ -448,9 +448,7 @@ class TestMessageHandling:
         """BookDepth handler calls registered callback."""
         callback = MagicMock()
         client_with_subscription._subscriptions["BTCUSD"].book_depth_callback = callback
-        client_with_subscription._subscriptions["BTCUSD"].channels.add(
-            EtherealChannel.BOOK_DEPTH
-        )
+        client_with_subscription._subscriptions["BTCUSD"].channels.add(EtherealChannel.BOOK_DEPTH)
 
         data = {
             "symbol": "BTC-USD",
@@ -492,12 +490,8 @@ class TestMessageHandling:
     ) -> None:
         """MarketPrice handler calls registered callback."""
         callback = MagicMock()
-        client_with_subscription._subscriptions["BTCUSD"].market_price_callback = (
-            callback
-        )
-        client_with_subscription._subscriptions["BTCUSD"].channels.add(
-            EtherealChannel.MARKET_PRICE
-        )
+        client_with_subscription._subscriptions["BTCUSD"].market_price_callback = callback
+        client_with_subscription._subscriptions["BTCUSD"].channels.add(EtherealChannel.MARKET_PRICE)
 
         data = {
             "symbol": "BTC-USD",
@@ -520,12 +514,8 @@ class TestMessageHandling:
     ) -> None:
         """FundingRate handler calls registered callback."""
         callback = MagicMock()
-        client_with_subscription._subscriptions["BTCUSD"].funding_rate_callback = (
-            callback
-        )
-        client_with_subscription._subscriptions["BTCUSD"].channels.add(
-            EtherealChannel.FUNDING_RATE
-        )
+        client_with_subscription._subscriptions["BTCUSD"].funding_rate_callback = callback
+        client_with_subscription._subscriptions["BTCUSD"].channels.add(EtherealChannel.FUNDING_RATE)
 
         data = {
             "symbol": "BTC-USD",
@@ -560,9 +550,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_connect_creates_socket(self) -> None:
         """Connect creates Socket.IO client."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio_class.return_value = mock_sio
 
@@ -575,9 +563,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_connect_uses_websocket_transport(self) -> None:
         """Connect uses websocket transport."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio_class.return_value = mock_sio
 
@@ -590,9 +576,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_connect_raises_on_failure(self) -> None:
         """Connect raises ConnectionError on failure."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio.connect = AsyncMock(side_effect=Exception("Connection refused"))
             mock_sio_class.return_value = mock_sio
@@ -605,9 +589,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_disconnect_clears_state(self) -> None:
         """Disconnect clears subscriptions and connection state."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio_class.return_value = mock_sio
 
@@ -621,9 +603,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_context_manager(self) -> None:
         """Async context manager connects and disconnects."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio_class.return_value = mock_sio
 
@@ -639,9 +619,7 @@ class TestReconnection:
     @pytest.mark.asyncio
     async def test_reconnect_resets_count_on_success(self) -> None:
         """Successful connection resets reconnect count."""
-        with patch(
-            "vibe_quant.ethereal.data_client.socketio.AsyncClient"
-        ) as mock_sio_class:
+        with patch("vibe_quant.ethereal.data_client.socketio.AsyncClient") as mock_sio_class:
             mock_sio = _create_mock_sio()
             mock_sio_class.return_value = mock_sio
 

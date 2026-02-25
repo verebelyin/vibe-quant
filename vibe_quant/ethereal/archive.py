@@ -180,9 +180,7 @@ class EtherealArchive:
         Returns:
             Number of rows inserted.
         """
-        rows = [
-            (symbol, r[0], r[1], r[2] if len(r) > 2 else None, source) for r in rates
-        ]
+        rows = [(symbol, r[0], r[1], r[2] if len(r) > 2 else None, source) for r in rates]
 
         before = self.conn.execute(
             "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
@@ -263,9 +261,7 @@ class EtherealArchive:
         query += " ORDER BY funding_time"
         return list(self.conn.execute(query, params))
 
-    def get_date_range(
-        self, symbol: str, timeframe: str
-    ) -> tuple[int, int] | None:
+    def get_date_range(self, symbol: str, timeframe: str) -> tuple[int, int] | None:
         """Get the date range of stored klines.
 
         Args:
@@ -307,7 +303,5 @@ class EtherealArchive:
         Returns:
             List of unique symbols.
         """
-        rows = self.conn.execute(
-            "SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol"
-        )
+        rows = self.conn.execute("SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol")
         return [r[0] for r in rows]

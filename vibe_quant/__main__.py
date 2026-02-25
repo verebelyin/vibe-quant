@@ -79,7 +79,9 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
         print("No validation runs found.")
         return 0
 
-    print(f"{'ID':<6} {'Strategy':<12} {'Status':<12} {'Sharpe':<8} {'Return':<10} {'Trades':<8} {'Created'}")
+    print(
+        f"{'ID':<6} {'Strategy':<12} {'Status':<12} {'Sharpe':<8} {'Return':<10} {'Trades':<8} {'Created'}"
+    )
     print("-" * 80)
 
     for run in runs:
@@ -94,15 +96,15 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
 
         sharpe = float(sharpe_raw) if isinstance(sharpe_raw, (int, float)) else None
         total_return = (
-            float(total_return_raw)
-            if isinstance(total_return_raw, (int, float))
-            else None
+            float(total_return_raw) if isinstance(total_return_raw, (int, float)) else None
         )
         sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "-"
         return_str = _format_fraction_as_percent(total_return, decimals=1)
         trades_str = str(trades) if trades is not None else "-"
 
-        print(f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<8} {return_str:<10} {trades_str:<8} {created}")
+        print(
+            f"{run_id:<6} {strategy:<12} {status:<12} {sharpe_str:<8} {return_str:<10} {trades_str:<8} {created}"
+        )
 
     return 0
 

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ns_to_isoformat(ns_timestamp: object) -> str:
+def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
     """Convert a nanosecond Unix timestamp to ISO 8601 string.
 
     NautilusTrader Position.ts_opened / ts_closed are uint64
@@ -83,9 +83,19 @@ def extract_stats(
     stats_returns = bt_result.stats_returns or {}
     stats_pnls = bt_result.stats_pnls or {}
 
-    _known_pnl_keys = {"pnl (total)", "pnl% (total)", "sharpe", "sortino",
-                       "max drawdown", "win rate", "profit factor",
-                       "expectancy", "avg winner", "avg loser", "long ratio"}
+    _known_pnl_keys = {
+        "pnl (total)",
+        "pnl% (total)",
+        "sharpe",
+        "sortino",
+        "max drawdown",
+        "win rate",
+        "profit factor",
+        "expectancy",
+        "avg winner",
+        "avg loser",
+        "long ratio",
+    }
 
     # Track which fields were populated from stats_pnls so we only
     # fall back to stats_returns for fields that weren't set.
@@ -128,9 +138,17 @@ def extract_stats(
             elif not any(k in key_lower for k in _known_pnl_keys):
                 logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
-    _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate",
-                           "profit factor", "expectancy", "avg winner",
-                           "avg loser", "long ratio"}
+    _known_returns_keys = {
+        "sharpe",
+        "sortino",
+        "max drawdown",
+        "win rate",
+        "profit factor",
+        "expectancy",
+        "avg winner",
+        "avg loser",
+        "long ratio",
+    }
     for key, value in stats_returns.items():
         if value is None:
             continue
@@ -193,15 +211,11 @@ def extract_trades(
     fill_cfg = venue_config.fill_config
     impact_k = getattr(fill_cfg, "impact_coefficient", 0.1) if fill_cfg else 0.1
     engine_prob_slippage = (
-        float(getattr(fill_cfg, "prob_slippage", 0.0))
-        if fill_cfg is not None
-        else 0.0
+        float(getattr(fill_cfg, "prob_slippage", 0.0)) if fill_cfg is not None else 0.0
     )
     use_post_fill_spec_slippage = engine_prob_slippage <= 0.0
     slippage_estimator = (
-        SlippageEstimator(impact_coefficient=impact_k)
-        if use_post_fill_spec_slippage
-        else None
+        SlippageEstimator(impact_coefficient=impact_k) if use_post_fill_spec_slippage else None
     )
 
     if not use_post_fill_spec_slippage:
@@ -249,7 +263,9 @@ def extract_trades(
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
 
-        direction = "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
+        direction = (
+            "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
+        )
         instrument_id = str(pos.instrument_id)
 
         # Split fees by maker/taker rates instead of 50/50.
@@ -473,9 +489,7 @@ def compute_extended_metrics(result: ValidationResult) -> None:
 
     if result.total_return != 0.0 and result.trades:
         try:
-            first_entry = datetime.fromisoformat(
-                result.trades[0].entry_time.replace("Z", "+00:00")
-            )
+            first_entry = datetime.fromisoformat(result.trades[0].entry_time.replace("Z", "+00:00"))
             last_exit_str = result.trades[-1].exit_time or result.trades[-1].entry_time
             last_exit = datetime.fromisoformat(last_exit_str.replace("Z", "+00:00"))
             days = max((last_exit - first_entry).total_seconds() / 86400.0, 1.0)

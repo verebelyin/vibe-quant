@@ -75,9 +75,7 @@ class KnownResult:
             self._assert_dict_matches(actual, self.expected, tol)
         else:
             if actual != self.expected:
-                raise AssertionError(
-                    f"[{self.name}] Expected {self.expected}, got {actual}"
-                )
+                raise AssertionError(f"[{self.name}] Expected {self.expected}, got {actual}")
 
     def _assert_dict_matches(
         self,
@@ -98,9 +96,7 @@ class KnownResult:
 
             if isinstance(exp_val, float) and isinstance(act_val, float):
                 if abs(act_val - exp_val) > tolerance:
-                    raise AssertionError(
-                        f"[{self.name}] {key}: expected {exp_val}, got {act_val}"
-                    )
+                    raise AssertionError(f"[{self.name}] {key}: expected {exp_val}, got {act_val}")
             elif isinstance(exp_val, dict) and isinstance(act_val, dict):
                 self._assert_dict_matches(
                     actual=act_val,  # type: ignore[arg-type]
@@ -108,9 +104,7 @@ class KnownResult:
                     tolerance=tolerance,
                 )
             elif act_val != exp_val:
-                raise AssertionError(
-                    f"[{self.name}] {key}: expected {exp_val}, got {act_val}"
-                )
+                raise AssertionError(f"[{self.name}] {key}: expected {exp_val}, got {act_val}")
 
 
 def load_known_results(category: str) -> list[KnownResult]:

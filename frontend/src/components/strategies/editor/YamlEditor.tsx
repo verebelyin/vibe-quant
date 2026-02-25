@@ -13,7 +13,7 @@ interface YamlEditorProps {
 
 interface YamlError {
   message: string;
-  line?: number;
+  line?: number | undefined;
 }
 
 function serializeConfig(config: DslConfig): string {

@@ -10,7 +10,7 @@ import { CoverageTable } from "./CoverageTable";
 interface MetricCardProps {
   label: string;
   value: string;
-  subtitle?: string;
+  subtitle?: string | undefined;
 }
 
 function MetricCard({ label, value, subtitle }: MetricCardProps) {

@@ -176,9 +176,7 @@ class RawDataArchive:
         Returns:
             Number of rows inserted.
         """
-        rows = [
-            (symbol, r[0], r[1], r[2] if len(r) > 2 else None, source) for r in rates
-        ]
+        rows = [(symbol, r[0], r[1], r[2] if len(r) > 2 else None, source) for r in rates]
 
         before = self.conn.execute(
             "SELECT COUNT(*) FROM raw_funding_rates WHERE symbol = ?",
@@ -296,7 +294,11 @@ class RawDataArchive:
         return row[0] if row else 0
 
     def get_month_kline_count(
-        self, symbol: str, interval: str, year: int, month: int,
+        self,
+        symbol: str,
+        interval: str,
+        year: int,
+        month: int,
     ) -> int:
         """Get kline count for a specific month.
 
@@ -310,17 +312,11 @@ class RawDataArchive:
             Number of klines in that month.
         """
         # First ms of month
-        start_ms = int(
-            datetime(year, month, 1, tzinfo=UTC).timestamp() * 1000
-        )
+        start_ms = int(datetime(year, month, 1, tzinfo=UTC).timestamp() * 1000)
         if month == 12:
-            end_ms = int(
-                datetime(year + 1, 1, 1, tzinfo=UTC).timestamp() * 1000
-            )
+            end_ms = int(datetime(year + 1, 1, 1, tzinfo=UTC).timestamp() * 1000)
         else:
-            end_ms = int(
-                datetime(year, month + 1, 1, tzinfo=UTC).timestamp() * 1000
-            )
+            end_ms = int(datetime(year, month + 1, 1, tzinfo=UTC).timestamp() * 1000)
 
         row = self.conn.execute(
             """SELECT COUNT(*) FROM raw_klines
@@ -331,7 +327,11 @@ class RawDataArchive:
         return row[0] if row else 0
 
     def has_month_coverage(
-        self, symbol: str, interval: str, year: int, month: int,
+        self,
+        symbol: str,
+        interval: str,
+        year: int,
+        month: int,
         threshold: float = 0.9,
     ) -> bool:
         """Check if a month has sufficient kline coverage.
@@ -374,9 +374,7 @@ class RawDataArchive:
         Returns:
             List of unique symbols.
         """
-        rows = self.conn.execute(
-            "SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol"
-        )
+        rows = self.conn.execute("SELECT DISTINCT symbol FROM raw_klines ORDER BY symbol")
         return [r[0] for r in rows]
 
     # -- Audit log methods --
@@ -435,8 +433,14 @@ class RawDataArchive:
                    status = ?,
                    error_message = ?
                WHERE id = ?""",
-            (klines_fetched, klines_inserted, funding_rates_fetched,
-             status, error_message, session_id),
+            (
+                klines_fetched,
+                klines_inserted,
+                funding_rates_fetched,
+                status,
+                error_message,
+                session_id,
+            ),
         )
         self.conn.commit()
 
@@ -449,7 +453,9 @@ class RawDataArchive:
         Returns:
             List of session rows, newest first.
         """
-        return list(self.conn.execute(
-            "SELECT * FROM download_sessions ORDER BY started_at DESC LIMIT ?",
-            (limit,),
-        ))
+        return list(
+            self.conn.execute(
+                "SELECT * FROM download_sessions ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        )

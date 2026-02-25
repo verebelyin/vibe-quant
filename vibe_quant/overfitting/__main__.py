@@ -71,7 +71,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         # Run pipeline
         print(f"Running overfitting pipeline on run_id={args.run_id}...")
-        print(f"  Filters: DSR={config.enable_dsr}, WFA={config.enable_wfa}, CV={config.enable_purged_kfold}")
+        print(
+            f"  Filters: DSR={config.enable_dsr}, WFA={config.enable_wfa}, CV={config.enable_purged_kfold}"
+        )
         print()
 
         result = pipeline.run(
@@ -111,20 +113,38 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("-" * 60)
 
         if config.enable_dsr:
-            pct = (result.passed_dsr / result.total_candidates * 100) if result.total_candidates else 0
-            print(f"  DSR (Deflated Sharpe):      {result.passed_dsr:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)")
+            pct = (
+                (result.passed_dsr / result.total_candidates * 100)
+                if result.total_candidates
+                else 0
+            )
+            print(
+                f"  DSR (Deflated Sharpe):      {result.passed_dsr:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
+            )
 
         if config.enable_wfa:
-            pct = (result.passed_wfa / result.total_candidates * 100) if result.total_candidates else 0
-            print(f"  WFA (Walk-Forward):         {result.passed_wfa:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)")
+            pct = (
+                (result.passed_wfa / result.total_candidates * 100)
+                if result.total_candidates
+                else 0
+            )
+            print(
+                f"  WFA (Walk-Forward):         {result.passed_wfa:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
+            )
 
         if config.enable_purged_kfold:
-            pct = (result.passed_cv / result.total_candidates * 100) if result.total_candidates else 0
-            print(f"  PKFOLD (Purged K-Fold CV):  {result.passed_cv:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)")
+            pct = (
+                (result.passed_cv / result.total_candidates * 100) if result.total_candidates else 0
+            )
+            print(
+                f"  PKFOLD (Purged K-Fold CV):  {result.passed_cv:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
+            )
 
         print()
         pct = (result.passed_all / result.total_candidates * 100) if result.total_candidates else 0
-        print(f"  ALL FILTERS:                {result.passed_all:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)")
+        print(
+            f"  ALL FILTERS:                {result.passed_all:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
+        )
         print()
 
         # Top candidates
@@ -138,7 +158,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
             for i, c in enumerate(result.filtered_candidates[:10]):
                 params_short = c.parameters[:37] + "..." if len(c.parameters) > 40 else c.parameters
-                print(f"{i+1:3d}  {c.sharpe_ratio:8.3f}  {c.total_return * 100:7.2f}%  {params_short:<40}")
+                print(
+                    f"{i + 1:3d}  {c.sharpe_ratio:8.3f}  {c.total_return * 100:7.2f}%  {params_short:<40}"
+                )
 
             if len(result.filtered_candidates) > 10:
                 print(f"  ... and {len(result.filtered_candidates) - 10} more")
@@ -195,16 +217,30 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"Found {len(candidates)} candidates")
         print()
 
-        print(f"{'#':>3}  {'ID':>5}  {'Sharpe':>8}  {'Return':>8}  {'DSR':>4}  {'WFA':>4}  {'CV':>4}")
+        print(
+            f"{'#':>3}  {'ID':>5}  {'Sharpe':>8}  {'Return':>8}  {'DSR':>4}  {'WFA':>4}  {'CV':>4}"
+        )
         print("-" * 60)
 
         for i, c in enumerate(candidates[:20]):
-            dsr = "Y" if c.get("passed_deflated_sharpe") == 1 else ("N" if c.get("passed_deflated_sharpe") == 0 else "-")
-            wfa = "Y" if c.get("passed_walk_forward") == 1 else ("N" if c.get("passed_walk_forward") == 0 else "-")
-            cv = "Y" if c.get("passed_purged_kfold") == 1 else ("N" if c.get("passed_purged_kfold") == 0 else "-")
+            dsr = (
+                "Y"
+                if c.get("passed_deflated_sharpe") == 1
+                else ("N" if c.get("passed_deflated_sharpe") == 0 else "-")
+            )
+            wfa = (
+                "Y"
+                if c.get("passed_walk_forward") == 1
+                else ("N" if c.get("passed_walk_forward") == 0 else "-")
+            )
+            cv = (
+                "Y"
+                if c.get("passed_purged_kfold") == 1
+                else ("N" if c.get("passed_purged_kfold") == 0 else "-")
+            )
 
             print(
-                f"{i+1:3d}  {c['id']:5d}  {c.get('sharpe_ratio', 0):8.3f}  "
+                f"{i + 1:3d}  {c['id']:5d}  {c.get('sharpe_ratio', 0):8.3f}  "
                 f"{(c.get('total_return', 0) or 0) * 100:7.2f}%  {dsr:>4}  {wfa:>4}  {cv:>4}"
             )
 

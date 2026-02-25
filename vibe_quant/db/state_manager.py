@@ -18,30 +18,83 @@ if TYPE_CHECKING:
 JsonDict = dict[str, Any]
 
 # Column whitelists per table (must match schema.py definitions)
-_BACKTEST_RESULTS_COLUMNS: frozenset[str] = frozenset({
-    "run_id", "total_return", "cagr", "sharpe_ratio", "sortino_ratio",
-    "calmar_ratio", "max_drawdown", "max_drawdown_duration_days",
-    "volatility_annual", "total_trades", "winning_trades", "losing_trades",
-    "win_rate", "profit_factor", "avg_win", "avg_loss", "largest_win",
-    "largest_loss", "avg_trade_duration_hours", "max_consecutive_wins",
-    "max_consecutive_losses", "total_fees", "total_funding", "total_slippage",
-    "deflated_sharpe", "walk_forward_efficiency", "purged_kfold_mean_sharpe",
-    "execution_time_seconds", "starting_balance", "notes",
-})
+_BACKTEST_RESULTS_COLUMNS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "total_return",
+        "cagr",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "calmar_ratio",
+        "max_drawdown",
+        "max_drawdown_duration_days",
+        "volatility_annual",
+        "total_trades",
+        "winning_trades",
+        "losing_trades",
+        "win_rate",
+        "profit_factor",
+        "avg_win",
+        "avg_loss",
+        "largest_win",
+        "largest_loss",
+        "avg_trade_duration_hours",
+        "max_consecutive_wins",
+        "max_consecutive_losses",
+        "total_fees",
+        "total_funding",
+        "total_slippage",
+        "deflated_sharpe",
+        "walk_forward_efficiency",
+        "purged_kfold_mean_sharpe",
+        "execution_time_seconds",
+        "starting_balance",
+        "notes",
+    }
+)
 
-_TRADES_COLUMNS: frozenset[str] = frozenset({
-    "run_id", "symbol", "direction", "leverage", "entry_time", "exit_time",
-    "entry_price", "exit_price", "quantity", "entry_fee", "exit_fee",
-    "funding_fees", "slippage_cost", "gross_pnl", "net_pnl", "roi_percent",
-    "exit_reason",
-})
+_TRADES_COLUMNS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "symbol",
+        "direction",
+        "leverage",
+        "entry_time",
+        "exit_time",
+        "entry_price",
+        "exit_price",
+        "quantity",
+        "entry_fee",
+        "exit_fee",
+        "funding_fees",
+        "slippage_cost",
+        "gross_pnl",
+        "net_pnl",
+        "roi_percent",
+        "exit_reason",
+    }
+)
 
-_SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset({
-    "run_id", "parameters", "sharpe_ratio", "sortino_ratio", "max_drawdown",
-    "total_return", "profit_factor", "win_rate", "total_trades", "total_fees",
-    "total_funding", "execution_time_seconds", "is_pareto_optimal",
-    "passed_deflated_sharpe", "passed_walk_forward", "passed_purged_kfold",
-})
+_SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "parameters",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "max_drawdown",
+        "total_return",
+        "profit_factor",
+        "win_rate",
+        "total_trades",
+        "total_fees",
+        "total_funding",
+        "execution_time_seconds",
+        "is_pareto_optimal",
+        "passed_deflated_sharpe",
+        "passed_walk_forward",
+        "passed_purged_kfold",
+    }
+)
 
 
 def _validate_columns(columns: list[str], allowed: frozenset[str], table: str) -> None:
@@ -121,9 +174,7 @@ class StateManager:
         Returns:
             Strategy dict or None if not found.
         """
-        cursor = self.conn.execute(
-            "SELECT * FROM strategies WHERE id = ?", (strategy_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM strategies WHERE id = ?", (strategy_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -140,9 +191,7 @@ class StateManager:
         Returns:
             Strategy dict or None if not found.
         """
-        cursor = self.conn.execute(
-            "SELECT * FROM strategies WHERE name = ?", (name,)
-        )
+        cursor = self.conn.execute("SELECT * FROM strategies WHERE name = ?", (name,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -204,9 +253,7 @@ class StateManager:
             params.append(is_active)
 
         params.append(strategy_id)
-        self.conn.execute(
-            f"UPDATE strategies SET {', '.join(updates)} WHERE id = ?", params
-        )
+        self.conn.execute(f"UPDATE strategies SET {', '.join(updates)} WHERE id = ?", params)
         self.conn.commit()
 
     # --- Sizing Config CRUD ---
@@ -231,9 +278,7 @@ class StateManager:
 
     def get_sizing_config(self, config_id: int) -> JsonDict | None:
         """Get sizing config by ID."""
-        cursor = self.conn.execute(
-            "SELECT * FROM sizing_configs WHERE id = ?", (config_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM sizing_configs WHERE id = ?", (config_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -251,7 +296,9 @@ class StateManager:
             results.append(result)
         return results
 
-    def update_sizing_config(self, config_id: int, name: str, method: str, config: JsonDict) -> None:
+    def update_sizing_config(
+        self, config_id: int, name: str, method: str, config: JsonDict
+    ) -> None:
         """Update an existing sizing configuration."""
         self.conn.execute(
             "UPDATE sizing_configs SET name = ?, method = ?, config = ? WHERE id = ?",
@@ -289,9 +336,7 @@ class StateManager:
 
     def get_risk_config(self, config_id: int) -> JsonDict | None:
         """Get risk config by ID."""
-        cursor = self.conn.execute(
-            "SELECT * FROM risk_configs WHERE id = ?", (config_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM risk_configs WHERE id = ?", (config_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -381,9 +426,7 @@ class StateManager:
 
     def get_backtest_run(self, run_id: int) -> JsonDict | None:
         """Get backtest run by ID."""
-        cursor = self.conn.execute(
-            "SELECT * FROM backtest_runs WHERE id = ?", (run_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,))
         row = cursor.fetchone()
         if row is None:
             return None
@@ -422,9 +465,7 @@ class StateManager:
                 params.append(error_message)
 
         params.append(run_id)
-        self.conn.execute(
-            f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?", params
-        )
+        self.conn.execute(f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?", params)
         self.conn.commit()
 
     def update_heartbeat(self, run_id: int) -> None:
@@ -486,9 +527,7 @@ class StateManager:
 
     def get_backtest_result(self, run_id: int) -> JsonDict | None:
         """Get backtest result for a run."""
-        cursor = self.conn.execute(
-            "SELECT * FROM backtest_results WHERE run_id = ?", (run_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM backtest_results WHERE run_id = ?", (run_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -650,9 +689,7 @@ class StateManager:
         )
         self.conn.commit()
 
-    def get_sweep_results(
-        self, run_id: int, pareto_only: bool = False
-    ) -> list[JsonDict]:
+    def get_sweep_results(self, run_id: int, pareto_only: bool = False) -> list[JsonDict]:
         """Get sweep results for a backtest run.
 
         Args:
@@ -720,22 +757,16 @@ class StateManager:
 
     def get_job(self, run_id: int) -> JsonDict | None:
         """Get job by run ID."""
-        cursor = self.conn.execute(
-            "SELECT * FROM background_jobs WHERE run_id = ?", (run_id,)
-        )
+        cursor = self.conn.execute("SELECT * FROM background_jobs WHERE run_id = ?", (run_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
     def get_running_jobs(self) -> list[JsonDict]:
         """Get all running jobs."""
-        cursor = self.conn.execute(
-            "SELECT * FROM background_jobs WHERE status = 'running'"
-        )
+        cursor = self.conn.execute("SELECT * FROM background_jobs WHERE status = 'running'")
         return [dict(row) for row in cursor]
 
-    def update_job_status(
-        self, run_id: int, status: str, error: str | None = None
-    ) -> None:
+    def update_job_status(self, run_id: int, status: str, error: str | None = None) -> None:
         """Update job status.
 
         Args:

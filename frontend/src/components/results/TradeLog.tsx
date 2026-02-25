@@ -133,7 +133,7 @@ export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const query = useGetTradesApiResultsRunsRunIdTradesGet(runId);
-  const trades = query.data?.data;
+  const trades = query.data?.data as TradeResponse[] | undefined;
 
   const symbols = useMemo(() => {
     if (!trades) return [];

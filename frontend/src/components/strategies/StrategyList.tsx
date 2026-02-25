@@ -113,7 +113,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
   }, [search]);
 
   const query = useListStrategiesApiStrategiesGet();
-  const data = query.data?.data;
+  const data = query.data?.data as { strategies?: StrategyResponse[] } | undefined;
 
   // Derive unique types actually present in the data
   const presentTypes = useMemo(() => {

@@ -49,7 +49,7 @@ function buildHeatmapData(returns: MonthlyReturn[]): {
 
 export function MonthlyReturnsHeatmap({ runId, height = 400 }: MonthlyReturnsHeatmapProps) {
   const query = useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet(runId);
-  const monthlyData = query.data?.data;
+  const monthlyData = query.data?.data as MonthlyReturn[] | undefined;
 
   const heatmapData = useMemo(() => {
     if (!monthlyData) return null;

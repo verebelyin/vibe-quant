@@ -124,7 +124,7 @@ export default function CandlestickChart({
     const container = containerRef.current;
     if (!container) return;
 
-    const chart = createChart(container, getChartOptions(theme, height));
+    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, height));
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -170,7 +170,7 @@ export default function CandlestickChart({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    chart.applyOptions(getChartOptions(theme, height));
+    chart.applyOptions(getChartOptions(theme === "system" ? "dark" : theme, height));
   }, [theme, height]);
 
   // Update candlestick data
@@ -179,7 +179,7 @@ export default function CandlestickChart({
     if (!series) return;
     series.setData(
       data.map((d) => ({
-        time: d.time,
+        time: d.time as never,
         open: d.open,
         high: d.high,
         low: d.low,
@@ -195,7 +195,7 @@ export default function CandlestickChart({
     if (!series || !volume) return;
     series.setData(
       volume.map((v) => ({
-        time: v.time,
+        time: v.time as never,
         value: v.value,
         color: v.color ?? (v.value >= 0 ? "#26a69a80" : "#ef535080"),
       })),

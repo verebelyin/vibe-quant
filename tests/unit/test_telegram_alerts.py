@@ -175,9 +175,7 @@ class TestTelegramBot:
     def test_rate_limit_expires(self, bot: TelegramBot) -> None:
         """Rate limit expires after threshold."""
         # Set a time in the past
-        bot._last_alert_times[AlertType.ERROR] = (
-            time.time() - RATE_LIMIT_SECONDS - 1
-        )
+        bot._last_alert_times[AlertType.ERROR] = time.time() - RATE_LIMIT_SECONDS - 1
 
         assert not bot._is_rate_limited(AlertType.ERROR)
 
@@ -242,9 +240,7 @@ class TestTelegramBot:
         mock_client.is_closed = False
         bot._client = mock_client
 
-        result = await bot.send_alert(
-            AlertType.ERROR, "Test error", bypass_rate_limit=True
-        )
+        result = await bot.send_alert(AlertType.ERROR, "Test error", bypass_rate_limit=True)
 
         assert result is True
         mock_client.post.assert_called_once()
@@ -273,9 +269,7 @@ class TestTelegramBot:
     async def test_send_alert_request_error(self, bot: TelegramBot) -> None:
         """Returns False on request error."""
         mock_client = AsyncMock(spec=httpx.AsyncClient)
-        mock_client.post = AsyncMock(
-            side_effect=httpx.RequestError("Connection failed")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.RequestError("Connection failed"))
         mock_client.is_closed = False
         mock_client.aclose = AsyncMock()
 

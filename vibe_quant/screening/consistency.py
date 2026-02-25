@@ -174,8 +174,7 @@ class ConsistencyChecker:
 
         # Flag as execution-sensitive if degradation exceeds threshold
         is_sensitive = (
-            sharpe_deg > self.DEGRADATION_THRESHOLD
-            or return_deg > self.DEGRADATION_THRESHOLD
+            sharpe_deg > self.DEGRADATION_THRESHOLD or return_deg > self.DEGRADATION_THRESHOLD
         )
 
         result = ConsistencyResult(
@@ -370,8 +369,12 @@ class ConsistencyChecker:
             lines.append("-" * 70)
             for c in sensitive:
                 lines.append(f"  {c.strategy_name}")
-                lines.append(f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})")
-                lines.append(f"    Return: {c.screening_return * 100:.2f}% -> {c.validation_return * 100:.2f}% ({c.return_degradation:+.1%})")
+                lines.append(
+                    f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})"
+                )
+                lines.append(
+                    f"    Return: {c.screening_return * 100:.2f}% -> {c.validation_return * 100:.2f}% ({c.return_degradation:+.1%})"
+                )
             lines.append("")
 
         if improved:
@@ -380,7 +383,9 @@ class ConsistencyChecker:
             lines.append("-" * 70)
             for c in improved[:10]:  # Top 10
                 lines.append(f"  {c.strategy_name}")
-                lines.append(f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})")
+                lines.append(
+                    f"    Sharpe: {c.screening_sharpe:.2f} -> {c.validation_sharpe:.2f} ({c.sharpe_degradation:+.1%})"
+                )
             lines.append("")
 
         return "\n".join(lines)

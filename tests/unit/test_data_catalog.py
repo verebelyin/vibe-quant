@@ -66,9 +66,7 @@ def make_bar(
 class TestAggregateBars:
     """Tests for aggregate_bars function."""
 
-    def test_aggregate_bars_5m(
-        self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
-    ) -> None:
+    def test_aggregate_bars_5m(self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType) -> None:
         """5 1m bars aggregate to 1 5m bar with correct OHLCV."""
         # Create 5 consecutive 1m bars starting at minute 0
         bars_1m = [

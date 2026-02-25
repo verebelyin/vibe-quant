@@ -193,7 +193,10 @@ class ScreeningPipeline:
                     dsr_passed.append(r)
             logger.info(
                 "DSR filter: %d/%d pass significance test (p<%.2f, %d trials)",
-                len(dsr_passed), len(filtered), dsr_significance, num_trials,
+                len(dsr_passed),
+                len(filtered),
+                dsr_significance,
+                num_trials,
             )
             filtered = dsr_passed
 
@@ -207,13 +210,8 @@ class ScreeningPipeline:
         # Map pareto indices back to the all-results list using object
         # identity (id()) instead of json.dumps of parameters, which
         # collides when two results share identical parameters.
-        pareto_objects = {
-            id(ranked_filtered[i]) for i in pareto_indices_filtered
-        }
-        pareto_indices = [
-            i for i, r in enumerate(ranked_all)
-            if id(r) in pareto_objects
-        ]
+        pareto_objects = {id(ranked_filtered[i]) for i in pareto_indices_filtered}
+        pareto_indices = [i for i, r in enumerate(ranked_all) if id(r) in pareto_objects]
         logger.info("Found %d Pareto-optimal results", len(pareto_indices))
 
         execution_time = time.time() - start_time
@@ -265,8 +263,7 @@ class ScreeningPipeline:
         with ProcessPoolExecutor(max_workers=self._max_workers) as executor:
             # Submit all tasks
             future_to_params = {
-                executor.submit(self._runner, params): params
-                for params in self._param_grid
+                executor.submit(self._runner, params): params for params in self._param_grid
             }
 
             # Collect results as they complete
@@ -325,20 +322,22 @@ class ScreeningPipeline:
 
         for i, metrics in enumerate(result.results):
             is_pareto = i in pareto_set
-            result_dicts.append({
-                "parameters": metrics.parameters,
-                "sharpe_ratio": metrics.sharpe_ratio,
-                "sortino_ratio": metrics.sortino_ratio,
-                "max_drawdown": metrics.max_drawdown,
-                "total_return": metrics.total_return,
-                "profit_factor": metrics.profit_factor,
-                "win_rate": metrics.win_rate,
-                "total_trades": metrics.total_trades,
-                "total_fees": metrics.total_fees,
-                "total_funding": metrics.total_funding,
-                "execution_time_seconds": metrics.execution_time_seconds,
-                "is_pareto_optimal": is_pareto,
-            })
+            result_dicts.append(
+                {
+                    "parameters": metrics.parameters,
+                    "sharpe_ratio": metrics.sharpe_ratio,
+                    "sortino_ratio": metrics.sortino_ratio,
+                    "max_drawdown": metrics.max_drawdown,
+                    "total_return": metrics.total_return,
+                    "profit_factor": metrics.profit_factor,
+                    "win_rate": metrics.win_rate,
+                    "total_trades": metrics.total_trades,
+                    "total_fees": metrics.total_fees,
+                    "total_funding": metrics.total_funding,
+                    "execution_time_seconds": metrics.execution_time_seconds,
+                    "is_pareto_optimal": is_pareto,
+                }
+            )
 
         # Batch save
         state_manager.save_sweep_results_batch(run_id, result_dicts)

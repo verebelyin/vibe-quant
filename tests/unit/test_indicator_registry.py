@@ -159,13 +159,19 @@ class TestIndicatorRegistry:
         """list_indicators() returns sorted list."""
         registry = IndicatorRegistry()
         registry.register_spec(
-            IndicatorSpec(name="ZZZ", nt_class=None, pandas_ta_func="z", default_params={}, param_schema={})
+            IndicatorSpec(
+                name="ZZZ", nt_class=None, pandas_ta_func="z", default_params={}, param_schema={}
+            )
         )
         registry.register_spec(
-            IndicatorSpec(name="AAA", nt_class=None, pandas_ta_func="a", default_params={}, param_schema={})
+            IndicatorSpec(
+                name="AAA", nt_class=None, pandas_ta_func="a", default_params={}, param_schema={}
+            )
         )
         registry.register_spec(
-            IndicatorSpec(name="MMM", nt_class=None, pandas_ta_func="m", default_params={}, param_schema={})
+            IndicatorSpec(
+                name="MMM", nt_class=None, pandas_ta_func="m", default_params={}, param_schema={}
+            )
         )
         assert registry.list_indicators() == ["AAA", "MMM", "ZZZ"]
 
@@ -173,10 +179,22 @@ class TestIndicatorRegistry:
         """has_nt_class() returns correct value."""
         registry = IndicatorRegistry()
         registry.register_spec(
-            IndicatorSpec(name="WITHNT", nt_class=object, pandas_ta_func=None, default_params={}, param_schema={})
+            IndicatorSpec(
+                name="WITHNT",
+                nt_class=object,
+                pandas_ta_func=None,
+                default_params={},
+                param_schema={},
+            )
         )
         registry.register_spec(
-            IndicatorSpec(name="WITHOUTNT", nt_class=None, pandas_ta_func="test", default_params={}, param_schema={})
+            IndicatorSpec(
+                name="WITHOUTNT",
+                nt_class=None,
+                pandas_ta_func="test",
+                default_params={},
+                param_schema={},
+            )
         )
         assert registry.has_nt_class("WITHNT") is True
         assert registry.has_nt_class("WITHOUTNT") is False
@@ -186,10 +204,22 @@ class TestIndicatorRegistry:
         """has_pandas_ta() returns correct value."""
         registry = IndicatorRegistry()
         registry.register_spec(
-            IndicatorSpec(name="WITHPTA", nt_class=None, pandas_ta_func="test", default_params={}, param_schema={})
+            IndicatorSpec(
+                name="WITHPTA",
+                nt_class=None,
+                pandas_ta_func="test",
+                default_params={},
+                param_schema={},
+            )
         )
         registry.register_spec(
-            IndicatorSpec(name="WITHOUTPTA", nt_class=object, pandas_ta_func=None, default_params={}, param_schema={})
+            IndicatorSpec(
+                name="WITHOUTPTA",
+                nt_class=object,
+                pandas_ta_func=None,
+                default_params={},
+                param_schema={},
+            )
         )
         assert registry.has_pandas_ta("WITHPTA") is True
         assert registry.has_pandas_ta("WITHOUTPTA") is False

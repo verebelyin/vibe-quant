@@ -35,7 +35,11 @@ StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 _LATENCY_PRESETS: list[LatencyPreset] = [
     LatencyPreset(name="co_located", description="Co-located server (1ms)", base_latency_ms=1),
     LatencyPreset(name="domestic", description="Domestic / same-region (20ms)", base_latency_ms=20),
-    LatencyPreset(name="international", description="International / cross-region (100ms)", base_latency_ms=100),
+    LatencyPreset(
+        name="international",
+        description="International / cross-region (100ms)",
+        base_latency_ms=100,
+    ),
     LatencyPreset(name="retail", description="Retail home connection (200ms)", base_latency_ms=200),
 ]
 

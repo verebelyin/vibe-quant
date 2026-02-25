@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
+import type { DiscoveryLaunchRequest } from "@/api/generated/models";
 import {
   useGetIndicatorPoolApiDiscoveryIndicatorPoolGet,
   useLaunchDiscoveryApiDiscoveryLaunchPost,
@@ -98,7 +99,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           indicator_pool: selectedIndicators.length > 0 ? selectedIndicators : null,
           ...(startDate && { start_date: startDate }),
           ...(endDate && { end_date: endDate }),
-        } as Record<string, unknown>,
+        } as DiscoveryLaunchRequest,
       },
       {
         onSuccess: (resp) => {

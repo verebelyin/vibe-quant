@@ -250,9 +250,7 @@ class TestDownloadBars:
         mock_response.content = self._create_mock_zip(csv_data)
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.get.return_value = (
-                mock_response
-            )
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
             start = datetime(2024, 1, 1, tzinfo=UTC)
             end = datetime(2024, 1, 31, tzinfo=UTC)
@@ -270,9 +268,7 @@ class TestDownloadBars:
         mock_response.status_code = 404
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.get.return_value = (
-                mock_response
-            )
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
             start = datetime(2024, 1, 1, tzinfo=UTC)
             end = datetime(2024, 1, 31, tzinfo=UTC)
@@ -310,9 +306,7 @@ class TestDownloadFundingRates:
         mock_response.content = self._create_mock_zip(csv_data)
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.get.return_value = (
-                mock_response
-            )
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
             start = datetime(2024, 1, 1, tzinfo=UTC)
             end = datetime(2024, 1, 31, tzinfo=UTC)
@@ -385,9 +379,7 @@ class TestIngestEthereal:
             (1704067200000, 2500.0, 2550.0, 2480.0, 2530.0, 100.0, 1704067259999),
         ]
 
-        with patch(
-            "vibe_quant.ethereal.ingestion.download_bars", return_value=mock_klines
-        ):
+        with patch("vibe_quant.ethereal.ingestion.download_bars", return_value=mock_klines):
             start = datetime(2024, 1, 1, tzinfo=UTC)
             end = datetime(2024, 1, 31, tzinfo=UTC)
 

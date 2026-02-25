@@ -61,9 +61,7 @@ def test_trades_sorted_before_cagr_computation() -> None:
 
     # Bad order: uses Mar as first, Jun as last => shorter period => higher CAGR
     # Correct order: Jan to Jun => longer period => lower CAGR
-    assert result.cagr != result_bad.cagr, (
-        "Sorted vs unsorted trades should produce different CAGR"
-    )
+    assert result.cagr != result_bad.cagr, "Sorted vs unsorted trades should produce different CAGR"
 
 
 def test_trades_sorted_single_trade_no_error() -> None:

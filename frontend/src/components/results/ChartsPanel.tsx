@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { BacktestResultResponse, DrawdownPoint, EquityCurvePoint, TradeResponse } from "@/api/generated/models";
 import {
   useGetDrawdownApiResultsRunsRunIdDrawdownGet,
   useGetEquityCurveApiResultsRunsRunIdEquityCurveGet,
@@ -32,10 +33,10 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
   const summaryQuery = useGetRunSummaryApiResultsRunsRunIdGet(runId);
   const tradesQuery = useGetTradesApiResultsRunsRunIdTradesGet(runId);
 
-  const equityData = equityQuery.data?.data ?? [];
-  const drawdownData = drawdownQuery.data?.data ?? [];
-  const summary = summaryQuery.data?.data;
-  const trades = tradesQuery.data?.data;
+  const equityData = (equityQuery.data?.data ?? []) as EquityCurvePoint[];
+  const drawdownData = (drawdownQuery.data?.data ?? []) as DrawdownPoint[];
+  const summary = summaryQuery.data?.data as BacktestResultResponse | undefined;
+  const trades = tradesQuery.data?.data as TradeResponse[] | undefined;
 
   const distributionTrades = useMemo(() => {
     if (!trades) return [];

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { DownloadHistoryApiDataHistoryGet200Item } from "@/api/generated/models";
 import { useDownloadHistoryApiDataHistoryGet } from "@/api/generated/data/data";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -48,7 +49,7 @@ const COLUMNS = [
 
 export function DownloadHistory() {
   const historyQuery = useDownloadHistoryApiDataHistoryGet({ limit: 50 });
-  const items = historyQuery.data?.data ?? [];
+  const items = (historyQuery.data?.data ?? []) as DownloadHistoryApiDataHistoryGet200Item[];
   const [sortKey, setSortKey] = useState("timestamp");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -111,7 +112,7 @@ export function DownloadHistory() {
                 key={col.key}
                 className={cn(
                   "cursor-pointer select-none px-4 hover:bg-muted/70",
-                  col.align === "right" && "text-right",
+                  "align" in col && col.align === "right" && "text-right",
                 )}
                 onClick={() => handleSort(col.key)}
               >

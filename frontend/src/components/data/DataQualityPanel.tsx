@@ -1,3 +1,4 @@
+import type { DataQualityResponse } from "@/api/generated/models";
 import { useDataQualityApiDataQualitySymbolGet } from "@/api/generated/data/data";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,7 +52,7 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
     query: { enabled: !!symbol },
   });
 
-  const data = query.data?.data;
+  const data = query.data?.data as DataQualityResponse | undefined;
 
   if (query.isLoading) {
     return <Skeleton className="h-32 rounded-lg" />;
@@ -68,7 +69,7 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
   if (!data) return null;
 
   const score = data.quality_score * 100;
-  const gaps = (data.gaps ?? []) as GapItem[];
+  const gaps = (data.gaps ?? []) as unknown as GapItem[];
   const gapCount = gaps.length;
   const missingBars = gaps.reduce((sum, g) => sum + (g.missing_bars ?? 0), 0);
   const ohlcErrors = data.ohlc_errors ?? [];

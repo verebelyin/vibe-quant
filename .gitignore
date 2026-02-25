@@ -38,6 +38,9 @@ htmlcov/
 # Type checking
 .mypy_cache/
 
+# OS
+.DS_Store
+
 # IDE
 .idea/
 .vscode/
@@ -49,6 +52,7 @@ data/catalog/
 data/archive/
 data/state/
 data/logs/
+frontend/data/
 
 # Keep data directory structure
 !data/.gitkeep

@@ -138,16 +138,20 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
 
   const updateParams = (idx: number, params: Record<string, number>) => {
     const updated = [...config.indicators];
-    updated[idx] = { ...updated[idx], params };
+    const existing = updated[idx];
+    if (existing) updated[idx] = { ...existing, params };
     updateIndicators(updated);
   };
 
   const updateTimeframeOverride = (idx: number, value: string) => {
     const updated = [...config.indicators];
-    updated[idx] = {
-      ...updated[idx],
-      timeframe_override: value === "default" ? undefined : value,
-    };
+    const existing = updated[idx];
+    if (existing) {
+      updated[idx] = {
+        ...existing,
+        timeframe_override: value === "default" ? undefined : value,
+      };
+    }
     updateIndicators(updated);
   };
 

@@ -79,7 +79,9 @@ class _NTBacktestFn:
             result = runner({})
 
             return {
-                "sharpe_ratio": result.sharpe_ratio if result.sharpe_ratio != float("-inf") else -1.0,
+                "sharpe_ratio": result.sharpe_ratio
+                if result.sharpe_ratio != float("-inf")
+                else -1.0,
                 "max_drawdown": result.max_drawdown,
                 "profit_factor": result.profit_factor,
                 "total_trades": result.total_trades,
@@ -146,12 +148,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--elite-count", type=int, default=2)
     parser.add_argument("--tournament-size", type=int, default=3)
     parser.add_argument("--convergence-generations", type=int, default=10)
-    parser.add_argument("--max-workers", type=int, default=0, help="Parallel workers (0=auto, -1=sequential)")
+    parser.add_argument(
+        "--max-workers", type=int, default=0, help="Parallel workers (0=auto, -1=sequential)"
+    )
     parser.add_argument("--symbols", type=str, default="BTCUSDT")
     parser.add_argument("--timeframe", type=str, default="4h")
     parser.add_argument("--start-date", type=str, default="2024-01-01")
     parser.add_argument("--end-date", type=str, default="2026-02-24")
-    parser.add_argument("--indicator-pool", type=str, default=None, help="Comma-separated indicator names to use (default: all)")
+    parser.add_argument(
+        "--indicator-pool",
+        type=str,
+        default=None,
+        help="Comma-separated indicator names to use (default: all)",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -228,7 +237,9 @@ def main() -> int:
 
         progress_file = f"logs/discovery_{args.run_id}_progress.json"
         pipeline = DiscoveryPipeline(
-            config=config, backtest_fn=backtest_fn, progress_file=progress_file,
+            config=config,
+            backtest_fn=backtest_fn,
+            progress_file=progress_file,
         )
         result = pipeline.run()
 
@@ -247,15 +258,17 @@ def main() -> int:
         for chrom, fitness in result.top_strategies[:5]:
             dsl = chromosome_to_dsl(chrom)
             dsl["timeframe"] = args.timeframe
-            top_dsls.append({
-                "dsl": dsl,
-                "score": fitness.adjusted_score,
-                "sharpe": fitness.sharpe_ratio,
-                "max_dd": fitness.max_drawdown,
-                "pf": fitness.profit_factor,
-                "trades": fitness.total_trades,
-                "return_pct": fitness.total_return,
-            })
+            top_dsls.append(
+                {
+                    "dsl": dsl,
+                    "score": fitness.adjusted_score,
+                    "sharpe": fitness.sharpe_ratio,
+                    "max_dd": fitness.max_drawdown,
+                    "pf": fitness.profit_factor,
+                    "trades": fitness.total_trades,
+                    "return_pct": fitness.total_return,
+                }
+            )
 
         state.save_backtest_result(
             args.run_id,
@@ -266,14 +279,16 @@ def main() -> int:
                 "profit_factor": best_fitness.profit_factor,
                 "total_trades": best_fitness.total_trades,
                 "execution_time_seconds": execution_time,
-                "notes": json.dumps({
-                    "type": "discovery",
-                    "generations": len(result.generations),
-                    "evaluated": result.total_candidates_evaluated,
-                    "converged": result.converged,
-                    "mock": use_mock,
-                    "top_strategies": top_dsls,
-                }),
+                "notes": json.dumps(
+                    {
+                        "type": "discovery",
+                        "generations": len(result.generations),
+                        "evaluated": result.total_candidates_evaluated,
+                        "converged": result.converged,
+                        "mock": use_mock,
+                        "top_strategies": top_dsls,
+                    }
+                ),
             },
         )
         state.update_backtest_run_status(args.run_id, "completed")
@@ -295,6 +310,7 @@ def main() -> int:
             pass
         print(f"Discovery failed: {exc}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:

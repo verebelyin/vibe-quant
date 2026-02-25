@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { BrowseDataResponse } from "@/api/generated/models";
 import {
   useBrowseDataApiDataBrowseSymbolGet,
   useListSymbolsApiDataSymbolsGet,
@@ -48,7 +49,7 @@ export function DataBrowser() {
   useEffect(() => {
     if (symbols.length > 0 && !symbol) {
       const btc = symbols.find((s) => s === "BTCUSDT");
-      setSymbol(btc ?? symbols[0]);
+      setSymbol(btc ?? symbols[0]!);
     }
   }, [symbols, symbol]);
 
@@ -59,7 +60,7 @@ export function DataBrowser() {
       query: { enabled: !!symbol },
     },
   );
-  const browseData = browseQuery.data?.data;
+  const browseData = browseQuery.data?.data as BrowseDataResponse | undefined;
 
   const { candles, volume } = useMemo(() => {
     if (!browseData?.data) return { candles: [], volume: [] };

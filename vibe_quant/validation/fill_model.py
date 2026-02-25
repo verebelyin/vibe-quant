@@ -150,9 +150,7 @@ class SlippageEstimator:
             return half_spread
 
         # SPEC formula: spread/2 + k * volatility * sqrt(order_size / avg_volume)
-        market_impact = (
-            self._k * volatility * math.sqrt(abs(order_size) / avg_volume)
-        )
+        market_impact = self._k * volatility * math.sqrt(abs(order_size) / avg_volume)
         return half_spread + market_impact
 
     def estimate_cost(

@@ -1,3 +1,4 @@
+import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,7 +20,7 @@ interface CostSegment {
 
 export function FuturesAnalytics({ runId }: FuturesAnalyticsProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
-  const data = query.data?.data;
+  const data = query.data?.data as BacktestResultResponse | undefined;
 
   if (query.isLoading) {
     return (

@@ -221,8 +221,8 @@ async def validate_coverage(body: CoverageCheckRequest) -> CoverageCheckResponse
     try:
         req_start = datetime.fromisoformat(body.start_date).replace(tzinfo=UTC)
         req_end = datetime.fromisoformat(body.end_date).replace(tzinfo=UTC)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format; use YYYY-MM-DD")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date format; use YYYY-MM-DD") from exc
 
     catalog = CatalogManager()
     coverage: dict[str, object] = {}

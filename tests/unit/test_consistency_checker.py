@@ -30,8 +30,12 @@ def db_path(tmp_path: Path) -> Path:
 
     # Create strategies
     conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (1, 'test_strategy', '{}')")
-    conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (2, 'improved_strategy', '{}')")
-    conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (3, 'sensitive_strategy', '{}')")
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (2, 'improved_strategy', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (3, 'sensitive_strategy', '{}')"
+    )
 
     # Create screening runs (run_ids 1-3)
     for i in range(1, 4):
@@ -52,14 +56,26 @@ def db_path(tmp_path: Path) -> Path:
         )
 
     # Sweep results (screening) - run_ids 1,2,3
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (1, '{\"rsi_period\": 14}', 2.0, 50.0)")
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (2, '{\"ema_period\": 20}', 1.5, 30.0)")
-    conn.execute("INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (3, '{\"period\": 10}', 3.0, 100.0)")
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (1, '{\"rsi_period\": 14}', 2.0, 50.0)"
+    )
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (2, '{\"ema_period\": 20}', 1.5, 30.0)"
+    )
+    conn.execute(
+        "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return) VALUES (3, '{\"period\": 10}', 3.0, 100.0)"
+    )
 
     # Backtest results (validation) - run_ids 4,5,6
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (4, 45.0, 1.8)")
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (5, 40.0, 2.0)")
-    conn.execute("INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (6, 30.0, 1.0)")
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (4, 45.0, 1.8)"
+    )
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (5, 40.0, 2.0)"
+    )
+    conn.execute(
+        "INSERT INTO backtest_results (run_id, total_return, sharpe_ratio) VALUES (6, 30.0, 1.0)"
+    )
 
     conn.commit()
     conn.close()
@@ -102,7 +118,7 @@ class TestConsistencyResult:
             validation_return=40.0,
             return_degradation=0.20,
             is_execution_sensitive=False,
-            parameters='{}',
+            parameters="{}",
             checked_at="2026-01-01T00:00:00",
         )
         with pytest.raises(AttributeError):
@@ -210,11 +226,13 @@ class TestConsistencyChecker:
         """Can check multiple pairs at once."""
         checker = ConsistencyChecker(db_path)
 
-        results = checker.check_batch([
-            (1, 4),
-            (2, 5),
-            (3, 6),
-        ])
+        results = checker.check_batch(
+            [
+                (1, 4),
+                (2, 5),
+                (3, 6),
+            ]
+        )
 
         assert len(results) == 3
         assert results[0].strategy_name == "test_strategy"
@@ -264,7 +282,9 @@ class TestDegradationCalculation:
         conn.execute("PRAGMA foreign_keys=ON")
 
         # Insert strategy + backtest_runs + results
-        conn.execute("INSERT INTO strategies (id, name, dsl_config) VALUES (10, 'zero_screen', '{}')")
+        conn.execute(
+            "INSERT INTO strategies (id, name, dsl_config) VALUES (10, 'zero_screen', '{}')"
+        )
         conn.execute(
             """INSERT INTO backtest_runs (id, strategy_id, run_mode, symbols, timeframe,
                start_date, end_date, parameters, status)

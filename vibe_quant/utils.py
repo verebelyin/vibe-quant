@@ -9,9 +9,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 
-def generate_month_range(
-    start_date: datetime, end_date: datetime
-) -> Generator[tuple[int, int]]:
+def generate_month_range(start_date: datetime, end_date: datetime) -> Generator[tuple[int, int]]:
     """Generate (year, month) tuples between two dates.
 
     Args:

@@ -404,10 +404,7 @@ class TestEventWriter:
                 )
                 writer.write(event)
 
-        threads = [
-            threading.Thread(target=write_events, args=(i,))
-            for i in range(num_threads)
-        ]
+        threads = [threading.Thread(target=write_events, args=(i,)) for i in range(num_threads)]
         for t in threads:
             t.start()
         for t in threads:
@@ -451,9 +448,7 @@ class TestEventQuery:
         assert len(events) == 3
 
         # Query filtered
-        signals = query_events(
-            "query_test", event_type=EventType.SIGNAL, base_path=tmp_path
-        )
+        signals = query_events("query_test", event_type=EventType.SIGNAL, base_path=tmp_path)
         assert len(signals) == 2
 
     def test_query_events_df(self, tmp_path: Path) -> None:

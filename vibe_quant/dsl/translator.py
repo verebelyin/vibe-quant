@@ -16,9 +16,7 @@ from typing import Any
 
 def _is_dsl_config_format(raw: dict[str, Any]) -> bool:
     """Return True if raw uses the frontend DslConfig nested format."""
-    return "general" in raw or (
-        isinstance(raw.get("indicators"), list) and "general" not in raw
-    )
+    return "general" in raw or (isinstance(raw.get("indicators"), list) and "general" not in raw)
 
 
 def _generate_indicator_name(ind_type: str, params: dict[str, Any], existing: set[str]) -> str:
@@ -71,7 +69,7 @@ def _build_ref_map(
 ) -> dict[str, str]:
     """Map human-readable refs like 'RSI(14)' or 'EMA(50)' to canonical names."""
     ref_map: dict[str, str] = {}
-    for ind, canonical in zip(indicators_raw, canonical_names):
+    for ind, canonical in zip(indicators_raw, canonical_names, strict=True):
         ind_type = str(ind.get("type", "EMA")).upper()
         params = ind.get("params", {}) or {}
 
@@ -108,9 +106,7 @@ def _resolve_ref(token: str, ref_map: dict[str, str]) -> str:
     return ref_map.get(token, token)
 
 
-def _condition_to_str(
-    cond: dict[str, Any] | str, ref_map: dict[str, str] | None = None
-) -> str:
+def _condition_to_str(cond: dict[str, Any] | str, ref_map: dict[str, str] | None = None) -> str:
     """Convert a DslCondition object or raw string to expression string."""
     if isinstance(cond, str):
         return cond
@@ -225,7 +221,8 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
         ]
     if time_raw.get("trading_days"):
         time_filters["blocked_days"] = [
-            d for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            d
+            for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
             if d not in (time_raw.get("trading_days") or [])
         ]
 

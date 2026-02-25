@@ -92,7 +92,9 @@ def download_monthly_klines(
     except httpx.HTTPStatusError:
         return None
     except Exception:
-        logger.exception("Unexpected error downloading %s %s/%s-%02d", symbol, interval, year, month)
+        logger.exception(
+            "Unexpected error downloading %s %s/%s-%02d", symbol, interval, year, month
+        )
         return None
     finally:
         if own_client:
@@ -134,7 +136,12 @@ def download_funding_rates(
                 response = client.get(url, params=params)
                 response.raise_for_status()
             except httpx.HTTPStatusError:
-                logger.warning("Funding rate request failed for %s at %d: %s", symbol, current_start, response.status_code)
+                logger.warning(
+                    "Funding rate request failed for %s at %d: %s",
+                    symbol,
+                    current_start,
+                    response.status_code,
+                )
                 break
             data = response.json()
 
@@ -196,7 +203,13 @@ def download_recent_klines(
                 response = client.get(url, params=params)
                 response.raise_for_status()
             except httpx.HTTPStatusError:
-                logger.warning("Klines request failed for %s/%s at %d: %s", symbol, interval, current_start, response.status_code)
+                logger.warning(
+                    "Klines request failed for %s/%s at %d: %s",
+                    symbol,
+                    interval,
+                    current_start,
+                    response.status_code,
+                )
                 break
             data = response.json()
 
@@ -240,9 +253,7 @@ def get_years_months_to_download(years: int = 2) -> list[tuple[int, int]]:
     return get_months_in_range(start, now)
 
 
-def get_months_in_range(
-    start: datetime, end: datetime
-) -> list[tuple[int, int]]:
+def get_months_in_range(start: datetime, end: datetime) -> list[tuple[int, int]]:
     """Get list of (year, month) for complete months in a date range.
 
     Only includes months that are fully completed (before the current month).

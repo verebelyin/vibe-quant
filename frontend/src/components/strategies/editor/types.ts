@@ -3,7 +3,7 @@
 export interface DslIndicator {
   type: string;
   params: Record<string, number>;
-  timeframe_override?: string;
+  timeframe_override?: string | undefined;
 }
 
 export type IndicatorCategory = "Trend" | "Momentum" | "Volatility" | "Volume";
@@ -79,7 +79,7 @@ export interface DslCondition {
   left: string;
   operator: string;
   right: string;
-  logic?: "and" | "or";
+  logic?: "and" | "or" | undefined;
 }
 
 export interface DslStopLoss {
@@ -94,21 +94,21 @@ export interface DslTakeProfit {
 
 export interface DslPositionSizing {
   type: string;
-  value?: number;
+  value?: number | undefined;
 }
 
 export interface DslRisk {
   stop_loss: DslStopLoss;
   take_profit: DslTakeProfit;
   position_sizing: DslPositionSizing;
-  trailing_stop_pct?: number;
+  trailing_stop_pct?: number | undefined;
 }
 
 export interface DslTime {
-  trading_hours?: { start: string; end: string };
-  trading_days?: string[];
-  sessions?: string[];
-  funding_avoidance?: boolean;
+  trading_hours?: { start: string; end: string } | undefined;
+  trading_days?: string[] | undefined;
+  sessions?: string[] | undefined;
+  funding_avoidance?: boolean | undefined;
 }
 
 export interface DslConfig {
@@ -116,7 +116,7 @@ export interface DslConfig {
     strategy_type: string;
     symbols: string[];
     timeframe: string;
-    additional_timeframes?: string[];
+    additional_timeframes?: string[] | undefined;
   };
   indicators: DslIndicator[];
   conditions: {

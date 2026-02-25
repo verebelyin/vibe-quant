@@ -432,18 +432,14 @@ class WalkForwardAnalysis:
         # Efficiency: mean(OOS_return) / mean(IS_return)
         # Negative IS return means strategy is unprofitable — efficiency undefined/zero
         mean_is_return = sum_is_return * inv_n
-        if mean_is_return <= 0:
-            efficiency = 0.0
-        else:
-            efficiency = aggregated_oos_return / mean_is_return
+        efficiency = 0.0 if mean_is_return <= 0 else aggregated_oos_return / mean_is_return
 
         avg_degradation = sum_degradation * inv_n
         consistency = profitable_count * inv_n
 
         # Robustness check (SPEC Section 8: efficiency > 0.5 AND > 50% OOS profitable)
         is_robust = (
-            consistency > self._config.min_consistency
-            and efficiency > self._config.min_efficiency
+            consistency > self._config.min_consistency and efficiency > self._config.min_efficiency
         )
 
         return WFAResult(
@@ -510,8 +506,7 @@ class WalkForwardAnalysis:
                 )
             if result.efficiency < self._config.min_efficiency:
                 lines.append(
-                    f"  - Efficiency {result.efficiency:.3f} < "
-                    f"{self._config.min_efficiency}"
+                    f"  - Efficiency {result.efficiency:.3f} < {self._config.min_efficiency}"
                 )
             lines.append("")
 
@@ -521,15 +516,10 @@ class WalkForwardAnalysis:
         lines.append("-" * 70)
 
         for w in result.windows:
+            lines.append(f"[{w.window_index}] IS: {w.is_start_date} to {w.is_end_date}")
+            lines.append(f"    OOS: {w.oos_start_date} to {w.oos_end_date}")
             lines.append(
-                f"[{w.window_index}] IS: {w.is_start_date} to {w.is_end_date}"
-            )
-            lines.append(
-                f"    OOS: {w.oos_start_date} to {w.oos_end_date}"
-            )
-            lines.append(
-                f"    Sharpe: {w.is_sharpe:.3f} -> {w.oos_sharpe:.3f} "
-                f"({w.sharpe_degradation:+.1%})"
+                f"    Sharpe: {w.is_sharpe:.3f} -> {w.oos_sharpe:.3f} ({w.sharpe_degradation:+.1%})"
             )
             lines.append(
                 f"    Return: {w.is_return:.2f}% -> {w.oos_return:.2f}% "

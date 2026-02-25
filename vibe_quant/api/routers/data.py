@@ -7,7 +7,10 @@ import logging
 import os
 import sys
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from vibe_quant.data.archive import RawDataArchive
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -38,11 +41,12 @@ def _parse_interval_minutes(interval: str) -> int:
         return _INTERVAL_MINUTES[interval]
     return 1
 
+
 CatMgr = Annotated[CatalogManager, Depends(get_catalog_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 
 
-def _get_archive():  # noqa: ANN202
+def _get_archive() -> RawDataArchive:
     from vibe_quant.data.archive import RawDataArchive
 
     return RawDataArchive()
@@ -96,7 +100,9 @@ async def data_coverage(catalog: CatMgr) -> DataCoverageResponse:
             start_date = ""
             end_date = ""
             if date_range:
-                start_date = datetime.fromtimestamp(date_range[0] / 1000, tz=UTC).strftime("%Y-%m-%d")
+                start_date = datetime.fromtimestamp(date_range[0] / 1000, tz=UTC).strftime(
+                    "%Y-%m-%d"
+                )
                 end_date = datetime.fromtimestamp(date_range[1] / 1000, tz=UTC).strftime("%Y-%m-%d")
 
             bar_count = catalog.get_bar_count(symbol, "1m")
@@ -108,14 +114,16 @@ async def data_coverage(catalog: CatMgr) -> DataCoverageResponse:
             ).fetchone()
             funding_rate_count = row[0] if row else 0
 
-            items.append(DataCoverageItem(
-                symbol=symbol,
-                start_date=start_date,
-                end_date=end_date,
-                kline_count=kline_count,
-                bar_count=bar_count,
-                funding_rate_count=funding_rate_count,
-            ))
+            items.append(
+                DataCoverageItem(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    kline_count=kline_count,
+                    bar_count=bar_count,
+                    funding_rate_count=funding_rate_count,
+                )
+            )
 
         return DataCoverageResponse(coverage=items)
     finally:
@@ -256,12 +264,16 @@ async def browse_data(
 
         if start:
             try:
-                start_ts = int(datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
+                start_ts = int(
+                    datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid start date: {exc}") from exc
         if end:
             try:
-                end_ts = int(datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
+                end_ts = int(
+                    datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid end date: {exc}") from exc
 
@@ -295,10 +307,17 @@ async def browse_data(
 
         if interval_minutes <= 1:
             for r in archive.conn.execute(sql, tuple(params)):
-                data.append({
-                    "open_time": r[0], "open": r[1], "high": r[2],
-                    "low": r[3], "close": r[4], "volume": r[5], "close_time": r[6],
-                })
+                data.append(
+                    {
+                        "open_time": r[0],
+                        "open": r[1],
+                        "high": r[2],
+                        "low": r[3],
+                        "close": r[4],
+                        "volume": r[5],
+                        "close_time": r[6],
+                    }
+                )
         else:
             bucket: dict[str, object] | None = None
             for r in archive.conn.execute(sql, tuple(params)):
@@ -308,8 +327,12 @@ async def browse_data(
                     if bucket is not None:
                         data.append(bucket)
                     bucket = {
-                        "open_time": bucket_start, "open": r[1], "high": r[2],
-                        "low": r[3], "close": r[4], "volume": r[5],
+                        "open_time": bucket_start,
+                        "open": r[1],
+                        "high": r[2],
+                        "low": r[3],
+                        "close": r[4],
+                        "volume": r[5],
                         "close_time": bucket_start + bucket_ms - 1,
                     }
                 else:
@@ -344,29 +367,37 @@ async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
             v = float(bar.get("volume", 0) or 0)
             ts = str(bar.get("timestamp", ""))
             if h < lo:
-                ohlc_errors.append(OhlcError(
-                    timestamp=ts,
-                    error_type="high_lt_low",
-                    values={"high": h, "low": lo},
-                ))
+                ohlc_errors.append(
+                    OhlcError(
+                        timestamp=ts,
+                        error_type="high_lt_low",
+                        values={"high": h, "low": lo},
+                    )
+                )
             if c <= 0:
-                ohlc_errors.append(OhlcError(
-                    timestamp=ts,
-                    error_type="zero_close",
-                    values={"close": c},
-                ))
+                ohlc_errors.append(
+                    OhlcError(
+                        timestamp=ts,
+                        error_type="zero_close",
+                        values={"close": c},
+                    )
+                )
             if v < 0:
-                ohlc_errors.append(OhlcError(
-                    timestamp=ts,
-                    error_type="negative_volume",
-                    values={"volume": v},
-                ))
+                ohlc_errors.append(
+                    OhlcError(
+                        timestamp=ts,
+                        error_type="negative_volume",
+                        values={"volume": v},
+                    )
+                )
             if o <= 0:
-                ohlc_errors.append(OhlcError(
-                    timestamp=ts,
-                    error_type="zero_open",
-                    values={"open": o},
-                ))
+                ohlc_errors.append(
+                    OhlcError(
+                        timestamp=ts,
+                        error_type="zero_open",
+                        values={"open": o},
+                    )
+                )
     except Exception:
         pass
 
@@ -411,20 +442,24 @@ async def download_history(limit: int = Query(default=50, ge=1, le=200)) -> list
             max_ts = r[3]
             start_date = (
                 datetime.fromtimestamp(min_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
-                if min_ts else None
+                if min_ts
+                else None
             )
             end_date = (
                 datetime.fromtimestamp(max_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
-                if max_ts else None
+                if max_ts
+                else None
             )
-            result.append({
-                "symbol": r[0],
-                "interval": r[1],
-                "start_date": start_date,
-                "end_date": end_date,
-                "rows": r[4],
-                "timestamp": r[5],
-            })
+            result.append(
+                {
+                    "symbol": r[0],
+                    "interval": r[1],
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "rows": r[4],
+                    "timestamp": r[5],
+                }
+            )
         return result
     finally:
         archive.close()

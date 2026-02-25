@@ -172,7 +172,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
             { strategyId: strategy.id },
             {
               onSuccess: (res) => {
-                const result = res.data;
+                const result = res.data as { valid: boolean; errors: string[]; warnings?: string[] };
                 setValidation(result);
                 setShowValidationPanel(true);
                 if (result.valid) {
@@ -324,7 +324,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
       )}
 
       {editorMode === "split" && (
-        <ResizablePanelGroup direction="horizontal" className="min-h-[500px] rounded-lg border">
+        <ResizablePanelGroup orientation="horizontal" className="min-h-[500px] rounded-lg border">
           <ResizablePanel defaultSize={50} minSize={30}>
             <div className="h-full overflow-auto p-4">
               <VisualEditorContent

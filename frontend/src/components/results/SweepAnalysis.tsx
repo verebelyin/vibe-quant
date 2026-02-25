@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLaunchValidationApiBacktestValidationPost } from "@/api/generated/backtest/backtest";
-import type { BacktestRunResponse } from "@/api/generated/models";
+import type { BacktestRunResponse, RunListResponse } from "@/api/generated/models";
 import type { SweepResultResponse } from "@/api/generated/models/sweepResultResponse";
 import {
   useGetSweepsApiResultsRunsRunIdSweepsGet,
@@ -146,9 +146,9 @@ function ValidateButton({
 
 export function SweepAnalysis({ runId }: SweepAnalysisProps) {
   const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId);
-  const sweeps = query.data?.data;
+  const sweeps = query.data?.data as SweepResultResponse[] | undefined;
   const runsQuery = useListRunsApiResultsRunsGet();
-  const run = runsQuery.data?.data?.runs?.find((r: BacktestRunResponse) => r.id === runId);
+  const run = (runsQuery.data?.data as RunListResponse | undefined)?.runs?.find((r: BacktestRunResponse) => r.id === runId);
 
   // Filter state
   const [minSharpe, setMinSharpe] = useState("");

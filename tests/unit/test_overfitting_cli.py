@@ -303,7 +303,9 @@ class TestCmdReport:
 class TestMain:
     """Tests for main entry point."""
 
-    def test_no_command(self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_no_command(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """No command prints help."""
         monkeypatch.setattr(sys, "argv", ["prog"])
         result = main()

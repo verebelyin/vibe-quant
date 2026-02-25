@@ -224,9 +224,7 @@ class BacktestJobManager:
         Returns:
             List of JobInfo for running jobs.
         """
-        cursor = self.conn.execute(
-            "SELECT * FROM background_jobs WHERE status = 'running'"
-        )
+        cursor = self.conn.execute("SELECT * FROM background_jobs WHERE status = 'running'")
         return [self._record_to_info(dict(row)) for row in cursor]
 
     def list_all_jobs(self, job_type: str | None = None) -> list[JobInfo]:
@@ -244,9 +242,7 @@ class BacktestJobManager:
                 (job_type,),
             )
         else:
-            cursor = self.conn.execute(
-                "SELECT * FROM background_jobs ORDER BY started_at DESC"
-            )
+            cursor = self.conn.execute("SELECT * FROM background_jobs ORDER BY started_at DESC")
         return [self._record_to_info(dict(row)) for row in cursor]
 
     def list_stale_jobs(self) -> list[JobInfo]:
@@ -374,9 +370,7 @@ class BacktestJobManager:
 
             # Mark as failed
             self._update_job_status(
-                job.run_id,
-                JobStatus.FAILED,
-                "Job stale - no heartbeat for >120s"
+                job.run_id, JobStatus.FAILED, "Job stale - no heartbeat for >120s"
             )
 
         return len(stale)
@@ -435,11 +429,7 @@ class BacktestJobManager:
         status = JobStatus(record["status"])
         if status == JobStatus.RUNNING and not self.is_process_alive(record["pid"]):
             # Process died without marking complete
-            self._update_job_status(
-                run_id,
-                JobStatus.FAILED,
-                "Process terminated unexpectedly"
-            )
+            self._update_job_status(run_id, JobStatus.FAILED, "Process terminated unexpectedly")
             return JobStatus.FAILED
 
         return status
@@ -453,12 +443,7 @@ class BacktestJobManager:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def _update_job_status(
-        self,
-        run_id: int,
-        status: JobStatus,
-        error: str | None = None
-    ) -> None:
+    def _update_job_status(self, run_id: int, status: JobStatus, error: str | None = None) -> None:
         """Update job status in database."""
         if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.KILLED):
             # Close log file handle to prevent FD leak
@@ -518,9 +503,7 @@ class BacktestJobManager:
         if value is None:
             return None
         try:
-            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=UTC
-            )
+            return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
         except ValueError:
             return None
 

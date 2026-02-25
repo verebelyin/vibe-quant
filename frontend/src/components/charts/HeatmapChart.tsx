@@ -35,7 +35,7 @@ export default function HeatmapChart({ data, title, height = 400, className }: H
 
   const layout = useMemo(
     () => ({
-      title: title ? { text: title, font: { color: fontColor, size: 14 } } : undefined,
+      ...(title ? { title: { text: title, font: { color: fontColor, size: 14 } } } : {}),
       paper_bgcolor: bgColor,
       plot_bgcolor: bgColor,
       font: { color: fontColor },

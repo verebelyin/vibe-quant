@@ -190,6 +190,7 @@ class PaperTradingNode:
         self._telegram: TelegramBot | None = None
         try:
             from vibe_quant.alerts.telegram import TelegramBot as _TBot
+
             self._telegram = _TBot.from_env()
         except Exception:
             pass  # Telegram not configured, alerts disabled
@@ -341,7 +342,9 @@ class PaperTradingNode:
 
         account_type_cls = getattr(binance_config, "BinanceAccountType", None)
         if account_type_cls is None:
-            raise ConfigurationError("BinanceAccountType is unavailable in NautilusTrader config module")
+            raise ConfigurationError(
+                "BinanceAccountType is unavailable in NautilusTrader config module"
+            )
 
         try:
             account_type = account_type_cls(self._config.binance.account_type)
@@ -536,7 +539,9 @@ class PaperTradingNode:
         )
 
         # Create trading node config
-        create_trading_node_config(self._config)  # Keep compatibility with existing config path/tests.
+        create_trading_node_config(
+            self._config
+        )  # Keep compatibility with existing config path/tests.
         self._trading_node = self._create_live_trading_node()
 
         # Start persistence lifecycle and save initial checkpoint.

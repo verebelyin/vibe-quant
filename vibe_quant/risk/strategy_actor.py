@@ -190,9 +190,7 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
             if self._check_cooldown_expired():
                 self._state.state = RiskState.ACTIVE
                 self._state.halted_at = None
-                self._log_info(
-                    f"Cooldown expired for {self._strategy_id_str}, resuming"
-                )
+                self._log_info(f"Cooldown expired for {self._strategy_id_str}, resuming")
             else:
                 return RiskState.HALTED
 
@@ -208,23 +206,22 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
                 return self._state.state
 
         daily_loss_pct = abs(self._state.daily_pnl) / self._state.daily_start_equity
-        if self._state.daily_pnl < Decimal("0") and daily_loss_pct >= self._risk_config.max_daily_loss_pct:
+        if (
+            self._state.daily_pnl < Decimal("0")
+            and daily_loss_pct >= self._risk_config.max_daily_loss_pct
+        ):
             self._halt_strategy("daily_loss", daily_loss_pct)
             return RiskState.HALTED
 
         if self._state.consecutive_losses >= self._risk_config.max_consecutive_losses:
-            self._halt_strategy(
-                "consecutive_losses", Decimal(str(self._state.consecutive_losses))
-            )
+            self._halt_strategy("consecutive_losses", Decimal(str(self._state.consecutive_losses)))
             return RiskState.HALTED
 
         # Drawdown-based position scaling
         self._update_position_scale_factor()
 
         if self._state.position_count >= self._risk_config.max_position_count:
-            self._halt_strategy(
-                "position_count", Decimal(str(self._state.position_count))
-            )
+            self._halt_strategy("position_count", Decimal(str(self._state.position_count)))
             return RiskState.HALTED
 
         self._state.state = RiskState.ACTIVE
@@ -375,6 +372,7 @@ class StrategyRiskActor(Actor):  # type: ignore[misc]
 
         elapsed = datetime.now(UTC) - halted_at
         from datetime import timedelta
+
         return elapsed >= timedelta(hours=cooldown_hours)
 
     def _check_daily_reset(self) -> None:

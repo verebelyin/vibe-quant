@@ -585,7 +585,7 @@ class TestDrawdownScaling:
 
     def test_no_drawdown_full_size(self) -> None:
         """Scale factor = 1.0 when no drawdown."""
-        config = StrategyRiskConfig(
+        StrategyRiskConfig(
             max_drawdown_pct=Decimal("0.15"),
             drawdown_scale_pct=Decimal("0.10"),
         )

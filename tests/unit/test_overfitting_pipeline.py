@@ -415,14 +415,28 @@ class TestPipelineResult:
         """filtered_candidates only returns passing candidates."""
         candidates = [
             CandidateResult(
-                sweep_result_id=1, run_id=1, strategy_name="pass",
-                parameters="{}", sharpe_ratio=2.0, total_return=50.0,
-                passed_dsr=True, passed_wfa=True, passed_cv=True, passed_all=True,
+                sweep_result_id=1,
+                run_id=1,
+                strategy_name="pass",
+                parameters="{}",
+                sharpe_ratio=2.0,
+                total_return=50.0,
+                passed_dsr=True,
+                passed_wfa=True,
+                passed_cv=True,
+                passed_all=True,
             ),
             CandidateResult(
-                sweep_result_id=2, run_id=1, strategy_name="fail",
-                parameters="{}", sharpe_ratio=1.0, total_return=20.0,
-                passed_dsr=True, passed_wfa=False, passed_cv=True, passed_all=False,
+                sweep_result_id=2,
+                run_id=1,
+                strategy_name="fail",
+                parameters="{}",
+                sharpe_ratio=1.0,
+                total_return=20.0,
+                passed_dsr=True,
+                passed_wfa=False,
+                passed_cv=True,
+                passed_all=False,
             ),
         ]
         result = PipelineResult(

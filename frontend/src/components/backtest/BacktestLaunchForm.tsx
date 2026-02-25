@@ -587,7 +587,8 @@ export function BacktestLaunchForm() {
                 Run ID: {launchResult.id} | Mode: {launchResult.runMode}
               </p>
               <Link
-                to={`/results?run=${launchResult.id}`}
+                to={`/results/$runId` as const}
+                params={{ runId: String(launchResult.id) }}
                 className="mt-2 inline-block text-sm font-medium text-accent-foreground underline"
               >
                 View Results

@@ -95,7 +95,7 @@ function metricsToReport(data: BacktestResultResponse): string {
 
 export function ExportPanel({ runId }: ExportPanelProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
-  const data = query.data?.data;
+  const data = query.data?.data as BacktestResultResponse | undefined;
 
   const exportCSV = () => {
     if (!data) return;

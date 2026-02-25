@@ -30,6 +30,7 @@ def _time_it(func, *args, iterations=1000, **kwargs):
 # 1. Pareto Front: NumPy vectorized vs Python loop
 # ============================================================
 
+
 def pareto_front_python(objectives_list):
     """Original Python-loop Pareto front."""
     n = len(objectives_list)
@@ -89,8 +90,7 @@ def pareto_front_python_inlined(objectives_list):
             if i == j or not is_pareto[j]:
                 continue
             sj, dj, pj = objectives_list[j]
-            if (sj >= si and dj >= di and pj >= pi
-                    and (sj > si or dj > di or pj > pi)):
+            if sj >= si and dj >= di and pj >= pi and (sj > si or dj > di or pj > pi):
                 is_pareto[i] = False
                 break
     return [i for i in range(n) if is_pareto[i]]
@@ -100,8 +100,10 @@ def pareto_front_python_inlined(objectives_list):
 # 2. DSR: scipy.stats.norm.sf vs math.erfc
 # ============================================================
 
+
 def dsr_pvalue_scipy(z):
     from scipy import stats as scipy_stats
+
     return float(scipy_stats.norm.sf(z))
 
 
@@ -138,7 +140,9 @@ def expected_max_sharpe_cached(num_trials):
     log_n = math.log(num_trials)
     base = math.sqrt(2.0 * log_n)
     inv_log_n = 1.0 / log_n
-    correction = 1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
+    correction = (
+        1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
+    )
     return base * correction
 
 
@@ -160,10 +164,12 @@ _PF_INV_RANGE = 1.0 / (PF_MAX - PF_MIN)
 def fitness_score_original(sharpe, max_dd, pf):
     def _clamp(v, lo, hi):
         return max(lo, min(hi, v))
+
     def _normalize(v, lo, hi):
         if hi <= lo:
             return 0.0
         return (v - lo) / (hi - lo)
+
     sn = _normalize(_clamp(sharpe, SHARPE_MIN, SHARPE_MAX), SHARPE_MIN, SHARPE_MAX)
     dn = 1.0 - _clamp(max_dd, 0.0, 1.0)
     pn = _normalize(_clamp(pf, PF_MIN, PF_MAX), PF_MIN, PF_MAX)
@@ -198,6 +204,7 @@ def fitness_score_inlined(sharpe, max_dd, pf):
 # ============================================================
 # 5. Aggregation: multi-pass vs single-pass
 # ============================================================
+
 
 def aggregate_multipass(data):
     """Original multi-pass aggregation."""
@@ -239,6 +246,7 @@ def aggregate_singlepass(data):
 # Run benchmarks
 # ============================================================
 
+
 def main():
     print("=" * 70)
     print("PERFORMANCE BENCHMARKS: Math Optimization")
@@ -248,7 +256,9 @@ def main():
     # 1. Pareto Front
     for n in [50, 200, 500, 1000, 2000]:
         random.seed(42)
-        objectives_list = [(random.random() * 3, random.random(), random.random() * 5) for _ in range(n)]
+        objectives_list = [
+            (random.random() * 3, random.random(), random.random() * 5) for _ in range(n)
+        ]
         objectives_array = np.array(objectives_list)
 
         iters = max(1, 2000 // n)
@@ -257,7 +267,9 @@ def main():
         t_np_full = _time_it(pareto_front_numpy_full, objectives_array, iterations=iters)
         sp_inline = t_py_orig / t_py_inline if t_py_inline > 0 else float("inf")
         sp_np = t_py_orig / t_np_full if t_np_full > 0 else float("inf")
-        print(f"Pareto (n={n:>4}): Orig={t_py_orig:>9.0f}μs  Inlined={t_py_inline:>9.0f}μs({sp_inline:.1f}x)  NP-Full={t_np_full:>9.0f}μs({sp_np:.1f}x)")
+        print(
+            f"Pareto (n={n:>4}): Orig={t_py_orig:>9.0f}μs  Inlined={t_py_inline:>9.0f}μs({sp_inline:.1f}x)  NP-Full={t_np_full:>9.0f}μs({sp_np:.1f}x)"
+        )
 
     print()
 
@@ -266,7 +278,9 @@ def main():
     t_scipy = _time_it(lambda: [dsr_pvalue_scipy(z) for z in z_values], iterations=1000)
     t_erfc = _time_it(lambda: [dsr_pvalue_erfc(z) for z in z_values], iterations=1000)
     speedup = t_scipy / t_erfc if t_erfc > 0 else float("inf")
-    print(f"DSR p-value (5 calls): scipy={t_scipy:>10.1f}μs  erfc={t_erfc:>10.1f}μs  Speedup={speedup:.1f}x")
+    print(
+        f"DSR p-value (5 calls): scipy={t_scipy:>10.1f}μs  erfc={t_erfc:>10.1f}μs  Speedup={speedup:.1f}x"
+    )
 
     # Validate accuracy
     for z in z_values:
@@ -283,22 +297,34 @@ def main():
     trial_values = [10, 50, 100, 200, 500, 1000]
 
     # Uncached
-    t_uncached = _time_it(lambda: [expected_max_sharpe_uncached(t) for t in trial_values], iterations=5000)
+    t_uncached = _time_it(
+        lambda: [expected_max_sharpe_uncached(t) for t in trial_values], iterations=5000
+    )
     # First call (cold cache)
     expected_max_sharpe_cached.cache_clear()
     _time_it(lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=1)
     # Warm cache
-    t_cached = _time_it(lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=5000)
+    t_cached = _time_it(
+        lambda: [expected_max_sharpe_cached(t) for t in trial_values], iterations=5000
+    )
     speedup_warm = t_uncached / t_cached if t_cached > 0 else float("inf")
-    print(f"Expected max Sharpe (6 trial vals): uncached={t_uncached:>8.1f}μs  cached_warm={t_cached:>8.1f}μs  Speedup={speedup_warm:.1f}x")
+    print(
+        f"Expected max Sharpe (6 trial vals): uncached={t_uncached:>8.1f}μs  cached_warm={t_cached:>8.1f}μs  Speedup={speedup_warm:.1f}x"
+    )
     print()
 
     # 4. Fitness score
     test_cases = [(1.5, 0.1, 2.0), (-0.5, 0.3, 0.8), (3.0, 0.05, 4.5), (0.0, 0.5, 1.0)]
-    t_orig = _time_it(lambda: [fitness_score_original(s, d, p) for s, d, p in test_cases], iterations=10000)
-    t_inlined = _time_it(lambda: [fitness_score_inlined(s, d, p) for s, d, p in test_cases], iterations=10000)
+    t_orig = _time_it(
+        lambda: [fitness_score_original(s, d, p) for s, d, p in test_cases], iterations=10000
+    )
+    t_inlined = _time_it(
+        lambda: [fitness_score_inlined(s, d, p) for s, d, p in test_cases], iterations=10000
+    )
     speedup = t_orig / t_inlined if t_inlined > 0 else float("inf")
-    print(f"Fitness score (4 calls): original={t_orig:>8.1f}μs  inlined={t_inlined:>8.1f}μs  Speedup={speedup:.1f}x")
+    print(
+        f"Fitness score (4 calls): original={t_orig:>8.1f}μs  inlined={t_inlined:>8.1f}μs  Speedup={speedup:.1f}x"
+    )
 
     # Validate accuracy
     for s, d, p in test_cases:
@@ -310,11 +336,15 @@ def main():
 
     # 5. Aggregation
     random.seed(42)
-    data = [(random.gauss(0.5, 1.0), random.gauss(0.1, 0.5), random.gauss(0.3, 0.4)) for _ in range(20)]
+    data = [
+        (random.gauss(0.5, 1.0), random.gauss(0.1, 0.5), random.gauss(0.3, 0.4)) for _ in range(20)
+    ]
     t_multi = _time_it(aggregate_multipass, data, iterations=10000)
     t_single = _time_it(aggregate_singlepass, data, iterations=10000)
     speedup = t_multi / t_single if t_single > 0 else float("inf")
-    print(f"Aggregation (20 windows): multipass={t_multi:>8.1f}μs  singlepass={t_single:>8.1f}μs  Speedup={speedup:.1f}x")
+    print(
+        f"Aggregation (20 windows): multipass={t_multi:>8.1f}μs  singlepass={t_single:>8.1f}μs  Speedup={speedup:.1f}x"
+    )
 
     # Validate accuracy
     r1 = aggregate_multipass(data)

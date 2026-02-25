@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-logger = logging.getLogger(__name__)
-
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.templates import ON_EVENT_LINES, ON_STOP_LINES, ORDER_METHODS_LINES
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         StrategyDSL,
         TimeFilterConfig,
     )
+
     pass
 
 
@@ -45,21 +46,25 @@ _ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "vibe_quant",
 )
 
-_BLOCKED_CALL_NAMES: frozenset[str] = frozenset({
-    "exec",
-    "eval",
-    "compile",
-    "__import__",
-    "open",
-    "input",
-})
+_BLOCKED_CALL_NAMES: frozenset[str] = frozenset(
+    {
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "open",
+        "input",
+    }
+)
 
-_BLOCKED_ATTR_CALLS: frozenset[tuple[str, str]] = frozenset({
-    ("os", "system"),
-    ("os", "popen"),
-    ("subprocess", "run"),
-    ("subprocess", "Popen"),
-})
+_BLOCKED_ATTR_CALLS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("os", "system"),
+        ("os", "popen"),
+        ("subprocess", "run"),
+        ("subprocess", "Popen"),
+    }
+)
 
 
 class CompilerError(Exception):
@@ -124,21 +129,28 @@ class StrategyCompiler:
         # Force MACD to pandas-ta when signal/histogram outputs are used in conditions
         # (NT MACD only exposes .value = MACD line, not signal or histogram)
         all_condition_text = " ".join(
-            dsl.entry_conditions.long + dsl.entry_conditions.short
-            + dsl.exit_conditions.long + dsl.exit_conditions.short
+            dsl.entry_conditions.long
+            + dsl.entry_conditions.short
+            + dsl.exit_conditions.long
+            + dsl.exit_conditions.short
         )
         for info in indicators:
             if (
                 info.config.type == "MACD"
                 and info.spec.nt_class is not None
                 and info.spec.pandas_ta_func is not None
-                and (f"{info.name}.signal" in all_condition_text
-                     or f"{info.name}.histogram" in all_condition_text
-                     or f"{info.name}_signal" in all_condition_text
-                     or f"{info.name}_histogram" in all_condition_text)
+                and (
+                    f"{info.name}.signal" in all_condition_text
+                    or f"{info.name}.histogram" in all_condition_text
+                    or f"{info.name}_signal" in all_condition_text
+                    or f"{info.name}_histogram" in all_condition_text
+                )
             ):
                 from dataclasses import replace as _dc_replace
-                info.spec = _dc_replace(info.spec, nt_class=None)
+
+                # IndicatorInfo is frozen; rebuild with replaced spec
+                new_spec = _dc_replace(info.spec, nt_class=None)
+                indicators[indicators.index(info)] = _dc_replace(info, spec=new_spec)
                 logger.info(
                     "MACD '%s' forced to pandas-ta: signal/histogram outputs referenced",
                     info.name,
@@ -156,9 +168,7 @@ class StrategyCompiler:
         # Generate parts
         imports = self._generate_imports(dsl, indicators)
         config_class = self._generate_config_class(dsl, indicator_names)
-        strategy_class = self._generate_strategy_class(
-            dsl, indicators, timeframes, indicator_names
-        )
+        strategy_class = self._generate_strategy_class(dsl, indicators, timeframes, indicator_names)
 
         # Combine
         source = "\n".join([imports, "", config_class, "", strategy_class])
@@ -289,9 +299,7 @@ class StrategyCompiler:
 
         return timeframes
 
-    def _generate_imports(
-        self, dsl: StrategyDSL, indicators: list[IndicatorInfo]
-    ) -> str:
+    def _generate_imports(self, dsl: StrategyDSL, indicators: list[IndicatorInfo]) -> str:
         """Generate import statements.
 
         Args:
@@ -387,7 +395,9 @@ class StrategyCompiler:
         # Add risk/sizing parameter (overridable via strategy config or sweep params)
         lines.append("    # Position sizing (override via ImportableStrategyConfig.config)")
         lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
-        lines.append("    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)")
+        lines.append(
+            "    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)"
+        )
         lines.append("")
 
         # Add indicator parameters
@@ -406,9 +416,7 @@ class StrategyCompiler:
             if config.d_period is not None:
                 lines.append(f"    {name}_d_period: int = {config.d_period}")
             if config.atr_multiplier is not None:
-                lines.append(
-                    f"    {name}_atr_multiplier: float = {config.atr_multiplier}"
-                )
+                lines.append(f"    {name}_atr_multiplier: float = {config.atr_multiplier}")
 
         # Add stop loss parameters
         lines.append("")
@@ -417,9 +425,7 @@ class StrategyCompiler:
         if dsl.stop_loss.percent is not None:
             lines.append(f"    stop_loss_percent: float = {dsl.stop_loss.percent}")
         if dsl.stop_loss.atr_multiplier is not None:
-            lines.append(
-                f"    stop_loss_atr_multiplier: float = {dsl.stop_loss.atr_multiplier}"
-            )
+            lines.append(f"    stop_loss_atr_multiplier: float = {dsl.stop_loss.atr_multiplier}")
         if dsl.stop_loss.indicator is not None:
             lines.append(f'    stop_loss_indicator: str = "{dsl.stop_loss.indicator}"')
 
@@ -438,9 +444,7 @@ class StrategyCompiler:
                 f"    take_profit_risk_reward: float = {dsl.take_profit.risk_reward_ratio}"
             )
         if dsl.take_profit.indicator is not None:
-            lines.append(
-                f'    take_profit_indicator: str = "{dsl.take_profit.indicator}"'
-            )
+            lines.append(f'    take_profit_indicator: str = "{dsl.take_profit.indicator}"')
 
         # Add custom thresholds (extracted from conditions)
         lines.append("")
@@ -455,7 +459,11 @@ class StrategyCompiler:
             + dsl.exit_conditions.short
         ):
             cond = parse_condition(cond_str, indicator_names or list(dsl.indicators.keys()))
-            if not cond.right.is_indicator and not cond.right.is_price and isinstance(cond.right.value, (int, float)):
+            if (
+                not cond.right.is_indicator
+                and not cond.right.is_price
+                and isinstance(cond.right.value, (int, float))
+            ):
                 left_name = str(cond.left.value) if cond.left.is_indicator else str(cond.left.value)
                 value_str = str(cond.right.value).replace(".", "_").replace("-", "neg_")
                 short_name = f"{left_name}_{value_str}_threshold"
@@ -518,18 +526,22 @@ class StrategyCompiler:
         ]
 
         # Add pandas-ta bar buffer if any indicators need it
-        has_pta = any(i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators)
+        has_pta = any(
+            i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators
+        )
         if has_pta:
-            lines.extend([
-                "        # Bar data buffer for pandas-ta indicators",
-                "        self._pta_close: list[float] = []",
-                "        self._pta_high: list[float] = []",
-                "        self._pta_low: list[float] = []",
-                "        self._pta_open: list[float] = []",
-                "        self._pta_volume: list[float] = []",
-                "        self._pta_values: dict[str, float] = {}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "        # Bar data buffer for pandas-ta indicators",
+                    "        self._pta_close: list[float] = []",
+                    "        self._pta_high: list[float] = []",
+                    "        self._pta_low: list[float] = []",
+                    "        self._pta_open: list[float] = []",
+                    "        self._pta_volume: list[float] = []",
+                    "        self._pta_values: dict[str, float] = {}",
+                    "",
+                ]
+            )
 
         # Add on_start method
         on_start = self._generate_on_start(dsl, indicators, timeframes)
@@ -619,10 +631,8 @@ class StrategyCompiler:
 
         for tf in sorted(timeframes):
             spec = tf_to_spec.get(tf, "5-MINUTE")
-            lines.append(f'    self.bar_type_{tf} = BarType.from_str(')
-            lines.append(
-                f'        f"{{self.instrument_id}}-{spec}-LAST-EXTERNAL"'
-            )
+            lines.append(f"    self.bar_type_{tf} = BarType.from_str(")
+            lines.append(f'        f"{{self.instrument_id}}-{spec}-LAST-EXTERNAL"')
             lines.append("    )")
 
         # Primary bar type
@@ -659,9 +669,12 @@ class StrategyCompiler:
 
         if spec.nt_class is None and spec.pandas_ta_func is not None:
             # pandas-ta fallback: store config for _update_pta_indicators()
-            lines.append(f"    # {info.name} ({config.type}): pandas-ta fallback via ta.{spec.pandas_ta_func}")
+            lines.append(
+                f"    # {info.name} ({config.type}): pandas-ta fallback via ta.{spec.pandas_ta_func}"
+            )
             return lines
 
+        assert spec.nt_class is not None  # guarded by caller check
         class_name = spec.nt_class.__name__
 
         # Build constructor arguments
@@ -713,7 +726,9 @@ class StrategyCompiler:
         Returns:
             on_bar method source code
         """
-        has_pta = any(i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators)
+        has_pta = any(
+            i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators
+        )
 
         lines = [
             "def on_bar(self, bar: Bar) -> None:",
@@ -726,23 +741,27 @@ class StrategyCompiler:
 
         # Feed bar data to pandas-ta buffer before indicators_ready check
         if has_pta:
-            lines.extend([
-                "    # Feed bar data to pandas-ta buffer",
-                "    self._pta_close.append(float(bar.close))",
-                "    self._pta_high.append(float(bar.high))",
-                "    self._pta_low.append(float(bar.low))",
-                "    self._pta_open.append(float(bar.open))",
-                "    self._pta_volume.append(float(bar.volume))",
-                "    self._update_pta_indicators()",
-                "",
-            ])
+            lines.extend(
+                [
+                    "    # Feed bar data to pandas-ta buffer",
+                    "    self._pta_close.append(float(bar.close))",
+                    "    self._pta_high.append(float(bar.high))",
+                    "    self._pta_low.append(float(bar.low))",
+                    "    self._pta_open.append(float(bar.open))",
+                    "    self._pta_volume.append(float(bar.volume))",
+                    "    self._update_pta_indicators()",
+                    "",
+                ]
+            )
 
-        lines.extend([
-            "    # Check if indicators are ready",
-            "    if not self._indicators_ready():",
-            "        return",
-            "",
-        ])
+        lines.extend(
+            [
+                "    # Check if indicators are ready",
+                "    if not self._indicators_ready():",
+                "        return",
+                "",
+            ]
+        )
 
         # Time filters
         if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
@@ -820,10 +839,12 @@ class StrategyCompiler:
         lines: list[str] = []
 
         # _indicators_ready
-        lines.extend([
-            "def _indicators_ready(self) -> bool:",
-            '    """Check if all indicators have enough data."""',
-        ])
+        lines.extend(
+            [
+                "def _indicators_ready(self) -> bool:",
+                '    """Check if all indicators have enough data."""',
+            ]
+        )
         for info in indicators:
             if info.spec.nt_class is not None:
                 lines.append(f"    if not {info.indicator_var}.initialized:")
@@ -849,7 +870,9 @@ class StrategyCompiler:
         lines.append("")
 
         # _update_pta_indicators (if any pandas-ta indicators exist)
-        pta_indicators = [i for i in indicators if i.spec.nt_class is None and i.spec.pandas_ta_func is not None]
+        pta_indicators = [
+            i for i in indicators if i.spec.nt_class is None and i.spec.pandas_ta_func is not None
+        ]
         if pta_indicators:
             lines.extend(self._generate_update_pta_indicators(pta_indicators))
             lines.append("")
@@ -911,9 +934,7 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
-    def _generate_get_indicator_value(
-        self, indicators: list[IndicatorInfo]
-    ) -> list[str]:
+    def _generate_get_indicator_value(self, indicators: list[IndicatorInfo]) -> list[str]:
         """Generate _get_indicator_value method.
 
         Args:
@@ -936,7 +957,9 @@ class StrategyCompiler:
                 if info.spec.output_names != ("value",):
                     for output_name in info.spec.output_names:
                         lines.append(f'    if name == "{info.name}_{output_name}":')
-                        lines.append(f'        return self._pta_values.get("{info.name}_{output_name}", 0.0)')
+                        lines.append(
+                            f'        return self._pta_values.get("{info.name}_{output_name}", 0.0)'
+                        )
                 continue
 
             nt_attr = self._get_default_output_attr(info)
@@ -952,7 +975,8 @@ class StrategyCompiler:
                             "MACD %s output '%s' not available in NT — "
                             "returns MACD line (.value) instead. "
                             "Use pandas-ta fallback for signal/histogram.",
-                            info.name, output_name,
+                            info.name,
+                            output_name,
                         )
                     lines.append(f'    if name == "{info.name}_{output_name}":')
                     lines.append(f"        return float({info.indicator_var}.{attr})")
@@ -1038,9 +1062,7 @@ class StrategyCompiler:
 
         return lines
 
-    def _generate_update_pta_indicators(
-        self, pta_indicators: list[IndicatorInfo]
-    ) -> list[str]:
+    def _generate_update_pta_indicators(self, pta_indicators: list[IndicatorInfo]) -> list[str]:
         """Generate _update_pta_indicators method for pandas-ta fallback.
 
         Computes pandas-ta indicators from accumulated bar data buffer.
@@ -1073,57 +1095,69 @@ class StrategyCompiler:
                 tenkan = config.period or spec.default_params.get("tenkan", 9)
                 kijun = spec.default_params.get("kijun", 26)
                 senkou = spec.default_params.get("senkou", 52)
-                lines.extend([
-                    "        _high = pd.Series(self._pta_high)",
-                    "        _low = pd.Series(self._pta_low)",
-                    "        _close = pd.Series(self._pta_close)",
-                    f"        _ichi = ta.ichimoku(_high, _low, _close, tenkan={tenkan}, kijun={kijun}, senkou={senkou})",
-                    "        if _ichi is not None and isinstance(_ichi, tuple) and len(_ichi) >= 1:",
-                    "            _df = _ichi[0]",
-                    "            if _df is not None and len(_df) > 0:",
-                    "                _last = _df.iloc[-1]",
-                    '                if not pd.isna(_last.iloc[0]):',
-                    f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
-                    f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
-                    f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',
-                    "            # Span values are in _ichi[1] (span DataFrame)",
-                    "            if len(_ichi) >= 2 and _ichi[1] is not None and len(_ichi[1]) > 0:",
-                    "                _span_last = _ichi[1].iloc[-1]",
-                    "                if len(_span_last) >= 2 and not pd.isna(_span_last.iloc[0]):",
-                    f'                    self._pta_values["{info.name}_span_a"] = float(_span_last.iloc[0])',
-                    f'                    self._pta_values["{info.name}_span_b"] = float(_span_last.iloc[1])',
-                ])
+                lines.extend(
+                    [
+                        "        _high = pd.Series(self._pta_high)",
+                        "        _low = pd.Series(self._pta_low)",
+                        "        _close = pd.Series(self._pta_close)",
+                        f"        _ichi = ta.ichimoku(_high, _low, _close, tenkan={tenkan}, kijun={kijun}, senkou={senkou})",
+                        "        if _ichi is not None and isinstance(_ichi, tuple) and len(_ichi) >= 1:",
+                        "            _df = _ichi[0]",
+                        "            if _df is not None and len(_df) > 0:",
+                        "                _last = _df.iloc[-1]",
+                        "                if not pd.isna(_last.iloc[0]):",
+                        f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
+                        f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
+                        f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',
+                        "            # Span values are in _ichi[1] (span DataFrame)",
+                        "            if len(_ichi) >= 2 and _ichi[1] is not None and len(_ichi[1]) > 0:",
+                        "                _span_last = _ichi[1].iloc[-1]",
+                        "                if len(_span_last) >= 2 and not pd.isna(_span_last.iloc[0]):",
+                        f'                    self._pta_values["{info.name}_span_a"] = float(_span_last.iloc[0])',
+                        f'                    self._pta_values["{info.name}_span_b"] = float(_span_last.iloc[1])',
+                    ]
+                )
             elif config.type == "VOLSMA":
                 # SMA applied to volume
                 period = config.period or spec.default_params.get("period", 20)
-                lines.extend([
-                    "        _vol = pd.Series(self._pta_volume)",
-                    f"        _result = ta.sma(_vol, length={period})",
-                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                ])
+                lines.extend(
+                    [
+                        "        _vol = pd.Series(self._pta_volume)",
+                        f"        _result = ta.sma(_vol, length={period})",
+                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                    ]
+                )
             elif config.type == "WILLR":
                 # Williams %R needs high, low, close
                 period = config.period or spec.default_params.get("period", 14)
-                lines.extend([
-                    "        _high = pd.Series(self._pta_high)",
-                    "        _low = pd.Series(self._pta_low)",
-                    "        _close = pd.Series(self._pta_close)",
-                    f"        _result = ta.willr(_high, _low, _close, length={period})",
-                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                ])
+                lines.extend(
+                    [
+                        "        _high = pd.Series(self._pta_high)",
+                        "        _low = pd.Series(self._pta_low)",
+                        "        _close = pd.Series(self._pta_close)",
+                        f"        _result = ta.willr(_high, _low, _close, length={period})",
+                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                    ]
+                )
             else:
                 # Generic single-output indicator (TEMA, etc.) on close series
                 period = config.period or spec.default_params.get("period", 14)
                 source = config.source or "close"
-                source_var = f"self._pta_{source}" if source in ("close", "high", "low", "open", "volume") else "self._pta_close"
-                lines.extend([
-                    f"        _series = pd.Series({source_var})",
-                    f"        _result = ta.{func_name}(_series, length={period})",
-                    "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                    f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                ])
+                source_var = (
+                    f"self._pta_{source}"
+                    if source in ("close", "high", "low", "open", "volume")
+                    else "self._pta_close"
+                )
+                lines.extend(
+                    [
+                        f"        _series = pd.Series({source_var})",
+                        f"        _result = ta.{func_name}(_series, length={period})",
+                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                    ]
+                )
 
         return lines
 
@@ -1131,18 +1165,23 @@ class StrategyCompiler:
     def _get_pta_lookback(info: IndicatorInfo) -> int:
         """Get minimum lookback bars needed for a pandas-ta indicator."""
         config = info.config
-        spec = info.spec
+        defaults = info.spec.default_params
+
+        def _int_param(key: str, fallback: int) -> int:
+            val = defaults.get(key, fallback)
+            return val if isinstance(val, int) else fallback
+
         if config.type == "ICHIMOKU":
             return max(
-                spec.default_params.get("tenkan", 9),
-                spec.default_params.get("kijun", 26),
-                spec.default_params.get("senkou", 52),
+                _int_param("tenkan", 9),
+                _int_param("kijun", 26),
+                _int_param("senkou", 52),
             )
         if config.type == "TEMA":
             # TEMA needs ~3x period for convergence
-            period = config.period or spec.default_params.get("period", 14)
+            period = config.period or _int_param("period", 14)
             return period * 3
-        period = config.period or spec.default_params.get("period", 14)
+        period = config.period or _int_param("period", 14)
         return period
 
     def _generate_time_filter_method(self, time_filters: TimeFilterConfig) -> list[str]:
@@ -1231,9 +1270,7 @@ class StrategyCompiler:
 
         return lines
 
-    def _generate_funding_avoidance_method(
-        self, funding_config: object
-    ) -> list[str]:
+    def _generate_funding_avoidance_method(self, funding_config: object) -> list[str]:
         """Generate _is_near_funding_time method.
 
         Args:
@@ -1295,7 +1332,7 @@ class StrategyCompiler:
         # Strip leading 'check' to avoid 'Check check ...' stutter in docstring
         readable = method_name.replace("_", " ").strip()
         if readable.startswith("check "):
-            readable = readable[len("check "):]
+            readable = readable[len("check ") :]
         lines = [
             f"def {method_name}(self, bar: Bar) -> bool:",
             f'    """Check {readable} conditions."""',
@@ -1338,16 +1375,12 @@ class StrategyCompiler:
             prev_left = self._operand_to_prev_code(cond.left)
             prev_right = self._operand_to_prev_code(cond.right)
             prev_guard = self._crossover_prev_guard(cond)
-            return (
-                f"cond_{index} = ({prev_guard}) and ({left} > {right}) and ({prev_left} <= {prev_right})"
-            )
+            return f"cond_{index} = ({prev_guard}) and ({left} > {right}) and ({prev_left} <= {prev_right})"
         elif cond.operator == Operator.CROSSES_BELOW:
             prev_left = self._operand_to_prev_code(cond.left)
             prev_right = self._operand_to_prev_code(cond.right)
             prev_guard = self._crossover_prev_guard(cond)
-            return (
-                f"cond_{index} = ({prev_guard}) and ({left} < {right}) and ({prev_left} >= {prev_right})"
-            )
+            return f"cond_{index} = ({prev_guard}) and ({left} < {right}) and ({prev_left} >= {prev_right})"
         elif cond.operator == Operator.BETWEEN:
             right2 = self._operand_to_threshold_code(cond.left, cond.right2) if cond.right2 else "0"
             return f"cond_{index} = {right} <= {left} <= {right2}"
@@ -1370,7 +1403,11 @@ class StrategyCompiler:
 
         if operand.is_price:
             # Price references need bar data
-            return f"float(bar.{operand.value}.as_double())" if operand.value != "volume" else "float(bar.volume.as_double())"
+            return (
+                f"float(bar.{operand.value}.as_double())"
+                if operand.value != "volume"
+                else "float(bar.volume.as_double())"
+            )
         elif operand.is_indicator:
             return f'self._get_indicator_value("{operand.value}")'
         else:

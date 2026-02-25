@@ -13,7 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { BacktestResultResponse, BacktestRunResponse } from "@/api/generated/models";
+import type { BacktestResultResponse, BacktestRunResponse, ComparisonResponse, DrawdownPoint, EquityCurvePoint, RunListResponse } from "@/api/generated/models";
 import {
   useCompareRunsApiResultsCompareGet,
   useGetDrawdownApiResultsRunsRunIdDrawdownGet,
@@ -101,7 +101,7 @@ function RunPicker({
   onToggle: (id: number) => void;
 }) {
   const query = useListRunsApiResultsRunsGet({ status: "completed" });
-  const runs = query.data?.data?.runs ?? [];
+  const runs = (query.data?.data as RunListResponse | undefined)?.runs ?? [];
 
   const sorted = useMemo(
     () =>
@@ -306,7 +306,7 @@ function EquityCurveOverlay({ runIds }: { runIds: number[] }) {
     const map = new Map<string, Record<string, number>>();
 
     for (let i = 0; i < runIds.length; i++) {
-      const points = queries[i]?.data?.data ?? [];
+      const points = (queries[i]?.data?.data ?? []) as EquityCurvePoint[];
       for (const pt of points) {
         const existing = map.get(pt.timestamp) ?? {};
         existing[`run_${runIds[i]}`] = pt.equity;
@@ -369,8 +369,8 @@ function EquityCurveOverlay({ runIds }: { runIds: number[] }) {
                 borderRadius: "6px",
                 fontSize: "12px",
               }}
-              labelFormatter={formatChartDate}
-              formatter={(value: number) => [formatCurrency(value), ""]}
+              labelFormatter={formatChartDate as never}
+              formatter={((value: number) => [formatCurrency(value), ""]) as never}
             />
             <Legend />
             {runIds.map((id, i) => (
@@ -379,7 +379,7 @@ function EquityCurveOverlay({ runIds }: { runIds: number[] }) {
                 type="monotone"
                 dataKey={`run_${id}`}
                 name={`Run #${id}`}
-                stroke={COLORS[i % COLORS.length]}
+                stroke={COLORS[i % COLORS.length]!}
                 strokeWidth={2}
                 dot={false}
                 connectNulls
@@ -420,7 +420,7 @@ function RadarOverlay({ runs }: { runs: BacktestResultResponse[] }) {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const entry: Record<string, number | string> = { metric: label };
-    runs.forEach((r, i) => {
+    runs.forEach((r) => {
       const val = typeof r[key] === "number" ? (r[key] as number) : 0;
       entry[`run_${r.run_id}`] = Number((normalize(val, min, max, higherIsBetter) * 100).toFixed(1));
     });
@@ -444,8 +444,8 @@ function RadarOverlay({ runs }: { runs: BacktestResultResponse[] }) {
                 key={run.run_id}
                 name={`Run #${run.run_id}`}
                 dataKey={`run_${run.run_id}`}
-                stroke={COLORS[i % COLORS.length]}
-                fill={COLORS[i % COLORS.length]}
+                stroke={COLORS[i % COLORS.length]!}
+                fill={COLORS[i % COLORS.length]!}
                 fillOpacity={0.12}
                 strokeWidth={2}
               />
@@ -489,10 +489,10 @@ function DrawdownOverlay({ runIds }: { runIds: number[] }) {
   const mergedData = useMemo(() => {
     const map = new Map<string, Record<string, number>>();
     for (let i = 0; i < runIds.length; i++) {
-      const points = queries[i]?.data?.data ?? [];
+      const points = (queries[i]?.data?.data ?? []) as DrawdownPoint[];
       for (const pt of points) {
-        const ts = (pt as Record<string, unknown>).timestamp as string;
-        const dd = (pt as Record<string, unknown>).drawdown as number;
+        const ts = pt.timestamp;
+        const dd = pt.drawdown;
         const existing = map.get(ts) ?? {};
         existing[`run_${runIds[i]}`] = dd;
         map.set(ts, existing);
@@ -547,8 +547,8 @@ function DrawdownOverlay({ runIds }: { runIds: number[] }) {
                 borderRadius: "6px",
                 fontSize: "12px",
               }}
-              labelFormatter={formatChartDate}
-              formatter={(value: number) => [`${(value * 100).toFixed(2)}%`, ""]}
+              labelFormatter={formatChartDate as never}
+              formatter={((value: number) => [`${(value * 100).toFixed(2)}%`, ""]) as never}
             />
             <Legend />
             {runIds.map((id, i) => (
@@ -557,7 +557,7 @@ function DrawdownOverlay({ runIds }: { runIds: number[] }) {
                 type="monotone"
                 dataKey={`run_${id}`}
                 name={`Run #${id}`}
-                stroke={COLORS[i % COLORS.length]}
+                stroke={COLORS[i % COLORS.length]!}
                 strokeWidth={2}
                 dot={false}
                 connectNulls
@@ -593,7 +593,7 @@ export function ComparisonView() {
     { query: { enabled: comparing && selectedIds.size >= MIN_COMPARE } },
   );
 
-  const comparedRuns = compareQuery.data?.data?.runs ?? [];
+  const comparedRuns = (compareQuery.data?.data as ComparisonResponse | undefined)?.runs ?? [];
   const runIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
 
   const handleCompare = () => {

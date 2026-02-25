@@ -9,6 +9,7 @@ import {
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
   type SeriesType,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import {
@@ -72,7 +73,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
-  const markersRef = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // Get run metadata
   const runsQuery = useListRunsApiResultsRunsGet();
@@ -89,7 +90,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   // Auto-select first symbol + default interval from run timeframe
   useEffect(() => {
     if (symbols.length > 0 && !symbols.includes(selectedSymbol)) {
-      setSelectedSymbol(symbols[0]);
+      setSelectedSymbol(symbols[0]!);
     }
   }, [symbols, selectedSymbol]);
 
@@ -100,13 +101,15 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   }, [run?.timeframe, interval]);
 
   // Fetch candle data
+  const effectiveInterval = interval || run?.timeframe || "";
+  const browseParams = {
+    interval: effectiveInterval,
+    ...(run?.start_date ? { start: run.start_date } : {}),
+    ...(run?.end_date ? { end: run.end_date } : {}),
+  };
   const candleQuery = useBrowseDataApiDataBrowseSymbolGet(
     selectedSymbol,
-    {
-      interval: interval || run?.timeframe,
-      start: run?.start_date,
-      end: run?.end_date,
-    },
+    browseParams,
     { query: { enabled: !!selectedSymbol && !!run && !!interval } },
   );
 
@@ -159,10 +162,10 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       let hi = times.length - 1;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
-        if (times[mid] < ts) lo = mid + 1;
+        if (times[mid]! < ts) lo = mid + 1;
         else hi = mid;
       }
-      if (lo > 0 && ts - times[lo - 1] < times[lo] - ts) {
+      if (lo > 0 && ts - times[lo - 1]! < times[lo]! - ts) {
         return times[lo - 1] as UTCTimestamp;
       }
       return times[lo] as UTCTimestamp;
@@ -189,7 +192,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     const resp = tradesQuery.data;
     if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return [];
     const trades = resp.data.filter((t) => t.symbol.startsWith(selectedSymbol));
-    const result: SeriesMarker<UTCTimestamp>[] = [];
+    const result: SeriesMarker<Time>[] = [];
     const hlId = highlightedTradeId;
     const hasFocus = hlId != null;
 
@@ -242,7 +245,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       markersRef.current = null;
     }
 
-    const chart = createChart(container, getChartOptions(theme, 450));
+    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, 450));
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {

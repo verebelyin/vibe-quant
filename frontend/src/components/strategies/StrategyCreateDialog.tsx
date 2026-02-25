@@ -57,19 +57,19 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
               queryKey: getListStrategiesApiStrategiesGetQueryKey(),
             });
             toast.success("Strategy created");
-            onCreated(res.data.id);
+            onCreated((res.data as { id: number }).id);
           },
           onError: () => toast.error("Failed to create strategy"),
         },
       );
     } else {
-      const tmpl = templates[selected];
+      const tmpl = templates[selected]!;
       createMutation.mutate(
         {
           data: {
             name: uniqueName(tmpl.name ?? "strategy"),
-            description: tmpl.description,
-            strategy_type: tmpl.strategy_type,
+            description: tmpl.description ?? null,
+            strategy_type: tmpl.strategy_type ?? "momentum",
             dsl_config: tmpl.dsl_config ?? {},
           },
         },
@@ -79,7 +79,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
               queryKey: getListStrategiesApiStrategiesGetQueryKey(),
             });
             toast.success("Strategy created");
-            onCreated(res.data.id);
+            onCreated((res.data as { id: number }).id);
           },
           onError: () => toast.error("Failed to create strategy"),
         },

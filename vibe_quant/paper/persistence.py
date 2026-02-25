@@ -299,9 +299,7 @@ class StatePersistence:
                 Can be sync or async.
         """
         self._running = True
-        self._checkpoint_task = asyncio.create_task(
-            self._checkpoint_loop(state_callback)
-        )
+        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(state_callback))
 
     async def stop_periodic_checkpointing(self) -> None:
         """Stop periodic checkpointing."""

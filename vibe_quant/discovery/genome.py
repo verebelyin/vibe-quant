@@ -28,14 +28,18 @@ _LEGACY_CONDITION_ALIASES: dict[str, ConditionType] = {
     "less_than": ConditionType.LT,
 }
 
-VALID_CONDITIONS: frozenset[str] = frozenset({
-    *_LEGACY_CONDITION_ALIASES,
-    *(cond.value for cond in ConditionType),
-})
+VALID_CONDITIONS: frozenset[str] = frozenset(
+    {
+        *_LEGACY_CONDITION_ALIASES,
+        *(cond.value for cond in ConditionType),
+    }
+)
 
-VALID_DIRECTIONS: frozenset[str] = frozenset({
-    *(direction.value for direction in Direction),
-})
+VALID_DIRECTIONS: frozenset[str] = frozenset(
+    {
+        *(direction.value for direction in Direction),
+    }
+)
 
 # Maps genome condition names to DSL operator syntax
 _CONDITION_TO_DSL_OP: dict[str, str] = {
@@ -105,6 +109,7 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         dsl_type="STOCH",
     ),
 }
+
 
 def _normalize_condition(condition: ConditionType | str) -> ConditionType | None:
     """Normalize legacy string conditions to canonical enum values."""
@@ -244,9 +249,7 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
             prefix = f"{label}[{i}]"
 
             if gene.indicator_type not in INDICATOR_POOL:
-                errors.append(
-                    f"{prefix}: unknown indicator '{gene.indicator_type}'"
-                )
+                errors.append(f"{prefix}: unknown indicator '{gene.indicator_type}'")
                 continue
 
             ind_def = INDICATOR_POOL[gene.indicator_type]
@@ -262,9 +265,7 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
                 if val is None:
                     errors.append(f"{prefix}: missing param '{pname}'")
                 elif not (lo <= val <= hi):
-                    errors.append(
-                        f"{prefix}: param '{pname}'={val} out of range [{lo}, {hi}]"
-                    )
+                    errors.append(f"{prefix}: param '{pname}'={val} out of range [{lo}, {hi}]")
 
             # Check for unexpected params
             for pname in gene.parameters:
@@ -282,13 +283,9 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
 
     # SL/TP ranges (percentage values, e.g. 2.0 = 2%)
     if not (0.5 <= chrom.stop_loss_pct <= 10.0):
-        errors.append(
-            f"stop_loss_pct={chrom.stop_loss_pct} out of range [0.5, 10.0]"
-        )
+        errors.append(f"stop_loss_pct={chrom.stop_loss_pct} out of range [0.5, 10.0]")
     if not (0.5 <= chrom.take_profit_pct <= 20.0):
-        errors.append(
-            f"take_profit_pct={chrom.take_profit_pct} out of range [0.5, 20.0]"
-        )
+        errors.append(f"take_profit_pct={chrom.take_profit_pct} out of range [0.5, 20.0]")
 
     # Direction
     if _normalize_direction(chrom.direction) is None:

@@ -41,7 +41,7 @@ function buildHistogram(
     const roi = t.roi_percent;
     const idx = Math.floor((roi - min) / step);
     const clamped = Math.max(0, Math.min(bins.length - 1, idx));
-    bins[clamped].count += 1;
+    bins[clamped]!.count += 1;
   }
   return bins;
 }
@@ -55,7 +55,7 @@ function computeMedian(values: number[]): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
 interface TooltipPayloadEntry {
@@ -65,7 +65,7 @@ interface TooltipPayloadEntry {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const bin = payload[0].payload;
+  const bin = payload[0]!.payload;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">{bin.range}</p>

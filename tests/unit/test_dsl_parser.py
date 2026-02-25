@@ -29,6 +29,7 @@ from vibe_quant.dsl import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
     pass
 
 
@@ -571,9 +572,7 @@ class TestParseStrategyFile:
         with pytest.raises(FileNotFoundError):
             parse_strategy("/nonexistent/path.yaml")
 
-    def test_parse_strategy_from_file(
-        self, tmp_path: Path, minimal_strategy_yaml: str
-    ) -> None:
+    def test_parse_strategy_from_file(self, tmp_path: Path, minimal_strategy_yaml: str) -> None:
         """Parse strategy from file."""
         yaml_file = tmp_path / "strategy.yaml"
         yaml_file.write_text(minimal_strategy_yaml)

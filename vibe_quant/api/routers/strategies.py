@@ -103,9 +103,7 @@ async def validate_strategy(strategy_id: int, mgr: StateMgr) -> ValidationResult
     from vibe_quant.dsl.translator import translate_dsl_config
 
     try:
-        translated = translate_dsl_config(
-            row["dsl_config"], strategy_name=str(row["name"])
-        )
+        translated = translate_dsl_config(row["dsl_config"], strategy_name=str(row["name"]))
         validate_strategy_dict(translated)
         return ValidationResult(valid=True, errors=[])
     except DSLValidationError as exc:

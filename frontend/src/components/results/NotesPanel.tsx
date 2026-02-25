@@ -16,7 +16,7 @@ export function NotesPanel({ runId }: NotesPanelProps) {
   const summaryQuery = useGetRunSummaryApiResultsRunsRunIdGet(runId);
   const mutation = useUpdateNotesApiResultsRunsRunIdNotesPut();
 
-  const serverNotes = summaryQuery.data?.data?.notes ?? "";
+  const serverNotes = (summaryQuery.data?.data as Record<string, unknown> | undefined)?.notes as string ?? "";
   const [text, setText] = useState(serverNotes);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [lastSaved, setLastSaved] = useState<Date | null>(null);

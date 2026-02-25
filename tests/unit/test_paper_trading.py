@@ -101,15 +101,17 @@ class TestBinanceTestnetConfig:
 
     def test_from_env_missing_key(self):
         """Raises error if API key missing."""
-        with patch.dict(os.environ, {}, clear=True), pytest.raises(
-            ConfigurationError, match="BINANCE_API_KEY"
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            pytest.raises(ConfigurationError, match="BINANCE_API_KEY"),
         ):
             BinanceTestnetConfig.from_env()
 
     def test_from_env_missing_secret(self):
         """Raises error if API secret missing."""
-        with patch.dict(os.environ, {"BINANCE_API_KEY": "key"}, clear=True), pytest.raises(
-            ConfigurationError, match="BINANCE_API_SECRET"
+        with (
+            patch.dict(os.environ, {"BINANCE_API_KEY": "key"}, clear=True),
+            pytest.raises(ConfigurationError, match="BINANCE_API_SECRET"),
         ):
             BinanceTestnetConfig.from_env()
 
@@ -552,7 +554,9 @@ class TestPaperTradingNode:
         assert node.status.state == NodeState.RUNNING
 
     @pytest.mark.asyncio
-    async def test_initialize_creates_live_node_object(self, db_path: Path, monkeypatch: pytest.MonkeyPatch):
+    async def test_initialize_creates_live_node_object(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """_initialize should attach a lifecycle node object, not a dict placeholder."""
         binance = BinanceTestnetConfig("key", "secret")
         config = PaperTradingConfig(
@@ -593,7 +597,9 @@ class TestPaperTradingNode:
             await node._shutdown()
 
     @pytest.mark.asyncio
-    async def test_initialize_saves_initial_checkpoint(self, db_path: Path, monkeypatch: pytest.MonkeyPatch):
+    async def test_initialize_saves_initial_checkpoint(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """_initialize should create persistence and store initial checkpoint."""
         binance = BinanceTestnetConfig("key", "secret")
         config = PaperTradingConfig(

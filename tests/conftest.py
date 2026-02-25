@@ -17,12 +17,14 @@ if TYPE_CHECKING:
     from vibe_quant.db import StateManager
 
 
-_NT_EAGER_IMPORT_TEST_MODULES = frozenset({
-    "test_data_catalog.py",
-    "test_ethereal_instruments.py",
-    "test_ethereal_venue.py",
-    "test_validation_venue.py",
-})
+_NT_EAGER_IMPORT_TEST_MODULES = frozenset(
+    {
+        "test_data_catalog.py",
+        "test_ethereal_instruments.py",
+        "test_ethereal_venue.py",
+        "test_validation_venue.py",
+    }
+)
 _NT_RUNTIME_TEST_PREFIXES = ("test_validation_",)
 
 
@@ -42,9 +44,8 @@ def _nt_runtime_preflight() -> tuple[bool, str]:
 def _requires_nt_runtime(path: Path) -> bool:
     """Return True for tests that should be skipped when NT runtime is incompatible."""
     filename = path.name
-    return (
-        filename in _NT_EAGER_IMPORT_TEST_MODULES
-        or filename.startswith(_NT_RUNTIME_TEST_PREFIXES)
+    return filename in _NT_EAGER_IMPORT_TEST_MODULES or filename.startswith(
+        _NT_RUNTIME_TEST_PREFIXES
     )
 
 

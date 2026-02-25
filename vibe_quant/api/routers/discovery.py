@@ -34,10 +34,26 @@ _DEFAULT_INDICATOR_POOL: list[dict[str, object]] = [
     {"name": "SMA", "params": {"period": {"min": 5, "max": 200, "step": 5}}},
     {"name": "EMA", "params": {"period": {"min": 5, "max": 200, "step": 5}}},
     {"name": "RSI", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
-    {"name": "MACD", "params": {"fast": {"min": 8, "max": 21}, "slow": {"min": 21, "max": 55}, "signal": {"min": 5, "max": 13}}},
-    {"name": "BollingerBands", "params": {"period": {"min": 10, "max": 50, "step": 5}, "std_dev": {"min": 1.5, "max": 3.0, "step": 0.25}}},
+    {
+        "name": "MACD",
+        "params": {
+            "fast": {"min": 8, "max": 21},
+            "slow": {"min": 21, "max": 55},
+            "signal": {"min": 5, "max": 13},
+        },
+    },
+    {
+        "name": "BollingerBands",
+        "params": {
+            "period": {"min": 10, "max": 50, "step": 5},
+            "std_dev": {"min": 1.5, "max": 3.0, "step": 0.25},
+        },
+    },
     {"name": "ATR", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
-    {"name": "Stochastic", "params": {"k_period": {"min": 5, "max": 21}, "d_period": {"min": 3, "max": 9}}},
+    {
+        "name": "Stochastic",
+        "params": {"k_period": {"min": 5, "max": 21}, "d_period": {"min": 3, "max": 9}},
+    },
     {"name": "ADX", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
     {"name": "CCI", "params": {"period": {"min": 10, "max": 40, "step": 5}}},
     {"name": "VWAP", "params": {}},
@@ -53,7 +69,10 @@ def _read_progress_file(run_id: int) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())  # type: ignore[return-value]
+        data: object = json.loads(path.read_text())
+        if isinstance(data, dict):
+            return data
+        return None
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -208,7 +227,10 @@ def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[st
     try:
         data = json.loads(notes)
         if isinstance(data, dict) and "top_strategies" in data:
-            return data["top_strategies"]
+            strategies = data["top_strategies"]
+            if isinstance(strategies, list):
+                return strategies  # type narrowed to list
+        return []
     except (json.JSONDecodeError, TypeError):
         pass
     return []
@@ -264,23 +286,24 @@ async def export_discovered_strategy(
         raise HTTPException(status_code=404, detail="Strategy index out of range")
 
     entry = strategies[strategy_index]
-    dsl = entry.get("dsl", {})
-    name = dsl.get("name", f"discovery_{run_id}_{strategy_index}")
+    dsl_raw = entry.get("dsl", {})
+    dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
+    name = str(dsl.get("name", f"discovery_{run_id}_{strategy_index}"))
 
     # Check if strategy name already exists
-    existing = state.conn.execute(
-        "SELECT id FROM strategies WHERE name = ?", (name,)
-    ).fetchone()
+    existing = state.conn.execute("SELECT id FROM strategies WHERE name = ?", (name,)).fetchone()
     if existing:
         return {"status": "exists", "strategy_id": existing[0], "name": name}
 
     import json
 
+    _score_raw = entry.get("score", 0)
+    _score: float = _score_raw if isinstance(_score_raw, (int, float)) else 0.0
     cursor = state.conn.execute(
         "INSERT INTO strategies (name, description, dsl_config, strategy_type) VALUES (?, ?, ?, ?)",
         (
             name,
-            f"Discovered via GA run {run_id} (score={entry.get('score', 0):.4f})",
+            f"Discovered via GA run {run_id} (score={_score:.4f})",
             json.dumps(dsl),
             dsl.get("strategy_type", "momentum"),
         ),
@@ -295,8 +318,11 @@ async def export_discovered_strategy(
 @router.get("/indicator-pool")
 async def get_indicator_pool() -> list[dict[str, object]]:
     try:
-        from vibe_quant.dsl.indicators import INDICATOR_CATALOG  # type: ignore[import-not-found]
+        from vibe_quant.dsl import indicators as _ind_mod
 
-        return INDICATOR_CATALOG  # type: ignore[return-value]
-    except (ImportError, AttributeError):
+        catalog: list[dict[str, object]] = getattr(
+            _ind_mod, "INDICATOR_CATALOG", _DEFAULT_INDICATOR_POOL
+        )
+        return catalog
+    except ImportError:
         return _DEFAULT_INDICATOR_POOL

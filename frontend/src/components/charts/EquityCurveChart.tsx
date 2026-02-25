@@ -38,7 +38,7 @@ interface TooltipPayloadEntry {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const point = payload[0];
+  const point = payload[0]!;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">
@@ -53,18 +53,18 @@ export default function EquityCurveChart({ data, height = 300, className }: Equi
   // Find max drawdown trough: track running peak and find min equity/peak ratio
   const maxDrawdownPoint = useMemo(() => {
     if (data.length < 2) return null;
-    let peak = data[0].equity;
+    let peak = data[0]!.equity;
     let maxDd = 0;
     let troughIdx = -1;
     for (let i = 1; i < data.length; i++) {
-      if (data[i].equity > peak) peak = data[i].equity;
-      const dd = (peak - data[i].equity) / peak;
+      if (data[i]!.equity > peak) peak = data[i]!.equity;
+      const dd = (peak - data[i]!.equity) / peak;
       if (dd > maxDd) {
         maxDd = dd;
         troughIdx = i;
       }
     }
-    return troughIdx >= 0 ? data[troughIdx] : null;
+    return troughIdx >= 0 ? data[troughIdx]! : null;
   }, [data]);
 
   return (

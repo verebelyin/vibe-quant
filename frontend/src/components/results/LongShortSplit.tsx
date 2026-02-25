@@ -81,7 +81,7 @@ function StatColumn({
 
 export function LongShortSplit({ runId }: LongShortSplitProps) {
   const query = useGetTradesApiResultsRunsRunIdTradesGet(runId);
-  const trades = query.data?.data;
+  const trades = query.data?.data as TradeResponse[] | undefined;
 
   const longStats = useMemo(
     () => (trades ? computeDirectionStats(trades, "long") : null),

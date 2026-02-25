@@ -336,9 +336,7 @@ class TestStateManager:
         assert len(running) == 1
         assert running[0]["pid"] == 11111
 
-    def test_duplicate_run_id_raises_integrity_error(
-        self, state_manager: StateManager
-    ) -> None:
+    def test_duplicate_run_id_raises_integrity_error(self, state_manager: StateManager) -> None:
         """Inserting two jobs with same run_id should raise IntegrityError."""
         strategy_id = state_manager.create_strategy(name="dup_test", dsl_config={})
         run_id = state_manager.create_backtest_run(
@@ -355,9 +353,7 @@ class TestStateManager:
         with pytest.raises(sqlite3.IntegrityError):
             state_manager.register_job(run_id, 22222, "screening")
 
-    def test_update_job_status_persists_error(
-        self, state_manager: StateManager
-    ) -> None:
+    def test_update_job_status_persists_error(self, state_manager: StateManager) -> None:
         """update_job_status with error should persist error_message."""
         strategy_id = state_manager.create_strategy(name="err_test", dsl_config={})
         run_id = state_manager.create_backtest_run(
@@ -418,12 +414,22 @@ class TestStateManager:
         sid_2 = state_manager.create_strategy(name="strat_b", dsl_config={})
 
         rid_1 = state_manager.create_backtest_run(
-            strategy_id=sid_1, run_mode="screening", symbols=["BTCUSDT-PERP"],
-            timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+            strategy_id=sid_1,
+            run_mode="screening",
+            symbols=["BTCUSDT-PERP"],
+            timeframe="5m",
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            parameters={},
         )
         rid_2 = state_manager.create_backtest_run(
-            strategy_id=sid_2, run_mode="screening", symbols=["ETHUSDT-PERP"],
-            timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+            strategy_id=sid_2,
+            run_mode="screening",
+            symbols=["ETHUSDT-PERP"],
+            timeframe="5m",
+            start_date="2024-01-01",
+            end_date="2024-06-30",
+            parameters={},
         )
 
         state_manager.save_backtest_result(rid_1, {"total_return": 0.10})
@@ -438,8 +444,13 @@ class TestStateManager:
         sid = state_manager.create_strategy(name="limit_test", dsl_config={})
         for i in range(5):
             rid = state_manager.create_backtest_run(
-                strategy_id=sid, run_mode="screening", symbols=["BTCUSDT-PERP"],
-                timeframe="5m", start_date="2024-01-01", end_date="2024-06-30", parameters={},
+                strategy_id=sid,
+                run_mode="screening",
+                symbols=["BTCUSDT-PERP"],
+                timeframe="5m",
+                start_date="2024-01-01",
+                end_date="2024-06-30",
+                parameters={},
             )
             state_manager.save_backtest_result(rid, {"total_return": i * 0.1})
 

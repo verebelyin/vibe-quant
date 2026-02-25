@@ -24,6 +24,7 @@ class VerifyResult(TypedDict):
     ohlc_errors: list[tuple[int, str]]
     kline_count: int
 
+
 # Gap detection threshold: 5 minutes in milliseconds
 MAX_GAP_MS = 5 * 60 * 1000
 

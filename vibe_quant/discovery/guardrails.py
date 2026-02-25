@@ -286,16 +286,12 @@ def apply_guardrails(
     reasons: list[str] = []
 
     # 1. Minimum trades
-    min_trades_passed, min_trades_reason = check_min_trades(
-        fitness.total_trades, config.min_trades
-    )
+    min_trades_passed, min_trades_reason = check_min_trades(fitness.total_trades, config.min_trades)
     if min_trades_reason:
         reasons.append(min_trades_reason)
 
     # 2. Complexity
-    complexity_passed, complexity_reason = check_complexity(
-        num_genes, config.max_complexity
-    )
+    complexity_passed, complexity_reason = check_complexity(num_genes, config.max_complexity)
     if complexity_reason:
         reasons.append(complexity_reason)
 

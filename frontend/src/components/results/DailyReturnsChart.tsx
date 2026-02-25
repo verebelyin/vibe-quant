@@ -31,11 +31,11 @@ function computeDailyReturns(data: EquityCurvePoint[]): DailyReturn[] {
 
   const result: DailyReturn[] = [];
   for (let i = 1; i < data.length; i++) {
-    const prev = data[i - 1].equity;
-    const curr = data[i].equity;
+    const prev = data[i - 1]!.equity;
+    const curr = data[i]!.equity;
     if (prev !== 0) {
       result.push({
-        timestamp: data[i].timestamp,
+        timestamp: data[i]!.timestamp,
         returnPct: Number.parseFloat((((curr - prev) / prev) * 100).toFixed(4)),
       });
     }
@@ -50,13 +50,13 @@ function formatDate(ts: string): string {
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
   if (!active || !payload?.length) return null;
-  const point = payload[0];
+  const point = payload[0]!;
   return (
     <div className="rounded-md border border-border bg-background px-3 py-2 text-sm shadow-md">
       <p className="text-muted-foreground">
         {new Date(point.payload.timestamp).toLocaleDateString()}
       </p>
-      <p className="font-medium text-foreground">{point.value.toFixed(4)}%</p>
+      <p className="font-medium text-foreground">{(point.value as number).toFixed(4)}%</p>
     </div>
   );
 }

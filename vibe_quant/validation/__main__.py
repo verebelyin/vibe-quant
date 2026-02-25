@@ -26,7 +26,10 @@ def main() -> int:
         result = runner.run(args.run_id)
         job_manager.mark_completed(args.run_id)
         # total_return is stored as a fraction (0.15 = 15%); multiply by 100 for display
-        print(f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%", file=sys.stderr)
+        print(
+            f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%",
+            file=sys.stderr,
+        )
         return 0
     except Exception as exc:
         import contextlib

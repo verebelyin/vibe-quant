@@ -93,13 +93,15 @@ def get_download_preview(
             else:
                 status = "Will download"
 
-            preview.append({
-                "Symbol": symbol,
-                "Month": f"{year}-{month:02d}",
-                "Status": status,
-                "Klines": actual,
-                "Expected": expected,
-            })
+            preview.append(
+                {
+                    "Symbol": symbol,
+                    "Month": f"{year}-{month:02d}",
+                    "Status": status,
+                    "Klines": actual,
+                    "Expected": expected,
+                }
+            )
 
     return preview
 
@@ -129,9 +131,7 @@ def update_symbol(
     """
     if symbol not in INSTRUMENT_CONFIGS:
         supported = sorted(INSTRUMENT_CONFIGS.keys())
-        raise ValueError(
-            f"Unsupported symbol '{symbol}'. Supported symbols: {supported}"
-        )
+        raise ValueError(f"Unsupported symbol '{symbol}'. Supported symbols: {supported}")
 
     if archive is None:
         archive = RawDataArchive()
@@ -231,38 +231,41 @@ def update_all(
     results: dict[str, dict[str, int]] = {}
 
     session_id = archive.create_download_session(
-        symbols=symbols, source="binance_api",
+        symbols=symbols,
+        source="binance_api",
     )
     total_new = 0
 
     try:
         for symbol in symbols:
             if verbose:
-                print(f"\n{'='*50}")
+                print(f"\n{'=' * 50}")
                 print(f"Updating {symbol}")
-                print(f"{'='*50}")
+                print(f"{'=' * 50}")
 
-            counts = update_symbol(
-                symbol, archive=archive, catalog=catalog, verbose=verbose
-            )
+            counts = update_symbol(symbol, archive=archive, catalog=catalog, verbose=verbose)
             results[symbol] = counts
             total_new += counts.get("new_klines", 0)
 
         archive.complete_download_session(
-            session_id, klines_fetched=total_new, klines_inserted=total_new,
+            session_id,
+            klines_fetched=total_new,
+            klines_inserted=total_new,
         )
     except Exception as e:
         archive.complete_download_session(
-            session_id, status="failed", error_message=str(e),
+            session_id,
+            status="failed",
+            error_message=str(e),
         )
         raise
 
     archive.close()
 
     if verbose:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print("UPDATE SUMMARY")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         for sym, cnts in results.items():
             print(f"{sym}: {cnts.get('new_klines', 0)} new klines")
 
@@ -296,9 +299,7 @@ def ingest_symbol(
     """
     if symbol not in INSTRUMENT_CONFIGS:
         supported = sorted(INSTRUMENT_CONFIGS.keys())
-        raise ValueError(
-            f"Unsupported symbol '{symbol}'. Supported symbols: {supported}"
-        )
+        raise ValueError(f"Unsupported symbol '{symbol}'. Supported symbols: {supported}")
 
     if archive is None:
         archive = RawDataArchive()
@@ -324,8 +325,10 @@ def ingest_symbol(
             to_download.append((year, month))
 
     if verbose:
-        print(f"Downloading {symbol}: {len(to_download)} months to download, "
-              f"{len(skipped)} months skipped (already archived)")
+        print(
+            f"Downloading {symbol}: {len(to_download)} months to download, "
+            f"{len(skipped)} months skipped (already archived)"
+        )
 
     # Download and archive 1m klines (only missing/partial months)
     for year, month in to_download:
@@ -344,8 +347,10 @@ def ingest_symbol(
     counts["months_downloaded"] = len(to_download)
 
     if verbose:
-        print(f"Total from Vision: {counts['klines_fetched']} fetched, "
-              f"{counts['klines_inserted']} new")
+        print(
+            f"Total from Vision: {counts['klines_fetched']} fetched, "
+            f"{counts['klines_inserted']} new"
+        )
 
     # Fill current incomplete month via REST API
     if months:
@@ -361,8 +366,10 @@ def ingest_symbol(
 
         if rest_start_ms < rest_end_ms:
             if verbose:
-                print(f"Fetching {rest_start.strftime('%Y-%m-%d')} to "
-                      f"{effective_end.strftime('%Y-%m-%d')} via REST API...")
+                print(
+                    f"Fetching {rest_start.strftime('%Y-%m-%d')} to "
+                    f"{effective_end.strftime('%Y-%m-%d')} via REST API..."
+                )
             recent = download_recent_klines(symbol, "1m", rest_start_ms, rest_end_ms)
             if recent:
                 inserted = archive.insert_klines(symbol, "1m", recent, "binance_api")
@@ -500,9 +507,9 @@ def ingest_all(
     try:
         for symbol in symbols:
             if verbose:
-                print(f"\n{'='*50}")
+                print(f"\n{'=' * 50}")
                 print(f"Processing {symbol}")
-                print(f"{'='*50}")
+                print(f"{'=' * 50}")
 
             counts = ingest_symbol(
                 symbol,
@@ -535,15 +542,23 @@ def ingest_all(
         )
     except Exception as e:
         archive.complete_download_session(
-            session_id, status="failed", error_message=str(e),
+            session_id,
+            status="failed",
+            error_message=str(e),
         )
         raise
 
     archive.close()
 
     if verbose:
-        _print_summary(results, archive._db_path, catalog._catalog_path,
-                       total_klines_fetched, total_klines_inserted, total_funding)
+        _print_summary(
+            results,
+            archive._db_path,
+            catalog._catalog_path,
+            total_klines_fetched,
+            total_klines_inserted,
+            total_funding,
+        )
 
     return results
 
@@ -574,9 +589,9 @@ def _print_summary(
     total_funding: int,
 ) -> None:
     """Print formatted download summary."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     for sym, cnts in results.items():
         fetched = cnts.get("klines_fetched", 0)
@@ -614,8 +629,10 @@ def _print_summary(
 
     # Totals if multiple symbols
     if len(results) > 1:
-        print(f"\n  Totals: {total_fetched:,} fetched, {total_inserted:,} new, "
-              f"{total_funding:,} funding rates")
+        print(
+            f"\n  Totals: {total_fetched:,} fetched, {total_inserted:,} new, "
+            f"{total_funding:,} funding rates"
+        )
 
     print()
 
@@ -708,9 +725,9 @@ def rebuild_from_archive(
 
     for symbol in symbols:
         if verbose:
-            print(f"\n{'='*50}")
+            print(f"\n{'=' * 50}")
             print(f"Processing {symbol}")
-            print(f"{'='*50}")
+            print(f"{'=' * 50}")
 
         counts: dict[str, int] = {}
 
@@ -760,9 +777,9 @@ def rebuild_from_archive(
     archive.close()
 
     if verbose:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print("REBUILD COMPLETE")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         for sym, counts in results.items():
             print(f"{sym}: {counts}")
 
@@ -807,9 +824,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("status", help="Show data status")
 
     # Update command
-    update_parser = subparsers.add_parser(
-        "update", help="Update data with recent candles"
-    )
+    update_parser = subparsers.add_parser("update", help="Update data with recent candles")
     update_parser.add_argument(
         "--symbols",
         type=str,
@@ -818,9 +833,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Rebuild command
-    rebuild_parser = subparsers.add_parser(
-        "rebuild", help="Rebuild catalog from archive"
-    )
+    rebuild_parser = subparsers.add_parser("rebuild", help="Rebuild catalog from archive")
     rebuild_parser.add_argument(
         "--from-archive",
         action="store_true",
@@ -848,9 +861,7 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             )
             end_date = (
-                datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC)
-                if args.end
-                else None
+                datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC) if args.end else None
             )
         except ValueError as e:
             print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
@@ -883,9 +894,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "verify":
         archive = RawDataArchive()
         symbols = (
-            [s.strip() for s in args.symbols.split(",")]
-            if args.symbols
-            else archive.get_symbols()
+            [s.strip() for s in args.symbols.split(",")] if args.symbols else archive.get_symbols()
         )
 
         if not symbols:

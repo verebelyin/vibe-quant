@@ -1,18 +1,18 @@
 import { cn } from "@/lib/utils";
 
-interface StrategyCardProps {
+export interface StrategyCardProps {
   name: string;
-  description?: string;
-  strategyType?: string;
-  version?: number;
-  isActive?: boolean;
-  timeframe?: string;
-  symbols?: string[];
-  indicatorCount?: number;
-  updatedAt?: string;
-  index?: number;
-  onClick?: () => void;
-  className?: string;
+  description?: string | undefined;
+  strategyType?: string | undefined;
+  version?: number | undefined;
+  isActive?: boolean | undefined;
+  timeframe?: string | undefined;
+  symbols?: string[] | undefined;
+  indicatorCount?: number | undefined;
+  updatedAt?: string | undefined;
+  index?: number | undefined;
+  onClick?: (() => void) | undefined;
+  className?: string | undefined;
 }
 
 export const TYPE_META: Record<string, { color: string; label: string }> = {

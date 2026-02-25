@@ -59,13 +59,9 @@ class BinanceTestnetConfig:
         api_secret = os.getenv(ENV_BINANCE_API_SECRET)
 
         if not api_key:
-            raise ConfigurationError(
-                f"Missing {ENV_BINANCE_API_KEY} environment variable"
-            )
+            raise ConfigurationError(f"Missing {ENV_BINANCE_API_KEY} environment variable")
         if not api_secret:
-            raise ConfigurationError(
-                f"Missing {ENV_BINANCE_API_SECRET} environment variable"
-            )
+            raise ConfigurationError(f"Missing {ENV_BINANCE_API_SECRET} environment variable")
 
         return cls(
             api_key=api_key,
@@ -163,7 +159,9 @@ class PaperTradingConfig:
 
         _VALID_SIZING_METHODS = {"fixed_fractional", "kelly", "atr"}
         if self.sizing.method not in _VALID_SIZING_METHODS:
-            errors.append(f"sizing method must be one of {sorted(_VALID_SIZING_METHODS)}, got '{self.sizing.method}'")
+            errors.append(
+                f"sizing method must be one of {sorted(_VALID_SIZING_METHODS)}, got '{self.sizing.method}'"
+            )
 
         if self.sizing.risk_per_trade <= 0 or self.sizing.risk_per_trade > Decimal("0.5"):
             errors.append("risk_per_trade must be between 0 and 0.5")

@@ -170,7 +170,8 @@ class DiscoveryPipeline:
         self,
         config: DiscoveryConfig,
         backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
-        filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None = None,
+        filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
+        | None = None,
         progress_file: str | Path | None = None,
     ) -> None:
         self.config = config
@@ -192,6 +193,7 @@ class DiscoveryPipeline:
             INDICATOR_POOL,
             _ensure_pool,
         )
+
         _ensure_pool()
         allowed = set(self.config.indicator_pool)
         to_remove = [k for k in INDICATOR_POOL if k not in allowed]
@@ -223,7 +225,10 @@ class DiscoveryPipeline:
 
         logger.info(
             "=== DISCOVERY START: pop=%d max_gen=%d symbols=%s tf=%s ===",
-            cfg.population_size, cfg.max_generations, cfg.symbols, cfg.timeframe,
+            cfg.population_size,
+            cfg.max_generations,
+            cfg.symbols,
+            cfg.timeframe,
         )
 
         for gen in range(cfg.max_generations):
@@ -274,7 +279,8 @@ class DiscoveryPipeline:
             logger.info(
                 "=== GEN %d/%d === best=%.4f mean=%.4f passed=%d | "
                 "trades=%d return=%.1f%% | gen_time=%.1fs total=%.0fs ETA=%.0fs",
-                gen + 1, cfg.max_generations,
+                gen + 1,
+                cfg.max_generations,
                 gen_result.best_fitness,
                 gen_result.mean_fitness,
                 gen_result.num_passed_filters,
@@ -305,7 +311,9 @@ class DiscoveryPipeline:
                 convergence_gen = gen
                 logger.info(
                     "=== CONVERGED at gen %d/%d after %.0fs ===",
-                    gen + 1, cfg.max_generations, total_elapsed,
+                    gen + 1,
+                    cfg.max_generations,
+                    total_elapsed,
                 )
                 break
 
@@ -412,9 +420,7 @@ class DiscoveryPipeline:
             return False
 
         recent = generation_results[-n:]
-        best_before = max(
-            gr.best_fitness for gr in generation_results[: -n]
-        )
+        best_before = max(gr.best_fitness for gr in generation_results[:-n])
         best_recent = max(gr.best_fitness for gr in recent)
         return best_recent <= best_before
 
@@ -450,12 +456,17 @@ class DiscoveryPipeline:
                 validated.append((chrom, fitness))
                 logger.info(
                     "Guardrail PASS: %s score=%.4f sharpe=%.2f trades=%d",
-                    chrom.uid, fitness.adjusted_score, fitness.sharpe_ratio, fitness.total_trades,
+                    chrom.uid,
+                    fitness.adjusted_score,
+                    fitness.sharpe_ratio,
+                    fitness.total_trades,
                 )
             else:
                 logger.info(
                     "Guardrail FAIL: %s score=%.4f reasons=%s",
-                    chrom.uid, fitness.adjusted_score, result.reasons,
+                    chrom.uid,
+                    fitness.adjusted_score,
+                    result.reasons,
                 )
 
         if not validated:
