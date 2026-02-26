@@ -576,6 +576,49 @@ take_profit:
         assert "slow_period" in source
         assert "signal_period" in source
 
+    def test_macd_signal_forces_pandas_ta_fallback(
+        self, compiler: StrategyCompiler
+    ) -> None:
+        """MACD with .signal/.histogram conditions must use pandas-ta, not NT.
+
+        NT MACD only exposes .value (MACD line). When signal/histogram
+        are referenced, compiler must switch to pandas-ta and generate
+        proper multi-output extraction (macd, signal, histogram).
+        """
+        yaml_content = """
+name: macd_signal_strategy
+timeframe: 5m
+indicators:
+  macd:
+    type: MACD
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+entry_conditions:
+  long:
+    - macd.signal > 0
+  short:
+    - macd.histogram < 0
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0
+"""
+        dsl = parse_strategy_string(yaml_content)
+        source = compiler.compile(dsl)
+
+        compile(source, "<generated>", "exec")
+        # Must use pandas-ta (ta.macd), not NT MACD class
+        assert "ta.macd(" in source
+        # Must extract all 3 sub-outputs
+        assert '"macd_signal"' in source
+        assert '"macd_histogram"' in source
+        assert '"macd_macd"' in source
+        # Must NOT instantiate NT MACD
+        assert "MovingAverageConvergenceDivergence(" not in source
+
     def test_compile_with_bbands_indicator(self, compiler: StrategyCompiler) -> None:
         """Bollinger Bands indicator should compile correctly."""
         yaml_content = """

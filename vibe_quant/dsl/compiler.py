@@ -1128,6 +1128,26 @@ class StrategyCompiler:
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
                     ]
                 )
+            elif config.type == "MACD":
+                # MACD returns DataFrame with 3 columns: MACD line, histogram, signal
+                fast = config.fast_period or spec.default_params.get("fast_period", 12)
+                slow = config.slow_period or spec.default_params.get("slow_period", 26)
+                signal = config.signal_period or spec.default_params.get("signal_period", 9)
+                lines.extend(
+                    [
+                        "        _close = pd.Series(self._pta_close)",
+                        f"        _macd_df = ta.macd(_close, fast={fast}, slow={slow}, signal={signal})",
+                        "        if _macd_df is not None and len(_macd_df) > 0:",
+                        "            _last = _macd_df.iloc[-1]",
+                        "            if not pd.isna(_last.iloc[0]):",
+                        f'                self._pta_values["{info.name}"] = float(_last.iloc[0])',
+                        f'                self._pta_values["{info.name}_macd"] = float(_last.iloc[0])',
+                        "            if len(_last) > 1 and not pd.isna(_last.iloc[1]):",
+                        f'                self._pta_values["{info.name}_histogram"] = float(_last.iloc[1])',
+                        "            if len(_last) > 2 and not pd.isna(_last.iloc[2]):",
+                        f'                self._pta_values["{info.name}_signal"] = float(_last.iloc[2])',
+                    ]
+                )
             elif config.type == "WILLR":
                 # Williams %R needs high, low, close
                 period = config.period or spec.default_params.get("period", 14)
@@ -1171,6 +1191,11 @@ class StrategyCompiler:
             val = defaults.get(key, fallback)
             return val if isinstance(val, int) else fallback
 
+        if config.type == "MACD":
+            # MACD needs slow_period + signal_period bars for convergence
+            slow = config.slow_period or _int_param("slow_period", 26)
+            signal = config.signal_period or _int_param("signal_period", 9)
+            return slow + signal
         if config.type == "ICHIMOKU":
             return max(
                 _int_param("tenkan", 9),
