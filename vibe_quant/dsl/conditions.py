@@ -178,7 +178,7 @@ class ConditionParseError(ValueError):
 # Allow dot notation for multi-output indicators (e.g., macd.histogram)
 _COMPARISON_PATTERN = re.compile(r"^\s*(\w+(?:\.\w+)?)\s*(>=|<=|>|<)\s*(-?\w+(?:\.\w+)?)\s*$")
 _CROSS_PATTERN = re.compile(
-    r"^\s*(\w+(?:\.\w+)?)\s+(crosses_above|crosses_below)\s+(\w+(?:\.\w+)?)\s*$",
+    r"^\s*(\w+(?:\.\w+)?)\s+(crosses_above|crosses_below)\s+(-?\w+(?:\.\w+)?)\s*$",
     re.IGNORECASE,
 )
 _BETWEEN_PATTERN = re.compile(
