@@ -91,6 +91,37 @@ Launched 5 parallel discovery runs on **BTCUSDT/1m, 2025-09-01 to 2026-02-24** (
 - **Validation runs 37, 39 show "Job stale" error**: The heartbeat timeout (120s) is too short for long backtests. Jobs completed successfully but were marked stale by the job manager before results were written. Results are still present in DB.
 - **Direction field ambiguity**: Run 42's genomes show `direction=long` but conditions are in `entry_short`/`exit_short`. Need to investigate if this is a display bug or a genome→DSL translation issue.
 
+### Switch to 5m Timeframe (Runs 51-54)
+
+Killed 1m runs 40-44 (too slow with pandas-ta on 260K bars). Relaunched on **BTCUSDT/5m, 2025-09-01 to 2026-02-24** (~52K bars).
+
+Also fixed crossover regex bug (commit `6282d41`): `_CROSS_PATTERN` in `conditions.py` didn't support negative thresholds like `-1.7083`, silently discarding genomes with ROC/MACD crossover conditions.
+
+| Run | Archetype | Indicators | Pop×Gen | Status | Duration | Best Fitness |
+|-----|-----------|------------|---------|--------|----------|-------------|
+| 51 | Momentum | RSI, MACD, ROC, WILLR | 12×10 | **Killed** (too slow) | ~2h, gen 6/10 | 0.33 |
+| **52** | **Mean Reversion** | **RSI, CCI, STOCH, BBANDS** | **12×10** | **Completed** | ~38 min | **0.8412** |
+| 53 | Exotic | CCI, WILLR, STOCH, ROC | 16×10 | **Died at gen 9/10** | ~3h | 0.6978 |
+| 54 | Full Pool | All 10 indicators | 16×12 | **Killed** (too slow) | ~38 min, gen ~3 | — |
+
+### Run 52 Results: CCI + RSI Mean Reversion (WINNER)
+
+**Best genome:** CCI(entry) >= 7.2 (short entry) + RSI(exit) crosses_below 70.5, SL=5.14%, TP=4.17%
+
+| Step | Run | Trades | Return | Sharpe | PF | Max DD | Fees |
+|------|-----|--------|--------|--------|-----|--------|------|
+| Discovery | 52 | 54 | +25.02% | 4.425 | 1.722 | 0.0% | — |
+| Screening | 55 | **54** | +25.02% | 4.425 | 1.722 | — | — |
+| Validation | 56 | **46** | +24.61% | 4.643 | 1.854 | 7.28% | — |
+
+**Key finding:** This strategy **survived validation** with only 8 lost trades (54→46), maintained return (+25%→+24.6%), and Sharpe actually *improved* (4.43→4.64). This is exceptional — most strategies degrade significantly in validation.
+
+### Run 53: Exotic CCI/WILLR/STOCH/ROC (Unfinished)
+
+Ran 3+ hours, reached gen 9/10 with fitness 0.6978 (101 trades, +17.1% return) but process died or timed out before gen 10 completed. API returned empty strategies. Best genome at gen 9 had mean fitness 0.6749, showing good convergence.
+
+**Lesson:** STOCH (pandas-ta) is extremely slow on 5m data. Gen 9 alone took 3079s (~51 min). Mixed pandas-ta indicator pools on 5m should use smaller populations or fewer generations.
+
 ---
 
 ## Historical Discovery Runs (Pre-Bug-Fix)
