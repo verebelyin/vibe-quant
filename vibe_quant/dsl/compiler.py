@@ -8,12 +8,14 @@ and on_bar() with time filter evaluation, condition checking, and order submissi
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import logging
 import sys
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
@@ -92,6 +94,22 @@ class IndicatorInfo:
     timeframe: str
     bar_type_var: str
     indicator_var: str
+
+
+def compiler_version_hash() -> str:
+    """Return short SHA-256 hash of compiler + templates source.
+
+    Use to detect when compiled strategies may be stale (e.g., after
+    fixing the pos.entry→pos.side bug, old discovery results become
+    unreliable). Stored in discovery notes and screening results.
+    """
+    h = hashlib.sha256()
+    dsl_dir = Path(__file__).parent
+    for name in ("compiler.py", "templates.py", "conditions.py", "indicators.py"):
+        src = dsl_dir / name
+        if src.exists():
+            h.update(src.read_bytes())
+    return h.hexdigest()[:12]
 
 
 class StrategyCompiler:

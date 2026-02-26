@@ -10,6 +10,39 @@ import sys
 from pathlib import Path
 
 
+def _store_compiler_version(state: object, run_id: int, version: str) -> None:
+    """Store compiler version hash in run's notes JSON."""
+    import json
+
+    try:
+        conn = getattr(state, "conn", None)
+        if conn is None:
+            return
+        row = conn.execute(
+            "SELECT notes FROM backtest_results WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row and row[0]:
+            notes = json.loads(row[0])
+            notes["compiler_version"] = version
+            conn.execute(
+                "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
+                (json.dumps(notes), run_id),
+            )
+        else:
+            # No results row yet — store in parameters instead
+            row2 = conn.execute(
+                "SELECT parameters FROM backtest_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            params = json.loads(row2[0]) if row2 and row2[0] else {}
+            params["compiler_version"] = version
+            conn.execute(
+                "UPDATE backtest_runs SET parameters = ? WHERE id = ?",
+                (json.dumps(params), run_id),
+            )
+    except Exception:
+        pass  # Non-critical metadata
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run screening pipeline for a given run_id.
 
@@ -74,6 +107,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         result = pipeline.run()
         pipeline.save_results(result, state, args.run_id)
+
+        # Store compiler version for staleness detection
+        from vibe_quant.dsl.compiler import compiler_version_hash
+
+        _store_compiler_version(state, args.run_id, compiler_version_hash())
+
         state.update_backtest_run_status(args.run_id, "completed")
         manager.mark_completed(args.run_id)
         print(

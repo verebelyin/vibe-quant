@@ -18,6 +18,16 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 
+def _get_compiler_version() -> str:
+    """Get compiler version hash for staleness detection."""
+    try:
+        from vibe_quant.dsl.compiler import compiler_version_hash
+
+        return compiler_version_hash()
+    except Exception:
+        return "unknown"
+
+
 def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     """Generate deterministic pseudo-backtest metrics for testing GA loop."""
     seed_bytes = repr(chromosome).encode("utf-8")
@@ -286,6 +296,7 @@ def main() -> int:
                         "evaluated": result.total_candidates_evaluated,
                         "converged": result.converged,
                         "mock": use_mock,
+                        "compiler_version": _get_compiler_version(),
                         "top_strategies": top_dsls,
                     }
                 ),

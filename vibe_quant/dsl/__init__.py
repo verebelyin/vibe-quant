@@ -34,6 +34,7 @@ from vibe_quant.dsl.compiler import (
     CompilerError,
     IndicatorInfo,
     StrategyCompiler,
+    compiler_version_hash,
 )
 from vibe_quant.dsl.conditions import (
     Condition,
@@ -120,6 +121,7 @@ __all__ = [
     "StrategyCompiler",
     "CompilerError",
     "IndicatorInfo",
+    "compiler_version_hash",
     # Errors
     "DSLParseError",
     "DSLValidationError",
