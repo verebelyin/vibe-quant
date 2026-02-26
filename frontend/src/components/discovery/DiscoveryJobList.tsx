@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
@@ -80,8 +80,9 @@ interface DiscoveryJobListProps {
 }
 
 export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobListProps = {}) {
+  const [hasRunning, setHasRunning] = useState(false);
   const { data: jobsResp, isLoading } = useListDiscoveryJobsApiDiscoveryJobsGet({
-    query: { refetchInterval: 10_000 },
+    query: { refetchInterval: hasRunning ? 15_000 : false },
   });
 
   const killMutation = useKillDiscoveryJobApiDiscoveryJobsRunIdDelete({
@@ -104,6 +105,10 @@ export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobLis
     if (jobsResp.status === 200) return jobsResp.data;
     return [];
   }, [jobsResp]);
+
+  useEffect(() => {
+    setHasRunning(jobs.some((j) => j.status.toLowerCase() === "running"));
+  }, [jobs]);
 
   return (
     <div className="space-y-3">

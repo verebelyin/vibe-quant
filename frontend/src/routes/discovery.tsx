@@ -14,7 +14,7 @@ export function DiscoveryPage() {
   });
 
   const { data: jobsResp } = useListDiscoveryJobsApiDiscoveryJobsGet({
-    query: { refetchInterval: 10_000 },
+    query: { refetchInterval: false },
   });
 
   const jobs: DiscoveryJobResponse[] = useMemo(() => {

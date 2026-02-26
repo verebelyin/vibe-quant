@@ -149,7 +149,7 @@ async def launch_discovery(
         "--convergence-generations",
         str(body.convergence_generations),
         "--max-workers",
-        "0",
+        "4",
         "--symbols",
         symbols_str,
         "--timeframe",

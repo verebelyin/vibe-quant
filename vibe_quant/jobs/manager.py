@@ -291,13 +291,13 @@ class BacktestJobManager:
 
         pid = record["pid"]
 
+        # start_new_session=True means PGID == pid, so killpg is safe
         try:
             if force:
-                os.kill(pid, signal.SIGKILL)
+                os.killpg(pid, signal.SIGKILL)
             else:
-                # Graceful: SIGTERM first
-                os.kill(pid, signal.SIGTERM)
-                # Wait up to graceful_timeout for process to exit
+                # Graceful: SIGTERM to entire process group first
+                os.killpg(pid, signal.SIGTERM)
                 import time
 
                 poll_interval = 0.1
@@ -308,16 +308,18 @@ class BacktestJobManager:
                     time.sleep(poll_interval)
                     waited += poll_interval
 
-                # If still alive, escalate to SIGKILL
+                # If still alive, escalate to SIGKILL on entire group
                 if self.is_process_alive(pid):
                     with contextlib.suppress(ProcessLookupError, OSError):
-                        os.kill(pid, signal.SIGKILL)
+                        os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
-            # Process already dead
-            pass
+            # Process group already dead — fallback to single PID kill
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.kill(pid, signal.SIGKILL)
         except OSError:
-            # Permission denied or other error
-            pass
+            # Permission denied or other error — fallback to single PID
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.kill(pid, signal.SIGKILL)
 
         # Update database status
         self._update_job_status(run_id, JobStatus.KILLED)
@@ -364,7 +366,10 @@ class BacktestJobManager:
         """
         stale = self.list_stale_jobs()
         for job in stale:
-            # Try to kill the process
+            # Kill entire process group (start_new_session=True → PGID == pid)
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(job.pid, signal.SIGKILL)
+            # Fallback: kill parent PID directly if group kill failed
             with contextlib.suppress(ProcessLookupError, OSError):
                 os.kill(job.pid, signal.SIGKILL)
 
