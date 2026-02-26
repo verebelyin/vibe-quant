@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from vibe_quant.api.app import create_app
 
-EXPECTED_PATH_COUNT = 65
-EXPECTED_SCHEMA_COUNT = 51
+EXPECTED_PATH_COUNT = 67
+EXPECTED_SCHEMA_COUNT = 53
 
 REQUIRED_PATHS = [
     "/health",

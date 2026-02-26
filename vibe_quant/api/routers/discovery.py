@@ -13,6 +13,8 @@ from vibe_quant.api.schemas.discovery import (
     DiscoveryJobResponse,
     DiscoveryLaunchRequest,
     DiscoveryResultResponse,
+    PromoteResponse,
+    ReplayResponse,
 )
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
@@ -310,6 +312,171 @@ async def export_discovered_strategy(
     )
     state.conn.commit()
     return {"status": "created", "strategy_id": cursor.lastrowid, "name": name}
+
+
+# --- Promote & Replay ---
+
+
+def _get_discovery_run_config(state: StateManager, run_id: int) -> dict[str, object]:
+    """Load discovery run and validate it exists with mode=discovery."""
+    run = state.get_backtest_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Discovery run not found")
+    if run.get("run_mode") != "discovery":
+        raise HTTPException(status_code=400, detail="Run is not a discovery run")
+    return run
+
+
+def _get_genome_entry(
+    state: StateManager, run_id: int, strategy_index: int
+) -> dict[str, object]:
+    """Load a specific genome entry from discovery results."""
+    strategies = _load_discovery_strategies(state, run_id)
+    if strategy_index < 0 or strategy_index >= len(strategies):
+        raise HTTPException(status_code=404, detail="Strategy index out of range")
+    return strategies[strategy_index]
+
+
+def _launch_backtest_job(
+    state: StateManager,
+    jobs: BacktestJobManager,
+    run_id: int,
+    job_type: str,
+) -> int:
+    """Start a screening/validation subprocess for a backtest run."""
+    log_file = f"logs/{job_type}_{run_id}.log"
+    command = [
+        sys.executable,
+        "-m",
+        "vibe_quant",
+        job_type,
+        "run",
+        "--run-id",
+        str(run_id),
+    ]
+    try:
+        pid = jobs.start_job(run_id, job_type, command, log_file=log_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state.update_backtest_run_status(run_id, "running", pid=pid)
+    return pid
+
+
+@router.post(
+    "/results/{run_id}/promote/{strategy_index}",
+    response_model=PromoteResponse,
+    status_code=201,
+)
+async def promote_discovered_strategy(
+    run_id: int,
+    strategy_index: int,
+    state: StateMgr,
+    jobs: JobMgr,
+    ws: WsMgr,
+    mode: str = "screening",
+) -> PromoteResponse:
+    """Export genome as strategy and launch screening/validation backtest."""
+    if mode not in ("screening", "validation"):
+        raise HTTPException(status_code=400, detail="mode must be 'screening' or 'validation'")
+
+    discovery_run = _get_discovery_run_config(state, run_id)
+    entry = _get_genome_entry(state, run_id, strategy_index)
+
+    # Export genome to strategies table (reuse export logic)
+    import json
+
+    dsl_raw = entry.get("dsl", {})
+    dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
+    name = str(dsl.get("name", f"discovery_{run_id}_{strategy_index}"))
+
+    existing = state.conn.execute("SELECT id FROM strategies WHERE name = ?", (name,)).fetchone()
+    if existing:
+        strategy_id: int = existing[0]
+    else:
+        _score_raw = entry.get("score", 0)
+        _score: float = _score_raw if isinstance(_score_raw, (int, float)) else 0.0
+        cursor = state.conn.execute(
+            "INSERT INTO strategies (name, description, dsl_config, strategy_type) VALUES (?, ?, ?, ?)",
+            (
+                name,
+                f"Discovered via GA run {run_id} (score={_score:.4f})",
+                json.dumps(dsl),
+                dsl.get("strategy_type", "momentum"),
+            ),
+        )
+        state.conn.commit()
+        strategy_id = cursor.lastrowid or 0
+
+    # Create backtest run using discovery run's symbols/timeframe/dates
+    symbols_raw = discovery_run.get("symbols", [])
+    symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
+    backtest_run_id = state.create_backtest_run(
+        strategy_id=strategy_id,
+        run_mode=mode,
+        symbols=symbols_list,
+        timeframe=str(discovery_run.get("timeframe", "4h")),
+        start_date=str(discovery_run.get("start_date", "")),
+        end_date=str(discovery_run.get("end_date", "")),
+        parameters={},
+    )
+
+    pid = _launch_backtest_job(state, jobs, backtest_run_id, mode)
+    logger.info("promote: strategy=%d %s run=%d pid=%d", strategy_id, mode, backtest_run_id, pid)
+    await ws.broadcast("jobs", {"type": "job_started", "run_id": backtest_run_id, "job_type": mode})
+
+    return PromoteResponse(
+        strategy_id=strategy_id,
+        run_id=backtest_run_id,
+        name=name,
+        mode=mode,
+    )
+
+
+@router.post(
+    "/results/{run_id}/replay/{strategy_index}",
+    response_model=ReplayResponse,
+    status_code=201,
+)
+async def replay_discovered_strategy(
+    run_id: int,
+    strategy_index: int,
+    state: StateMgr,
+    jobs: JobMgr,
+    ws: WsMgr,
+) -> ReplayResponse:
+    """Re-run genome through screening to verify discovery metrics match."""
+    import json
+
+    discovery_run = _get_discovery_run_config(state, run_id)
+    entry = _get_genome_entry(state, run_id, strategy_index)
+
+    dsl_raw = entry.get("dsl", {})
+    dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
+
+    # Use dsl_override so screening CLI uses DSL directly (no strategy needed)
+    symbols_raw = discovery_run.get("symbols", [])
+    symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
+
+    from vibe_quant.dsl.translator import translate_dsl_config
+
+    dsl_name = str(dsl.get("name", f"replay_{run_id}_{strategy_index}"))
+    translated = translate_dsl_config(dsl, strategy_name=dsl_name)
+
+    replay_run_id = state.create_backtest_run(
+        strategy_id=None,
+        run_mode="screening",
+        symbols=symbols_list,
+        timeframe=str(discovery_run.get("timeframe", "4h")),
+        start_date=str(discovery_run.get("start_date", "")),
+        end_date=str(discovery_run.get("end_date", "")),
+        parameters={"dsl_override": translated},
+    )
+
+    pid = _launch_backtest_job(state, jobs, replay_run_id, "screening")
+    logger.info("replay: discovery=%d genome=%d screening=%d pid=%d", run_id, strategy_index, replay_run_id, pid)
+    await ws.broadcast("jobs", {"type": "job_started", "run_id": replay_run_id, "job_type": "screening"})
+
+    return ReplayResponse(replay_run_id=replay_run_id, original_run_id=run_id)
 
 
 # --- Indicator pool ---

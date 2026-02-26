@@ -33,19 +33,24 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"Run {args.run_id} not found")
             return 1
 
-        strategy_id = run_config["strategy_id"]
-        strategy = state.get_strategy(int(str(strategy_id)))
-        if strategy is None:
-            print(f"Strategy {strategy_id} not found")
-            return 1
-
         from vibe_quant.dsl.schema import StrategyDSL
         from vibe_quant.dsl.translator import translate_dsl_config
         from vibe_quant.screening.pipeline import create_screening_pipeline
 
-        raw_config = translate_dsl_config(
-            strategy["dsl_config"], strategy_name=str(strategy["name"])
-        )
+        # Check for DSL override (used by discovery replay)
+        parameters = run_config.get("parameters", {}) or {}
+        dsl_override = parameters.get("dsl_override") if isinstance(parameters, dict) else None
+        if dsl_override and isinstance(dsl_override, dict):
+            raw_config = dsl_override
+        else:
+            strategy_id = run_config["strategy_id"]
+            strategy = state.get_strategy(int(str(strategy_id)))
+            if strategy is None:
+                print(f"Strategy {strategy_id} not found")
+                return 1
+            raw_config = translate_dsl_config(
+                strategy["dsl_config"], strategy_name=str(strategy["name"])
+            )
         dsl = StrategyDSL.model_validate(raw_config)
 
         # Extract run parameters

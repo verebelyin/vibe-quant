@@ -31,3 +31,15 @@ class DiscoveryJobResponse(BaseModel):
 
 class DiscoveryResultResponse(BaseModel):
     strategies: list[dict[str, object]]
+
+
+class PromoteResponse(BaseModel):
+    strategy_id: int
+    run_id: int
+    name: str
+    mode: str
+
+
+class ReplayResponse(BaseModel):
+    replay_run_id: int
+    original_run_id: int
