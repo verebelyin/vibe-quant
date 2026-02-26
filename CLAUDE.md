@@ -2,6 +2,10 @@
 
 Algorithmic trading engine for crypto perpetual futures using NautilusTrader (Rust core) with two-tier backtesting (screening + validation), strategy DSL, overfitting prevention, and paper/live execution.
 
+## This file
+
+The rule of this file is to describe common mistakes and confusion points that agents might encounter as they work in this project. If you ever encounter something in this project that surprises you, or you failed to do after multiple attempts, please alert the developer working with you and indicate and describe that in the @AGENTS.md file to help prevent future agents from having the same issue.
+
 ## Quick Reference
 
 - **Package manager:** `uv` (not pip/poetry)
@@ -19,6 +23,7 @@ Algorithmic trading engine for crypto perpetual futures using NautilusTrader (Ru
 Start backend + frontend then test with `agent-browser`. **Always use `dangerouslyDisableSandbox: true`** for agent-browser commands (it needs `~/.agent-browser` socket dir).
 
 **Quick start:**
+
 ```bash
 # Start backend + frontend (background)
 .venv/bin/uvicorn vibe_quant.api.main:app --port 8000 &
@@ -29,6 +34,7 @@ agent-browser open http://localhost:5173 && agent-browser screenshot /tmp/claude
 ```
 
 **Chain commands with `&&`** to reduce round-trips:
+
 ```bash
 # Navigate + snapshot in one call
 agent-browser open http://localhost:5173 && agent-browser snapshot -i
@@ -41,6 +47,7 @@ agent-browser fill @e1 "test_strategy" && agent-browser fill @e2 "description" &
 ```
 
 **Key workflow:**
+
 1. `agent-browser open <url>` — navigate
 2. `agent-browser snapshot -i` — get interactive elements with refs (`@e1`, `@e2`...)
 3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` — interact using refs
@@ -58,18 +65,19 @@ Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting Filt
 ```
 
 Single engine (NautilusTrader) with two modes:
+
 - **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- still models leverage/funding/liquidation
 - **Validation mode**: custom FillModel, LatencyModel (co-located 1ms → retail 200ms), full cost modeling
 
 ## Key Specifications
 
-| Detail | Reference |
-|--------|-----------|
+| Detail                   | Reference                                                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | Full implementation spec | [`SPEC.md`](SPEC.md) -- **the authoritative source** for architecture, DSL, pipelines, data, schemas, and phases |
-| Sections 1-5 | Architecture, tech stack, decisions, data layout, strategy DSL |
-| Sections 6-7 | Screening pipeline, validation backtesting |
-| Sections 8-13 | Overfitting, risk, dashboard, paper trading, observability, testing |
-| Phases 1-8 | Implementation roadmap with deliverables and acceptance criteria |
+| Sections 1-5             | Architecture, tech stack, decisions, data layout, strategy DSL                                                   |
+| Sections 6-7             | Screening pipeline, validation backtesting                                                                       |
+| Sections 8-13            | Overfitting, risk, dashboard, paper trading, observability, testing                                              |
+| Phases 1-8               | Implementation roadmap with deliverables and acceptance criteria                                                 |
 
 ## Conventions
 
@@ -108,6 +116,7 @@ bd daemon start        # Background daemon for auto-export to JSONL
 ```
 
 **Other environments** (normal network access):
+
 ```bash
 npm install -g @beads/bd          # npm (auto-downloads binary)
 bun install -g --trust @beads/bd  # bun alternative
@@ -123,9 +132,21 @@ go install github.com/steveyegge/beads/cmd/bd@latest  # go (needs go 1.25+)
 - Valid issue types: `bug`, `feature`, `task`, `epic`, `chore`, `merge-request`, `molecule`, `gate`, `agent`, `role`, `rig`, `convoy`, `event`. Use `feature` not `enhancement` (alias fails import validation)
 
 **Fallback (no `bd`):** Edit `.beads/issues.jsonl` directly. Each issue is one JSON line:
+
 ```json
-{"id":"vibe-quant-xxx","title":"...","description":"...","status":"open","priority":1,"issue_type":"bug","owner":"verebelyin@gmail.com","created_at":"2026-02-07T14:00:00.000000+01:00","created_by":"Claude"}
+{
+  "id": "vibe-quant-xxx",
+  "title": "...",
+  "description": "...",
+  "status": "open",
+  "priority": 1,
+  "issue_type": "bug",
+  "owner": "verebelyin@gmail.com",
+  "created_at": "2026-02-07T14:00:00.000000+01:00",
+  "created_by": "Claude"
+}
 ```
+
 To list open issues without `bd`: `python3 -c "import json; [print(f'{j[\"id\"]}: {j[\"title\"]}') for line in open('.beads/issues.jsonl') if (j:=json.loads(line.strip())) and j.get('status')=='open']"`
 
 ### Usage
@@ -231,6 +252,7 @@ vibe-quant/
 ```
 
 **Key paths to remember:**
+
 - Strategy card: `frontend/src/components/ui/StrategyCard.tsx`
 - Strategy list/page: `frontend/src/components/strategies/StrategyList.tsx`, `frontend/src/routes/strategies.tsx`
 - Theme/CSS vars: `frontend/src/index.css`
@@ -243,10 +265,10 @@ vibe-quant/
 
 The files in `docs/` predate `SPEC.md` and contain **outdated architectural decisions** (FreqTrade, VectorBT, PostgreSQL, TimescaleDB, Redis, 5-year data). They are retained as research context only. When any `docs/*.md` file contradicts `SPEC.md`, **SPEC.md wins**.
 
-| File | Status | Contents |
-|------|--------|----------|
-| `docs/opus-prd.md` | Superseded by SPEC.md | Original PRD (recommends FreqTrade -- no longer applicable) |
-| `docs/opus-spec.md` | Superseded by SPEC.md | Older technical spec (hybrid VectorBT approach -- removed) |
-| `docs/opus-research.md` | Historical reference | Framework comparison research |
-| `docs/gpt-research.md` | Historical reference | Extended framework evaluation |
-| `docs/crypto-trading-bot-specification.md` | Historical reference | Original bot specification |
+| File                                       | Status                | Contents                                                    |
+| ------------------------------------------ | --------------------- | ----------------------------------------------------------- |
+| `docs/opus-prd.md`                         | Superseded by SPEC.md | Original PRD (recommends FreqTrade -- no longer applicable) |
+| `docs/opus-spec.md`                        | Superseded by SPEC.md | Older technical spec (hybrid VectorBT approach -- removed)  |
+| `docs/opus-research.md`                    | Historical reference  | Framework comparison research                               |
+| `docs/gpt-research.md`                     | Historical reference  | Extended framework evaluation                               |
+| `docs/crypto-trading-bot-specification.md` | Historical reference  | Original bot specification                                  |
