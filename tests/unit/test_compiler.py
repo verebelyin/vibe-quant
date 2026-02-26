@@ -659,6 +659,23 @@ take_profit:
         # Should reference bar.close
         assert "bar.close" in source or "bar." in source
 
+    def test_position_side_not_entry_in_on_event(
+        self, compiler: StrategyCompiler, minimal_strategy_yaml: str
+    ) -> None:
+        """Regression: on_event must use pos.side, not pos.entry.
+
+        pos.entry returns OrderSide (BUY=1/SELL=2), but PositionSide
+        (LONG=2/SHORT=3) has overlapping numeric values. Cross-enum
+        comparison pos.entry == PositionSide.LONG is True for SHORT
+        positions (both == 2), causing SL/TP with wrong side.
+        """
+        dsl = parse_strategy_string(minimal_strategy_yaml)
+        source = compiler.compile(dsl)
+
+        assert "pos.side == PositionSide.LONG" in source
+        assert "pos.entry == PositionSide.LONG" not in source
+        assert "pos.entry == PositionSide.SHORT" not in source
+
     def test_condition_helpers_receive_bar_parameter(self, compiler: StrategyCompiler) -> None:
         """Condition check helpers must accept bar param for price operands."""
         yaml_content = """
