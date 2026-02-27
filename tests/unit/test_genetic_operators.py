@@ -19,6 +19,7 @@ from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     StrategyGene,
+    _THRESHOLD_RANGES,
     apply_elitism,
     crossover,
     initialize_population,
@@ -387,3 +388,32 @@ class TestInitializePopulation:
         for chrom in pop:
             for gene in chrom.entry_genes + chrom.exit_genes:
                 assert gene.indicator_type in INDICATOR_POOL
+
+
+# ---------------------------------------------------------------------------
+# Mutation threshold reset on indicator swap
+# ---------------------------------------------------------------------------
+
+
+class TestMutateThresholdReset:
+    def test_indicator_swap_resets_threshold_to_valid_range(self) -> None:
+        """When mutation swaps indicator type, threshold must be in new indicator's range."""
+        random.seed(42)
+        # Create gene with RSI threshold (25-75 range)
+        gene = _make_gene("RSI", threshold=72.0, condition=ConditionType.GT)
+        chrom = StrategyChromosome(
+            entry_genes=[gene],
+            exit_genes=[_make_gene()],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+
+        # Mutate many times — after indicator swap, threshold should be in new range
+        for _ in range(500):
+            mutated = mutate(chrom, mutation_rate=1.0)
+            for g in mutated.entry_genes:
+                if g.indicator_type in _THRESHOLD_RANGES:
+                    lo, hi = _THRESHOLD_RANGES[g.indicator_type]
+                    assert lo <= g.threshold <= hi, (
+                        f"{g.indicator_type} threshold {g.threshold} outside [{lo}, {hi}]"
+                    )

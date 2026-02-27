@@ -470,9 +470,16 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
 
     if mutation_type == 0:
         # Swap indicator type
+        _ensure_pool()
         new_ind = random.choice(_INDICATOR_NAMES)
         gene.indicator_type = new_ind
         gene.parameters = _random_params(new_ind)
+        # Reset threshold to valid range for new indicator
+        if new_ind in _THRESHOLD_RANGES:
+            tlo, thi = _THRESHOLD_RANGES[new_ind]
+            gene.threshold = round(random.uniform(tlo, thi), 4)
+        elif new_ind in _PRICE_RELATIVE_INDICATORS:
+            gene.threshold = 0.0
 
     elif mutation_type == 1:
         # Perturb parameters
@@ -490,8 +497,12 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
         gene.condition = _CONDITION_COMPLEMENTS.get(gene.condition, random.choice(_CONDITION_TYPES))
 
     else:
-        # Perturb threshold (no lower clamp — indicators like WILLR use negative thresholds)
-        gene.threshold = _perturb(gene.threshold, 0.2)
+        # Perturb threshold, clamped to indicator-specific range if known
+        if gene.indicator_type in _THRESHOLD_RANGES:
+            tlo, thi = _THRESHOLD_RANGES[gene.indicator_type]
+            gene.threshold = _perturb(gene.threshold, 0.2, tlo, thi)
+        else:
+            gene.threshold = _perturb(gene.threshold, 0.2)
 
 
 def tournament_select(
