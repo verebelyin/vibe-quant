@@ -172,6 +172,7 @@ def aggregate_bars(
     target_bar_type: BarType,
     target_minutes: int,
     size_precision: int = 8,
+    price_precision: int | None = None,
 ) -> list[Bar]:
     """Aggregate 1-minute bars to higher timeframe.
 
@@ -185,6 +186,8 @@ def aggregate_bars(
         target_bar_type: Target bar type for aggregated bars.
         target_minutes: Target bar duration in minutes.
         size_precision: Decimal places for volume (must match instrument).
+        price_precision: Decimal places for prices. If None, preserves
+            source bar precision (safe when 1m bars already formatted).
 
     Returns:
         List of aggregated bars.
@@ -210,7 +213,7 @@ def aggregate_bars(
         if bar_key != group_key:
             # Aggregate current group
             if current_group:
-                aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision))
+                aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision, price_precision))
 
             # Start new group
             current_group = [bar]
@@ -220,12 +223,17 @@ def aggregate_bars(
 
     # Don't forget the last group
     if current_group:
-        aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision))
+        aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision, price_precision))
 
     return aggregated
 
 
-def _aggregate_group(bars: list[Bar], bar_type: BarType, size_precision: int = 8) -> Bar:
+def _aggregate_group(
+    bars: list[Bar],
+    bar_type: BarType,
+    size_precision: int = 8,
+    price_precision: int | None = None,
+) -> Bar:
     """Aggregate a group of bars into a single bar.
 
     Uses a single loop to track high/low/volume instead of
@@ -235,19 +243,26 @@ def _aggregate_group(bars: list[Bar], bar_type: BarType, size_precision: int = 8
         bars: List of bars to aggregate.
         bar_type: Target bar type.
         size_precision: Decimal places for volume (must match instrument).
+        price_precision: Decimal places for prices. None preserves source precision.
 
     Returns:
         Aggregated bar.
     """
     first = bars[0]
+
+    def _fmt_price(p: Price) -> Price:
+        if price_precision is None:
+            return p
+        return Price.from_str(f"{float(p):.{price_precision}f}")
+
     if len(bars) == 1:
         # Fast path: single bar, no aggregation needed
         return Bar(
             bar_type=bar_type,
-            open=first.open,
-            high=first.high,
-            low=first.low,
-            close=first.close,
+            open=_fmt_price(first.open),
+            high=_fmt_price(first.high),
+            low=_fmt_price(first.low),
+            close=_fmt_price(first.close),
             volume=first.volume,
             ts_event=first.ts_event,
             ts_init=first.ts_init,
@@ -273,10 +288,10 @@ def _aggregate_group(bars: list[Bar], bar_type: BarType, size_precision: int = 8
     vol_str = f"{vol:.{size_precision}f}"
     return Bar(
         bar_type=bar_type,
-        open=first.open,
-        high=high_price,
-        low=low_price,
-        close=last.close,
+        open=_fmt_price(first.open),
+        high=_fmt_price(high_price),
+        low=_fmt_price(low_price),
+        close=_fmt_price(last.close),
         volume=Quantity.from_str(vol_str),
         ts_event=first.ts_event,
         ts_init=last.ts_init,

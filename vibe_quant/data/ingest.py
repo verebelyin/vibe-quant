@@ -201,7 +201,7 @@ def update_symbol(
         minutes = _interval_to_minutes(interval)
 
         bar_type = get_bar_type(symbol, interval)
-        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
+        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec, price_prec)
         catalog.write_bars(agg_bars)
         counts[f"bars_{interval}"] = len(agg_bars)
         if verbose:
@@ -411,7 +411,7 @@ def ingest_symbol(
         bar_type = get_bar_type(symbol, interval)
         minutes = _interval_to_minutes(interval)
 
-        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
+        agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec, price_prec)
         catalog.write_bars(agg_bars)
         counts[f"bars_{interval}"] = len(agg_bars)
         if verbose:
@@ -766,7 +766,7 @@ def rebuild_from_archive(
             bar_type = get_bar_type(symbol, interval)
             minutes = _interval_to_minutes(interval)
 
-            agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec)
+            agg_bars = aggregate_bars(bars_1m, bar_type, minutes, size_prec, price_prec)
             catalog.write_bars(agg_bars)
             counts[f"bars_{interval}"] = len(agg_bars)
             if verbose:

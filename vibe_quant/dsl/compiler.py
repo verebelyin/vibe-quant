@@ -982,7 +982,8 @@ class StrategyCompiler:
 
             nt_attr = self._get_default_output_attr(info)
             lines.append(f'    if name == "{info.name}":')
-            lines.append(f"        return float({info.indicator_var}.{nt_attr})")
+            lines.append(f"        _v = {info.indicator_var}.{nt_attr}")
+            lines.append("        return float(_v) if _v is not None else 0.0")
 
             # Register sub-names for each output of multi-output indicators
             if info.spec.output_names != ("value",):
@@ -997,7 +998,8 @@ class StrategyCompiler:
                             output_name,
                         )
                     lines.append(f'    if name == "{info.name}_{output_name}":')
-                    lines.append(f"        return float({info.indicator_var}.{attr})")
+                    lines.append(f"        _v = {info.indicator_var}.{attr}")
+                    lines.append("        return float(_v) if _v is not None else 0.0")
 
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
         return lines
