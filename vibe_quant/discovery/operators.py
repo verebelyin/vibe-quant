@@ -559,22 +559,27 @@ def apply_elitism(
     return [population[i].clone() for i in top_indices]
 
 
-def initialize_population(size: int = 50) -> list[StrategyChromosome]:
+def initialize_population(
+    size: int = 50, direction_constraint: Direction | None = None
+) -> list[StrategyChromosome]:
     """Generate a population of random valid chromosomes.
 
     Args:
         size: Number of chromosomes to generate.
+        direction_constraint: If set, all chromosomes use this direction.
 
     Returns:
         List of valid random chromosomes.
     """
     population: list[StrategyChromosome] = []
     for _ in range(size):
-        population.append(_random_chromosome())
+        population.append(_random_chromosome(direction_constraint=direction_constraint))
     return population
 
 
-def _random_chromosome() -> StrategyChromosome:
+def _random_chromosome(
+    direction_constraint: Direction | None = None,
+) -> StrategyChromosome:
     """Generate a single random valid chromosome.
 
     Biased toward simpler strategies (1-2 entry genes, 1 exit gene)
@@ -586,10 +591,11 @@ def _random_chromosome() -> StrategyChromosome:
         [1, 2, 3, random.randint(4, MAX_ENTRY_GENES)], weights=[50, 30, 15, 5]
     )[0]
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
+    direction = direction_constraint if direction_constraint is not None else random.choice(list(Direction))
     return StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],
         exit_genes=[_random_gene() for _ in range(n_exit)],
         stop_loss_pct=round(random.uniform(*SL_RANGE), 4),
         take_profit_pct=round(random.uniform(*TP_RANGE), 4),
-        direction=random.choice(list(Direction)),
+        direction=direction,
     )

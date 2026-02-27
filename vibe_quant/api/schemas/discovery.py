@@ -16,6 +16,7 @@ class DiscoveryLaunchRequest(BaseModel):
     symbols: list[str] = ["BTCUSDT"]
     timeframes: list[str] = ["4h"]
     indicator_pool: list[str] | None = None
+    direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
 

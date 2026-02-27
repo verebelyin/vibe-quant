@@ -161,6 +161,8 @@ async def launch_discovery(
     ]
     if body.indicator_pool is not None:
         command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
+    if body.direction is not None:
+        command.extend(["--direction", body.direction])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)

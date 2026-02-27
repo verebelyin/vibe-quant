@@ -171,6 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated indicator names to use (default: all)",
     )
+    parser.add_argument(
+        "--direction",
+        type=str,
+        default=None,
+        help="Direction constraint: long, short, both, or omit for random",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -226,6 +232,7 @@ def main() -> int:
             start_date=args.start_date,
             end_date=args.end_date,
             indicator_pool=ind_pool,
+            direction=args.direction,
         )
 
         # Choose backtest function: real NT if data available, else mock

@@ -4,6 +4,135 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-02-27: Batch 6 — Bull Market Discovery, First Long Strategy, New Records
+
+### Goal
+
+Find winning strategies on **2024 bull market data** that are **not just short-only**. Previous batches all tested bearish windows (Sep 2025–Feb 2026) where long was "brutally unprofitable." BTC went from ~$42K (Jan 2024) to ~$100K (Dec 2024) — the ideal window for discovering long and bidirectional strategies.
+
+### Setup
+
+5 parallel discovery runs, all BTC, CCI+RSI dominant, bigger timeframes, 2024-centric date ranges.
+
+**Design rationale:**
+- CCI is king across all 5 previous batches — kept in every run
+- 2024 bull market is the first window where long-only strategies should work
+- `both` direction on 3/5 runs to find bidirectional strategies
+- Run 89 is pure `long` on 2024 — first real test of long strategy discovery
+- Run 92 adds WILLR for indicator diversity (successful in run 53)
+- Conservative pop sizes to target 30-40min completion
+- Note: sandbox blocked `ProcessPoolExecutor` → all runs fell back to sequential mode, extending runtimes to 30-50min
+
+| Run | TF | Dir | Indicators | Pop×Gen | Mut | Date Range | Duration |
+|-----|-----|-----|------------|---------|-----|------------|----------|
+| 88 | 4h | both | CCI,RSI | 22×12 | 0.22 | 2024-01→2025-06 | ~48m |
+| 89 | 4h | long | CCI,RSI | 22×12 | 0.20 | 2024-01→2024-12 | ~35m |
+| 90 | 1h | both | CCI,RSI | 20×10 | 0.25 | 2024-01→2025-06 | ~38m |
+| 91 | 15m | both | CCI,RSI | 18×10 | 0.25 | 2024-06→2025-06 | ~50m |
+| 92 | 4h | both | CCI,RSI,WILLR | 20×10 | 0.22 | 2024-01→2026-02 | ~55m |
+
+### Discovery Results
+
+| Run | TF | Dir | Fitness | Sharpe | PF | Trades | Return |
+|-----|-----|-----|---------|--------|-----|--------|--------|
+| **88** | **4h** | **both** | **0.793** | **4.19** | **2.808** | **60** | **+50.4%** |
+| **90** | **1h** | **both** | **0.764** | **4.08** | **1.727** | **52** | **+43.0%** |
+| **89** | **4h** | **long** | **0.733** | **3.57** | **1.652** | **52** | **+45.4%** |
+| 91 | 15m | both | 0.642 | 2.58 | 1.437 | 58 | +24.6% |
+| 92 | 4h | both | 0.598 | 2.09 | 1.401 | 168 | +13.6% |
+
+### Top 3 Strategies
+
+**Run 88 — CCI Triple Bidirectional (4h, Both) ★ NEW ALL-TIME BEST**
+- Entry: CCI(30) crosses_below 59.9 (both long+short)
+- Exit: CCI(40) crosses_below 75.0 AND CCI(47) < 29.2 (both sides)
+- SL: 1.09% (very tight), TP: 17.13% (wide) — trend-following risk profile
+- Pure CCI strategy, no RSI needed
+
+**Run 89 — RSI Long-Only (4h, Long) ★ FIRST PROFITABLE LONG STRATEGY**
+- Entry (long): RSI(12) < 60.9
+- Exit (long): RSI(37) crosses_below 41.9
+- SL: 4.4%, TP: 13.3%
+- Pure RSI strategy — CCI not selected by GA on bull market!
+
+**Run 90 — CCI Bidirectional (1h, Both)**
+- Entry: CCI(25) crosses_above -81.4 (both sides)
+- Exit: RSI(7) crosses_above 58.9 (both sides)
+- SL: 6.0%, TP: 11.6%
+- CCI+RSI combo, deep oversold CCI entry
+
+### Full Pipeline: Discovery → Screening → Validation
+
+**Run 88 (4h Both CCI) ★ NEW ALL-TIME BEST:**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 88 | 4.19 | 2.808 | 60 | +50.4% | 0% |
+| Screening | 93 | **4.19** | **2.808** | **60** | **+50.4%** | 0% |
+| Validation | 98 | **4.12** | **2.736** | **61** | **+49.3%** | 11.3% |
+
+Validation barely degraded: Sharpe 4.19→4.12, PF 2.808→2.736, return 50.4→49.3%. **Gained 1 trade** (60→61) — validation fill model gave slightly different entry timing. MaxDD 11.3% is moderate. PF 2.736 is the **highest validated PF ever recorded** (previous: run 81's 2.135).
+
+**Run 89 (4h Long RSI) ★ FIRST LONG STRATEGY:**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 89 | 3.57 | 1.652 | 52 | +45.4% | 0% |
+| Screening | 94 | **3.57** | **1.652** | **52** | **+45.4%** | 0% |
+| Validation | 99 | **3.57** | **1.651** | **51** | **+45.5%** | 16.0% |
+
+**Virtually zero degradation.** Sharpe identical (3.57→3.57), return slightly improved (45.4→45.5%), lost only 1/52 trades. 16% MaxDD is the concern — typical for a long-only strategy on a bull market (deep drawdowns during corrections). This strategy is **latency-immune** (4h RSI doesn't care about 200ms).
+
+**Run 90 (1h Both CCI+RSI):**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 90 | 4.08 | 1.727 | 52 | +43.0% | 0% |
+| Screening | 95 | **4.08** | **1.727** | **52** | **+43.0%** | 0% |
+| Validation | 100 | **3.99** | **1.709** | **47** | **+38.0%** | 10.5% |
+
+Classical degradation: lost 5/52 trades (90% survival), return 43→38%, Sharpe 4.08→3.99. Still excellent. 10.5% MaxDD is well-controlled.
+
+### Comparison: Batch 6 vs All Previous Champions
+
+| Run | TF | Dir | V.Sharpe | V.PF | V.Trades | V.Return | V.MaxDD | Window |
+|-----|-----|-----|----------|------|----------|----------|---------|--------|
+| **98 (new) ★** | **4h** | **both** | **4.12** | **2.736** | **61** | **+49.3%** | **11.3%** | **2024-01→2025-06** |
+| **99 (new)** | **4h** | **long** | **3.57** | **1.651** | **51** | **+45.5%** | **16.0%** | **2024-01→2024-12** |
+| **100 (new)** | **1h** | **both** | **3.99** | **1.709** | **47** | **+38.0%** | **10.5%** | **2024-01→2025-06** |
+| 85 (prev) | 15m | short | 4.60 | 2.010 | 47 | +41.4% | 16.1% | 2024-06→2026-02 |
+| 87 (prev best) | 4h | both | 3.65 | 2.135 | 85 | +16.7% | 2.2% | 2024-06→2026-02 |
+| 56 (orig) | 5m | short | 4.64 | 1.854 | 46 | +24.6% | 7.3% | 2025-09→2026-02 |
+
+### Findings
+
+1. **Run 88/98 is the new all-time best** — PF 2.736 (highest ever validated), Sharpe 4.12, +49.3% return on 18 months of data. The tight SL (1.09%) with wide TP (17.13%) creates a trend-following system that cuts losses fast and lets winners run. The triple-CCI setup (entry CCI(30), exit CCI(40)+CCI(47)) provides multi-scale momentum confirmation.
+
+2. **Run 89/99 proves long strategies work on bull markets** — first ever profitable long-only strategy in the discovery pipeline. The GA chose pure RSI (no CCI!) on the 2024 bull market, finding that RSI works better than CCI for trend-following in uptrends. Sharpe 3.57 is strong, +45.5% return is the second-highest ever.
+
+3. **The date window matters enormously** — previous batches found only short strategies because the test window (Sep 2025–Feb 2026) was bearish. Testing on the 2024 bull run found long and bidirectional strategies with dramatically higher returns (+49% vs +17% for the same 4h bidirectional approach).
+
+4. **4h strategies are consistently the most robust** — runs 88 and 89 both achieved >98% trade survival through validation. The 200ms retail latency is irrelevant on 4h bars. Run 90 (1h) lost 10% of trades but still performed well.
+
+5. **CCI remains dominant but RSI shines on bull markets** — run 89's GA independently discovered that RSI alone works better than CCI for long strategies in uptrends. This is the first time any indicator has beaten CCI in the discovery pipeline.
+
+6. **WILLR didn't help (run 92)** — adding WILLR to the indicator pool produced the weakest result (PF 1.401, +13.6%). The extra search space from 3 indicators diluted the GA's ability to converge on strong CCI patterns. Keep indicator pools lean.
+
+7. **15m both-direction (run 91) was mediocre** — fitness 0.642 and +24.6% return. The 15m timeframe generates too many signals for bidirectional trading, leading the GA to spend generations reducing overtrade (started at 7190 trades, ended at 58). Better to use 15m for focused single-direction strategies.
+
+8. **Previous champion run 87 (PF 2.135, MaxDD 2.2%) still holds the MaxDD crown** — run 98's 11.3% MaxDD is higher. For risk-averse deployment, run 87 remains the best. For absolute returns, run 98 dominates.
+
+### Recommendations
+
+1. **Paper trade run 98 (4h both CCI)** — new all-time best on PF and return
+2. **Paper trade run 99 (4h long RSI)** — first long strategy, watch 16% MaxDD
+3. **Multi-window testing** — run 98's strategy on the Sep 2025–Feb 2026 window to check if it survives bearish conditions
+4. **Portfolio combination** — combine run 87 (bearish window champion) with run 98 (bull window champion) for regime-adaptive trading
+5. **Out-of-sample validation** — test run 98 on 2023 data (not in training set) for true out-of-sample performance
+6. **RSI long-only exploration** — run 89's success with pure RSI suggests dedicated long-only RSI discovery runs could find even better bull-market strategies
+
+---
+
 ## 2026-02-27: Batch 5 — Bigger Timeframes, Both-Direction, Longer Date Ranges
 
 ### Goal

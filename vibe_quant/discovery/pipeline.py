@@ -79,6 +79,7 @@ class DiscoveryConfig:
     start_date: str = ""
     end_date: str = ""
     indicator_pool: list[str] | None = None  # None = use all available
+    direction: str | None = None  # "long", "short", "both", or None (random)
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -211,7 +212,15 @@ class DiscoveryPipeline:
         """
         cfg = self.config
         self._apply_indicator_pool_filter()
-        population = initialize_population(cfg.population_size)
+
+        # Parse direction constraint
+        from vibe_quant.discovery.operators import Direction
+        direction_constraint: Direction | None = None
+        if cfg.direction:
+            direction_constraint = Direction(cfg.direction)
+        self._direction_constraint = direction_constraint
+
+        population = initialize_population(cfg.population_size, direction_constraint=direction_constraint)
         generation_results: list[GenerationResult] = []
         total_evaluated = 0
         last_fitness_results: list[FitnessResult] = []
@@ -386,6 +395,11 @@ class DiscoveryPipeline:
             child_a = mutate(child_a, cfg.mutation_rate)
             child_b = mutate(child_b, cfg.mutation_rate)
 
+            # Enforce direction constraint after crossover/mutation
+            if self._direction_constraint is not None:
+                child_a.direction = self._direction_constraint
+                child_b.direction = self._direction_constraint
+
             for child in (child_a, child_b):
                 if remaining <= 0:
                     break
@@ -397,7 +411,7 @@ class DiscoveryPipeline:
                     valid_child = mutate(child, cfg.mutation_rate)
                 else:
                     if not is_valid_chromosome(valid_child):
-                        valid_child = _random_chromosome()
+                        valid_child = _random_chromosome(direction_constraint=self._direction_constraint)
                 new_pop.append(valid_child)
                 remaining -= 1
 
