@@ -19,7 +19,7 @@ from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     StrategyGene,
-    _THRESHOLD_RANGES,
+    THRESHOLD_RANGES,
     apply_elitism,
     crossover,
     initialize_population,
@@ -53,9 +53,12 @@ def _make_chromosome(
     tp: float = 4.0,
     direction: Direction = Direction.LONG,
 ) -> StrategyChromosome:
+    # Use thresholds within RSI valid range (25-75)
+    entry_thresholds = [25.0 + i * 5.0 for i in range(n_entry)]
+    exit_thresholds = [70.0 + i * 2.0 for i in range(n_exit)]
     return StrategyChromosome(
-        entry_genes=[_make_gene(threshold=float(i * 10)) for i in range(n_entry)],
-        exit_genes=[_make_gene(threshold=float(70 + i * 10)) for i in range(n_exit)],
+        entry_genes=[_make_gene(threshold=t) for t in entry_thresholds],
+        exit_genes=[_make_gene(threshold=t) for t in exit_thresholds],
         stop_loss_pct=sl,
         take_profit_pct=tp,
         direction=direction,
@@ -412,8 +415,8 @@ class TestMutateThresholdReset:
         for _ in range(500):
             mutated = mutate(chrom, mutation_rate=1.0)
             for g in mutated.entry_genes:
-                if g.indicator_type in _THRESHOLD_RANGES:
-                    lo, hi = _THRESHOLD_RANGES[g.indicator_type]
+                if g.indicator_type in THRESHOLD_RANGES:
+                    lo, hi = THRESHOLD_RANGES[g.indicator_type]
                     assert lo <= g.threshold <= hi, (
                         f"{g.indicator_type} threshold {g.threshold} outside [{lo}, {hi}]"
                     )

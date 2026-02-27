@@ -11,6 +11,7 @@ import random
 from dataclasses import dataclass
 
 from vibe_quant.discovery.operators import (
+    THRESHOLD_RANGES,
     ConditionType,
     Direction,
     StrategyChromosome,
@@ -80,7 +81,7 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
     "RSI": IndicatorDef(
         name="RSI",
         param_ranges={"period": (5, 50)},
-        default_threshold_range=(20.0, 80.0),
+        default_threshold_range=(25.0, 75.0),
         dsl_type="RSI",
     ),
     # EMA excluded: price-relative indicator, threshold=0 produces no trades
@@ -92,14 +93,14 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
             "slow_period": (21, 50),
             "signal_period": (5, 13),
         },
-        default_threshold_range=(-0.01, 0.01),
+        default_threshold_range=(-0.005, 0.005),
         dsl_type="MACD",
     ),
     # BBANDS excluded: price-relative indicator, threshold=0 produces no trades
     "ATR": IndicatorDef(
         name="ATR",
         param_ranges={"period": (5, 30)},
-        default_threshold_range=(0.001, 0.05),
+        default_threshold_range=(0.001, 0.03),
         dsl_type="ATR",
     ),
     "STOCH": IndicatorDef(
@@ -271,6 +272,15 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
             for pname in gene.parameters:
                 if pname not in ind_def.param_ranges:
                     errors.append(f"{prefix}: unexpected param '{pname}'")
+
+            # Validate threshold is within indicator's expected range
+            if gene.indicator_type in THRESHOLD_RANGES:
+                tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
+                if not (tlo <= gene.threshold <= thi):
+                    errors.append(
+                        f"{prefix}: threshold {gene.threshold} outside "
+                        f"[{tlo}, {thi}] for {gene.indicator_type}"
+                    )
 
             # MACD: fast_period must be < slow_period
             if gene.indicator_type == "MACD":

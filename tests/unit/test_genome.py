@@ -14,7 +14,7 @@ from vibe_quant.discovery.genome import (
     generate_random_chromosome,
     validate_chromosome,
 )
-from vibe_quant.discovery.operators import is_valid_chromosome, mutate
+from vibe_quant.discovery.operators import THRESHOLD_RANGES, is_valid_chromosome, mutate
 from vibe_quant.dsl.schema import StrategyDSL
 
 # =============================================================================
@@ -386,6 +386,18 @@ class TestDSLConversion:
             strategy = StrategyDSL(**dsl_dict)
             assert strategy.name.startswith("genome_")
 
+    def test_threshold_in_range_for_random_chromosomes(self) -> None:
+        """All random chromosomes should have thresholds within valid ranges."""
+        rng = random.Random(42)
+        for _ in range(200):
+            chrom = generate_random_chromosome(rng)
+            for gene in chrom.entry_genes + chrom.exit_genes:
+                if gene.indicator_type in THRESHOLD_RANGES:
+                    tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
+                    assert tlo <= gene.threshold <= thi, (
+                        f"{gene.indicator_type} threshold {gene.threshold} outside [{tlo}, {thi}]"
+                    )
+
     def test_multi_gene_chromosome(self) -> None:
         genes = [
             StrategyGene("RSI", {"period": 14}, "less_than", 30.0),
@@ -401,3 +413,46 @@ class TestDSLConversion:
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)
         assert len(strategy.indicators) == 4  # 3 entry + 1 exit
+
+
+# =============================================================================
+# Threshold validation
+# =============================================================================
+
+
+class TestThresholdValidation:
+    def test_threshold_out_of_range_detected(self) -> None:
+        """ATR with threshold=72 (RSI range) should fail validation."""
+        gene = StrategyGene("ATR", {"period": 14}, "greater_than", 72.0)
+        chrom = StrategyChromosome(
+            entry_genes=[gene],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        errors = validate_chromosome(chrom)
+        assert any("threshold" in e.lower() for e in errors)
+
+    def test_threshold_in_range_passes(self) -> None:
+        """ATR with valid threshold should pass."""
+        gene = StrategyGene("ATR", {"period": 14}, "greater_than", 0.015)
+        chrom = StrategyChromosome(
+            entry_genes=[gene],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        errors = validate_chromosome(chrom)
+        assert errors == []
+
+    def test_rsi_threshold_out_of_range(self) -> None:
+        """RSI with threshold=150 (>100) should fail."""
+        gene = StrategyGene("RSI", {"period": 14}, "greater_than", 150.0)
+        chrom = StrategyChromosome(
+            entry_genes=[gene],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        errors = validate_chromosome(chrom)
+        assert any("threshold" in e.lower() for e in errors)

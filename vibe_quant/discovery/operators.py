@@ -193,7 +193,7 @@ def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) ->
 
 # Indicator-specific threshold ranges to avoid impossible conditions
 # that produce 0 trades (the #1 cause of wasted evals)
-_THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
+THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
     "RSI": (25.0, 75.0),
     "STOCH": (20.0, 80.0),
     "CCI": (-100.0, 100.0),
@@ -235,8 +235,8 @@ def _random_gene() -> StrategyGene:
                 ConditionType.LT,
             ]
         )
-    elif ind in _THRESHOLD_RANGES:
-        lo, hi = _THRESHOLD_RANGES[ind]
+    elif ind in THRESHOLD_RANGES:
+        lo, hi = THRESHOLD_RANGES[ind]
         threshold = round(random.uniform(lo, hi), 4)
         condition = random.choice(_CONDITION_TYPES)
     else:
@@ -302,6 +302,11 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
             fast = gene.parameters.get("fast_period", 12)
             slow = gene.parameters.get("slow_period", 26)
             if fast >= slow:
+                return False
+        # Check threshold is in valid range for indicator
+        if gene.indicator_type in THRESHOLD_RANGES:
+            tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
+            if not (tlo <= gene.threshold <= thi):
                 return False
     return True
 
@@ -475,8 +480,8 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
         gene.indicator_type = new_ind
         gene.parameters = _random_params(new_ind)
         # Reset threshold to valid range for new indicator
-        if new_ind in _THRESHOLD_RANGES:
-            tlo, thi = _THRESHOLD_RANGES[new_ind]
+        if new_ind in THRESHOLD_RANGES:
+            tlo, thi = THRESHOLD_RANGES[new_ind]
             gene.threshold = round(random.uniform(tlo, thi), 4)
         elif new_ind in _PRICE_RELATIVE_INDICATORS:
             gene.threshold = 0.0
@@ -498,8 +503,8 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
 
     else:
         # Perturb threshold, clamped to indicator-specific range if known
-        if gene.indicator_type in _THRESHOLD_RANGES:
-            tlo, thi = _THRESHOLD_RANGES[gene.indicator_type]
+        if gene.indicator_type in THRESHOLD_RANGES:
+            tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
             gene.threshold = _perturb(gene.threshold, 0.2, tlo, thi)
         else:
             gene.threshold = _perturb(gene.threshold, 0.2)
