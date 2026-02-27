@@ -128,11 +128,11 @@ class TestDiscoveryDSR:
         assert result.p_value < 0.05
 
     def test_insignificant_with_many_trials(self) -> None:
-        """Mediocre Sharpe + many trials -> not significant."""
+        """Low Sharpe + many trials + few observations -> not significant."""
         result = apply_discovery_dsr(
-            observed_sharpe=0.8,
+            observed_sharpe=0.1,
             num_trials=5000,
-            num_observations=252,
+            num_observations=50,
         )
         assert isinstance(result, DSRResult)
         assert result.is_significant is False
@@ -226,13 +226,13 @@ class TestApplyGuardrails:
             require_dsr=True,
             require_wfa=False,
         )
-        fitness = _make_fitness(sharpe=0.5, trades=100)
+        fitness = _make_fitness(sharpe=0.1, trades=100)
         result = apply_guardrails(
             fitness,
             num_genes=4,
             config=cfg,
             num_trials=5000,
-            num_observations=252,
+            num_observations=50,
         )
 
         assert result.dsr_passed is False

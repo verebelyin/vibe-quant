@@ -17,11 +17,14 @@ Formula:
 
 Where:
     - SR_hat: observed Sharpe ratio
-    - SR_0: expected maximum Sharpe under null (depends on N trials)
+    - SR_0: expected maximum Sharpe under null = E[max(Z_1..Z_N)] / sqrt(T-1)
     - gamma3: skewness of returns
     - gamma4: kurtosis of returns
     - T: number of observations
     - Phi: standard normal CDF
+
+Note: SR_0 must be in Sharpe-ratio units (not z-score units). Under the null
+(true SR=0), estimated SR ~ N(0, 1/sqrt(T-1)), so E[max(SR)] = E[max(Z)] / sqrt(T-1).
 """
 
 from __future__ import annotations
@@ -145,7 +148,11 @@ class DeflatedSharpeRatio:
         self._validate_inputs(observed_sharpe, num_trials, num_observations, kurtosis)
 
         # Compute expected max Sharpe under null
-        expected_max_sharpe = self._expected_max_sharpe(num_trials)
+        # _expected_max_sharpe returns E[max(Z_1..Z_N)] for standard normals.
+        # Under the null (SR=0), the Sharpe estimator has std = 1/sqrt(T-1),
+        # so expected max Sharpe = E[max(Z)] / sqrt(T-1).
+        expected_max_z = self._expected_max_sharpe(num_trials)
+        expected_max_sharpe = expected_max_z / math.sqrt(max(num_observations - 1, 1))
 
         # Compute variance of Sharpe estimator (with non-normality correction)
         sharpe_variance = self._sharpe_variance(

@@ -22,19 +22,27 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success).
     """
-    from vibe_quant.validation.runner import ValidationRunner, ValidationRunnerError
+    from pathlib import Path
+
+    from vibe_quant.db.connection import DEFAULT_DB_PATH
+    from vibe_quant.jobs.manager import run_with_heartbeat
+    from vibe_quant.validation.runner import ValidationRunner
 
     run_id = args.run_id
     latency = args.latency
+    db_path = Path(args.db) if getattr(args, "db", None) else DEFAULT_DB_PATH
 
     print(f"Running validation backtest for run_id={run_id}")
     if latency:
         print(f"  Latency preset: {latency}")
 
+    job_manager, stop_heartbeat = run_with_heartbeat(run_id, db_path)
     runner: ValidationRunner | None = None
     try:
-        runner = ValidationRunner()
+        runner = ValidationRunner(db_path=db_path)
         result = runner.run(run_id=run_id, latency_preset=latency)
+
+        job_manager.mark_completed(run_id)
 
         print("\nValidation Results:")
         print(f"  Strategy: {result.strategy_name}")
@@ -52,12 +60,19 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
 
         return 0
 
-    except ValidationRunnerError as e:
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            job_manager.mark_completed(run_id, error=error_msg)
         print(f"Error: {e}", file=sys.stderr)
         return 1
     finally:
+        stop_heartbeat()
         if runner is not None:
             runner.close()
+        job_manager.close()
 
 
 def cmd_validation_list(args: argparse.Namespace) -> int:

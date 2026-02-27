@@ -10,6 +10,16 @@ from typing import Any
 from vibe_quant import __main__ as root_cli
 
 
+class _FakeJobManager:
+    """Stub job manager for CLI tests."""
+
+    def mark_completed(self, run_id: int, error: str | None = None) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 def _install_fake_validation_runner_module(
     monkeypatch: Any,
     runner_cls: type[Any],
@@ -23,6 +33,11 @@ def _install_fake_validation_runner_module(
     if list_validation_runs_fn is not None:
         module.list_validation_runs = list_validation_runs_fn
     monkeypatch.setitem(sys.modules, "vibe_quant.validation.runner", module)
+
+    # Mock run_with_heartbeat to return no-op job manager and stop function
+    jobs_module = ModuleType("vibe_quant.jobs.manager")
+    jobs_module.run_with_heartbeat = lambda run_id, db_path: (_FakeJobManager(), lambda: None)
+    monkeypatch.setitem(sys.modules, "vibe_quant.jobs.manager", jobs_module)
 
 
 def _install_forward_target(
@@ -41,6 +56,9 @@ def test_cmd_validation_run_closes_runner_on_success(monkeypatch: Any, capsys: A
     state = {"closed": 0}
 
     class FakeValidationRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
         def run(self, run_id: int, latency_preset: str | None = None) -> Any:
             assert run_id == 123
             assert latency_preset is None
@@ -91,6 +109,9 @@ def test_cmd_validation_run_closes_runner_on_validation_error(
         pass
 
     class FakeValidationRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
         def run(self, run_id: int, latency_preset: str | None = None) -> Any:
             assert run_id == 999
             assert latency_preset == "retail"

@@ -231,12 +231,12 @@ class TestDSREndToEnd:
         assert result.p_value < 0.05
 
     def test_low_sharpe_many_trials(self) -> None:
-        """A low Sharpe with many trials should NOT be significant."""
+        """A low Sharpe with many trials and few obs should NOT be significant."""
         dsr = DeflatedSharpeRatio(significance_level=0.05)
         result = dsr.calculate(
-            observed_sharpe=0.5,
+            observed_sharpe=0.1,
             num_trials=1000,
-            num_observations=252,
+            num_observations=20,
         )
         assert result.is_significant is False
         assert result.p_value > 0.05

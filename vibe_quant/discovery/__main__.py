@@ -283,7 +283,7 @@ def main() -> int:
         state.save_backtest_result(
             args.run_id,
             {
-                "total_return": best_fitness.adjusted_score,
+                "total_return": best_fitness.total_return,
                 "sharpe_ratio": best_fitness.sharpe_ratio,
                 "max_drawdown": best_fitness.max_drawdown,
                 "profit_factor": best_fitness.profit_factor,

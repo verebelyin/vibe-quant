@@ -103,14 +103,14 @@ class TestExpectedMaxSharpe:
         assert result_1000.expected_max_sharpe > result_100.expected_max_sharpe
 
     def test_expected_max_sharpe_reasonable_magnitude(self, dsr: DeflatedSharpeRatio) -> None:
-        """Expected max Sharpe should be in reasonable range for typical N."""
-        # For N=100, expected max ~= sqrt(2*ln(100)) ~= 3.03
+        """Expected max Sharpe scaled by 1/sqrt(T-1) for typical N."""
+        # For N=100, T=252: E[max(Z)]~3.03 / sqrt(251) ~ 0.19
         result = dsr.calculate(observed_sharpe=1.0, num_trials=100, num_observations=252)
-        assert 2.5 < result.expected_max_sharpe < 3.5
+        assert 0.1 < result.expected_max_sharpe < 0.3
 
-        # For N=1000, expected max ~= sqrt(2*ln(1000)) ~= 3.72
+        # For N=1000, T=252: E[max(Z)]~3.72 / sqrt(251) ~ 0.23
         result = dsr.calculate(observed_sharpe=1.0, num_trials=1000, num_observations=252)
-        assert 3.0 < result.expected_max_sharpe < 4.0
+        assert 0.15 < result.expected_max_sharpe < 0.35
 
 
 class TestSharpeVariance:
@@ -200,15 +200,15 @@ class TestDSRCalculation:
         assert result.is_significant
         assert result.p_value < 0.01
 
-    def test_high_sharpe_many_trials_not_significant(self, dsr: DeflatedSharpeRatio) -> None:
-        """High Sharpe from many trials may not be significant."""
+    def test_low_sharpe_many_trials_not_significant(self, dsr: DeflatedSharpeRatio) -> None:
+        """Low Sharpe from many trials with few observations -> not significant."""
         result = dsr.calculate(
-            observed_sharpe=2.5,  # High but not extreme
-            num_trials=10000,  # Many trials
-            num_observations=252,
+            observed_sharpe=0.15,
+            num_trials=10000,
+            num_observations=30,
         )
-        # Expected max Sharpe for 10000 trials is ~4.3
-        # 2.5 < 4.3, so not significant
+        # Expected max Sharpe for 10000 trials, T=30: ~4.3/sqrt(29) ~ 0.80
+        # 0.15 < 0.80, so not significant
         assert not result.is_significant
         assert result.p_value > 0.05
 
@@ -227,9 +227,9 @@ class TestDSRCalculation:
     ) -> None:
         """Deflated Sharpe < 0 when observed < expected max."""
         result = dsr.calculate(
-            observed_sharpe=1.0,
-            num_trials=100,  # Expected max ~3
-            num_observations=252,
+            observed_sharpe=0.05,
+            num_trials=10000,
+            num_observations=10,
         )
         assert result.deflated_sharpe < 0
         assert result.observed_sharpe < result.expected_max_sharpe
@@ -293,11 +293,11 @@ class TestConvenienceMethods:
         )
         assert dsr.passes_threshold(result, threshold=0.95)
 
-        # Low Sharpe, many trials = low confidence
+        # Low Sharpe, many trials, few observations = low confidence
         result_low = dsr.calculate(
-            observed_sharpe=1.0,
+            observed_sharpe=0.1,
             num_trials=1000,
-            num_observations=100,
+            num_observations=10,
         )
         assert not dsr.passes_threshold(result_low, threshold=0.95)
 
@@ -347,15 +347,14 @@ class TestEdgeCases:
         assert result.deflated_sharpe < 0  # 0 < expected_max
 
     def test_very_high_num_trials(self, dsr: DeflatedSharpeRatio) -> None:
-        """Very high number of trials is handled."""
+        """Very high number of trials is handled without NaN."""
         result = dsr.calculate(
             observed_sharpe=5.0,
             num_trials=1_000_000,
             num_observations=252,
         )
-        # Expected max for 1M trials is ~5.26
-        # So even Sharpe=5 is borderline
-        assert result.expected_max_sharpe > 5.0
+        # Expected max for 1M trials, T=252: ~5.26/sqrt(251) ~ 0.33
+        assert result.expected_max_sharpe > 0.2
         assert not math.isnan(result.deflated_sharpe)
 
     def test_very_few_observations(self, dsr: DeflatedSharpeRatio) -> None:
@@ -422,12 +421,11 @@ class TestSpecCompliance:
         """DSR should reject strategies that are likely lucky finds."""
         dsr = DeflatedSharpeRatio()
 
-        # Test 10000 param combos, get Sharpe of 3
-        # Expected max for 10000 trials is ~4.3
+        # Low Sharpe, many trials, few observations -> likely luck
         result = dsr.calculate(
-            observed_sharpe=3.0,
+            observed_sharpe=0.2,
             num_trials=10000,
-            num_observations=252,
+            num_observations=20,
         )
 
         # Should NOT pass - this Sharpe is likely from multiple testing
