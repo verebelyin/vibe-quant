@@ -101,7 +101,7 @@ Also fixed crossover regex bug (commit `6282d41`): `_CROSS_PATTERN` in `conditio
 |-----|-----------|------------|---------|--------|----------|-------------|
 | 51 | Momentum | RSI, MACD, ROC, WILLR | 12×10 | **Killed** (too slow) | ~2h, gen 6/10 | 0.33 |
 | **52** | **Mean Reversion** | **RSI, CCI, STOCH, BBANDS** | **12×10** | **Completed** | ~38 min | **0.8412** |
-| 53 | Exotic | CCI, WILLR, STOCH, ROC | 16×10 | **Died at gen 9/10** | ~3h | 0.6978 |
+| 53 | Exotic | CCI, WILLR, STOCH, ROC | 12×10 | **Completed** | ~3h 36m | 0.6978 |
 | 54 | Full Pool | All 10 indicators | 16×12 | **Killed** (too slow) | ~38 min, gen ~3 | — |
 
 ### Run 52 Results: CCI + RSI Mean Reversion (WINNER)
@@ -116,9 +116,15 @@ Also fixed crossover regex bug (commit `6282d41`): `_CROSS_PATTERN` in `conditio
 
 **Key finding:** This strategy **survived validation** with only 8 lost trades (54→46), maintained return (+25%→+24.6%), and Sharpe actually *improved* (4.43→4.64). This is exceptional — most strategies degrade significantly in validation.
 
-### Run 53: Exotic CCI/WILLR/STOCH/ROC (Unfinished)
+### Run 53: Exotic CCI/WILLR/STOCH/ROC (Completed)
 
-Ran 3+ hours, reached gen 9/10 with fitness 0.6978 (101 trades, +17.1% return) but process died or timed out before gen 10 completed. API returned empty strategies. Best genome at gen 9 had mean fitness 0.6749, showing good convergence.
+Completed in 10/10 generations (120 evaluations) with best fitness 0.6978 after ~3h 36m.
+
+**Final best genome:** `genome_43bef822cde3`
+- Entry (short): `willr_entry_0 crosses_above -2.601`
+- Exit (short): `willr_exit_0 crosses_below 9.4135` and `willr_exit_1 >= -3.8788`
+- SL: 5.1%, TP: 1.46%
+- Final metrics: 101 trades, +17.1% return, Sharpe 3.6398, PF 1.6247, max DD 0.0%
 
 **Lesson:** STOCH (pandas-ta) is extremely slow on 5m data. Gen 9 alone took 3079s (~51 min). Mixed pandas-ta indicator pools on 5m should use smaller populations or fewer generations.
 
