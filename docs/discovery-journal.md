@@ -4,6 +4,85 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-02-27: Strategy Combination Experiments — Bull+Bear Merge Attempts
+
+### Goal
+
+Combine the bull champion (run 88: 4h CCI, +49.3% on 2024-01→2025-06) with the bear champion (run 81/87: 4h CCI, +16.7% on 2024-06→2026-02) into a single regime-adaptive strategy.
+
+### Approach 1: Out-of-Sample Test (Run 101)
+
+First tested run 88's bull strategy on the unseen bear window (2025-06→2026-02).
+
+| Window | Sharpe | PF | Trades | Return | MaxDD |
+|--------|--------|-----|--------|--------|-------|
+| In-sample (2024-01→2025-06) | 4.12 | 2.736 | 61 | +49.3% | 11.3% |
+| **Out-of-sample (2025-06→2026-02)** | **-4.14** | **0.446** | **32** | **-8.9%** | **10.1%** |
+
+Strategy is pure bull — all 61 in-sample trades were LONG despite `direction=both`. On the bear window it kept entering longs into a downtrend and hitting SL repeatedly.
+
+### Approach 2: Combined DSL with Separate Long/Short Conditions
+
+Used the DSL's per-direction entry/exit support:
+- Long side: run 88's conditions (CCI(30) crosses_below 59.9)
+- Short side: run 81's conditions (CCI(23) crosses_above 37.0)
+
+**Run 102 — Wide SL (8.29% from run 81):**
+
+| Metric | Value |
+|--------|-------|
+| Sharpe | -1.03 |
+| PF | 0.832 |
+| Trades | 78 (44 long, 34 short) |
+| Return | -9.8% |
+| MaxDD | 15.2% |
+| Long PnL | +$3,372 |
+| Short PnL | **-$13,141** |
+
+**Run 103 — Tight SL (1.09% from run 88):**
+
+| Metric | Value |
+|--------|-------|
+| Sharpe | -0.10 |
+| PF | 0.978 |
+| Trades | 170 (87 long, 83 short) |
+| Return | -9.7% |
+| MaxDD | 22.0% |
+| Long PnL | +$10,868 |
+| Short PnL | **-$20,588** |
+
+Both lost money. The short side fires during the 2024 bull rally and gets stopped out repeatedly. CCI is a bounded oscillator — it cycles in ALL market conditions and has zero regime awareness.
+
+### Approach 3: Full 2yr Discovery (Run 104/106)
+
+Let the GA find a genuinely regime-adaptive strategy on the full 2024-01→2026-02 window.
+
+Config: pop=16, gen=8, CCI+RSI, direction=both, ~35min runtime.
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 104 | 1.39 | 1.225 | 64 | +15.5% | 0% |
+| Screening | 105 | 1.39 | 1.225 | 64 | +15.5% | 0% |
+| Validation | 106 | 1.53 | 1.251 | 58 | +16.5% | 24.9% |
+
+**Winner: RSI(16) <= 68.9 entry, RSI(5) > 68.8 exit, SL=5.34%, TP=17.53%**
+
+The GA produced another long-only strategy (0 short trades). It concluded — same as us — that you can't profitably short across a full bull+bear cycle with RSI/CCI thresholds. Moderate returns (+16.5%) but 24.9% MaxDD is poor.
+
+### Conclusions
+
+1. **Naive strategy combination doesn't work** — both sides trade all the time regardless of regime, and the losing side overwhelms the winner
+2. **CCI/RSI are not regime detectors** — they're bounded oscillators that cycle in all conditions. SMA(200) is equally unreliable
+3. **Per-regime specialists dominate** — run 88 (+49.3% bull) and run 87 (+16.7% bear, 2.2% MaxDD) are far superior on their windows than any combined approach
+4. **Full-window discovery produces mediocre results** — Sharpe 1.53 vs 3.65 (run 87) and 4.12 (run 98). The GA can't find a single strategy that works well in both regimes
+5. **Per-direction SL/TP would help** (bead vibe-quant-k4ya) — tight stops for longs, wide for shorts, but won't solve the fundamental regime problem
+
+### Filed
+
+- `vibe-quant-k4ya`: Per-direction SL/TP support in DSL (P2 feature)
+
+---
+
 ## 2026-02-27: Batch 6 — Bull Market Discovery, First Long Strategy, New Records
 
 ### Goal
