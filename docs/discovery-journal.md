@@ -91,6 +91,40 @@ Launched 5 parallel discovery runs on **BTCUSDT/1m, 2025-09-01 to 2026-02-24** (
 - **Validation runs 37, 39 show "Job stale" error**: The heartbeat timeout (120s) is too short for long backtests. Jobs completed successfully but were marked stale by the job manager before results were written. Results are still present in DB.
 - **Direction field ambiguity**: Run 42's genomes show `direction=long` but conditions are in `entry_short`/`exit_short`. Need to investigate if this is a display bug or a genome→DSL translation issue.
 
+### Batch 3: Fast Discovery Runs (Runs 57-60)
+
+Launched 3 parallel discovery runs on **BTCUSDT/5m** with pop=8, gen=5 (~40 evals), targeting 5-10 min completion. Higher mutation (0.25-0.3) for more diversity including long/both directions.
+
+| Run | Archetype | Indicators | Status | Duration | Best Fitness | Notes |
+|-----|-----------|------------|--------|----------|-------------|-------|
+| 57 | Trend | SMA,EMA,ADX,ATR | **CRASHED** | ~4.5 min | 0.0 | Position size rounds to 0 |
+| 58 | Mean Rev v2 | RSI,CCI,EMA | **Completed** | ~8.7 min | 0.6415 | Short-only, +18% |
+| 59 | Momentum | RSI,ADX,ATR,SMA | **FAILED** | ~44s | 0.0 | 0 trades all gens |
+| 60 | Momentum v2 | RSI,EMA,SMA,ATR | **Completed** | ~60s | 0.328 | Both-dir, -27.6%, DSR fail |
+
+**Run 57 crash:** `ValueError: quantity 0.0004996 rounded to zero due to size increment 0.001`. Position sizing produces sub-minimum-lot quantities when risk-based sizing on high-priced BTC. Filed as `vibe-quant-p47m`.
+
+**Run 59 failure:** All Rust-native indicators with very different value ranges (RSI: 0-100, ATR: ~50-500, SMA: ~60K+) produced random conditions that never triggered entries. Pop=8 too small to find viable combinations.
+
+**Run 58 Results: RSI + CCI Mean Reversion v2**
+
+Best genome: RSI(36) < 72.5 (short entry, very loose) + CCI(14) < -30.4 and RSI(12) > 71.7 (exit), SL=0.66%, TP=7.43%
+
+| Step | Run | Trades | Return | Sharpe | PF | Max DD |
+|------|-----|--------|--------|--------|-----|--------|
+| Discovery | 58 | 179 | +18.0% | 2.91 | 1.479 | 0.0% |
+| Screening | 61 | **179** | +18.0% | 2.91 | — | — |
+| Validation | 62 | **196** | +15.4% | 2.41 | 1.405 | 12.0% |
+
+Strategy survived validation: Sharpe degraded 2.91→2.41, return 18%→15.4%, but max DD is 12% (acceptable). Short-only again — GA converges on short because it outperforms long on this BTC period.
+
+**Key learnings:**
+1. Position sizing needs min-lot-size guard (bug filed)
+2. Small populations (8) with heterogeneous indicators (different scales) often produce 0-trade runs
+3. CCI+RSI combo continues to be the most reliable (Run 52 and 58 both won with similar combos)
+4. GA converges on short-only because it genuinely outperforms long on this 6-month BTC window
+5. For bidirectional strategies, may need to force direction=both or run separate long-only/short-only discovery
+
 ### Switch to 5m Timeframe (Runs 51-54)
 
 Killed 1m runs 40-44 (too slow with pandas-ta on 260K bars). Relaunched on **BTCUSDT/5m, 2025-09-01 to 2026-02-24** (~52K bars).
