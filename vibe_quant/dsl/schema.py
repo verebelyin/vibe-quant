@@ -262,6 +262,33 @@ class TimeFilterConfig(BaseModel):
         return v
 
 
+class StopLossOverride(BaseModel):
+    """Per-direction override for stop loss parameters.
+
+    Allows long and short directions to use different SL values
+    while sharing the same SL type from the parent config.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    percent: float | None = Field(default=None, ge=0.1, le=50.0)
+    atr_multiplier: float | None = Field(default=None, ge=0.5, le=10.0)
+
+
+class TakeProfitOverride(BaseModel):
+    """Per-direction override for take profit parameters.
+
+    Allows long and short directions to use different TP values
+    while sharing the same TP type from the parent config.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    percent: float | None = Field(default=None, ge=0.1, le=100.0)
+    atr_multiplier: float | None = Field(default=None, ge=0.5, le=20.0)
+    risk_reward_ratio: float | None = Field(default=None, ge=0.5, le=10.0)
+
+
 class StopLossConfig(BaseModel):
     """Configuration for stop loss.
 
@@ -270,6 +297,8 @@ class StopLossConfig(BaseModel):
         percent: Percentage for fixed_pct type
         atr_multiplier: ATR multiplier for ATR-based types
         indicator: Indicator name for ATR reference
+        long: Optional per-direction override for long positions
+        short: Optional per-direction override for short positions
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -278,6 +307,8 @@ class StopLossConfig(BaseModel):
     percent: float | None = Field(default=None, ge=0.1, le=50.0)
     atr_multiplier: float | None = Field(default=None, ge=0.5, le=10.0)
     indicator: str | None = Field(default=None, description="ATR indicator name")
+    long: StopLossOverride | None = Field(default=None, description="Long-direction override")
+    short: StopLossOverride | None = Field(default=None, description="Short-direction override")
 
     @field_validator("type")
     @classmethod
@@ -293,11 +324,21 @@ class StopLossConfig(BaseModel):
     def validate_stop_loss_params(self) -> StopLossConfig:
         """Validate stop loss parameters based on type."""
         if self.type == "fixed_pct":
-            if self.percent is None:
-                msg = "stop_loss.percent is required when type is 'fixed_pct'"
+            # Need percent at top level OR in both direction overrides
+            has_default = self.percent is not None
+            has_long = self.long is not None and self.long.percent is not None
+            has_short = self.short is not None and self.short.percent is not None
+            if not has_default and not (has_long and has_short):
+                msg = (
+                    "stop_loss.percent is required when type is 'fixed_pct' "
+                    "(either at top level or in both long/short overrides)"
+                )
                 raise ValueError(msg)
         elif self.type in {"atr_fixed", "atr_trailing"}:
-            if self.atr_multiplier is None:
+            has_default = self.atr_multiplier is not None
+            has_long = self.long is not None and self.long.atr_multiplier is not None
+            has_short = self.short is not None and self.short.atr_multiplier is not None
+            if not has_default and not (has_long and has_short):
                 msg = f"stop_loss.atr_multiplier is required when type is '{self.type}'"
                 raise ValueError(msg)
             if self.indicator is None:
@@ -315,6 +356,8 @@ class TakeProfitConfig(BaseModel):
         atr_multiplier: ATR multiplier for ATR-based types
         risk_reward_ratio: Risk/reward ratio for risk_reward type
         indicator: Indicator name for ATR reference
+        long: Optional per-direction override for long positions
+        short: Optional per-direction override for short positions
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -324,6 +367,8 @@ class TakeProfitConfig(BaseModel):
     atr_multiplier: float | None = Field(default=None, ge=0.5, le=20.0)
     risk_reward_ratio: float | None = Field(default=None, ge=0.5, le=10.0)
     indicator: str | None = Field(default=None, description="ATR indicator name")
+    long: TakeProfitOverride | None = Field(default=None, description="Long-direction override")
+    short: TakeProfitOverride | None = Field(default=None, description="Short-direction override")
 
     @field_validator("type")
     @classmethod
@@ -339,19 +384,32 @@ class TakeProfitConfig(BaseModel):
     def validate_take_profit_params(self) -> TakeProfitConfig:
         """Validate take profit parameters based on type."""
         if self.type == "fixed_pct":
-            if self.percent is None:
-                msg = "take_profit.percent is required when type is 'fixed_pct'"
+            has_default = self.percent is not None
+            has_long = self.long is not None and self.long.percent is not None
+            has_short = self.short is not None and self.short.percent is not None
+            if not has_default and not (has_long and has_short):
+                msg = (
+                    "take_profit.percent is required when type is 'fixed_pct' "
+                    "(either at top level or in both long/short overrides)"
+                )
                 raise ValueError(msg)
         elif self.type == "atr_fixed":
-            if self.atr_multiplier is None:
+            has_default = self.atr_multiplier is not None
+            has_long = self.long is not None and self.long.atr_multiplier is not None
+            has_short = self.short is not None and self.short.atr_multiplier is not None
+            if not has_default and not (has_long and has_short):
                 msg = "take_profit.atr_multiplier is required when type is 'atr_fixed'"
                 raise ValueError(msg)
             if self.indicator is None:
                 msg = "take_profit.indicator (ATR indicator name) is required when type is 'atr_fixed'"
                 raise ValueError(msg)
-        elif self.type == "risk_reward" and self.risk_reward_ratio is None:
-            msg = "take_profit.risk_reward_ratio is required when type is 'risk_reward'"
-            raise ValueError(msg)
+        elif self.type == "risk_reward":
+            has_default = self.risk_reward_ratio is not None
+            has_long = self.long is not None and self.long.risk_reward_ratio is not None
+            has_short = self.short is not None and self.short.risk_reward_ratio is not None
+            if not has_default and not (has_long and has_short):
+                msg = "take_profit.risk_reward_ratio is required when type is 'risk_reward'"
+                raise ValueError(msg)
         return self
 
 

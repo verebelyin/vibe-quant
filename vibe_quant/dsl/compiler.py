@@ -446,6 +446,21 @@ class StrategyCompiler:
             lines.append(f"    stop_loss_atr_multiplier: float = {dsl.stop_loss.atr_multiplier}")
         if dsl.stop_loss.indicator is not None:
             lines.append(f'    stop_loss_indicator: str = "{dsl.stop_loss.indicator}"')
+        # Per-direction SL overrides
+        if dsl.stop_loss.long is not None:
+            if dsl.stop_loss.long.percent is not None:
+                lines.append(f"    stop_loss_long_percent: float = {dsl.stop_loss.long.percent}")
+            if dsl.stop_loss.long.atr_multiplier is not None:
+                lines.append(
+                    f"    stop_loss_long_atr_multiplier: float = {dsl.stop_loss.long.atr_multiplier}"
+                )
+        if dsl.stop_loss.short is not None:
+            if dsl.stop_loss.short.percent is not None:
+                lines.append(f"    stop_loss_short_percent: float = {dsl.stop_loss.short.percent}")
+            if dsl.stop_loss.short.atr_multiplier is not None:
+                lines.append(
+                    f"    stop_loss_short_atr_multiplier: float = {dsl.stop_loss.short.atr_multiplier}"
+                )
 
         # Add take profit parameters
         lines.append("")
@@ -463,6 +478,33 @@ class StrategyCompiler:
             )
         if dsl.take_profit.indicator is not None:
             lines.append(f'    take_profit_indicator: str = "{dsl.take_profit.indicator}"')
+        # Per-direction TP overrides
+        if dsl.take_profit.long is not None:
+            if dsl.take_profit.long.percent is not None:
+                lines.append(
+                    f"    take_profit_long_percent: float = {dsl.take_profit.long.percent}"
+                )
+            if dsl.take_profit.long.atr_multiplier is not None:
+                lines.append(
+                    f"    take_profit_long_atr_multiplier: float = {dsl.take_profit.long.atr_multiplier}"
+                )
+            if dsl.take_profit.long.risk_reward_ratio is not None:
+                lines.append(
+                    f"    take_profit_long_risk_reward: float = {dsl.take_profit.long.risk_reward_ratio}"
+                )
+        if dsl.take_profit.short is not None:
+            if dsl.take_profit.short.percent is not None:
+                lines.append(
+                    f"    take_profit_short_percent: float = {dsl.take_profit.short.percent}"
+                )
+            if dsl.take_profit.short.atr_multiplier is not None:
+                lines.append(
+                    f"    take_profit_short_atr_multiplier: float = {dsl.take_profit.short.atr_multiplier}"
+                )
+            if dsl.take_profit.short.risk_reward_ratio is not None:
+                lines.append(
+                    f"    take_profit_short_risk_reward: float = {dsl.take_profit.short.risk_reward_ratio}"
+                )
 
         # Add custom thresholds (extracted from conditions)
         lines.append("")
