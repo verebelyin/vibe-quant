@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
-from vibe_quant.dsl.templates import ON_EVENT_LINES, ON_RESET_LINES, ON_STOP_LINES, ORDER_METHODS_LINES
+from vibe_quant.dsl.templates import (
+    ON_EVENT_LINES,
+    ON_RESET_LINES,
+    ON_STOP_LINES,
+    ORDER_METHODS_LINES,
+)
 
 logger = logging.getLogger(__name__)
 
