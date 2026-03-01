@@ -420,3 +420,57 @@ class TestMutateThresholdReset:
                     assert lo <= g.threshold <= hi, (
                         f"{g.indicator_type} threshold {g.threshold} outside [{lo}, {hi}]"
                     )
+
+
+# ---------------------------------------------------------------------------
+# Per-direction SL/TP operators
+# ---------------------------------------------------------------------------
+
+
+class TestPerDirectionSLTPOperators:
+    def test_crossover_preserves_per_direction(self) -> None:
+        random.seed(42)
+        a = _make_chromosome(direction=Direction.BOTH)
+        a.stop_loss_long_pct = 1.0
+        a.stop_loss_short_pct = 5.0
+        b = _make_chromosome(direction=Direction.BOTH)
+        b.stop_loss_long_pct = 2.0
+        b.stop_loss_short_pct = 8.0
+        sl_long_vals: set[float] = set()
+        for _ in range(100):
+            c1, _ = crossover(a, b)
+            if c1.stop_loss_long_pct is not None:
+                sl_long_vals.add(c1.stop_loss_long_pct)
+        assert sl_long_vals <= {1.0, 2.0}
+
+    def test_mutation_perturbs_per_direction(self) -> None:
+        random.seed(42)
+        chrom = _make_chromosome(direction=Direction.BOTH)
+        chrom.stop_loss_long_pct = 2.0
+        chrom.stop_loss_short_pct = 5.0
+        chrom.take_profit_long_pct = 8.0
+        chrom.take_profit_short_pct = 12.0
+        changed = {k: False for k in ["sl_long", "sl_short", "tp_long", "tp_short"]}
+        for _ in range(100):
+            m = mutate(chrom, mutation_rate=1.0)
+            if m.stop_loss_long_pct != 2.0:
+                changed["sl_long"] = True
+            if m.stop_loss_short_pct != 5.0:
+                changed["sl_short"] = True
+            if m.take_profit_long_pct != 8.0:
+                changed["tp_long"] = True
+            if m.take_profit_short_pct != 12.0:
+                changed["tp_short"] = True
+        assert all(changed.values()), f"Not all per-direction values mutated: {changed}"
+
+    def test_random_both_has_per_direction(self) -> None:
+        random.seed(42)
+        pop = initialize_population(size=50, direction_constraint=Direction.BOTH)
+        has_per_dir = sum(1 for c in pop if c.stop_loss_long_pct is not None)
+        assert has_per_dir == 50
+
+    def test_random_long_no_per_direction(self) -> None:
+        random.seed(42)
+        pop = initialize_population(size=20, direction_constraint=Direction.LONG)
+        has_per_dir = sum(1 for c in pop if c.stop_loss_long_pct is not None)
+        assert has_per_dir == 0

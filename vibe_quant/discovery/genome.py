@@ -297,6 +297,17 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
     if not (0.5 <= chrom.take_profit_pct <= 20.0):
         errors.append(f"take_profit_pct={chrom.take_profit_pct} out of range [0.5, 20.0]")
 
+    # Per-direction SL/TP ranges
+    for attr, label, valid_range in [
+        ("stop_loss_long_pct", "stop_loss_long_pct", (0.5, 10.0)),
+        ("stop_loss_short_pct", "stop_loss_short_pct", (0.5, 10.0)),
+        ("take_profit_long_pct", "take_profit_long_pct", (0.5, 20.0)),
+        ("take_profit_short_pct", "take_profit_short_pct", (0.5, 20.0)),
+    ]:
+        val = getattr(chrom, attr, None)
+        if val is not None and not (valid_range[0] <= val <= valid_range[1]):
+            errors.append(f"{label}={val} out of range [{valid_range[0]}, {valid_range[1]}]")
+
     # Direction
     if _normalize_direction(chrom.direction) is None:
         errors.append(f"invalid direction '{chrom.direction}'")
@@ -424,6 +435,17 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         "stop_loss": {"type": "fixed_pct", "percent": sl_pct},
         "take_profit": {"type": "fixed_pct", "percent": tp_pct},
     }
+
+    # Per-direction SL/TP overrides (only for BOTH direction)
+    if direction == Direction.BOTH:
+        if chrom.stop_loss_long_pct is not None:
+            dsl["stop_loss_long"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_long_pct, 2)}
+        if chrom.stop_loss_short_pct is not None:
+            dsl["stop_loss_short"] = {"type": "fixed_pct", "percent": round(chrom.stop_loss_short_pct, 2)}
+        if chrom.take_profit_long_pct is not None:
+            dsl["take_profit_long"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_long_pct, 2)}
+        if chrom.take_profit_short_pct is not None:
+            dsl["take_profit_short"] = {"type": "fixed_pct", "percent": round(chrom.take_profit_short_pct, 2)}
 
     # Time filters (optional)
     if chrom.time_filters:

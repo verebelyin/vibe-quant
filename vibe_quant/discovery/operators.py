@@ -145,6 +145,10 @@ class StrategyChromosome:
     stop_loss_pct: float
     take_profit_pct: float
     direction: Direction = field(default=Direction.LONG)
+    stop_loss_long_pct: float | None = field(default=None)
+    stop_loss_short_pct: float | None = field(default=None)
+    take_profit_long_pct: float | None = field(default=None)
+    take_profit_short_pct: float | None = field(default=None)
     time_filters: dict[str, object] = field(default_factory=dict)
     uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -156,6 +160,10 @@ class StrategyChromosome:
             stop_loss_pct=self.stop_loss_pct,
             take_profit_pct=self.take_profit_pct,
             direction=self.direction,
+            stop_loss_long_pct=self.stop_loss_long_pct,
+            stop_loss_short_pct=self.stop_loss_short_pct,
+            take_profit_long_pct=self.take_profit_long_pct,
+            take_profit_short_pct=self.take_profit_short_pct,
             time_filters=dict(self.time_filters),
             uid=self.uid,
         )
@@ -295,6 +303,17 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
         return False
     if not (TP_RANGE[0] <= chrom.take_profit_pct <= TP_RANGE[1]):
         return False
+    # Per-direction SL/TP range checks
+    for attr, valid_range in [
+        ("stop_loss_long_pct", SL_RANGE),
+        ("stop_loss_short_pct", SL_RANGE),
+        ("take_profit_long_pct", TP_RANGE),
+        ("take_profit_short_pct", TP_RANGE),
+    ]:
+        val = getattr(chrom, attr)
+        if val is not None and not (valid_range[0] <= val <= valid_range[1]):
+            return False
+
     for gene in chrom.entry_genes + chrom.exit_genes:
         if gene.indicator_type not in INDICATOR_POOL:
             return False
@@ -354,12 +373,26 @@ def crossover(
     dir_a = parent_a.direction if random.random() < 0.5 else parent_b.direction
     dir_b = parent_b.direction if random.random() < 0.5 else parent_a.direction
 
+    # Per-direction SL/TP: random pick per child
+    sl_long_a = parent_a.stop_loss_long_pct if random.random() < 0.5 else parent_b.stop_loss_long_pct
+    sl_short_a = parent_a.stop_loss_short_pct if random.random() < 0.5 else parent_b.stop_loss_short_pct
+    tp_long_a = parent_a.take_profit_long_pct if random.random() < 0.5 else parent_b.take_profit_long_pct
+    tp_short_a = parent_a.take_profit_short_pct if random.random() < 0.5 else parent_b.take_profit_short_pct
+    sl_long_b = parent_b.stop_loss_long_pct if random.random() < 0.5 else parent_a.stop_loss_long_pct
+    sl_short_b = parent_b.stop_loss_short_pct if random.random() < 0.5 else parent_a.stop_loss_short_pct
+    tp_long_b = parent_b.take_profit_long_pct if random.random() < 0.5 else parent_a.take_profit_long_pct
+    tp_short_b = parent_b.take_profit_short_pct if random.random() < 0.5 else parent_a.take_profit_short_pct
+
     child_a = StrategyChromosome(
         entry_genes=child_a_entries,
         exit_genes=child_a_exits,
         stop_loss_pct=sl_a,
         take_profit_pct=tp_a,
         direction=dir_a,
+        stop_loss_long_pct=sl_long_a,
+        stop_loss_short_pct=sl_short_a,
+        take_profit_long_pct=tp_long_a,
+        take_profit_short_pct=tp_short_a,
     )
     child_b = StrategyChromosome(
         entry_genes=child_b_entries,
@@ -367,6 +400,10 @@ def crossover(
         stop_loss_pct=sl_b,
         take_profit_pct=tp_b,
         direction=dir_b,
+        stop_loss_long_pct=sl_long_b,
+        stop_loss_short_pct=sl_short_b,
+        take_profit_long_pct=tp_long_b,
+        take_profit_short_pct=tp_short_b,
     )
     return child_a, child_b
 
@@ -444,6 +481,16 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
         chrom.stop_loss_pct = _perturb(chrom.stop_loss_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
     if random.random() < mutation_rate * 0.5:
         chrom.take_profit_pct = _perturb(chrom.take_profit_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+
+    # Mutate per-direction SL/TP (only if set)
+    if chrom.stop_loss_long_pct is not None and random.random() < mutation_rate * 0.5:
+        chrom.stop_loss_long_pct = _perturb(chrom.stop_loss_long_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+    if chrom.stop_loss_short_pct is not None and random.random() < mutation_rate * 0.5:
+        chrom.stop_loss_short_pct = _perturb(chrom.stop_loss_short_pct, 0.2, SL_RANGE[0], SL_RANGE[1])
+    if chrom.take_profit_long_pct is not None and random.random() < mutation_rate * 0.5:
+        chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+    if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
+        chrom.take_profit_short_pct = _perturb(chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
 
     return chrom
 
@@ -608,10 +655,16 @@ def _random_chromosome(
     )[0]
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     direction = direction_constraint if direction_constraint is not None else random.choice(list(Direction))
-    return StrategyChromosome(
+    chrom = StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],
         exit_genes=[_random_gene() for _ in range(n_exit)],
         stop_loss_pct=round(random.uniform(*SL_RANGE), 4),
         take_profit_pct=round(random.uniform(*TP_RANGE), 4),
         direction=direction,
     )
+    if chrom.direction == Direction.BOTH:
+        chrom.stop_loss_long_pct = round(random.uniform(*SL_RANGE), 4)
+        chrom.stop_loss_short_pct = round(random.uniform(*SL_RANGE), 4)
+        chrom.take_profit_long_pct = round(random.uniform(*TP_RANGE), 4)
+        chrom.take_profit_short_pct = round(random.uniform(*TP_RANGE), 4)
+    return chrom
