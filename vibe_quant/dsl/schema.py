@@ -454,6 +454,11 @@ class StrategyDSL(BaseModel):
     stop_loss: StopLossConfig = Field(..., description="Stop loss configuration")
     take_profit: TakeProfitConfig = Field(..., description="Take profit configuration")
 
+    stop_loss_long: StopLossConfig | None = Field(default=None, description="Stop loss override for longs")
+    stop_loss_short: StopLossConfig | None = Field(default=None, description="Stop loss override for shorts")
+    take_profit_long: TakeProfitConfig | None = Field(default=None, description="Take profit override for longs")
+    take_profit_short: TakeProfitConfig | None = Field(default=None, description="Take profit override for shorts")
+
     position_management: PositionManagementConfig = Field(
         default_factory=PositionManagementConfig, description="Position management"
     )
@@ -536,6 +541,29 @@ class StrategyDSL(BaseModel):
                     f"which is not defined in indicators"
                 )
                 raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_per_direction_indicators(self) -> StrategyDSL:
+        """Validate per-direction SL/TP indicator references exist."""
+        for field_name in ("stop_loss_long", "stop_loss_short"):
+            cfg = getattr(self, field_name)
+            if cfg is not None and cfg.type in {"atr_fixed", "atr_trailing"}:
+                if cfg.indicator and cfg.indicator not in self.indicators:
+                    msg = (
+                        f"{field_name} references indicator '{cfg.indicator}' "
+                        f"which is not defined in indicators"
+                    )
+                    raise ValueError(msg)
+        for field_name in ("take_profit_long", "take_profit_short"):
+            cfg = getattr(self, field_name)
+            if cfg is not None and cfg.type == "atr_fixed":
+                if cfg.indicator and cfg.indicator not in self.indicators:
+                    msg = (
+                        f"{field_name} references indicator '{cfg.indicator}' "
+                        f"which is not defined in indicators"
+                    )
+                    raise ValueError(msg)
         return self
 
     def get_all_timeframes(self) -> set[str]:
