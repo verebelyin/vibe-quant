@@ -779,3 +779,69 @@ class TestCompiledModuleImports:
         config = module.TestMinimalConfig(instrument_id="BTCUSDT.BINANCE")
         assert config.instrument_id == "BTCUSDT.BINANCE"
         assert config.rsi_period == 14
+
+
+class TestPerDirectionSLTPCompiler:
+    def test_per_direction_sl_emits_config_attrs(self) -> None:
+        """Compiler should emit stop_loss_long_* attrs when per-direction SL is set."""
+        from vibe_quant.dsl.compiler import StrategyCompiler
+        from vibe_quant.dsl.schema import StrategyDSL
+
+        dsl = StrategyDSL(
+            name="test_per_dir",
+            timeframe="5m",
+            indicators={"rsi": {"type": "RSI", "period": 14}},
+            entry_conditions={"long": ["rsi > 50"]},
+            stop_loss={"type": "fixed_pct", "percent": 2.0},
+            take_profit={"type": "fixed_pct", "percent": 4.0},
+            stop_loss_long={"type": "fixed_pct", "percent": 1.09},
+            stop_loss_short={"type": "fixed_pct", "percent": 8.29},
+        )
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        assert "stop_loss_long_type" in source
+        assert "stop_loss_long_percent" in source
+        assert "1.09" in source
+        assert "stop_loss_short_type" in source
+        assert "8.29" in source
+
+    def test_per_direction_tp_emits_config_attrs(self) -> None:
+        from vibe_quant.dsl.compiler import StrategyCompiler
+        from vibe_quant.dsl.schema import StrategyDSL
+
+        dsl = StrategyDSL(
+            name="test_per_dir_tp",
+            timeframe="5m",
+            indicators={"rsi": {"type": "RSI", "period": 14}},
+            entry_conditions={"long": ["rsi > 50"]},
+            stop_loss={"type": "fixed_pct", "percent": 2.0},
+            take_profit={"type": "fixed_pct", "percent": 4.0},
+            take_profit_long={"type": "fixed_pct", "percent": 17.13},
+            take_profit_short={"type": "fixed_pct", "percent": 13.06},
+        )
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        assert "take_profit_long_type" in source
+        assert "17.13" in source
+        assert "take_profit_short_type" in source
+        assert "13.06" in source
+
+    def test_no_per_direction_no_extra_attrs(self) -> None:
+        """Without per-direction, should not emit *_long_* or *_short_* attrs."""
+        from vibe_quant.dsl.compiler import StrategyCompiler
+        from vibe_quant.dsl.schema import StrategyDSL
+
+        dsl = StrategyDSL(
+            name="test_unified",
+            timeframe="5m",
+            indicators={"rsi": {"type": "RSI", "period": 14}},
+            entry_conditions={"long": ["rsi > 50"]},
+            stop_loss={"type": "fixed_pct", "percent": 2.0},
+            take_profit={"type": "fixed_pct", "percent": 4.0},
+        )
+        compiler = StrategyCompiler()
+        source = compiler.compile(dsl)
+        assert "stop_loss_long_type" not in source
+        assert "stop_loss_short_type" not in source
+        assert "take_profit_long_type" not in source
+        assert "take_profit_short_type" not in source

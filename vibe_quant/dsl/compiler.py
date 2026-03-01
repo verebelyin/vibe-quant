@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
-from vibe_quant.dsl.templates import ON_EVENT_LINES, ON_STOP_LINES, ORDER_METHODS_LINES
+from vibe_quant.dsl.templates import ON_EVENT_LINES, ON_RESET_LINES, ON_STOP_LINES, ORDER_METHODS_LINES
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +464,36 @@ class StrategyCompiler:
         if dsl.take_profit.indicator is not None:
             lines.append(f'    take_profit_indicator: str = "{dsl.take_profit.indicator}"')
 
+        # Add per-direction stop loss parameters (if present)
+        for direction in ("long", "short"):
+            sl_cfg = getattr(dsl, f"stop_loss_{direction}", None)
+            if sl_cfg is not None:
+                lines.append("")
+                lines.append(f"    # Stop loss ({direction}) parameters")
+                lines.append(f'    stop_loss_{direction}_type: str = "{sl_cfg.type}"')
+                if sl_cfg.percent is not None:
+                    lines.append(f"    stop_loss_{direction}_percent: float = {sl_cfg.percent}")
+                if sl_cfg.atr_multiplier is not None:
+                    lines.append(f"    stop_loss_{direction}_atr_multiplier: float = {sl_cfg.atr_multiplier}")
+                if sl_cfg.indicator is not None:
+                    lines.append(f'    stop_loss_{direction}_indicator: str = "{sl_cfg.indicator}"')
+
+        # Add per-direction take profit parameters (if present)
+        for direction in ("long", "short"):
+            tp_cfg = getattr(dsl, f"take_profit_{direction}", None)
+            if tp_cfg is not None:
+                lines.append("")
+                lines.append(f"    # Take profit ({direction}) parameters")
+                lines.append(f'    take_profit_{direction}_type: str = "{tp_cfg.type}"')
+                if tp_cfg.percent is not None:
+                    lines.append(f"    take_profit_{direction}_percent: float = {tp_cfg.percent}")
+                if tp_cfg.atr_multiplier is not None:
+                    lines.append(f"    take_profit_{direction}_atr_multiplier: float = {tp_cfg.atr_multiplier}")
+                if tp_cfg.risk_reward_ratio is not None:
+                    lines.append(f"    take_profit_{direction}_risk_reward: float = {tp_cfg.risk_reward_ratio}")
+                if tp_cfg.indicator is not None:
+                    lines.append(f'    take_profit_{direction}_indicator: str = "{tp_cfg.indicator}"')
+
         # Add custom thresholds (extracted from conditions)
         lines.append("")
         lines.append("    # Condition thresholds (can be overridden)")
@@ -581,6 +611,11 @@ class StrategyCompiler:
         lines.append(textwrap.indent(on_stop, "    "))
         lines.append("")
 
+        # Add on_reset method to suppress NT warning
+        on_reset = self._generate_on_reset()
+        lines.append(textwrap.indent(on_reset, "    "))
+        lines.append("")
+
         # Add helper methods
         helpers = self._generate_helper_methods(dsl, indicators, indicator_names)
         lines.append(textwrap.indent(helpers, "    "))
@@ -608,6 +643,14 @@ class StrategyCompiler:
             on_stop method source code
         """
         return "\n".join(ON_STOP_LINES)
+
+    def _generate_on_reset(self) -> str:
+        """Generate on_reset() to suppress NT warning and reset state.
+
+        Returns:
+            on_reset method source code
+        """
+        return "\n".join(ON_RESET_LINES)
 
     def _generate_on_start(
         self,
