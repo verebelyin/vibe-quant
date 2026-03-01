@@ -16,6 +16,7 @@ from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     StrategyGene,
+    _ensure_pool,
 )
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,7 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
     - SL/TP within valid ranges
     - Direction is valid
     """
+    _ensure_pool()  # ensure THRESHOLD_RANGES is populated
     errors: list[str] = []
 
     # Gene count checks

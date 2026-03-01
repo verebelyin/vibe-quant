@@ -517,61 +517,27 @@ class StrategyDSL(BaseModel):
                 raise ValueError(msg)
         return self
 
-    @model_validator(mode="after")
-    def validate_stop_loss_indicator(self) -> StrategyDSL:
-        """Validate stop loss indicator reference exists."""
-        if self.stop_loss.type in {"atr_fixed", "atr_trailing"}:
-            indicator_name = self.stop_loss.indicator
-            if indicator_name and indicator_name not in self.indicators:
-                msg = (
-                    f"stop_loss references indicator '{indicator_name}' "
-                    f"which is not defined in indicators"
-                )
-                raise ValueError(msg)
-        return self
+    def _check_indicator_ref(self, field_name: str, types: set[str]) -> None:
+        """Raise if SL/TP config references an undefined indicator."""
+        cfg = getattr(self, field_name)
+        if cfg is None:
+            return
+        if cfg.type in types and cfg.indicator and cfg.indicator not in self.indicators:
+            msg = (
+                f"{field_name} references indicator '{cfg.indicator}' "
+                f"which is not defined in indicators"
+            )
+            raise ValueError(msg)
 
     @model_validator(mode="after")
-    def validate_take_profit_indicator(self) -> StrategyDSL:
-        """Validate take profit indicator reference exists."""
-        if self.take_profit.type == "atr_fixed":
-            indicator_name = self.take_profit.indicator
-            if indicator_name and indicator_name not in self.indicators:
-                msg = (
-                    f"take_profit references indicator '{indicator_name}' "
-                    f"which is not defined in indicators"
-                )
-                raise ValueError(msg)
-        return self
-
-    @model_validator(mode="after")
-    def validate_per_direction_indicators(self) -> StrategyDSL:
-        """Validate per-direction SL/TP indicator references exist."""
-        for field_name in ("stop_loss_long", "stop_loss_short"):
-            cfg = getattr(self, field_name)
-            if (
-                cfg is not None
-                and cfg.type in {"atr_fixed", "atr_trailing"}
-                and cfg.indicator
-                and cfg.indicator not in self.indicators
-            ):
-                    msg = (
-                        f"{field_name} references indicator '{cfg.indicator}' "
-                        f"which is not defined in indicators"
-                    )
-                    raise ValueError(msg)
-        for field_name in ("take_profit_long", "take_profit_short"):
-            cfg = getattr(self, field_name)
-            if (
-                cfg is not None
-                and cfg.type == "atr_fixed"
-                and cfg.indicator
-                and cfg.indicator not in self.indicators
-            ):
-                    msg = (
-                        f"{field_name} references indicator '{cfg.indicator}' "
-                        f"which is not defined in indicators"
-                    )
-                    raise ValueError(msg)
+    def validate_sl_tp_indicators(self) -> StrategyDSL:
+        """Validate all SL/TP indicator references exist."""
+        sl_types = {"atr_fixed", "atr_trailing"}
+        tp_types = {"atr_fixed"}
+        for name in ("stop_loss", "stop_loss_long", "stop_loss_short"):
+            self._check_indicator_ref(name, sl_types)
+        for name in ("take_profit", "take_profit_long", "take_profit_short"):
+            self._check_indicator_ref(name, tp_types)
         return self
 
     def get_all_timeframes(self) -> set[str]:

@@ -52,11 +52,13 @@ _INDICATOR_NAMES: list[str] = []
 
 
 def _ensure_pool() -> None:
-    """Populate INDICATOR_POOL on first use (breaks circular import)."""
+    """Populate INDICATOR_POOL and THRESHOLD_RANGES on first use (breaks circular import)."""
     global _INDICATOR_NAMES  # noqa: PLW0603
     if not INDICATOR_POOL:
         INDICATOR_POOL.update(_build_indicator_pool())
         _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
+    if not THRESHOLD_RANGES:
+        THRESHOLD_RANGES.update(_build_threshold_ranges())
 
 
 class ConditionType(Enum):
@@ -200,19 +202,28 @@ def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) ->
 
 
 # Indicator-specific threshold ranges to avoid impossible conditions
-# that produce 0 trades (the #1 cause of wasted evals)
-THRESHOLD_RANGES: dict[str, tuple[float, float]] = {
-    "RSI": (25.0, 75.0),
-    "STOCH": (20.0, 80.0),
-    "CCI": (-100.0, 100.0),
-    "WILLR": (-80.0, -20.0),
-    "MFI": (20.0, 80.0),
-    "ROC": (-5.0, 5.0),
-    "MACD": (-0.005, 0.005),
-    "ATR": (0.001, 0.03),
-    # EMA/BBANDS: price-relative, threshold = 0
-    # (compared against price, not a fixed number — these produce ~0 trades)
-}
+# that produce 0 trades (the #1 cause of wasted evals).
+# Ranges for INDICATOR_POOL indicators are derived from genome.IndicatorDef;
+# extras (CCI, WILLR, etc.) are defined here directly.
+def _build_threshold_ranges() -> dict[str, tuple[float, float]]:
+    """Build threshold ranges: derive from INDICATOR_POOL + manual extras."""
+    from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
+
+    ranges = {name: defn.default_threshold_range for name, defn in _GENOME_POOL.items()}
+    # Extra oscillators not in INDICATOR_POOL (no IndicatorDef)
+    ranges.update({
+        "CCI": (-100.0, 100.0),
+        "WILLR": (-80.0, -20.0),
+        "MFI": (20.0, 80.0),
+        "ROC": (-5.0, 5.0),
+    })
+    return ranges
+
+
+# Deferred initialization (same pattern as INDICATOR_POOL) to break circular import
+THRESHOLD_RANGES: dict[str, tuple[float, float]] = {}
+
+
 _PRICE_RELATIVE_INDICATORS = frozenset(
     {
         "EMA",
