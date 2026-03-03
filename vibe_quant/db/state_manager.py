@@ -458,7 +458,7 @@ class StateManager:
             if pid is not None:
                 updates.append("pid = ?")
                 params.append(pid)
-        elif status in ("completed", "failed"):
+        elif status in ("completed", "failed", "killed", "cancelled"):
             updates.append("completed_at = datetime('now')")
             if error_message is not None:
                 updates.append("error_message = ?")

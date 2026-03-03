@@ -53,8 +53,8 @@ const STATUS_STYLES: Record<string, string> = {
 function formatDuration(start: string | null | undefined, end: string | null | undefined, status: string): string {
   if (!start) return "-";
   const s = new Date(start).getTime();
-  const e = status === "running" ? Date.now() : end ? new Date(end).getTime() : s;
-  const secs = Math.round((e - s) / 1000);
+  const e = status === "running" ? Date.now() : end ? new Date(end).getTime() : Date.now();
+  const secs = Math.max(0, Math.round((e - s) / 1000));
   if (secs < 60) return `${secs}s`;
   if (secs < 3600) return `${Math.round(secs / 60)}m`;
   const h = Math.floor(secs / 3600);

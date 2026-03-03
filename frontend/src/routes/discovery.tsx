@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 
 export function DiscoveryPage() {
   const { data: jobsResp } = useListDiscoveryJobsApiDiscoveryJobsGet({
-    query: { refetchInterval: 10_000 },
+    query: { refetchInterval: 5_000 },
   });
 
   const runningJobs: DiscoveryJobResponse[] = useMemo(() => {
@@ -17,6 +17,8 @@ export function DiscoveryPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <DiscoveryConfig />
+
       {runningJobs.length > 0 && (
         <div className="rounded-lg border border-blue-500/30 bg-blue-950/20 p-3">
           <div className="flex items-center justify-between">
@@ -52,8 +54,6 @@ export function DiscoveryPage() {
           </div>
         </div>
       )}
-
-      <DiscoveryConfig />
     </div>
   );
 }
