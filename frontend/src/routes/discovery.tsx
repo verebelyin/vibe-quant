@@ -1,64 +1,59 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import { useListDiscoveryJobsApiDiscoveryJobsGet } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
-import { DiscoveryConfig, type DiscoveryConvergenceConfig } from "@/components/discovery/DiscoveryConfig";
-import { DiscoveryJobList } from "@/components/discovery/DiscoveryJobList";
-import { DiscoveryProgress } from "@/components/discovery/DiscoveryProgress";
-import { DiscoveryResults } from "@/components/discovery/DiscoveryResults";
+import { DiscoveryConfig } from "@/components/discovery/DiscoveryConfig";
+import { Badge } from "@/components/ui/badge";
 
 export function DiscoveryPage() {
-  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
-  const [convergence, setConvergence] = useState<DiscoveryConvergenceConfig>({
-    convergenceWindow: 5,
-    convergenceThreshold: 0.001,
-  });
-
   const { data: jobsResp } = useListDiscoveryJobsApiDiscoveryJobsGet({
-    query: { refetchInterval: false },
+    query: { refetchInterval: 10_000 },
   });
 
-  const jobs: DiscoveryJobResponse[] = useMemo(() => {
-    if (!jobsResp) return [];
-    if (jobsResp.status === 200) return jobsResp.data;
-    return [];
+  const runningJobs: DiscoveryJobResponse[] = useMemo(() => {
+    if (!jobsResp || jobsResp.status !== 200) return [];
+    return jobsResp.data.filter((j) => j.status.toLowerCase() === "running");
   }, [jobsResp]);
 
-  const runningJob = jobs.find((j) => j.status.toLowerCase() === "running");
-
-  // Auto-select latest completed job if none selected
-  const completedJobs = jobs.filter((j) => j.status.toLowerCase() === "completed");
-  const effectiveRunId =
-    selectedRunId ?? (completedJobs[0]?.run_id ?? null);
-
-  // Extract total generations from progress or fallback to 100
-  const totalGens = runningJob
-    ? Number(
-        (runningJob.progress as Record<string, unknown> | null)?.max_generations ??
-          (runningJob.progress as Record<string, unknown> | null)?.total_generations ??
-          100,
-      )
-    : 100;
-
   return (
-    <div className="mx-auto max-w-5xl space-y-8">
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <DiscoveryConfig onConvergenceChange={setConvergence} />
-        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-          <DiscoveryJobList selectedRunId={effectiveRunId} onSelectRun={setSelectedRunId} />
+    <div className="mx-auto max-w-3xl space-y-6">
+      {runningJobs.length > 0 && (
+        <div className="rounded-lg border border-blue-500/30 bg-blue-950/20 p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+              <span className="text-sm font-medium text-foreground">
+                {runningJobs.length} discovery{" "}
+                {runningJobs.length === 1 ? "run" : "runs"} active
+              </span>
+            </div>
+            <Link
+              to="/discovery/results"
+              className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
+            >
+              View results &rarr;
+            </Link>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {runningJobs.map((job) => {
+              const p = job.progress as Record<string, unknown> | null;
+              const gen = p ? Number(p.generation ?? 0) : 0;
+              const maxGen = p ? Number(p.max_generations ?? 0) : 0;
+              return (
+                <Badge
+                  key={job.run_id}
+                  variant="outline"
+                  className="font-mono text-[10px]"
+                >
+                  #{job.run_id} — Gen {gen}/{maxGen || "?"}
+                </Badge>
+              );
+            })}
+          </div>
         </div>
-      </div>
-
-      {runningJob && (
-        <DiscoveryProgress
-          runId={runningJob.run_id}
-          totalGenerations={totalGens}
-          convergenceWindow={convergence.convergenceWindow}
-          convergenceThreshold={convergence.convergenceThreshold}
-        />
       )}
 
-      <DiscoveryResults runId={effectiveRunId} />
+      <DiscoveryConfig />
     </div>
   );
 }
