@@ -10,6 +10,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
@@ -18,6 +21,7 @@ interface NavItem {
   label: string;
   path: string;
   icon: React.ReactNode;
+  children?: { label: string; path: string }[];
 }
 
 interface NavGroup {
@@ -67,6 +71,7 @@ const navGroups: NavGroup[] = [
             <path d="m21 21-4.3-4.3" />
           </svg>
         ),
+        children: [{ label: "Results", path: "/discovery/results" }],
       },
     ],
   },
@@ -284,7 +289,9 @@ export function Sidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
-                  const isActive = location.pathname === item.path;
+                  const isActive = item.children
+                    ? location.pathname.startsWith(item.path)
+                    : location.pathname === item.path;
                   return (
                     <SidebarMenuItem key={item.path}>
                       <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
@@ -293,6 +300,22 @@ export function Sidebar() {
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {item.children && (
+                        <SidebarMenuSub>
+                          {item.children.map((child) => (
+                            <SidebarMenuSubItem key={child.path}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={location.pathname === child.path}
+                              >
+                                <Link to={child.path}>
+                                  <span>{child.label}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      )}
                     </SidebarMenuItem>
                   );
                 })}
