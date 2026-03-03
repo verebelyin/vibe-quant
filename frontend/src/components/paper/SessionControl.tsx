@@ -89,7 +89,7 @@ export function SessionControl() {
     const ids = new Set<number>();
     for (const run of allRuns) {
       if (run.run_mode === "validation" && run.status === "completed") {
-        ids.add(run.strategy_id);
+        if (run.strategy_id != null) ids.add(run.strategy_id);
       }
     }
     return ids;

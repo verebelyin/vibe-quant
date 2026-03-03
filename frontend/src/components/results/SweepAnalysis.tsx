@@ -116,11 +116,11 @@ function ValidateButton({
     mutation.mutate(
       {
         data: {
-          strategy_id: run.strategy_id,
+          strategy_id: run.strategy_id ?? 0,
           symbols: run.symbols,
-          timeframe: run.timeframe,
-          start_date: run.start_date,
-          end_date: run.end_date,
+          timeframe: run.timeframe ?? "",
+          start_date: run.start_date ?? "",
+          end_date: run.end_date ?? "",
           parameters: sweep.parameters,
         },
       },
