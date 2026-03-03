@@ -7,8 +7,8 @@
 
 export interface RunSummaryItem {
   run_id: number;
-  strategy_id: number;
-  strategy_name: string | null;
+  strategy_id?: number | null;
+  strategy_name?: string | null;
   run_mode: string;
   symbols: string[];
   timeframe: string;

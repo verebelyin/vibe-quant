@@ -8,16 +8,16 @@ import type { BacktestRunResponseParameters } from './backtestRunResponseParamet
 
 export interface BacktestRunResponse {
   id: number;
-  strategy_id: number;
+  strategy_id?: number | null;
   run_mode: string;
   symbols: string[];
   timeframe: string;
-  start_date: string;
-  end_date: string;
-  parameters: BacktestRunResponseParameters;
+  start_date?: string | null;
+  end_date?: string | null;
+  parameters?: BacktestRunResponseParameters;
   status: string;
-  started_at: string | null;
-  completed_at: string | null;
-  error_message: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
   created_at: string;
 }

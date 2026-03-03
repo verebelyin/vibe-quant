@@ -28,8 +28,12 @@ import type {
   DiscoveryLaunchRequest,
   DiscoveryResultResponse,
   ExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost201,
+  GetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet200,
   GetIndicatorPoolApiDiscoveryIndicatorPoolGet200Item,
-  HTTPValidationError
+  HTTPValidationError,
+  PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams,
+  PromoteResponse,
+  ReplayResponse
 } from '.././models';
 
 import { customInstance } from '../../client';
@@ -229,6 +233,124 @@ export function useListDiscoveryJobsApiDiscoveryJobsGet<TData = Awaited<ReturnTy
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getListDiscoveryJobsApiDiscoveryJobsGetQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Get discovery job progress from file written by subprocess.
+ * @summary Get Discovery Progress
+ */
+export type getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse200 = {
+  data: GetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet200
+  status: 200
+}
+
+export type getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponseSuccess = (getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse200) & {
+  headers: Headers;
+};
+export type getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponseError = (getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse422) & {
+  headers: Headers;
+};
+
+export type getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse = (getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponseSuccess | getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponseError)
+
+export const getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetUrl = (runId: number,) => {
+
+
+  
+
+  return `/api/discovery/jobs/${runId}/progress`
+}
+
+export const getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet = async (runId: number, options?: RequestInit): Promise<getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse> => {
+  
+  return customInstance<getDiscoveryProgressApiDiscoveryJobsRunIdProgressGetResponse>(getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetUrl(runId),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryKey = (runId: number,) => {
+    return [
+    `/api/discovery/jobs/${runId}/progress`
+    ] as const;
+    }
+
+    
+export const getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryOptions = <TData = Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryKey(runId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>> = ({ signal }) => getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet(runId, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryResult = NonNullable<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>>
+export type GetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryError = HTTPValidationError
+
+
+export function useGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError = HTTPValidationError>(
+ runId: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>,
+          TError,
+          Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>,
+          TError,
+          Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Discovery Progress
+ */
+
+export function useGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGet<TData = Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getDiscoveryProgressApiDiscoveryJobsRunIdProgressGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetDiscoveryProgressApiDiscoveryJobsRunIdProgressGetQueryOptions(runId,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -554,6 +676,7 @@ export function useGetDiscoveryResultsApiDiscoveryResultsRunIdGet<TData = Awaite
 
 
 /**
+ * Export a discovered strategy to the strategies table.
  * @summary Export Discovered Strategy
  */
 export type exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPostResponse201 = {
@@ -642,6 +765,197 @@ export const useExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIn
         TContext
       > => {
       return useMutation(getExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Export genome as strategy and launch screening/validation backtest.
+ * @summary Promote Discovered Strategy
+ */
+export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse201 = {
+  data: PromoteResponse
+  status: 201
+}
+
+export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponseSuccess = (promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse201) & {
+  headers: Headers;
+};
+export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponseError = (promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse422) & {
+  headers: Headers;
+};
+
+export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse = (promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponseSuccess | promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponseError)
+
+export const getPromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostUrl = (runId: number,
+    strategyIndex: number,
+    params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/discovery/results/${runId}/promote/${strategyIndex}?${stringifiedParams}` : `/api/discovery/results/${runId}/promote/${strategyIndex}`
+}
+
+export const promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost = async (runId: number,
+    strategyIndex: number,
+    params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams, options?: RequestInit): Promise<promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse> => {
+  
+  return customInstance<promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse>(getPromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostUrl(runId,strategyIndex,params),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getPromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>, TError,{runId: number;strategyIndex: number;params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>, TError,{runId: number;strategyIndex: number;params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams}, TContext> => {
+
+const mutationKey = ['promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>, {runId: number;strategyIndex: number;params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams}> = (props) => {
+          const {runId,strategyIndex,params} = props ?? {};
+
+          return  promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost(runId,strategyIndex,params,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostMutationResult = NonNullable<Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>>
+    
+    export type PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Promote Discovered Strategy
+ */
+export const usePromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>, TError,{runId: number;strategyIndex: number;params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPost>>,
+        TError,
+        {runId: number;strategyIndex: number;params?: PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams},
+        TContext
+      > => {
+      return useMutation(getPromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Re-run genome through screening to verify discovery metrics match.
+ * @summary Replay Discovered Strategy
+ */
+export type replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse201 = {
+  data: ReplayResponse
+  status: 201
+}
+
+export type replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponseSuccess = (replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse201) & {
+  headers: Headers;
+};
+export type replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponseError = (replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse422) & {
+  headers: Headers;
+};
+
+export type replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse = (replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponseSuccess | replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponseError)
+
+export const getReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostUrl = (runId: number,
+    strategyIndex: number,) => {
+
+
+  
+
+  return `/api/discovery/results/${runId}/replay/${strategyIndex}`
+}
+
+export const replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost = async (runId: number,
+    strategyIndex: number, options?: RequestInit): Promise<replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse> => {
+  
+  return customInstance<replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostResponse>(getReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostUrl(runId,strategyIndex),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext> => {
+
+const mutationKey = ['replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>, {runId: number;strategyIndex: number}> = (props) => {
+          const {runId,strategyIndex} = props ?? {};
+
+          return  replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost(runId,strategyIndex,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostMutationResult = NonNullable<Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>>
+    
+    export type ReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Replay Discovered Strategy
+ */
+export const useReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>, TError,{runId: number;strategyIndex: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof replayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPost>>,
+        TError,
+        {runId: number;strategyIndex: number},
+        TContext
+      > => {
+      return useMutation(getReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostMutationOptions(options), queryClient);
     }
     /**
  * @summary Get Indicator Pool

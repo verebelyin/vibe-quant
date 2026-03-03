@@ -25,6 +25,7 @@ import type {
 
 import type {
   BacktestResultResponse,
+  BacktestRunResponse,
   CompareRunsApiResultsCompareGetParams,
   ComparisonResponse,
   DrawdownPoint,
@@ -412,6 +413,124 @@ export function useCompareRunsApiResultsCompareGet<TData = Awaited<ReturnType<ty
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getCompareRunsApiResultsCompareGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Get run metadata (strategy_id, symbols, timeframe, dates).
+ * @summary Get Run Meta
+ */
+export type getRunMetaApiResultsRunsRunIdMetaGetResponse200 = {
+  data: BacktestRunResponse
+  status: 200
+}
+
+export type getRunMetaApiResultsRunsRunIdMetaGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type getRunMetaApiResultsRunsRunIdMetaGetResponseSuccess = (getRunMetaApiResultsRunsRunIdMetaGetResponse200) & {
+  headers: Headers;
+};
+export type getRunMetaApiResultsRunsRunIdMetaGetResponseError = (getRunMetaApiResultsRunsRunIdMetaGetResponse422) & {
+  headers: Headers;
+};
+
+export type getRunMetaApiResultsRunsRunIdMetaGetResponse = (getRunMetaApiResultsRunsRunIdMetaGetResponseSuccess | getRunMetaApiResultsRunsRunIdMetaGetResponseError)
+
+export const getGetRunMetaApiResultsRunsRunIdMetaGetUrl = (runId: number,) => {
+
+
+  
+
+  return `/api/results/runs/${runId}/meta`
+}
+
+export const getRunMetaApiResultsRunsRunIdMetaGet = async (runId: number, options?: RequestInit): Promise<getRunMetaApiResultsRunsRunIdMetaGetResponse> => {
+  
+  return customInstance<getRunMetaApiResultsRunsRunIdMetaGetResponse>(getGetRunMetaApiResultsRunsRunIdMetaGetUrl(runId),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetRunMetaApiResultsRunsRunIdMetaGetQueryKey = (runId: number,) => {
+    return [
+    `/api/results/runs/${runId}/meta`
+    ] as const;
+    }
+
+    
+export const getGetRunMetaApiResultsRunsRunIdMetaGetQueryOptions = <TData = Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError = HTTPValidationError>(runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetRunMetaApiResultsRunsRunIdMetaGetQueryKey(runId);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>> = ({ signal }) => getRunMetaApiResultsRunsRunIdMetaGet(runId, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(runId), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetRunMetaApiResultsRunsRunIdMetaGetQueryResult = NonNullable<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>>
+export type GetRunMetaApiResultsRunsRunIdMetaGetQueryError = HTTPValidationError
+
+
+export function useGetRunMetaApiResultsRunsRunIdMetaGet<TData = Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError = HTTPValidationError>(
+ runId: number, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>,
+          TError,
+          Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRunMetaApiResultsRunsRunIdMetaGet<TData = Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>,
+          TError,
+          Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRunMetaApiResultsRunsRunIdMetaGet<TData = Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Run Meta
+ */
+
+export function useGetRunMetaApiResultsRunsRunIdMetaGet<TData = Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError = HTTPValidationError>(
+ runId: number, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRunMetaApiResultsRunsRunIdMetaGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetRunMetaApiResultsRunsRunIdMetaGetQueryOptions(runId,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

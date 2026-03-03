@@ -27,7 +27,13 @@ class DiscoveryJobResponse(BaseModel):
     run_id: int
     status: str
     started_at: str | None
+    completed_at: str | None = None
     progress: dict[str, object] | None = None
+    symbols: list[str] | None = None
+    timeframe: str | None = None
+    generations: int | None = None
+    population: int | None = None
+    strategies_found: int | None = None
 
 
 class DiscoveryResultResponse(BaseModel):

@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type BacktestRunResponseParameters = { [key: string]: unknown } | null;
+export interface IndicatorSeriesPoint {
+  time: number;
+  value: number | null;
+}

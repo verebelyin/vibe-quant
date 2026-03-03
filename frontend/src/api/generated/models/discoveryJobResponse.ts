@@ -10,5 +10,11 @@ export interface DiscoveryJobResponse {
   run_id: number;
   status: string;
   started_at: string | null;
+  completed_at?: string | null;
   progress?: DiscoveryJobResponseProgress;
+  symbols?: string[] | null;
+  timeframe?: string | null;
+  generations?: number | null;
+  population?: number | null;
+  strategies_found?: number | null;
 }

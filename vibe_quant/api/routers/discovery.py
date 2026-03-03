@@ -79,14 +79,28 @@ def _read_progress_file(run_id: int) -> dict[str, object] | None:
         return None
 
 
-def _job_info_to_discovery_response(info: JobInfo) -> DiscoveryJobResponse:
+def _job_info_to_discovery_response(
+    info: JobInfo, state: StateManager | None = None
+) -> DiscoveryJobResponse:
     progress = _read_progress_file(info.run_id)
-    return DiscoveryJobResponse(
+    resp = DiscoveryJobResponse(
         run_id=info.run_id,
         status=info.status.value,
         started_at=info.started_at.isoformat() if info.started_at else None,
         progress=progress,
     )
+    if state is not None:
+        run = state.get_backtest_run(info.run_id)
+        if run:
+            resp.symbols = run.get("symbols")
+            resp.timeframe = run.get("timeframe")
+            params = run.get("parameters", {})
+            resp.generations = params.get("generations")
+            resp.population = params.get("population")
+            resp.completed_at = run.get("completed_at")
+            strategies = _load_discovery_strategies(state, info.run_id)
+            resp.strategies_found = len(strategies) if strategies else None
+    return resp
 
 
 # --- Launch ---
@@ -177,16 +191,16 @@ async def launch_discovery(
     info = jobs.get_job_info(run_id)
     if info is None:  # pragma: no cover
         raise HTTPException(status_code=500, detail="Job disappeared after creation")
-    return _job_info_to_discovery_response(info)
+    return _job_info_to_discovery_response(info, state)
 
 
 # --- Job management ---
 
 
 @router.get("/jobs", response_model=list[DiscoveryJobResponse])
-async def list_discovery_jobs(jobs: JobMgr) -> list[DiscoveryJobResponse]:
+async def list_discovery_jobs(jobs: JobMgr, state: StateMgr) -> list[DiscoveryJobResponse]:
     all_jobs = jobs.list_all_jobs(job_type="discovery")
-    return [_job_info_to_discovery_response(j) for j in all_jobs]
+    return [_job_info_to_discovery_response(j, state) for j in all_jobs]
 
 
 @router.get("/jobs/{run_id}/progress")

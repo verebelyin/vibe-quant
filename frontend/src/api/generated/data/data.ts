@@ -26,12 +26,14 @@ import type {
 import type {
   BrowseDataApiDataBrowseSymbolGetParams,
   BrowseDataResponse,
+  ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams,
   DataCoverageResponse,
   DataQualityResponse,
   DataStatusResponse,
   DownloadHistoryApiDataHistoryGet200Item,
   DownloadHistoryApiDataHistoryGetParams,
   HTTPValidationError,
+  IndicatorsResponse,
   IngestPreviewResponse,
   IngestRequest,
   RebuildCatalogApiDataRebuildPost202,
@@ -839,6 +841,138 @@ export function useBrowseDataApiDataBrowseSymbolGet<TData = Awaited<ReturnType<t
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getBrowseDataApiDataBrowseSymbolGetQueryOptions(symbol,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * @summary Compute Indicators Endpoint
+ */
+export type computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse200 = {
+  data: IndicatorsResponse
+  status: 200
+}
+
+export type computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponseSuccess = (computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse200) & {
+  headers: Headers;
+};
+export type computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponseError = (computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse422) & {
+  headers: Headers;
+};
+
+export type computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse = (computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponseSuccess | computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponseError)
+
+export const getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetUrl = (symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/data/indicators/${symbol}?${stringifiedParams}` : `/api/data/indicators/${symbol}`
+}
+
+export const computeIndicatorsEndpointApiDataIndicatorsSymbolGet = async (symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options?: RequestInit): Promise<computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse> => {
+  
+  return customInstance<computeIndicatorsEndpointApiDataIndicatorsSymbolGetResponse>(getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetUrl(symbol,params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryKey = (symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams,) => {
+    return [
+    `/api/data/indicators/${symbol}`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+    
+export const getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryOptions = <TData = Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError = HTTPValidationError>(symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryKey(symbol,params);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>> = ({ signal }) => computeIndicatorsEndpointApiDataIndicatorsSymbolGet(symbol,params, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, enabled: !!(symbol), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryResult = NonNullable<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>>
+export type ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryError = HTTPValidationError
+
+
+export function useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet<TData = Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError = HTTPValidationError>(
+ symbol: string,
+    params: undefined |  ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>,
+          TError,
+          Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet<TData = Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError = HTTPValidationError>(
+ symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>,
+          TError,
+          Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet<TData = Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError = HTTPValidationError>(
+ symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Compute Indicators Endpoint
+ */
+
+export function useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet<TData = Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError = HTTPValidationError>(
+ symbol: string,
+    params?: ComputeIndicatorsEndpointApiDataIndicatorsSymbolGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof computeIndicatorsEndpointApiDataIndicatorsSymbolGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getComputeIndicatorsEndpointApiDataIndicatorsSymbolGetQueryOptions(symbol,params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

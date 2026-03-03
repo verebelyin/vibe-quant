@@ -5,4 +5,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost201 = {[key: string]: string};
+export type ExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost201 = { [key: string]: unknown };

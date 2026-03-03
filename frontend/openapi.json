@@ -576,6 +576,100 @@
         }
       }
     },
+    "/api/data/indicators/{symbol}": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Compute Indicators Endpoint",
+        "operationId": "compute_indicators_endpoint_api_data_indicators__symbol__get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1h",
+              "title": "Interval"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "indicators",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "[]",
+              "title": "Indicators"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndicatorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/data/quality/{symbol}": {
       "get": {
         "tags": [
@@ -734,6 +828,51 @@
         }
       }
     },
+    "/api/discovery/jobs/{run_id}/progress": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Get Discovery Progress",
+        "description": "Get discovery job progress from file written by subprocess.",
+        "operationId": "get_discovery_progress_api_discovery_jobs__run_id__progress_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Discovery Progress Api Discovery Jobs  Run Id  Progress Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/discovery/jobs/{run_id}": {
       "delete": {
         "tags": [
@@ -838,6 +977,7 @@
           "discovery"
         ],
         "summary": "Export Discovered Strategy",
+        "description": "Export a discovered strategy to the strategies table.",
         "operationId": "export_discovered_strategy_api_discovery_results__run_id__export__strategy_index__post",
         "parameters": [
           {
@@ -866,10 +1006,122 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "title": "Response Export Discovered Strategy Api Discovery Results  Run Id  Export  Strategy Index  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/results/{run_id}/promote/{strategy_index}": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Promote Discovered Strategy",
+        "description": "Export genome as strategy and launch screening/validation backtest.",
+        "operationId": "promote_discovered_strategy_api_discovery_results__run_id__promote__strategy_index__post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "strategy_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Index"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "screening",
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/discovery/results/{run_id}/replay/{strategy_index}": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Replay Discovered Strategy",
+        "description": "Re-run genome through screening to verify discovery metrics match.",
+        "operationId": "replay_discovered_strategy_api_discovery_results__run_id__replay__strategy_index__post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "strategy_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Strategy Index"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayResponse"
                 }
               }
             }
@@ -1643,6 +1895,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ComparisonResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/results/runs/{run_id}/meta": {
+      "get": {
+        "tags": [
+          "results"
+        ],
+        "summary": "Get Run Meta",
+        "description": "Get run metadata (strategy_id, symbols, timeframe, dates).",
+        "operationId": "get_run_meta_api_results_runs__run_id__meta_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunResponse"
                 }
               }
             }
@@ -3404,7 +3699,14 @@
             "title": "Id"
           },
           "strategy_id": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Strategy Id"
           },
           "run_mode": {
@@ -3423,16 +3725,37 @@
             "title": "Timeframe"
           },
           "start_date": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Start Date"
           },
           "end_date": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "End Date"
           },
           "parameters": {
-            "additionalProperties": true,
-            "type": "object",
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Parameters"
           },
           "status": {
@@ -3480,17 +3803,10 @@
         "type": "object",
         "required": [
           "id",
-          "strategy_id",
           "run_mode",
           "symbols",
           "timeframe",
-          "start_date",
-          "end_date",
-          "parameters",
           "status",
-          "started_at",
-          "completed_at",
-          "error_message",
           "created_at"
         ],
         "title": "BacktestRunResponse"
@@ -3795,6 +4111,17 @@
             ],
             "title": "Started At"
           },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
           "progress": {
             "anyOf": [
               {
@@ -3806,6 +4133,64 @@
               }
             ],
             "title": "Progress"
+          },
+          "symbols": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbols"
+          },
+          "timeframe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeframe"
+          },
+          "generations": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generations"
+          },
+          "population": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Population"
+          },
+          "strategies_found": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategies Found"
           }
         },
         "type": "object",
@@ -3820,15 +4205,18 @@
         "properties": {
           "population": {
             "type": "integer",
-            "title": "Population"
+            "title": "Population",
+            "default": 20
           },
           "generations": {
             "type": "integer",
-            "title": "Generations"
+            "title": "Generations",
+            "default": 15
           },
           "mutation_rate": {
             "type": "number",
-            "title": "Mutation Rate"
+            "title": "Mutation Rate",
+            "default": 0.1
           },
           "crossover_rate": {
             "type": "number",
@@ -3855,14 +4243,20 @@
               "type": "string"
             },
             "type": "array",
-            "title": "Symbols"
+            "title": "Symbols",
+            "default": [
+              "BTCUSDT"
+            ]
           },
           "timeframes": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Timeframes"
+            "title": "Timeframes",
+            "default": [
+              "4h"
+            ]
           },
           "indicator_pool": {
             "anyOf": [
@@ -3877,6 +4271,17 @@
               }
             ],
             "title": "Indicator Pool"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
           },
           "start_date": {
             "anyOf": [
@@ -3902,13 +4307,6 @@
           }
         },
         "type": "object",
-        "required": [
-          "population",
-          "generations",
-          "mutation_rate",
-          "symbols",
-          "timeframes"
-        ],
         "title": "DiscoveryLaunchRequest"
       },
       "DiscoveryResultResponse": {
@@ -3976,6 +4374,104 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IndicatorSeries": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "output_name": {
+            "type": "string",
+            "title": "Output Name"
+          },
+          "indicator_type": {
+            "type": "string",
+            "title": "Indicator Type"
+          },
+          "display_label": {
+            "type": "string",
+            "title": "Display Label"
+          },
+          "pane": {
+            "type": "string",
+            "title": "Pane"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorSeriesPoint"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "output_name",
+          "indicator_type",
+          "display_label",
+          "pane",
+          "params",
+          "data"
+        ],
+        "title": "IndicatorSeries"
+      },
+      "IndicatorSeriesPoint": {
+        "properties": {
+          "time": {
+            "type": "integer",
+            "title": "Time"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "time",
+          "value"
+        ],
+        "title": "IndicatorSeriesPoint"
+      },
+      "IndicatorsResponse": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "interval": {
+            "type": "string",
+            "title": "Interval"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorSeries"
+            },
+            "type": "array",
+            "title": "Series"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "interval",
+          "series"
+        ],
+        "title": "IndicatorsResponse"
       },
       "IngestPreviewResponse": {
         "properties": {
@@ -4386,6 +4882,52 @@
         ],
         "title": "ParetoMarkRequest"
       },
+      "PromoteResponse": {
+        "properties": {
+          "strategy_id": {
+            "type": "integer",
+            "title": "Strategy Id"
+          },
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy_id",
+          "run_id",
+          "name",
+          "mode"
+        ],
+        "title": "PromoteResponse"
+      },
+      "ReplayResponse": {
+        "properties": {
+          "replay_run_id": {
+            "type": "integer",
+            "title": "Replay Run Id"
+          },
+          "original_run_id": {
+            "type": "integer",
+            "title": "Original Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "replay_run_id",
+          "original_run_id"
+        ],
+        "title": "ReplayResponse"
+      },
       "RiskConfigCreate": {
         "properties": {
           "name": {
@@ -4510,7 +5052,14 @@
             "title": "Run Id"
           },
           "strategy_id": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Strategy Id"
           },
           "strategy_name": {
@@ -4657,8 +5206,6 @@
         "type": "object",
         "required": [
           "run_id",
-          "strategy_id",
-          "strategy_name",
           "run_mode",
           "symbols",
           "timeframe",

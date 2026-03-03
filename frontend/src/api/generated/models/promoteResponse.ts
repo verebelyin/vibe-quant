@@ -5,4 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type BacktestRunResponseParameters = { [key: string]: unknown } | null;
+export interface PromoteResponse {
+  strategy_id: number;
+  run_id: number;
+  name: string;
+  mode: string;
+}
