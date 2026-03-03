@@ -98,6 +98,7 @@ def _job_info_to_discovery_response(
             resp.generations = params.get("generations")
             resp.population = params.get("population")
             resp.completed_at = run.get("completed_at")
+            resp.error_message = run.get("error_message")
             strategies = _load_discovery_strategies(state, info.run_id)
             resp.strategies_found = len(strategies) if strategies else None
     return resp

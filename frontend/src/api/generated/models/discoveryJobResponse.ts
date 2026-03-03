@@ -17,4 +17,5 @@ export interface DiscoveryJobResponse {
   generations?: number | null;
   population?: number | null;
   strategies_found?: number | null;
+  error_message?: string | null;
 }

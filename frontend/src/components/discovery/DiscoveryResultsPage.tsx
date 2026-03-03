@@ -328,7 +328,10 @@ export function DiscoveryResultsPage() {
     state: { sorting, expanded },
     onSortingChange: setSorting,
     onExpandedChange: setExpanded,
-    getRowCanExpand: (row) => row.original.status.toLowerCase() === "completed",
+    getRowCanExpand: (row) => {
+      const s = row.original.status.toLowerCase();
+      return s === "completed" || s === "failed";
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
@@ -404,7 +407,18 @@ export function DiscoveryResultsPage() {
                     <TableRow>
                       <TableCell colSpan={columns.length} className="p-0">
                         <div className="border-t border-border bg-muted/10 p-4">
-                          <DiscoveryResults runId={row.original.run_id} />
+                          {row.original.status.toLowerCase() === "failed" ? (
+                            <div className="space-y-2">
+                              <h4 className="text-sm font-semibold text-red-400">
+                                Error Details
+                              </h4>
+                              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/20 bg-red-950/20 p-3 font-mono text-xs text-red-300">
+                                {row.original.error_message || "No error details available. Check server logs for run #" + row.original.run_id + "."}
+                              </pre>
+                            </div>
+                          ) : (
+                            <DiscoveryResults runId={row.original.run_id} />
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

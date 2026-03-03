@@ -34,6 +34,7 @@ class DiscoveryJobResponse(BaseModel):
     generations: int | None = None
     population: int | None = None
     strategies_found: int | None = None
+    error_message: str | None = None
 
 
 class DiscoveryResultResponse(BaseModel):
