@@ -2,9 +2,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { DiscoveryLaunchRequest } from "@/api/generated/models";
 import {
+  getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
   useGetIndicatorPoolApiDiscoveryIndicatorPoolGet,
   useLaunchDiscoveryApiDiscoveryLaunchPost,
 } from "@/api/generated/discovery/discovery";
+import { queryClient } from "@/api/query-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -107,11 +109,25 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             toast.success("Discovery launched", {
               description: `Run ID: ${resp.data.run_id}`,
             });
+            queryClient.invalidateQueries({
+              queryKey: getListDiscoveryJobsApiDiscoveryJobsGetQueryKey(),
+            });
           }
         },
         onError: (err: unknown) => {
-          const message = err instanceof Error ? err.message : "Launch failed";
-          toast.error("Discovery launch failed", { description: message });
+          let message = "Launch failed";
+          if (err instanceof Error) {
+            message = err.message;
+          }
+          // Try to extract detail from Axios-style error response
+          const axiosErr = err as { response?: { data?: { detail?: string }; status?: number } };
+          if (axiosErr.response?.data?.detail) {
+            message = axiosErr.response.data.detail;
+          }
+          toast.error("Discovery launch failed", {
+            description: message,
+            duration: 8000,
+          });
         },
       },
     );
