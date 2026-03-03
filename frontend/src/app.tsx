@@ -28,6 +28,9 @@ const ResultsDetailPage = lazy(() =>
 const DiscoveryPage = lazy(() =>
   import("./routes/discovery").then((m) => ({ default: m.DiscoveryPage })),
 );
+const DiscoveryResultsPage = lazy(() =>
+  import("./routes/discovery-results").then((m) => ({ default: m.DiscoveryResultsPage })),
+);
 const PaperTradingPage = lazy(() =>
   import("./routes/paper-trading").then((m) => ({ default: m.PaperTradingPage })),
 );
@@ -73,6 +76,18 @@ const strategyEditRoute = createRoute({
     return (
       <SuspensePage>
         <StrategyEditPage strategyId={Number(strategyId)} />
+      </SuspensePage>
+    );
+  },
+});
+
+const discoveryResultsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/discovery/results",
+  component: function DiscoveryResultsRouteComponent() {
+    return (
+      <SuspensePage>
+        <DiscoveryResultsPage />
       </SuspensePage>
     );
   },
@@ -191,6 +206,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   strategiesRoute,
   strategyEditRoute,
+  discoveryResultsRoute,
   discoveryRoute,
   backtestRoute,
   resultsRoute,
