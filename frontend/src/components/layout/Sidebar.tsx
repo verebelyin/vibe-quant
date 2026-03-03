@@ -301,19 +301,40 @@ export function Sidebar() {
                         </Link>
                       </SidebarMenuButton>
                       {item.children && (
-                        <SidebarMenuSub>
-                          {item.children.map((child) => (
-                            <SidebarMenuSubItem key={child.path}>
-                              <SidebarMenuSubButton
-                                asChild
-                                isActive={location.pathname === child.path}
-                              >
-                                <Link to={child.path}>
-                                  <span>{child.label}</span>
-                                </Link>
-                              </SidebarMenuSubButton>
-                            </SidebarMenuSubItem>
-                          ))}
+                        <SidebarMenuSub className="border-sidebar-primary/30 ml-4 mt-0.5 border-l-2 pl-3">
+                          {item.children.map((child) => {
+                            const isChildActive = location.pathname === child.path;
+                            return (
+                              <SidebarMenuSubItem key={child.path}>
+                                <SidebarMenuSubButton
+                                  asChild
+                                  isActive={isChildActive}
+                                  className={
+                                    isChildActive
+                                      ? "bg-sidebar-primary/15 text-sidebar-primary font-medium"
+                                      : "text-sidebar-foreground/80 hover:text-sidebar-accent-foreground"
+                                  }
+                                >
+                                  <Link to={child.path}>
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className="size-3.5"
+                                    >
+                                      <title>{child.label}</title>
+                                      <path d="M3 3v18h18" />
+                                      <path d="m19 9-5 5-4-4-3 3" />
+                                    </svg>
+                                    <span>{child.label}</span>
+                                  </Link>
+                                </SidebarMenuSubButton>
+                              </SidebarMenuSubItem>
+                            );
+                          })}
                         </SidebarMenuSub>
                       )}
                     </SidebarMenuItem>
