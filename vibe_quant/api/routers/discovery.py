@@ -218,13 +218,14 @@ async def get_discovery_progress(run_id: int, jobs: JobMgr) -> dict[str, object]
 
 
 @router.delete("/jobs/{run_id}", status_code=204)
-async def kill_discovery_job(run_id: int, jobs: JobMgr, ws: WsMgr) -> None:
+async def kill_discovery_job(run_id: int, jobs: JobMgr, state: StateMgr, ws: WsMgr) -> None:
     info = jobs.get_job_info(run_id)
     if info is None or info.job_type != "discovery":
         raise HTTPException(status_code=404, detail="Discovery job not found")
     killed = jobs.kill_job(run_id)
     if not killed:
         raise HTTPException(status_code=404, detail="Job not running")
+    state.update_backtest_run_status(run_id, "killed")
     logger.info("discovery job killed run_id=%d", run_id)
     await ws.broadcast("jobs", {"type": "job_killed", "run_id": run_id})
 
