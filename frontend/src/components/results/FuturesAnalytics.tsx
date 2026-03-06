@@ -37,12 +37,13 @@ export function FuturesAnalytics({ runId }: FuturesAnalyticsProps) {
   const slippage = Math.abs(data.total_slippage ?? 0);
   const totalCosts = fees + funding + slippage;
 
-  const grossPnl =
+  // total_return from backend is NET (after fees)
+  const netPnl =
     data.total_return != null && data.starting_balance != null
-      ? (data.total_return / 100) * data.starting_balance + totalCosts
+      ? (data.total_return / 100) * data.starting_balance
       : null;
 
-  const netPnl = grossPnl != null ? grossPnl - totalCosts : null;
+  const grossPnl = netPnl != null ? netPnl + totalCosts : null;
   const fundingPctOfGross =
     grossPnl != null && grossPnl !== 0 ? (funding / Math.abs(grossPnl)) * 100 : null;
 

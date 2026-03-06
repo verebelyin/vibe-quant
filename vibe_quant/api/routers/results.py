@@ -204,7 +204,7 @@ async def get_equity_curve(run_id: int, mgr: StateMgr) -> list[EquityCurvePoint]
     )
     if not closed:
         return []
-    equity = 10_000.0  # default starting equity
+    equity = _get_starting_balance(mgr, run_id)
     points = [EquityCurvePoint(timestamp=closed[0]["entry_time"], equity=equity)]
     for t in closed:
         equity += float(t.get("net_pnl") or 0)
@@ -224,7 +224,7 @@ async def get_drawdown(run_id: int, mgr: StateMgr) -> list[DrawdownPoint]:
     )
     if not closed:
         return []
-    equity = 10_000.0
+    equity = _get_starting_balance(mgr, run_id)
     peak = equity
     points: list[DrawdownPoint] = []
     for t in closed:
@@ -256,7 +256,7 @@ async def get_monthly_returns(run_id: int, mgr: StateMgr) -> list[MonthlyReturn]
             key = (int(parts[0]), int(parts[1]))
             monthly[key] = monthly.get(key, 0.0) + float(t.get("net_pnl") or 0)
     # Convert to percentage of starting equity
-    starting = 10_000.0
+    starting = _get_starting_balance(mgr, run_id)
     return [
         MonthlyReturn(year=y, month=m, return_pct=round(pnl / starting * 100, 2))
         for (y, m), pnl in sorted(monthly.items())
@@ -308,3 +308,11 @@ def _ensure_run_exists(mgr: StateManager, run_id: int) -> None:
     run = mgr.get_backtest_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+
+
+def _get_starting_balance(mgr: StateManager, run_id: int) -> float:
+    """Get starting balance from backtest results, default 10_000.0."""
+    result = mgr.get_backtest_result(run_id)
+    if result and result.get("starting_balance"):
+        return float(result["starting_balance"])
+    return 10_000.0

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   useLaunchScreeningApiBacktestScreeningPost,
@@ -17,6 +17,7 @@ import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/st
 import { parseDslConfig } from "@/components/strategies/editor/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DatasetRangeIndicator } from "@/components/ui/DatasetRangeIndicator";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 import { PreflightStatus } from "./PreflightStatus";
 import { SweepBuilder, type SweepConfig, sweepToPayload } from "./SweepBuilder";
 
@@ -71,6 +73,13 @@ export function BacktestLaunchForm() {
   const latencyQuery = useListLatencyPresetsApiSettingsLatencyPresetsGet();
   const sizingQuery = useListSizingConfigsApiSettingsSizingGet();
   const riskQuery = useListRiskConfigsApiSettingsRiskGet();
+  const datasetRange = useDatasetDateRange();
+
+  // Auto-populate dates from dataset coverage
+  useEffect(() => {
+    if (!startDate && datasetRange.minStart) setStartDate(datasetRange.minStart);
+    if (!endDate && datasetRange.maxEnd) setEndDate(datasetRange.maxEnd);
+  }, [datasetRange.minStart, datasetRange.maxEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mutations
   const coverageMutation = useValidateCoverageApiBacktestValidateCoveragePost();
@@ -282,9 +291,22 @@ export function BacktestLaunchForm() {
 
           {/* Date range */}
           <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label>Date Range</Label>
+              <DatasetRangeIndicator
+                items={datasetRange.items}
+                minStart={datasetRange.minStart}
+                maxEnd={datasetRange.maxEnd}
+                isLoading={datasetRange.isLoading}
+                onApply={(start, end) => {
+                  setStartDate(start);
+                  setEndDate(end);
+                }}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="start-date">Start Date</Label>
+                <Label htmlFor="start-date" className="text-xs text-muted-foreground">Start</Label>
                 <DatePicker
                   id="start-date"
                   value={startDate}
@@ -293,7 +315,7 @@ export function BacktestLaunchForm() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="end-date">End Date</Label>
+                <Label htmlFor="end-date" className="text-xs text-muted-foreground">End</Label>
                 <DatePicker
                   id="end-date"
                   value={endDate}

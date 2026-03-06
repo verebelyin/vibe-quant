@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   useIngestPreviewApiDataIngestPreviewPost,
@@ -10,6 +10,7 @@ import {
 import type { IngestPreviewResponse } from "@/api/generated/models";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DatasetRangeIndicator } from "@/components/ui/DatasetRangeIndicator";
 import { DateRangePicker } from "@/components/ui/DateRangePicker";
 import { Label } from "@/components/ui/label";
 import {
@@ -20,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
@@ -36,6 +38,13 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
 
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
   const symbols = symbolsQuery.data?.data ?? [];
+  const datasetRange = useDatasetDateRange();
+
+  // Auto-populate dates from dataset coverage
+  useEffect(() => {
+    if (!startDate && datasetRange.minStart) setStartDate(datasetRange.minStart);
+    if (!endDate && datasetRange.maxEnd) setEndDate(datasetRange.maxEnd);
+  }, [datasetRange.minStart, datasetRange.maxEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const previewMutation = useIngestPreviewApiDataIngestPreviewPost();
   const ingestMutation = useStartIngestApiDataIngestPost();
@@ -176,18 +185,34 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
 
         {/* Date range + interval */}
         <div className="flex flex-wrap items-end gap-4">
-          <DateRangePicker
-            startDate={startDate}
-            endDate={endDate}
-            onStartChange={(d) => {
-              setStartDate(d);
-              setPreview(null);
-            }}
-            onEndChange={(d) => {
-              setEndDate(d);
-              setPreview(null);
-            }}
-          />
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Label className="text-xs uppercase tracking-wider">Date Range</Label>
+              <DatasetRangeIndicator
+                items={datasetRange.items}
+                minStart={datasetRange.minStart}
+                maxEnd={datasetRange.maxEnd}
+                isLoading={datasetRange.isLoading}
+                onApply={(start, end) => {
+                  setStartDate(start);
+                  setEndDate(end);
+                  setPreview(null);
+                }}
+              />
+            </div>
+            <DateRangePicker
+              startDate={startDate}
+              endDate={endDate}
+              onStartChange={(d) => {
+                setStartDate(d);
+                setPreview(null);
+              }}
+              onEndChange={(d) => {
+                setEndDate(d);
+                setPreview(null);
+              }}
+            />
+          </div>
           <div className="flex flex-col gap-1">
             <Label className="text-xs text-muted-foreground">Interval</Label>
             <Select value={interval} onValueChange={setInterval}>

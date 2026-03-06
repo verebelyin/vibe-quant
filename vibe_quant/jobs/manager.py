@@ -158,35 +158,37 @@ class BacktestJobManager:
             if log_handle is not None:
                 self._log_handles[run_id] = log_handle
 
-        # Register job in database (upsert: update if exists, insert otherwise)
-        existing = self.conn.execute(
-            "SELECT id FROM background_jobs WHERE run_id = ?", (run_id,)
-        ).fetchone()
-        if existing:
+            # Register job in database while still holding lock to prevent
+            # race: two callers both passing the active-job check, both
+            # spawning processes, second write clobbering first PID.
+            existing_rec = self.conn.execute(
+                "SELECT id FROM background_jobs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if existing_rec:
+                self.conn.execute(
+                    """UPDATE background_jobs
+                       SET pid = ?, job_type = ?, status = 'running',
+                           log_file = ?, started_at = datetime('now'),
+                           heartbeat_at = datetime('now'), completed_at = NULL,
+                           error_message = NULL
+                       WHERE run_id = ?""",
+                    (pid, job_type, log_file, run_id),
+                )
+            else:
+                self.conn.execute(
+                    """INSERT INTO background_jobs
+                       (run_id, pid, job_type, status, log_file, started_at, heartbeat_at)
+                       VALUES (?, ?, ?, 'running', ?, datetime('now'), datetime('now'))""",
+                    (run_id, pid, job_type, log_file),
+                )
+            # Also update backtest_runs table
             self.conn.execute(
-                """UPDATE background_jobs
-                   SET pid = ?, job_type = ?, status = 'running',
-                       log_file = ?, started_at = datetime('now'),
-                       heartbeat_at = datetime('now'), completed_at = NULL,
-                       error_message = NULL
-                   WHERE run_id = ?""",
-                (pid, job_type, log_file, run_id),
+                """UPDATE backtest_runs
+                   SET status = 'running', pid = ?, started_at = datetime('now'), heartbeat_at = datetime('now')
+                   WHERE id = ?""",
+                (pid, run_id),
             )
-        else:
-            self.conn.execute(
-                """INSERT INTO background_jobs
-                   (run_id, pid, job_type, status, log_file, started_at, heartbeat_at)
-                   VALUES (?, ?, ?, 'running', ?, datetime('now'), datetime('now'))""",
-                (run_id, pid, job_type, log_file),
-            )
-        # Also update backtest_runs table
-        self.conn.execute(
-            """UPDATE backtest_runs
-               SET status = 'running', pid = ?, started_at = datetime('now'), heartbeat_at = datetime('now')
-               WHERE id = ?""",
-            (pid, run_id),
-        )
-        self.conn.commit()
+            self.conn.commit()
 
         return pid
 

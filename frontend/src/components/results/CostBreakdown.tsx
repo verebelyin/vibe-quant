@@ -40,12 +40,13 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
   const funding = data.total_funding ?? 0;
   const totalCosts = fees + slippage + funding;
 
-  const grossPnl =
+  // total_return from backend is NET (after fees)
+  const netPnl =
     data.total_return != null && data.starting_balance != null
-      ? (data.total_return / 100) * data.starting_balance + totalCosts
+      ? (data.total_return / 100) * data.starting_balance
       : null;
 
-  const netPnl = grossPnl != null ? grossPnl - totalCosts : null;
+  const grossPnl = netPnl != null ? netPnl + totalCosts : null;
 
   const costs: CostRow[] = [
     { label: "Fees / Commission", value: fees, barClass: "bg-red-500" },

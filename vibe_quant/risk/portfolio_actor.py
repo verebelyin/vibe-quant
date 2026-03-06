@@ -36,6 +36,10 @@ class PortfolioRiskActorConfig(ActorConfig, frozen=True):
             None disables heat checking.
         cooldown_after_halt_hours: Hours to wait before auto-resuming after halt.
             0 means manual resume only (no auto-resume).
+        cooldown_position_scale: Position size multiplier during cooldown period
+            (0.0-1.0). After halt expires, portfolio enters COOLDOWN state with
+            reduced sizing for one cooldown period before returning to ACTIVE.
+            Default 0.50 = 50% position size during cooldown.
     """
 
     max_portfolio_drawdown_pct: Decimal = Decimal("0.20")
@@ -43,6 +47,7 @@ class PortfolioRiskActorConfig(ActorConfig, frozen=True):
     max_single_instrument_pct: Decimal = Decimal("0.30")
     max_portfolio_heat_pct: Decimal | None = Decimal("0.06")
     cooldown_after_halt_hours: int = 24
+    cooldown_position_scale: Decimal = Decimal("0.50")
 
 
 @dataclass
@@ -65,6 +70,7 @@ class PortfolioRiskState:
     state: RiskState = RiskState.ACTIVE
     portfolio_heat_pct: Decimal = Decimal("0")
     halted_at: datetime | None = None
+    cooldown_started_at: datetime | None = None
 
 
 class PortfolioRiskActor(Actor):  # type: ignore[misc]
@@ -93,6 +99,7 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
         )
         self._state = PortfolioRiskState()
         self._cooldown_hours = config.cooldown_after_halt_hours
+        self._cooldown_position_scale = config.cooldown_position_scale
         # TODO: populate _halted_strategies per-strategy instead of halting ALL
         # trading when a single strategy violates risk limits. Requires strategy-level
         # halt propagation (currently only portfolio-wide halt is implemented).
@@ -117,6 +124,19 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
     def portfolio_heat_pct(self) -> Decimal:
         """Get current portfolio heat percentage."""
         return self._state.portfolio_heat_pct
+
+    @property
+    def position_size_scale(self) -> Decimal:
+        """Get current position size multiplier.
+
+        Returns 1.0 during ACTIVE, configured scale during COOLDOWN,
+        and 0.0 during HALTED.
+        """
+        if self._state.state == RiskState.HALTED:
+            return Decimal("0")
+        if self._state.state == RiskState.COOLDOWN:
+            return self._cooldown_position_scale
+        return Decimal("1")
 
     def on_start(self) -> None:
         """Initialize actor on start."""
@@ -148,17 +168,34 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
     def _check_risk(self) -> RiskState:
         """Internal risk check implementation.
 
-        Includes cooldown auto-resume: if halted and cooldown period has
-        elapsed, re-checks whether conditions are still breached.
+        State machine: ACTIVE -> HALTED -> COOLDOWN -> ACTIVE.
+
+        When halted and cooldown expires, transitions to COOLDOWN with reduced
+        position sizing. After a second cooldown period in COOLDOWN without
+        re-triggering, transitions back to ACTIVE.
+
+        If risk limits are breached during COOLDOWN, goes back to HALTED.
         """
+        # Handle HALTED state: wait for cooldown then transition to COOLDOWN
         if self._state.state == RiskState.HALTED:
-            if self._check_cooldown_expired():
-                self._state.state = RiskState.ACTIVE
+            if self._check_halt_cooldown_expired():
+                self._state.state = RiskState.COOLDOWN
+                self._state.cooldown_started_at = datetime.now(UTC)
                 self._state.halted_at = None
-                self._log_info("Portfolio cooldown expired, re-evaluating risk")
+                self._log_info(
+                    f"Portfolio halt cooldown expired, entering COOLDOWN "
+                    f"(position scale={self._cooldown_position_scale})"
+                )
             else:
                 return RiskState.HALTED
 
+        # Handle COOLDOWN state: check if cooldown period completed
+        if self._state.state == RiskState.COOLDOWN and self._check_cooldown_period_completed():
+            self._state.state = RiskState.ACTIVE
+            self._state.cooldown_started_at = None
+            self._log_info("Portfolio cooldown period completed, resuming ACTIVE")
+
+        # Check risk limits (applies in both ACTIVE and COOLDOWN)
         if self._state.current_drawdown_pct >= self._risk_config.max_portfolio_drawdown_pct:
             self._halt_portfolio("portfolio_drawdown", self._state.current_drawdown_pct)
             return RiskState.HALTED
@@ -180,13 +217,13 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             self._halt_portfolio("portfolio_heat", self._state.portfolio_heat_pct)
             return RiskState.HALTED
 
-        self._state.state = RiskState.ACTIVE
-        return RiskState.ACTIVE
+        return self._state.state
 
     def _halt_portfolio(self, metric: str, value: Decimal) -> None:
         """Halt all portfolio trading due to risk breach."""
         self._state.state = RiskState.HALTED
         self._state.halted_at = datetime.now(UTC)
+        self._state.cooldown_started_at = None
         self._cancel_all_orders()
 
         if metric == "portfolio_drawdown":
@@ -285,12 +322,12 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
         except Exception as e:
             self._log_error(f"Error calculating exposures: {e}")
 
-    def _check_cooldown_expired(self) -> bool:
-        """Check if cooldown period has elapsed since halt.
+    def _check_halt_cooldown_expired(self) -> bool:
+        """Check if halt cooldown has elapsed (HALTED -> COOLDOWN).
 
         Returns:
-            True if cooldown has expired and portfolio can be re-evaluated.
-            False if still in cooldown or cooldown is disabled (0 hours).
+            True if halt cooldown expired and portfolio can enter COOLDOWN.
+            False if still halted or cooldown is disabled (0 hours).
         """
         if self._cooldown_hours <= 0:
             return False  # Manual resume only
@@ -299,6 +336,22 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
         from datetime import timedelta
 
         elapsed = datetime.now(UTC) - self._state.halted_at
+        return elapsed >= timedelta(hours=self._cooldown_hours)
+
+    def _check_cooldown_period_completed(self) -> bool:
+        """Check if cooldown period has completed (COOLDOWN -> ACTIVE).
+
+        Uses the same cooldown_hours duration for the cooldown observation
+        period. During this time, position sizes are reduced.
+
+        Returns:
+            True if cooldown observation period is complete.
+        """
+        if self._state.cooldown_started_at is None:
+            return False
+        from datetime import timedelta
+
+        elapsed = datetime.now(UTC) - self._state.cooldown_started_at
         return elapsed >= timedelta(hours=self._cooldown_hours)
 
     def _get_portfolio_equity(self) -> Decimal:

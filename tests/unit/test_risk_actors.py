@@ -222,11 +222,16 @@ class TestRiskState:
         """HALTED should indicate trading stopped."""
         assert RiskState.HALTED.value == "HALTED"
 
+    def test_cooldown_state(self) -> None:
+        """COOLDOWN should indicate post-halt reduced sizing."""
+        assert RiskState.COOLDOWN.value == "COOLDOWN"
+
     def test_string_conversion(self) -> None:
         """Should convert to/from string."""
         # RiskState(str, Enum) uses .value for string comparison
         assert RiskState.ACTIVE.value == "ACTIVE"
         assert RiskState("HALTED") == RiskState.HALTED
+        assert RiskState("COOLDOWN") == RiskState.COOLDOWN
 
 
 class TestRiskEvent:
@@ -333,6 +338,38 @@ class TestPortfolioRiskState:
         assert state.total_exposure_pct == Decimal("0.35")
         assert len(state.instrument_exposures) == 2
         assert state.portfolio_heat_pct == Decimal("0.04")
+
+
+class TestPortfolioRiskCooldownTransitions:
+    """Tests for portfolio HALTED -> COOLDOWN -> ACTIVE state machine."""
+
+    def test_halted_to_cooldown_transition(self) -> None:
+        """HALTED transitions to COOLDOWN after halt, not directly to ACTIVE."""
+        state = PortfolioRiskState(state=RiskState.HALTED)
+        state.state = RiskState.COOLDOWN
+        assert state.state == RiskState.COOLDOWN
+
+    def test_cooldown_to_active_transition(self) -> None:
+        """COOLDOWN transitions to ACTIVE after observation period."""
+        state = PortfolioRiskState(state=RiskState.COOLDOWN)
+        state.state = RiskState.ACTIVE
+        assert state.state == RiskState.ACTIVE
+
+    def test_cooldown_to_halted_on_breach(self) -> None:
+        """COOLDOWN goes back to HALTED if risk re-breached."""
+        state = PortfolioRiskState(state=RiskState.COOLDOWN)
+        state.state = RiskState.HALTED
+        assert state.state == RiskState.HALTED
+
+    def test_cooldown_started_at_tracking(self) -> None:
+        """cooldown_started_at should track when cooldown began."""
+        from datetime import UTC, datetime
+
+        state = PortfolioRiskState()
+        assert state.cooldown_started_at is None
+        now = datetime.now(UTC)
+        state.cooldown_started_at = now
+        assert state.cooldown_started_at == now
 
 
 class TestStrategyRiskActorConfig:

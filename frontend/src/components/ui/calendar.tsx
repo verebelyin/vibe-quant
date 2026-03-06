@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DayPicker } from "react-day-picker";
 
@@ -8,11 +9,20 @@ function Calendar({
   className,
   classNames,
   showOutsideDays = true,
+  month: monthProp,
+  onMonthChange: onMonthChangeProp,
   ...props
 }: React.ComponentProps<typeof DayPicker>) {
+  const [monthState, setMonthState] = useState<Date>(monthProp ?? new Date());
+
+  const month = monthProp ?? monthState;
+  const onMonthChange = onMonthChangeProp ?? setMonthState;
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
+      month={month}
+      onMonthChange={onMonthChange}
       className={cn("p-3", className)}
       classNames={{
         months: "flex flex-col sm:flex-row gap-2",

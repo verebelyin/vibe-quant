@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { DiscoveryLaunchRequest } from "@/api/generated/models";
 import {
@@ -10,6 +10,7 @@ import { queryClient } from "@/api/query-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DatasetRangeIndicator } from "@/components/ui/DatasetRangeIndicator";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 
 export interface DiscoveryConvergenceConfig {
   convergenceWindow: number;
@@ -52,6 +54,13 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
 
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
+  const datasetRange = useDatasetDateRange();
+
+  // Auto-populate dates from dataset coverage
+  useEffect(() => {
+    if (!startDate && datasetRange.minStart) setStartDate(datasetRange.minStart);
+    if (!endDate && datasetRange.maxEnd) setEndDate(datasetRange.maxEnd);
+  }, [datasetRange.minStart, datasetRange.maxEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const indicators: Array<{ name: string; [key: string]: unknown }> =
     indicatorPoolQuery.data?.status === 200
@@ -319,9 +328,22 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             </Select>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <Label>Date Range</Label>
+          <DatasetRangeIndicator
+            items={datasetRange.items}
+            minStart={datasetRange.minStart}
+            maxEnd={datasetRange.maxEnd}
+            isLoading={datasetRange.isLoading}
+            onApply={(start, end) => {
+              setStartDate(start);
+              setEndDate(end);
+            }}
+          />
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="disc-start-date">Start Date</Label>
+            <Label htmlFor="disc-start-date" className="text-xs text-muted-foreground">Start</Label>
             <DatePicker
               id="disc-start-date"
               value={startDate}
@@ -330,7 +352,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="disc-end-date">End Date</Label>
+            <Label htmlFor="disc-end-date" className="text-xs text-muted-foreground">End</Label>
             <DatePicker
               id="disc-end-date"
               value={endDate}

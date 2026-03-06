@@ -16,6 +16,7 @@ class RiskState(StrEnum):
     ACTIVE = "ACTIVE"  # Normal trading
     WARNING = "WARNING"  # Approaching limits
     HALTED = "HALTED"  # Trading stopped
+    COOLDOWN = "COOLDOWN"  # Post-halt cooldown, reduced position sizing
 
 
 @dataclass

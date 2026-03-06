@@ -86,7 +86,7 @@ interface DiscoveryResultsProps {
 }
 
 export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
-  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [exportedKeys, setExportedKeys] = useState<Set<string>>(new Set());
 
   // Fetch results for specific run
@@ -122,20 +122,22 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
     return [];
   }, [activeResp.data]);
 
-  // Sort by fitness descending
+  // Sort by fitness descending, keeping track of original indices for backend API calls
   const sorted = useMemo(() => {
-    return [...strategies].sort((a, b) => {
-      const fa = num(a, "fitness") ?? num(a, "adjusted_score") ?? num(a, "score") ?? -Infinity;
-      const fb = num(b, "fitness") ?? num(b, "adjusted_score") ?? num(b, "score") ?? -Infinity;
-      return fb - fa;
-    });
+    return strategies
+      .map((s, originalIndex) => ({ strategy: s, originalIndex }))
+      .sort((a, b) => {
+        const fa = num(a.strategy, "fitness") ?? num(a.strategy, "adjusted_score") ?? num(a.strategy, "score") ?? -Infinity;
+        const fb = num(b.strategy, "fitness") ?? num(b.strategy, "adjusted_score") ?? num(b.strategy, "score") ?? -Infinity;
+        return fb - fa;
+      });
   }, [strategies]);
 
-  const summary = useMemo(() => computeSummary(sorted), [sorted]);
+  const summary = useMemo(() => computeSummary(sorted.map((s) => s.strategy)), [sorted]);
 
-  function handleExport(strategyIndex: number, stableKey: string) {
+  function handleExport(originalIndex: number, stableKey: string) {
     if (runId == null) return;
-    exportMutation.mutate({ runId, strategyIndex }, {
+    exportMutation.mutate({ runId, strategyIndex: originalIndex }, {
       onSuccess: () => {
         setExportedKeys((prev) => new Set(prev).add(stableKey));
       },
@@ -204,9 +206,8 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sorted.map((s, idx) => {
+            {sorted.map(({ strategy: s, originalIndex }, idx) => {
               const rank = idx + 1;
-              const isExpanded = expandedRow === idx;
               const fitness = num(s, "fitness") ?? num(s, "adjusted_score") ?? num(s, "score");
               const sharpe = num(s, "sharpe") ?? num(s, "sharpe_ratio");
               const returnPct = num(s, "return_pct") ?? num(s, "total_return") ?? num(s, "return");
@@ -219,8 +220,9 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               const indicators = dslIndicators
                 ? Object.keys(dslIndicators as Record<string, unknown>).map(k => k.split("_")[0]!.toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(", ")
                 : str(s, "indicators");
-              // Build a stable key from strategy identity fields (no idx — survives re-sort)
+              // Build a stable key from strategy identity fields (survives re-sort)
               const stableKey = `${str(s, "name")}-${fitness ?? ""}-${sharpe ?? ""}-${trades ?? ""}`;
+              const isExpanded = expandedKey === stableKey;
               const isExported = exportedKeys.has(stableKey);
 
               return (
@@ -231,7 +233,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                     RANK_STYLES[rank],
                     isExpanded && "bg-muted/30",
                   )}
-                  onClick={() => setExpandedRow(isExpanded ? null : idx)}
+                  onClick={() => setExpandedKey(isExpanded ? null : stableKey)}
                 >
                   <TableCell className="font-mono text-xs text-foreground">
                     {rank <= 3 ? (
@@ -293,7 +295,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                         variant={isExported ? "outline" : "secondary"}
                         size="xs"
                         disabled={isExported || exportMutation.isPending}
-                        onClick={() => handleExport(idx, stableKey)}
+                        onClick={() => handleExport(originalIndex, stableKey)}
                       >
                         {isExported ? "Exported" : "Export"}
                       </Button>
@@ -307,9 +309,16 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
       </div>
 
       {/* Expanded row detail */}
-      {expandedRow != null && sorted[expandedRow] && (
-        <StrategyDetail strategy={sorted[expandedRow]} rank={expandedRow + 1} />
-      )}
+      {expandedKey != null && (() => {
+        const expandedIdx = sorted.findIndex(({ strategy: s }) => {
+          const fitness = num(s, "fitness") ?? num(s, "adjusted_score") ?? num(s, "score");
+          const sharpe = num(s, "sharpe") ?? num(s, "sharpe_ratio");
+          const trades = num(s, "trades") ?? num(s, "total_trades");
+          return `${str(s, "name")}-${fitness ?? ""}-${sharpe ?? ""}-${trades ?? ""}` === expandedKey;
+        });
+        const entry = expandedIdx >= 0 ? sorted[expandedIdx] : undefined;
+        return entry ? <StrategyDetail strategy={entry.strategy} rank={expandedIdx + 1} /> : null;
+      })()}
     </div>
   );
 }
