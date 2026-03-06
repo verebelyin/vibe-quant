@@ -28,6 +28,7 @@ def _store_compiler_version(state: object, run_id: int, version: str) -> None:
                 "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
                 (json.dumps(notes), run_id),
             )
+            conn.commit()
         else:
             # No results row yet — store in parameters instead
             row2 = conn.execute(
@@ -39,6 +40,7 @@ def _store_compiler_version(state: object, run_id: int, version: str) -> None:
                 "UPDATE backtest_runs SET parameters = ? WHERE id = ?",
                 (json.dumps(params), run_id),
             )
+            conn.commit()
     except Exception:
         pass  # Non-critical metadata
 
@@ -77,6 +79,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             raw_config = dsl_override
         else:
             strategy_id = run_config["strategy_id"]
+            if strategy_id is None or str(strategy_id) == "None":
+                print(f"Run {args.run_id} has no strategy_id (mode: {run_config.get('run_mode', '?')})")
+                return 1
             strategy = state.get_strategy(int(str(strategy_id)))
             if strategy is None:
                 print(f"Strategy {strategy_id} not found")

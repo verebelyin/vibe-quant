@@ -87,6 +87,7 @@ def _job_info_to_discovery_response(
         run_id=info.run_id,
         status=info.status.value,
         started_at=info.started_at.isoformat() if info.started_at else None,
+        completed_at=info.completed_at.isoformat() if info.completed_at else None,
         progress=progress,
     )
     if state is not None:
@@ -97,7 +98,6 @@ def _job_info_to_discovery_response(
             params = run.get("parameters", {})
             resp.generations = params.get("generations")
             resp.population = params.get("population")
-            resp.completed_at = run.get("completed_at")
             resp.error_message = run.get("error_message")
             strategies = _load_discovery_strategies(state, info.run_id)
             resp.strategies_found = len(strategies) if strategies else None
@@ -131,7 +131,7 @@ async def launch_discovery(
         strategy_id=None,
         run_mode="discovery",
         symbols=body.symbols,
-        timeframe=body.timeframes[0] if body.timeframes else "1h",
+        timeframe=body.timeframes[0] if body.timeframes else "4h",
         start_date=body.start_date or "",
         end_date=body.end_date or "",
         parameters=params,

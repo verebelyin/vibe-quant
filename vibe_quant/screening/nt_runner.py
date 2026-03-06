@@ -363,10 +363,13 @@ class NTScreeningRunner:
             )
 
         # Extract fees from closed positions
+        # NT netting mode removes closed positions from the main index;
+        # combine positions() + position_snapshots() to capture all.
         try:
-            positions = engine.kernel.cache.positions()
+            cache = engine.kernel.cache
+            all_positions = list(cache.positions()) + list(cache.position_snapshots())
             total_fees = 0.0
-            for pos in positions:
+            for pos in all_positions:
                 if pos.is_closed:
                     total_fees += sum(abs(float(c)) for c in pos.commissions())
             metrics.total_fees = total_fees

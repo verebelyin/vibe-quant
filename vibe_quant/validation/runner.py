@@ -513,9 +513,9 @@ class ValidationRunner:
         Returns:
             Configured VenueConfig.
         """
-        balance = run_config.get("starting_balance", 100_000)
+        balance = run_config.get("starting_balance", 1_000)
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
-            balance = 100_000
+            balance = 1_000
         return create_venue_config_for_validation(
             starting_balance_usdt=int(balance),
             latency_preset=latency_preset or LatencyPreset.RETAIL,

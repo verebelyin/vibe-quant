@@ -37,7 +37,7 @@ INSTRUMENT_CONFIGS = {
         "margin_init": Decimal("0.008"),
         "margin_maint": Decimal("0.004"),
         "maker_fee": Decimal("0.0002"),
-        "taker_fee": Decimal("0.0004"),
+        "taker_fee": Decimal("0.0005"),
     },
     "ETHUSDT": {
         "base": "ETH",
@@ -50,7 +50,7 @@ INSTRUMENT_CONFIGS = {
         "margin_init": Decimal("0.01"),
         "margin_maint": Decimal("0.005"),
         "maker_fee": Decimal("0.0002"),
-        "taker_fee": Decimal("0.0004"),
+        "taker_fee": Decimal("0.0005"),
     },
     "SOLUSDT": {
         "base": "SOL",
@@ -63,7 +63,7 @@ INSTRUMENT_CONFIGS = {
         "margin_init": Decimal("0.02"),
         "margin_maint": Decimal("0.01"),
         "maker_fee": Decimal("0.0002"),
-        "taker_fee": Decimal("0.0004"),
+        "taker_fee": Decimal("0.0005"),
     },
 }
 

@@ -4,6 +4,7 @@ import {
   createChart,
   createSeriesMarkers,
   HistogramSeries,
+  LineSeries,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
@@ -16,7 +17,12 @@ import {
   useGetTradesApiResultsRunsRunIdTradesGet,
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
-import { useBrowseDataApiDataBrowseSymbolGet } from "@/api/generated/data/data";
+import {
+  useBrowseDataApiDataBrowseSymbolGet,
+  useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet,
+} from "@/api/generated/data/data";
+import { useGetStrategyApiStrategiesStrategyIdGet } from "@/api/generated/strategies/strategies";
+import type { IndicatorSeries } from "@/api/generated/models";
 import { useUIStore } from "@/stores/ui";
 import {
   Select,
@@ -43,6 +49,41 @@ const THEME_COLORS = {
 } as const;
 
 const CANDLE_COLORS = { up: "#26a69a", down: "#ef5350" } as const;
+
+// Color palette per indicator type
+const INDICATOR_COLORS: Record<string, string> = {
+  SMA: "#ff9800",
+  EMA: "#2196f3",
+  WMA: "#9c27b0",
+  DEMA: "#00bcd4",
+  TEMA: "#e91e63",
+  VWAP: "#ffeb3b",
+  RSI: "#7c4dff",
+  CCI: "#ff9800",
+  WILLR: "#e91e63",
+  ROC: "#00bcd4",
+  ATR: "#ff9800",
+  MFI: "#9c27b0",
+  OBV: "#2196f3",
+};
+
+// Multi-output color mapping
+const OUTPUT_COLORS: Record<string, Record<string, string>> = {
+  BBANDS: { upper: "#7c4dff", middle: "#7c4dff80", lower: "#7c4dff" },
+  KC: { upper: "#ff9800", middle: "#ff980080", lower: "#ff9800" },
+  DONCHIAN: { upper: "#2196f3", middle: "#2196f380", lower: "#2196f3" },
+  MACD: { macd: "#2196f3", signal: "#ff9800", histogram: "#26a69a" },
+  STOCH: { k: "#2196f3", d: "#ff9800" },
+  ICHIMOKU: { conversion: "#2196f3", base: "#ff9800", span_a: "#26a69a", span_b: "#ef5350" },
+};
+
+function getSeriesColor(series: IndicatorSeries): string {
+  const typeColors = OUTPUT_COLORS[series.indicator_type];
+  if (typeColors) {
+    return typeColors[series.output_name] ?? "#a0a0b0";
+  }
+  return INDICATOR_COLORS[series.indicator_type] ?? "#a0a0b0";
+}
 
 function getChartOptions(theme: "light" | "dark", height: number) {
   const colors = THEME_COLORS[theme];
@@ -74,6 +115,9 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const candleSeriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const indicatorSeriesRefs = useRef<{ key: string; series: ISeriesApi<SeriesType> }[]>([]);
+
+  const [hiddenIndicators, setHiddenIndicators] = useState<Set<string>>(new Set());
 
   // Get run metadata
   const runsQuery = useListRunsApiResultsRunsGet();
@@ -83,7 +127,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     return runs.find((r) => r.id === runId);
   }, [runsQuery.data, runId]);
 
-  const symbols = run?.symbols ?? [];
+  const symbols = useMemo(() => run?.symbols ?? [], [run?.symbols]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>("");
   const [interval, setIntervalState] = useState<string>("");
 
@@ -99,6 +143,22 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       setIntervalState(run.timeframe);
     }
   }, [run?.timeframe, interval]);
+
+  // Fetch strategy to get indicator configs (only for non-discovery runs)
+  const strategyId = run?.strategy_id;
+  const strategyQuery = useGetStrategyApiStrategiesStrategyIdGet(strategyId ?? 0, {
+    query: { enabled: !!strategyId },
+  });
+
+  const indicatorConfigs = useMemo(() => {
+    const resp = strategyQuery.data;
+    if (!resp || resp.status !== 200) return [];
+    const dsl = resp.data.dsl_config as Record<string, unknown> | null;
+    if (!dsl) return [];
+    const indicators = dsl.indicators;
+    if (!Array.isArray(indicators)) return [];
+    return indicators as Record<string, unknown>[];
+  }, [strategyQuery.data]);
 
   // Fetch candle data
   const effectiveInterval = interval || run?.timeframe || "";
@@ -117,6 +177,46 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const tradesQuery = useGetTradesApiResultsRunsRunIdTradesGet(runId, undefined, {
     query: { enabled: !!run },
   });
+
+  // Fetch indicators
+  const indicatorsJson = useMemo(() => {
+    if (indicatorConfigs.length === 0) return "[]";
+    return JSON.stringify(indicatorConfigs);
+  }, [indicatorConfigs]);
+
+  const indicatorQuery = useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet(
+    selectedSymbol,
+    {
+      interval: effectiveInterval,
+      ...(run?.start_date ? { start: run.start_date } : {}),
+      ...(run?.end_date ? { end: run.end_date } : {}),
+      indicators: indicatorsJson,
+    },
+    {
+      query: {
+        enabled: !!selectedSymbol && !!effectiveInterval && indicatorConfigs.length > 0,
+      },
+    },
+  );
+
+  const indicatorSeries = useMemo(() => {
+    const resp = indicatorQuery.data;
+    if (!resp || resp.status !== 200) return [];
+    return resp.data.series;
+  }, [indicatorQuery.data]);
+
+  // Count oscillator panes for dynamic height
+  const oscillatorPaneCount = useMemo(() => {
+    const types = new Set<string>();
+    for (const s of indicatorSeries) {
+      if (s.pane === "oscillator" && !hiddenIndicators.has(`${s.indicator_type}-${s.output_name}`)) {
+        types.add(s.indicator_type);
+      }
+    }
+    return types.size;
+  }, [indicatorSeries, hiddenIndicators]);
+
+  const chartHeight = 450 + oscillatorPaneCount * 150;
 
   const candles = useMemo(() => {
     const resp = candleQuery.data;
@@ -172,7 +272,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     };
   }, [sortedCandleTimes]);
 
-  // Map trade id → snapped entry/exit times
+  // Map trade id -> snapped entry/exit times
   const tradeTimeMap = useMemo(() => {
     const resp = tradesQuery.data;
     if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
@@ -230,8 +330,8 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
 
   const hasCandles = candles.length > 0;
 
-  // Create/recreate chart when candles become available (container must be visible)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: recreate on data availability
+  // Create/recreate chart when candles become available
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recreate on data availability + indicator pane count
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !hasCandles) return;
@@ -243,9 +343,10 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
+      indicatorSeriesRefs.current = [];
     }
 
-    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, 450));
+    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, chartHeight));
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -271,6 +372,77 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     });
     markersRef.current = seriesMarkers;
 
+    // Add indicator series
+    const indRefs: ISeriesApi<SeriesType>[] = [];
+
+    // Group oscillators by indicator_type to assign panes
+    const oscillatorTypes: string[] = [];
+    for (const s of indicatorSeries) {
+      if (
+        s.pane === "oscillator" &&
+        !oscillatorTypes.includes(s.indicator_type)
+      ) {
+        oscillatorTypes.push(s.indicator_type);
+      }
+    }
+
+    // Create panes for each oscillator type
+    const oscillatorPaneIndexMap = new Map<string, number>();
+    for (const oscType of oscillatorTypes) {
+      const pane = chart.addPane();
+      oscillatorPaneIndexMap.set(oscType, pane.paneIndex());
+    }
+
+    for (const s of indicatorSeries) {
+      const key = `${s.indicator_type}-${s.output_name}`;
+      const hidden = hiddenIndicators.has(key);
+
+      const color = getSeriesColor(s);
+      const isHistogram = s.output_name === "histogram" && s.indicator_type === "MACD";
+      const paneIndex = s.pane === "oscillator" ? oscillatorPaneIndexMap.get(s.indicator_type) : undefined;
+
+      const data = s.data
+        .filter((p) => p.value != null)
+        .map((p) => ({
+          time: Math.floor(p.time / 1000) as UTCTimestamp,
+          value: p.value as number,
+        }));
+
+      if (isHistogram) {
+        const histData = data.map((d) => ({
+          ...d,
+          color: d.value >= 0 ? "#26a69a" : "#ef5350",
+        }));
+        const series = chart.addSeries(HistogramSeries, {
+          title: s.display_label,
+          priceScaleId: `osc-${s.indicator_type}`,
+          visible: !hidden,
+        }, paneIndex);
+        series.setData(histData);
+        indRefs.push({ key, series });
+      } else {
+        const lineWidth = s.output_name === "middle" ? 1 : 2;
+        const lineStyle = s.output_name === "middle" ? 2 : 0; // dashed for middle bands
+        const opts: Record<string, unknown> = {
+          color,
+          lineWidth,
+          lineStyle,
+          title: s.display_label,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: !hidden,
+        };
+        if (s.pane === "oscillator") {
+          opts.priceScaleId = `osc-${s.indicator_type}`;
+        }
+        const series = chart.addSeries(LineSeries, opts, paneIndex);
+        series.setData(data);
+        indRefs.push({ key, series });
+      }
+    }
+
+    indicatorSeriesRefs.current = indRefs;
+
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         chart.applyOptions({ width: entry.contentRect.width });
@@ -285,10 +457,18 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       markersRef.current = null;
+      indicatorSeriesRefs.current = [];
     };
-  }, [hasCandles, theme]);
+  }, [hasCandles, theme, indicatorSeries, chartHeight]);
 
-  // Set candle + volume data and initial range (only when data changes, NOT on highlight)
+  // Toggle indicator visibility without rebuilding chart
+  useEffect(() => {
+    for (const { key, series } of indicatorSeriesRefs.current) {
+      series.applyOptions({ visible: !hiddenIndicators.has(key) });
+    }
+  }, [hiddenIndicators]);
+
+  // Set candle + volume data and initial range
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
@@ -302,7 +482,6 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       return;
     }
 
-    // Force chart to match container width (container may have been hidden on mount)
     chart.applyOptions({ width: container.clientWidth });
 
     candleSeries.setData(candles);
@@ -311,10 +490,36 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     chart.timeScale().fitContent();
   }, [candles, volumeData]);
 
-  // Update markers separately (runs on highlight change without touching zoom)
+  // Update markers separately
   useEffect(() => {
     markersRef.current?.setMarkers(markers);
   }, [markers]);
+
+  const toggleIndicator = (key: string) => {
+    setHiddenIndicators((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Build unique indicator chips for legend
+  const indicatorChips = useMemo(() => {
+    const seen = new Set<string>();
+    const chips: { key: string; label: string; color: string }[] = [];
+    for (const s of indicatorSeries) {
+      const key = `${s.indicator_type}-${s.output_name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chips.push({
+        key,
+        label: s.display_label,
+        color: getSeriesColor(s),
+      });
+    }
+    return chips;
+  }, [indicatorSeries]);
 
   const isLoading = candleQuery.isLoading || tradesQuery.isLoading;
 
@@ -363,17 +568,53 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
           )}
         </div>
       </div>
+      {/* Indicator legend/toggle chips */}
+      {indicatorChips.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {indicatorChips.map((chip) => {
+            const isHidden = hiddenIndicators.has(chip.key);
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => toggleIndicator(chip.key)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-all",
+                  isHidden
+                    ? "border-border/50 text-muted-foreground/50 line-through"
+                    : "border-border text-foreground",
+                )}
+              >
+                <span
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{
+                    backgroundColor: isHidden ? "#555" : chip.color,
+                  }}
+                />
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {isLoading && (
-        <div className="flex h-[450px] items-center justify-center text-muted-foreground">
+        <div
+          className="flex items-center justify-center text-muted-foreground"
+          style={{ height: chartHeight }}
+        >
           Loading chart data...
         </div>
       )}
       <div
         ref={containerRef}
-        className={isLoading || candles.length === 0 ? "hidden" : "h-[450px]"}
+        className={isLoading || candles.length === 0 ? "hidden" : ""}
+        style={{ height: chartHeight }}
       />
       {!isLoading && candles.length === 0 && selectedSymbol && (
-        <div className="flex h-[450px] items-center justify-center text-muted-foreground">
+        <div
+          className="flex items-center justify-center text-muted-foreground"
+          style={{ height: 450 }}
+        >
           No candle data available for {selectedSymbol}
         </div>
       )}

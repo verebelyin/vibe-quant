@@ -50,13 +50,14 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
   const [text, setText] = useState(() => serializeConfig(config));
   const [error, setError] = useState<YamlError | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Track whether config was updated externally (visual editor)
-  const skipNextSync = useRef(false);
+  // Track the last config we emitted to avoid echo-back from parent
+  const lastEmittedConfig = useRef<DslConfig | null>(null);
 
   // Sync from visual editor -> YAML text when config changes externally
   useEffect(() => {
-    if (skipNextSync.current) {
-      skipNextSync.current = false;
+    if (config === lastEmittedConfig.current) {
+      // This config originated from our own edit — skip sync
+      lastEmittedConfig.current = null;
       return;
     }
     setText(serializeConfig(config));
@@ -69,7 +70,7 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
       const result = parseYamlToDsl(value);
       setError(result.error);
       if (!result.error) {
-        skipNextSync.current = true;
+        lastEmittedConfig.current = result.config;
         onConfigChange(result.config);
       }
     },

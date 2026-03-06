@@ -29,7 +29,7 @@ from vibe_quant.validation.latency import (
 # Default Binance fee rates (percentage)
 # Note: Binance has VIP tiers; these are default non-VIP rates
 BINANCE_MAKER_FEE = Decimal("0.0002")  # 0.02%
-BINANCE_TAKER_FEE = Decimal("0.0004")  # 0.04%
+BINANCE_TAKER_FEE = Decimal("0.0005")  # 0.05%
 
 
 @dataclass
@@ -50,7 +50,7 @@ class VenueConfig:
     """
 
     name: str = "BINANCE"
-    starting_balance_usdt: int = 100_000
+    starting_balance_usdt: int = 1_000
     default_leverage: Decimal = Decimal("10")
     leverages: dict[str, Decimal] = field(default_factory=dict)
 
@@ -69,7 +69,7 @@ class VenueConfig:
 
 
 def create_venue_config_for_screening(
-    starting_balance_usdt: int = 100_000,
+    starting_balance_usdt: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> VenueConfig:
@@ -103,7 +103,7 @@ def create_venue_config_for_screening(
 
 
 def create_venue_config_for_validation(
-    starting_balance_usdt: int = 100_000,
+    starting_balance_usdt: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
     latency_preset: LatencyPreset | str = LatencyPreset.RETAIL,

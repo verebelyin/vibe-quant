@@ -34,12 +34,15 @@ class PortfolioRiskActorConfig(ActorConfig, frozen=True):
         max_single_instrument_pct: Maximum concentration in single instrument.
         max_portfolio_heat_pct: Maximum portfolio heat (total risk from all stops).
             None disables heat checking.
+        cooldown_after_halt_hours: Hours to wait before auto-resuming after halt.
+            0 means manual resume only (no auto-resume).
     """
 
     max_portfolio_drawdown_pct: Decimal = Decimal("0.20")
     max_total_exposure_pct: Decimal = Decimal("0.50")
     max_single_instrument_pct: Decimal = Decimal("0.30")
     max_portfolio_heat_pct: Decimal | None = Decimal("0.06")
+    cooldown_after_halt_hours: int = 24
 
 
 @dataclass
@@ -61,6 +64,7 @@ class PortfolioRiskState:
     instrument_exposures: dict[str, Decimal] = field(default_factory=dict)
     state: RiskState = RiskState.ACTIVE
     portfolio_heat_pct: Decimal = Decimal("0")
+    halted_at: datetime | None = None
 
 
 class PortfolioRiskActor(Actor):  # type: ignore[misc]
@@ -88,6 +92,7 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
             max_portfolio_heat_pct=config.max_portfolio_heat_pct,
         )
         self._state = PortfolioRiskState()
+        self._cooldown_hours = config.cooldown_after_halt_hours
         # TODO: populate _halted_strategies per-strategy instead of halting ALL
         # trading when a single strategy violates risk limits. Requires strategy-level
         # halt propagation (currently only portfolio-wide halt is implemented).
@@ -141,9 +146,18 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
         return self._check_risk()
 
     def _check_risk(self) -> RiskState:
-        """Internal risk check implementation."""
+        """Internal risk check implementation.
+
+        Includes cooldown auto-resume: if halted and cooldown period has
+        elapsed, re-checks whether conditions are still breached.
+        """
         if self._state.state == RiskState.HALTED:
-            return RiskState.HALTED
+            if self._check_cooldown_expired():
+                self._state.state = RiskState.ACTIVE
+                self._state.halted_at = None
+                self._log_info("Portfolio cooldown expired, re-evaluating risk")
+            else:
+                return RiskState.HALTED
 
         if self._state.current_drawdown_pct >= self._risk_config.max_portfolio_drawdown_pct:
             self._halt_portfolio("portfolio_drawdown", self._state.current_drawdown_pct)
@@ -172,6 +186,7 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
     def _halt_portfolio(self, metric: str, value: Decimal) -> None:
         """Halt all portfolio trading due to risk breach."""
         self._state.state = RiskState.HALTED
+        self._state.halted_at = datetime.now(UTC)
         self._cancel_all_orders()
 
         if metric == "portfolio_drawdown":
@@ -269,6 +284,22 @@ class PortfolioRiskActor(Actor):  # type: ignore[misc]
 
         except Exception as e:
             self._log_error(f"Error calculating exposures: {e}")
+
+    def _check_cooldown_expired(self) -> bool:
+        """Check if cooldown period has elapsed since halt.
+
+        Returns:
+            True if cooldown has expired and portfolio can be re-evaluated.
+            False if still in cooldown or cooldown is disabled (0 hours).
+        """
+        if self._cooldown_hours <= 0:
+            return False  # Manual resume only
+        if self._state.halted_at is None:
+            return False
+        from datetime import timedelta
+
+        elapsed = datetime.now(UTC) - self._state.halted_at
+        return elapsed >= timedelta(hours=self._cooldown_hours)
 
     def _get_portfolio_equity(self) -> Decimal:
         """Get total portfolio equity."""

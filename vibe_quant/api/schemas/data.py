@@ -44,6 +44,27 @@ class BrowseDataResponse(BaseModel):
     data: list[dict[str, object]]
 
 
+class IndicatorSeriesPoint(BaseModel):
+    time: int  # open_time ms (matches browse_data format)
+    value: float | None  # None during warmup
+
+
+class IndicatorSeries(BaseModel):
+    name: str  # "ema_20", "bbands_20"
+    output_name: str  # "value", "upper", "middle", "lower", "macd", "signal", "histogram"
+    indicator_type: str  # "EMA", "BBANDS", "RSI"
+    display_label: str  # "EMA(20)", "BB Upper(20, 2.0)"
+    pane: str  # "overlay" | "oscillator"
+    params: dict[str, object]
+    data: list[IndicatorSeriesPoint]
+
+
+class IndicatorsResponse(BaseModel):
+    symbol: str
+    interval: str
+    series: list[IndicatorSeries]
+
+
 class OhlcError(BaseModel):
     timestamp: str
     error_type: str  # 'high_lt_low', 'zero_close', 'negative_volume', 'zero_open'

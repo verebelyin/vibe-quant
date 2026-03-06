@@ -87,7 +87,7 @@ interface DiscoveryResultsProps {
 
 export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
-  const [exportedIndices, setExportedIndices] = useState<Set<number>>(new Set());
+  const [exportedKeys, setExportedKeys] = useState<Set<string>>(new Set());
 
   // Fetch results for specific run
   const runResults = useGetDiscoveryResultsApiDiscoveryResultsRunIdGet(runId ?? 0, {
@@ -102,9 +102,8 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
   const exportMutation = useExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost(
     {
       mutation: {
-        onSuccess: (_data, variables) => {
+        onSuccess: () => {
           toast.success("Strategy exported to library");
-          setExportedIndices((prev) => new Set(prev).add(variables.strategyIndex));
         },
         onError: (err: unknown) => {
           const message = err instanceof Error ? err.message : "Export failed";
@@ -134,9 +133,13 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
 
   const summary = useMemo(() => computeSummary(sorted), [sorted]);
 
-  function handleExport(strategyIndex: number) {
+  function handleExport(strategyIndex: number, stableKey: string) {
     if (runId == null) return;
-    exportMutation.mutate({ runId, strategyIndex });
+    exportMutation.mutate({ runId, strategyIndex }, {
+      onSuccess: () => {
+        setExportedKeys((prev) => new Set(prev).add(stableKey));
+      },
+    });
   }
 
   if (isLoading) {
@@ -204,7 +207,6 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
             {sorted.map((s, idx) => {
               const rank = idx + 1;
               const isExpanded = expandedRow === idx;
-              const isExported = exportedIndices.has(idx);
               const fitness = num(s, "fitness") ?? num(s, "adjusted_score") ?? num(s, "score");
               const sharpe = num(s, "sharpe") ?? num(s, "sharpe_ratio");
               const returnPct = num(s, "return_pct") ?? num(s, "total_return") ?? num(s, "return");
@@ -217,8 +219,9 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               const indicators = dslIndicators
                 ? Object.keys(dslIndicators as Record<string, unknown>).map(k => k.split("_")[0]!.toUpperCase()).filter((v, i, a) => a.indexOf(v) === i).join(", ")
                 : str(s, "indicators");
-              // Build a stable key from strategy identity fields
-              const stableKey = `${str(s, "name") ?? ""}-${fitness ?? ""}-${sharpe ?? ""}-${idx}`;
+              // Build a stable key from strategy identity fields (no idx — survives re-sort)
+              const stableKey = `${str(s, "name")}-${fitness ?? ""}-${sharpe ?? ""}-${trades ?? ""}`;
+              const isExported = exportedKeys.has(stableKey);
 
               return (
                 <TableRow
@@ -290,7 +293,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                         variant={isExported ? "outline" : "secondary"}
                         size="xs"
                         disabled={isExported || exportMutation.isPending}
-                        onClick={() => handleExport(idx)}
+                        onClick={() => handleExport(idx, stableKey)}
                       >
                         {isExported ? "Exported" : "Export"}
                       </Button>

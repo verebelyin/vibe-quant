@@ -268,17 +268,14 @@ def extract_trades(
         )
         instrument_id = str(pos.instrument_id)
 
-        # Split fees by maker/taker rates instead of 50/50.
-        # Entry is typically a taker (market) order, exit may be maker (limit).
-        maker_rate = float(venue_config.maker_fee)
-        taker_rate = float(venue_config.taker_fee)
-        total_rate = maker_rate + taker_rate
-        if total_rate > 0 and abs(pos_fees) > 0:
-            entry_fee = abs(pos_fees) * (taker_rate / total_rate)
-            exit_fee = abs(pos_fees) * (maker_rate / total_rate)
-        else:
-            entry_fee = abs(pos_fees) / 2.0
-            exit_fee = abs(pos_fees) / 2.0
+        # Split fees 50/50 between entry and exit.
+        # NT's MakerTakerFeeModel uses order.liquidity_side per fill:
+        # market/stop orders → taker, limit orders → maker. Our strategies
+        # use market entry + stop-market SL/TP, so both fills are taker.
+        # The Position only exposes total commissions, not per-fill breakdown,
+        # so we split evenly (both sides same rate in practice).
+        entry_fee = abs(pos_fees) / 2.0
+        exit_fee = abs(pos_fees) / 2.0
 
         # TODO: NT Position does not expose which child order (SL/TP/signal)
         # triggered the close. Detecting exit_reason from price vs SL/TP

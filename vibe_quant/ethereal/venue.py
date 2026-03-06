@@ -66,7 +66,7 @@ class EtherealVenueConfig:
     """
 
     name: str = "ETHEREAL"
-    starting_balance_usde: int = 100_000
+    starting_balance_usde: int = 1_000
     default_leverage: Decimal = Decimal("10")
     leverages: dict[str, Decimal] = field(default_factory=dict)
     funding_interval: int = ETHEREAL_FUNDING_INTERVAL
@@ -102,7 +102,7 @@ def get_ethereal_latency_model(
 
 
 def get_ethereal_venue_for_backtesting(
-    starting_balance_usde: int = 100_000,
+    starting_balance_usde: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> EtherealVenueConfig:
@@ -128,7 +128,7 @@ def get_ethereal_venue_for_backtesting(
 
 
 def get_ethereal_venue_for_paper_trading(
-    starting_balance_usde: int = 100_000,
+    starting_balance_usde: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> EtherealVenueConfig:

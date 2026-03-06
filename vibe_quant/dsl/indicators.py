@@ -211,7 +211,7 @@ class IndicatorRegistry:
         elif name == "MACD":
             kwargs["fast_period"] = params.get("fast_period", 12)
             kwargs["slow_period"] = params.get("slow_period", 26)
-            kwargs["signal_period"] = params.get("signal_period", 9)
+            # NT MovingAverageConvergenceDivergence does not accept signal_period
         elif name == "BBANDS":
             kwargs["period"] = params.get("period", 20)
             kwargs["k"] = params.get("std_dev", 2.0)

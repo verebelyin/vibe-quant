@@ -32,6 +32,8 @@ from vibe_quant.discovery.operators import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from vibe_quant.discovery.operators import Direction
+
 logger = logging.getLogger(__name__)
 
 # Max retries when generating valid offspring via crossover+mutation
@@ -179,6 +181,7 @@ class DiscoveryPipeline:
         self._backtest_fn = backtest_fn
         self._filter_fn = filter_fn
         self._progress_file = Path(progress_file) if progress_file else None
+        self._direction_constraint: Direction | None = None
 
     # -- public API ---------------------------------------------------------
 

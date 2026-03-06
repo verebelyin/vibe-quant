@@ -100,7 +100,7 @@ class ValidationResult(PerformanceMetrics):
     total_slippage: float = 0.0
     trades: list[TradeRecord] = field(default_factory=list)
 
-    starting_balance: float = 100000.0
+    starting_balance: float = 1000.0
 
     def to_metrics_dict(self) -> dict[str, object]:
         """Convert to metrics dictionary for database storage."""

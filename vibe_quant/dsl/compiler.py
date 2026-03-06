@@ -874,7 +874,12 @@ class StrategyCompiler:
                 lines.append("                self._submit_exit(bar)")
 
         # Trailing stop update
-        if dsl.stop_loss.type == "atr_trailing":
+        has_trailing = (
+            dsl.stop_loss.type == "atr_trailing"
+            or (dsl.stop_loss_long is not None and dsl.stop_loss_long.type == "atr_trailing")
+            or (dsl.stop_loss_short is not None and dsl.stop_loss_short.type == "atr_trailing")
+        )
+        if has_trailing:
             lines.append("")
             lines.append("    # Update trailing stop loss")
             lines.append("    self._update_trailing_stop(bar)")

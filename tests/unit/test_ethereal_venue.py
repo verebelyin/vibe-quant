@@ -105,7 +105,7 @@ class TestEtherealVenueConfig:
         """VenueConfig has sensible defaults."""
         config = EtherealVenueConfig()
         assert config.name == "ETHEREAL"
-        assert config.starting_balance_usde == 100_000
+        assert config.starting_balance_usde == 1_000
         assert config.default_leverage == Decimal("10")
         assert config.leverages == {}
         assert config.funding_interval == 3600

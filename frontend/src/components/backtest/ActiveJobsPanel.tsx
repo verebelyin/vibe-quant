@@ -106,7 +106,7 @@ export function ActiveJobsPanel() {
     if (!hasStale) {
       cleanupTriggered.current = false;
     }
-  }, [hasStale, cleanupMutation]);
+  }, [hasStale, cleanupMutation.isPending]);
 
   return (
     <div className="rounded-lg border border-border bg-background p-4">

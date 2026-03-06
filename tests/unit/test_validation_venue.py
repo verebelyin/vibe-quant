@@ -211,7 +211,7 @@ class TestVenueConfig:
         """VenueConfig has sensible defaults."""
         config = VenueConfig()
         assert config.name == "BINANCE"
-        assert config.starting_balance_usdt == 100_000
+        assert config.starting_balance_usdt == 1_000
         assert config.default_leverage == Decimal("10")
         assert config.leverages == {}
         assert config.latency_preset is None
@@ -222,7 +222,7 @@ class TestVenueConfig:
     def test_binance_fee_constants(self) -> None:
         """Binance fee constants are correct."""
         assert Decimal("0.0002") == BINANCE_MAKER_FEE  # 0.02%
-        assert Decimal("0.0004") == BINANCE_TAKER_FEE  # 0.04%
+        assert Decimal("0.0005") == BINANCE_TAKER_FEE  # 0.05%
 
     def test_create_venue_config_for_screening(self) -> None:
         """Create screening venue config."""
@@ -279,7 +279,7 @@ class TestBacktestVenueConfig:
         assert backtest_config.name == "BINANCE"
         assert backtest_config.oms_type == "NETTING"
         assert backtest_config.account_type == "MARGIN"
-        assert backtest_config.starting_balances == ["100000 USDT"]
+        assert backtest_config.starting_balances == ["1000 USDT"]
         assert backtest_config.default_leverage == 10.0
         assert backtest_config.latency_model is None  # No latency for screening
         assert backtest_config.fill_model is not None

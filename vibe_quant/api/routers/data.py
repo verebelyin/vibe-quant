@@ -21,6 +21,7 @@ from vibe_quant.api.schemas.data import (
     DataCoverageResponse,
     DataQualityResponse,
     DataStatusResponse,
+    IndicatorsResponse,
     IngestPreviewResponse,
     IngestRequest,
     OhlcError,
@@ -347,6 +348,105 @@ async def browse_data(
                 data.append(bucket)
 
         return BrowseDataResponse(symbol=symbol, interval=interval, data=data)
+    finally:
+        archive.close()
+
+
+# --- Indicator computation ---
+
+
+@router.get("/indicators/{symbol}", response_model=IndicatorsResponse)
+async def compute_indicators_endpoint(
+    symbol: str,
+    interval: str = Query(default="1h"),
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    indicators: str = Query(default="[]"),
+) -> IndicatorsResponse:
+    import json
+
+    import pandas as pd
+
+    from vibe_quant.data.indicator_compute import compute_indicators
+
+    # Parse indicators JSON
+    try:
+        indicator_configs: list[dict[str, object]] = json.loads(indicators)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid indicators JSON: {exc}") from exc
+
+    if not indicator_configs:
+        return IndicatorsResponse(symbol=symbol, interval=interval, series=[])
+
+    if interval not in _INTERVAL_MINUTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid interval '{interval}'. Must be one of: {', '.join(_INTERVAL_MINUTES)}",
+        )
+
+    archive = _get_archive()
+    try:
+        start_ts: int | None = None
+        end_ts: int | None = None
+        if start:
+            try:
+                start_ts = int(
+                    datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid start date: {exc}") from exc
+        if end:
+            try:
+                end_ts = int(
+                    datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid end date: {exc}") from exc
+
+        interval_minutes = _INTERVAL_MINUTES[interval]
+        bucket_ms = interval_minutes * 60 * 1000
+
+        # Fetch 1m candles
+        conditions = ["symbol = ?", "interval = '1m'"]
+        params: list[object] = [symbol]
+        if start_ts is not None:
+            conditions.append("open_time >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            conditions.append("open_time < ?")
+            params.append(end_ts)
+        where = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT open_time, open, high, low, close, volume
+            FROM raw_klines
+            WHERE {where}
+            ORDER BY open_time
+        """
+        rows = archive.conn.execute(sql, tuple(params)).fetchall()
+
+        if not rows:
+            return IndicatorsResponse(symbol=symbol, interval=interval, series=[])
+
+        # Build DataFrame
+        raw_df = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close", "volume"])
+
+        # Aggregate to requested interval if > 1m
+        if interval_minutes > 1:
+            raw_df["bucket"] = (raw_df["open_time"] // bucket_ms) * bucket_ms
+            df = raw_df.groupby("bucket").agg(
+                open_time=("bucket", "first"),
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            ).reset_index(drop=True)
+        else:
+            df = raw_df
+
+        series = compute_indicators(df, indicator_configs)
+        return IndicatorsResponse(symbol=symbol, interval=interval, series=series)
     finally:
         archive.close()
 

@@ -137,43 +137,22 @@ class TestComputeMaxDrawdownFromTrades:
 
 
 class TestFeeSplit:
-    """Tests for maker/taker fee splitting in trade extraction."""
+    """Tests for fee splitting in trade extraction."""
 
-    def test_fee_split_uses_maker_taker_rates(self) -> None:
-        """entry_fee/exit_fee should reflect taker/maker rate ratio, not 50/50."""
-        # Binance default: maker=0.02%, taker=0.04%
-        # Total rate = 0.06%, taker share = 0.04/0.06 = 2/3, maker share = 1/3
-        # For total fees of $6: entry_fee = $4 (taker), exit_fee = $2 (maker)
-        from decimal import Decimal
+    def test_fee_split_is_50_50(self) -> None:
+        """entry_fee/exit_fee should split total fees evenly.
 
-        maker_fee = Decimal("0.0002")
-        taker_fee = Decimal("0.0004")
-        total_rate = float(maker_fee + taker_fee)
-        total_fees = 6.0
-
-        entry_fee = total_fees * (float(taker_fee) / total_rate)
-        exit_fee = total_fees * (float(maker_fee) / total_rate)
-
-        assert abs(entry_fee - 4.0) < 1e-9
-        assert abs(exit_fee - 2.0) < 1e-9
-        assert abs(entry_fee + exit_fee - total_fees) < 1e-9
-
-    def test_fee_split_fallback_when_zero_rates(self) -> None:
-        """When rates are zero, should fall back to 50/50."""
+        NT's MakerTakerFeeModel charges per-fill based on order.liquidity_side.
+        Our strategies use market entry + stop-market SL/TP, so both fills
+        are taker. The Position only exposes total commissions, so we split 50/50.
+        """
         total_fees = 10.0
-        maker_rate = 0.0
-        taker_rate = 0.0
-        total_rate = maker_rate + taker_rate
-
-        if total_rate > 0 and total_fees > 0:
-            entry_fee = total_fees * (taker_rate / total_rate)
-            exit_fee = total_fees * (maker_rate / total_rate)
-        else:
-            entry_fee = total_fees / 2.0
-            exit_fee = total_fees / 2.0
+        entry_fee = total_fees / 2.0
+        exit_fee = total_fees / 2.0
 
         assert entry_fee == 5.0
         assert exit_fee == 5.0
+        assert abs(entry_fee + exit_fee - total_fees) < 1e-9
 
 
 class TestSlippageModelSelection:
@@ -221,7 +200,7 @@ class TestSlippageModelSelection:
             default_leverage=Decimal("10"),
             fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0),
             maker_fee=Decimal("0.0002"),
-            taker_fee=Decimal("0.0004"),
+            taker_fee=Decimal("0.0005"),
         )
 
         extract_trades(result, engine, venue_config)
@@ -238,7 +217,7 @@ class TestSlippageModelSelection:
             default_leverage=Decimal("10"),
             fill_config=SimpleNamespace(impact_coefficient=0.1, prob_slippage=0.0),
             maker_fee=Decimal("0.0002"),
-            taker_fee=Decimal("0.0004"),
+            taker_fee=Decimal("0.0005"),
         )
 
         extract_trades(result, engine, venue_config)
