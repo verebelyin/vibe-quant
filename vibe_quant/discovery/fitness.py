@@ -330,9 +330,20 @@ def _evaluate_single(
     )
 
     try:
+        import time as _time
+        _bt_start = _time.monotonic()
         bt = backtest_fn(chrom)
+        _bt_elapsed = _time.monotonic() - _bt_start
+        indicators = [g.indicator_type for g in chrom.entry_genes + chrom.exit_genes]
+        logger.debug(
+            "Backtest %s: %.1fs indicators=%s trades=%s",
+            chrom.uid,
+            _bt_elapsed,
+            indicators,
+            bt.get("total_trades", "?"),
+        )
     except Exception:
-        logger.warning("Backtest failed for chromosome, assigning zero fitness", exc_info=True)
+        logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
         return _zero
 
     sharpe = float(bt["sharpe_ratio"])

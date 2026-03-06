@@ -242,6 +242,18 @@ class DiscoveryPipeline:
             cfg.symbols,
             cfg.timeframe,
         )
+        logger.info(
+            "Config: mutation=%.2f crossover=%.2f elite=%d tournament=%d "
+            "convergence_gens=%d direction=%s max_workers=%s indicator_pool=%s",
+            cfg.mutation_rate,
+            cfg.crossover_rate,
+            cfg.elite_count,
+            cfg.tournament_size,
+            cfg.convergence_generations,
+            cfg.direction or "random",
+            cfg.max_workers,
+            cfg.indicator_pool or "all",
+        )
 
         for gen in range(cfg.max_generations):
             gen_start = time.monotonic()
@@ -288,19 +300,50 @@ class DiscoveryPipeline:
             best_trades = best_fr.total_trades
             best_return = best_fr.total_return
 
+            # Population diversity: score spread and direction distribution
+            score_std = (sum((s - gen_result.mean_fitness) ** 2 for s in scores) / len(scores)) ** 0.5
+            unique_indicators = {g.indicator_type for c in population for g in c.entry_genes + c.exit_genes}
+            dir_counts = {}
+            for c in population:
+                d = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
+                dir_counts[d] = dir_counts.get(d, 0) + 1
+
             logger.info(
-                "=== GEN %d/%d === best=%.4f mean=%.4f passed=%d | "
-                "trades=%d return=%.1f%% | gen_time=%.1fs total=%.0fs ETA=%.0fs",
+                "=== GEN %d/%d === best=%.4f mean=%.4f std=%.4f passed=%d | "
+                "trades=%d return=%.1f%% sharpe=%.2f pf=%.2f dd=%.1f%% | "
+                "gen_time=%.1fs total=%.0fs ETA=%.0fs",
                 gen + 1,
                 cfg.max_generations,
                 gen_result.best_fitness,
                 gen_result.mean_fitness,
+                score_std,
                 gen_result.num_passed_filters,
                 best_trades,
                 best_return * 100,
+                best_fr.sharpe_ratio,
+                best_fr.profit_factor,
+                best_fr.max_drawdown * 100,
                 gen_elapsed,
                 total_elapsed,
                 eta_seconds,
+            )
+            # Best chromosome details
+            best_chrom = population[best_idx]
+            entry_indicators = [g.indicator_type for g in best_chrom.entry_genes]
+            exit_indicators = [g.indicator_type for g in best_chrom.exit_genes]
+            logger.info(
+                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                best_chrom.uid,
+                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
+                entry_indicators,
+                exit_indicators,
+                best_chrom.stop_loss_pct * 100,
+                best_chrom.take_profit_pct * 100,
+            )
+            logger.info(
+                "  Diversity: indicators=%s directions=%s",
+                sorted(unique_indicators),
+                dir_counts,
             )
 
             self._write_progress(
@@ -317,7 +360,14 @@ class DiscoveryPipeline:
                 total_evaluated=total_evaluated,
             )
 
-            # Convergence check
+            # Convergence check with progress tracking
+            stagnant_gens = self._stagnant_generations(generation_results)
+            if stagnant_gens > 0:
+                logger.info(
+                    "  Convergence: %d/%d stagnant gens (best unchanged)",
+                    stagnant_gens,
+                    cfg.convergence_generations,
+                )
             if self._check_convergence(generation_results):
                 converged = True
                 convergence_gen = gen
@@ -343,6 +393,38 @@ class DiscoveryPipeline:
         validated = self._validate_top_strategies(top_strategies, total_evaluated)
         if validated:
             top_strategies = validated
+
+        # Final summary
+        total_time = time.monotonic() - pipeline_start
+        if top_strategies:
+            best_chrom, best_fit = top_strategies[0]
+            best_entry = [g.indicator_type for g in best_chrom.entry_genes]
+            best_exit = [g.indicator_type for g in best_chrom.exit_genes]
+            logger.info(
+                "=== DISCOVERY COMPLETE: %.0fs total | %d gens | %d evaluated | converged=%s ===",
+                total_time,
+                len(generation_results),
+                total_evaluated,
+                converged,
+            )
+            logger.info(
+                "  Winner: score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
+                best_fit.adjusted_score,
+                best_fit.sharpe_ratio,
+                best_fit.profit_factor,
+                best_fit.max_drawdown * 100,
+                best_fit.total_return * 100,
+                best_fit.total_trades,
+            )
+            logger.info(
+                "  Winner genome: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                best_chrom.uid,
+                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
+                best_entry,
+                best_exit,
+                best_chrom.stop_loss_pct * 100,
+                best_chrom.take_profit_pct * 100,
+            )
 
         return DiscoveryResult(
             generations=generation_results,
@@ -388,6 +470,8 @@ class DiscoveryPipeline:
 
         # Fill remaining slots
         remaining = cfg.population_size - len(new_pop)
+        retries = 0
+        random_fallbacks = 0
         while remaining > 0:
             parent_a = tournament_select(population, scores, cfg.tournament_size)
             parent_b = tournament_select(population, scores, cfg.tournament_size)
@@ -408,17 +492,40 @@ class DiscoveryPipeline:
                     break
                 # Retry if invalid; fall back to random if all retries fail
                 valid_child = child
-                for _ in range(_MAX_OFFSPRING_RETRIES):
+                for attempt in range(_MAX_OFFSPRING_RETRIES):
                     if is_valid_chromosome(valid_child):
+                        if attempt > 0:
+                            retries += attempt
                         break
                     valid_child = mutate(child, cfg.mutation_rate)
                 else:
                     if not is_valid_chromosome(valid_child):
                         valid_child = _random_chromosome(direction_constraint=self._direction_constraint)
+                        random_fallbacks += 1
                 new_pop.append(valid_child)
                 remaining -= 1
 
+        if retries > 0 or random_fallbacks > 0:
+            logger.info(
+                "  Evolution: %d mutation retries, %d random fallbacks",
+                retries,
+                random_fallbacks,
+            )
+
         return new_pop
+
+    def _stagnant_generations(self, generation_results: list[GenerationResult]) -> int:
+        """Count consecutive generations without improvement from the end."""
+        if len(generation_results) < 2:
+            return 0
+        current_best = generation_results[-1].best_fitness
+        count = 0
+        for gr in reversed(generation_results[:-1]):
+            if gr.best_fitness >= current_best:
+                count += 1
+            else:
+                break
+        return count
 
     def _check_convergence(self, generation_results: list[GenerationResult]) -> bool:
         """Check if best fitness has stagnated for convergence_generations.
