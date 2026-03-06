@@ -160,6 +160,23 @@ CREATE TABLE IF NOT EXISTS background_jobs (
     error_message TEXT
 );
 
+-- Screening-to-validation consistency checks
+CREATE TABLE IF NOT EXISTS consistency_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_name TEXT NOT NULL,
+    screening_run_id INTEGER NOT NULL,
+    validation_run_id INTEGER NOT NULL,
+    screening_sharpe REAL NOT NULL,
+    validation_sharpe REAL NOT NULL,
+    sharpe_degradation REAL NOT NULL,
+    screening_return REAL NOT NULL,
+    validation_return REAL NOT NULL,
+    return_degradation REAL NOT NULL,
+    is_execution_sensitive INTEGER NOT NULL,
+    parameters TEXT NOT NULL,
+    checked_at TEXT NOT NULL
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_status ON backtest_runs(status);

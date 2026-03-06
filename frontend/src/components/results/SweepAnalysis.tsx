@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLaunchValidationApiBacktestValidationPost } from "@/api/generated/backtest/backtest";
-import type { BacktestRunResponse, RunListResponse } from "@/api/generated/models";
+import type { BacktestRunResponse } from "@/api/generated/models";
 import type { SweepResultResponse } from "@/api/generated/models/sweepResultResponse";
 import {
+  useGetRunMetaApiResultsRunsRunIdMetaGet,
   useGetSweepsApiResultsRunsRunIdSweepsGet,
-  useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
 import ParetoSurface3D from "@/components/charts/ParetoSurface3D";
 import SweepScatterChart from "@/components/charts/SweepScatterChart";
@@ -82,7 +82,9 @@ function exportSweepCsv(sweeps: SweepResultResponse[], runId: number) {
   const link = document.createElement("a");
   link.href = url;
   link.download = `sweep_run_${runId}.csv`;
+  document.body.appendChild(link);
   link.click();
+  document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
 
@@ -100,46 +102,23 @@ function SweepSkeleton() {
 }
 
 function ValidateButton({
-  sweep,
-  run,
+  isPending,
+  disabled,
+  onValidate,
 }: {
-  sweep: SweepResultResponse;
-  run: BacktestRunResponse | undefined;
+  isPending: boolean;
+  disabled: boolean;
+  onValidate: () => void;
 }) {
-  const mutation = useLaunchValidationApiBacktestValidationPost();
-
-  function handleValidate() {
-    if (!run) {
-      toast.error("Run metadata not available");
-      return;
-    }
-    mutation.mutate(
-      {
-        data: {
-          strategy_id: run.strategy_id ?? 0,
-          symbols: run.symbols,
-          timeframe: run.timeframe ?? "",
-          start_date: run.start_date ?? "",
-          end_date: run.end_date ?? "",
-          parameters: sweep.parameters,
-        },
-      },
-      {
-        onSuccess: () => toast.success("Validation launched"),
-        onError: () => toast.error("Failed to launch validation"),
-      },
-    );
-  }
-
   return (
     <Button
       variant="outline"
       size="sm"
       className="h-6 text-[10px]"
-      onClick={handleValidate}
-      disabled={mutation.isPending || !run}
+      onClick={onValidate}
+      disabled={isPending || disabled}
     >
-      {mutation.isPending ? "..." : "Validate"}
+      {isPending ? "..." : "Validate"}
     </Button>
   );
 }
@@ -147,14 +126,60 @@ function ValidateButton({
 export function SweepAnalysis({ runId }: SweepAnalysisProps) {
   const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId);
   const sweeps = query.data?.data as SweepResultResponse[] | undefined;
-  const runsQuery = useListRunsApiResultsRunsGet();
-  const run = (runsQuery.data?.data as RunListResponse | undefined)?.runs?.find((r: BacktestRunResponse) => r.id === runId);
+  const metaQuery = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
+  const run = metaQuery.data?.data as BacktestRunResponse | undefined;
 
   // Filter state
   const [minSharpe, setMinSharpe] = useState("");
   const [maxDrawdown, setMaxDrawdown] = useState("");
   const [paretoOnly, setParetoOnly] = useState(false);
   const [show3D, setShow3D] = useState(false);
+
+  // Lifted validation mutation state (Bug 3: survives filter changes)
+  const [pendingValidations, setPendingValidations] = useState<Set<number>>(new Set());
+  const mutation = useLaunchValidationApiBacktestValidationPost();
+
+  const handleValidate = useCallback(
+    (sweep: SweepResultResponse) => {
+      if (!run) {
+        toast.error("Run metadata not available");
+        return;
+      }
+      const sweepId = sweep.id;
+      setPendingValidations((prev) => new Set(prev).add(sweepId));
+      mutation.mutate(
+        {
+          data: {
+            strategy_id: run.strategy_id ?? 0,
+            symbols: run.symbols,
+            timeframe: run.timeframe ?? "",
+            start_date: run.start_date ?? "",
+            end_date: run.end_date ?? "",
+            parameters: sweep.parameters,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success("Validation launched");
+            setPendingValidations((prev) => {
+              const next = new Set(prev);
+              next.delete(sweepId);
+              return next;
+            });
+          },
+          onError: () => {
+            toast.error("Failed to launch validation");
+            setPendingValidations((prev) => {
+              const next = new Set(prev);
+              next.delete(sweepId);
+              return next;
+            });
+          },
+        },
+      );
+    },
+    [run, mutation],
+  );
 
   const chartData = useMemo(() => {
     if (!sweeps) return [];
@@ -181,7 +206,7 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
     return sweeps.filter((s) => {
       if (paretoOnly && !s.is_pareto_optimal) return false;
       if (minSharpe !== "" && (s.sharpe_ratio ?? 0) < Number(minSharpe)) return false;
-      if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown)) return false;
+      if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown) / 100) return false;
       return true;
     });
   }, [sweeps, paretoOnly, minSharpe, maxDrawdown]);
@@ -254,14 +279,17 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Max Drawdown</Label>
-            <Input
-              type="number"
-              step="0.01"
-              placeholder="e.g. 0.20"
-              value={maxDrawdown}
-              onChange={(e) => setMaxDrawdown(e.target.value)}
-              className="h-7 w-28 text-xs"
-            />
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                step="1"
+                placeholder="e.g. 20"
+                value={maxDrawdown}
+                onChange={(e) => setMaxDrawdown(e.target.value)}
+                className="h-7 w-28 text-xs"
+              />
+              <span className="text-xs text-muted-foreground">%</span>
+            </div>
           </div>
           <Label className="flex cursor-pointer items-center gap-2 text-xs">
             <input
@@ -351,7 +379,11 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <ValidateButton sweep={sweep} run={run} />
+                  <ValidateButton
+                    isPending={pendingValidations.has(sweep.id)}
+                    disabled={!run}
+                    onValidate={() => handleValidate(sweep)}
+                  />
                 </TableCell>
               </TableRow>
             ))}

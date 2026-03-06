@@ -106,7 +106,9 @@ function exportToCsv(trades: TradeResponse[], runId: number) {
   const link = document.createElement("a");
   link.href = url;
   link.download = `trades_run_${runId}.csv`;
+  document.body.appendChild(link);
   link.click();
+  document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
 

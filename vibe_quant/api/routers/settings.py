@@ -189,9 +189,22 @@ def _get_nt_version() -> str:
         return "not installed"
 
 
+_KNOWN_TABLES: frozenset[str] = frozenset({
+    "strategies",
+    "sizing_configs",
+    "risk_configs",
+    "backtest_runs",
+    "backtest_results",
+    "trades",
+    "sweep_results",
+    "background_jobs",
+    "consistency_checks",
+})
+
+
 def _get_table_counts(mgr: StateManager) -> dict[str, int]:
     cursor = mgr.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = [row[0] for row in cursor]
+    tables = [row[0] for row in cursor if row[0] in _KNOWN_TABLES]
     counts: dict[str, int] = {}
     for table in tables:
         count_cursor = mgr.conn.execute(f"SELECT COUNT(*) FROM [{table}]")  # noqa: S608

@@ -126,11 +126,12 @@ export function LiveDashboard() {
         if (msg.win_rate != null) setWinRate(Number(msg.win_rate));
         if (msg.max_drawdown != null) setDrawdown(Number(msg.max_drawdown));
 
-        // Add equity point
+        // Add equity point — prefer server timestamp over client clock
         const equity = Number(msg.equity ?? msg.account_equity ?? 0);
         if (equity > 0) {
+          const time = String(msg.timestamp ?? msg.ts ?? new Date().toISOString());
           setEquityHistory((prev) => {
-            const next = [...prev, { time: new Date().toISOString(), equity }];
+            const next = [...prev, { time, equity }];
             return next.length > MAX_EQUITY_POINTS ? next.slice(-MAX_EQUITY_POINTS) : next;
           });
         }

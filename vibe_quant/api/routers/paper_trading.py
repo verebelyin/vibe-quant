@@ -255,6 +255,6 @@ async def get_session(trader_id: str) -> CheckpointResponse | None:
                 halt_reason=node_status.get("halt_reason"),
                 error_message=node_status.get("error_message"),
             )
-    except (ImportError, Exception):
+    except ImportError:
         logger.debug("paper persistence not available for trader_id=%s", trader_id)
     return None

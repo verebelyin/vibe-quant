@@ -36,7 +36,7 @@ function paramValueCount(p: SweepParam): number {
       return 1;
     case "range": {
       if (p.rangeStep <= 0 || p.rangeMax < p.rangeMin) return 0;
-      return Math.floor((p.rangeMax - p.rangeMin) / p.rangeStep) + 1;
+      return Math.round((p.rangeMax - p.rangeMin) / p.rangeStep) + 1;
     }
     case "list": {
       const vals = p.listValues
@@ -58,7 +58,9 @@ export function expandParam(p: SweepParam): number[] {
     case "range": {
       if (p.rangeStep <= 0 || p.rangeMax < p.rangeMin) return [];
       const vals: number[] = [];
-      for (let v = p.rangeMin; v <= p.rangeMax; v += p.rangeStep) {
+      const count = Math.round((p.rangeMax - p.rangeMin) / p.rangeStep) + 1;
+      for (let i = 0; i < count; i++) {
+        const v = p.rangeMin + i * p.rangeStep;
         vals.push(v);
       }
       return vals;

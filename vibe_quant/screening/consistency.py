@@ -6,12 +6,15 @@ candidates that significantly degraded (execution-sensitive strategies).
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from vibe_quant.db.connection import DEFAULT_DB_PATH
+from vibe_quant.db.connection import DEFAULT_DB_PATH, get_connection
+
+if TYPE_CHECKING:
+    import sqlite3
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,34 +74,8 @@ class ConsistencyChecker:
     def conn(self) -> sqlite3.Connection:
         """Get database connection."""
         if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._ensure_tables()
+            self._conn = get_connection(self.db_path)
         return self._conn
-
-    def _ensure_tables(self) -> None:
-        """Create consistency_checks table if not exists."""
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS consistency_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_name TEXT NOT NULL,
-                screening_run_id INTEGER NOT NULL,
-                validation_run_id INTEGER NOT NULL,
-                screening_sharpe REAL NOT NULL,
-                validation_sharpe REAL NOT NULL,
-                sharpe_degradation REAL NOT NULL,
-                screening_return REAL NOT NULL,
-                validation_return REAL NOT NULL,
-                return_degradation REAL NOT NULL,
-                is_execution_sensitive INTEGER NOT NULL,
-                parameters TEXT NOT NULL,
-                checked_at TEXT NOT NULL
-            )
-        """)
-        self.conn.commit()
 
     def close(self) -> None:
         """Close database connection."""
