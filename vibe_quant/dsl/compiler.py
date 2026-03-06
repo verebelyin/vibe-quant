@@ -1042,14 +1042,17 @@ class StrategyCompiler:
             if info.spec.output_names != ("value",):
                 for output_name in info.spec.output_names:
                     attr = self._output_to_nt_attr(info.config.type, output_name)
-                    if info.config.type == "MACD" and output_name in ("signal", "histogram"):
+                    if (
+                        info.config.type == "MACD"
+                        and output_name in ("signal", "histogram")
+                        and not getattr(self, "_macd_fallback_warned", False)
+                    ):
                         logger.warning(
-                            "MACD %s output '%s' not available in NT — "
+                            "MACD signal/histogram not available in NT — "
                             "returns MACD line (.value) instead. "
                             "Use pandas-ta fallback for signal/histogram.",
-                            info.name,
-                            output_name,
                         )
+                        self._macd_fallback_warned = True
                     lines.append(f'    if name == "{info.name}_{output_name}":')
                     lines.append(f"        _v = {info.indicator_var}.{attr}")
                     lines.append("        return float(_v) if _v is not None else 0.0")

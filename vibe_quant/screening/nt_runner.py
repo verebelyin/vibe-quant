@@ -379,4 +379,55 @@ class NTScreeningRunner:
         # Screening mode doesn't model funding; set explicitly for DB storage
         metrics.total_funding = 0.0
 
+        # NT 1.222+ removed MaxDrawdown indicator, so stats may not contain it.
+        # Compute from trade PnLs as fallback (same approach as validation).
+        if metrics.max_drawdown == 0.0 and metrics.total_trades > 0:
+            metrics.max_drawdown = self._compute_max_drawdown(engine, start_time)
+
         return metrics
+
+    def _compute_max_drawdown(
+        self,
+        engine: object,
+        start_time: float,
+    ) -> float:
+        """Compute max drawdown from closed positions' realized PnL.
+
+        Reconstructs equity curve from cumulative PnL and finds the
+        maximum peak-to-trough decline as a fraction of peak equity.
+
+        Args:
+            engine: BacktestEngine after run.
+            start_time: Backtest start time (unused, kept for signature compat).
+
+        Returns:
+            Max drawdown as positive fraction (e.g. 0.12 for 12%).
+        """
+        try:
+            cache = engine.kernel.cache
+            all_positions = list(cache.positions()) + list(cache.position_snapshots())
+            closed = [p for p in all_positions if p.is_closed]
+            if not closed:
+                return 0.0
+
+            # Sort by close time for correct equity curve
+            closed.sort(key=lambda p: int(p.ts_closed))
+
+            # Use a default balance of 1000 (screening uses fixed balance)
+            equity = 1000.0
+            peak = equity
+            max_dd = 0.0
+
+            for pos in closed:
+                equity += float(pos.realized_pnl)
+                if equity > peak:
+                    peak = equity
+                if peak > 0:
+                    dd = (peak - equity) / peak
+                    if dd > max_dd:
+                        max_dd = dd
+
+            return max_dd
+        except Exception:
+            logger.warning("Could not compute max drawdown from positions", exc_info=True)
+            return 0.0

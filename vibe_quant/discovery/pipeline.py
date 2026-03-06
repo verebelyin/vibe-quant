@@ -366,8 +366,8 @@ class DiscoveryPipeline:
                 best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
                 entry_indicators,
                 exit_indicators,
-                best_chrom.stop_loss_pct * 100,
-                best_chrom.take_profit_pct * 100,
+                best_chrom.stop_loss_pct,
+                best_chrom.take_profit_pct,
                 best_fr.sharpe_ratio,
                 best_fr.profit_factor,
                 best_fr.max_drawdown * 100,
@@ -448,9 +448,16 @@ class DiscoveryPipeline:
             # Evolve next generation (skip on last iteration)
             population = self._evolve_generation(population, fitness_results)
 
-        # Select top-K
+        # Select top-K with deduplication by chromosome uid
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
-        top_strategies = all_scored[: cfg.top_k]
+        seen_uids: set[str] = set()
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]] = []
+        for chrom, fr in all_scored:
+            if chrom.uid not in seen_uids:
+                seen_uids.add(chrom.uid)
+                top_strategies.append((chrom, fr))
+                if len(top_strategies) >= cfg.top_k:
+                    break
         if last_fitness_results:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
@@ -509,8 +516,8 @@ class DiscoveryPipeline:
                     _dir,
                     entry,
                     exit_,
-                    chrom.stop_loss_pct * 100,
-                    chrom.take_profit_pct * 100,
+                    chrom.stop_loss_pct,
+                    chrom.take_profit_pct,
                 )
 
                 # Log entry/exit gene details (thresholds, params) for reproduceability

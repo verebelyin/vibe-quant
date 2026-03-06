@@ -346,11 +346,23 @@ def _evaluate_single(
         logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
         return _zero
 
+    import math as _math
+
     sharpe = float(bt["sharpe_ratio"])
     max_dd = float(bt["max_drawdown"])
     pf = float(bt["profit_factor"])
     trades = int(bt["total_trades"])
     total_return = float(bt.get("total_return", 0.0))
+
+    # Coerce NaN metrics to safe defaults (NT returns NaN for 0-trade strategies)
+    if _math.isnan(sharpe):
+        sharpe = 0.0
+    if _math.isnan(max_dd):
+        max_dd = 0.0
+    if _math.isnan(pf):
+        pf = 0.0
+    if _math.isnan(total_return):
+        total_return = 0.0
 
     # Sanity checks on backtest output — flag impossible metric combinations
     _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
