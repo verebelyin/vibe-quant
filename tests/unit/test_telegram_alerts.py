@@ -96,8 +96,8 @@ class TestDailySummary:
             unrealized_pnl=Decimal("50.50"),
             open_positions=2,
             trades_executed=5,
-            win_rate=60.0,
-            max_drawdown=2.5,
+            win_rate=0.60,
+            max_drawdown=0.025,
             total_fees=Decimal("1.25"),
         )
 

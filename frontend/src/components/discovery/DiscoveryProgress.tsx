@@ -10,7 +10,8 @@ import {
   YAxis,
 } from "recharts";
 import { Badge } from "@/components/ui/badge";
-import { useWebSocket, type WsMessage } from "@/hooks/useWebSocket";
+import { useDiscoveryWS } from "@/hooks/useDiscoveryWS";
+import type { WsMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
 
 interface GenerationData {
@@ -71,7 +72,7 @@ export function DiscoveryProgress({
   convergenceWindow = DEFAULT_CONVERGENCE_WINDOW,
   convergenceThreshold = DEFAULT_CONVERGENCE_THRESHOLD,
 }: DiscoveryProgressProps) {
-  const ws = useWebSocket("discovery");
+  const ws = useDiscoveryWS();
   const [history, setHistory] = useState<GenerationData[]>([]);
   const [bestStrategy, setBestStrategy] = useState<BestStrategy>({
     sharpe: null,
@@ -244,7 +245,7 @@ export function DiscoveryProgress({
                 bestStrategy.maxDrawdown != null ? `${bestStrategy.maxDrawdown.toFixed(1)}%` : "--"
               }
               positive={
-                bestStrategy.maxDrawdown != null ? bestStrategy.maxDrawdown >= 0 : undefined
+                bestStrategy.maxDrawdown != null ? bestStrategy.maxDrawdown < 20 : undefined
               }
             />
           </div>

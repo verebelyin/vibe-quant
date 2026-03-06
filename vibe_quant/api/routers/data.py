@@ -6,6 +6,7 @@ import contextlib
 import logging
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated
 
@@ -34,6 +35,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/data", tags=["data"])
 
 _INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+
+
+def _next_data_run_id() -> int:
+    """Generate a unique negative run_id for data jobs.
+
+    Uses negative timestamp-based IDs to avoid collision with positive
+    backtest run IDs. Microsecond precision prevents duplicates under
+    normal concurrency.
+    """
+    return -int(time.time() * 1_000_000)
 
 
 def _parse_interval_minutes(interval: str) -> int:
@@ -187,9 +198,8 @@ async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
         body.end_date,
     ]
 
-    # Use run_id=0 as sentinel for non-backtest jobs
     try:
-        pid = jobs.start_job(0, "data_ingest", command, log_file=log_file)
+        pid = jobs.start_job(_next_data_run_id(), "data_ingest", command, log_file=log_file)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -217,7 +227,7 @@ async def start_update(jobs: JobMgr) -> dict[str, object]:
     ]
 
     try:
-        pid = jobs.start_job(0, "data_update", command, log_file=log_file)
+        pid = jobs.start_job(_next_data_run_id(), "data_update", command, log_file=log_file)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -240,7 +250,7 @@ async def rebuild_catalog(jobs: JobMgr) -> dict[str, object]:
     ]
 
     try:
-        pid = jobs.start_job(0, "catalog_rebuild", command, log_file=log_file)
+        pid = jobs.start_job(_next_data_run_id(), "catalog_rebuild", command, log_file=log_file)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -457,6 +467,7 @@ async def compute_indicators_endpoint(
 @router.get("/quality/{symbol}", response_model=DataQualityResponse)
 async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
     ohlc_errors: list[OhlcError] = []
+    quality_error: str | None = None
     try:
         bars = catalog.get_bars(symbol, "1m")
         for bar in bars:
@@ -499,7 +510,18 @@ async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
                     )
                 )
     except Exception:
-        pass
+        logger.warning("data quality check failed for %s", symbol, exc_info=True)
+        quality_error = f"Quality check failed for {symbol}"
+
+    if quality_error:
+        return DataQualityResponse(
+            symbol=symbol,
+            gaps=[],
+            quality_score=None,
+            ohlc_errors=[],
+            ohlc_error_count=0,
+            error=quality_error,
+        )
 
     error_count = len(ohlc_errors)
     quality_score = max(0.0, 1.0 - min(1.0, error_count / 100.0)) if error_count > 0 else 1.0

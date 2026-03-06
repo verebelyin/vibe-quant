@@ -88,8 +88,8 @@ class DailySummary:
         unrealized_pnl: Unrealized P&L.
         open_positions: Number of open positions.
         trades_executed: Number of trades executed.
-        win_rate: Win rate percentage (0-100).
-        max_drawdown: Maximum drawdown percentage.
+        win_rate: Win rate as decimal fraction (0.55 = 55%).
+        max_drawdown: Maximum drawdown as decimal fraction (0.05 = 5%).
         total_fees: Total fees paid.
     """
 
@@ -122,8 +122,8 @@ class DailySummary:
             f"  Unrealized: {self.unrealized_pnl.quantize(q2)}\n"
             f"Positions: {self.open_positions}\n"
             f"Trades: {self.trades_executed}\n"
-            f"Win Rate: {self.win_rate:.1f}%\n"
-            f"Max DD: {self.max_drawdown:.2f}%\n"
+            f"Win Rate: {self.win_rate * 100:.1f}%\n"
+            f"Max DD: {self.max_drawdown * 100:.2f}%\n"
             f"Fees: {self.total_fees.quantize(q4)} USDT"
         )
 

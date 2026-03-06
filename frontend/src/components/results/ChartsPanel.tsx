@@ -53,7 +53,7 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
     return [
       { label: "Sharpe", value: summary.sharpe_ratio ?? 0, max: 4 },
       { label: "Sortino", value: summary.sortino_ratio ?? 0, max: 6 },
-      { label: "Win Rate", value: summary.win_rate ?? 0, max: 100 },
+      { label: "Win Rate", value: (summary.win_rate ?? 0) * 100, max: 100 },
       { label: "Profit Factor", value: summary.profit_factor ?? 0, max: 5 },
       { label: "Calmar", value: summary.calmar_ratio ?? 0, max: 5 },
       { label: "Return", value: Math.min(summary.total_return ?? 0, 200), max: 200 },

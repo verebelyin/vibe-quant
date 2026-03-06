@@ -23,7 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useWebSocket, type WsMessage } from "@/hooks/useWebSocket";
+import { useTradingWS } from "@/hooks/useTradingWS";
+import type { WsMessage } from "@/hooks/useWebSocket";
 import { cn } from "@/lib/utils";
 
 interface EquityPoint {
@@ -82,9 +83,9 @@ function EquityTooltip({
 }
 
 export function LiveDashboard() {
-  const ws = useWebSocket("trading");
+  const ws = useTradingWS();
   const [pnl, setPnl] = useState<number | null>(null);
-  const [prevPnl, setPrevPnl] = useState<number | null>(null);
+  const prevPnlRef = useRef<number | null>(null);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [winRate, setWinRate] = useState<number | null>(null);
   const [drawdown, setDrawdown] = useState<number | null>(null);
@@ -116,8 +117,10 @@ export function LiveDashboard() {
     (msg: WsMessage) => {
       if (msg.type === "pnl_update") {
         const newPnl = Number(msg.total_pnl ?? msg.pnl ?? 0);
-        setPrevPnl(pnl);
-        setPnl(newPnl);
+        setPnl((current) => {
+          prevPnlRef.current = current;
+          return newPnl;
+        });
 
         // Strategy metrics
         if (msg.win_rate != null) setWinRate(Number(msg.win_rate));
@@ -153,14 +156,16 @@ export function LiveDashboard() {
         queryClient.invalidateQueries({ queryKey: ["/api/paper/positions"] });
       }
     },
-    [pnl],
+    [],
   );
 
   useEffect(() => {
     if (ws.lastMessage) {
       handleMessage(ws.lastMessage);
     }
-  }, [ws.lastMessage, handleMessage]);
+    // handleMessage is stable (empty deps) so no need in dep array
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.lastMessage]);
 
   // Cleanup flash timers on unmount
   useEffect(() => {
@@ -171,7 +176,12 @@ export function LiveDashboard() {
     };
   }, []);
 
-  const pnlTrend = pnl != null && prevPnl != null ? (pnl >= prevPnl ? "up" : "down") : null;
+  const pnlTrend =
+    pnl != null && prevPnlRef.current != null
+      ? pnl >= prevPnlRef.current
+        ? "up"
+        : "down"
+      : null;
 
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">

@@ -42,7 +42,10 @@ function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpeP
   for (let i = window - 1; i < returns.length; i++) {
     const slice = returns.slice(i - window + 1, i + 1);
     const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
-    const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / slice.length;
+    const variance =
+      slice.length > 1
+        ? slice.reduce((a, b) => a + (b - mean) ** 2, 0) / (slice.length - 1)
+        : 0;
     const std = Math.sqrt(variance);
     const sharpe = std !== 0 ? (mean / std) * Math.sqrt(252) : 0;
     result.push({

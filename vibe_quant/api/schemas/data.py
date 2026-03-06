@@ -74,6 +74,7 @@ class OhlcError(BaseModel):
 class DataQualityResponse(BaseModel):
     symbol: str
     gaps: list[dict[str, object]]
-    quality_score: float
+    quality_score: float | None
     ohlc_errors: list[OhlcError] = []
     ohlc_error_count: int = 0
+    error: str | None = None

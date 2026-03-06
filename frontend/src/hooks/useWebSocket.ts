@@ -94,6 +94,7 @@ export function useWebSocket(channel: string): UseWebSocketReturn {
 
     return () => {
       unmountedRef.current = true;
+      retryRef.current = 0;
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -140,8 +141,9 @@ async def launch_discovery(
     log_file = f"logs/discovery_{run_id}.log"
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
-    start_date = body.start_date or "2024-01-01"
-    end_date = body.end_date or "2026-02-24"
+    today = datetime.now()
+    start_date = body.start_date or (today - timedelta(days=365)).strftime("%Y-%m-%d")
+    end_date = body.end_date or today.strftime("%Y-%m-%d")
     command = [
         sys.executable,
         "-m",
