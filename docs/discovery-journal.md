@@ -4,6 +4,108 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-06: Batch 8 — Novel Indicators: STOCH, WILLR, ROC, MACD (Post-Bugfix)
+
+### Goal
+Test indicators never seriously tried on 4h: STOCH, WILLR, ROC, MACD (post-bugfix). Validate new rich logging system. Compare with CCI-dominant champions from Batch 7.
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Direction | Time |
+|-----|-----------|-----|------|----|-----------|------|
+| 142 | STOCH+WILLR | 12 | 5 | 4h | both | 1551s (25.9 min) |
+| 143 | ROC+STOCH | 12 | 5 | 4h | both | 998s (16.6 min) |
+| 144 | MACD+WILLR | 12 | 5 | 4h | both | 1460s (24.3 min) |
+
+Runs executed in parallel (3 concurrent), sequential mode (macOS sandbox, ProcessPoolExecutor blocked).
+Per-chromosome: 16-26s avg depending on CPU contention.
+
+### Full Pipeline Results
+
+| Stage | Run 142 STOCH+WILLR | Run 143 ROC+STOCH | Run 144 MACD+WILLR |
+|-------|----|----|------|
+| **Discovery** score | 0.5259 | 0.5565 | 0.5758 |
+| **Discovery** sharpe | 1.69 | 1.67 | 1.95 |
+| **Screening** sharpe | 1.69 ✓ | 1.67 ✓ | 1.95 ✓ |
+| **Screening** trades | 76 ✓ | 312 ✓ | 114 ✓ |
+| **Screening** return | +9.1% ✓ | +7.2% ✓ | +26.3% ✓ |
+| **Screening** dd | 0.0% ⚠️ | 0.0% ⚠️ | 0.0% ⚠️ |
+| **Validation** sharpe | 1.81 | 1.56 | 1.87 |
+| **Validation** return | +10.6% | +5.9% | +24.4% |
+| **Validation** dd | 13.4% | 8.0% | 25.6% |
+| **Validation** trades | 76 | 311 | 115 |
+| **Validation** PF | 1.40 | 1.33 | 1.35 |
+| **Validation** win rate | 35.5% | 66.9% | 24.3% |
+| **Validation** fees | $28.76 | $82.55 | $70.12 |
+| **Validation** latency | retail (200ms) | retail (200ms) | retail (200ms) |
+
+### Winning Strategies (Gene Details from Logs)
+
+**Run 142 winner (genome_75f34d645f85):**
+- Entry: STOCH(k=10, d=4) < 45.37, WILLR(30) <= -21.47, WILLR(14) >= -54.73
+- Exit: STOCH(k=18, d=7) crosses_above 20.54
+- SL=1.2%, TP=3.9% (per-direction: SL_long=5.9%, SL_short=2.1%, TP_long=10.8%, TP_short=7.3%)
+
+**Run 143 winner (genome_3c20746fc88f):**
+- Entry: STOCH(k=11, d=3) crosses_below 23.84
+- Exit: STOCH(k=8, d=4) crosses_above 28.42
+- SL=2.0%, TP=8.9% (simplest genome — 1 entry + 1 exit gene)
+
+**Run 144 winner (genome_3f1890f0b082):**
+- Entry: MACD(11/23/11) > -0.0006
+- Exit: WILLR(19) > -46.55 AND WILLR(16) < -64.11
+- SL=6.8%, TP=1.9% (unusual: tight TP, wide SL)
+
+### Bugs Found
+
+**BUG: Screening reports max_drawdown=0.0% for all strategies.** Validation shows 8-26% drawdown for the same strategies. Discovery also reports 0.0% in logs (`dd=0.0%`). This is likely a bug in the NTScreeningRunner's drawdown extraction — needs investigation. The drawdown component (25% weight) in fitness scoring is effectively disabled.
+
+**MACD histogram fallback (run 149):** `MACD macd_entry_0 output 'histogram' not available in NT — returns MACD line (.value) instead.` MACD strategies are not testing what they think they're testing.
+
+**NaN metrics from zero-trade strategies:** 5/12 chromosomes in ROC+STOCH Gen 1 produced 0 trades with NaN sharpe/PF. Sanity checks caught these correctly. These indicators have narrow effective threshold ranges — many random chromosomes generate no signals.
+
+### New Logging System Observations
+
+The enhanced logging worked exactly as intended:
+- **Environment section** showed PID, compiler version, data catalog sizes — useful for reproducibility
+- **Per-gen analytics** showed score distributions (mean/median/std), zero-score counts, indicator frequency %
+- **Sanity checks** caught NaN metrics and suspicious high-Sharpe-low-trade cases
+- **Score decomposition** (raw - complexity - overtrade = adjusted) visible per gen
+- **Evolution timeline** (e.g., `0.556 → 0.570 → 0.570 → 0.570 → 0.576`) shows where improvement happened
+- **Gene details** in final summary allow exact strategy reproduction from logs alone
+- **Delta tracking** (Δbest=+0.0327) shows improvement rate per generation
+
+### Comparison with Batch 7 (CCI Champions)
+
+| Metric | Batch 7 Best (Run 128) | Batch 8 Best (Run 144) |
+|--------|----------------------|----------------------|
+| Discovery score | 0.8499 | 0.5758 |
+| Validation sharpe | 7.24 | 1.87 |
+| Validation return | +11.9% | +24.4% |
+| Validation dd | 0.9% | 25.6% |
+| Validation PF | 4.78 | 1.35 |
+| Indicators | CCI+RSI | MACD+WILLR |
+
+**CCI remains king by a wide margin.** STOCH/WILLR/ROC/MACD strategies produce mediocre Sharpe (1.5-1.9) and significant drawdown (8-26%). CCI strategies achieve Sharpe 5-7 with <5% drawdown.
+
+### Key Findings
+
+1. **CCI dominance confirmed**: Novel indicators (STOCH, WILLR, ROC, MACD) underperform CCI by 3-5x on Sharpe
+2. **Drawdown bug discovered**: Screening/discovery report 0.0% drawdown — fitness function's 25% DD weight is broken
+3. **STOCH convergence problem**: GA converges to single genome rapidly (all top-5 identical), suggests narrow fitness landscape
+4. **ROC produces many zero-trade strategies**: 5/12 (42%) in Gen 1 — threshold ranges may need tuning
+5. **MACD needs pandas-ta fallback**: NT built-in only exposes main line, signal/histogram silently degraded
+6. **Run timing**: 3 concurrent 4h runs take 17-26 min each due to CPU contention (9 min sequential estimate was for single run)
+
+### Recommendations
+
+1. **CRITICAL: Fix drawdown bug** — max_drawdown=0.0 in screening/discovery is clearly wrong. This affects all historical fitness scores
+2. **Investigate CCI magic**: Why does CCI so dramatically outperform? Threshold range [-200, 200] gives wider signal space?
+3. **Tune ROC/WILLR threshold ranges**: High zero-trade rate indicates ranges too narrow/wide for these indicators
+4. **Force pandas-ta for MACD**: Until NT exposes signal/histogram, MACD results are unreliable
+5. **Increase population for novel indicators**: 12 is too small for STOCH/WILLR — narrow fitness landscape needs more exploration
+
+---
+
 ## 2026-03-06: Batch 7 — Record-Breaking Discovery, Sharpe 7.24 Validated
 
 ### Goal
