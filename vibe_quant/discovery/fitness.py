@@ -352,6 +352,9 @@ def _evaluate_single(
     trades = int(bt["total_trades"])
     total_return = float(bt.get("total_return", 0.0))
 
+    # Sanity checks on backtest output — flag impossible metric combinations
+    _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
+
     num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
     complexity_pen = compute_complexity_penalty(num_genes)
     overtrade_pen = compute_overtrade_penalty(trades)
@@ -366,6 +369,15 @@ def _evaluate_single(
     # Apply minimum trade filter + all penalties
     adjusted = 0.0 if trades < MIN_TRADES else max(0.0, raw - complexity_pen - overtrade_pen)
 
+    # Log score decomposition for debugging fitness calculation correctness
+    if adjusted > 0:
+        logger.debug(
+            "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f = adjusted=%.4f "
+            "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d)",
+            chrom.uid, raw, complexity_pen, overtrade_pen, adjusted,
+            sharpe, max_dd, pf, total_return, trades, num_genes,
+        )
+
     return FitnessResult(
         sharpe_ratio=sharpe,
         max_drawdown=max_dd,
@@ -379,6 +391,54 @@ def _evaluate_single(
         passed_filters=passed_filters,
         filter_results=filter_results,
     )
+
+
+def _sanity_check_metrics(
+    uid: str,
+    sharpe: float,
+    max_dd: float,
+    pf: float,
+    trades: int,
+    total_return: float,
+) -> None:
+    """Log warnings for impossible or suspicious metric combinations.
+
+    These indicate potential bugs in the backtesting engine or data issues,
+    not just bad strategies.
+    """
+    issues: list[str] = []
+
+    # Drawdown must be in [0, 1]
+    if max_dd < 0:
+        issues.append(f"negative max_drawdown={max_dd:.4f}")
+    if max_dd > 1.0:
+        issues.append(f"max_drawdown={max_dd:.4f} > 1.0")
+
+    # Profit factor must be non-negative
+    if pf < 0:
+        issues.append(f"negative profit_factor={pf:.4f}")
+
+    # Zero trades but non-zero metrics
+    if trades == 0:
+        if sharpe != 0 and sharpe != float("-inf"):
+            issues.append(f"0 trades but sharpe={sharpe:.4f}")
+        if total_return != 0:
+            issues.append(f"0 trades but return={total_return:.4f}")
+        if pf != 0:
+            issues.append(f"0 trades but pf={pf:.4f}")
+
+    # Positive return with profit_factor < 1 (or vice versa) — plausible but suspicious
+    if trades > 10 and total_return > 0.1 and pf < 0.8:
+        issues.append(f"return={total_return:.2f} but pf={pf:.2f} (suspicious mismatch)")
+    if trades > 10 and total_return < -0.1 and pf > 1.5:
+        issues.append(f"return={total_return:.2f} but pf={pf:.2f} (suspicious mismatch)")
+
+    # Extremely high Sharpe with very few trades — likely noise
+    if trades < 30 and sharpe > 5.0:
+        issues.append(f"sharpe={sharpe:.2f} with only {trades} trades (likely noise)")
+
+    if issues:
+        logger.warning("SANITY %s: %s", uid, "; ".join(issues))
 
 
 _parallel_broken: bool = False

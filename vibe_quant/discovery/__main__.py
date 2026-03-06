@@ -117,6 +117,41 @@ def _make_nt_backtest_fn(
     return _NTBacktestFn(symbols, timeframe, start_date, end_date)
 
 
+def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
+    """Log data catalog details: available symbols, bar counts, date ranges."""
+    try:
+        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
+
+        bar_dir = DEFAULT_CATALOG_PATH / "data" / "bar"
+        if not bar_dir.exists():
+            logger.info("Data catalog: no bar directory at %s", bar_dir)
+            return
+
+        for sym in symbols:
+            instrument_id = f"{sym}-PERP.BINANCE"
+            found_dirs = [
+                d.name for d in bar_dir.iterdir()
+                if d.is_dir() and instrument_id in d.name
+            ]
+            if found_dirs:
+                # Count parquet files to estimate data volume
+                for dname in found_dirs:
+                    dpath = bar_dir / dname
+                    parquet_files = list(dpath.glob("*.parquet"))
+                    total_size = sum(f.stat().st_size for f in parquet_files)
+                    logger.info(
+                        "Data catalog: %s → %s (%d files, %.1f MB)",
+                        sym,
+                        dname,
+                        len(parquet_files),
+                        total_size / (1024 * 1024),
+                    )
+            else:
+                logger.warning("Data catalog: %s NOT FOUND in catalog", sym)
+    except Exception:
+        logger.debug("Could not read data catalog info", exc_info=True)
+
+
 def _check_data_available(symbols: list[str]) -> bool:
     """Check if ParquetDataCatalog has data for the given symbols."""
     try:
@@ -234,6 +269,19 @@ def main() -> int:
             indicator_pool=ind_pool,
             direction=args.direction,
         )
+
+        # Log environment details for debugging and journal entries
+        logger.info(
+            "Environment: run_id=%d pid=%d compiler_version=%s",
+            args.run_id,
+            __import__("os").getpid(),
+            _get_compiler_version(),
+        )
+        logger.info(
+            "Data range: %s to %s | symbols=%s | timeframe=%s",
+            args.start_date, args.end_date, symbols, args.timeframe,
+        )
+        _log_data_catalog_info(symbols, args.timeframe)
 
         # Choose backtest function: real NT if data available, else mock
         use_mock = args.mock or not _check_data_available(symbols)

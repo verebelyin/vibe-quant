@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import random
+import statistics
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -300,50 +302,114 @@ class DiscoveryPipeline:
             best_trades = best_fr.total_trades
             best_return = best_fr.total_return
 
-            # Population diversity: score spread and direction distribution
+            # === Population analytics ===
+
+            # Score distribution
             score_std = (sum((s - gen_result.mean_fitness) ** 2 for s in scores) / len(scores)) ** 0.5
-            unique_indicators = {g.indicator_type for c in population for g in c.entry_genes + c.exit_genes}
-            dir_counts = {}
+            nonzero_scores = [s for s in scores if s > 0]
+            zero_count = len(scores) - len(nonzero_scores)
+            median_score = statistics.median(scores) if scores else 0.0
+
+            # Metric distributions across population (for correctness checks)
+            all_sharpes = [fr.sharpe_ratio for fr in fitness_results if fr.total_trades > 0]
+            all_trades = [fr.total_trades for fr in fitness_results if fr.total_trades > 0]
+            all_returns = [fr.total_return for fr in fitness_results if fr.total_trades > 0]
+            all_dds = [fr.max_drawdown for fr in fitness_results if fr.total_trades > 0]
+
+            # Indicator frequency across population
+            ind_counter: Counter[str] = Counter()
+            for c in population:
+                for g in c.entry_genes + c.exit_genes:
+                    ind_counter[g.indicator_type] += 1
+            total_genes = sum(ind_counter.values()) or 1
+            ind_pcts = {k: f"{v/total_genes*100:.0f}%" for k, v in ind_counter.most_common()}
+
+            # Direction distribution
+            dir_counts: dict[str, int] = {}
             for c in population:
                 d = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
                 dir_counts[d] = dir_counts.get(d, 0) + 1
 
+            # Gen-over-gen improvement tracking
+            if gen > 0:
+                prev_best = generation_results[-2].best_fitness
+                improvement = gen_result.best_fitness - prev_best
+                improvement_str = f" Δbest={improvement:+.4f}" if improvement != 0 else " (no change)"
+            else:
+                improvement_str = " (initial)"
+
             logger.info(
-                "=== GEN %d/%d === best=%.4f mean=%.4f std=%.4f passed=%d | "
-                "trades=%d return=%.1f%% sharpe=%.2f pf=%.2f dd=%.1f%% | "
-                "gen_time=%.1fs total=%.0fs ETA=%.0fs",
+                "=== GEN %d/%d === best=%.4f mean=%.4f median=%.4f std=%.4f | "
+                "zero_score=%d/%d | gen_time=%.1fs total=%.0fs ETA=%.0fs%s",
                 gen + 1,
                 cfg.max_generations,
                 gen_result.best_fitness,
                 gen_result.mean_fitness,
+                median_score,
                 score_std,
-                gen_result.num_passed_filters,
-                best_trades,
-                best_return * 100,
-                best_fr.sharpe_ratio,
-                best_fr.profit_factor,
-                best_fr.max_drawdown * 100,
+                zero_count,
+                len(scores),
                 gen_elapsed,
                 total_elapsed,
                 eta_seconds,
+                improvement_str,
             )
-            # Best chromosome details
+
+            # Best chromosome details with full metrics
             best_chrom = population[best_idx]
             entry_indicators = [g.indicator_type for g in best_chrom.entry_genes]
             exit_indicators = [g.indicator_type for g in best_chrom.exit_genes]
             logger.info(
-                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
+                "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
                 best_chrom.uid,
                 best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
                 entry_indicators,
                 exit_indicators,
                 best_chrom.stop_loss_pct * 100,
                 best_chrom.take_profit_pct * 100,
+                best_fr.sharpe_ratio,
+                best_fr.profit_factor,
+                best_fr.max_drawdown * 100,
+                best_fr.total_return * 100,
+                best_fr.total_trades,
             )
+
+            # Score decomposition for best (helps verify fitness calc)
+            logger.info(
+                "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
+                best_fr.raw_score,
+                best_fr.complexity_penalty,
+                best_fr.overtrade_penalty,
+                best_fr.adjusted_score,
+            )
+
+            # Population distributions
+            if all_sharpes:
+                logger.info(
+                    "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "
+                    "trades=[%d, %d, %d] dd=[%.1f%%, %.1f%%, %.1f%%] return=[%.1f%%, %.1f%%, %.1f%%]",
+                    len(all_sharpes),
+                    min(all_sharpes), statistics.median(all_sharpes), max(all_sharpes),
+                    min(all_trades), int(statistics.median(all_trades)), max(all_trades),
+                    min(all_dds) * 100, statistics.median(all_dds) * 100, max(all_dds) * 100,
+                    min(all_returns) * 100, statistics.median(all_returns) * 100, max(all_returns) * 100,
+                )
+
+            # Diversity metrics
             logger.info(
                 "  Diversity: indicators=%s directions=%s",
-                sorted(unique_indicators),
+                ind_pcts,
                 dir_counts,
+            )
+
+            # Backtest timing stats (from gen_elapsed and pop size)
+            avg_bt_time = gen_elapsed / len(population) if population else 0
+            logger.info(
+                "  Timing: %.1fs/chromosome avg (%.1fs total for %d chromosomes)",
+                avg_bt_time,
+                gen_elapsed,
+                len(population),
             )
 
             self._write_progress(
@@ -396,35 +462,78 @@ class DiscoveryPipeline:
 
         # Final summary
         total_time = time.monotonic() - pipeline_start
-        if top_strategies:
-            best_chrom, best_fit = top_strategies[0]
-            best_entry = [g.indicator_type for g in best_chrom.entry_genes]
-            best_exit = [g.indicator_type for g in best_chrom.exit_genes]
+        avg_gen_time = total_time / len(generation_results) if generation_results else 0
+
+        logger.info(
+            "=== DISCOVERY COMPLETE: %.0fs total (%.1fs/gen avg) | %d gens | %d evaluated | converged=%s ===",
+            total_time,
+            avg_gen_time,
+            len(generation_results),
+            total_evaluated,
+            converged,
+        )
+
+        # Evolution timeline: how best score progressed across generations
+        if generation_results:
+            timeline = " → ".join(f"{gr.best_fitness:.3f}" for gr in generation_results)
+            logger.info("  Evolution: %s", timeline)
+
+            # Find which generation found the overall best
+            best_gen_idx = max(range(len(generation_results)), key=lambda i: generation_results[i].best_fitness)
             logger.info(
-                "=== DISCOVERY COMPLETE: %.0fs total | %d gens | %d evaluated | converged=%s ===",
-                total_time,
+                "  Peak gen: %d/%d (score=%.4f, %s of total time)",
+                best_gen_idx + 1,
                 len(generation_results),
-                total_evaluated,
-                converged,
+                generation_results[best_gen_idx].best_fitness,
+                f"{(best_gen_idx + 1) / len(generation_results) * 100:.0f}%",
             )
-            logger.info(
-                "  Winner: score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
-                best_fit.adjusted_score,
-                best_fit.sharpe_ratio,
-                best_fit.profit_factor,
-                best_fit.max_drawdown * 100,
-                best_fit.total_return * 100,
-                best_fit.total_trades,
-            )
-            logger.info(
-                "  Winner genome: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
-                best_chrom.uid,
-                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
-                best_entry,
-                best_exit,
-                best_chrom.stop_loss_pct * 100,
-                best_chrom.take_profit_pct * 100,
-            )
+
+        # Top-K strategy details (not just winner)
+        if top_strategies:
+            logger.info("  --- Top %d strategies ---", len(top_strategies))
+            for rank, (chrom, fit) in enumerate(top_strategies, 1):
+                entry = [g.indicator_type for g in chrom.entry_genes]
+                exit_ = [g.indicator_type for g in chrom.exit_genes]
+                _dir = chrom.direction.value if hasattr(chrom.direction, "value") else chrom.direction
+                logger.info(
+                    "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
+                    "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                    rank,
+                    chrom.uid,
+                    fit.adjusted_score,
+                    fit.sharpe_ratio,
+                    fit.profit_factor,
+                    fit.max_drawdown * 100,
+                    fit.total_return * 100,
+                    fit.total_trades,
+                    _dir,
+                    entry,
+                    exit_,
+                    chrom.stop_loss_pct * 100,
+                    chrom.take_profit_pct * 100,
+                )
+
+                # Log entry/exit gene details (thresholds, params) for reproduceability
+                for i, gene in enumerate(chrom.entry_genes):
+                    logger.info(
+                        "    entry[%d]: %s(%s) %s %.4f%s",
+                        i,
+                        gene.indicator_type,
+                        ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
+                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
+                        gene.threshold,
+                        f" sub={gene.sub_value}" if gene.sub_value else "",
+                    )
+                for i, gene in enumerate(chrom.exit_genes):
+                    logger.info(
+                        "    exit[%d]: %s(%s) %s %.4f%s",
+                        i,
+                        gene.indicator_type,
+                        ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
+                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
+                        gene.threshold,
+                        f" sub={gene.sub_value}" if gene.sub_value else "",
+                    )
 
         return DiscoveryResult(
             generations=generation_results,
