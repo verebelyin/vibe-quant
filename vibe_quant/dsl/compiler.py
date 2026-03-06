@@ -1225,14 +1225,14 @@ class StrategyCompiler:
                     ]
                 )
             elif config.type == "MFI":
-                # MFI needs high, low, close, volume
+                # MFI needs high, low, close, volume (cast to float to avoid FutureWarning)
                 period = config.period or spec.default_params.get("period", 14)
                 lines.extend(
                     [
-                        "        _high = pd.Series(self._pta_high)",
-                        "        _low = pd.Series(self._pta_low)",
-                        "        _close = pd.Series(self._pta_close)",
-                        "        _vol = pd.Series(self._pta_volume)",
+                        "        _high = pd.Series(self._pta_high, dtype=float)",
+                        "        _low = pd.Series(self._pta_low, dtype=float)",
+                        "        _close = pd.Series(self._pta_close, dtype=float)",
+                        "        _vol = pd.Series(self._pta_volume, dtype=float)",
                         f"        _result = ta.mfi(_high, _low, _close, _vol, length={period})",
                         "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',

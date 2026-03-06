@@ -4,6 +4,107 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-06: Batch 9 — MFI Debut + Expanded Indicator Combos (Post DD-Fix)
+
+### Goal
+Test MFI (Money Flow Index, new indicator) in various combinations. Also test WILLR+ROC and CCI+STOCH without CCI dominance. Validate that the drawdown fix from Batch 8 bugs works. Run 6 discoveries total (3 from prev session + 3 new), validate top 4 winners.
+
+### Bug Fixes Applied Before This Batch
+- **Drawdown=0.0 fix**: `_compute_max_drawdown()` fallback added to `nt_runner.py` (same pattern as validation)
+- **MFI compiler OHLCV fix**: MFI needs high/low/close/volume; generic handler only passed close
+- **MFI FutureWarning fix**: Added `dtype=float` to Series construction to suppress pandas dtype spam
+- **MACD warning cache**: Single warning instead of per-bar spam
+- **NaN fitness coercion**: NaN metrics → 0.0 before fitness scoring
+- **SL/TP display**: Removed erroneous `*100` (values already percentages)
+- **Top-K deduplication**: uid-based dedup prevents clones in results
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 154 | CCI+ROC | 10 | 6 | 4h | ~27min | Completed (prev session) |
+| 157 | CCI+STOCH | 10 | 6 | 4h | ~28min | Completed (prev session) |
+| 162 | MFI+CCI+ROC | 10 | 6 | 4h | ~14min | Completed (prev session, parallel) |
+| 185 | WILLR+ROC | 10 | 6 | 4h | 29min | Completed |
+| 186 | MFI+CCI | 10 | 6 | 4h | 39min | Completed |
+| 187 | MFI+WILLR | 10 | 6 | 4h | 52min | Completed |
+
+MFI runs ~2x slower than non-MFI (pandas-ta fallback vs Rust-native). 3 concurrent sequential runs.
+
+### Full Pipeline Results
+
+| Stage | Run 154 CCI+ROC | Run 157 CCI+STOCH | Run 185 WILLR+ROC | Run 186 MFI+CCI | Run 187 MFI+WILLR |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | 0.4788 | 0.4788 | 0.3330 | 0.4574 | **0.6493** |
+| **Discovery** sharpe | 1.96 | ~0.48 | -0.25 | 0.83 | **2.73** |
+| **Discovery** dd | 14.6% | ? | 20.0% | 12.7% | **5.9%** |
+| **Discovery** guardrails | ? | ? | FAIL (all DSR p=1.0) | 5/5 pass | **5/5 pass** |
+| **Validation** sharpe | **2.04** | **2.05** | skipped | 0.86 | **2.45** |
+| **Validation** return | +16.4% | +13.9% | skipped | -1.4% | **+17.4%** |
+| **Validation** dd | 14.5% | 8.2% | skipped | 12.4% | **5.9%** |
+| **Validation** trades | 87 | 105 | skipped | 209 | **98** |
+| **Validation** PF | 1.93 | 1.47 | skipped | 1.14 | **1.73** |
+| **Validation** win rate | 6/81 | 38.1% | skipped | 48.8% | **38.8%** |
+| **Validation** fees | $47.16 | $57.78 | skipped | $106.28 | **$53.68** |
+
+### Winning Strategies
+
+**Run 187 winner (genome_95270c8141bd) — BEST OF BATCH:**
+- Direction: LONG only
+- Entry: MFI(29) crosses_above 50.20
+- Exit: WILLR(25) < -41.87
+- SL=1.7%, TP=17.8%
+- Validation: Sharpe=2.45, Return=+17.4%, DD=5.9%, 98 trades, PF=1.73
+- DSR p=0.0000 (highly significant)
+
+**Run 154 winner (genome_17cd89664cd9):**
+- Direction: SHORT only
+- Entry: CCI(12) < -66.13 AND CCI(24) crosses_below -80.58
+- Exit: CCI(12) crosses_below 63.30 AND ROC(15) <= -4.78
+- SL=0.59%, TP=15.35%
+- Validation: Sharpe=2.04, Return=+16.4%, DD=14.5%, 87 trades, PF=1.93
+
+**Run 157 winner (genome_cb22c7229fdc):**
+- Direction: LONG+SHORT
+- Entry: CCI(26)+STOCH(k=22,d=6)
+- SL=3.28%, TP=15.64%
+- Validation: Sharpe=2.05, Return=+13.9%, DD=8.2%, 105 trades, PF=1.47
+
+### Issues Found
+
+1. **MFI FutureWarning spam**: pandas-ta MFI generates ~25-48M lines of dtype warnings per run. Fixed by adding `dtype=float` to Series construction.
+2. **WILLR+ROC all failed guardrails**: All top-5 had negative Sharpe (-0.25), DSR p=1.0. WILLR+ROC without CCI produces poor strategies on 4h BTCUSDT.
+3. **MFI runs 2x slower**: pandas-ta fallback (~8-16min/gen vs 4-6min/gen for Rust-native indicators).
+4. **CLI discoveries don't appear in UI Discovery Results**: Runs launched via `python -m vibe_quant.discovery` don't register in the API's job tracking — only `/api/discovery/launch` runs show. Validation results DO appear in Results Analysis.
+
+### Key Findings
+
+1. **MFI is a strong new indicator**: MFI+WILLR produced the best strategy of this batch (Sharpe 2.45 validated). MFI crosses_above 50 as a momentum entry works well.
+2. **Drawdown fix confirmed working**: DD values now correctly populated (5.9%-14.5% range, vs 0.0% in Batch 8).
+3. **CCI still competitive but not dominant**: CCI+ROC and CCI+STOCH produce good results (Sharpe 2.0+) but MFI+WILLR beats them.
+4. **WILLR+ROC without CCI is poor**: Negative Sharpe, all failed guardrails. These indicators need CCI to anchor signals.
+5. **Long strategies emerge**: Best strategy is LONG-only (MFI+WILLR). Previous batches were short-dominated.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 7 Best (CCI+RSI) | Batch 8 Best (MACD+WILLR) | Batch 9 Best (MFI+WILLR) |
+|--------|----------------------|----------------------|----------------------|
+| Validation Sharpe | 7.24 | 1.87 | 2.45 |
+| Validation Return | +11.9% | +24.4% | +17.4% |
+| Validation DD | 0.9% | 25.6% | 5.9% |
+| Validation PF | 4.78 | 1.35 | 1.73 |
+| Direction | both | both | long |
+
+Batch 7's CCI+RSI remains the all-time champion (Sharpe 7.24), but Batch 9's MFI+WILLR is the best non-CCI strategy found so far and has excellent risk-adjusted returns (low DD, decent PF).
+
+### Recommendations
+
+1. **Try MFI+CCI combination**: MFI shows promise; combining with CCI could produce even better results
+2. **Try MFI on 1h timeframe**: MFI is volume-based — shorter timeframes may give more signals
+3. **Suppress pandas-ta warnings globally**: The `dtype=float` fix helps but ideally suppress all FutureWarning in generated strategies
+4. **Fix CLI↔UI disconnect**: Discovery runs from CLI should appear in the Discovery Results UI
+
+---
+
 ## 2026-03-06: Batch 8 — Novel Indicators: STOCH, WILLR, ROC, MACD (Post-Bugfix)
 
 ### Goal
