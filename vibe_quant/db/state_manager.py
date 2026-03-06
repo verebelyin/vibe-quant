@@ -120,6 +120,7 @@ class StateManager:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -157,13 +158,14 @@ class StateManager:
         Returns:
             ID of created strategy.
         """
-        cursor = self.conn.execute(
-            """INSERT INTO strategies (name, dsl_config, description, strategy_type)
-               VALUES (?, ?, ?, ?)""",
-            (name, json.dumps(dsl_config), description, strategy_type),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO strategies (name, dsl_config, description, strategy_type)
+                   VALUES (?, ?, ?, ?)""",
+                (name, json.dumps(dsl_config), description, strategy_type),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_strategy(self, strategy_id: int) -> JsonDict | None:
         """Get strategy by ID.
@@ -224,6 +226,7 @@ class StateManager:
     def update_strategy(
         self,
         strategy_id: int,
+        name: str | None = None,
         dsl_config: JsonDict | None = None,
         description: str | None = None,
         is_active: bool | None = None,
@@ -232,12 +235,17 @@ class StateManager:
 
         Args:
             strategy_id: Strategy ID.
+            name: New name (optional).
             dsl_config: New DSL config (optional).
             description: New description (optional).
             is_active: New active status (optional).
         """
         updates = ["updated_at = datetime('now')"]
         params: list[Any] = []
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
 
         if dsl_config is not None:
             updates.append("dsl_config = ?")
@@ -253,8 +261,9 @@ class StateManager:
             params.append(is_active)
 
         params.append(strategy_id)
-        self.conn.execute(f"UPDATE strategies SET {', '.join(updates)} WHERE id = ?", params)
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(f"UPDATE strategies SET {', '.join(updates)} WHERE id = ?", params)
+            self.conn.commit()
 
     # --- Sizing Config CRUD ---
 
@@ -269,12 +278,13 @@ class StateManager:
         Returns:
             ID of created config.
         """
-        cursor = self.conn.execute(
-            "INSERT INTO sizing_configs (name, method, config) VALUES (?, ?, ?)",
-            (name, method, json.dumps(config)),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                "INSERT INTO sizing_configs (name, method, config) VALUES (?, ?, ?)",
+                (name, method, json.dumps(config)),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_sizing_config(self, config_id: int) -> JsonDict | None:
         """Get sizing config by ID."""
@@ -300,16 +310,18 @@ class StateManager:
         self, config_id: int, name: str, method: str, config: JsonDict
     ) -> None:
         """Update an existing sizing configuration."""
-        self.conn.execute(
-            "UPDATE sizing_configs SET name = ?, method = ?, config = ? WHERE id = ?",
-            (name, method, json.dumps(config), config_id),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE sizing_configs SET name = ?, method = ?, config = ? WHERE id = ?",
+                (name, method, json.dumps(config), config_id),
+            )
+            self.conn.commit()
 
     def delete_sizing_config(self, config_id: int) -> None:
         """Delete a sizing configuration by ID."""
-        self.conn.execute("DELETE FROM sizing_configs WHERE id = ?", (config_id,))
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("DELETE FROM sizing_configs WHERE id = ?", (config_id,))
+            self.conn.commit()
 
     # --- Risk Config CRUD ---
 
@@ -326,13 +338,14 @@ class StateManager:
         Returns:
             ID of created config.
         """
-        cursor = self.conn.execute(
-            """INSERT INTO risk_configs (name, strategy_level, portfolio_level)
-               VALUES (?, ?, ?)""",
-            (name, json.dumps(strategy_level), json.dumps(portfolio_level)),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO risk_configs (name, strategy_level, portfolio_level)
+                   VALUES (?, ?, ?)""",
+                (name, json.dumps(strategy_level), json.dumps(portfolio_level)),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_risk_config(self, config_id: int) -> JsonDict | None:
         """Get risk config by ID."""
@@ -360,16 +373,18 @@ class StateManager:
         self, config_id: int, name: str, strategy_level: JsonDict, portfolio_level: JsonDict
     ) -> None:
         """Update an existing risk configuration."""
-        self.conn.execute(
-            "UPDATE risk_configs SET name = ?, strategy_level = ?, portfolio_level = ? WHERE id = ?",
-            (name, json.dumps(strategy_level), json.dumps(portfolio_level), config_id),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE risk_configs SET name = ?, strategy_level = ?, portfolio_level = ? WHERE id = ?",
+                (name, json.dumps(strategy_level), json.dumps(portfolio_level), config_id),
+            )
+            self.conn.commit()
 
     def delete_risk_config(self, config_id: int) -> None:
         """Delete a risk configuration by ID."""
-        self.conn.execute("DELETE FROM risk_configs WHERE id = ?", (config_id,))
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute("DELETE FROM risk_configs WHERE id = ?", (config_id,))
+            self.conn.commit()
 
     # --- Backtest Run CRUD ---
 
@@ -403,26 +418,27 @@ class StateManager:
         Returns:
             ID of created run.
         """
-        cursor = self.conn.execute(
-            """INSERT INTO backtest_runs
-               (strategy_id, sizing_config_id, risk_config_id, run_mode, symbols,
-                timeframe, start_date, end_date, parameters, latency_preset)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                strategy_id,
-                sizing_config_id,
-                risk_config_id,
-                run_mode,
-                json.dumps(list(symbols)),
-                timeframe,
-                start_date,
-                end_date,
-                json.dumps(parameters),
-                latency_preset,
-            ),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO backtest_runs
+                   (strategy_id, sizing_config_id, risk_config_id, run_mode, symbols,
+                    timeframe, start_date, end_date, parameters, latency_preset)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    strategy_id,
+                    sizing_config_id,
+                    risk_config_id,
+                    run_mode,
+                    json.dumps(list(symbols)),
+                    timeframe,
+                    start_date,
+                    end_date,
+                    json.dumps(parameters),
+                    latency_preset,
+                ),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_backtest_run(self, run_id: int) -> JsonDict | None:
         """Get backtest run by ID."""
@@ -465,16 +481,20 @@ class StateManager:
                 params.append(error_message)
 
         params.append(run_id)
-        self.conn.execute(f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?", params)
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?", params
+            )
+            self.conn.commit()
 
     def update_heartbeat(self, run_id: int) -> None:
         """Update heartbeat timestamp for a running backtest."""
-        self.conn.execute(
-            "UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = ?",
-            (run_id,),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE backtest_runs SET heartbeat_at = datetime('now') WHERE id = ?",
+                (run_id,),
+            )
+            self.conn.commit()
 
     def list_backtest_runs(
         self, strategy_id: int | None = None, status: str | None = None
@@ -518,12 +538,13 @@ class StateManager:
         placeholders = ", ".join(["?"] * len(columns))
         values = [run_id] + list(metrics.values())
 
-        cursor = self.conn.execute(
-            f"INSERT INTO backtest_results ({', '.join(columns)}) VALUES ({placeholders})",
-            values,
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                f"INSERT INTO backtest_results ({', '.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_backtest_result(self, run_id: int) -> JsonDict | None:
         """Get backtest result for a run."""
@@ -582,11 +603,12 @@ class StateManager:
             run_id: Backtest run ID.
             notes: Notes text to store.
         """
-        self.conn.execute(
-            "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
-            (notes, run_id),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE backtest_results SET notes = ? WHERE run_id = ?",
+                (notes, run_id),
+            )
+            self.conn.commit()
 
     # --- Trade CRUD ---
 
@@ -605,12 +627,13 @@ class StateManager:
         _validate_columns(columns, _TRADES_COLUMNS, "trades")
         placeholders = ", ".join(["?"] * len(columns))
 
-        cursor = self.conn.execute(
-            f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})",
-            list(trade_data.values()),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})",
+                list(trade_data.values()),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def save_trades_batch(self, run_id: int, trades: Sequence[JsonDict]) -> None:
         """Save multiple trades in a batch.
@@ -627,11 +650,12 @@ class StateManager:
         _validate_columns(columns, _TRADES_COLUMNS, "trades")
         placeholders = ", ".join(["?"] * len(columns))
 
-        self.conn.executemany(
-            f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})",
-            [[run_id] + list(t.values()) for t in trades],
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.executemany(
+                f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})",
+                [[run_id] + list(t.values()) for t in trades],
+            )
+            self.conn.commit()
 
     def get_trades(self, run_id: int) -> list[JsonDict]:
         """Get all trades for a backtest run."""
@@ -660,12 +684,13 @@ class StateManager:
         _validate_columns(columns, _SWEEP_RESULTS_COLUMNS, "sweep_results")
         placeholders = ", ".join(["?"] * len(columns))
 
-        cursor = self.conn.execute(
-            f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
-            list(result_data.values()),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
+                list(result_data.values()),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def save_sweep_results_batch(self, run_id: int, results: Sequence[JsonDict]) -> None:
         """Save multiple sweep results in a batch."""
@@ -683,11 +708,12 @@ class StateManager:
         _validate_columns(columns, _SWEEP_RESULTS_COLUMNS, "sweep_results")
         placeholders = ", ".join(["?"] * len(columns))
 
-        self.conn.executemany(
-            f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
-            [list(r.values()) for r in processed],
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.executemany(
+                f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
+                [list(r.values()) for r in processed],
+            )
+            self.conn.commit()
 
     def get_sweep_results(self, run_id: int, pareto_only: bool = False) -> list[JsonDict]:
         """Get sweep results for a backtest run.
@@ -721,11 +747,12 @@ class StateManager:
         if not result_ids:
             return
         placeholders = ", ".join(["?"] * len(result_ids))
-        self.conn.execute(
-            f"UPDATE sweep_results SET is_pareto_optimal = 1 WHERE id IN ({placeholders})",
-            list(result_ids),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE sweep_results SET is_pareto_optimal = 1 WHERE id IN ({placeholders})",
+                list(result_ids),
+            )
+            self.conn.commit()
 
     # --- Background Jobs CRUD ---
     # NOTE: Job operations are also implemented in jobs/manager.py (BacktestJobManager).
@@ -747,13 +774,14 @@ class StateManager:
         Returns:
             ID of created job.
         """
-        cursor = self.conn.execute(
-            """INSERT INTO background_jobs (run_id, pid, job_type, log_file)
-               VALUES (?, ?, ?, ?)""",
-            (run_id, pid, job_type, log_file),
-        )
-        self.conn.commit()
-        return cursor.lastrowid or 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO background_jobs (run_id, pid, job_type, log_file)
+                   VALUES (?, ?, ?, ?)""",
+                (run_id, pid, job_type, log_file),
+            )
+            self.conn.commit()
+            return cursor.lastrowid or 0
 
     def get_job(self, run_id: int) -> JsonDict | None:
         """Get job by run ID."""
@@ -774,19 +802,20 @@ class StateManager:
             status: New status (running, completed, failed, killed).
             error: Optional error message.
         """
-        if status in ("completed", "failed", "killed"):
-            self.conn.execute(
-                """UPDATE background_jobs
-                   SET status = ?, completed_at = datetime('now'), error_message = ?
-                   WHERE run_id = ?""",
-                (status, error, run_id),
-            )
-        else:
-            self.conn.execute(
-                "UPDATE background_jobs SET status = ? WHERE run_id = ?",
-                (status, run_id),
-            )
-        self.conn.commit()
+        with self._write_lock:
+            if status in ("completed", "failed", "killed"):
+                self.conn.execute(
+                    """UPDATE background_jobs
+                       SET status = ?, completed_at = datetime('now'), error_message = ?
+                       WHERE run_id = ?""",
+                    (status, error, run_id),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE background_jobs SET status = ? WHERE run_id = ?",
+                    (status, run_id),
+                )
+            self.conn.commit()
 
     def list_runs_with_results(
         self,
@@ -856,9 +885,10 @@ class StateManager:
 
     def update_job_heartbeat(self, run_id: int) -> None:
         """Update job heartbeat timestamp."""
-        self.conn.execute(
-            """UPDATE background_jobs SET heartbeat_at = datetime('now')
-               WHERE run_id = ?""",
-            (run_id,),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE background_jobs SET heartbeat_at = datetime('now')
+                   WHERE run_id = ?""",
+                (run_id,),
+            )
+            self.conn.commit()

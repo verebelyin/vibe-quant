@@ -72,7 +72,7 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
   function handlePreview() {
     if (!canPreview) return;
     previewMutation.mutate(
-      { data: { symbols: selectedSymbols, start_date: startDate, end_date: endDate } },
+      { data: { symbols: selectedSymbols, start_date: startDate, end_date: endDate, interval } },
       {
         onSuccess: (res) => {
           if (res.status === 200) {
@@ -89,7 +89,7 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
   function handleStartDownload() {
     if (!canPreview) return;
     ingestMutation.mutate(
-      { data: { symbols: selectedSymbols, start_date: startDate, end_date: endDate } },
+      { data: { symbols: selectedSymbols, start_date: startDate, end_date: endDate, interval } },
       {
         onSuccess: (res) => {
           const data = res.data as Record<string, unknown>;

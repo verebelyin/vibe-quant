@@ -75,6 +75,12 @@ export function BacktestLaunchForm() {
   const riskQuery = useListRiskConfigsApiSettingsRiskGet();
   const datasetRange = useDatasetDateRange();
 
+  // Reset sweep config when strategy changes to avoid stale indicator indices
+  useEffect(() => {
+    setSweepEnabled(false);
+    setSweepConfig({ params: [] });
+  }, [strategyId]);
+
   // Auto-populate dates from dataset coverage
   useEffect(() => {
     if (!startDate && datasetRange.minStart) setStartDate(datasetRange.minStart);
@@ -117,8 +123,8 @@ export function BacktestLaunchForm() {
   }
 
   function applyDatePreset(months: number) {
-    const end = new Date();
-    const start = new Date();
+    const end = datasetRange.maxEnd ? new Date(datasetRange.maxEnd + "T00:00:00") : new Date();
+    const start = new Date(end);
     start.setMonth(start.getMonth() - months);
     setEndDate(end.toISOString().slice(0, 10));
     setStartDate(start.toISOString().slice(0, 10));

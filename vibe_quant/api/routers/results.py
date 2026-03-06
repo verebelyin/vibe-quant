@@ -77,10 +77,9 @@ async def list_runs(
     rows = mgr.list_backtest_runs(strategy_id=strategy_id, status=status)
     runs = [BacktestRunResponse(**r) for r in rows]
     if start_date:
-        runs = [r for r in runs if r.created_at >= start_date]
+        runs = [r for r in runs if r.created_at and r.created_at[:10] >= start_date[:10]]
     if end_date:
-        # Include runs on end_date even if created_at has time component (e.g. "2024-01-15 14:30:00")
-        runs = [r for r in runs if r.created_at < end_date + "Z"]
+        runs = [r for r in runs if r.created_at and r.created_at[:10] <= end_date[:10]]
     return RunListResponse(runs=runs)
 
 

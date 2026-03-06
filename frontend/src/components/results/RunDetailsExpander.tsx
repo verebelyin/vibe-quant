@@ -1,6 +1,5 @@
 import { useState } from "react";
-import type { BacktestRunResponse } from "@/api/generated/models";
-import { useListRunsApiResultsRunsGet } from "@/api/generated/results/results";
+import { useGetRunMetaApiResultsRunsRunIdMetaGet } from "@/api/generated/results/results";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,9 +32,8 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 
 export function RunDetailsExpander({ runId }: RunDetailsExpanderProps) {
   const [open, setOpen] = useState(false);
-  const query = useListRunsApiResultsRunsGet();
-  const runs = (query.data?.data as { runs?: BacktestRunResponse[] } | undefined)?.runs;
-  const run = runs?.find((r: BacktestRunResponse) => r.id === runId);
+  const query = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
+  const run = query.data?.status === 200 ? query.data.data : null;
 
   if (!run) return null;
 

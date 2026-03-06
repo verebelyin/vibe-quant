@@ -7,6 +7,7 @@
 import type { StrategyUpdateDslConfig } from './strategyUpdateDslConfig';
 
 export interface StrategyUpdate {
+  name?: string | null;
   dsl_config?: StrategyUpdateDslConfig;
   description?: string | null;
   is_active?: boolean | null;

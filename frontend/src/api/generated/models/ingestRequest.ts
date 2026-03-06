@@ -9,4 +9,5 @@ export interface IngestRequest {
   symbols: string[];
   start_date: string;
   end_date: string;
+  interval?: string;
 }

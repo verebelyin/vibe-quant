@@ -8,6 +8,8 @@ interface DateRangePickerProps {
   endDate: string;
   onStartChange: (date: string) => void;
   onEndChange: (date: string) => void;
+  /** Reference date for presets (e.g. dataset end date). Defaults to today. */
+  referenceDate?: Date;
   className?: string;
 }
 
@@ -18,9 +20,9 @@ function toISODate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function getPresetRange(preset: string): [string, string] {
-  const end = new Date();
-  const start = new Date();
+function getPresetRange(preset: string, refDate?: Date): [string, string] {
+  const end = refDate ? new Date(refDate) : new Date();
+  const start = new Date(end);
 
   switch (preset) {
     case "30d":
@@ -52,10 +54,11 @@ export function DateRangePicker({
   endDate,
   onStartChange,
   onEndChange,
+  referenceDate,
   className,
 }: DateRangePickerProps) {
   const handlePreset = (key: string) => {
-    const [start, end] = getPresetRange(key);
+    const [start, end] = getPresetRange(key, referenceDate);
     onStartChange(start);
     onEndChange(end);
   };

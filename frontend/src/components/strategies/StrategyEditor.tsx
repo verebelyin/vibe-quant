@@ -135,6 +135,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
       {
         strategyId: strategy.id,
         data: {
+          name,
           description: description || null,
           dsl_config: config as unknown as Record<string, unknown>,
         },
@@ -159,6 +160,7 @@ export function StrategyEditor({ strategy }: StrategyEditorProps) {
       {
         strategyId: strategy.id,
         data: {
+          name,
           description: description || null,
           dsl_config: config as unknown as Record<string, unknown>,
         },

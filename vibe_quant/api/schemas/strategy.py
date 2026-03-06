@@ -13,6 +13,7 @@ class StrategyCreate(BaseModel):
 
 
 class StrategyUpdate(BaseModel):
+    name: str | None = None
     dsl_config: dict[str, object] | None = None
     description: str | None = None
     is_active: bool | None = None

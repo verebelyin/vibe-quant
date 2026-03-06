@@ -8,7 +8,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
+from vibe_quant.api.deps import (
+    get_catalog_manager,
+    get_job_manager,
+    get_state_manager,
+    get_ws_manager,
+)
 from vibe_quant.api.schemas.backtest import (
     BacktestLaunchRequest,
     BacktestRunResponse,
@@ -17,6 +22,7 @@ from vibe_quant.api.schemas.backtest import (
     JobStatusResponse,
 )
 from vibe_quant.api.ws.manager import ConnectionManager
+from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 
@@ -27,6 +33,7 @@ router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
+CatMgr = Annotated[CatalogManager, Depends(get_catalog_manager)]
 
 
 def _job_info_to_response(info: object) -> JobStatusResponse:
@@ -213,18 +220,14 @@ async def sync_job(run_id: int, jobs: JobMgr, ws: WsMgr) -> JobStatusResponse:
 
 
 @router.post("/validate-coverage", response_model=CoverageCheckResponse)
-async def validate_coverage(body: CoverageCheckRequest) -> CoverageCheckResponse:
+async def validate_coverage(body: CoverageCheckRequest, catalog: CatMgr) -> CoverageCheckResponse:
     from datetime import UTC, datetime
-
-    from vibe_quant.data.catalog import CatalogManager
 
     try:
         req_start = datetime.fromisoformat(body.start_date).replace(tzinfo=UTC)
         req_end = datetime.fromisoformat(body.end_date).replace(tzinfo=UTC)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid date format; use YYYY-MM-DD") from exc
-
-    catalog = CatalogManager()
     coverage: dict[str, object] = {}
 
     for symbol in body.symbols:

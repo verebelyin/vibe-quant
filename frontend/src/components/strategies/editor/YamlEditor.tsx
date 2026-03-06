@@ -50,27 +50,39 @@ export function YamlEditor({ config, onConfigChange }: YamlEditorProps) {
   const [text, setText] = useState(() => serializeConfig(config));
   const [error, setError] = useState<YamlError | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Track the last config we emitted to avoid echo-back from parent
-  const lastEmittedConfig = useRef<DslConfig | null>(null);
+  // Monotonic counter: incremented on every local edit, checked on incoming sync.
+  // If the incoming config's serialized YAML matches current text, skip the sync
+  // (handles the echo-back case without fragile reference equality).
+  const localEditCounter = useRef(0);
+  const lastSyncedCounter = useRef(0);
 
   // Sync from visual editor -> YAML text when config changes externally
   useEffect(() => {
-    if (config === lastEmittedConfig.current) {
-      // This config originated from our own edit — skip sync
-      lastEmittedConfig.current = null;
-      return;
+    if (localEditCounter.current !== lastSyncedCounter.current) {
+      // We have a pending local edit — check if incoming config matches current text
+      const incomingYaml = serializeConfig(config);
+      if (incomingYaml === text) {
+        // Echo-back of our own edit — skip
+        lastSyncedCounter.current = localEditCounter.current;
+        return;
+      }
+      // Content actually differs (visual editor changed something else) — accept it
+      lastSyncedCounter.current = localEditCounter.current;
     }
-    setText(serializeConfig(config));
+    const newText = serializeConfig(config);
+    if (newText === text) return; // no-op if already in sync
+    setText(newText);
     setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   const handleTextChange = useCallback(
     (value: string) => {
+      localEditCounter.current += 1;
       setText(value);
       const result = parseYamlToDsl(value);
       setError(result.error);
       if (!result.error) {
-        lastEmittedConfig.current = result.config;
         onConfigChange(result.config);
       }
     },

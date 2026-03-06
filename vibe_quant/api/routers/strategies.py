@@ -75,6 +75,7 @@ async def update_strategy(
         raise HTTPException(status_code=404, detail="Strategy not found")
     mgr.update_strategy(
         strategy_id,
+        name=body.name,
         dsl_config=body.dsl_config,
         description=body.description,
         is_active=body.is_active,

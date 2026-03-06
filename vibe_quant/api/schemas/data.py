@@ -30,6 +30,7 @@ class IngestRequest(BaseModel):
     symbols: list[str]
     start_date: str
     end_date: str
+    interval: str = "1m"
 
 
 class IngestPreviewResponse(BaseModel):

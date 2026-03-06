@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryKey,
+  getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryKey,
   getGetRunSummaryApiResultsRunsRunIdGetQueryKey,
   getGetSweepsApiResultsRunsRunIdSweepsGetQueryKey,
   getGetTradesApiResultsRunsRunIdTradesGetQueryKey,
@@ -63,6 +65,12 @@ function useRunPolling(runId: number) {
       });
       queryClient.invalidateQueries({
         queryKey: getGetTradesApiResultsRunsRunIdTradesGetQueryKey(runId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryKey(runId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryKey(runId),
       });
     }
     prevStatus.current = status;
