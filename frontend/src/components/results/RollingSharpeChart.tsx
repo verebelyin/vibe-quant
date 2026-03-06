@@ -27,7 +27,7 @@ interface TooltipPayloadEntry {
   payload: SharpePoint;
 }
 
-function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpePoint[] {
+export function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpePoint[] {
   if (data.length < window + 1) return [];
 
   // compute daily returns

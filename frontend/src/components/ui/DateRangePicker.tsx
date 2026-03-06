@@ -20,7 +20,7 @@ function toISODate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-function getPresetRange(preset: string, refDate?: Date): [string, string] {
+export function getPresetRange(preset: string, refDate?: Date): [string, string] {
   const end = refDate ? new Date(refDate) : new Date();
   const start = new Date(end);
 
