@@ -110,6 +110,12 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(20.0, 80.0),
         dsl_type="STOCH",
     ),
+    "MFI": IndicatorDef(
+        name="MFI",
+        param_ranges={"period": (5, 30)},
+        default_threshold_range=(20.0, 80.0),
+        dsl_type="MFI",
+    ),
 }
 
 

@@ -1224,6 +1224,20 @@ class StrategyCompiler:
                         f'                self._pta_values["{info.name}_signal"] = float(_last.iloc[2])',
                     ]
                 )
+            elif config.type == "MFI":
+                # MFI needs high, low, close, volume
+                period = config.period or spec.default_params.get("period", 14)
+                lines.extend(
+                    [
+                        "        _high = pd.Series(self._pta_high)",
+                        "        _low = pd.Series(self._pta_low)",
+                        "        _close = pd.Series(self._pta_close)",
+                        "        _vol = pd.Series(self._pta_volume)",
+                        f"        _result = ta.mfi(_high, _low, _close, _vol, length={period})",
+                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
+                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                    ]
+                )
             elif config.type == "WILLR":
                 # Williams %R needs high, low, close
                 period = config.period or spec.default_params.get("period", 14)
