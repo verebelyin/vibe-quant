@@ -4,6 +4,145 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-06: Batch 7 — Record-Breaking Discovery, Sharpe 7.24 Validated
+
+### Goal
+
+Find winning strategies that are **not short-only**, on **bigger timeframes** (4h, 1h), targeting **2024 bull market data**. Run 5 parallel discoveries in 15-30 minutes, propagate winners to screening and validation.
+
+### Setup
+
+5 parallel discovery runs on BTCUSDT, CCI+RSI dominant (proven king), 2024-centric date ranges.
+
+**Design rationale:**
+- CCI dominant across all 6 previous batches — kept in every run
+- 2024 bull market produced all-time bests in batch 6 (runs 88, 89, 90)
+- `both` direction on 4/5 runs (run 127 = `long` to explore pure long strategies)
+- Run 130 used CCI+ATR for indicator diversity (ATR is Rust-native = fast)
+- Smaller populations (14-20) × fewer generations (6-10) to target ~15-30min
+- All runs sequential mode (sandbox blocks ProcessPoolExecutor)
+
+| Run | TF | Dir | Indicators | Pop×Gen | Mut | Date Range | Duration |
+|-----|-----|-----|------------|---------|-----|------------|----------|
+| 126 | 4h | both | CCI,RSI | 18×8 | 0.22 | 2024-01→2024-12 | ~20m |
+| 127 | 4h | long | CCI,RSI | 16×8 | 0.20 | 2024-01→2025-06 | ~25m |
+| 128 | 4h | both | CCI,RSI | 20×8 | 0.25 | 2024-06→2025-06 | ~22m |
+| 129 | 1h | both | CCI,RSI | 14×6 | 0.25 | 2024-01→2024-09 | ~10m |
+| 130 | 4h | both | CCI,ATR | 20×10 | 0.22 | 2024-01→2025-06 | ~40m |
+
+**Note:** 5 concurrent processes shared CPU, extending runtimes ~2x vs solo. Run 130 (largest pop×gen) took longest.
+
+### Discovery Results
+
+| Run | TF | Dir | Fitness | Sharpe | PF | Trades | Return |
+|-----|-----|-----|---------|--------|-----|--------|--------|
+| **128** | **4h** | **both** | **0.8499** | **7.31** | **4.883** | **55** | **+11.9%** |
+| **126** | **4h** | **both** | **0.8099** | **5.63** | **2.904** | **57** | **+40.7%** |
+| **130** | **4h** | **both** | **0.7419** | **3.66** | **1.997** | **65** | **+28.3%** |
+| 127 | 4h | long | 0.5413 | 1.37 | 1.229 | 95 | +14.5% |
+| 129 | 1h | both | 0.4794 | 0.94 | 1.115 | 78 | +3.0% |
+
+### Top 3 Strategies
+
+**Run 128 — CCI Triple Bidirectional (4h, Both) ★ NEW ALL-TIME BEST**
+- Entry: CCI(44) crosses_above 13.5 (both long+short)
+- Exit: CCI(36) >= -0.52 AND CCI(20) > -14.1 (both sides)
+- SL: 3.96% (tight), TP: 15.48% (wide) — trend-following risk profile
+- Per-direction: SL_long=4.89%, SL_short=2.98%, TP_long=9.91%, TP_short=6.72%
+- Pure CCI strategy with triple-CCI exit confirmation
+- Window: 2024-06→2025-06 (12mo regime-spanning)
+
+**Run 126 — CCI Bidirectional, Highest Return (4h, Both)**
+- Entry: CCI(28) > 51.7 (both sides)
+- Exit: CCI(50) crosses_below 48.3 (both sides)
+- SL: 7.84%, TP: 9.65%
+- Per-direction: SL_long=5.25%, SL_short=3.36%, TP_long=11.64%, TP_short=8.82%
+- Pure CCI with long-period exit (CCI(50))
+- Window: 2024-01→2024-12 (pure bull year)
+
+**Run 130 — CCI Bidirectional, CCI+ATR Pool (4h, Both)**
+- Entry: CCI(21) > 38.9 (both sides)
+- Exit: CCI(44) crosses_above -76.7 (both sides)
+- SL: 7.2%, TP: 12.37%
+- GA chose pure CCI despite ATR being available — confirms CCI dominance
+- Window: 2024-01→2025-06
+
+### Full Pipeline: Discovery → Screening → Validation
+
+**Run 128 (4h Both CCI) ★ NEW ALL-TIME CHAMPION:**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 128 | 7.31 | 4.883 | 55 | +11.9% | 0% |
+| Screening | 138 | **7.31** | **4.883** | **55** | **+11.9%** | 0% |
+| Validation | 139 | **7.24** | **4.78** | **55** | **+11.9%** | **0.9%** |
+
+Validation barely degraded: Sharpe 7.31→7.24, PF 4.883→4.78. **Zero trade loss** (55→55). MaxDD 0.9% is the **lowest ever recorded** (previous best: run 87's 2.2%). Sortino 28.44 is exceptional. Win rate 63.6%.
+
+**Run 126 (4h Both CCI) — Highest Validated Return:**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 126 | 5.63 | 2.904 | 57 | +40.7% | 0% |
+| Screening | 136 | **5.63** | **2.904** | **57** | **+40.7%** | 0% |
+| Validation | 137 | **5.56** | **2.85** | **57** | **+39.7%** | **5.0%** |
+
+**Zero trade loss** (57→57). Return degraded only 1% (40.7→39.7%). Sharpe 5.56 is the 2nd highest ever validated. Sortino 14.78.
+
+**Run 130 (4h Both CCI+ATR pool):**
+
+| Step | Run | Sharpe | PF | Trades | Return | MaxDD |
+|------|-----|--------|-----|--------|--------|-------|
+| Discovery | 130 | 3.66 | 1.997 | 65 | +28.3% | 0% |
+| Screening | 140 | **3.66** | **1.997** | **65** | **+28.3%** | 0% |
+| Validation | 141 | **3.69** | **2.01** | **65** | **+28.5%** | **7.4%** |
+
+Validation **improved** slightly (Sharpe 3.66→3.69, return 28.3→28.5%). Zero trade loss (65→65). MaxDD 7.4%.
+
+### Comparison: Batch 7 vs All Previous Champions
+
+| Run | TF | Dir | V.Sharpe | V.PF | V.Trades | V.Return | V.MaxDD | Window |
+|-----|-----|-----|----------|------|----------|----------|---------|--------|
+| **139 (new) ★** | **4h** | **both** | **7.24** | **4.78** | **55** | **+11.9%** | **0.9%** | **2024-06→2025-06** |
+| **137 (new)** | **4h** | **both** | **5.56** | **2.85** | **57** | **+39.7%** | **5.0%** | **2024-01→2024-12** |
+| **141 (new)** | **4h** | **both** | **3.69** | **2.01** | **65** | **+28.5%** | **7.4%** | **2024-01→2025-06** |
+| 98 (prev best) | 4h | both | 4.12 | 2.736 | 61 | +49.3% | 11.3% | 2024-01→2025-06 |
+| 87 (prev MaxDD) | 4h | both | 3.65 | 2.135 | 85 | +16.7% | 2.2% | 2024-06→2026-02 |
+| 85 (prev Sharpe) | 15m | short | 4.60 | 2.010 | 47 | +41.4% | 16.1% | 2024-06→2026-02 |
+
+### Findings
+
+1. **Run 128/139 is the new all-time champion** — Sharpe 7.24 (56% higher than prev best 4.64), PF 4.78 (75% higher than prev best 2.736), MaxDD 0.9% (best ever). The triple-CCI setup with tight SL (3.96%) and wide TP (15.48%) creates an extremely selective entry with high win rate (63.6%). The entry condition (CCI(44) crosses_above 13.5) uses a long-period CCI that only triggers on strong momentum shifts.
+
+2. **Run 126/137 has the 2nd highest validated return ever** (+39.7%) and would be the champion on absolute returns if not for run 98 (+49.3%). The CCI(28)/CCI(50) combination with symmetric conditions (same entry/exit for long+short) is remarkably simple yet effective. The wider SL (7.84%) allows more room for trades to develop.
+
+3. **All 3 winners are pure CCI** — run 130 had ATR in the pool but GA chose CCI only. CCI's dominance continues unbroken across 7 batches. The question is whether this represents a genuine edge or overfitting to the indicator.
+
+4. **Per-direction SL/TP is being used** — all strategies have different SL/TP for long vs short (tighter short SL, wider long SL). This suggests the GA is finding asymmetric risk profiles. Worth monitoring for overfitting concerns.
+
+5. **4h both-direction continues to dominate** — all 3 top strategies are 4h bidirectional. Run 127 (long-only) was mediocre (Sharpe 1.37), and run 129 (1h) was poor (Sharpe 0.94). The 4h timeframe provides enough data for CCI to generate reliable signals while being immune to latency.
+
+6. **Return vs Sharpe tradeoff** — Run 128 has the best risk-adjusted metrics (Sharpe 7.24, MaxDD 0.9%) but modest return (+11.9%). Run 126 has higher return (+39.7%) but lower Sharpe (5.56) and higher MaxDD (5.0%). This is the classic precision-vs-magnitude tradeoff.
+
+7. **Shorter windows can produce higher Sharpe** — Run 128's window (12mo, 2024-06→2025-06) produced Sharpe 7.24. Run 126's (12mo, 2024-01→2024-12) produced Sharpe 5.56. Different sub-periods of the bull market have different optimal strategies. This suggests walk-forward analysis would be valuable.
+
+8. **Zero trade loss across all validations** — All 3 strategies maintained 100% trade survival through validation (55→55, 57→57, 65→65). 4h strategies are completely latency-immune as confirmed in previous batches.
+
+### Recommendations
+
+1. **Paper trade run 128/139** immediately — best risk-adjusted metrics ever recorded (Sharpe 7.24, MaxDD 0.9%)
+2. **Paper trade run 126/137** for absolute return (+39.7%)
+3. **Out-of-sample test** — run both strategies on 2023 data and 2025-06→2026-02 (bearish) to test regime robustness
+4. **Walk-forward analysis** — split 2024 into quarterly windows and test strategy stability
+5. **Portfolio combination** — combine run 128 (low MaxDD champion) with run 87 (bearish window champion) for all-weather portfolio
+6. **Increase population/generations** — run 128 converged to 0.85 fitness in just 8 generations without converging flag. Larger runs (pop=30, gen=15) might find even better strategies
+
+### Filed
+
+- Run 130 confirmed CCI dominance: ATR in pool but GA chose pure CCI
+
+---
+
 ## 2026-02-27: Strategy Combination Experiments — Bull+Bear Merge Attempts
 
 ### Goal

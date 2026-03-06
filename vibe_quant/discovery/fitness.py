@@ -370,6 +370,9 @@ def _evaluate_single(
     )
 
 
+_parallel_broken: bool = False
+
+
 def evaluate_population(
     chromosomes: list[StrategyChromosome],
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
@@ -382,7 +385,7 @@ def evaluate_population(
     """Evaluate fitness for an entire population, optionally in parallel.
 
     When max_workers > 1, uses ProcessPoolExecutor for parallel evaluation.
-    Falls back to sequential if parallelization fails.
+    Falls back to sequential if parallelization fails (cached — only logs once).
     Pass `executor` to reuse a long-lived pool across generations.
 
     Args:
@@ -395,11 +398,13 @@ def evaluate_population(
     Returns:
         FitnessResult for each chromosome, parallel to input.
     """
-    if max_workers is not None and max_workers != 1:
+    global _parallel_broken  # noqa: PLW0603
+    if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
             return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor)
         except Exception:
-            logger.warning("Parallel evaluation failed, falling back to sequential", exc_info=True)
+            _parallel_broken = True
+            logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
 
     return [_evaluate_single(chrom, backtest_fn, filter_fn) for chrom in chromosomes]
 
