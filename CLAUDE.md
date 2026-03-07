@@ -334,6 +334,7 @@ vibe-quant/
 - Validation uses custom fill model + latency → fewer trades and worse metrics (expected)
 - **Bug fix `2944ad3`:** `pos.entry→pos.side` enum mismatch caused 155:1 trade ratio. All runs before this fix are invalid.
 - **Compiler version hash:** stored in discovery notes for staleness detection. Current valid hash: `8ae876464003`
+- STOCH+CCI is the best multi-indicator combo (Batch 13: Sharpe 3.52 validated, DD 2.1%) — STOCH entry + CCI confirmation/exit
 - **1m data is slow:** Rust-native indicators (SMA/EMA/ADX/ATR) ~10x faster than pandas-ta (MACD/STOCH/BBANDS). Budget accordingly.
 - **Fitness function:** 35% Sharpe + 25% (1-MaxDD) + 20% PF + 20% Return. Hard gate: 0 if <50 trades.
 
