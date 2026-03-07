@@ -74,7 +74,7 @@ class DiscoveryConfig:
     crossover_rate: float = 0.8
     elite_count: int = 2
     tournament_size: int = 3
-    convergence_generations: int = 10
+    convergence_generations: int = 3
     top_k: int = 5
     min_trades: int = 50
     max_workers: int | None = 0  # 0 = auto (cpu_count), None = sequential
@@ -103,6 +103,11 @@ class DiscoveryConfig:
             errors.append("tournament_size must be >= 1")
         if self.convergence_generations < 1:
             errors.append("convergence_generations must be >= 1")
+        # Cap convergence_gens so early stop can trigger before max_gen
+        # _check_convergence requires 2*n gens, so cap at max_gen // 2
+        max_conv = max(1, self.max_generations // 2)
+        if self.convergence_generations > max_conv:
+            object.__setattr__(self, "convergence_generations", max_conv)
         if self.top_k < 1:
             errors.append("top_k must be >= 1")
         if errors:

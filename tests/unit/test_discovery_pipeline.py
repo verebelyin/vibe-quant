@@ -83,7 +83,7 @@ class TestDiscoveryConfig:
         assert cfg.mutation_rate == 0.1
         assert cfg.elite_count == 2
         assert cfg.tournament_size == 3
-        assert cfg.convergence_generations == 10
+        assert cfg.convergence_generations == 3
         assert cfg.top_k == 5
         assert cfg.min_trades == 50
         assert cfg.max_workers == 0
@@ -190,14 +190,14 @@ class TestConvergence:
         )
 
     def test_not_converged_too_few_generations(self) -> None:
-        cfg = _make_config(convergence_generations=3)
+        cfg = _make_config(convergence_generations=3, max_generations=10)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         # Need at least 2*n=6 generations
         results = [self._make_gen_result(i, 1.0) for i in range(5)]
         assert not pipe._check_convergence(results)
 
     def test_converged_stagnation(self) -> None:
-        cfg = _make_config(convergence_generations=3)
+        cfg = _make_config(convergence_generations=3, max_generations=10)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         # Gens 0-2 improve, then gens 3-5 stagnate
         results = [
@@ -211,7 +211,7 @@ class TestConvergence:
         assert pipe._check_convergence(results)
 
     def test_not_converged_improving(self) -> None:
-        cfg = _make_config(convergence_generations=3)
+        cfg = _make_config(convergence_generations=3, max_generations=10)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         results = [
             self._make_gen_result(0, 1.0),
