@@ -4,6 +4,119 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-07: Batch 12 — Untried Pairings: STOCH+MFI, CCI+WILLR, MFI+RSI, STOCH+RSI, MFI+ROC
+
+### Goal
+Test 5 never-tried 2-indicator combinations using proven strong indicators (MFI, STOCH, CCI, RSI, ROC, WILLR). Skip ADX (GA ignores it) and MACD (narrow threshold). Focus on complementary signal types: volume+momentum, oscillator pairs.
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 232 | CCI+WILLR | 10 | 6 | 4h | ~6min | Completed |
+| 233 | STOCH+MFI | 12 | 8 | 4h | ~12min | Completed |
+| 234 | MFI+RSI | 12 | 8 | 4h | ~15min | Completed |
+| 235 | STOCH+RSI | 12 | 8 | 4h | ~8min | Completed |
+| 236 | MFI+ROC | 12 | 8 | 4h | ~14min | Completed |
+
+All 5 launched via API (parallel). Data range: 2025-03-07 to 2026-03-07 (full catalog, 12 months). Compiler version: `9636e12ba5f9`.
+
+### Full Pipeline Results
+
+| Stage | Run 232 CCI+WILLR | Run 233 STOCH+MFI | Run 234 MFI+RSI | Run 235 STOCH+RSI | Run 236 MFI+ROC |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | 0.489 | **0.624** | 0.326 | 0.474 | 0.493 |
+| **Discovery** sharpe | 1.43 | **2.57** | -0.08 | 1.34 | 2.08 |
+| **Discovery** dd | 8.8% | **10.9%** | 8.4% | 15.0% | 18.7% |
+| **Discovery** trades | 340 | **104** | 357 | 75 | 63 |
+| **Discovery** return | -5.8% | **+24.4%** | -7.7% | +5.2% | +14.1% |
+| **Discovery** PF | 1.22 | **1.71** | 0.99 | 1.18 | 1.45 |
+| **DSR guardrails** | 5/5 pass | **5/5 pass** | 0/5 FAIL (p=1.0) | 5/5 pass | 5/5 pass |
+| **Screening** match | exact ✓ | **exact ✓** | n/a | exact ✓ | exact ✓ |
+| **Validation** sharpe | 1.56 | **2.55** | n/a | 1.33 | 1.35 ⚠️ |
+| **Validation** return | -5.1% | **+23.6%** | n/a | +6.2% | +6.3% |
+| **Validation** dd | 8.4% | **10.5%** | n/a | 15.7% | 17.5% |
+| **Validation** trades | 340 | **104** | n/a | 74 | 64 |
+| **Validation** PF | 1.24 | **1.69** | n/a | 1.18 | 1.28 |
+| **Validation** fees | $131.47 | **$53.52** | n/a | $15.46 | $30.06 |
+| **Validation** win rate | 44.1% | **59.6%** | n/a | 70.3% | 14.1% |
+
+### Winning Strategies
+
+**Run 233 winner (genome_10f82ae507d2) — BEST OF BATCH:**
+- Direction: SHORT only
+- Entry: STOCH(k=10, d=9) crosses_above 51.22
+- Exit: STOCH(k=21, d=5) crosses_below 58.90
+- SL=3.55%, TP=12.9%
+- Validation: Sharpe=2.55, Return=+23.6%, DD=10.5%, 104 trades, PF=1.69, WR=59.6%
+- DSR p=0.0000 (highly significant)
+- **Pure STOCH** — GA chose STOCH only despite MFI being in the pool (100% STOCH by gen 8)
+- Zero trade loss through validation (104→104)
+
+**Run 236 winner (genome_1151043122f5) — only true multi-indicator combo:**
+- Direction: SHORT only
+- Entry: ROC(9) >= -2.88 AND MFI(7) < 72.00 AND ROC(12) >= -0.05
+- Exit: ROC(11) <= -0.75 AND MFI(6) < 37.69
+- SL=1.48%, TP=11.58%
+- Validation: Sharpe=1.35, Return=+6.3%, DD=17.5%, 64 trades, PF=1.28
+- **35% Sharpe degradation** (2.08→1.35) — complex multi-indicator strategies degrade more in validation
+- Only run that actually used both pool indicators
+
+**Run 232 winner (genome_ff106d9a5387):**
+- Direction: BOTH
+- Entry: CCI(41) >= 59.92
+- Exit: CCI(32) >= 45.52
+- SL=8.38%, TP=12.41% (per-direction overrides)
+- Validation: Sharpe=1.56 (improved from 1.43), 340 trades, PF=1.24
+- **Pure CCI** — GA chose CCI only despite WILLR being in the pool
+
+**Run 235 winner (genome_541aa767d52d):**
+- Direction: SHORT only
+- Entry: RSI(50) <= 49.61
+- Exit: RSI(26) crosses_below 58.62 AND RSI(23) <= 58.85
+- SL=6.87%, TP=3.44% (unusual: tight TP, wide SL)
+- Validation: Sharpe=1.33, 74 trades, PF=1.18
+- **Pure RSI** — GA chose RSI only despite STOCH being in the pool
+
+### Issues Found
+
+1. **Discovery launch API missing dates (KNOWN)**: Same as Batch 11. Screening auto-runs on promote but with empty dates → 0 trades. Manual DB fix + re-run required. Needs proper fix in launch endpoint.
+2. **MFI+RSI failed completely (run 234)**: Negative Sharpe (-0.08), all DSR p=1.0. GA couldn't find profitable combinations with MFI+RSI on 4h BTCUSDT.
+3. **MFI+ROC 35% validation degradation (run 236)**: Discovery Sharpe 2.08 → Validation 1.35. Only multi-indicator strategy. Complex 5-gene strategy (3 entry + 2 exit) overfits more than simple strategies.
+
+### Key Findings
+
+1. **GA strongly prefers single-indicator strategies**: 3/4 passing runs converged to pure single-indicator strategies (CCI, STOCH, RSI), ignoring the second indicator. Only MFI+ROC (run 236) used both — and it degraded most in validation.
+2. **STOCH is the new #2 indicator**: Run 233 produced Sharpe 2.55 validated with pure STOCH short. Combined with Batch 11's STOCH (Sharpe 1.54 long), STOCH is now the strongest non-CCI indicator.
+3. **STOCH short strategy is robust**: crosses_above 51 entry / crosses_below 59 exit — simple mean-reversion short. 59.6% win rate, 104 trades, minimal validation degradation (2.57→2.55, -1%).
+4. **Multi-indicator strategies overfit more**: Run 236's 5-gene MFI+ROC strategy had 35% Sharpe drop. Simpler 1-2 gene strategies (runs 232, 233, 235) had <3% degradation. Complexity → more overfitting.
+5. **MFI+RSI is a poor combo**: Couldn't produce positive Sharpe in 96 evaluations. Both bounded [0,100] oscillators measuring overlapping momentum signals.
+6. **Clean run**: Zero errors across all 15 log files (5 discovery + 4 screening + 4 validation + 2 warnings benign).
+7. **Short bias continues**: All 4 passing runs found short or short-dominant strategies. Current 12-month window (2025-03 to 2026-03) favors short.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 7 (CCI+RSI) | Batch 9 (MFI+WILLR) | Batch 11 (CCI+ADX) | Batch 12 (STOCH+MFI) |
+|--------|-------------------|---------------------|---------------------|---------------------|
+| Validation Sharpe | 7.24 | 2.45 | 2.53 | 2.55 |
+| Validation Return | +11.9% | +17.4% | +11.4% | +23.6% |
+| Validation DD | 0.9% | 5.9% | 5.5% | 10.5% |
+| Validation PF | 4.78 | 1.73 | 1.78 | 1.69 |
+| Direction | both | long | short | short |
+| Winner indicator | CCI | MFI+WILLR | CCI | STOCH |
+
+Batch 12's STOCH winner has the **highest validated return ever** (+23.6%) and ties for 3rd best Sharpe (2.55 vs 2.53 Batch 11, 2.45 Batch 9). Higher DD than Batches 9/11 though (10.5% vs 5.5-5.9%).
+
+### Recommendations
+
+1. **Try STOCH+CCI**: STOCH proved strong standalone. CCI is champion. Pairing them could produce the best combo since Batch 7's CCI+RSI. (Note: CCI+STOCH was tried in Batch 9 run 157, Sharpe 2.05 — but on older data and lower pop.)
+2. **Try STOCH on bull-market data**: Current STOCH short strategy thrives in 2025-2026 bearish window. Test on 2024 bull-market data (like Batch 7) to see if STOCH can find long strategies.
+3. **Increase pop/gens for STOCH runs**: STOCH converges well — larger search (pop=20, gens=12) could find even better parameters.
+4. **Investigate indicator-vs-indicator comparison**: GA consistently picks single indicators because threshold comparison works best with one indicator type. Supporting indicator-vs-indicator conditions (e.g., RSI > STOCH) would enable true multi-indicator strategies.
+5. **Skip MFI+RSI**: Failed completely — redundant oscillator signals.
+6. **Multi-indicator strategies need validation scrutiny**: 35% Sharpe drop on run 236 suggests complex strategies overfit. Apply stricter WFA/purged-kfold to multi-gene strategies.
+
+---
+
 ## 2026-03-07: Batch 11 — ADX Re-runs (Bug-Free) + CCI Combos + Genome Pool Expansion
 
 ### Goal
