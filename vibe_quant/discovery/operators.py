@@ -210,13 +210,6 @@ def _build_threshold_ranges() -> dict[str, tuple[float, float]]:
     from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
 
     ranges = {name: defn.default_threshold_range for name, defn in _GENOME_POOL.items()}
-    # Extra oscillators not in INDICATOR_POOL (no IndicatorDef)
-    ranges.update({
-        "CCI": (-100.0, 100.0),
-        "WILLR": (-80.0, -20.0),
-        "MFI": (20.0, 80.0),
-        "ROC": (-5.0, 5.0),
-    })
     return ranges
 
 
