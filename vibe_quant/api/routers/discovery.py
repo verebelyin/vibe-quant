@@ -127,23 +127,24 @@ async def launch_discovery(
     if body.indicator_pool is not None:
         params["indicator_pool"] = body.indicator_pool
 
-    # Use strategy_id=None for discovery (no pre-existing strategy)
-    run_id = state.create_backtest_run(
-        strategy_id=None,
-        run_mode="discovery",
-        symbols=body.symbols,
-        timeframe=body.timeframes[0] if body.timeframes else "4h",
-        start_date=body.start_date or "",
-        end_date=body.end_date or "",
-        parameters=params,
-    )
-
-    log_file = f"logs/discovery_{run_id}.log"
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
     today = datetime.now()
     start_date = body.start_date or (today - timedelta(days=365)).strftime("%Y-%m-%d")
     end_date = body.end_date or today.strftime("%Y-%m-%d")
+
+    # Use strategy_id=None for discovery (no pre-existing strategy)
+    run_id = state.create_backtest_run(
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=body.symbols,
+        timeframe=timeframe,
+        start_date=start_date,
+        end_date=end_date,
+        parameters=params,
+    )
+
+    log_file = f"logs/discovery_{run_id}.log"
     command = [
         sys.executable,
         "-m",
