@@ -46,6 +46,7 @@ _ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "__future__",
     "datetime",
     "typing",
+    "warnings",
     "zoneinfo",
     "nautilus_trader",
     "pandas",
@@ -378,6 +379,8 @@ class StrategyCompiler:
         if has_pta:
             imports.append("")
             imports.append("# pandas-ta-classic fallback for indicators without NT class")
+            imports.append("import warnings")
+            imports.append("warnings.filterwarnings('ignore', category=FutureWarning)")
             imports.append("import pandas as pd")
             imports.append("import pandas_ta_classic as ta")
 
@@ -747,7 +750,7 @@ class StrategyCompiler:
         args: list[str] = []
 
         # Map DSL params to NT params based on indicator type
-        if config.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI"}:
+        if config.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "ADX"}:
             args.append(f"period=self.config.{info.name}_period")
         elif config.type == "MACD":
             args.append(f"fast_period=self.config.{info.name}_fast_period")

@@ -116,6 +116,12 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(20.0, 80.0),
         dsl_type="MFI",
     ),
+    "ADX": IndicatorDef(
+        name="ADX",
+        param_ranges={"period": (7, 30)},
+        default_threshold_range=(15.0, 60.0),
+        dsl_type="ADX",
+    ),
 }
 
 

@@ -205,7 +205,7 @@ class IndicatorRegistry:
         kwargs: dict[str, object] = {}
 
         # Common mapping from DSL names to NT names
-        if name in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI"}:
+        if name in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "ADX"}:
             if "period" in params:
                 kwargs["period"] = params["period"]
         elif name == "MACD":
@@ -410,6 +410,17 @@ def _roc_spec() -> IndicatorSpec:
         nt_class=_get_nt_class("nautilus_trader.indicators", "RateOfChange"),
         pandas_ta_func="roc",
         default_params={"period": 10},
+        param_schema={"period": int},
+    )
+
+
+@indicator_registry.register("ADX")
+def _adx_spec() -> IndicatorSpec:
+    return IndicatorSpec(
+        name="ADX",
+        nt_class=_get_nt_class("nautilus_trader.indicators", "DirectionalMovement"),
+        pandas_ta_func="adx",
+        default_params={"period": 14},
         param_schema={"period": int},
     )
 

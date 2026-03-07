@@ -30,6 +30,7 @@ VALID_INDICATOR_TYPES = frozenset(
         "CCI",
         "WILLR",
         "ROC",
+        "ADX",
         # Volatility
         "ATR",
         "BBANDS",
