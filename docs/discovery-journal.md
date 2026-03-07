@@ -4,6 +4,122 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-07: Batch 15 — Deep STOCH+CCI + Best-Winner Combos (3 Runs)
+
+### Goal
+Combine the best winning indicators from the entire journal history. 3 focused runs (not 5) with larger pop/gen settings for deeper search (20-30 min budget). Specifically: (1) STOCH+CCI deep search (B14 didn't converge at gen 10), (2) CCI+MFI+WILLR (CCI + B9's champion MFI+WILLR combo), (3) STOCH+CCI+MACD (B14's two winning combos combined).
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 273 | STOCH+CCI | 20 | 15 | 4h | ~13min | Completed (not converged) |
+| 274 | CCI+MFI+WILLR | 14 | 10 | 4h | ~15min | Completed (not converged) |
+| 275 | STOCH+CCI+MACD | 14 | 10 | 4h | ~8min | Completed (not converged) |
+
+3 runs launched via API (parallel). Data range: 2025-03-07 to 2026-03-07 (full catalog, 12 months). Only 3 concurrent = less CPU contention than previous 5-run batches.
+
+### Full Pipeline Results
+
+| Stage | Run 273 STOCH+CCI (deep) | Run 274 CCI+MFI+WILLR | Run 275 STOCH+CCI+MACD |
+|-------|----|----|------|
+| **Discovery** score | **0.7918** | 0.5261 | 0.5762 |
+| **Discovery** sharpe | **8.13** | 1.75 | 1.96 |
+| **Discovery** dd | **1.0%** | 9.8% | 3.6% |
+| **Discovery** trades | **59** | 266 | 59 |
+| **Discovery** return | **+6.1%** | +5.7% | +4.2% |
+| **Discovery** PF | **3.09** | 1.43 | 1.46 |
+| **DSR guardrails** | **5/5 pass** | 5/5 pass | 5/5 pass |
+| **Screening** match | exact | exact | exact |
+| **Validation** sharpe | **9.10** | 1.65 | 1.98 |
+| **Validation** return | **+6.9%** | +4.3% | +4.3% |
+| **Validation** dd | **1.0%** | 9.7% | 3.7% |
+| **Validation** trades | **59** | 265 | 59 |
+| **Validation** PF | **3.54** | 1.40 | 1.46 |
+| **Validation** fees | $23.19 | $76.40 | $19.70 |
+| **Validation** win rate | **79.7%** | 49.8% | 64.4% |
+
+### Winning Strategies
+
+**Run 273 winner (genome_4013d00c6199) — NEW ALL-TIME BEST ON CURRENT DATA:**
+- Direction: BOTH
+- Entry: CCI(40) crosses_above -65.31 (both long+short)
+- Exit: STOCH(19, d=5) <= 43.10 (both sides)
+- SL=1.78%, TP=7.24%, TP_long=0.53% (asymmetric long TP)
+- Validation: Sharpe=9.10, Return=+6.9%, DD=1.0%, 59 trades, PF=3.54, WR=79.7%
+- DSR p=0.0000 (highly significant)
+- **TRUE MULTI-INDICATOR**: CCI entry + STOCH exit, same STOCH+CCI pattern as B13/B14 but MUCH better
+- Validation IMPROVED over discovery (8.13→9.10 Sharpe, 3.09→3.54 PF)
+- Zero trade loss (59→59), DD stayed at 1.0%
+- Evolution: 0.623 → 0.656 → 0.657 → 0.656 → 0.753 → 0.753 → 0.753 → 0.753 → 0.753 → 0.770 → 0.775 → 0.779 → 0.791 → 0.791 → 0.792
+- **Still not converged at gen 15** — fitness still climbing (0.779→0.792 in last 4 gens)
+- Population converged to 100% BOTH direction by gen 9, 50/50 CCI/STOCH indicator split maintained throughout
+
+**Run 274 winner (genome_21eada382957) — TRUE 3-INDICATOR STRATEGY:**
+- Direction: SHORT only
+- Entry: MFI(11) > 50.85
+- Exit: CCI(24) > -33.11 AND WILLR(18) <= -25.32
+- SL=6.62%, TP=15.32%
+- Validation: Sharpe=1.65, Return=+4.3%, DD=9.7%, 265 trades, PF=1.40, WR=49.8%
+- **Uses ALL 3 indicators**: MFI entry + CCI+WILLR dual exit. First true 3-indicator strategy to pass full pipeline.
+- Indicator diversity maintained throughout: ~33% each MFI/CCI/WILLR from gen 3 onward
+- Population converged to 100% SHORT by gen 3
+- Lost 1 trade in validation (266→265)
+- 6% Sharpe degradation (1.75→1.65)
+
+**Run 275 winner (genome_ae2dac333447) — STOCH+CCI short:**
+- Direction: SHORT only
+- Entry: CCI(30) crosses_below -34.53
+- Exit: STOCH(14, d=4) crosses_below 22.76
+- SL=5.83%, TP=6.18%
+- Validation: Sharpe=1.98 (improved from 1.96), Return=+4.3%, DD=3.7%, 59 trades, PF=1.46, WR=64.4%
+- CCI entry + STOCH exit pattern (same as run 273 but SHORT-only)
+- GA eliminated MACD by gen 4 (83% STOCH → eventually 50/50 CCI/STOCH)
+- Zero trade loss (59→59)
+
+### Issues Found
+
+1. **Discovery launch API missing dates (KNOWN)**: Same as all previous batches. Manual DB fix required before promote.
+2. **MACD eliminated by GA in run 275**: MACD dropped from 29%→3%→0% by gen 4. GA strongly prefers CCI+STOCH over MACD. MACD's narrow threshold range (-0.005 to 0.005) can't compete.
+3. **Run 273 TP_long=0.53% is suspicious**: Extremely tight long TP means long trades are closed almost immediately. The strategy likely makes most profit from short trades despite being BOTH direction. Worth investigating if this is effectively a short-only strategy.
+4. **14 MACD signal/histogram warnings in run 275**: Expected known limitation. Not errors.
+
+### Key Findings
+
+1. **STOCH+CCI deep search produced the all-time best on current data**: Sharpe 9.10 validated (prev best B14: 3.70). The larger search (pop=20, gen=15 vs pop=16, gen=10) found dramatically better parameters. Deep search works — B14 recommended this and it paid off enormously.
+2. **Validation IMPROVED Sharpe**: 8.13→9.10, PF 3.09→3.54. This is rare and indicates a very robust strategy. The validation fill model and 200ms latency actually helped (possibly by filtering out marginal trades).
+3. **79.7% win rate is unprecedented**: Previous best was ~64% (B13). Combined with low DD (1.0%) and high PF (3.54), this is an exceptionally selective strategy.
+4. **CCI+MFI+WILLR produced a true 3-indicator strategy**: First time ALL 3 pool indicators were used in a winning strategy. The MFI entry + CCI+WILLR dual exit pattern is novel. Performance is modest (Sharpe 1.65) but the multi-indicator architecture is significant.
+5. **MACD is systematically eliminated**: Run 275 had STOCH+CCI+MACD but GA eliminated MACD by gen 4. Across all batches, MACD only survives when it's the primary indicator (B14 run 262) or when paired with a weak partner. When CCI or STOCH are available, MACD loses.
+6. **Clean run**: Zero errors across all 9 log files. 14 MACD warnings in run 275 (expected).
+7. **3 runs with less contention is efficient**: Total wall time ~15min for longest run (vs ~27min for 5-run batches). Less CPU contention = faster per-run.
+8. **None of the 3 runs converged**: All still improving at termination. Even larger searches could find better strategies.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 7 (CCI+RSI) | Batch 14 (STOCH+CCI) | Batch 15 (STOCH+CCI deep) |
+|--------|-------------------|---------------------|---------------------|
+| Data window | 2024-06→2025-06 | 2025-03→2026-03 | 2025-03→2026-03 |
+| Validation Sharpe | 7.24 | 3.70 | **9.10** |
+| Validation Return | +11.9% | +27.6% | **+6.9%** |
+| Validation DD | 0.9% | 6.4% | **1.0%** |
+| Validation PF | 4.78 | 2.25 | **3.54** |
+| Validation WR | 63.6% | 58.4% | **79.7%** |
+| Direction | both | short | both |
+| Winner pattern | CCI entry+exit | STOCH entry + CCI exit | CCI entry + STOCH exit |
+
+Batch 15's run 273 has the **highest validated Sharpe ever on current bearish data** (9.10) and ties B7 for lowest DD (1.0%). Win rate (79.7%) is the highest ever across any batch. PF (3.54) is 2nd only to B7's 4.78. The trade-off is modest return (+6.9% vs B14's +27.6%) — the strategy is extremely selective with tight SL (1.78%) and moderate TP (7.24%).
+
+### Recommendations
+
+1. **Paper trade run 273/279**: Sharpe 9.10, DD 1.0%, WR 79.7%, PF 3.54. Best risk-adjusted strategy ever on current data.
+2. **Investigate TP_long=0.53%**: The asymmetric long TP may mean the strategy is effectively short-only despite BOTH direction. Check trade-level P&L breakdown.
+3. **Even deeper STOCH+CCI search**: Run 273 still not converged at gen 15. Try pop=30, gen=25 for exhaustive search.
+4. **CCI+MFI+WILLR is a promising architecture**: First true 3-indicator strategy. Try larger pop/gen to let GA explore the 3-indicator space more.
+5. **Stop including MACD with CCI/STOCH**: GA eliminates it every time. MACD only works when it's the lead indicator.
+6. **3 runs > 5 runs**: Less contention, same quality, faster. Use 3-run format for future batches.
+
+---
+
 ## 2026-03-07: Batch 14 — MACD Gap Fill + STOCH+CCI Large Search + MFI+WILLR Re-run
 
 ### Goal

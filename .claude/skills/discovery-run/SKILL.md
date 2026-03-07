@@ -12,7 +12,7 @@ Full-cycle automated discovery: journal review, 5 parallel discoveries, monitori
 1. **`status` is read-only in zsh** — never use `status` as a variable name. Use `st`, `stat`, or `run_status` instead.
 2. **Always use `rg` (ripgrep) instead of `grep`** — faster, no `|` escaping. `rg "ERROR|Exception" file` not `grep "ERROR\|Exception" file`.
 3. **Don't embed `$rid` inside python3 heredocs** — shell expands it before python sees it. Use the python3 `-c` approach where `$rid` stays in the shell layer, not inside python strings.
-4. **Don't use `sleep N &&` for polling waits** — just make separate Bash tool calls when you're ready to poll. Let the agent decide when to call next.
+4. **USE `sleep N &&` for polling waits** — combine `sleep 180 && <poll_command>` in a single Bash tool call with `timeout: 300000`. This prevents spamming the user with rapid tool calls. Each poll should wait 3 minutes via sleep before checking.
 5. **Parallel background commands**: use `cmd1 & cmd2 & wait` pattern. Check exit codes after `wait`.
 
 **Working polling script (copy-paste safe):**
@@ -271,9 +271,30 @@ Record all `run_id` values. Launch all 5 as parallel Bash tool calls.
 
 ### Phase 3: Monitor Every 3 Minutes
 
-Poll all 5 runs every 3 minutes. **Do NOT use `sleep` in the Bash command.** Instead, make separate Bash tool calls when ready to poll.
+Poll all runs every 3 minutes. **USE `sleep 180 &&` before the poll command** in a single Bash tool call with `timeout: 300000`. This avoids spamming the user with rapid tool calls.
 
-Use the polling script from "Shell Gotchas" section above. Report results in a markdown table.
+```bash
+sleep 180 && for rid in RUN_IDS; do
+  echo -n "Run $rid: "
+  curl -s "http://localhost:8000/api/discovery/jobs/$rid/progress" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+g=d.get('progress') or {}
+gen=g.get('generation','?')
+mx=g.get('max_generations','?')
+best=g.get('best_fitness',0)
+mean=g.get('mean_fitness',0)
+st=d.get('status','?')
+e=g.get('eta_seconds')
+eta=f'{int(e)//60}m{int(e)%60}s' if e else '-'
+bf=f'{best:.4f}' if isinstance(best,(int,float)) else str(best)
+mf=f'{mean:.4f}' if isinstance(mean,(int,float)) else str(mean)
+print(f'{st} | Gen {gen}/{mx} | Best={bf} | Mean={mf} | ETA={eta}')
+"
+done
+```
+
+Report results in a markdown table. Repeat until all runs show `completed`.
 
 ### Phase 4: Collect Results
 
