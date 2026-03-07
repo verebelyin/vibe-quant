@@ -382,7 +382,7 @@ class TestStructuralDedup:
 
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:
-        cfg = _make_config(population_size=8, elite_count=2)
+        cfg = _make_config(population_size=8, elite_count=2, use_crowding=False)
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         pop = initialize_population(8)
         from vibe_quant.discovery.fitness import evaluate_population

@@ -25,6 +25,7 @@ from vibe_quant.discovery.operators import (
     _random_chromosome,
     apply_elitism,
     crossover,
+    crowding_replace,
     initialize_population,
     is_valid_chromosome,
     mutate,
@@ -85,8 +86,8 @@ class DiscoveryConfig:
     indicator_pool: list[str] | None = None  # None = use all available
     direction: str | None = None  # "long", "short", "both", or None (random)
     use_crowding: bool = True  # Use deterministic crowding (True) or classic tournament (False)
-    immigrant_fraction: float = 0.1  # Fraction of population replaced when entropy is low
-    entropy_threshold: float = 0.3  # Entropy below this triggers immigrant injection
+    immigrant_fraction: float = 0.15  # Fraction of population replaced when entropy is low
+    entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
 
     def __post_init__(self) -> None:
@@ -648,7 +649,7 @@ class DiscoveryPipeline:
         population: list[StrategyChromosome],
         fitness_results: list[FitnessResult],
     ) -> list[StrategyChromosome]:
-        """Produce next generation via elitism + tournament/crossover/mutation.
+        """Produce next generation via crowding or classic tournament.
 
         Args:
             population: Current generation chromosomes.
@@ -660,10 +661,19 @@ class DiscoveryPipeline:
         cfg = self.config
         scores = [fr.adjusted_score for fr in fitness_results]
 
-        # Elites carried forward unchanged
+        if cfg.use_crowding:
+            return self._evolve_crowding(population, scores)
+        return self._evolve_tournament(population, scores)
+
+    def _evolve_tournament(
+        self,
+        population: list[StrategyChromosome],
+        scores: list[float],
+    ) -> list[StrategyChromosome]:
+        """Classic evolution: elitism + tournament selection + crossover + mutation."""
+        cfg = self.config
         new_pop = apply_elitism(population, scores, cfg.elite_count)
 
-        # Fill remaining slots
         remaining = cfg.population_size - len(new_pop)
         retries = 0
         random_fallbacks = 0
@@ -677,7 +687,6 @@ class DiscoveryPipeline:
             child_a = mutate(child_a, cfg.mutation_rate)
             child_b = mutate(child_b, cfg.mutation_rate)
 
-            # Enforce direction constraint after crossover/mutation
             if self._direction_constraint is not None:
                 child_a.direction = self._direction_constraint
                 child_b.direction = self._direction_constraint
@@ -685,7 +694,6 @@ class DiscoveryPipeline:
             for child in (child_a, child_b):
                 if remaining <= 0:
                     break
-                # Retry if invalid; fall back to random if all retries fail
                 valid_child = child
                 for attempt in range(_MAX_OFFSPRING_RETRIES):
                     if is_valid_chromosome(valid_child):
@@ -699,6 +707,102 @@ class DiscoveryPipeline:
                         random_fallbacks += 1
                 new_pop.append(valid_child)
                 remaining -= 1
+
+        if retries > 0 or random_fallbacks > 0:
+            logger.info(
+                "  Evolution: %d mutation retries, %d random fallbacks",
+                retries,
+                random_fallbacks,
+            )
+
+        return new_pop
+
+    def _evolve_crowding(
+        self,
+        population: list[StrategyChromosome],
+        scores: list[float],
+    ) -> list[StrategyChromosome]:
+        """Deterministic crowding evolution.
+
+        1. Keep 1 elite as safety net
+        2. Randomly pair remaining individuals
+        3. Each pair produces 2 offspring (crossover + mutation)
+        4. Offspring replaces most-similar parent only if fitter
+
+        Offspring aren't evaluated until next gen, so they get a "free pass"
+        into the population. The real crowding competition happens at
+        subsequent generations when fitness values are available.
+        """
+        cfg = self.config
+
+        # Keep 1 elite as safety net (down from default 2)
+        elite = apply_elitism(population, scores, min(1, cfg.elite_count))
+
+        # Build replacement pool (all non-elite)
+        elite_indices = set()
+        if elite:
+            best_idx = max(range(len(scores)), key=lambda i: scores[i])
+            elite_indices.add(best_idx)
+
+        pool_indices = [i for i in range(len(population)) if i not in elite_indices]
+        random.shuffle(pool_indices)
+
+        # Pair up for crowding
+        new_pop = list(elite)
+        retries = 0
+        random_fallbacks = 0
+
+        for pair_start in range(0, len(pool_indices) - 1, 2):
+            i, j = pool_indices[pair_start], pool_indices[pair_start + 1]
+            parent_a, parent_b = population[i], population[j]
+
+            # Crossover + mutation
+            if random.random() < cfg.crossover_rate:
+                child_a, child_b = crossover(parent_a, parent_b)
+            else:
+                child_a, child_b = parent_a.clone(), parent_b.clone()
+            child_a = mutate(child_a, cfg.mutation_rate)
+            child_b = mutate(child_b, cfg.mutation_rate)
+
+            if self._direction_constraint is not None:
+                child_a.direction = self._direction_constraint
+                child_b.direction = self._direction_constraint
+
+            # Validate offspring
+            children = []
+            for child in (child_a, child_b):
+                valid = child
+                for attempt in range(_MAX_OFFSPRING_RETRIES):
+                    if is_valid_chromosome(valid):
+                        if attempt > 0:
+                            retries += attempt
+                        break
+                    valid = mutate(child, cfg.mutation_rate)
+                else:
+                    if not is_valid_chromosome(valid):
+                        valid = _random_chromosome(direction_constraint=self._direction_constraint)
+                        random_fallbacks += 1
+                children.append(valid)
+
+            # Crowding replacement: offspring compete against similar parent
+            result = crowding_replace(
+                parents=[parent_a, parent_b],
+                parent_fitness=[scores[i], scores[j]],
+                offspring=children,
+                offspring_fitness=[scores[i], scores[j]],  # No real fitness yet; tie = offspring wins
+            )
+            new_pop.extend(result)
+
+        # Handle odd pool (last unpaired individual)
+        if len(pool_indices) % 2 == 1:
+            new_pop.append(population[pool_indices[-1]].clone())
+
+        # Trim to population size
+        if len(new_pop) > cfg.population_size:
+            new_pop = new_pop[: cfg.population_size]
+        # Pad if somehow short
+        while len(new_pop) < cfg.population_size:
+            new_pop.append(_random_chromosome(direction_constraint=self._direction_constraint))
 
         if retries > 0 or random_fallbacks > 0:
             logger.info(
