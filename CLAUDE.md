@@ -60,23 +60,28 @@ agent-browser fill @e1 "test_strategy" && agent-browser fill @e2 "description" &
 
 ## Shell Preferences
 
-- **Always use `rg` (ripgrep) instead of `grep`** — faster, simpler regex syntax (no escaping `|`), better defaults. Use `rg` in Bash tool calls and in skills/scripts.
+- **Always use `rg` (ripgrep) instead of `grep`** — faster, simpler regex syntax (no escaping `|`), better defaults. Use `rg` in Bash tool calls, skills, and scripts. This applies to ALL search operations in the terminal.
   ```bash
   rg "ERROR|Exception" logs/          # NOT: grep "ERROR\|Exception" logs/
   rg -c "pattern" file                # count matches
   rg "pattern" -A5 file               # context after
   rg "pattern" -l                     # list files only
+  rg "pattern" -B2 -A2 file           # context before and after
   ```
+- **`status` is read-only in zsh** — never use it as a variable name in shell scripts. Use `st`, `stat`, or `run_status` instead.
+- **Don't use `sleep N` in Bash tool calls for polling** — make separate tool calls when ready instead. `sleep` blocks the tool and wastes time.
+- **Check ports before starting servers**: `lsof -i :8000` before launching uvicorn. Avoids "address already in use" errors.
 
 ## SQLite Queries (state DB)
 
 DB path: `data/state/vibe_quant.db`. Always use WAL mode.
 
 **Common mistakes to avoid:**
-1. **Don't use `.format()` or f-strings with values** — use `?` placeholders
+1. **Don't use `.format()` or f-strings with values** — use `?` placeholders for ALL query values
 2. **Values can be `None`/`str`/numeric** — always handle `None` before formatting with `:.2f`
 3. **No `discovery_runs` table** — discovery runs are in `backtest_runs` with `run_mode='discovery'`
 4. **`row_factory = sqlite3.Row`** enables dict-style access
+5. **Always `conn.commit()` after INSERT/UPDATE** — SQLite doesn't auto-commit
 
 **Pattern for safe queries:**
 ```python
@@ -86,6 +91,34 @@ conn = sqlite3.connect('data/state/vibe_quant.db')
 conn.row_factory = sqlite3.Row
 rows = conn.execute('SELECT * FROM backtest_runs WHERE run_mode=? ORDER BY id DESC LIMIT 5', ('discovery',)).fetchall()
 for r in rows: print(dict(r))
+"
+```
+
+**Pattern for safe formatting (handle None):**
+```python
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/state/vibe_quant.db')
+conn.row_factory = sqlite3.Row
+row = conn.execute('SELECT * FROM backtest_runs WHERE id=?', (RUN_ID,)).fetchone()
+if row:
+    d = dict(row)
+    # WRONG: print(f'{d[\"start_date\"]:.2f}')  — crashes if None or str
+    # RIGHT: guard with 'if val is not None'
+    for k, v in d.items():
+        print(f'  {k}: {v}')
+"
+```
+
+**Pattern for batch updates:**
+```python
+python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/state/vibe_quant.db')
+for rid in [237, 238, 239]:
+    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('2025-03-07', '2026-03-07', rid))
+conn.commit()  # DON'T FORGET THIS
+print('Updated')
 "
 ```
 
