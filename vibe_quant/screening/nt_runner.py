@@ -73,7 +73,12 @@ class NTScreeningRunner:
         try:
             return self._run_backtest(params, start_time)
         except Exception as e:
-            logger.warning("NT screening backtest failed for %s: %s", params, e)
+            logger.warning(
+                "NT screening backtest failed: params=%s strategy=%s error=%s",
+                params,
+                self._dsl_dict.get("name", "unknown"),
+                e,
+            )
             return BacktestMetrics(
                 parameters=params,
                 sharpe_ratio=float("-inf"),
