@@ -275,15 +275,18 @@ def _perturb(
 ) -> float:
     """Perturb a value by +/- frac fraction. Optionally clamp to [lo, hi].
 
-    When value is exactly 0.0, ``frac`` is used as an absolute range
-    [-frac, frac] so that genes (e.g., thresholds) can mutate away from
-    zero. Without this, zero-valued genes would be permanently stuck
-    since ``0 * frac = 0``.
+    When value is exactly 0.0 and bounds are provided, uses ``frac * (hi - lo)``
+    as the perturbation scale so the result stays proportional to the valid range.
+    When value is 0.0 without bounds, uses ``frac`` as an absolute range so
+    genes can mutate away from zero.
     """
     if value == 0.0:
-        # When value is exactly 0, use frac as absolute perturbation range
-        # so genes (e.g., thresholds) can mutate away from zero
-        result = random.uniform(-frac, frac)
+        if lo is not None and hi is not None:
+            # Use fraction of the valid range, not absolute frac
+            scale = (hi - lo) * frac
+            result = random.uniform(-scale, scale)
+        else:
+            result = random.uniform(-frac, frac)
     else:
         delta = value * frac
         result = value + random.uniform(-delta, delta)

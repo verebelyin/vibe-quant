@@ -92,6 +92,36 @@ class TestCrowdingReplace:
         assert result[1].uid == parent_b.uid  # CCI parent survived (0.9 > 0.1)
 
 
+class TestPerturb:
+    def test_perturb_zero_with_narrow_bounds(self) -> None:
+        """_perturb(0.0) with narrow bounds should stay within bounds, not use absolute frac."""
+        import random
+        from vibe_quant.discovery.operators import _perturb
+        random.seed(42)
+        lo, hi = -0.05, 0.05
+        results = [_perturb(0.0, 0.2, lo, hi) for _ in range(200)]
+        # All within bounds
+        for r in results:
+            assert lo <= r <= hi, f"Result {r} outside [{lo}, {hi}]"
+        # Most values should NOT be pinned at boundaries (< 25% at each boundary)
+        at_lo = sum(1 for r in results if r == lo)
+        at_hi = sum(1 for r in results if r == hi)
+        boundary_pct = (at_lo + at_hi) / len(results)
+        assert boundary_pct < 0.25, (
+            f"{boundary_pct:.0%} of values pinned at boundaries — perturbation overshoots range"
+        )
+
+    def test_perturb_zero_without_bounds_uses_absolute(self) -> None:
+        """_perturb(0.0) without bounds should still use frac as absolute range."""
+        import random
+        from vibe_quant.discovery.operators import _perturb
+        random.seed(42)
+        results = [_perturb(0.0, 0.2) for _ in range(100)]
+        # Should produce values in [-0.2, 0.2]
+        assert any(r < -0.05 for r in results), "Should produce values below -0.05 when unbounded"
+        assert any(r > 0.05 for r in results), "Should produce values above 0.05 when unbounded"
+
+
 class TestThresholdRanges:
     def test_macd_threshold_range_wide_enough(self) -> None:
         """MACD threshold range must span at least 0.05 to produce viable signals."""
