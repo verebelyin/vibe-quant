@@ -178,14 +178,20 @@ class TestSharpeVariancePrecision:
 
 
 def _reference_expected_max_sharpe(num_trials: int) -> float:
-    """Reference implementation without pre-computed constants."""
+    """Reference implementation using the paper's exact Φ⁻¹ formula.
+
+    Bailey & Lopez de Prado (2014):
+    E[max(Z)] = (1-γ)Φ⁻¹(1-1/N) + γΦ⁻¹(1-1/(Ne))
+    """
     if num_trials <= 1:
         return 0.0
+    from statistics import NormalDist
     gamma = 0.5772156649015329  # Euler-Mascheroni
-    log_n = math.log(num_trials)
-    base = math.sqrt(2.0 * log_n)
-    correction = 1.0 - gamma / log_n + (gamma**2) / (2.0 * log_n**2)
-    return base * correction
+    norm = NormalDist(0, 1)
+    return (
+        (1 - gamma) * norm.inv_cdf(1 - 1 / num_trials)
+        + gamma * norm.inv_cdf(1 - 1 / (num_trials * math.e))
+    )
 
 
 class TestExpectedMaxSharpePrecision:

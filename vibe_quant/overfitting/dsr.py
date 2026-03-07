@@ -32,13 +32,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from functools import lru_cache
+from statistics import NormalDist
 
 # Euler-Mascheroni constant
 EULER_MASCHERONI: float = 0.5772156649015329
-# Pre-compute squared constant to avoid repeated multiplication
-_EULER_MASCHERONI_SQ: float = EULER_MASCHERONI * EULER_MASCHERONI
 # Pre-compute 1/sqrt(2) for fast normal CDF
 _INV_SQRT2: float = 1.0 / math.sqrt(2.0)
+# Standard normal for inverse CDF (stdlib, no scipy needed)
+_NORM: NormalDist = NormalDist(0, 1)
+# 1/e pre-computed
+_INV_E: float = 1.0 / math.e
 
 
 def _norm_sf(x: float) -> float:
@@ -123,6 +126,7 @@ class DeflatedSharpeRatio:
         num_observations: int,
         skewness: float = 0.0,
         kurtosis: float = 3.0,
+        trials_sharpe_variance: float | None = None,
     ) -> DSRResult:
         """Calculate Deflated Sharpe Ratio.
 
@@ -133,11 +137,11 @@ class DeflatedSharpeRatio:
             skewness: Return distribution skewness (default 0 = symmetric).
             kurtosis: Return distribution kurtosis (default 3 = normal).
                 Note: this is full kurtosis, not excess kurtosis.
-                TODO: The screening pipeline does not yet store per-candidate
-                skewness/kurtosis, so DSR always uses the normal distribution
-                assumption. For heavy-tailed crypto returns this understates
-                the Sharpe variance, making DSR slightly optimistic. Store
-                skewness/kurtosis in sweep_results once available.
+            trials_sharpe_variance: Empirical variance of Sharpe ratios across
+                all trials (V[{SR_n}]). When provided, SR₀ uses this instead
+                of the theoretical 1/(T-1). Per the paper, this captures the
+                true dispersion of trial Sharpes which may be wider than
+                theoretical (e.g. fat-tailed crypto returns).
 
         Returns:
             DSRResult with deflated Sharpe, p-value, and significance flag.
@@ -147,12 +151,15 @@ class DeflatedSharpeRatio:
         """
         self._validate_inputs(observed_sharpe, num_trials, num_observations, kurtosis)
 
-        # Compute expected max Sharpe under null
-        # _expected_max_sharpe returns E[max(Z_1..Z_N)] for standard normals.
-        # Under the null (SR=0), the Sharpe estimator has std = 1/sqrt(T-1),
-        # so expected max Sharpe = E[max(Z)] / sqrt(T-1).
+        # Compute expected max Sharpe under null using the paper's formula:
+        # SR₀ = E[{SR_n}] + sqrt(V[{SR_n}]) × maxZ(N)
+        # Under null, E[{SR_n}] = 0. V[{SR_n}] is the empirical variance of
+        # trial Sharpes if provided, otherwise theoretical 1/(T-1).
         expected_max_z = self._expected_max_sharpe(num_trials)
-        expected_max_sharpe = expected_max_z / math.sqrt(max(num_observations - 1, 1))
+        if trials_sharpe_variance is not None:
+            expected_max_sharpe = math.sqrt(trials_sharpe_variance) * expected_max_z
+        else:
+            expected_max_sharpe = expected_max_z / math.sqrt(max(num_observations - 1, 1))
 
         # Compute variance of Sharpe estimator (with non-normality correction)
         sharpe_variance = self._sharpe_variance(
@@ -220,12 +227,11 @@ class DeflatedSharpeRatio:
     @staticmethod
     @lru_cache(maxsize=1024)
     def _expected_max_sharpe(num_trials: int) -> float:
-        """Compute expected maximum Sharpe ratio under null hypothesis.
+        """Compute expected maximum of N independent standard normal variables.
 
-        Uses the asymptotic approximation for the expected maximum of N
-        independent standard normal random variables:
+        Uses the exact analytical formula from Bailey & Lopez de Prado (2014):
 
-            E[max(Z_1, ..., Z_N)] ≈ sqrt(2*ln(N)) * (1 - gamma/(ln(N)) + gamma^2/(2*ln(N)^2))
+            E[max(Z_1, ..., Z_N)] = (1-γ)Φ⁻¹(1-1/N) + γΦ⁻¹(1-1/(Ne))
 
         For N=1, returns 0 (single trial has no multiple testing bias).
 
@@ -236,24 +242,15 @@ class DeflatedSharpeRatio:
             num_trials: Number of independent trials (N).
 
         Returns:
-            Expected maximum Sharpe under null hypothesis.
+            Expected maximum of N standard normals (z-score units).
         """
         if num_trials <= 1:
             return 0.0
 
-        log_n = math.log(num_trials)
-
-        # Asymptotic approximation
-        # E[max] ≈ sqrt(2*ln(N)) * (1 - gamma/ln(N) + gamma^2/(2*ln(N)^2))
-        base = math.sqrt(2.0 * log_n)
-
-        # Higher-order correction terms using pre-computed squared constant
-        inv_log_n = 1.0 / log_n
-        correction = (
-            1.0 - EULER_MASCHERONI * inv_log_n + _EULER_MASCHERONI_SQ * 0.5 * inv_log_n * inv_log_n
+        return (
+            (1.0 - EULER_MASCHERONI) * _NORM.inv_cdf(1.0 - 1.0 / num_trials)
+            + EULER_MASCHERONI * _NORM.inv_cdf(1.0 - _INV_E / num_trials)
         )
-
-        return base * correction
 
     @staticmethod
     def _sharpe_variance(
@@ -330,6 +327,7 @@ def calculate_dsr(
     skewness: float = 0.0,
     kurtosis: float = 3.0,
     significance_level: float = 0.05,
+    trials_sharpe_variance: float | None = None,
 ) -> DSRResult:
     """Convenience function to calculate DSR without instantiating class.
 
@@ -340,6 +338,7 @@ def calculate_dsr(
         skewness: Return distribution skewness (default 0).
         kurtosis: Return distribution kurtosis (default 3).
         significance_level: p-value threshold (default 0.05).
+        trials_sharpe_variance: Empirical variance of trial Sharpe ratios.
 
     Returns:
         DSRResult with deflated Sharpe, p-value, and significance.
@@ -351,4 +350,5 @@ def calculate_dsr(
         num_observations=num_observations,
         skewness=skewness,
         kurtosis=kurtosis,
+        trials_sharpe_variance=trials_sharpe_variance,
     )

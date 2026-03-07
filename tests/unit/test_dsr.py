@@ -441,3 +441,155 @@ class TestEulerMascheroniConstant:
         # Known value to high precision
         expected = 0.5772156649015328606065120900824024310421
         assert abs(EULER_MASCHERONI - expected) < 1e-15
+
+
+class TestExpectedMaxExactFormula:
+    """Tests that E[max] uses the paper's exact Φ⁻¹ formula, not Gumbel approximation.
+
+    Reference: Bailey & Lopez de Prado (2014), eq. for E[max(SR)].
+    Formula: E[max(Z)] = (1-γ)Φ⁻¹(1-1/N) + γΦ⁻¹(1-1/(Ne))
+    """
+
+    @pytest.fixture
+    def dsr(self) -> DeflatedSharpeRatio:
+        return DeflatedSharpeRatio()
+
+    def test_emax_n2_matches_paper(self, dsr: DeflatedSharpeRatio) -> None:
+        """For N=2, exact E[max(Z)] ≈ 0.5198 (Gumbel gives 0.6052 = 16% error)."""
+        from statistics import NormalDist
+        gamma = EULER_MASCHERONI
+        _norm = NormalDist(0, 1)
+        N = 2
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+
+        # Access the static method directly
+        result = DeflatedSharpeRatio._expected_max_sharpe(N)
+        assert abs(result - expected) < 0.01, (
+            f"E[max(Z)] for N={N}: got {result:.4f}, paper says {expected:.4f}"
+        )
+
+    def test_emax_n100_matches_paper(self, dsr: DeflatedSharpeRatio) -> None:
+        """For N=100, exact E[max(Z)] ≈ 2.5306 (Gumbel gives 2.6783 = 6% error)."""
+        from statistics import NormalDist
+        gamma = EULER_MASCHERONI
+        _norm = NormalDist(0, 1)
+        N = 100
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+
+        result = DeflatedSharpeRatio._expected_max_sharpe(N)
+        assert abs(result - expected) < 0.01, (
+            f"E[max(Z)] for N={N}: got {result:.4f}, paper says {expected:.4f}"
+        )
+
+    def test_emax_n1000_within_1pct(self, dsr: DeflatedSharpeRatio) -> None:
+        """For N=1000, result within 1% of paper's exact formula."""
+        from statistics import NormalDist
+        gamma = EULER_MASCHERONI
+        _norm = NormalDist(0, 1)
+        N = 1000
+        expected = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+
+        result = DeflatedSharpeRatio._expected_max_sharpe(N)
+        pct_err = abs(result - expected) / expected * 100
+        assert pct_err < 1.0, f"E[max(Z)] for N={N}: {pct_err:.1f}% error (>1%)"
+
+
+class TestTrialsSharpeVariance:
+    """Tests that SR₀ uses empirical trial variance when provided.
+
+    Paper: SR₀ = E[{SR_n}] + sqrt(V[{SR_n}]) × maxZ(N)
+    When trials_sharpe_variance is provided, it should be used instead of 1/(T-1).
+    """
+
+    @pytest.fixture
+    def dsr(self) -> DeflatedSharpeRatio:
+        return DeflatedSharpeRatio()
+
+    def test_higher_trial_variance_raises_sr0(self, dsr: DeflatedSharpeRatio) -> None:
+        """Higher empirical trial variance → higher SR₀ → harder to pass."""
+        T = 252
+        N = 100
+
+        # Without trial variance (theoretical 1/(T-1))
+        result_default = dsr.calculate(
+            observed_sharpe=1.0, num_trials=N, num_observations=T,
+        )
+        # With 3x theoretical variance
+        result_high = dsr.calculate(
+            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            trials_sharpe_variance=3.0 / (T - 1),
+        )
+        assert result_high.expected_max_sharpe > result_default.expected_max_sharpe, (
+            f"SR₀ with 3x variance ({result_high.expected_max_sharpe:.4f}) should be "
+            f"higher than default ({result_default.expected_max_sharpe:.4f})"
+        )
+
+    def test_trial_variance_matches_paper_formula(self, dsr: DeflatedSharpeRatio) -> None:
+        """SR₀ = sqrt(V_emp) × maxZ(N) when mean_sr=0."""
+        from statistics import NormalDist
+        gamma = EULER_MASCHERONI
+        _norm = NormalDist(0, 1)
+
+        T = 252
+        N = 50
+        V_emp = 0.02  # Empirical variance of trial Sharpes
+
+        result = dsr.calculate(
+            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            trials_sharpe_variance=V_emp,
+        )
+
+        maxZ = (1 - gamma) * _norm.inv_cdf(1 - 1/N) + gamma * _norm.inv_cdf(1 - 1/(N * math.e))
+        expected_sr0 = math.sqrt(V_emp) * maxZ
+
+        assert abs(result.expected_max_sharpe - expected_sr0) < 1e-6, (
+            f"SR₀ got {result.expected_max_sharpe:.6f}, expected {expected_sr0:.6f}"
+        )
+
+    def test_none_trial_variance_uses_theoretical(self, dsr: DeflatedSharpeRatio) -> None:
+        """When trials_sharpe_variance=None, fall back to 1/(T-1)."""
+        T = 252
+        N = 50
+
+        result_none = dsr.calculate(
+            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            trials_sharpe_variance=None,
+        )
+        result_theoretical = dsr.calculate(
+            observed_sharpe=1.0, num_trials=N, num_observations=T,
+            trials_sharpe_variance=1.0 / (T - 1),
+        )
+        assert abs(result_none.expected_max_sharpe - result_theoretical.expected_max_sharpe) < 1e-10
+
+    def test_dsr_more_conservative_with_fat_tail_variance(self, dsr: DeflatedSharpeRatio) -> None:
+        """Borderline strategy rejected when empirical variance reveals fat tails."""
+        T = 252
+        N = 200
+        # Strategy with moderate Sharpe
+        sr = 0.4
+
+        # With theoretical variance: should pass
+        result_thin = dsr.calculate(
+            observed_sharpe=sr, num_trials=N, num_observations=T,
+        )
+        # With 5x empirical variance (fat-tailed crypto): should be harder
+        result_fat = dsr.calculate(
+            observed_sharpe=sr, num_trials=N, num_observations=T,
+            trials_sharpe_variance=5.0 / (T - 1),
+        )
+        # Fat-tail version should have higher p-value (less significant)
+        assert result_fat.p_value > result_thin.p_value
+
+
+class TestConvenienceFunctionTrialsVariance:
+    """Tests that calculate_dsr convenience function supports trials_sharpe_variance."""
+
+    def test_calculate_dsr_accepts_trials_variance(self) -> None:
+        """calculate_dsr passes trials_sharpe_variance through."""
+        result = calculate_dsr(
+            observed_sharpe=1.0,
+            num_trials=100,
+            num_observations=252,
+            trials_sharpe_variance=0.01,
+        )
+        assert result.expected_max_sharpe > 0

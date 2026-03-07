@@ -138,6 +138,7 @@ def apply_discovery_dsr(
     significance_level: float = 0.05,
     skewness: float = 0.0,
     kurtosis: float = 3.0,
+    trials_sharpe_variance: float | None = None,
 ) -> DSRResult:
     """Apply DSR correction for the entire discovery run.
 
@@ -151,6 +152,9 @@ def apply_discovery_dsr(
         significance_level: p-value threshold for significance.
         skewness: Return distribution skewness.
         kurtosis: Return distribution kurtosis.
+        trials_sharpe_variance: Empirical variance of Sharpe ratios across
+            all evaluated candidates. Improves DSR accuracy for fat-tailed
+            return distributions.
 
     Returns:
         DSRResult with significance test.
@@ -162,6 +166,7 @@ def apply_discovery_dsr(
         num_observations=num_observations,
         skewness=skewness,
         kurtosis=kurtosis,
+        trials_sharpe_variance=trials_sharpe_variance,
     )
     logger.info(
         "DSR: sharpe=%.3f trials=%d p=%.4f significant=%s",
@@ -253,6 +258,7 @@ def apply_guardrails(
     num_observations: int = 252,
     skewness: float = 0.0,
     kurtosis: float = 3.0,
+    trials_sharpe_variance: float | None = None,
     wfa: WalkForwardAnalysis | None = None,
     wfa_strategy_id: str = "",
     wfa_data_start: date | None = None,
@@ -272,6 +278,8 @@ def apply_guardrails(
         num_observations: Number of bars/periods in backtest (for DSR).
         skewness: Return distribution skewness (for DSR).
         kurtosis: Return distribution kurtosis (for DSR).
+        trials_sharpe_variance: Empirical variance of Sharpe ratios across
+            all evaluated candidates (for DSR).
         wfa: WalkForwardAnalysis instance (required if require_wfa).
         wfa_strategy_id: Strategy ID for WFA.
         wfa_data_start: Data start date for WFA.
@@ -314,6 +322,7 @@ def apply_guardrails(
             significance_level=config.dsr_significance_level,
             skewness=skewness,
             kurtosis=kurtosis,
+            trials_sharpe_variance=trials_sharpe_variance,
         )
         dsr_passed = dsr_result.is_significant
         if not dsr_passed:

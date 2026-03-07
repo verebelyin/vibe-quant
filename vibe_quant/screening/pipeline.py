@@ -221,6 +221,14 @@ class ScreeningPipeline:
             bar_count = _compute_bar_count(
                 self._start_date, self._end_date, self.dsl.timeframe
             )
+            # Compute empirical variance of trial Sharpes for accurate DSR
+            trials_sharpe_variance: float | None = None
+            if len(all_results) >= 2:
+                sharpes = [r.sharpe_ratio for r in all_results]
+                mean_sr = sum(sharpes) / len(sharpes)
+                trials_sharpe_variance = (
+                    sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
+                )
             dsr_passed = []
             for r in filtered:
                 num_obs = bar_count if bar_count else max(r.total_trades, 30)
@@ -228,6 +236,7 @@ class ScreeningPipeline:
                     observed_sharpe=r.sharpe_ratio,
                     num_trials=num_trials,
                     num_observations=num_obs,
+                    trials_sharpe_variance=trials_sharpe_variance,
                 )
                 if result.is_significant:
                     dsr_passed.append(r)

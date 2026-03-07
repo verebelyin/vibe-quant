@@ -89,6 +89,8 @@ class OverfittingPipeline:
         data_end: date | None = None,
         n_samples: int = 1000,
         allow_mock: bool = False,
+        total_trials: int | None = None,
+        trials_sharpe_variance: float | None = None,
     ) -> PipelineResult:
         """Run overfitting filter chain on sweep results.
 
@@ -101,6 +103,11 @@ class OverfittingPipeline:
             n_samples: Number of samples for Purged K-Fold (default 1000).
             allow_mock: If True, allow MockBacktestRunner fallback for WFA/CV.
                 If False (default), raise ValueError when no real runner is injected.
+            total_trials: Total number of strategies evaluated (for DSR). When
+                provided, overrides len(candidates) as the multiple-testing
+                correction factor. Use this when candidates are pre-filtered.
+            trials_sharpe_variance: Empirical variance of Sharpe ratios across
+                all evaluated trials (for DSR).
 
         Returns:
             PipelineResult with all candidate results and filter counts.
@@ -132,8 +139,9 @@ class OverfittingPipeline:
             config.enable_purged_kfold,
         )
 
-        # Count number of trials for DSR
-        num_trials = len(candidates)
+        # Count number of trials for DSR — use total_trials if provided
+        # (candidates may be pre-filtered, understating the testing burden)
+        num_trials = total_trials if total_trials is not None else len(candidates)
 
         # Initialize filters
         dsr = DeflatedSharpeRatio(significance_level=config.dsr_significance)
@@ -187,6 +195,7 @@ class OverfittingPipeline:
                         num_observations=num_observations,
                         skewness=skewness,
                         kurtosis=kurtosis,
+                        trials_sharpe_variance=trials_sharpe_variance,
                     )
                     passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
                 if passed_dsr:

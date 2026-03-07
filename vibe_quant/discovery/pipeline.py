@@ -467,8 +467,18 @@ class DiscoveryPipeline:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
 
+        # Compute empirical variance of Sharpe ratios across all GA evaluations
+        # for accurate DSR (per Bailey & Lopez de Prado 2014)
+        trials_sharpe_variance: float | None = None
+        if len(all_scored) >= 2:
+            sharpes = [fr.sharpe_ratio for _, fr in all_scored]
+            mean_sr = sum(sharpes) / len(sharpes)
+            trials_sharpe_variance = sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
+
         # Validate top strategies with guardrails (DSR + min trades + complexity)
-        validated = self._validate_top_strategies(top_strategies, total_evaluated)
+        validated = self._validate_top_strategies(
+            top_strategies, total_evaluated, trials_sharpe_variance
+        )
         if validated:
             top_strategies = validated
 
@@ -673,6 +683,7 @@ class DiscoveryPipeline:
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
         total_evaluated: int,
+        trials_sharpe_variance: float | None = None,
     ) -> list[tuple[StrategyChromosome, FitnessResult]] | None:
         """Apply guardrails (DSR, complexity, min trades) to top strategies.
 
@@ -696,6 +707,7 @@ class DiscoveryPipeline:
                 config=guardrail_cfg,
                 num_trials=total_evaluated,
                 num_observations=max(100, fitness.total_trades * 5),
+                trials_sharpe_variance=trials_sharpe_variance,
             )
             if result.passed:
                 validated.append((chrom, fitness))
