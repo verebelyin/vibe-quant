@@ -693,7 +693,11 @@ class StateManager:
             return cursor.lastrowid or 0
 
     def save_sweep_results_batch(self, run_id: int, results: Sequence[JsonDict]) -> None:
-        """Save multiple sweep results in a batch."""
+        """Save multiple sweep results in a batch.
+
+        Deletes any existing sweep_results for run_id first to prevent
+        duplicates on re-run.
+        """
         if not results:
             return
 
@@ -709,6 +713,9 @@ class StateManager:
         placeholders = ", ".join(["?"] * len(columns))
 
         with self._write_lock:
+            self.conn.execute(
+                "DELETE FROM sweep_results WHERE run_id = ?", (run_id,)
+            )
             self.conn.executemany(
                 f"INSERT INTO sweep_results ({', '.join(columns)}) VALUES ({placeholders})",
                 [list(r.values()) for r in processed],
