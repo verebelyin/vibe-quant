@@ -14,7 +14,7 @@ The rule of this file is to describe common mistakes and confusion points that a
 - **Tests:** `pytest` (target 80% coverage on core modules)
 - **Lint:** `ruff check`
 - **Type check:** `mypy`
-- **Backend:** `.venv/bin/uvicorn vibe_quant.api.main:app --port 8000`
+- **Backend:** `.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000`
 - **Frontend:** `cd frontend && pnpm dev` (Vite on port 5173)
 - **Frontend build:** `cd frontend && pnpm build`
 
@@ -26,7 +26,7 @@ Start backend + frontend then test with `agent-browser`. **Always use `dangerous
 
 ```bash
 # Start backend + frontend (background)
-.venv/bin/uvicorn vibe_quant.api.main:app --port 8000 &
+.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000 &
 cd frontend && pnpm dev --port 5173 &
 
 # Open and take initial screenshot
@@ -57,6 +57,39 @@ agent-browser fill @e1 "test_strategy" && agent-browser fill @e2 "description" &
 **Navigation pages** (sidebar links): Strategy Management, Discovery, Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings
 
 **Test flow:** Data Management (download data) → Strategy Management (create strategy) → Backtest Launch (run screening) → Results Analysis (verify results)
+
+## Shell Preferences
+
+- **Always use `rg` (ripgrep) instead of `grep`** — faster, simpler regex syntax (no escaping `|`), better defaults. Use `rg` in Bash tool calls and in skills/scripts.
+  ```bash
+  rg "ERROR|Exception" logs/          # NOT: grep "ERROR\|Exception" logs/
+  rg -c "pattern" file                # count matches
+  rg "pattern" -A5 file               # context after
+  rg "pattern" -l                     # list files only
+  ```
+
+## SQLite Queries (state DB)
+
+DB path: `data/state/vibe_quant.db`. Always use WAL mode.
+
+**Common mistakes to avoid:**
+1. **Don't use `.format()` or f-strings with values** — use `?` placeholders
+2. **Values can be `None`/`str`/numeric** — always handle `None` before formatting with `:.2f`
+3. **No `discovery_runs` table** — discovery runs are in `backtest_runs` with `run_mode='discovery'`
+4. **`row_factory = sqlite3.Row`** enables dict-style access
+
+**Pattern for safe queries:**
+```python
+python3 -c "
+import sqlite3, json
+conn = sqlite3.connect('data/state/vibe_quant.db')
+conn.row_factory = sqlite3.Row
+rows = conn.execute('SELECT * FROM backtest_runs WHERE run_mode=? ORDER BY id DESC LIMIT 5', ('discovery',)).fetchall()
+for r in rows: print(dict(r))
+"
+```
+
+**Key tables:** `backtest_runs` (all run types), `strategies`, `backtest_results`, `background_jobs`, `trades`, `sweep_results`
 
 ## Architecture
 
