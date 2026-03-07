@@ -170,7 +170,7 @@ class TestBacktestJobManager:
         """start_job updates backtest_runs table."""
         pid = manager.start_job(
             run_id=run_id,
-            job_type="validation",
+            job_type="screening",
             command=[sys.executable, "-c", "pass"],
         )
 

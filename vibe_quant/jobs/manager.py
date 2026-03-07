@@ -130,7 +130,26 @@ class BacktestJobManager:
         Raises:
             ValueError: If run already has an active job.
         """
+        # Map job_type to expected run_mode(s)
+        _JOB_TO_MODES: dict[str, set[str]] = {
+            "screening": {"screening"},
+            "validation": {"validation"},
+            "discovery": {"discovery"},
+        }
+        expected_modes = _JOB_TO_MODES.get(job_type)
+
         with self._start_lock:
+            # Validate run_mode matches job_type to prevent cross-mode launches
+            if expected_modes is not None:
+                row = self.conn.execute(
+                    "SELECT run_mode FROM backtest_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                if row and row["run_mode"] not in expected_modes:
+                    raise ValueError(
+                        f"Run {run_id} has mode '{row['run_mode']}', "
+                        f"cannot launch as '{job_type}'"
+                    )
+
             # Check for existing active job
             existing = self._get_job_record(run_id)
             if existing and existing["status"] == "running":
