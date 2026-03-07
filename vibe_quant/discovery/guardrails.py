@@ -49,6 +49,7 @@ class GuardrailConfig:
     """
 
     min_trades: int = 50
+    min_return: float = 0.0  # minimum total return (fraction, e.g. 0.0 = breakeven)
     max_complexity: int = 8
     require_dsr: bool = True
     dsr_significance_level: float = 0.05
@@ -290,6 +291,13 @@ def apply_guardrails(
     if min_trades_reason:
         reasons.append(min_trades_reason)
 
+    # 1b. Minimum return (reject positive-Sharpe but negative-return strategies)
+    min_return_passed = fitness.total_return >= config.min_return
+    if not min_return_passed:
+        reasons.append(
+            f"Return {fitness.total_return:.2%} below minimum {config.min_return:.2%}"
+        )
+
     # 2. Complexity
     complexity_passed, complexity_reason = check_complexity(num_genes, config.max_complexity)
     if complexity_reason:
@@ -355,7 +363,7 @@ def apply_guardrails(
                 reasons.append(kfold_reason)
 
     # Overall verdict: all enabled checks must pass
-    overall = min_trades_passed and complexity_passed
+    overall = min_trades_passed and min_return_passed and complexity_passed
     if dsr_passed is not None:
         overall = overall and dsr_passed
     if wfa_passed is not None:
