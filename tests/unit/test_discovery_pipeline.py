@@ -329,6 +329,57 @@ class TestExportTopStrategies:
 # ---------------------------------------------------------------------------
 
 
+class TestStructuralDedup:
+    """Tests for distance-based top-K deduplication."""
+
+    def test_clones_rejected(self) -> None:
+        """Structurally identical chromosomes are deduped even with different UIDs."""
+        from vibe_quant.discovery.pipeline import _select_diverse_top_k
+        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+
+        gene = StrategyGene(
+            indicator_type="RSI", parameters={"period": 14.0},
+            condition=ConditionType.GT, threshold=50.0,
+        )
+        candidates = []
+        for i in range(5):
+            c = StrategyChromosome(
+                entry_genes=[gene.clone()], exit_genes=[gene.clone()],
+                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+            )
+            candidates.append((c, 0.8 - i * 0.01))
+        result = _select_diverse_top_k(candidates, top_k=5, min_distance=0.15)
+        assert len(result) == 1  # Only 1 unique structure
+
+    def test_diverse_strategies_all_kept(self) -> None:
+        """Structurally different strategies are all kept."""
+        from vibe_quant.discovery.pipeline import _select_diverse_top_k
+        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+
+        indicators = ["RSI", "CCI", "ATR", "STOCH", "ADX"]
+        candidates = []
+        for i, ind in enumerate(indicators):
+            params: dict[str, float] = {"period": 14.0}
+            if ind == "STOCH":
+                params = {"k_period": 14.0, "d_period": 3.0}
+            gene = StrategyGene(
+                indicator_type=ind, parameters=params,
+                condition=ConditionType.GT, threshold=50.0 if ind in ("RSI", "CCI") else 0.01,
+            )
+            c = StrategyChromosome(
+                entry_genes=[gene], exit_genes=[gene.clone()],
+                stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+            )
+            candidates.append((c, 0.9 - i * 0.01))
+        result = _select_diverse_top_k(candidates, top_k=5, min_distance=0.15)
+        assert len(result) == 5  # All different indicators
+
+
+# ---------------------------------------------------------------------------
+# Elite preservation
+# ---------------------------------------------------------------------------
+
+
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:
         cfg = _make_config(population_size=8, elite_count=2)

@@ -84,6 +84,10 @@ class DiscoveryConfig:
     end_date: str = ""
     indicator_pool: list[str] | None = None  # None = use all available
     direction: str | None = None  # "long", "short", "both", or None (random)
+    use_crowding: bool = True  # Use deterministic crowding (True) or classic tournament (False)
+    immigrant_fraction: float = 0.1  # Fraction of population replaced when entropy is low
+    entropy_threshold: float = 0.3  # Entropy below this triggers immigrant injection
+    min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -159,6 +163,44 @@ class DiscoveryResult:
     total_candidates_evaluated: int
     converged: bool
     convergence_generation: int | None
+
+
+def _select_diverse_top_k(
+    scored: list[tuple[StrategyChromosome, FitnessResult | float]],
+    top_k: int = 5,
+    min_distance: float = 0.15,
+) -> list[tuple[StrategyChromosome, FitnessResult | float]]:
+    """Select top-K strategies with diversity enforcement.
+
+    Iterates through candidates sorted by fitness (descending). A candidate
+    is added only if its distance to ALL already-selected strategies exceeds
+    min_distance.
+
+    Args:
+        scored: List of (chromosome, fitness) tuples, sorted by fitness desc.
+        top_k: Maximum number of strategies to select.
+        min_distance: Minimum Gower distance to all selected strategies.
+
+    Returns:
+        List of up to top_k diverse (chromosome, fitness) tuples.
+    """
+    from vibe_quant.discovery.distance import chromosome_distance
+
+    selected: list[tuple[StrategyChromosome, FitnessResult | float]] = []
+
+    for chrom, fitness in scored:
+        if len(selected) >= top_k:
+            break
+
+        is_diverse = all(
+            chromosome_distance(chrom, sel_chrom) >= min_distance
+            for sel_chrom, _ in selected
+        )
+
+        if is_diverse:
+            selected.append((chrom, fitness))
+
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +444,10 @@ class DiscoveryPipeline:
                 )
 
             # Diversity metrics
+            from vibe_quant.discovery.diversity import population_entropy
             logger.info(
-                "  Diversity: indicators=%s directions=%s",
+                "  Diversity: entropy=%.3f indicators=%s directions=%s",
+                population_entropy(population),
                 ind_pcts,
                 dir_counts,
             )
@@ -453,16 +497,36 @@ class DiscoveryPipeline:
             # Evolve next generation (skip on last iteration)
             population = self._evolve_generation(population, fitness_results)
 
-        # Select top-K with deduplication by chromosome uid
+            # Diversity monitoring + immigrant injection
+            from vibe_quant.discovery.diversity import (
+                population_entropy,
+                should_inject_immigrants,
+                inject_random_immigrants,
+            )
+            entropy = population_entropy(population)
+            if should_inject_immigrants(entropy, threshold=cfg.entropy_threshold):
+                scores_for_inject = [fr.adjusted_score for fr in fitness_results]
+                population = inject_random_immigrants(
+                    population, scores_for_inject, fraction=cfg.immigrant_fraction,
+                    direction_constraint=self._direction_constraint,
+                )
+                n_immigrants = max(1, int(len(population) * cfg.immigrant_fraction))
+                logger.info(
+                    "  Diversity intervention: entropy=%.3f < %.1f, injected %d random immigrants",
+                    entropy, cfg.entropy_threshold, n_immigrants,
+                )
+
+        # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
-        seen_uids: set[str] = set()
-        top_strategies: list[tuple[StrategyChromosome, FitnessResult]] = []
-        for chrom, fr in all_scored:
-            if chrom.uid not in seen_uids:
-                seen_uids.add(chrom.uid)
-                top_strategies.append((chrom, fr))
-                if len(top_strategies) >= cfg.top_k:
-                    break
+        top_strategies_raw = _select_diverse_top_k(
+            all_scored,
+            top_k=cfg.top_k,
+            min_distance=cfg.min_diversity_distance,
+        )
+        # Cast back to the expected type (FitnessResult, not float)
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]] = [
+            (chrom, fr) for chrom, fr in top_strategies_raw  # type: ignore[misc]
+        ]
         if last_fitness_results:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
