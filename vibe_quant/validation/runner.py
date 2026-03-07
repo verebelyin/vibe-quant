@@ -148,7 +148,13 @@ class ValidationRunner:
 
             result.execution_time_seconds = time.monotonic() - start_time
             self._store_results(run_id, result)
-            self._state.update_backtest_run_status(run_id, "completed")
+
+            if result.total_trades == 0:
+                error_msg = "Validation produced 0 trades — likely missing/empty data"
+                logger.error("Run %d: %s", run_id, error_msg)
+                self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
+            else:
+                self._state.update_backtest_run_status(run_id, "completed")
             return result
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
@@ -297,7 +303,13 @@ class ValidationRunner:
 
             aggregate.execution_time_seconds = time.monotonic() - start_time
             self._store_results(run_id, aggregate)
-            self._state.update_backtest_run_status(run_id, "completed")
+
+            if aggregate.total_trades == 0:
+                error_msg = "Walk-forward produced 0 trades — likely missing/empty data"
+                logger.error("Run %d: %s", run_id, error_msg)
+                self._state.update_backtest_run_status(run_id, "failed", error_message=error_msg)
+            else:
+                self._state.update_backtest_run_status(run_id, "completed")
             return window_results
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
