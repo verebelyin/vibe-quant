@@ -1176,9 +1176,9 @@ class StrategyCompiler:
                 senkou = spec.default_params.get("senkou", 52)
                 lines.extend(
                     [
-                        "        _high = pd.Series(self._pta_high)",
-                        "        _low = pd.Series(self._pta_low)",
-                        "        _close = pd.Series(self._pta_close)",
+                        "        _high = pd.Series(self._pta_high, dtype=float)",
+                        "        _low = pd.Series(self._pta_low, dtype=float)",
+                        "        _close = pd.Series(self._pta_close, dtype=float)",
                         f"        _ichi = ta.ichimoku(_high, _low, _close, tenkan={tenkan}, kijun={kijun}, senkou={senkou})",
                         "        if _ichi is not None and isinstance(_ichi, tuple) and len(_ichi) >= 1:",
                         "            _df = _ichi[0]",
@@ -1201,7 +1201,7 @@ class StrategyCompiler:
                 period = config.period or spec.default_params.get("period", 20)
                 lines.extend(
                     [
-                        "        _vol = pd.Series(self._pta_volume)",
+                        "        _vol = pd.Series(self._pta_volume, dtype=float)",
                         f"        _result = ta.sma(_vol, length={period})",
                         "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
@@ -1214,7 +1214,7 @@ class StrategyCompiler:
                 signal = config.signal_period or spec.default_params.get("signal_period", 9)
                 lines.extend(
                     [
-                        "        _close = pd.Series(self._pta_close)",
+                        "        _close = pd.Series(self._pta_close, dtype=float)",
                         f"        _macd_df = ta.macd(_close, fast={fast}, slow={slow}, signal={signal})",
                         "        if _macd_df is not None and len(_macd_df) > 0:",
                         "            _last = _macd_df.iloc[-1]",
@@ -1246,9 +1246,9 @@ class StrategyCompiler:
                 period = config.period or spec.default_params.get("period", 14)
                 lines.extend(
                     [
-                        "        _high = pd.Series(self._pta_high)",
-                        "        _low = pd.Series(self._pta_low)",
-                        "        _close = pd.Series(self._pta_close)",
+                        "        _high = pd.Series(self._pta_high, dtype=float)",
+                        "        _low = pd.Series(self._pta_low, dtype=float)",
+                        "        _close = pd.Series(self._pta_close, dtype=float)",
                         f"        _result = ta.willr(_high, _low, _close, length={period})",
                         "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
@@ -1265,7 +1265,7 @@ class StrategyCompiler:
                 )
                 lines.extend(
                     [
-                        f"        _series = pd.Series({source_var})",
+                        f"        _series = pd.Series({source_var}, dtype=float)",
                         f"        _result = ta.{func_name}(_series, length={period})",
                         "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
