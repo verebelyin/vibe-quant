@@ -712,10 +712,11 @@ def crowding_replace(
     d_a1_b1 = chromosome_distance(parents[1], offspring[1])
 
     # Match: minimize total distance
-    if (d_a0_b0 + d_a1_b1) <= (d_a0_b1 + d_a1_b0):
-        matches = [(0, 0), (1, 1)]
-    else:
-        matches = [(0, 1), (1, 0)]
+    matches = (
+        [(0, 0), (1, 1)]
+        if d_a0_b0 + d_a1_b1 <= d_a0_b1 + d_a1_b0
+        else [(0, 1), (1, 0)]
+    )
 
     result = list(parents)  # Start with parents
     for p_idx, o_idx in matches:

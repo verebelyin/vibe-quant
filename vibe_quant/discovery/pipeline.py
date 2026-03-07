@@ -499,9 +499,9 @@ class DiscoveryPipeline:
 
             # Diversity monitoring + immigrant injection
             from vibe_quant.discovery.diversity import (
+                inject_random_immigrants,
                 population_entropy,
                 should_inject_immigrants,
-                inject_random_immigrants,
             )
             entropy = population_entropy(population)
             if should_inject_immigrants(entropy, threshold=cfg.entropy_threshold):

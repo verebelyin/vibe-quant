@@ -55,7 +55,12 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
             cond_val = gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
             cond_counter[cond_val] += 1
 
-    from vibe_quant.discovery.operators import ConditionType, Direction, _ensure_pool, _INDICATOR_NAMES
+    from vibe_quant.discovery.operators import (  # noqa: I001
+        ConditionType,
+        Direction,
+        _ensure_pool,
+        _INDICATOR_NAMES,
+    )
     _ensure_pool()
 
     n_indicators = max(len(_INDICATOR_NAMES), 1)

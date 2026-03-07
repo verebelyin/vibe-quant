@@ -84,10 +84,7 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
         if a.indicator_type in THRESHOLD_RANGES:
             tlo, thi = THRESHOLD_RANGES[a.indicator_type]
             rng = thi - tlo
-            if rng > 0:
-                t_dist = abs(a.threshold - b.threshold) / rng
-            else:
-                t_dist = 0.0
+            t_dist = abs(a.threshold - b.threshold) / rng if rng > 0 else 0.0
         else:
             t_dist = abs(a.threshold - b.threshold) / _THRESHOLD_GLOBAL_RANGE
         weighted_sum += _W_THRESHOLD * min(1.0, t_dist)
