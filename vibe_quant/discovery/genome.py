@@ -122,6 +122,24 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(15.0, 60.0),
         dsl_type="ADX",
     ),
+    "CCI": IndicatorDef(
+        name="CCI",
+        param_ranges={"period": (10, 50)},
+        default_threshold_range=(-200.0, 200.0),
+        dsl_type="CCI",
+    ),
+    "WILLR": IndicatorDef(
+        name="WILLR",
+        param_ranges={"period": (5, 30)},
+        default_threshold_range=(-100.0, 0.0),
+        dsl_type="WILLR",
+    ),
+    "ROC": IndicatorDef(
+        name="ROC",
+        param_ranges={"period": (5, 30)},
+        default_threshold_range=(-10.0, 10.0),
+        dsl_type="ROC",
+    ),
 }
 
 

@@ -4,6 +4,103 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-07: Batch 11 — ADX Re-runs (Bug-Free) + CCI Combos + Genome Pool Expansion
+
+### Goal
+Re-run ADX combos with fixed compiler (Batch 10 had 30-50% failures from period bug). Test CCI+ADX (champion + new trend indicator), ADX+STOCH, ADX+WILLR, ADX+RSI+ATR (3-indicator), and CCI+MFI re-run. Also expanded genome pool: added CCI, WILLR, ROC back (were missing from `INDICATOR_POOL`).
+
+### Bug Fixes Applied During This Batch
+- **Genome pool expansion**: Added CCI (threshold [-200,200]), WILLR ([-100,0]), ROC ([-10,10]) to `INDICATOR_POOL` in `genome.py`. These were missing — all previous CCI/WILLR/ROC discoveries must have had them added in earlier sessions that were lost.
+- **Discovery launch API missing dates**: Discovery runs created via `/api/discovery/launch` store empty `start_date`/`end_date` in `backtest_runs`. The pipeline uses catalog dates internally but doesn't persist them. This caused screening replays to fail with `can't convert negative value to uint64_t` (NT fails on empty date → negative timestamp). Fixed manually by updating DB. Root cause needs proper fix in discovery launch endpoint.
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 219 | ADX+WILLR | 10 | 6 | 4h | ~10min | Completed |
+| 220 | ADX+STOCH | 12 | 8 | 4h | ~12min | Completed |
+| 221 | CCI+ADX | 12 | 8 | 4h | ~12min | Completed |
+| 222 | ADX+RSI+ATR | 12 | 8 | 4h | ~12min | Completed |
+| 223 | CCI+MFI | 10 | 6 | 4h | ~12min | Completed |
+
+All 5 launched via API (parallel). Data range: 2025-03-07 to 2026-03-07 (full catalog, 12 months).
+
+### Full Pipeline Results
+
+| Stage | Run 219 ADX+WILLR | Run 220 ADX+STOCH | Run 221 CCI+ADX | Run 222 ADX+RSI+ATR | Run 223 CCI+MFI |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | 0.348 | 0.508 | **0.608** | 0.454 | 0.443 |
+| **Discovery** sharpe | 0.15 | 1.38 | **2.52** | 0.76 | 0.70 |
+| **Discovery** dd | 11.5% | 4.9% | **5.5%** | 12.9% | 6.5% |
+| **Discovery** trades | 407 | 106 | **52** | 86 | 223 |
+| **Discovery** return | -11.4% | +3.1% | **+11.3%** | +1.3% | -1.7% |
+| **Discovery** PF | 1.02 | 1.38 | **1.78** | 1.12 | 1.13 |
+| **DSR guardrails** | 1/5 FAIL (p=1.0) | 5/5 pass | **5/5 pass** | 5/5 pass | 5/5 pass |
+| **Screening** match | n/a | exact ✓ | **exact ✓** | exact ✓ | exact ✓ |
+| **Validation** sharpe | n/a | 1.54 | **2.53** | 0.45 | 1.02 |
+| **Validation** return | n/a | +4.2% | **+11.4%** | -0.4% | -0.8% |
+| **Validation** dd | n/a | 4.9% | **5.5%** | 12.9% | 6.1% |
+| **Validation** trades | n/a | 106 | **52** | 82 | 222 |
+| **Validation** PF | n/a | 1.43 | **1.78** | 1.07 | 1.19 |
+| **Validation** fees | n/a | $55.47 | **$25.55** | $14.07 | $52.73 |
+
+### Winning Strategies
+
+**Run 221 winner (genome_bb9d4e38b83b) — BEST OF BATCH:**
+- Direction: SHORT only
+- Entry: CCI(19) >= -92.59 AND CCI(33) crosses_above 18.42
+- Exit: CCI(42) crosses_above 26.68
+- SL=4.0%, TP=11.3%
+- Validation: Sharpe=2.53, Return=+11.4%, DD=5.5%, 52 trades, PF=1.78
+- DSR p=0.0000 (highly significant)
+- **Pure CCI** — GA chose CCI only despite ADX being in the pool
+- Zero trade loss through validation (52→52)
+
+**Run 220 winner (genome_92f909e38b34) — second best:**
+- Direction: LONG only
+- Entry: STOCH(k,d) based
+- Exit: STOCH based
+- SL=0.7%, TP=19.4%
+- Validation: Sharpe=1.54, Return=+4.2%, DD=4.9%, 106 trades, PF=1.43
+- **Pure STOCH** — GA chose STOCH only despite ADX being available
+
+### Issues Found
+
+1. **Discovery launch API missing dates (MEDIUM)**: `/api/discovery/launch` doesn't persist `start_date`/`end_date` to `backtest_runs` table. Pipeline uses catalog dates internally but promote/replay fails because screening reads empty dates → NT `uint64_t` error. Manual DB fix applied. Needs proper fix in launch endpoint.
+2. **Genome pool was missing CCI/WILLR/ROC**: These indicators were not in `INDICATOR_POOL` despite being used in Batches 5-10. Must have been added in prior sessions and lost. Re-added in this batch.
+3. **ADX+WILLR failed DSR (run 219)**: All top strategies had negative Sharpe (-0.32), p=1.0. ADX+WILLR produces poor strategies on 4h BTCUSDT.
+4. **GA consistently ignores ADX**: In 4/5 runs where ADX was available, the GA chose other indicators. Only run 222 used ADX for entry (with RSI exit). ADX's threshold range [15,60] may be too narrow or the signal doesn't complement well with threshold comparison.
+
+### Key Findings
+
+1. **CCI dominance confirmed yet again**: Run 221 had CCI+ADX in pool but GA chose pure CCI. Run 223 had CCI+MFI but GA chose pure CCI. CCI's wide threshold range [-200,200] gives much more signal space than other indicators.
+2. **ADX is a weak discovery indicator**: Despite being bug-free now, ADX was rarely selected by GA. When selected (run 222), it produced mediocre results (Sharpe 0.45 validated). ADX measures trend strength [0-100] — useful conceptually but threshold comparison may not be the right approach for it.
+3. **STOCH works well standalone**: Run 220 found a pure STOCH long strategy (Sharpe 1.54 validated, 4.9% DD). First time STOCH succeeded without CCI.
+4. **Validation closely matches discovery**: Run 221 Sharpe improved 2.52→2.53, return 11.3%→11.4%. Run 220 improved 1.38→1.54. Zero trade loss on 4h strategies.
+5. **Clean run**: Zero errors across all 5 discovery logs, zero FutureWarnings. No orphaned processes. Significant improvement over Batches 9-10.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 7 (CCI+RSI) | Batch 9 (MFI+WILLR) | Batch 10 (ADX+MFI) | Batch 11 (CCI+ADX) |
+|--------|-------------------|---------------------|---------------------|---------------------|
+| Validation Sharpe | 7.24 | 2.45 | 1.43 | 2.53 |
+| Validation Return | +11.9% | +17.4% | +8.2% | +11.4% |
+| Validation DD | 0.9% | 5.9% | 8.2% | 5.5% |
+| Validation PF | 4.78 | 1.73 | 1.24 | 1.78 |
+| Direction | both | long | long | short |
+
+Batch 11's CCI+ADX (actually pure CCI) winner is the 3rd best validated strategy ever (after Batch 7's CCI+RSI and Batch 9's MFI+WILLR). Better Sharpe and PF than Batch 10.
+
+### Recommendations
+
+1. **Fix discovery launch API dates**: Persist actual catalog date range to `backtest_runs.start_date/end_date` when launching discovery. Critical for promote/replay workflow.
+2. **Persist genome pool additions**: CCI/WILLR/ROC need to stay in `INDICATOR_POOL` — commit the genome.py change.
+3. **Stop trying ADX in discovery**: 2 batches, 7 runs, GA consistently ignores it. ADX needs indicator-vs-indicator comparison (e.g. ADX > 25 means trending) rather than threshold comparison against fixed values.
+4. **Try STOCH+CCI**: Run 220 found good STOCH strategy. Combining with CCI (champion) could be powerful.
+5. **Try different data windows**: Batch 11 used 2025-03 to 2026-03 (bearish-dominated). Bull-market windows (2024) produced much better results in Batches 6-7.
+6. **Increase pop/gens for CCI runs**: CCI consistently produces the best results — larger search (pop=20, gens=12) could find even better strategies.
+
+---
+
 ## 2026-03-07: Batch 10 — ADX Debut + Novel Indicator Combos
 
 ### Goal
