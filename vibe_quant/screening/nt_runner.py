@@ -290,7 +290,7 @@ class NTScreeningRunner:
         _populated: set[str] = set()
         stats_pnls = bt_result.stats_pnls or {}
         if not stats_pnls:
-            logger.warning("No stats_pnls in bt_result for params %s", params)
+            logger.debug("No stats_pnls in bt_result for params %s", params)
         for _currency, pnl_stats in stats_pnls.items():
             for key, value in pnl_stats.items():
                 if value is None:

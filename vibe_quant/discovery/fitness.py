@@ -542,7 +542,43 @@ def _evaluate_parallel(
     if executor is not None and isinstance(executor, Executor):
         _run_with(executor)
     else:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        pool = ProcessPoolExecutor(max_workers=workers)
+        try:
             _run_with(pool)
+        except RuntimeError:
+            # macOS spawn method fails inside NautilusTrader's Rust runtime.
+            # Explicitly terminate orphaned workers and re-raise so caller
+            # falls back to sequential.
+            _force_shutdown_pool(pool)
+            raise
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     return [r if r is not None else _zero for r in results]
+
+
+def _force_shutdown_pool(pool: object) -> None:
+    """Kill all worker processes in a ProcessPoolExecutor.
+
+    Handles the macOS case where spawn-method workers get stuck at 100% CPU
+    after a RuntimeError during submit().
+    """
+    import signal
+
+    processes = getattr(pool, "_processes", None)
+    if not processes:
+        return
+    for pid, proc in list(processes.items()):
+        try:
+            if proc.is_alive():
+                logger.warning("Killing orphaned pool worker pid=%d", pid)
+                proc.kill()
+                proc.join(timeout=5)
+        except Exception:
+            # Last resort: SIGKILL via os
+            try:
+                import os
+
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
