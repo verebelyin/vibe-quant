@@ -344,6 +344,35 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
     return True
 
 
+def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
+    """Repair a chromosome by re-sampling out-of-range thresholds and fixing param constraints.
+
+    Called after crossover to handle cases where parent A's threshold gets
+    paired with parent B's indicator type, creating impossible conditions.
+    """
+    _ensure_pool()
+    for gene in chrom.entry_genes + chrom.exit_genes:
+        if gene.indicator_type in THRESHOLD_RANGES:
+            tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
+            if gene.threshold < tlo or gene.threshold > thi:
+                gene.threshold = round(random.uniform(tlo, thi), 4)
+        if gene.indicator_type == "MACD":
+            _enforce_param_constraints(gene.indicator_type, gene.parameters)
+    chrom.stop_loss_pct = max(SL_RANGE[0], min(SL_RANGE[1], chrom.stop_loss_pct))
+    chrom.take_profit_pct = max(TP_RANGE[0], min(TP_RANGE[1], chrom.take_profit_pct))
+    # Per-direction SL/TP
+    for attr, valid_range in [
+        ("stop_loss_long_pct", SL_RANGE),
+        ("stop_loss_short_pct", SL_RANGE),
+        ("take_profit_long_pct", TP_RANGE),
+        ("take_profit_short_pct", TP_RANGE),
+    ]:
+        val = getattr(chrom, attr)
+        if val is not None:
+            setattr(chrom, attr, max(valid_range[0], min(valid_range[1], val)))
+    return chrom
+
+
 # ---------------------------------------------------------------------------
 # Genetic operators
 # ---------------------------------------------------------------------------
@@ -419,7 +448,7 @@ def crossover(
         take_profit_long_pct=tp_long_b,
         take_profit_short_pct=tp_short_b,
     )
-    return child_a, child_b
+    return _repair_chromosome(child_a), _repair_chromosome(child_b)
 
 
 def _crossover_genes(

@@ -122,6 +122,53 @@ class TestPerturb:
         assert any(r > 0.05 for r in results), "Should produce values above 0.05 when unbounded"
 
 
+class TestRepairChromosome:
+    def test_repair_fixes_out_of_range_threshold(self) -> None:
+        """Chromosomes with out-of-range thresholds should be repaired."""
+        from vibe_quant.discovery.operators import (
+            StrategyGene, StrategyChromosome, ConditionType, Direction,
+            is_valid_chromosome, _repair_chromosome, _ensure_pool, THRESHOLD_RANGES,
+        )
+        _ensure_pool()
+        # ATR with RSI-scale threshold (impossible: ATR range is 0.001-0.08)
+        bad_gene = StrategyGene(
+            indicator_type="ATR", parameters={"period": 14.0},
+            condition=ConditionType.GT, threshold=72.0,
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[bad_gene],
+            exit_genes=[StrategyGene(
+                indicator_type="RSI", parameters={"period": 14.0},
+                condition=ConditionType.LT, threshold=50.0,
+            )],
+            stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+        )
+        assert not is_valid_chromosome(chrom)
+        repaired = _repair_chromosome(chrom)
+        assert is_valid_chromosome(repaired)
+        lo, hi = THRESHOLD_RANGES["ATR"]
+        assert lo <= repaired.entry_genes[0].threshold <= hi
+
+    def test_repair_preserves_valid_chromosome(self) -> None:
+        """Valid chromosomes should pass through repair unchanged."""
+        from vibe_quant.discovery.operators import (
+            StrategyGene, StrategyChromosome, ConditionType, Direction,
+            is_valid_chromosome, _repair_chromosome,
+        )
+        gene = StrategyGene(
+            indicator_type="RSI", parameters={"period": 14.0},
+            condition=ConditionType.GT, threshold=50.0,
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[gene],
+            exit_genes=[gene.clone()],
+            stop_loss_pct=2.0, take_profit_pct=5.0, direction=Direction.LONG,
+        )
+        assert is_valid_chromosome(chrom)
+        repaired = _repair_chromosome(chrom)
+        assert repaired.entry_genes[0].threshold == 50.0
+
+
 class TestThresholdRanges:
     def test_macd_threshold_range_wide_enough(self) -> None:
         """MACD threshold range must span at least 0.05 to produce viable signals."""
