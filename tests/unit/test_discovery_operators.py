@@ -169,6 +169,32 @@ class TestRepairChromosome:
         assert repaired.entry_genes[0].threshold == 50.0
 
 
+class TestGen1Viability:
+    def test_random_chromosomes_mostly_valid_thresholds(self) -> None:
+        """All random chromosomes should have valid thresholds (is_valid_chromosome passes)."""
+        import random
+        from vibe_quant.discovery.operators import initialize_population, is_valid_chromosome
+        random.seed(42)
+        pop = initialize_population(100)
+        valid_count = sum(1 for c in pop if is_valid_chromosome(c))
+        assert valid_count == 100, f"Only {valid_count}/100 chromosomes valid"
+
+    def test_crossover_produces_valid_offspring(self) -> None:
+        """Crossover + repair should always produce valid chromosomes."""
+        import random
+        from vibe_quant.discovery.operators import initialize_population, crossover, is_valid_chromosome
+        random.seed(42)
+        pop = initialize_population(20)
+        invalid_count = 0
+        for i in range(0, len(pop) - 1, 2):
+            c1, c2 = crossover(pop[i], pop[i + 1])
+            if not is_valid_chromosome(c1):
+                invalid_count += 1
+            if not is_valid_chromosome(c2):
+                invalid_count += 1
+        assert invalid_count == 0, f"{invalid_count} invalid offspring from crossover"
+
+
 class TestThresholdRanges:
     def test_macd_threshold_range_wide_enough(self) -> None:
         """MACD threshold range must span at least 0.05 to produce viable signals."""
