@@ -114,7 +114,7 @@ class OverfittingPipeline:
         # Load candidates from database
         candidates = self._load_candidates(run_id)
         if not candidates:
-            logger.warning("No candidates found for run_id=%d", run_id)
+            logger.error("No candidates found for run_id=%d", run_id)
             return PipelineResult(
                 config=config,
                 total_candidates=0,
@@ -318,6 +318,10 @@ class OverfittingPipeline:
     def _load_candidates(self, run_id: int) -> list[dict[str, Any]]:
         """Load sweep result candidates from database.
 
+        Queries sweep_results first. If empty and the run is a discovery run,
+        falls back to backtest_results and promotes the entry into sweep_results
+        so downstream update/filter queries work unchanged.
+
         Args:
             run_id: Backtest run ID.
 
@@ -342,7 +346,97 @@ class OverfittingPipeline:
         for row in cursor:
             candidates.append(dict(row))
 
+        if not candidates:
+            candidates = self._promote_discovery_results(run_id)
+
         return candidates
+
+    def _promote_discovery_results(self, run_id: int) -> list[dict[str, Any]]:
+        """Copy backtest_results into sweep_results for discovery runs.
+
+        Discovery-mode runs store results in backtest_results, not sweep_results.
+        This copies them so the rest of the pipeline works unchanged.
+
+        Returns:
+            List of promoted candidate dicts (empty if not a discovery run or
+            no backtest_results exist).
+        """
+        row = self.conn.execute(
+            "SELECT run_mode FROM backtest_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if not row or row["run_mode"] != "discovery":
+            return []
+
+        br_row = self.conn.execute(
+            """
+            SELECT br.run_id, br.sharpe_ratio, br.sortino_ratio, br.max_drawdown,
+                   br.total_return, br.profit_factor, br.win_rate, br.total_trades,
+                   br.total_fees, br.total_funding, br.execution_time_seconds,
+                   br.notes, r.strategy_id, s.name AS strategy_name
+            FROM backtest_results br
+            LEFT JOIN backtest_runs r ON br.run_id = r.id
+            LEFT JOIN strategies s ON r.strategy_id = s.id
+            WHERE br.run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+
+        if not br_row:
+            return []
+
+        d = dict(br_row)
+        parameters = d.pop("notes", None) or "{}"
+        d.pop("strategy_name", None)
+        d.pop("strategy_id", None)
+        d.pop("total_trades", None)
+
+        cursor = self.conn.execute(
+            """
+            INSERT INTO sweep_results
+                (run_id, parameters, sharpe_ratio, sortino_ratio, max_drawdown,
+                 total_return, profit_factor, win_rate, total_fees, total_funding,
+                 execution_time_seconds, is_pareto_optimal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                run_id,
+                parameters,
+                d.get("sharpe_ratio"),
+                d.get("sortino_ratio"),
+                d.get("max_drawdown"),
+                d.get("total_return"),
+                d.get("profit_factor"),
+                d.get("win_rate"),
+                d.get("total_fees"),
+                d.get("total_funding"),
+                d.get("execution_time_seconds"),
+            ),
+        )
+        self.conn.commit()
+
+        sweep_id = cursor.lastrowid
+        logger.info(
+            "Promoted discovery backtest_result to sweep_results id=%d for run_id=%d",
+            sweep_id,
+            run_id,
+        )
+
+        return [
+            {
+                "id": sweep_id,
+                "run_id": run_id,
+                "parameters": parameters,
+                "sharpe_ratio": d.get("sharpe_ratio"),
+                "total_return": d.get("total_return"),
+                "sortino_ratio": d.get("sortino_ratio"),
+                "max_drawdown": d.get("max_drawdown"),
+                "profit_factor": d.get("profit_factor"),
+                "win_rate": d.get("win_rate"),
+                "is_pareto_optimal": 1,
+                "strategy_id": br_row["strategy_id"],
+                "strategy_name": br_row["strategy_name"],
+            }
+        ]
 
     def _update_candidate(
         self,

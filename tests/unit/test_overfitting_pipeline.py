@@ -114,6 +114,141 @@ def db_path(tmp_path: Path) -> Path:
     return db_file
 
 
+@pytest.fixture
+def discovery_db_path(tmp_path: Path) -> Path:
+    """Create temp database with discovery run results in backtest_results only."""
+    db_file = tmp_path / "test_discovery_overfitting.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    conn.execute("""
+        CREATE TABLE strategies (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            dsl_config JSON NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE backtest_runs (
+            id INTEGER PRIMARY KEY,
+            strategy_id INTEGER REFERENCES strategies(id),
+            run_mode TEXT NOT NULL,
+            symbols JSON NOT NULL,
+            timeframe TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            parameters JSON NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE sweep_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            parameters TEXT NOT NULL,
+            sharpe_ratio REAL,
+            sortino_ratio REAL,
+            max_drawdown REAL,
+            total_return REAL,
+            profit_factor REAL,
+            win_rate REAL,
+            total_trades INTEGER,
+            total_fees REAL,
+            total_funding REAL,
+            execution_time_seconds REAL,
+            is_pareto_optimal BOOLEAN DEFAULT 0,
+            passed_deflated_sharpe BOOLEAN,
+            passed_walk_forward BOOLEAN,
+            passed_purged_kfold BOOLEAN
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE backtest_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER REFERENCES backtest_runs(id),
+            total_return REAL,
+            sharpe_ratio REAL,
+            sortino_ratio REAL,
+            max_drawdown REAL,
+            profit_factor REAL,
+            win_rate REAL,
+            total_trades INTEGER,
+            total_fees REAL,
+            total_funding REAL,
+            execution_time_seconds REAL,
+            notes TEXT
+        )
+    """)
+
+    conn.execute(
+        "INSERT INTO strategies (id, name, dsl_config) VALUES (?, ?, ?)",
+        (1, "disc_strategy", "{}"),
+    )
+    conn.execute(
+        "INSERT INTO backtest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (10, 1, "discovery", '["BTCUSDT"]', "1h", "2025-01-01", "2025-12-31", "{}"),
+    )
+    conn.execute(
+        """INSERT INTO backtest_results
+           (run_id, sharpe_ratio, total_return, profit_factor, max_drawdown, win_rate,
+            total_fees, total_funding, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (10, 3.2, 85.0, 2.5, 0.08, 0.62, 1.5, 0.3, '{"rsi_period": 14}'),
+    )
+
+    conn.commit()
+    conn.close()
+    return db_file
+
+
+class TestDiscoveryFallback:
+    """Tests for discovery run fallback from backtest_results to sweep_results."""
+
+    def test_load_candidates_promotes_discovery_results(
+        self, discovery_db_path: Path
+    ) -> None:
+        """Discovery run results are promoted from backtest_results to sweep_results."""
+        pipeline = OverfittingPipeline(discovery_db_path)
+        candidates = pipeline._load_candidates(10)
+
+        assert len(candidates) == 1
+        assert candidates[0]["sharpe_ratio"] == 3.2
+        assert candidates[0]["total_return"] == 85.0
+        assert candidates[0]["strategy_name"] == "disc_strategy"
+
+        # Verify promoted into sweep_results
+        row = pipeline.conn.execute(
+            "SELECT * FROM sweep_results WHERE run_id = 10"
+        ).fetchone()
+        assert row is not None
+        assert row["sharpe_ratio"] == 3.2
+
+        pipeline.close()
+
+    def test_pipeline_run_with_discovery(self, discovery_db_path: Path) -> None:
+        """Full pipeline run works with discovery results."""
+        pipeline = OverfittingPipeline(discovery_db_path)
+        result = pipeline.run(run_id=10, config=FilterConfig.dsr_only())
+
+        assert result.total_candidates == 1
+        assert len(result.candidates) == 1
+        pipeline.close()
+
+    def test_no_fallback_for_screening_runs(self, discovery_db_path: Path) -> None:
+        """Screening runs without sweep_results get 0 candidates (no fallback)."""
+        conn = sqlite3.connect(str(discovery_db_path))
+        conn.execute(
+            "INSERT INTO backtest_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (20, 1, "screening", '["BTCUSDT"]', "1h", "2025-01-01", "2025-12-31", "{}"),
+        )
+        conn.commit()
+        conn.close()
+
+        pipeline = OverfittingPipeline(discovery_db_path)
+        candidates = pipeline._load_candidates(20)
+        assert len(candidates) == 0
+        pipeline.close()
+
+
 class TestFilterConfig:
     """Tests for FilterConfig dataclass."""
 
