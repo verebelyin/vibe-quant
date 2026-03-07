@@ -75,6 +75,8 @@ MFI runs ~2x slower than non-MFI (pandas-ta fallback vs Rust-native). 3 concurre
 2. **WILLR+ROC all failed guardrails**: All top-5 had negative Sharpe (-0.25), DSR p=1.0. WILLR+ROC without CCI produces poor strategies on 4h BTCUSDT.
 3. **MFI runs 2x slower**: pandas-ta fallback (~8-16min/gen vs 4-6min/gen for Rust-native indicators).
 4. **CLI discoveries don't appear in UI Discovery Results**: Runs launched via `python -m vibe_quant.discovery` don't register in the API's job tracking — only `/api/discovery/launch` runs show. Validation results DO appear in Results Analysis.
+5. **ProcessPoolExecutor orphaned workers (macOS)**: Run 162 (MFI+CCI+ROC, `max_workers=0`) used `ProcessPoolExecutor` which failed with `RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase` (spawn method on macOS). Pipeline fell back to sequential, but 5+ worker processes were never joined — stuck at 100% CPU until manually killed. Root cause: Python's `spawn` start method on macOS can't fork inside NautilusTrader's Rust runtime. Fix needed: catch the RuntimeError and explicitly terminate/join the pool, or default to sequential on macOS.
+6. **"No stats_pnls" warnings in run 162**: ~40+ instances where `NTScreeningRunner` got no PnL statistics from NT backtest. These chromosomes likely produced zero-profit trades (all positions flat or no fills).
 
 ### Key Findings
 
