@@ -1,0 +1,36 @@
+======================================================================
+OVERFITTING PREVENTION PIPELINE REPORT
+======================================================================
+
+Total candidates: 3
+
+----------------------------------------------------------------------
+FILTER RESULTS
+----------------------------------------------------------------------
+  DSR (Deflated Sharpe):   3/3 (100.0%)
+  WFA (Walk-Forward):      DISABLED
+  Purged K-Fold CV:        DISABLED
+
+  PASSED ALL FILTERS:      3/3 (100.0%)
+
+----------------------------------------------------------------------
+FILTERED CANDIDATES (top 10)
+----------------------------------------------------------------------
+
+  [1] test_strategy
+      Sharpe: 2.500  Return: 5000.00%
+      DSR: PASS
+      WFA: N/A
+      CV:  N/A
+
+  [2] test_strategy
+      Sharpe: 1.500  Return: 3000.00%
+      DSR: PASS
+      WFA: N/A
+      CV:  N/A
+
+  [3] test_strategy
+      Sharpe: 0.500  Return: 1000.00%
+      DSR: PASS
+      WFA: N/A
+      CV:  N/A

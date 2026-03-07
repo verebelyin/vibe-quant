@@ -1,0 +1,16 @@
+
+name: test_strategy
+timeframe: 5m
+indicators:
+  rsi:
+    type: RSI
+    period: 14
+entry_conditions:
+  long:
+    - rsi < 30
+stop_loss:
+  type: fixed_pct
+  percent: 2.0
+take_profit:
+  type: fixed_pct
+  percent: 3.0

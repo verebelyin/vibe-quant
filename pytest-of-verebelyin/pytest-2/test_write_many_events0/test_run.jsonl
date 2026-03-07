@@ -1,0 +1,5 @@
+{"ts":"2026-03-05T22:09:07.457259+00:00","event":"SIGNAL","run_id":"test_run","strategy":"strat","data":{"n":0}}
+{"ts":"2026-03-05T22:09:07.457264+00:00","event":"SIGNAL","run_id":"test_run","strategy":"strat","data":{"n":1}}
+{"ts":"2026-03-05T22:09:07.457265+00:00","event":"SIGNAL","run_id":"test_run","strategy":"strat","data":{"n":2}}
+{"ts":"2026-03-05T22:09:07.457266+00:00","event":"SIGNAL","run_id":"test_run","strategy":"strat","data":{"n":3}}
+{"ts":"2026-03-05T22:09:07.457267+00:00","event":"SIGNAL","run_id":"test_run","strategy":"strat","data":{"n":4}}

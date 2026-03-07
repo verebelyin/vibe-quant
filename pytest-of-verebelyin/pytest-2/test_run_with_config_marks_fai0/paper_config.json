@@ -1,0 +1,1 @@
+{"trader_id": "PAPER-001", "binance": {"api_key": "test_key", "api_secret": "test_secret", "testnet": true}, "symbols": ["BTCUSDT"], "strategy_id": 1}

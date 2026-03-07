@@ -1,0 +1,3 @@
+{"ts":"2026-03-05T21:56:44.711941+00:00","event":"SIGNAL","run_id":"count_test","strategy":"strat","data":{}}
+{"ts":"2026-03-05T21:56:44.712137+00:00","event":"SIGNAL","run_id":"count_test","strategy":"strat","data":{}}
+{"ts":"2026-03-05T21:56:44.712157+00:00","event":"ORDER","run_id":"count_test","strategy":"strat","data":{}}

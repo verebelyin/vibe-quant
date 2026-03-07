@@ -1,0 +1,28 @@
+{
+  "trader_id": "PAPER-001",
+  "binance": {
+    "testnet": true,
+    "account_type": "USDT_FUTURES"
+  },
+  "symbols": [
+    "BTCUSDT"
+  ],
+  "strategy_id": 1,
+  "sizing": {
+    "method": "fixed_fractional",
+    "max_leverage": "12.5",
+    "max_position_pct": "0.5",
+    "risk_per_trade": "0.015",
+    "kelly_fraction": "0.5",
+    "atr_multiplier": "2.0"
+  },
+  "risk": {
+    "max_drawdown_pct": "0.123",
+    "max_daily_loss_pct": "0.02",
+    "max_consecutive_losses": 10,
+    "max_position_count": 5
+  },
+  "db_path": null,
+  "logs_path": "logs/paper",
+  "state_persistence_interval": 60
+}
