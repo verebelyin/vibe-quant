@@ -102,7 +102,11 @@ async def launch_screening(
         latency_preset=body.latency_preset,
     )
 
-    log_file = f"logs/screening_{run_id}.log"
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/screening_{run_id}_{_ts}.log"
     command = [
         sys.executable,
         "-m",
@@ -149,7 +153,11 @@ async def launch_validation(
         latency_preset=body.latency_preset,
     )
 
-    log_file = f"logs/validation_{run_id}.log"
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/validation_{run_id}_{_ts}.log"
     command = [
         sys.executable,
         "-m",

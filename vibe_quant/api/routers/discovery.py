@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -144,7 +144,8 @@ async def launch_discovery(
         parameters=params,
     )
 
-    log_file = f"logs/discovery_{run_id}.log"
+    _ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/discovery_{run_id}_{_ts}.log"
     command = [
         sys.executable,
         "-m",
@@ -365,7 +366,8 @@ def _launch_backtest_job(
     job_type: str,
 ) -> int:
     """Start a screening/validation subprocess for a backtest run."""
-    log_file = f"logs/{job_type}_{run_id}.log"
+    _ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/{job_type}_{run_id}_{_ts}.log"
     command = [
         sys.executable,
         "-m",

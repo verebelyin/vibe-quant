@@ -118,7 +118,11 @@ async def start_paper(
     with config_path.open("w") as f:
         json.dump(config_data, f, indent=2)
 
-    log_file = f"logs/paper_{run_id}.log"
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/paper_{run_id}_{_ts}.log"
     command = [
         sys.executable,
         "-m",
