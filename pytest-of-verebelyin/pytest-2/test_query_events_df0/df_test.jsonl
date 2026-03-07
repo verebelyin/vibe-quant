@@ -1,5 +1,0 @@
-{"ts":"2024-01-15T10:00:00+00:00","event":"FILL","run_id":"df_test","strategy":"strat","data":{"price":42000}}
-{"ts":"2024-01-15T10:01:00+00:00","event":"FILL","run_id":"df_test","strategy":"strat","data":{"price":42010}}
-{"ts":"2024-01-15T10:02:00+00:00","event":"FILL","run_id":"df_test","strategy":"strat","data":{"price":42020}}
-{"ts":"2024-01-15T10:03:00+00:00","event":"FILL","run_id":"df_test","strategy":"strat","data":{"price":42030}}
-{"ts":"2024-01-15T10:04:00+00:00","event":"FILL","run_id":"df_test","strategy":"strat","data":{"price":42040}}
