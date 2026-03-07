@@ -39,7 +39,7 @@ Autonomous loop: pick bead, validate, implement, test, commit, push. Repeat.
    - Do NOT skip this step
 8. COMMIT & PUSH:
    - git add <specific_files>
-   - git commit -m "<type>: <description> (bd-<short_id>)"
+   - git commit -m "<type>: <longer description about the changes> (bd-<short_id>)"
    - bd close <id>
    - bd sync
    - git push
@@ -49,6 +49,7 @@ Autonomous loop: pick bead, validate, implement, test, commit, push. Repeat.
 ## Stopping Conditions
 
 Stop the loop when:
+
 - `bd ready` returns no beads
 - Context window is getting full (>80% used) — push remaining work and summarize
 - A bead requires external input or decisions beyond scope — skip it, note in summary
@@ -56,12 +57,14 @@ Stop the loop when:
 ## Bead Selection
 
 Priority order:
+
 1. Bugs (highest priority first)
 2. Tasks
 3. Features
 4. Chores
 
 Skip beads that:
+
 - Require UI/frontend changes if you're unsure about the design
 - Need external API keys or services not available
 - Are epics (too large for a single grind iteration)
@@ -69,6 +72,7 @@ Skip beads that:
 ## Quality Gates
 
 Before closing any bead:
+
 - Changed Python files pass `ruff check`
 - Relevant tests pass (run specific test files, not always full suite)
 - No import errors in changed modules
@@ -77,7 +81,7 @@ Before closing any bead:
 ## Commit Message Format
 
 ```
-<type>: <concise description> (bd-<short_id>)
+<type>: <longer description about the changes and why> (bd-<short_id>)
 ```
 
 Types: `fix`, `feat`, `refactor`, `chore`, `test`, `docs`
@@ -92,21 +96,25 @@ After the loop ends, output a markdown summary:
 ## Grind Summary
 
 ### Completed
-| Bead | Title | Type | Changes |
-|------|-------|------|---------|
-| bd-xxx | Fix None crash | bug | vibe_quant/foo.py |
+
+| Bead   | Title          | Type | Changes           |
+| ------ | -------------- | ---- | ----------------- |
+| bd-xxx | Fix None crash | bug  | vibe_quant/foo.py |
 
 ### Skipped
-| Bead | Title | Reason |
-|------|-------|--------|
+
+| Bead   | Title       | Reason             |
+| ------ | ----------- | ------------------ |
 | bd-yyy | Redesign UI | needs design input |
 
 ### New Issues Filed
-| Bead | Title | Found While |
-|------|-------|-------------|
+
+| Bead   | Title          | Found While         |
+| ------ | -------------- | ------------------- |
 | bd-zzz | Tech debt in X | implementing bd-xxx |
 
 ### Stats
+
 - Completed: N
 - Skipped: N
 - New issues: N

@@ -94,14 +94,14 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
             "slow_period": (21, 50),
             "signal_period": (5, 13),
         },
-        default_threshold_range=(-0.005, 0.005),
+        default_threshold_range=(-0.05, 0.05),
         dsl_type="MACD",
     ),
     # BBANDS excluded: price-relative indicator, threshold=0 produces no trades
     "ATR": IndicatorDef(
         name="ATR",
         param_ranges={"period": (5, 30)},
-        default_threshold_range=(0.001, 0.03),
+        default_threshold_range=(0.001, 0.08),
         dsl_type="ATR",
     ),
     "STOCH": IndicatorDef(

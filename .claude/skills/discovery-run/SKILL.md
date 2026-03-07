@@ -16,6 +16,7 @@ Full-cycle automated discovery: journal review, 5 parallel discoveries, monitori
 5. **Parallel background commands**: use `cmd1 & cmd2 & wait` pattern. Check exit codes after `wait`.
 
 **Working polling script (copy-paste safe):**
+
 ```bash
 for rid in 232 233 234 235 236; do
   echo -n "Run $rid: "
@@ -40,24 +41,27 @@ done
 ## Indicator Catalog
 
 ### Currently in Discovery Genome Pool
+
 These can be used directly in discovery (`vibe_quant/discovery/genome.py`):
 
-| Indicator | Category | Speed | Param Ranges | Threshold Range |
-|-----------|----------|-------|-------------|-----------------|
-| RSI | Momentum | Rust-native (fast) | period: [5, 50] | [25.0, 75.0] |
-| MACD | Momentum | pandas-ta (slow) | fast: [8,21], slow: [21,50], signal: [5,13] | [-0.005, 0.005] |
-| ATR | Volatility | Rust-native (fast) | period: [5, 30] | [0.001, 0.03] |
-| STOCH | Momentum | Rust-native (fast) | k_period: [5,21], d_period: [3,9] | [20.0, 80.0] |
-| MFI | Volume | Rust-native (fast) | period: [5, 30] | [20.0, 80.0] |
-| ADX | Trend | Rust-native (fast) | period: [7, 30] | [15.0, 60.0] |
-| CCI | Momentum | Rust-native (fast) | period: [10, 50] | [-200.0, 200.0] |
-| WILLR | Momentum | pandas-ta (slow) | period: [5, 30] | [-100.0, 0.0] |
-| ROC | Momentum | Rust-native (fast) | period: [5, 30] | [-10.0, 10.0] |
+| Indicator | Category   | Speed              | Param Ranges                                | Threshold Range |
+| --------- | ---------- | ------------------ | ------------------------------------------- | --------------- |
+| RSI       | Momentum   | Rust-native (fast) | period: [5, 50]                             | [25.0, 75.0]    |
+| MACD      | Momentum   | pandas-ta (slow)   | fast: [8,21], slow: [21,50], signal: [5,13] | [-0.005, 0.005] |
+| ATR       | Volatility | Rust-native (fast) | period: [5, 30]                             | [0.001, 0.03]   |
+| STOCH     | Momentum   | Rust-native (fast) | k_period: [5,21], d_period: [3,9]           | [20.0, 80.0]    |
+| MFI       | Volume     | Rust-native (fast) | period: [5, 30]                             | [20.0, 80.0]    |
+| ADX       | Trend      | Rust-native (fast) | period: [7, 30]                             | [15.0, 60.0]    |
+| CCI       | Momentum   | Rust-native (fast) | period: [10, 50]                            | [-200.0, 200.0] |
+| WILLR     | Momentum   | pandas-ta (slow)   | period: [5, 30]                             | [-100.0, 0.0]   |
+| ROC       | Momentum   | Rust-native (fast) | period: [5, 30]                             | [-10.0, 10.0]   |
 
 **IMPORTANT:** Always verify the genome pool is current before launching. Run:
+
 ```bash
 rg "INDICATOR_POOL" vibe_quant/discovery/genome.py -A 3 | head -40
 ```
+
 If a needed indicator is missing, add it before discovery.
 
 ### Full DSL Catalog (available for backtesting, need genome pool expansion for discovery)
@@ -77,6 +81,7 @@ If a needed indicator is missing, add it before discovery.
 ## API Reference (Critical — avoid guessing endpoints)
 
 **Backend startup:**
+
 ```bash
 # ALWAYS check if backend is already running before starting
 lsof -i :8000 2>/dev/null | head -3
@@ -85,9 +90,11 @@ lsof -i :8000 2>/dev/null | head -3
 # Wait and verify:
 sleep 3 && curl -s http://localhost:8000/api/data/coverage | python3 -c "import json,sys; print('Backend OK' if json.load(sys.stdin) else 'FAIL')"
 ```
+
 Note: uses `create_app` factory, NOT `app` directly. Module is `vibe_quant.api.app`, NOT `vibe_quant.api.main`.
 
 **Discovery endpoints:**
+
 ```
 POST /api/discovery/launch                              → {run_id, status, ...}
 GET  /api/discovery/jobs/{run_id}/progress              → {run_id, status, progress: {generation, best_fitness, ...}}
@@ -96,6 +103,7 @@ POST /api/discovery/results/{run_id}/promote/{idx}?mode=screening  → {strategy
 ```
 
 **Results endpoints:**
+
 ```
 GET  /api/results/runs/{run_id}                         → {sharpe_ratio, total_trades, total_return, profit_factor, max_drawdown, win_rate, total_fees, sortino_ratio, ...}
 GET  /api/results/runs/{run_id}/trades                  → trade list
@@ -103,15 +111,18 @@ GET  /api/results/runs/summary                          → all runs summary
 ```
 
 **Strategy endpoints:**
+
 ```
 GET  /api/strategies/{id}                               → {id, name, dsl_config, ...}
 ```
 
 **Discovery result field names** (NOT the same as results/runs):
+
 - `score`, `sharpe`, `max_dd`, `pf`, `trades`, `return_pct`
 - DSR info is in the discovery **log file**, not the API response
 
 **Results/runs field names:**
+
 - `sharpe_ratio`, `total_trades`, `total_return`, `profit_factor`, `max_drawdown`, `win_rate`, `total_fees`
 
 **Known bug — discovery launch missing dates:**
@@ -120,6 +131,7 @@ Discovery launch API doesn't save `start_date`/`end_date` to `backtest_runs`. Th
 **CRITICAL ORDERING:** You MUST fix dates BEFORE promoting. The promote endpoint auto-runs screening immediately. If dates are empty when you promote, screening produces 0 trades and you must re-run.
 
 **Correct workflow:**
+
 ```bash
 # 1. Get the data range from ANY discovery log
 rg "Data range" logs/discovery_{FIRST_RUN_ID}.log | head -1
@@ -161,6 +173,7 @@ print(f'trades={tr}' + (' — OK' if tr > 0 else ' — NEED RE-RUN'))
 ```
 
 **Validation runs — create manually** (promote endpoint may fail for re-promotes):
+
 ```python
 python3 -c "
 import sqlite3, json
@@ -173,9 +186,11 @@ for sid in [STRATEGY_IDS]:
 conn.commit()
 "
 ```
+
 Then launch: `.venv/bin/python -m vibe_quant validation run --run-id {run_id}`
 
 **Screening re-runs:**
+
 ```bash
 .venv/bin/python -m vibe_quant screening run --run-id {run_id}
 ```
@@ -185,6 +200,7 @@ Then launch: `.venv/bin/python -m vibe_quant validation run --run-id {run_id}`
 DB path: `data/state/vibe_quant.db`
 
 **Always use `python3 -c` with `?` placeholders** — NEVER use f-strings or `.format()` for values:
+
 ```python
 python3 -c "
 import sqlite3, json
@@ -196,12 +212,14 @@ if row: print(dict(row))
 ```
 
 **Handle None before formatting** — DB values can be `None`, `str`, or numeric:
+
 ```python
 # WRONG: print(f'{val:.2f}')  — crashes if val is None
 # RIGHT: print(f'{val:.2f}' if val is not None else 'N/A')
 ```
 
 **Key tables:**
+
 - `backtest_runs` — all runs (discovery, screening, validation). Columns: id, strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status, pid, started_at, completed_at
 - `strategies` — saved strategies. Columns: id, name, dsl_config, strategy_type
 - `backtest_results` — stored results per run
@@ -221,6 +239,7 @@ if row: print(dict(row))
 6. Present the 5 combos to user for approval before launching
 
 **Combo selection heuristics (from journal learnings):**
+
 - Volume + momentum combos perform well (MFI+WILLR best so far)
 - CCI+RSI is all-time champion — consider variations
 - STOCH is the #2 indicator after CCI (Batch 12: Sharpe 2.55 validated standalone)
@@ -234,6 +253,7 @@ if row: print(dict(row))
 ### Phase 2: Launch 5 Parallel Discoveries
 
 **Pre-launch checklist:**
+
 1. Verify backend is running: `lsof -i :8000`
 2. Verify genome pool: `rg "INDICATOR_POOL" vibe_quant/discovery/genome.py -A 3 | head -40`
 
@@ -249,11 +269,13 @@ Convergence generations: 5
 ```
 
 **Time budget**: 20 minutes total. If combos include slow indicators (pandas-ta), reduce pop/gens:
+
 - All Rust-native: pop=12, gens=8
 - 1 pandas-ta indicator: pop=10, gens=6
 - 2 pandas-ta indicators: pop=8, gens=5
 
 Launch command (repeat for each combo):
+
 ```bash
 curl -s -X POST http://localhost:8000/api/discovery/launch \
   -H "Content-Type: application/json" \
@@ -299,6 +321,7 @@ Report results in a markdown table. Repeat until all runs show `completed`.
 ### Phase 4: Collect Results
 
 Once all complete, fetch results. **Use the correct field names** (discovery results differ from backtest results):
+
 ```bash
 # Discovery results — fields: score, sharpe, max_dd, pf, trades, return_pct
 for rid in 232 233 234 235 236; do
@@ -395,6 +418,7 @@ Verify: discovery metrics == screening metrics (trade count, Sharpe, return, PF 
 ### Phase 7: Validation Backtest
 
 For strategies that passed screening, create validation runs manually:
+
 ```bash
 python3 -c "
 import sqlite3, json
@@ -435,6 +459,7 @@ done
 ```
 
 **If errors found**: Create a bead for each distinct issue:
+
 ```bash
 bd create --title="[discovery-run] <error description>" --type=bug --priority=2
 bd sync && git push
@@ -478,7 +503,7 @@ Append a new batch entry to `docs/discovery-journal.md` following the exact form
 ```bash
 git add docs/discovery-journal.md
 bd sync
-git commit -m "feat: Batch N discovery journal — <brief summary>"
+git commit -m "feat: Batch N discovery journal — <summary>"
 bd sync
 git push
 ```

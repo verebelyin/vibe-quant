@@ -90,3 +90,23 @@ class TestCrowdingReplace:
         )
         assert result[0].uid == "off_rsi"  # RSI offspring won (0.5 > 0.3)
         assert result[1].uid == parent_b.uid  # CCI parent survived (0.9 > 0.1)
+
+
+class TestThresholdRanges:
+    def test_macd_threshold_range_wide_enough(self) -> None:
+        """MACD threshold range must span at least 0.05 to produce viable signals."""
+        from vibe_quant.discovery.operators import THRESHOLD_RANGES, _ensure_pool
+
+        THRESHOLD_RANGES.clear()
+        _ensure_pool()
+        lo, hi = THRESHOLD_RANGES["MACD"]
+        assert hi - lo >= 0.05, f"MACD range too narrow: ({lo}, {hi})"
+
+    def test_atr_threshold_range_wide_enough(self) -> None:
+        """ATR threshold range must span at least 0.05 to produce viable signals."""
+        from vibe_quant.discovery.operators import THRESHOLD_RANGES, _ensure_pool
+
+        THRESHOLD_RANGES.clear()
+        _ensure_pool()
+        lo, hi = THRESHOLD_RANGES["ATR"]
+        assert hi - lo >= 0.05, f"ATR range too narrow: ({lo}, {hi})"
