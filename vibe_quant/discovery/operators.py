@@ -679,3 +679,47 @@ def _random_chromosome(
         chrom.take_profit_long_pct = round(random.uniform(*TP_RANGE), 4)
         chrom.take_profit_short_pct = round(random.uniform(*TP_RANGE), 4)
     return chrom
+
+
+def crowding_replace(
+    parents: list[StrategyChromosome],
+    parent_fitness: Sequence[float],
+    offspring: list[StrategyChromosome],
+    offspring_fitness: Sequence[float],
+) -> list[StrategyChromosome]:
+    """Deterministic crowding: offspring replace most-similar parent if fitter.
+
+    Given 2 parents and 2 offspring (from crossover+mutation of those parents),
+    match each offspring to the parent it's most similar to. If the offspring
+    is at least as fit as that parent, it replaces the parent. Otherwise the
+    parent survives.
+
+    Args:
+        parents: Two parent chromosomes.
+        parent_fitness: Fitness scores for parents.
+        offspring: Two offspring chromosomes.
+        offspring_fitness: Fitness scores for offspring.
+
+    Returns:
+        List of 2 chromosomes (mix of parents and offspring).
+    """
+    from vibe_quant.discovery.distance import chromosome_distance
+
+    # Compute 4 distances for matching
+    d_a0_b0 = chromosome_distance(parents[0], offspring[0])
+    d_a0_b1 = chromosome_distance(parents[0], offspring[1])
+    d_a1_b0 = chromosome_distance(parents[1], offspring[0])
+    d_a1_b1 = chromosome_distance(parents[1], offspring[1])
+
+    # Match: minimize total distance
+    if (d_a0_b0 + d_a1_b1) <= (d_a0_b1 + d_a1_b0):
+        matches = [(0, 0), (1, 1)]
+    else:
+        matches = [(0, 1), (1, 0)]
+
+    result = list(parents)  # Start with parents
+    for p_idx, o_idx in matches:
+        if offspring_fitness[o_idx] >= parent_fitness[p_idx]:
+            result[p_idx] = offspring[o_idx]
+
+    return result
