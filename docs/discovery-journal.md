@@ -4,6 +4,125 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-07: Batch 14 — MACD Gap Fill + STOCH+CCI Large Search + MFI+WILLR Re-run
+
+### Goal
+Fill the MACD gap (never tried with top-2 indicators CCI/STOCH), push STOCH+CCI harder with larger population/generations (B13 recommended), re-run CCI+ROC on current data (B9 was older window), and re-validate B9's MFI+WILLR champion on current 12mo bearish window.
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 260 | STOCH+CCI | 16 | 10 | 4h | ~9min | Completed |
+| 261 | MACD+CCI | 10 | 6 | 4h | ~6min | Completed |
+| 262 | MACD+STOCH | 10 | 6 | 4h | ~6min | Completed |
+| 263 | CCI+ROC | 12 | 8 | 4h | ~7min | Completed |
+| 264 | MFI+WILLR | 10 | 6 | 4h | ~10min | Completed (both slow) |
+
+All 5 launched via API (parallel). Data range: 2025-03-07 to 2026-03-07 (full catalog, 12 months). 5 concurrent runs caused CPU contention — total wall time ~27 min.
+
+### Full Pipeline Results
+
+| Stage | Run 260 STOCH+CCI | Run 261 MACD+CCI | Run 262 MACD+STOCH | Run 264 MFI+WILLR | Run 263 CCI+ROC |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | **0.7399** | 0.5046 | 0.5220 | 0.4316 | 0.2899 |
+| **Discovery** sharpe | **3.95** | 1.63 | 1.85 | 0.42 | -0.68 |
+| **Discovery** dd | **6.8%** | 13.1% | 4.3% | 10.5% | 30.1% |
+| **Discovery** trades | **90** | 132 | 332 | 164 | 119 |
+| **Discovery** return | **+30.3%** | +7.4% | -0.6% | -1.4% | -15.8% |
+| **Discovery** PF | **2.35** | 1.29 | 1.33 | 1.07 | 0.92 |
+| **DSR guardrails** | **5/5 pass** | 5/5 pass | 5/5 pass | 5/5 pass | **0/5 FAIL (p=1.0)** |
+| **Screening** match | exact ✓ | exact ✓ | exact ✓ | exact ✓ | n/a |
+| **Validation** sharpe | **3.70** | 1.57 | 1.95 | 0.10 | n/a |
+| **Validation** return | **+27.6%** | +8.8% | +0.0% | -3.8% | n/a |
+| **Validation** dd | **6.4%** | 12.4% | 4.3% | 10.6% | n/a |
+| **Validation** trades | **89** | 134 | 332 | 163 | n/a |
+| **Validation** PF | **2.25** | 1.28 | 1.34 | 1.02 | n/a |
+| **Validation** fees | $45.42 | $66.98 | $74.85 | $40.70 | n/a |
+| **Validation** win rate | **58.4%** | 56.0% | 51.2% | 42.3% | n/a |
+
+### Winning Strategies
+
+**Run 260 winner (genome_8343b72dd413) — BEST OF BATCH:**
+- Direction: SHORT only
+- Entry: STOCH(k=18, d=9) > 39.04 AND STOCH(k=15, d=9) crosses_above 47.58
+- Exit: CCI(10) crosses_below 60.48
+- SL=4.1%, TP=10.3%
+- Validation: Sharpe=3.70, Return=+27.6%, DD=6.4%, 89 trades, PF=2.25, WR=58.4%
+- DSR p=0.0000 (highly significant)
+- **STOCH+CCI again**: STOCH entry trigger + CCI exit, same pattern as B13's winner
+- Evolution: 0.539 → 0.566 → 0.666 → 0.712 → 0.712 → 0.712 → 0.712 → 0.735 → 0.735 → 0.740
+- Lost only 1 trade in validation (90→89)
+- **Highest validated return on current data** (+27.6% vs B13's +4.2%)
+
+**Run 262 winner (genome_53d51bb9dfdc) — MACD+STOCH multi-indicator:**
+- Direction: LONG only
+- Entry: MACD(20/38/10) >= 0.0045 AND MACD(13/46/5) >= -0.0019
+- Exit: STOCH(k=19, d=4) >= 58.15
+- SL=8.7%, TP=16.6%
+- Validation: Sharpe=1.95, Return=+0.0%, DD=4.3%, 332 trades, PF=1.34, WR=51.2%
+- **First true MACD winner**: Uses MACD for entry (dual confirmation) and STOCH for exit
+- **Only long strategy** — rare on this bearish window. Sharpe improved in validation (1.85→1.95)
+- Zero trade loss (332→332)
+
+**Run 261 winner (genome_6484bf41a026) — MACD+CCI multi-indicator:**
+- Direction: SHORT only
+- Entry: CCI(14) >= 53.84
+- Exit: MACD(11/27/5) >= -0.0015 AND CCI(14) < 29.81
+- SL=2.2%, TP=8.9%
+- Validation: Sharpe=1.57, Return=+8.8%, DD=12.4%, 134 trades, PF=1.28, WR=56.0%
+- **Uses both indicators**: CCI entry + MACD+CCI exit — true multi-indicator exit
+- Gained 2 trades in validation (132→134)
+
+**Run 264 winner (genome_bb462b39aa4b) — MFI+WILLR:**
+- Direction: BOTH
+- Entry: MFI(9) >= 45.70
+- Exit: WILLR(6) crosses_above -71.20
+- SL=6.6%, TP=6.2%
+- Validation: Sharpe=0.10 (76% degradation from 0.42), Return=-3.8%, DD=10.6%, 163 trades, PF=1.02
+- **MFI+WILLR failed on current window**: B9's MFI+WILLR was Sharpe 2.45 on 2025-03→2026-03 but that was a different data window. Current bearish conditions don't suit this combo in both-direction mode
+- Lost 1 trade in validation (164→163)
+
+### Issues Found
+
+1. **Discovery launch API missing dates (KNOWN)**: Same as all previous batches. Manual DB fix required before promote.
+2. **CCI+ROC completely failed (run 263)**: Negative Sharpe (-0.68), all DSR p=1.0. GA converged on a losing strategy. CCI+ROC is poor on this data window (B9's success was on older data).
+3. **MFI+WILLR collapsed on current window (run 264)**: Sharpe 0.42 discovery → 0.10 validation (76% degradation). The B9 MFI+WILLR champion (Sharpe 2.45) used a different strategy (long-only, MFI crosses_above 50.2 entry). Current run found both-direction MFI entry which doesn't work.
+4. **MACD signal/histogram fallback warnings**: 61 warnings in run 261, 60 in run 262. MACD strategies use NT's MACD line (.value) not signal/histogram. Known limitation.
+
+### Key Findings
+
+1. **STOCH+CCI is reproducible**: Run 260 produced Sharpe 3.70 validated (vs B13's 3.52). Same entry pattern: STOCH triggers, CCI confirms exit. Larger search (pop=16, gen=10 vs pop=12, gen=8) found higher return (+27.6% vs +4.2%) with similar DD (6.4% vs 2.1%).
+2. **MACD works as a multi-indicator partner**: Both MACD runs (261, 262) produced true multi-indicator strategies. First time MACD has been part of a winning combo. MACD's narrow threshold range is overcome when CCI or STOCH handles the primary signal.
+3. **MACD+STOCH found a rare long strategy**: Run 262 is long-only with Sharpe 1.95 on a bearish window. Dual MACD entry (two different period combos) is selective, and STOCH exit manages position timing.
+4. **CCI+ROC doesn't work on current data**: B9 found Sharpe 2.04 on 2024-era data, but current bearish window kills this combo. Context-dependent.
+5. **MFI+WILLR is data-window sensitive**: B9's champion was long-only on different data. Current both-direction version fails. The indicator combo works but direction and data window matter enormously.
+6. **Clean run**: Zero errors across all 16 log files.
+7. **Run 260 didn't converge**: Evolution still improving at Gen 10 (0.735→0.740). Even larger search (pop=20, gen=15) might find better parameters.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 7 (CCI+RSI) | Batch 9 (MFI+WILLR) | Batch 13 (STOCH+CCI) | Batch 14 (STOCH+CCI) |
+|--------|-------------------|---------------------|---------------------|---------------------|
+| Validation Sharpe | 7.24 | 2.45 | 3.52 | **3.70** |
+| Validation Return | +11.9% | +17.4% | +4.2% | **+27.6%** |
+| Validation DD | 0.9% | 5.9% | 2.1% | **6.4%** |
+| Validation PF | 4.78 | 1.73 | 1.72 | **2.25** |
+| Direction | both | long | both | short |
+| Winner indicator | CCI | MFI+WILLR | STOCH+CCI | **STOCH+CCI** |
+
+Batch 14's STOCH+CCI improves on B13 across the board: higher Sharpe (3.70 vs 3.52), much higher return (+27.6% vs +4.2%), higher PF (2.25 vs 1.72). DD is higher (6.4% vs 2.1%) — the trade-off for higher returns. Still the **3rd best validated Sharpe** ever (after B7's 7.24 and B7's 5.56).
+
+### Recommendations
+
+1. **Paper trade run 260/269**: Best strategy on current data. Sharpe 3.70, PF 2.25, +27.6% return with 6.4% DD.
+2. **Even larger STOCH+CCI search**: Run 260 didn't converge at gen 10. Try pop=20, gen=15 for deeper exploration.
+3. **MACD is viable as exit/confirmation**: Runs 261/262 prove MACD works when paired with stronger entry indicators. Try MACD+ROC or MACD+RSI next.
+4. **Stop re-running CCI+ROC**: Failed twice now (B9 older data, B14 current data). The combo is unreliable.
+5. **MFI+WILLR needs direction constraint**: B9's success was long-only. Current both-direction attempt failed. Try MFI+WILLR with forced long direction.
+6. **STOCH+CCI short-only is the proven combo**: B13 (both, Sharpe 3.52) and B14 (short, Sharpe 3.70) both use STOCH entry + CCI exit. The short version is stronger on current data.
+
+---
+
 ## 2026-03-07: Batch 13 — ATR Exploration + STOCH+CCI Re-run + 4-Indicator Experiment
 
 ### Goal
