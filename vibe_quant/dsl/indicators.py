@@ -358,9 +358,12 @@ def _tema_spec() -> IndicatorSpec:
 
 @indicator_registry.register("MACD")
 def _macd_spec() -> IndicatorSpec:
+    # Always use pandas-ta: NT's MovingAverageConvergenceDivergence only exposes
+    # MACD line (.value), not signal or histogram. Strategies using signal crossover
+    # silently compute wrong conditions with NT class.
     return IndicatorSpec(
         name="MACD",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "MovingAverageConvergenceDivergence"),
+        nt_class=None,
         pandas_ta_func="macd",
         default_params={"fast_period": 12, "slow_period": 26, "signal_period": 9},
         param_schema={"fast_period": int, "slow_period": int, "signal_period": int},
