@@ -4,6 +4,108 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 16 — Ultra-Deep STOCH+CCI + Larger CCI+MFI+WILLR + CCI+RSI Current Window
+
+### Goal
+Follow B15 recommendations: (1) even deeper STOCH+CCI search (pop=30, gen=20 — B15 not converged at gen 15), (2) CCI+MFI+WILLR larger search (pop=18, gen=12 — B15 first true 3-indicator at smaller scale), (3) CCI+RSI on current data (was all-time best Sharpe 7.24 on old 2024-era data, never tested on current 2025-03→2026-03 bearish window).
+
+### Configuration
+| Run | Indicators | Pop | Gens | TF | Time | Status |
+|-----|-----------|-----|------|----|------|--------|
+| 285 | STOCH+CCI | 30 | 20 | 4h | ~24min | Completed (not converged, stuck) |
+| 286 | CCI+MFI+WILLR | 18 | 12 | 4h | ~23min | Completed (not converged) |
+| 287 | CCI+RSI | 16 | 10 | 4h | ~8min | Completed |
+
+3 runs launched via API (parallel). Data range: 2025-03-08 to 2026-03-08 (full catalog, 12 months). 3 concurrent runs = less CPU contention.
+
+### Full Pipeline Results
+
+| Stage | Run 285 STOCH+CCI | Run 286 CCI+MFI+WILLR | Run 287 CCI+RSI |
+|-------|----|----|------|
+| **Discovery** score | 0.5782 | 0.5729 | 0.4832 |
+| **Discovery** sharpe | 2.40 | **2.74** | 1.04 |
+| **Discovery** dd | 1.8% | 5.9% | 10.3% |
+| **Discovery** trades | 56 | 60 | 85 |
+| **Discovery** return | +2.8% | **+10.5%** | +3.6% |
+| **Discovery** PF | 1.66 | 1.56 | 1.17 |
+| **DSR guardrails** | **0/5 FAIL** (p=1.0) | **0/5 FAIL** (p=1.0) | **0/5 FAIL** (p=1.0) |
+| **Screening** match | exact | exact | exact |
+| **Validation** sharpe | 2.43 (+1%) | **2.41** (-12%) | 0.45 (-57%) |
+| **Validation** return | +3.0% | **+9.7%** | +1.4% |
+| **Validation** dd | 1.8% | 6.6% | 12.0% |
+| **Validation** trades | 56 | 61 | 84 |
+| **Validation** PF | 1.69 | 1.48 | 1.07 |
+| **Validation** fees | $11.51 | $32.16 | $12.82 |
+| **Validation** win rate | 57.1% | 59.0% | **83.3%** |
+
+### Winning Strategies
+
+**Run 285 winner (genome_67cf0b336b00) — STOCH+CCI deep:**
+- Direction: LONG only
+- Discovery: Sharpe=2.40, DD=1.8%, 56 trades, PF=1.66, Return=+2.8%
+- Validation: Sharpe=2.43 (improved +1%), Return=+3.0%, DD=1.8%, 56 trades, PF=1.69, WR=57.1%
+- DSR p=1.0 FAIL — unfiltered fallback
+- Evolution: flat at 0.578 for ALL 20 generations — GA trapped in local optimum from gen 1
+- Very low fees ($11.51 = 56 trades, 4h, selective)
+- **Disappointing vs B15**: B15 pop=20 gen=15 found Sharpe 9.10; pop=30 gen=20 got stuck at Sharpe 2.40
+
+**Run 286 winner (genome_94291d2c80bc) — CCI+MFI+WILLR:**
+- Direction: BOTH (long+short)
+- Discovery: Sharpe=2.74, DD=5.9%, 60 trades, PF=1.56, Return=+10.5%
+- Validation: Sharpe=2.41 (-12% degradation), Return=+9.7%, DD=6.6%, 61 trades (+1), PF=1.48, WR=59.0%
+- DSR p=1.0 FAIL — unfiltered fallback
+- **Better than B15's CCI+MFI+WILLR**: B15 got Sharpe 1.65; this run found Sharpe 2.74 discovery / 2.41 validated
+- 3-indicator architecture confirmed viable with proper search depth
+- Evolution: 0.508 → 0.573 (major jump at gen 5-6), then plateau
+
+**Run 287 winner (genome_7603817bb3d1) — CCI+RSI current data:**
+- Direction: SHORT only
+- Discovery: Sharpe=1.04, DD=10.3%, 85 trades, PF=1.17, Return=+3.6%
+- Validation: Sharpe=0.45 (-57% degradation), Return=+1.4%, DD=12.0%, 84 trades, PF=1.07, WR=83.3%
+- DSR p=1.0 FAIL — unfiltered fallback
+- **CCI+RSI fails on current bearish window**: B7's Sharpe 7.24 was on 2024-era data. Current window doesn't suit this combo.
+- 57% Sharpe degradation in validation — unreliable strategy
+- WR=83.3% is extremely high but PF=1.07 shows tiny average wins — likely SL too wide vs TP
+
+### Issues Found
+
+1. **All 3 runs failed DSR (p=1.0)**: First batch with universal DSR failure. Strategies are weak — Sharpe below 3.0 tends to fail DSR with 160-600 trials. The pipeline falls back to unfiltered output.
+2. **STOCH+CCI GA got stuck (run 285)**: Evolution flat at 0.578 for all 20 gens from gen 1. GA trapped in local optimum — increasing pop/gens didn't help. The B15 result (Sharpe 9.10) was highly dependent on lucky initialization. With different seed, same pool converges to a much worse solution.
+3. **Discovery launch API missing dates (KNOWN)**: Same as all previous batches. Manual DB fix required before promote.
+
+### Key Findings
+
+1. **Deep search doesn't guarantee better results — GA is highly seed-dependent**: B15's STOCH+CCI found Sharpe 9.10 (pop=20, gen=15) but B16 found only 2.40 (pop=30, gen=20) because the GA got stuck in a different basin. Increasing pop/gens cannot overcome a bad initialization when the GA plateaus from gen 1.
+2. **All 3 DSR FAIL is a red flag**: When all strategies produce p=1.0, it means the discovered Sharpe ratios are not statistically distinguishable from random. Low Sharpe (≤2.74) + many trials (160-600) is a recipe for DSR failure. Only strategies with Sharpe >3.5+ reliably pass DSR.
+3. **CCI+MFI+WILLR improved with larger search**: B15 found Sharpe 1.65 (pop=14, gen=10); B16 found Sharpe 2.74 (pop=18, gen=12). The extra search depth helped this 3-indicator combo.
+4. **CCI+RSI is data-window specific**: B7's Sharpe 7.24 was on 2024-era data. On current 2025-03→2026-03 bearish window, best is 1.04 discovery / 0.45 validation. Different market regime kills this combo.
+5. **Clean run**: Zero errors across all 9 log files. 8/15/1 warnings (expected MACD/WillR-related).
+6. **Validation of run 285 slightly improved**: Sharpe 2.40→2.43, consistent with B15's pattern where STOCH+CCI improves in validation.
+
+### Comparison with Previous Batches
+
+| Metric | Batch 15 (STOCH+CCI) | Batch 16 (STOCH+CCI) | Batch 16 (CCI+MFI+WILLR) |
+|--------|---------------------|---------------------|--------------------------|
+| Pop/Gens | 20/15 | 30/20 | 18/12 |
+| Discovery Sharpe | **8.13** | 2.40 | 2.74 |
+| Validation Sharpe | **9.10** | 2.43 | 2.41 |
+| Validation DD | **1.0%** | 1.8% | 6.6% |
+| Validation PF | **3.54** | 1.69 | 1.48 |
+| DSR | **5/5 PASS** | 0/5 FAIL | 0/5 FAIL |
+| Winner pattern | CCI entry + STOCH exit | STOCH+CCI LONG | CCI+MFI+WILLR BOTH |
+
+B16 is substantially weaker than B15. The B15 STOCH+CCI result (Sharpe 9.10) appears to have been a lucky initialization that found an exceptional basin. Deeper search with different random seed landed in a much worse basin.
+
+### Recommendations
+
+1. **Re-run STOCH+CCI with multiple seeds**: B15's Sharpe 9.10 may be reproducible with different random initializations. Run 3-5 more STOCH+CCI batches to see if 9.10 is outlier or reproducible.
+2. **CCI+MFI+WILLR shows promise**: Improved from B15's Sharpe 1.65 to 2.74. Try even larger search (pop=25, gen=15) to push further.
+3. **Stop testing CCI+RSI on current data**: Two data windows tested (old 2024-era and current 2025-2026), current bearish window doesn't suit this combo. Archive B7's result as period-specific.
+4. **Focus on achieving DSR-passing Sharpe**: Only strategies with discovery Sharpe >3.5-4.0 reliably pass DSR. Lower the bar for what qualifies as a successful discovery.
+5. **Try forcing LONG direction for STOCH+CCI**: B16's best was LONG (Sharpe 2.43); B15's best was BOTH (9.10). Perhaps search with direction=long to avoid wasting budget on short exploration.
+
+---
+
 ## 2026-03-07: Batch 15 — Deep STOCH+CCI + Best-Winner Combos (3 Runs)
 
 ### Goal
