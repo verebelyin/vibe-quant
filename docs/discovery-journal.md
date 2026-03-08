@@ -4,6 +4,109 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 23 — Skewness/Kurtosis Integration Test + STOCH+CCI Sharpe 4.16
+
+### Goal
+
+Validate end-to-end skewness/kurtosis computation after implementing return moments for DSR (bd-3zq9). Re-run proven combos to verify moments are stored in both sweep_results and backtest_results, DSR uses actual distribution shape, and no regressions.
+
+### Bug Fixes Applied During Run
+
+1. **`pos.quantity` → `pos.peak_qty`**: Closed positions have `quantity=0` (current open qty). Must use `peak_qty` for trade size. All moment computations silently returned defaults (skew=0, kurt=3) before fix.
+2. **Discovery `_NTBacktestFn.__call__` missing moments**: Wasn't passing skewness/kurtosis from nt_runner metrics to fitness dict.
+3. **`_BACKTEST_RESULTS_COLUMNS` missing columns**: skewness/kurtosis not in whitelist, causing save to silently omit them.
+4. **Validation extraction missing moments**: Added `_extract_return_moments()` to validation extraction pipeline and `to_metrics_dict()`.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 371 | STOCH+CCI | 20 | 15 | 300 | random | Proven champion, test moments |
+| 372 | MFI+WILLR | 20 | 15 | 280* | random | B22 winner, slow (WILLR pandas-ta) |
+| 373 | WILLR+CCI | 12 | 8 | 96 | random | B21 stable validator |
+| 374 | MFI+CCI | 12 | 8 | 96 | random | B17 champion combo |
+| 375 | ROC+CCI | 12 | 8 | 96 | random | Control (moderate performer) |
+
+*Run 372 converged early at gen 14/15 (280 evals). Data range: 2025-03-08 to 2026-03-08.
+
+### Full Pipeline Results
+
+| Stage | 371 STOCH+CCI | 372 MFI+WILLR | 373 WILLR+CCI | 374 MFI+CCI | 375 ROC+CCI |
+|-------|------|------|------|------|------|
+| **Direction** | **LONG** | SHORT | SHORT | SHORT | SHORT |
+| **Discovery** sharpe | **3.82** | 2.15 | 2.00 | 1.19 | 0.83 |
+| **Discovery** dd | **1.5%** | 8.3% | 3.1% | 10.7% | 14.2% |
+| **Discovery** trades | 91 | 228 | 73 | 93 | 240 |
+| **Discovery** return | +3.2% | +5.6% | +1.4% | +3.7% | -3.6% |
+| **Discovery** PF | **2.12** | 1.58 | 1.52 | 1.22 | 1.13 |
+| **DSR guardrails** | **PASS** | **PASS** | **PASS** | **PASS** | PASS |
+| **Screening** match | exact | exact | exact | exact | exact |
+| **Screening** skewness | -2.11 | 4.29 | -2.01 | 1.16 | -0.17 |
+| **Screening** kurtosis | 13.13 | 41.41 | 16.61 | 4.60 | 3.48 |
+| **Validation** sharpe | **4.16 (+9%)** | **2.16 (+0.5%)** | **2.01 (+0.5%)** | — | — |
+| **Validation** dd | 1.5% | 8.8% | 3.1% | — | — |
+| **Validation** trades | 91 (exact) | 228 (exact) | 73 (exact) | — | — |
+| **Validation** PF | **2.24** | 1.59 | 1.52 | — | — |
+| **Validation** WR | **72.5%** | 41.7% | 63.0% | — | — |
+| **Validation** fees | $21.08 | $110.26 | $18.46 | — | — |
+| **Validation** skewness | -2.06 | 4.25 | -1.94 | — | — |
+| **Validation** kurtosis | 12.51 | 40.63 | 16.09 | — | — |
+
+### Winning Strategy
+
+**Run 371 winner (genome_d6e0031e4f35) — STOCH+CCI LONG, Sharpe 4.16 validated:**
+- Direction: LONG
+- Discovery: Sharpe=3.82, DD=1.5%, 91 trades, PF=2.12, Return=+3.2%
+- Validation: Sharpe=4.16 (+9%), DD=1.5%, 91 trades (exact), PF=2.24, WR=72.5%, fees=$21.08
+- DSR PASS (p≈0)
+- Return distribution: skewness=-2.06, kurtosis=12.51 (heavy left tail, extreme fat tails)
+- STOCH+CCI Sharpe improved in validation again — extends B15/B16/B21/B22 pattern
+
+### Issues Found
+
+1. **Four `peak_qty` / wiring bugs** found during integration testing (all fixed and pushed):
+   - `_compute_return_moments` used `pos.quantity` (0 for closed) instead of `pos.peak_qty`
+   - Discovery `_NTBacktestFn` didn't pass skewness/kurtosis to fitness dict
+   - `_BACKTEST_RESULTS_COLUMNS` whitelist missing skewness/kurtosis
+   - Validation extraction didn't compute moments at all
+2. **Screening 378 failed on auto-run** (stale process), required manual reset and re-run
+3. **No other errors**: 0 errors across all 8 log files
+
+### Key Findings
+
+1. **Moments are now stored end-to-end**: sweep_results (screening) and backtest_results (validation) both contain real skewness/kurtosis. DSR can use actual return distribution shape.
+2. **Crypto returns have extreme kurtosis**: Values range from 3.48 (near-normal) to 41.41 (extremely fat tails). This confirms normal distribution assumption was inadequate for DSR.
+3. **Negative skewness dominates high-Sharpe strategies**: STOCH+CCI (skew=-2.11) and WILLR+CCI (skew=-2.01) both have heavy left tails — meaning occasional large losses offset by frequent small wins. The high WR (72.5%, 63.0%) confirms this pattern.
+4. **MFI+WILLR has extreme positive skew (4.29)**: Occasional very large wins. Kurtosis=41.41 is the highest seen. Low WR (41.7%) but rare huge wins drive the Sharpe.
+5. **Moments consistent between screening and validation**: Slight changes (skew: -2.11→-2.06, kurt: 13.13→12.51) due to fill model differences, but same distribution shape.
+6. **STOCH+CCI LONG improved in validation again**: 3.82→4.16 (+9%). The B15/B21/B22/B23 pattern is unbreakable.
+7. **DSR correctly passes all Sharpe >1.0 strategies** with the B22 fix. No false rejections.
+
+### Comparison with All-Time Best (current 4h data, validated Sharpe)
+
+| Rank | Batch | Combo | Val Sharpe | Val DD | Dir | DSR | Skewness | Kurtosis |
+|------|-------|-------|-----------|--------|-----|-----|----------|----------|
+| 1 | B15 | STOCH+CCI | **9.10** | 1.0% | BOTH | PASS | — | — |
+| 2 | B22 | MFI+WILLR | 4.07 | 2.5% | LONG | PASS | — | — |
+| **3** | **B23** | **STOCH+CCI** | **4.16** | **1.5%** | **LONG** | **PASS** | **-2.06** | **12.51** |
+| 4 | B17 | MFI+CCI | 3.80 | 1.0% | BOTH | PASS* | — | — |
+| 5 | B21 | STOCH+CCI | 3.56 | 1.0% | BOTH | PASS* | — | — |
+| 6 | B21 | MFI+WILLR | 3.24 | 5.8% | SHORT | PASS* | — | — |
+| 7 | B22 | STOCH+CCI | 2.97 | 2.8% | SHORT | PASS | — | — |
+| 8 | B22 | STOCH+CCI | 2.84 | 3.5% | SHORT | PASS | — | — |
+| 9 | B20 | MFI+WILLR | 2.63 | 10.4% | BOTH | PASS* | — | — |
+
+*Would pass with B22 DSR fix. B23 is the first batch with moments data.
+
+### Recommendations
+
+1. **Backfill moments for B15-B22 strategies**: Re-run screening for top strategies from previous batches to compute their skewness/kurtosis. The leaderboard needs this data.
+2. **Investigate Lo's correction impact**: With kurtosis values 3.48-41.41, the Sharpe variance correction factor varies dramatically. Log the corrected vs uncorrected DSR p-values to quantify impact.
+3. **STOCH+CCI LONG is paper-trade ready**: Sharpe 4.16, DD 1.5%, 72.5% WR, $21 fees. Best risk-adjusted strategy outside B15.
+4. **MFI+WILLR needs more depth**: B23 found 2.15 at 280 trials vs B22's 4.07 at 600 trials. The combo clearly benefits from deep search.
+
+---
+
 ## 2026-03-08: Batch 22 — DSR Fix + Ultra-Deep MFI+WILLR + STOCH+CCI Lottery
 
 ### DSR Bug Fix (vibe-quant-fici)
