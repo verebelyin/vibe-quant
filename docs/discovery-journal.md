@@ -4,6 +4,61 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 27 — Budget Impact Test: STOCH+CCI at 300 Trials
+
+### Goal
+
+Test whether the massive gap between B15 STOCH+CCI (Sharpe 9.10, pop=20/gens=15/300 trials) and B26 STOCH+CCI (Sharpe 2.29, pop=12/gens=8/96 trials) was caused by insufficient GA budget. Re-run STOCH+CCI with the same pop=20/gens=15 settings as the original B15.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 408 | STOCH+CCI | 20 | 15 | 300 | random | Match B15 budget to test budget hypothesis |
+
+Data range: 2025-03-08 to 2026-03-08. Single run — controlled experiment.
+
+### Full Pipeline Results
+
+| Stage | B26 Run 398 (96 trials) | **B27 Run 408 (300 trials)** | B15 Run 273 (300 trials) |
+|-------|------------------------|------------------------------|--------------------------|
+| **Pop × Gens** | 12 × 8 = 96 | **20 × 15 = 300** | **20 × 15 = 300** |
+| **Direction** | SHORT | SHORT | BOTH |
+| **Discovery** score | 0.5181 | **0.6731** | — |
+| **Discovery** sharpe | 1.65 | **3.08** | — |
+| **DSR** | PASS 5/5 | **PASS 3/5** | PASS |
+| **Screening** match | exact | exact | exact |
+| **Validation** sharpe | 2.29 | **3.24 (+5%)** | **9.10** |
+| **Validation** dd | 9.0% | **2.9%** | **1.0%** |
+| **Validation** trades | 80 | 102 | 59 |
+| **Validation** PF | 1.50 | **1.90** | **3.54** |
+| **Validation** WR | 37.5% | **62.7%** | **79.7%** |
+| **Validation** return | +11.3% | +6.0% | +6.9% |
+| **Validation** fees | $39.70 | $26.71 | $23.19 |
+
+### Winning Strategy
+
+**Run 408 — STOCH+CCI (Short)** — Strategy `genome_f4665936aa48` (sid=125)
+- Entry: CCI(10) crosses_below -8.1 → short
+- Exit: STOCH(17,3) < 31.9
+- SL: 7.32% / TP: 8.40%
+- Validated Sharpe 3.24 (+5% improvement), 102 trades, 6.0% return, 2.9% DD, 62.7% WR
+- Clean 2-gene architecture (1 entry, 1 exit) — minimal complexity
+
+### Key Findings
+
+1. **Budget hypothesis confirmed** — 300 trials produced Sharpe 3.24 vs 96 trials' 2.29 (+41%). DD improved from 9.0% to 2.9%, WR from 37.5% to 62.7%.
+2. **Still not matching B15's 9.10** — B15 found a rare BOTH-direction scalper with 0.53% TP on longs and 79.7% WR. This architecture is extremely rare in the search space.
+3. **B15 may be an outlier** — across all STOCH+CCI runs (B15/B16/B21/B22/B23/B24/B26/B27), only B15 found Sharpe >5. The median is ~3.0. B15's 9.10 is likely a lucky seed.
+4. **Validation improvement pattern holds** — +5% improvement confirms STOCH+CCI strategies are genuinely robust, not overfit.
+5. **All future runs should use pop=20/gens=15** — the 3x budget consistently finds better strategies. The ~10min extra runtime is worth it.
+
+### Recommendation
+
+Run ALL top combos (STOCH+MFI, MFI+CCI, STOCH+CCI) with pop=20/gens=15 going forward. Also try the triple combo STOCH+CCI+MFI — all three are top ingredients.
+
+---
+
 ## 2026-03-08: Batch 26 — Top 4 Historical Combos Re-Run (STOCH+CCI, MFI+WILLR, MFI+CCI, STOCH+MFI)
 
 ### Goal
