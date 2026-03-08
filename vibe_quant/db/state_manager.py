@@ -49,6 +49,8 @@ _BACKTEST_RESULTS_COLUMNS: frozenset[str] = frozenset(
         "purged_kfold_mean_sharpe",
         "execution_time_seconds",
         "starting_balance",
+        "skewness",
+        "kurtosis",
         "notes",
     }
 )

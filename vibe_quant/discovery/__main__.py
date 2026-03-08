@@ -96,6 +96,8 @@ class _NTBacktestFn:
                 "profit_factor": result.profit_factor,
                 "total_trades": result.total_trades,
                 "total_return": getattr(result, "total_return", 0.0),
+                "skewness": getattr(result, "skewness", 0.0),
+                "kurtosis": getattr(result, "kurtosis", 3.0),
             }
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
@@ -343,6 +345,8 @@ def main() -> int:
                 "max_drawdown": best_fitness.max_drawdown,
                 "profit_factor": best_fitness.profit_factor,
                 "total_trades": best_fitness.total_trades,
+                "skewness": best_fitness.skewness,
+                "kurtosis": best_fitness.kurtosis,
                 "execution_time_seconds": execution_time,
                 "notes": json.dumps(
                     {
