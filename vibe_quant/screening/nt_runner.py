@@ -417,7 +417,8 @@ class NTScreeningRunner:
             # Per-trade return as fraction of notional entry value
             returns: list[float] = []
             for pos in closed:
-                entry_val = abs(float(pos.quantity) * float(pos.avg_px_open))
+                # Use peak_qty (not quantity which is 0 for closed positions)
+                entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
                 if entry_val > 0:
                     returns.append(float(pos.realized_pnl) / entry_val)
 
