@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 
+# Maximum concurrent discovery jobs. Prevents resource contention
+# (each discovery run spawns --max-workers backtests in parallel).
+_MAX_CONCURRENT_DISCOVERIES = 5
+
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
@@ -105,6 +109,26 @@ def _job_info_to_discovery_response(
     return resp
 
 
+# --- Helpers ---
+
+
+def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
+    """Sync status for all running discovery jobs and return the still-running ones.
+
+    Detects dead processes (OOM-killed, crashed) that are still marked
+    'running' in the DB and updates them to 'failed'.
+    """
+    all_discovery = jobs.list_all_jobs(job_type="discovery")
+    running: list[JobInfo] = []
+    for job in all_discovery:
+        if job.status.value != "running":
+            continue
+        synced = jobs.sync_job_status(job.run_id)
+        if synced == "running":
+            running.append(job)
+    return running
+
+
 # --- Launch ---
 
 
@@ -115,6 +139,19 @@ async def launch_discovery(
     jobs: JobMgr,
     ws: WsMgr,
 ) -> DiscoveryJobResponse:
+    # Guard: refuse if too many discovery jobs already running
+    running = _sync_discovery_statuses(jobs)
+    if len(running) >= _MAX_CONCURRENT_DISCOVERIES:
+        run_ids = [j.run_id for j in running]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(running)} discovery jobs already running (run_ids={run_ids}). "
+                f"Kill existing jobs via DELETE /api/discovery/jobs/{{run_id}} "
+                f"or wait for them to complete."
+            ),
+        )
+
     params: dict[str, object] = {
         "population": body.population,
         "generations": body.generations,
@@ -204,6 +241,8 @@ async def launch_discovery(
 
 @router.get("/jobs", response_model=list[DiscoveryJobResponse])
 async def list_discovery_jobs(jobs: JobMgr, state: StateMgr) -> list[DiscoveryJobResponse]:
+    # Sync running jobs to detect dead processes before returning status
+    _sync_discovery_statuses(jobs)
     all_jobs = jobs.list_all_jobs(job_type="discovery")
     return [_job_info_to_discovery_response(j, state) for j in all_jobs]
 
