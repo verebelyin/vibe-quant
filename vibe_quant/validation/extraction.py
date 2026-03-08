@@ -34,6 +34,45 @@ def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
     return datetime.fromtimestamp(ns / 1e9, tz=UTC).isoformat()
 
 
+def _extract_return_moments(result: ValidationResult, engine: BacktestEngine) -> None:
+    """Compute skewness/kurtosis from closed positions and set on result."""
+    try:
+        cache = engine.kernel.cache
+        all_positions = list(cache.positions()) + list(cache.position_snapshots())
+        closed = [p for p in all_positions if p.is_closed]
+        if len(closed) < 4:
+            return
+
+        returns: list[float] = []
+        for pos in closed:
+            entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
+            if entry_val > 0:
+                returns.append(float(pos.realized_pnl) / entry_val)
+
+        n = len(returns)
+        if n < 4:
+            return
+
+        mean = sum(returns) / n
+        diffs = [r - mean for r in returns]
+        m2 = sum(d * d for d in diffs) / n
+        if m2 == 0:
+            return
+
+        m3 = sum(d**3 for d in diffs) / n
+        m4 = sum(d**4 for d in diffs) / n
+
+        result.skewness = round(
+            (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5), 4
+        )
+        excess = ((n + 1) * (n - 1) * m4) / (
+            (n - 2) * (n - 3) * m2**2
+        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+        result.kurtosis = round(max(1.0, excess + 3.0), 4)
+    except Exception:
+        logger.warning("Could not compute return moments", exc_info=True)
+
+
 def extract_results(
     run_id: int,
     strategy_name: str,
@@ -56,6 +95,7 @@ def extract_results(
 
     extract_stats(result, bt_result)
     extract_trades(result, engine, venue_config)
+    _extract_return_moments(result, engine)
 
     return result
 

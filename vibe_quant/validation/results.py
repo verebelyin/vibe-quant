@@ -128,6 +128,8 @@ class ValidationResult(PerformanceMetrics):
             "total_fees": self.total_fees,
             "total_funding": self.total_funding,
             "total_slippage": self.total_slippage,
+            "skewness": self.skewness,
+            "kurtosis": self.kurtosis,
             "execution_time_seconds": self.execution_time_seconds,
             "starting_balance": self.starting_balance,
         }
