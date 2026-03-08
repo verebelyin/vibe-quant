@@ -31,6 +31,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
+from vibe_quant.utils import compute_bar_count
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -532,18 +533,21 @@ class DiscoveryPipeline:
             exported = self._export_top_strategies(population, last_fitness_results)
             logger.debug("Exported %d top strategy DSL dicts", len(exported))
 
-        # Compute empirical variance of Sharpe ratios across all GA evaluations
-        # for accurate DSR (per Bailey & Lopez de Prado 2014)
-        trials_sharpe_variance: float | None = None
+        # Log empirical Sharpe distribution across GA evaluations (diagnostic only).
+        # NOTE: NOT passed to DSR — cross-strategy Sharpe dispersion is a category
+        # error for the paper's V[{SR_n}] which measures within-strategy estimation
+        # noise. See vibe-quant-fici.
         if len(all_scored) >= 2:
             sharpes = [fr.sharpe_ratio for _, fr in all_scored]
             mean_sr = sum(sharpes) / len(sharpes)
-            trials_sharpe_variance = sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
+            var_sr = sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
+            logger.info(
+                "GA Sharpe distribution: n=%d mean=%.3f std=%.3f min=%.3f max=%.3f",
+                len(sharpes), mean_sr, var_sr ** 0.5, min(sharpes), max(sharpes),
+            )
 
         # Validate top strategies with guardrails (DSR + min trades + complexity)
-        validated = self._validate_top_strategies(
-            top_strategies, total_evaluated, trials_sharpe_variance
-        )
+        validated = self._validate_top_strategies(top_strategies, total_evaluated)
         if validated:
             top_strategies = validated
 
@@ -851,12 +855,15 @@ class DiscoveryPipeline:
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
         total_evaluated: int,
-        trials_sharpe_variance: float | None = None,
     ) -> list[tuple[StrategyChromosome, FitnessResult]] | None:
         """Apply guardrails (DSR, complexity, min trades) to top strategies.
 
         Logs validation results and filters out strategies that fail.
         Returns None if all fail (caller keeps original list).
+
+        DSR uses theoretical variance (1/(T-1)) rather than empirical
+        cross-strategy variance, which inflates SR₀ beyond what any
+        strategy can achieve (see vibe-quant-fici).
         """
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
@@ -866,16 +873,24 @@ class DiscoveryPipeline:
             require_purged_kfold=False,
         )
 
+        # Use actual bar count for DSR (not total_trades * 5 proxy)
+        bar_count = compute_bar_count(
+            self.config.start_date, self.config.end_date, self.config.timeframe,
+        )
+
         validated: list[tuple[StrategyChromosome, FitnessResult]] = []
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+            num_obs = bar_count if bar_count else max(100, fitness.total_trades * 5)
             result: GuardrailResult = apply_guardrails(
                 fitness=fitness,
                 num_genes=num_genes,
                 config=guardrail_cfg,
                 num_trials=total_evaluated,
-                num_observations=max(100, fitness.total_trades * 5),
-                trials_sharpe_variance=trials_sharpe_variance,
+                num_observations=num_obs,
+                # trials_sharpe_variance intentionally omitted — use theoretical
+                # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
+                # the paper's V[{SR_n}] measures (see vibe-quant-fici).
             )
             if result.passed:
                 validated.append((chrom, fitness))

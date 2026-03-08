@@ -17,7 +17,6 @@ import json
 import logging
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +33,7 @@ from vibe_quant.screening.types import (
     MetricFilters,
     ScreeningResult,
 )
+from vibe_quant.utils import compute_bar_count
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,35 +42,6 @@ if TYPE_CHECKING:
     from vibe_quant.dsl.schema import StrategyDSL
 
 logger = logging.getLogger(__name__)
-
-# Timeframe string to minutes mapping
-_TIMEFRAME_MINUTES: dict[str, int] = {
-    "1m": 1,
-    "5m": 5,
-    "15m": 15,
-    "1h": 60,
-    "4h": 240,
-}
-
-
-def _compute_bar_count(
-    start_date: str | None,
-    end_date: str | None,
-    timeframe: str,
-) -> int | None:
-    """Compute number of bars from date range and timeframe.
-
-    Returns None if dates are missing or timeframe is unknown.
-    """
-    if not start_date or not end_date:
-        return None
-    tf_minutes = _TIMEFRAME_MINUTES.get(timeframe)
-    if not tf_minutes:
-        return None
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-    total_minutes = (end - start).total_seconds() / 60
-    return max(int(total_minutes / tf_minutes), 1)
 
 
 def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
@@ -218,7 +189,7 @@ class ScreeningPipeline:
             dsr = DeflatedSharpeRatio(significance_level=dsr_significance)
             num_trials = len(all_results)
             # DSR needs number of return periods (bars), not trades
-            bar_count = _compute_bar_count(
+            bar_count = compute_bar_count(
                 self._start_date, self._end_date, self.dsl.timeframe
             )
             # Compute empirical variance of trial Sharpes for accurate DSR

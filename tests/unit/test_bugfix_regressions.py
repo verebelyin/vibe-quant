@@ -83,31 +83,116 @@ class TestStartingBalance:
 
 
 class TestComputeBarCount:
-    """_compute_bar_count returns bar count from date range, not trade count."""
+    """compute_bar_count returns bar count from date range, not trade count."""
 
     def test_1h_full_year(self) -> None:
         """365 days at 1h = 8760 bars."""
-        from vibe_quant.screening.pipeline import _compute_bar_count
+        from vibe_quant.utils import compute_bar_count
 
-        result = _compute_bar_count("2024-01-01", "2024-12-31", "1h")
+        result = compute_bar_count("2024-01-01", "2024-12-31", "1h")
         assert result is not None
         # 365 days * 24 hours = 8760 (might be 8736 due to 364 day diff)
         assert 8700 <= result <= 8800, f"Expected ~8760 bars, got {result}"
 
     def test_unknown_timeframe_returns_none(self) -> None:
         """Unknown timeframe like '2h' returns None."""
-        from vibe_quant.screening.pipeline import _compute_bar_count
+        from vibe_quant.utils import compute_bar_count
 
-        result = _compute_bar_count("2024-01-01", "2024-12-31", "2h")
+        result = compute_bar_count("2024-01-01", "2024-12-31", "2h")
         assert result is None
 
     def test_missing_dates_returns_none(self) -> None:
         """Missing start or end date returns None."""
-        from vibe_quant.screening.pipeline import _compute_bar_count
+        from vibe_quant.utils import compute_bar_count
 
-        assert _compute_bar_count(None, "2024-12-31", "1h") is None
-        assert _compute_bar_count("2024-01-01", None, "1h") is None
-        assert _compute_bar_count(None, None, "1h") is None
+        assert compute_bar_count(None, "2024-12-31", "1h") is None
+        assert compute_bar_count("2024-01-01", None, "1h") is None
+        assert compute_bar_count(None, None, "1h") is None
+
+
+# ---------------------------------------------------------------------------
+# 2b. DSR empirical variance inflates SR₀ beyond valid strategies (vibe-quant-fici)
+# ---------------------------------------------------------------------------
+
+
+class TestDSREmpiricalVarianceFix:
+    """DSR with empirical cross-strategy variance produced p=1.0 for Sharpe 3.56.
+
+    Root cause: GA chromosomes have wildly different Sharpes (CCI threshold
+    range [-200,200] → degenerate chromosomes → extreme dispersion). The
+    paper's V[{SR_n}] measures within-strategy estimation noise, NOT
+    cross-strategy dispersion.
+
+    Fix: discovery pipeline uses theoretical 1/(T-1) variance + actual bar
+    count instead of empirical cross-strategy variance + trade count proxy.
+    """
+
+    def test_sharpe_3_56_passes_with_theoretical_variance(self) -> None:
+        """B21 STOCH+CCI: Sharpe 3.56, 500 trials, 4h/1yr → should pass DSR."""
+        from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+
+        dsr = DeflatedSharpeRatio()
+        # 4h bars over ~1 year (2025-03-07 to 2026-03-07)
+        bar_count = 2190
+        result = dsr.calculate(
+            observed_sharpe=3.56,
+            num_trials=500,
+            num_observations=bar_count,
+            # No trials_sharpe_variance → uses theoretical 1/(T-1)
+        )
+        assert result.is_significant, (
+            f"Sharpe 3.56 should pass DSR with theoretical variance: "
+            f"p={result.p_value:.4f}, SR₀={result.expected_max_sharpe:.4f}"
+        )
+
+    def test_sharpe_3_56_fails_with_inflated_empirical_variance(self) -> None:
+        """Same strategy fails when empirical cross-strategy variance is used.
+
+        This documents the bug — NOT a desired behavior.
+        """
+        from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+
+        dsr = DeflatedSharpeRatio()
+        # Typical GA cross-strategy variance with CCI: std(SR) ≈ 1.5 → var ≈ 2.25
+        result = dsr.calculate(
+            observed_sharpe=3.56,
+            num_trials=500,
+            num_observations=2190,
+            trials_sharpe_variance=2.25,  # cross-strategy, NOT estimation noise
+        )
+        # This FAILS — documenting the broken behavior
+        assert not result.is_significant, (
+            "Empirical cross-strategy variance should make DSR overly strict"
+        )
+        assert result.p_value > 0.5
+
+    def test_sharpe_3_74_passes_with_theoretical_variance(self) -> None:
+        """B17 MFI+CCI: Sharpe 3.74 failed with p=0.8033 — should pass now."""
+        from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+
+        dsr = DeflatedSharpeRatio()
+        result = dsr.calculate(
+            observed_sharpe=3.74,
+            num_trials=96,  # pop=8, gen=12
+            num_observations=2190,  # 4h bars, 1 year
+        )
+        assert result.is_significant, (
+            f"Sharpe 3.74 should pass DSR: p={result.p_value:.4f}"
+        )
+
+    def test_lucky_low_sharpe_still_rejected(self) -> None:
+        """DSR still rejects lucky low Sharpe from massive trial count."""
+        from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+
+        dsr = DeflatedSharpeRatio()
+        result = dsr.calculate(
+            observed_sharpe=0.15,
+            num_trials=10000,
+            num_observations=50,  # very few bars
+        )
+        assert not result.is_significant, (
+            "Lucky low Sharpe with few observations should still be rejected"
+        )
 
 
 # ---------------------------------------------------------------------------
