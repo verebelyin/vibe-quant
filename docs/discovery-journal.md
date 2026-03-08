@@ -4,6 +4,94 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 18 — ATR+CCI Surprise + RSI+CCI Failure + MACD+RSI Complete Failure
+
+### Goal
+Deeper MFI+CCI (B17 winner, pop=16/gen=10), RSI+CCI on current data (B7 champion on old data), STOCH+CCI retry, ATR+CCI novel pair (ATR tried with STOCH/MFI before but never with CCI), MACD+RSI novel pair.
+
+### Configuration
+| Run | Indicators | Pop | Gens | Trials | TF | Time | Status |
+|-----|-----------|-----|------|--------|----|------|--------|
+| 309 | MFI+CCI | 16 | 10 | 160 | 4h | ~35min | Completed (slow — contention) |
+| 310 | RSI+CCI | 12 | 8 | 96 | 4h | ~9min | Completed |
+| 311 | ATR+CCI | 12 | 8 | 96 | 4h | ~9min | Completed |
+| 312 | MACD+RSI | 10 | 6 | 60 | 4h | ~8min | **FAILED** (no viable strategies) |
+| 313 | STOCH+CCI | 12 | 8 | 96 | 4h | ~9min | Completed |
+
+### Full Pipeline Results
+
+| Stage | 309 MFI+CCI | 310 RSI+CCI | 311 ATR+CCI | 312 MACD+RSI | 313 STOCH+CCI |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | 0.5142 | 0.3995 | **0.5846** | FAILED | 0.4094 |
+| **Discovery** sharpe | 1.56 | 0.37 | **2.12** | — | 0.46 |
+| **Discovery** dd | 7.5% | 8.9% | 7.5% | — | 21.1% |
+| **Discovery** trades | 71 | 318 | 77 | — | 112 |
+| **Discovery** return | +4.1% | -6.0% | +7.7% | — | -1.0% |
+| **Discovery** PF | 1.36 | 1.05 | 1.58 | — | 1.09 |
+| **DSR guardrails** | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) | — | FAIL (p=1.0) |
+| **Screening** match | exact | skipped | exact | — | skipped |
+| **Validation** sharpe | 1.57 (+1%) | — | **2.11** (-1%) | — | — |
+| **Validation** return | +4.6% | — | +7.7% | — | — |
+| **Validation** dd | 7.6% | — | 7.5% | — | — |
+| **Validation** trades | 71 | — | 77 | — | — |
+| **Validation** PF | 1.36 | — | 1.58 | — | — |
+| **Validation** WR | 25.4% | — | 58.4% | — | — |
+| **Validation** fees | $36.80 | — | $17.48 | — | — |
+
+### Winning Strategies
+
+**Run 311 winner (genome_62111f19f1f5) — ATR+CCI SURPRISE:**
+- Direction: SHORT only
+- Discovery: Sharpe=2.12, DD=7.5%, 77 trades, PF=1.58, Return=+7.7%
+- Validation: Sharpe=2.11 (-0.5%), Return=+7.7%, DD=7.5%, 77 trades (exact), PF=1.58, WR=58.4%, fees=$17.48
+- DSR FAIL (p=1.0) — unfiltered. First time ATR+CCI produced a real result.
+- ATR previously ignored by GA when paired with STOCH/MFI. With CCI as partner, ATR contributes meaningfully.
+- Near-perfect validation match: 0.5% Sharpe drop, exact trade count, exact return.
+
+**Run 309 winner (genome_458b004ae99d) — MFI+CCI deeper:**
+- Direction: BOTH
+- Validation: Sharpe=1.57, Return=+4.6%, DD=7.6%, 71 trades, PF=1.36, WR=25.4%
+- Weak result vs B17's MFI+CCI (Sharpe 3.80). Deeper search found worse basin.
+- WR=25.4% is very low — high reward:risk ratio but many losers.
+
+### Issues Found
+
+1. **MACD+RSI complete failure (run 312)**: RuntimeError "Discovery produced no strategies". All 60 evaluated candidates failed guardrails with no fallback. MACD's narrow threshold (-0.005 to 0.005) combined with RSI produces no strategies passing min_trades=50. First complete discovery failure.
+2. **RSI+CCI catastrophic on current data (run 310)**: Sharpe 0.37, return -6.0%. B7's Sharpe 7.24 was on 2024-era bull market data. Current bearish window kills this combo completely. CCI+RSI is definitively data-window specific.
+3. **STOCH+CCI worst result ever (run 313)**: Sharpe 0.46, DD 21%, return -1.0%. Same config as B13 (Sharpe 3.26) and B17 (Sharpe 2.14). This seed found the worst basin yet. Confirms extreme randomness.
+4. **MFI deeper search found worse basin**: pop=16/gen=10 (160 trials) got Sharpe 1.56 vs B17's pop=12/gen=8 (96 trials) got Sharpe 3.74. Same pattern as B16 STOCH+CCI — more trials ≠ better.
+5. **DSR universally failing (KNOWN)**: vibe-quant-fici filed. No change.
+
+### Key Findings
+
+1. **ATR+CCI is viable**: First time ATR produced a winning multi-indicator strategy. Previous ATR runs (B13 ATR+STOCH, ATR+MFI) saw GA ignore ATR. With CCI's momentum signal, ATR provides effective volatility context. Sharpe 2.11 validated, exact trade preservation.
+2. **RSI+CCI fails on current data**: Confirmed definitively. B7's Sharpe 7.24 was 2024 bull market. Current bearish window produces Sharpe 0.37 with -6% return. Not worth testing again.
+3. **MACD+RSI produces no strategies**: The combination of MACD's narrow threshold and RSI's moderate range fails to produce strategies with ≥50 trades in 12 months at 4h timeframe. MACD needs a partner with wide threshold range (CCI) to be viable.
+4. **GA basin luck dominates**: STOCH+CCI results across batches: B13=3.52, B14=3.70, B15=9.10, B16=2.14, B17=2.14, B18=0.46. Same combo, same pop/gen, wildly different outcomes. The "best" strategy (B15's 9.10) was exceptional luck.
+5. **Clean run (except 312)**: 0 errors in 9/10 logs. 1 error in discovery_312 (expected — RuntimeError from failed discovery).
+
+### Comparison with Previous Batches (best per batch on current data)
+
+| Metric | B15 (STOCH+CCI) | B17 (MFI+CCI) | B18 (ATR+CCI) |
+|--------|-----------------|----------------|----------------|
+| Validation Sharpe | **9.10** | 3.80 | 2.11 |
+| Validation DD | **1.0%** | 1.0% | 7.5% |
+| Validation Return | +6.9% | +1.1% | **+7.7%** |
+| Validation PF | 3.54 | 1.83 | 1.58 |
+| Direction | BOTH | BOTH | SHORT |
+| DSR | PASS | FAIL | FAIL |
+
+### Recommendations
+
+1. **Fix DSR bug (vibe-quant-fici) before running more batches**: DSR universally failing means the guardrail is non-functional. Fix the empirical variance inflation issue first.
+2. **ATR+CCI worth exploring more**: First viable ATR result. Try ATR+CCI with larger pop/gen (pop=16, gen=10) to see if better basins exist.
+3. **Stop retrying STOCH+CCI at standard pop/gen**: B18's Sharpe 0.46 shows the extreme variance. Only worth running at B15 scale (pop=20, gen=15+) where exceptional basins can be found.
+4. **Never try RSI+CCI on current window again**: Definitively fails on bearish data.
+5. **Never try MACD+RSI**: No viable strategies produced. MACD needs CCI or STOCH as partner.
+6. **MFI+CCI sweet spot is 96 trials**: B17 (96 trials) found Sharpe 3.80; B18 (160 trials) found Sharpe 1.56. Less is more for MFI+CCI.
+
+---
+
 ## 2026-03-08: Batch 17 — DSR-Aware Small Batches: STOCH+CCI / MFI+CCI / STOCH+ROC / WILLR+STOCH / STOCH+MFI
 
 ### Goal
