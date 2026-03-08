@@ -4,6 +4,106 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 25 — Novel 2-Indicator Pairs (STOCH+MFI, STOCH+WILLR, MACD+STOCH, MACD+MFI, ADX+CCI)
+
+### Goal
+
+Test 5 completely novel 2-indicator combinations using proven ingredients. Focus on complementary signal types (momentum+volume, trend+momentum). All pairs untried in prior batches.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 387 | STOCH+MFI | 12 | 8 | 96 | random | #2 + #3 ingredients, complementary (momentum+volume) |
+| 388 | STOCH+WILLR | 10 | 6 | 60 | random | WILLR slow (pandas-ta), reduce budget |
+| 389 | MACD+STOCH | 12 | 8 | 96 | random | Tests if STOCH fixes MACD's narrow threshold |
+| 390 | MACD+MFI | 12 | 8 | 96 | random | All-new signal combo |
+| 391 | ADX+CCI | 12 | 8 | 96 | random | ADX's last chance with a strong partner |
+
+Data range: 2025-03-08 to 2026-03-08. 4/5 all-Rust-native (fast). STOCH+WILLR reduced budget due to WILLR pandas-ta overhead.
+
+### Full Pipeline Results
+
+| Stage | 387 STOCH+MFI | 388 STOCH+WILLR | 389 MACD+STOCH | 390 MACD+MFI | 391 ADX+CCI |
+|-------|--------------|----------------|---------------|-------------|------------|
+| **Direction** | LONG | BOTH | SHORT | SHORT | LONG |
+| **Discovery** score | **0.5275** | 0.4075 | 0.4493 | **0.5078** | 0.4110 |
+| **Discovery** sharpe | **1.49** | 0.86 | 1.31 | 1.25 | 0.13 |
+| **Discovery** dd | 7.2% | 18.7% | 8.5% | 7.8% | 8.7% |
+| **Discovery** trades | 58 | 56 | 191 | 68 | 260 |
+| **Discovery** return | +2.3% | +1.8% | +2.9% | +3.2% | -5.8% |
+| **Discovery** PF | 1.32 | 1.16 | 1.25 | 1.27 | 1.02 |
+| **DSR** | **PASS 3/5** | PASS 1/5 | **PASS 2/5** | **PASS 4/5** | **FAIL 0/5** |
+| **Screening** match | exact | — | exact | exact | — |
+| **Screening** sharpe | 1.49 | — | 1.31 | 1.25 | — |
+| **Screening** trades | 58 | — | 191 | 68 | — |
+| **Validation** sharpe | **1.41 (-5%)** | — | **1.05 (-20%)** | **0.94 (-25%)** | — |
+| **Validation** dd | 7.0% | — | 8.4% | 7.9% | — |
+| **Validation** trades | 57 (-1) | — | 189 (-2) | 67 (-1) | — |
+| **Validation** PF | 1.30 | — | 1.19 | 1.21 | — |
+| **Validation** WR | 47.4% | — | 38.6% | 55.2% | — |
+| **Validation** fees | $30.37 | — | $55.48 | $13.81 | — |
+| **Validation** return | +2.1% | — | +0.7% | +2.2% | — |
+
+### Winning Strategies
+
+**#1: Run 387 — STOCH+MFI (Long)** — Strategy `genome_47e124ae7ccd` (sid=119)
+- Entry: MFI(18) crosses_below 33.6 → long
+- Exit: STOCH(17,4) >= 53.5
+- SL: 1.13% / TP: 11.25%
+- Validated Sharpe 1.41, 57 trades, 2.1% return, 7.0% DD — **only 5% Sharpe degradation**
+- Clean architecture: MFI for volume-based entry, STOCH for momentum exit
+
+**#2: Run 390 — MACD+MFI (Short)** — Strategy `genome_5bb1be6cce11` (sid=121)
+- Entry: MACD(19,28,9) >= 0.0445 → short (contrarian)
+- Exit: MFI(9) crosses_above 35.8
+- SL: 9.76% / TP: 15.73%
+- Validated Sharpe 0.94, 67 trades, 2.2% return, 7.9% DD
+- MFI appears in both winners — confirming its value as a discovery ingredient
+
+**#3: Run 389 — MACD+STOCH (Short)** — Strategy `genome_ad08d8f19ed3` (sid=120)
+- Entry: 3 STOCH conditions (multi-period), Exit: MACD + STOCH
+- Validated Sharpe 1.05, 189 trades, 0.7% return, 8.4% DD
+- High trade count but 20% Sharpe degradation in validation — complex strategy with 5 indicators
+
+### Issues Found
+
+1. No errors in any log files (discovery, validation)
+2. Warnings are benign sanity checks on low-trade outlier chromosomes (expected)
+3. ADX+CCI (391) total failure — ADX continues to underperform in discovery, even with CCI's wide threshold range
+
+### Key Findings
+
+1. **MFI is the standout ingredient** — appears in both top strategies (387 and 390). Works for both entry and exit, both long and short directions.
+2. **STOCH+MFI is the new best novel pair** — 0.5275 fitness, 1.49→1.41 Sharpe with only 5% validation degradation. Clean 2-indicator architecture.
+3. **MACD works better as entry for shorts** — Run 390 shows MACD can find contrarian short entries when paired with MFI exit. MACD alone still struggles but MFI compensates.
+4. **ADX is officially dead for discovery** — B10, B11, B12, and now B25 all show ADX failing. Even CCI's strong [-200,200] range couldn't save it. Remove from future experiments.
+5. **STOCH+WILLR redundant** — both are momentum oscillators on similar scales. Poor fitness (0.4075), heavy DSR failures. Avoid pairing similar-category indicators.
+6. **Validation degradation normal** — 5-25% Sharpe drop across all 3 validated strategies. Trade counts within 1-2 of discovery. Pipeline working as designed.
+7. **GA still converges to single-indicator architectures** — Run 389 used STOCH pool but GA built a 5-gene strategy using only STOCH for entry. Multi-indicator combos remain hard to force.
+
+### Comparison with Previous Batches (Validated Sharpe)
+
+| Batch | Strategy | Sharpe | Trades | DD | PF |
+|-------|----------|--------|--------|-----|-----|
+| B23 | STOCH+CCI #276 | **4.16** | 59 | 2.0% | 2.60 |
+| B24 | STOCH+CCI #384 | 3.02 | 57 | 2.1% | 2.07 |
+| **B25** | **STOCH+MFI #387** | **1.41** | 57 | 7.0% | 1.30 |
+| **B25** | MACD+STOCH #389 | 1.05 | 189 | 8.4% | 1.19 |
+| **B25** | MACD+MFI #390 | 0.94 | 67 | 7.9% | 1.21 |
+
+B25 strategies are decent but don't challenge the STOCH+CCI dominance from B23-B24.
+
+### Recommendations
+
+1. **Try STOCH+MFI with tighter direction constraints** — B25 found long-only winner; try forcing short-only to see if MFI works both ways
+2. **CCI+MFI** — CCI is the #1 indicator, MFI just proved itself as #3. This pair has never been tried.
+3. **STOCH+CCI remains king** — consider higher pop/gens for STOCH+CCI to find more diverse strategies
+4. **Drop ADX from future experiments** — 4 batches of failure is conclusive
+5. **Explore 3-indicator combos** — STOCH+CCI+MFI could combine the top 3 ingredients
+
+---
+
 ## 2026-03-08: Batch 24 — First Real-Moments DSR Run + Leaderboard Backfill
 
 ### Goal
