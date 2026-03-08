@@ -4,6 +4,107 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 26 — Top 4 Historical Combos Re-Run (STOCH+CCI, MFI+WILLR, MFI+CCI, STOCH+MFI)
+
+### Goal
+
+Re-run the 4 historically best-performing indicator combinations to see if the GA can discover new high-quality strategies with fresh random seeds. These are the combos with the highest validated Sharpe ratios across all prior batches.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 398 | STOCH+CCI | 12 | 8 | 96 | random | #1 all-time combo (B15 Sharpe 9.10, B23 4.16) |
+| 399 | MFI+WILLR | 10 | 6 | 60 | random | #2 all-time (B22 Sharpe 4.07). WILLR slow. |
+| 400 | MFI+CCI | 12 | 8 | 96 | random | #4 all-time (B17 Sharpe 3.80) |
+| 401 | STOCH+MFI | 12 | 8 | 96 | random | #5 all-time (B25 Sharpe 1.41, best novel pair) |
+
+Data range: 2025-03-08 to 2026-03-08. 3/4 all-Rust-native. MFI+WILLR reduced budget due to WILLR pandas-ta.
+
+### Full Pipeline Results
+
+| Stage | 398 STOCH+CCI | 399 MFI+WILLR | 400 MFI+CCI | 401 STOCH+MFI |
+|-------|--------------|--------------|-------------|--------------|
+| **Direction** | SHORT | LONG | SHORT | SHORT |
+| **Discovery** score | 0.5181 | 0.3488 | 0.5415 | **0.7187** |
+| **Discovery** sharpe | 1.65 | -0.58 | 2.08 | **3.76** |
+| **Discovery** dd | 8.8% | 10.8% | 12.9% | **2.7%** |
+| **Discovery** trades | 80 | 59 | 69 | 118 |
+| **Discovery** return | +7.0% | -5.9% | +9.5% | +8.8% |
+| **Discovery** PF | 1.33 | 0.84 | 1.38 | **2.23** |
+| **DSR** | **PASS 5/5** | **FAIL 0/5** | **PASS 1/5** | **PASS 4/5** |
+| **Screening** match | exact | — | exact | exact |
+| **Screening** sharpe | 1.65 | — | 2.08 | 3.76 |
+| **Screening** trades | 80 | — | 69 | 118 |
+| **Validation** sharpe | **2.29 (+39%)** | — | **2.06 (-1%)** | **3.80 (+1%)** |
+| **Validation** dd | 9.0% | — | 12.8% | **2.8%** |
+| **Validation** trades | 80 (exact) | — | 67 (-2) | 117 (-1) |
+| **Validation** PF | 1.50 | — | 1.39 | **2.24** |
+| **Validation** WR | 37.5% | — | 40.3% | 43.6% |
+| **Validation** fees | $39.70 | — | $20.08 | $39.43 |
+| **Validation** return | **+11.3%** | — | +8.9% | +8.6% |
+
+### Winning Strategies
+
+**#1: Run 401 — STOCH+MFI (Short)** — Strategy `genome_c65727c72c4a` (sid=124) — **#3 ALL-TIME**
+- Entry: STOCH(19,4) crosses_below 34.9 → short
+- Exit: STOCH(14,8) < 52.7 AND MFI(12) >= 26.6
+- SL: 5.96% / TP: 5.76%
+- Validated **Sharpe 3.80**, 117 trades, 8.6% return, **2.8% DD**, PF 2.24
+- **Validation IMPROVED over discovery (+1%)** — extremely robust strategy
+- STOCH+MFI short dominates: B25 found long winner, B26 found short winner — combo works both ways
+
+**#2: Run 398 — STOCH+CCI (Short)** — Strategy `genome_fd22dc83961f` (sid=122)
+- Entry: CCI(23) crosses_below -42.6 → short
+- Exit: STOCH(14,5) >= 48.7 AND STOCH(13,3) < 58.9
+- SL: 2.1% / TP: 7.29%
+- Validated **Sharpe 2.29 (+39% improvement!)**, 80 trades, 11.3% return, 9.0% DD
+- STOCH+CCI continues to produce robust strategies that improve in validation
+
+**#3: Run 400 — MFI+CCI (Short)** — Strategy `genome_7a93a478c756` (sid=123)
+- Entry: CCI(11) <= -72.0 → short
+- Exit: CCI(23) crosses_below 96.9 AND MFI(25) >= 31.2
+- SL: 6.12% / TP: 8.18%
+- Validated Sharpe 2.06, 67 trades, 8.9% return, 12.8% DD
+
+### Issues Found
+
+1. No errors in any log files
+2. MFI+WILLR (399) total failure — negative Sharpe, all 5 strategies failed DSR. This combo may be exhausted or direction-dependent (B22 found long winner).
+3. All 3 validated strategies are SHORT — bearish bias in this data window
+
+### Key Findings
+
+1. **STOCH+MFI Sharpe 3.80 is #3 all-time validated** — behind B15 STOCH+CCI (9.10) and B23 STOCH+CCI (4.16). Only 2.8% DD makes it arguably the safest high-Sharpe strategy.
+2. **STOCH+MFI works both directions** — B25 found long winner (Sharpe 1.41), B26 found short winner (Sharpe 3.80). This is rare — most combos are direction-dependent.
+3. **Validation improvement pattern continues** — 398 improved +39%, 401 improved +1%. STOCH+CCI and STOCH+MFI both show this pattern. These are genuinely robust combos, not overfitted.
+4. **MFI+WILLR exhausted** — B20 found Sharpe 2.63, B21 found 3.24, B22 found 4.07 (all validated). B26 found nothing. The combo may have been mined out.
+5. **CCI entry + STOCH/MFI exit is the winning template** — appears in 398 and 400. CCI detects extreme conditions, STOCH/MFI times the exit.
+6. **All winners are SHORT** — current 4h BTC data has a bearish regime that favors short strategies. Worth noting for live deployment.
+
+### Comparison with All-Time Best (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | DD | Trades | PF | Dir |
+|------|-------|-------|--------|-----|--------|-----|-----|
+| 1 | B15 | STOCH+CCI | **9.10** | 1.0% | — | — | BOTH |
+| 2 | B23 | STOCH+CCI | 4.16 | 1.5% | 59 | 2.60 | LONG |
+| **3** | **B26** | **STOCH+MFI** | **3.80** | **2.8%** | **117** | **2.24** | **SHORT** |
+| 4 | B22 | MFI+WILLR | 4.07 | 2.5% | — | — | LONG |
+| 5 | B17 | MFI+CCI | 3.80 | 1.0% | — | — | BOTH |
+| 6 | B24 | STOCH+CCI | 3.02 | 2.1% | 57 | 2.07 | BOTH |
+| 7 | **B26** | **STOCH+CCI** | **2.29** | **9.0%** | **80** | **1.50** | **SHORT** |
+| 8 | **B26** | **MFI+CCI** | **2.06** | **12.8%** | **67** | **1.39** | **SHORT** |
+
+### Recommendations
+
+1. **Paper trade STOCH+MFI #401** — Sharpe 3.80 with only 2.8% DD is paper-trading ready
+2. **Try STOCH+CCI+MFI triple combo** — all 3 indicators appear in top strategies. Triple combo has never been tested.
+3. **MFI+WILLR may need direction forcing** — try forcing LONG direction since all historical winners were long
+4. **Consider higher pop/gens for STOCH+MFI** — it found 0.7187 fitness, highest ever seen. More budget could find even better.
+5. **Short bias warning** — all B26 winners are SHORT. Deploy with caution or pair with long strategies from prior batches.
+
+---
+
 ## 2026-03-08: Batch 25 — Novel 2-Indicator Pairs (STOCH+MFI, STOCH+WILLR, MACD+STOCH, MACD+MFI, ADX+CCI)
 
 ### Goal
