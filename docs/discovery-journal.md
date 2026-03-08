@@ -4,6 +4,108 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 20 — MFI+WILLR Validated (Sharpe 2.63, +14.3%), MACD+CCI Works, WILLR+CCI Strong
+
+### Goal
+
+5 novel pairs on current 4h data: ROC+CCI (B19 recommendation), MACD+CCI (B18/B19 recommendation — MACD needs CCI), WILLR+CCI (novel pure pair), MFI+WILLR (B9 champion retest), ROC+MFI (fast Rust-native pair).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | TF | Time | Status |
+|-----|-----------|-----|------|--------|----|------|--------|
+| 325 | MFI+WILLR | 10 | 6 | 60 | 4h | ~11min | Completed |
+| 326 | ROC+CCI | 12 | 8 | 96 | 4h | ~8min | Completed |
+| 327 | WILLR+CCI | 12 | 8 | 96 | 4h | ~9min | Completed |
+| 328 | MACD+CCI | 10 | 6 | 60 | 4h | ~7min | Completed |
+| 329 | ROC+MFI | 12 | 8 | 96 | 4h | ~13min | Completed |
+
+Data range: 2025-03-08 to 2026-03-08.
+
+### Full Pipeline Results
+
+| Stage | 325 MFI+WILLR | 326 ROC+CCI | 327 WILLR+CCI | 328 MACD+CCI | 329 ROC+MFI |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | **0.5814** | 0.5240 | **0.5921** | 0.5670 | 0.5618 |
+| **Discovery** sharpe | **2.71** | 1.76 | 2.37 | 2.16 | 2.28 |
+| **Discovery** dd | 10.7% | 9.0% | **4.5%** | 8.4% | 10.3% |
+| **Discovery** trades | 58 | 98 | 66 | 78 | 52 |
+| **Discovery** return | **+14.9%** | +4.9% | +7.0% | +7.9% | +6.1% |
+| **Discovery** PF | 1.55 | 1.34 | **1.66** | 1.63 | 1.42 |
+| **Discovery** dir | BOTH | short | short | short | short |
+| **DSR guardrails** | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) |
+| **Screening** match | exact | exact | exact | exact | exact |
+| **Validation** sharpe | **2.63 (-3%)** | 1.58 (-10%) | **2.32 (-2%)** | 2.09 (-3%) | 1.82 (-20%) |
+| **Validation** return | **+14.3%** | +4.4% | +6.8% | +7.4% | +4.6% |
+| **Validation** dd | 10.4% | 9.3% | **4.4%** | 8.6% | 10.0% |
+| **Validation** trades | 57 (-1) | 99 (+1) | 66 (exact) | 78 (exact) | 51 (-1) |
+| **Validation** PF | 1.53 | 1.30 | **1.64** | 1.60 | 1.34 |
+| **Validation** WR | 54.4% | 38.4% | 42.4% | 28.2% | 27.5% |
+| **Validation** fees | $34.05 | $24.06 | $33.47 | $22.69 | $11.37 |
+
+### Winning Strategies
+
+**Run 325 winner (genome_6438ee6baed7) — MFI+WILLR BOTH:**
+- Direction: BOTH (long+short)
+- Discovery: Sharpe=2.71, DD=10.7%, 58 trades, PF=1.55, Return=+14.9%
+- Validation: Sharpe=2.63 (-3%), Return=+14.3%, DD=10.4%, 57 trades, PF=1.53, WR=54.4%, fees=$34.05
+- DSR FAIL (p=1.0) — known vibe-quant-fici bug
+- **Best return of all batches on current data (+14.3%)** — only strategy beating B16's +9.7% CCI+MFI+WILLR
+- Both-direction bidirectional — rare on this bearish window
+- 54.4% WR is healthy; 10.4% DD acceptable for +14.3% return
+- MFI+WILLR B9 champion on old data — confirmed viable on current bearish window too
+
+**Run 327 winner (genome_29674b57e69a) — WILLR+CCI SHORT:**
+- Direction: SHORT only
+- Discovery: Sharpe=2.37, DD=4.5%, 66 trades, PF=1.66, Return=+7.0%
+- Validation (run 340): Sharpe=2.32 (-2%), Return=+6.8%, DD=4.4%, 66 trades (exact), PF=1.64, WR=42.4%, fees=$33.47
+- DSR FAIL (p=1.0)
+- Near-perfect validation: 2% Sharpe drop, exact trade count, near-exact DD (4.5%→4.4%)
+- Best DD/Sharpe ratio of the batch — very conservative strategy
+
+**Run 328 winner (genome_8f23332983e5) — MACD+CCI SHORT:**
+- Direction: SHORT only
+- Discovery: Sharpe=2.16, DD=8.4%, 78 trades, PF=1.63, Return=+7.9%
+- Validation: Sharpe=2.09 (-3%), Return=+7.4%, DD=8.6%, 78 trades (exact), PF=1.60, WR=28.2%, fees=$22.69
+- DSR FAIL (p=1.0)
+- **First confirmed MACD+CCI viable strategy** — B18 hypothesis proven correct
+- Perfect trade count preservation. Low win rate (28.2%) but high reward:risk
+
+### Issues Found
+
+1. **Validation run 337 (WILLR+CCI) failed with Thrift/Arrow size limit error** when run in parallel with 4 others. Retry as fresh run 340 succeeded. Transient resource contention — 5 parallel NautilusTrader instances exceeded PyArrow memory limits. Future batches should run validation sequentially or in pairs (not all 5 at once).
+2. **DSR universally failing (KNOWN)**: vibe-quant-fici not yet fixed.
+
+### Key Findings
+
+1. **MFI+WILLR is the strongest return generator on current data (+14.3% validated)**: Both-direction strategy on a bearish window is rare. The combination of MFI (volume) + WILLR (momentum oscillator) produces both long and short signals effectively. The B9 champion combo translates to the current window.
+2. **MACD+CCI hypothesis confirmed**: B18 predicted MACD needs a wide-threshold partner (CCI). B20 proves it: Sharpe 2.09 validated, 0% trade degradation. MACD's narrow threshold range is complemented by CCI's [-200,200] range — GA can find viable signal combinations.
+3. **WILLR+CCI is remarkably stable in validation**: Only 2% Sharpe drop, exact trade count, DD barely changes (4.5%→4.4%). The pure WILLR+CCI pair produces a very latency-robust strategy.
+4. **All 5 runs viable in discovery; 5/5 survive validation**: Best batch quality-wise. Previous batches had multiple validation collapses (WILLR+ATR in B19, RSI+CCI etc). Every combo this batch passed validation with Sharpe >1.5.
+5. **ROC+MFI weakest but still viable** (Sharpe 1.82): The expected result from a slower Rust pair. Not worth prioritizing.
+6. **5 parallel validations cause Thrift OOM**: Keep validation to ≤3 concurrent runs.
+
+### Comparison with Previous Batches (best per batch, current 4h data)
+
+| Metric | B15 (STOCH+CCI) | B17 (MFI+CCI) | B20 MFI+WILLR | B20 WILLR+CCI |
+|--------|-----------------|----------------|----------------|----------------|
+| Validation Sharpe | **9.10** | 3.80 | 2.63 | 2.32 |
+| Validation DD | **1.0%** | **1.0%** | 10.4% | **4.4%** |
+| Validation Return | +6.9% | +1.1% | **+14.3%** | +6.8% |
+| Validation PF | **3.54** | 1.83 | 1.53 | 1.64 |
+| Direction | BOTH | BOTH | BOTH | SHORT |
+| DSR | PASS | FAIL | FAIL | FAIL |
+
+### Recommendations
+
+1. **Fix DSR bug (vibe-quant-fici)**: Every batch since B15 fails. The filter is non-functional.
+2. **MFI+WILLR deeper search**: B20 found Sharpe 2.71 at pop=10/gen=6 (60 trials). Try pop=16/gen=10 (160 trials) — same scale as B17's MFI+CCI which found 3.80.
+3. **WILLR+CCI deeper**: Only 96 trials found Sharpe 2.37 with exceptional stability. Try pop=16/gen=10.
+4. **3 concurrent validations max**: 5 parallel caused Thrift OOM. Run in batches of 3.
+5. **MACD+CCI worth deepening**: First viable MACD result. Pop=10/gen=6 was conservative — try pop=12/gen=8.
+
+---
+
 ## 2026-03-08: Batch 19 — ATR+CCI+WILLR Collapses, ATR+CCI+ROC Validated (Sharpe 2.31)
 
 ### Goal
