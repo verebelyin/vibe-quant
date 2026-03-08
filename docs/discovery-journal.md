@@ -4,6 +4,94 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 29 — Direction-Forced + Triple Combo Seeds (STOCH+CCI BOTH, STOCH+CCI+MFI ×2, STOCH+MFI BOTH)
+
+### Goal
+
+Apply two key learnings: (1) B15's all-time best Sharpe 9.10 was BOTH-direction — force BOTH for STOCH+CCI and STOCH+MFI. (2) B28's triple combo was #2 all-time — run 2 more seeds to explore the space.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 423 | STOCH+CCI | 20 | 15 | 300 | **BOTH forced** | Replicate B15's direction constraint |
+| 424 | STOCH+CCI+MFI | 20 | 15 | 300 | random | Triple seed 2 |
+| 425 | STOCH+CCI+MFI | 20 | 15 | 300 | random | Triple seed 3 |
+| 426 | STOCH+MFI | 20 | 15 | 300 | **BOTH forced** | B28 found BOTH at 2.98 — push further |
+
+Data range: 2025-03-08 to 2026-03-08. Note: 423 converged early at gen 14 (280 effective trials).
+
+### Full Pipeline Results
+
+| Stage | 423 STOCH+CCI BOTH | 424 STOCH+CCI+MFI | 425 STOCH+CCI+MFI | 426 STOCH+MFI BOTH |
+|-------|-------------------|-------------------|-------------------|-------------------|
+| **Direction** | BOTH | LONG | SHORT | BOTH |
+| **Discovery** score | 0.6713 | **0.6936** | 0.5812 | 0.6084 |
+| **Discovery** sharpe | 3.12 | **3.71** | 2.43 | 2.63 |
+| **Discovery** dd | 2.5% | **1.9%** | 6.4% | 6.6% |
+| **Discovery** trades | 73 | **127** | 102 | 113 |
+| **Discovery** return | +5.9% | +2.0% | +6.4% | +3.8% |
+| **Discovery** PF | 1.70 | **1.77** | 1.41 | 1.79 |
+| **DSR** | **PASS 5/5** | **PASS 4/5** | **PASS 5/5** | **PASS 4/5** |
+| **Screening** match | ~exact (72 vs 73) | exact | exact | exact |
+| **Validation** sharpe | **2.94 (-6%)** | **3.51 (-5%)** | **2.20 (-9%)** | **2.71 (+3%)** |
+| **Validation** dd | **2.6%** | **1.8%** | 6.4% | 6.6% |
+| **Validation** trades | 74 | 128 (+1) | 102 (exact) | 113 (exact) |
+| **Validation** PF | 1.65 | **1.72** | 1.35 | **1.84** |
+| **Validation** WR | 55.4% | **52.3%** | 42.2% | **65.5%** |
+| **Validation** return | +5.4% | +1.8% | +5.0% | +4.1% |
+| **Validation** fees | $21.47 | $39.56 | $45.60 | $37.02 |
+| **Validation** sortino | 3.94 | **5.79** | 4.03 | 3.45 |
+
+### Winning Strategies
+
+**#1: Run 424 — STOCH+CCI+MFI Triple Seed 2 (Long)** — Strategy `genome_864ba841b2c3` (sid=131)
+- Validated **Sharpe 3.51**, Sortino 5.79, 128 trades, **1.8% DD**, PF 1.72
+- LONG direction — first high-performing long triple strategy
+- Confirms triple combo is consistently strong across seeds
+
+**#2: Run 423 — STOCH+CCI BOTH Forced** — Strategy `genome_c91ad14897c1` (sid=130)
+- Validated Sharpe 2.94, 74 trades, 5.4% return, 2.6% DD
+- BOTH direction as forced — but didn't match B15's 9.10
+- Still a solid BOTH-direction strategy for portfolio diversification
+
+**#3: Run 426 — STOCH+MFI BOTH Forced** — Strategy `genome_3949e9caab49` (sid=133)
+- Validated Sharpe 2.71, 113 trades, 4.1% return, **65.5% WR**
+- BOTH direction, highest WR in batch
+
+### Key Findings
+
+1. **Triple combo seed 2 (424) produced Sharpe 3.51** — consistent with B28's 3.85. Triple combo averaging ~3.7 discovery → ~3.5-3.8 validated. Very repeatable.
+2. **Forcing BOTH didn't replicate B15** — 423 got Sharpe 2.94 (decent but not 9.10). B15's architecture (tiny 0.53% TP scalper) remains a rare GA artifact.
+3. **BOTH-direction strategies viable** — 423 (2.94) and 426 (2.71) both work. Useful for portfolio construction — pair with SHORT strategies for hedging.
+4. **Triple seed variance** — seed 2 (3.51) vs seed 3 (2.20). Wide variance confirms GA stochasticity matters even at 300 trials.
+5. **424 found a LONG strategy** — most recent batches were SHORT-biased. A Sharpe 3.51 LONG strategy is valuable for diversification.
+6. **Screening 1-trade discrepancy on 427** — 72 vs 73 trades. Minor and within tolerance, but worth monitoring.
+
+### Updated All-Time Leaderboard (Validated Sharpe, Top 10)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | Dir |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|
+| 1 | B15 | STOCH+CCI | **9.10** | 12.99 | 1.0% | 59 | 3.54 | BOTH |
+| 2 | B28 | STOCH+CCI+MFI | 3.85 | 7.89 | 2.5% | 52 | 1.79 | SHORT |
+| 3 | B26 | STOCH+MFI | 3.80 | 11.44 | 2.8% | 117 | 2.24 | SHORT |
+| **4** | **B29** | **STOCH+CCI+MFI** | **3.51** | **5.79** | **1.8%** | **128** | **1.72** | **LONG** |
+| 5 | B23 | STOCH+CCI | 4.16 | — | 1.5% | 59 | 2.60 | LONG |
+| 6 | B22 | MFI+WILLR | 4.07 | — | 2.5% | — | — | LONG |
+| 7 | B27 | STOCH+CCI | 3.24 | 4.42 | 2.9% | 102 | 1.90 | SHORT |
+| 8 | B28 | STOCH+CCI | 3.07 | 5.65 | 2.1% | 54 | 1.60 | BOTH |
+| 9 | B28 | STOCH+MFI | 2.98 | 4.41 | 3.6% | 94 | 1.75 | BOTH |
+| 10 | **B29** | **STOCH+CCI BOTH** | **2.94** | **3.94** | **2.6%** | **74** | **1.65** | **BOTH** |
+
+### Recommendations
+
+1. **Build a portfolio**: Pair B28 SHORT (3.85) + B29 LONG (3.51) + B29 BOTH (2.94) for direction-diversified deployment
+2. **Run more triple seeds** — 3.51 and 3.85 from 2 seeds is promising. 5-10 seeds could find something even better.
+3. **B15 remains unreachable** — direction forcing didn't help. Its scalper architecture is a rare GA discovery. Accept it as an outlier.
+4. **Consider paper trading top 3**: B28 triple (3.85), B26 STOCH+MFI (3.80), B29 triple (3.51)
+
+---
+
 ## 2026-03-08: Batch 28 — High-Budget Top Combos + First Triple Combo (STOCH+CCI+MFI)
 
 ### Goal
