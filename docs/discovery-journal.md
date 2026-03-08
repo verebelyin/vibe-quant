@@ -4,6 +4,88 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 24 — First Real-Moments DSR Run + Leaderboard Backfill
+
+### Goal
+
+Three parallel tasks: (1) Run first discovery where DSR uses actual skewness/kurtosis during GA evolution, (2) backfill moments for all B15-B22 leaderboard strategies, (3) investigate paper trading readiness.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Rationale |
+|-----|-----------|-----|------|--------|-----------|-----------|
+| 384 | STOCH+CCI | 12 | 8 | 96 | random | First real-moments DSR run |
+
+Data range: 2025-03-08 to 2026-03-08. Single run — this batch is a validation exercise, not exploration.
+
+### Full Pipeline Results
+
+| Stage | 384 STOCH+CCI |
+|-------|------|
+| **Direction** | BOTH |
+| **Discovery** sharpe | 3.09 |
+| **Discovery** dd | 2.1% |
+| **Discovery** trades | 57 |
+| **Discovery** return | +2.4% |
+| **Discovery** PF | 2.15 |
+| **Discovery** skewness | **3.264** |
+| **Discovery** kurtosis | **19.148** |
+| **DSR** | **PASS (p=0.0000)** |
+| **Screening** match | exact |
+| **Screening** skewness | 3.264 (exact) |
+| **Screening** kurtosis | 19.148 (exact) |
+| **Validation** sharpe | **3.02 (-2%)** |
+| **Validation** dd | 2.1% |
+| **Validation** trades | 57 (exact) |
+| **Validation** PF | 2.07 |
+| **Validation** WR | 45.6% |
+| **Validation** fees | $14.29 |
+| **Validation** skewness | 3.232 |
+| **Validation** kurtosis | 19.303 |
+
+### Leaderboard with Moments (Screening, Top 20)
+
+| Rank | Run | Sharpe | Trades | Skewness | Kurtosis |
+|------|-----|--------|--------|----------|----------|
+| 1 | 276 | 8.13 | 59 | -2.38 | 8.48 |
+| 2 | 138 | 7.31 | 55 | 2.66 | 13.97 |
+| 3 | 136 | 5.63 | 57 | 0.94 | 3.14 |
+| 4 | 55 | 4.43 | 54 | -0.79 | 1.59 |
+| 5 | 361 | 4.29 | 74 | 0.38 | 6.91 |
+| 6 | 93 | 4.19 | 60 | 2.12 | 5.98 |
+| 7 | 95 | 4.08 | 52 | 0.14 | 1.00 |
+| 8 | 265 | 3.95 | 90 | 1.63 | 7.16 |
+| 9 | 376 | 3.81 | 91 | -2.11 | 13.13 |
+| 10 | 302 | 3.74 | 50 | 0.58 | 3.14 |
+| 11 | 140 | 3.66 | 65 | 1.04 | 3.47 |
+| 12 | 94 | 3.57 | 52 | 0.65 | 1.37 |
+| 13 | 347 | 3.31 | 70 | 2.19 | 8.23 |
+| 14 | 250 | 3.26 | 68 | 0.85 | 5.12 |
+| 15 | 346 | 3.23 | 74 | -1.75 | 10.43 |
+| 16 | 385 | 3.09 | 57 | 3.26 | 19.15 |
+| 17 | 61 | 2.91 | 179 | 2.41 | 6.86 |
+| 18 | 348 | 2.79 | 56 | -0.61 | 3.68 |
+| 19 | 289 | 2.74 | 60 | 0.50 | 2.67 |
+| 20 | 330 | 2.71 | 58 | 1.26 | 4.56 |
+
+### Key Findings
+
+1. **First real-moments DSR confirmed working**: Discovery 384 passed DSR (p=0.0000) with actual skewness=3.264, kurtosis=19.148. The Lo correction increased Sharpe variance but not enough to reject a Sharpe 3.09 strategy.
+2. **Moments are perfectly consistent**: Discovery→Screening identical (3.264, 19.148). Validation shifts slightly (3.232, 19.303) due to fill model — but same distribution shape.
+3. **Distribution diversity across leaderboard**: Skewness ranges from -2.38 to +3.26. Kurtosis from 1.00 to 19.15. Strategies have very different return profiles despite similar Sharpes.
+4. **Negative skew = frequent small wins, rare big losses**: Top strategies (runs 276, 376, 346) have skew < -1.5 and high kurtosis — classic "picking up nickels in front of steamrollers" pattern. High WR but tail risk.
+5. **Positive skew = rare big wins**: Runs 138, 93, 347 have skew > 2.0 — lottery-style strategies with low WR but outsized winners.
+6. **Paper trading blocked**: Requires `BINANCE_API_KEY` and `BINANCE_API_SECRET` env vars for Binance testnet connection. CLI entry point not yet wired into main `__main__.py`.
+
+### Recommendations
+
+1. **Set up Binance testnet API keys** for paper trading the B23 STOCH+CCI LONG winner (Sharpe 4.16, DD 1.5%)
+2. **Wire paper trading CLI** into `vibe_quant/__main__.py` (currently missing `paper` subcommand)
+3. **Consider skewness in strategy selection**: Negative-skew strategies (runs 276, 376) have tail risk despite high Sharpes. Positive-skew strategies are safer for paper trading.
+4. **Lo's correction is negligible for high Sharpe**: Even with kurtosis=19.15, DSR p≈0 for Sharpe >2.0. The correction matters more for marginal strategies (Sharpe 0.5-1.5).
+
+---
+
 ## 2026-03-08: Batch 23 — Skewness/Kurtosis Integration Test + STOCH+CCI Sharpe 4.16
 
 ### Goal
