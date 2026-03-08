@@ -89,6 +89,8 @@ _SWEEP_RESULTS_COLUMNS: frozenset[str] = frozenset(
         "total_fees",
         "total_funding",
         "execution_time_seconds",
+        "skewness",
+        "kurtosis",
         "is_pareto_optimal",
         "passed_deflated_sharpe",
         "passed_walk_forward",

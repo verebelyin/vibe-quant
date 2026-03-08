@@ -888,6 +888,8 @@ class DiscoveryPipeline:
                 config=guardrail_cfg,
                 num_trials=total_evaluated,
                 num_observations=num_obs,
+                skewness=fitness.skewness,
+                kurtosis=fitness.kurtosis,
                 # trials_sharpe_variance intentionally omitted — use theoretical
                 # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
                 # the paper's V[{SR_n}] measures (see vibe-quant-fici).

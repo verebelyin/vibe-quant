@@ -85,6 +85,8 @@ class FitnessResult:
     adjusted_score: float
     passed_filters: bool
     filter_results: dict[str, bool]
+    skewness: float = 0.0
+    kurtosis: float = 3.0
 
 
 # Pre-compute inverse ranges for normalization to avoid repeated division
@@ -402,6 +404,8 @@ def _evaluate_single(
         adjusted_score=adjusted,
         passed_filters=passed_filters,
         filter_results=filter_results,
+        skewness=float(bt.get("skewness", 0.0)),
+        kurtosis=float(bt.get("kurtosis", 3.0)),
     )
 
 

@@ -28,3 +28,5 @@ class PerformanceMetrics:
     total_fees: float = 0.0
     total_funding: float = 0.0
     execution_time_seconds: float = 0.0
+    skewness: float = 0.0  # Return distribution skewness (0 = symmetric)
+    kurtosis: float = 3.0  # Return distribution kurtosis (3 = normal)

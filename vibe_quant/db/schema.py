@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     total_fees REAL,
     total_funding REAL,
     total_slippage REAL,
+    skewness REAL,
+    kurtosis REAL,
     deflated_sharpe REAL,
     walk_forward_efficiency REAL,
     purged_kfold_mean_sharpe REAL,
@@ -140,6 +142,8 @@ CREATE TABLE IF NOT EXISTS sweep_results (
     total_fees REAL,
     total_funding REAL,
     execution_time_seconds REAL,
+    skewness REAL,
+    kurtosis REAL,
     is_pareto_optimal BOOLEAN DEFAULT 0,
     passed_deflated_sharpe BOOLEAN,
     passed_walk_forward BOOLEAN,
@@ -199,6 +203,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("backtest_results", "notes", "TEXT"),
         ("background_jobs", "error_message", "TEXT"),
         ("sweep_results", "execution_time_seconds", "REAL"),
+        ("sweep_results", "skewness", "REAL"),
+        ("sweep_results", "kurtosis", "REAL"),
+        ("backtest_results", "skewness", "REAL"),
+        ("backtest_results", "kurtosis", "REAL"),
     ]
     applied = 0
     for table, column, col_type in migrations:

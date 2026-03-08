@@ -381,6 +381,9 @@ class NTScreeningRunner:
         except Exception:
             logger.warning("Could not extract fees from engine cache", exc_info=True)
 
+        # Compute return distribution moments (skewness/kurtosis) for DSR
+        metrics.skewness, metrics.kurtosis = self._compute_return_moments(engine)
+
         # Screening mode doesn't model funding; set explicitly for DB storage
         metrics.total_funding = 0.0
 
@@ -390,6 +393,68 @@ class NTScreeningRunner:
             metrics.max_drawdown = self._compute_max_drawdown(engine, start_time)
 
         return metrics
+
+    @staticmethod
+    def _compute_return_moments(engine: object) -> tuple[float, float]:
+        """Compute skewness and kurtosis from closed positions' realized PnL %.
+
+        Uses adjusted Fisher-Pearson G1 (skewness) and G2 (excess kurtosis)
+        formulas — the same as scipy.stats.skew(bias=False) and
+        scipy.stats.kurtosis(bias=False). Returns full kurtosis (G2 + 3).
+
+        Falls back to (0.0, 3.0) — normal distribution defaults — if
+        fewer than 4 trades or computation fails.
+        """
+        import math
+
+        try:
+            cache = engine.kernel.cache  # type: ignore[union-attr]
+            all_positions = list(cache.positions()) + list(cache.position_snapshots())
+            closed = [p for p in all_positions if p.is_closed]
+            if len(closed) < 4:
+                return 0.0, 3.0
+
+            # Per-trade return as fraction of notional entry value
+            returns: list[float] = []
+            for pos in closed:
+                entry_val = abs(float(pos.quantity) * float(pos.avg_px_open))
+                if entry_val > 0:
+                    returns.append(float(pos.realized_pnl) / entry_val)
+
+            n = len(returns)
+            if n < 4:
+                return 0.0, 3.0
+
+            mean = sum(returns) / n
+            diffs = [r - mean for r in returns]
+            # Biased central moments (population moments)
+            m2 = sum(d * d for d in diffs) / n
+            if m2 == 0:
+                return 0.0, 3.0
+
+            m3 = sum(d**3 for d in diffs) / n
+            m4 = sum(d**4 for d in diffs) / n
+
+            # Adjusted Fisher-Pearson G1 skewness (bias-corrected)
+            # G1 = sqrt(n(n-1)) / (n-2) * (m3 / m2^1.5)
+            skewness = (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5)
+
+            # Adjusted Fisher G2 excess kurtosis (bias-corrected)
+            # G2 = (n+1)(n-1) / ((n-2)(n-3)) * m4/m2² - 3(n-1)² / ((n-2)(n-3))
+            excess = ((n + 1) * (n - 1) * m4) / (
+                (n - 2) * (n - 3) * m2**2
+            ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+
+            # Full kurtosis = excess + 3 (DSR expects gamma_4, not excess)
+            kurtosis = excess + 3.0
+
+            # Clamp kurtosis to valid range (>=1 per DSR validator)
+            kurtosis = max(1.0, kurtosis)
+
+            return round(skewness, 4), round(kurtosis, 4)
+        except Exception:
+            logger.warning("Could not compute return moments", exc_info=True)
+            return 0.0, 3.0
 
     def _compute_max_drawdown(
         self,

@@ -207,6 +207,8 @@ class ScreeningPipeline:
                     observed_sharpe=r.sharpe_ratio,
                     num_trials=num_trials,
                     num_observations=num_obs,
+                    skewness=r.skewness,
+                    kurtosis=r.kurtosis,
                     trials_sharpe_variance=trials_sharpe_variance,
                 )
                 if result.is_significant:
@@ -355,6 +357,8 @@ class ScreeningPipeline:
                     "total_fees": metrics.total_fees,
                     "total_funding": metrics.total_funding,
                     "execution_time_seconds": metrics.execution_time_seconds,
+                    "skewness": metrics.skewness,
+                    "kurtosis": metrics.kurtosis,
                     "is_pareto_optimal": is_pareto,
                 }
             )
