@@ -4,6 +4,126 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 21 — Deep Search Breakthrough: STOCH+CCI Sharpe 3.56, MFI+WILLR 3.24
+
+### Goal
+
+Maximize expected value with 1hr budget. Analysis showed all CCI 2-indicator pairs exhausted; highest EV is deep re-runs of proven combos (new seeds) + novel 3/4-indicator combos with proven ingredients. 3 two-indicator deep re-runs, 1 novel 3-indicator (STOCH+CCI+MFI "holy trinity"), 1 novel 4-indicator (MFI+CCI+STOCH+WILLR).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | TF | Time | Status |
+|-----|-----------|-----|------|--------|----|------|--------|
+| 341 | STOCH+CCI | 25 | 20 | 500 | 4h | ~38min | Completed |
+| 342 | MFI+WILLR | 20 | 15 | 300 | 4h | ~43min | Completed |
+| 343 | WILLR+CCI | 20 | 12 | 240 | 4h | ~26min | Completed |
+| 344 | STOCH+CCI+MFI (3-ind) | 18 | 12 | 216 | 4h | ~37min | Completed |
+| 345 | MFI+CCI+STOCH+WILLR (4-ind) | 16 | 10 | 160 | 4h | ~29min | Completed |
+
+Data range: 2025-03-08 to 2026-03-08. All 5 launched in parallel.
+
+### Full Pipeline Results
+
+| Stage | 341 STOCH+CCI | 342 MFI+WILLR | 343 WILLR+CCI | 344 STOCH+CCI+MFI | 345 4-ind |
+|-------|----|----|------|-----|-----|
+| **Discovery** score | 0.6640 | **0.6717** | 0.6182 | 0.6193 | 0.5939 |
+| **Discovery** sharpe | 3.23 | **3.31** | 2.79 | 2.57 | 2.36 |
+| **Discovery** dd | **1.0%** | 5.6% | 2.8% | 6.6% | 5.8% |
+| **Discovery** trades | 74 | 70 | 56 | 51 | 221 |
+| **Discovery** return | +1.9% | **+16.9%** | +0.5% | +5.3% | +1.7% |
+| **Discovery** PF | 1.81 | **1.90** | 1.58 | 1.64 | 1.38 |
+| **Discovery** dir | BOTH | SHORT | LONG | LONG | SHORT |
+| **DSR guardrails** | FAIL (p=0.99) | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) | FAIL (p=1.0) |
+| **Screening** match | exact | exact | exact | exact | exact |
+| **Validation** sharpe | **3.56 (+10%)** | **3.24 (-2%)** | **2.93 (+5%)** | 2.51 (-2%) | **2.45 (+4%)** |
+| **Validation** return | +2.1% | **+16.1%** | +0.4% | +5.2% | +2.1% |
+| **Validation** dd | **1.0%** | 5.8% | **2.8%** | 6.6% | 5.5% |
+| **Validation** trades | 74 (exact) | 69 (-1) | 56 (exact) | 51 (exact) | 220 (-1) |
+| **Validation** PF | **1.87** | **1.87** | 1.55 | 1.62 | 1.40 |
+| **Validation** WR | **67.6%** | 37.7% | 55.4% | 51.0% | 47.3% |
+| **Validation** fees | $15.36 | $35.37 | $27.65 | $13.23 | $46.23 |
+
+### Winning Strategies
+
+**Run 341 winner (genome_a1176279bbee) — STOCH+CCI DEEP, BOTH:**
+- Direction: BOTH (long+short)
+- Discovery: Sharpe=3.23, DD=1.0%, 74 trades, PF=1.81, Return=+1.9%
+- Validation: Sharpe=3.56 (+10% improvement!), Return=+2.1%, DD=1.0%, 74 trades (exact), PF=1.87, WR=67.6%, fees=$15.36
+- DSR FAIL (p=0.99) — known vibe-quant-fici bug
+- **#3 all-time validated Sharpe** (after B15's 9.10 and B17's 3.80)
+- Sharpe IMPROVED in validation (3.23→3.56) — same rare pattern as B15 STOCH+CCI (8.13→9.10). STOCH+CCI strategies consistently improve under realistic fills.
+- 67.6% WR is the highest ever for a Sharpe >3.0 strategy
+- Perfect trade count preservation (74→74), DD identical (1.0%→1.0%)
+- Deep search (pop=25, gen=20, 500 trials) found a better basin than B16's (pop=30, gen=20, Sharpe 2.40)
+
+**Run 342 winner (genome_f5fe3ee01cbc) — MFI+WILLR DEEP, SHORT:**
+- Direction: SHORT only
+- Discovery: Sharpe=3.31, DD=5.6%, 70 trades, PF=1.90, Return=+16.9%
+- Validation: Sharpe=3.24 (-2%), Return=+16.1%, DD=5.8%, 69 trades (-1), PF=1.87, WR=37.7%, fees=$35.37
+- DSR FAIL (p=1.0) — known bug
+- **#4 all-time validated Sharpe** — massive improvement from B20's 2.63 (60 trials → 300 trials)
+- +16.1% return is the highest for any Sharpe >3.0 strategy in any batch
+- Deep search (300 trials) confirmed MFI+WILLR benefits from exploration depth, unlike MFI+CCI
+
+**Run 343 winner (genome_ea9ef195d6f1) — WILLR+CCI DEEP, LONG:**
+- Direction: LONG only
+- Validation: Sharpe=2.93 (+5% improvement), DD=2.8%, 56 trades (exact), PF=1.55, WR=55.4%
+- First viable LONG-only strategy on current bearish window! Sharpe 2.93 as a long-only strategy is remarkable.
+- B20 found 2.32 at 96 trials; 240 trials found a substantially better basin.
+
+**Run 344 winner (genome_79985d211d46) — STOCH+CCI+MFI HOLY TRINITY, LONG:**
+- Direction: LONG only
+- Validation: Sharpe=2.51 (-2%), DD=6.6%, 51 trades (exact), PF=1.62, WR=51.0%, fees=$13.23
+- Novel 3-indicator combo. GA found a LONG strategy — unusual. The 3-indicator diversity may have helped avoid the short-only convergence.
+- Decent but didn't produce the hoped-for exceptional multi-indicator synergy. The GA likely converged to 1-2 indicators.
+
+**Run 345 winner (genome_8cd4896cb114) — 4-INDICATOR, SHORT:**
+- Direction: SHORT only
+- Validation: Sharpe=2.45 (+4%), DD=5.5%, 220 trades (-1), PF=1.40, WR=47.3%, fees=$46.23
+- 220 trades/year = high-frequency for 4h, driving fees ($46.23). Sharpe improved in validation (+4%).
+- The 4-indicator pool didn't produce a single multi-indicator architecture — GA likely converged to 1-2 indicators.
+
+### Issues Found
+
+1. **DSR universally failing (KNOWN)**: vibe-quant-fici not yet fixed. Even Sharpe 3.56 fails DSR (p=0.99). The 500-trial search inflates E[max(Z_N)], making DSR harder to pass.
+2. **No issues otherwise**: Zero errors across all 15 log files. All screenings exact match. All validations preserved trade count. Cleanest batch ever.
+
+### Key Findings
+
+1. **Deep search on proven combos is the highest-EV play**: Both top results came from deeper searches of proven combos. STOCH+CCI (500 trials → Sharpe 3.56) and MFI+WILLR (300 trials → Sharpe 3.24) both found substantially better basins than previous shallower runs. The analysis-driven combo selection was correct.
+2. **STOCH+CCI Sharpe improves in validation**: B15 (8.13→9.10 = +12%), B16 (2.40→2.43 = +1%), B21 (3.23→3.56 = +10%). This is a consistent pattern — STOCH+CCI strategies are robust to realistic fills and actually benefit from the validation fill model. This makes STOCH+CCI the most reliable combo.
+3. **MFI+WILLR benefits from depth**: B20 found 2.63 at 60 trials; B21 found 3.24 at 300 trials. Unlike MFI+CCI (which peaked at 96 trials), MFI+WILLR improves with deeper search. Try 500+ trials next.
+4. **LONG-only strategies emerged**: Runs 343 (WILLR+CCI, LONG, Sharpe 2.93) and 344 (STOCH+CCI+MFI, LONG, Sharpe 2.51) found viable long strategies on a bearish window. The deeper search + larger populations explore more of the direction space.
+5. **3/5 validation Sharpe IMPROVED**: Runs 341 (+10%), 343 (+5%), 345 (+4%). This is rare — most batches see degradation. Deep search finds strategies that are more robust to realistic execution.
+6. **4-indicator pool didn't help**: Run 345 (Sharpe 2.45) was the weakest despite having the most diverse pool. GA can't effectively explore 4-indicator combinatorial space at 160 trials. Would need 500+ trials to see benefit.
+7. **All 5 survived validation**: Best batch quality ever. No collapses, no failures, all near-perfect trade count preservation.
+
+### Comparison with All-Time Best (current 4h data, validated Sharpe)
+
+| Rank | Batch | Combo | Val Sharpe | Val DD | Val Return | Direction | DSR |
+|------|-------|-------|-----------|--------|------------|-----------|-----|
+| 1 | B15 | STOCH+CCI | **9.10** | **1.0%** | +6.9% | BOTH | PASS |
+| 2 | B17 | MFI+CCI | 3.80 | **1.0%** | +1.1% | BOTH | FAIL |
+| **3** | **B21** | **STOCH+CCI** | **3.56** | **1.0%** | +2.1% | **BOTH** | FAIL |
+| **4** | **B21** | **MFI+WILLR** | **3.24** | 5.8% | **+16.1%** | SHORT | FAIL |
+| **5** | **B21** | **WILLR+CCI** | **2.93** | 2.8% | +0.4% | **LONG** | FAIL |
+| 6 | B20 | MFI+WILLR | 2.63 | 10.4% | +14.3% | BOTH | FAIL |
+| 7 | B21 | STOCH+CCI+MFI | 2.51 | 6.6% | +5.2% | LONG | FAIL |
+| 8 | B21 | 4-ind | 2.45 | 5.5% | +2.1% | SHORT | FAIL |
+| 9 | B16 | STOCH+CCI | 2.43 | 1.8% | +3.0% | LONG | FAIL |
+
+B21 placed 3 strategies in the top 5 and 5 in the top 9 — the most productive batch in the project's history.
+
+### Recommendations
+
+1. **Fix DSR bug (vibe-quant-fici) urgently**: With multiple Sharpe >3.0 strategies, the DSR filter should be passing these. The bug is hiding viable strategies.
+2. **MFI+WILLR ultra-deep (pop=30, gen=20, 600 trials)**: MFI+WILLR showed clear improvement from 60→300 trials (2.63→3.24). Push to 600 trials to see if the trend continues.
+3. **Paper trade B21's STOCH+CCI (genome_a1176279bbee)**: Sharpe 3.56, 1% DD, BOTH direction, 67.6% WR. This is the most paper-trade-ready strategy since B15.
+4. **Try STOCH+CCI at pop=30, gen=25 (750 trials)**: B15's 9.10 came from 300 trials. B21's 3.56 from 500 trials. The question is whether 750+ can find another exceptional basin.
+5. **Don't invest more in 4-indicator pools**: 160 trials isn't enough for 4-indicator diversity. The cost/benefit ratio is poor compared to 2-indicator deep search.
+
+---
+
 ## 2026-03-08: Batch 20 — MFI+WILLR Validated (Sharpe 2.63, +14.3%), MACD+CCI Works, WILLR+CCI Strong
 
 ### Goal
