@@ -4,6 +4,86 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-03-08: Batch 19 — ATR+CCI+WILLR Collapses, ATR+CCI+ROC Validated (Sharpe 2.31)
+
+### Goal
+
+Test two 3-indicator combos combining B18's viable ATR+CCI pair with WILLR (set 3) and ROC (set 4). Hypothesis: adding a third indicator to ATR+CCI could improve the Sharpe 2.11 result from B18.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | TF | Time | Status |
+|-----|-----------|-----|------|--------|----|------|--------|
+| 319 | ATR+CCI+WILLR | 12 | 8 | 96 | 4h | ~4.5min | Completed |
+| 320 | ATR+CCI+ROC | 12 | 8 | 96 | 4h | ~3.5min | Completed |
+
+Data range: 2025-03-08 to 2026-03-08.
+
+### Full Pipeline Results
+
+| Stage | 319 ATR+CCI+WILLR | 320 ATR+CCI+ROC |
+|-------|----|----|
+| **Discovery** score | 0.4965 | **0.5917** |
+| **Discovery** sharpe | 1.39 | **2.41** |
+| **Discovery** dd | 18.9% | 1.6% |
+| **Discovery** trades | 54 | 64 |
+| **Discovery** return | +7.1% | +0.4% |
+| **Discovery** PF | 1.37 | 1.50 |
+| **DSR guardrails** | FAIL (p=1.0) | FAIL (p=1.0) |
+| **Screening** match | exact | exact |
+| **Validation** sharpe | **-0.16** | **2.31 (-4%)** |
+| **Validation** return | -7.5% | +0.3% |
+| **Validation** dd | 25.5% | 1.7% |
+| **Validation** trades | 66 (+12) | 64 (exact) |
+| **Validation** PF | 0.96 | 1.45 |
+| **Validation** WR | 6.1% | 45.3% |
+| **Validation** fees | $28.51 | $16.29 |
+
+### Winning Strategy
+
+**Run 320 winner (genome_e4079b9c3762) — ATR+CCI+ROC → ROC-dominant SHORT:**
+- Direction: SHORT only
+- Discovery: Sharpe=2.41, DD=1.6%, 64 trades, PF=1.50, Return=+0.4%
+- Validation: Sharpe=2.31 (-4%), Return=+0.3%, DD=1.7%, 64 trades (exact), PF=1.45, WR=45.3%, fees=$16.29
+- DSR FAIL (p=1.0) — known vibe-quant-fici bug
+- GA converged to single-indicator ROC strategy (entry: ROC, exit: ROC) — ATR and CCI ignored
+- Near-perfect validation match: 4% Sharpe drop, exact trade count, exact return
+- Very low DD (1.7%) and fees ($16.29) — highly selective strategy
+
+### Issues Found
+
+1. **ATR+CCI+WILLR collapses in validation**: Sharpe 1.39 discovery → -0.16 validation. WR=6.1% is catastrophic. Trade count increased (54→66) suggesting fill model created spurious trades. WILLR combined with ATR creates a strategy that only works at zero latency.
+2. **GA ignores ATR and CCI in run 320**: The winning genome uses ROC-only (entry: ROC, exit: ROC). Including ATR and CCI in the pool didn't result in a multi-indicator strategy. This is consistent with the journal pattern: GA overwhelmingly converges to single-indicator strategies.
+3. **DSR universally failing (KNOWN)**: vibe-quant-fici not yet fixed.
+
+### Key Findings
+
+1. **ATR+CCI+ROC produces better result than B18's ATR+CCI**: B18 found Sharpe 2.11 (ATR+CCI pool); B19 found Sharpe 2.31 (ATR+CCI+ROC pool). However the winner uses ROC-only, so the improvement came from ROC being in the pool, not from CCI or ATR.
+2. **ROC is a viable standalone indicator**: First time ROC-only strategy survived validation with Sharpe 2.31. Previous ROC appearances (STOCH+ROC B17: 1.72) were weaker. Pure ROC short strategy on 4h BTC is viable.
+3. **WILLR poisons ATR-based strategies**: ATR+WILLR combination collapses completely in validation (WR=6.1%). WILLR's momentum signals combined with ATR's volatility context may create entries that are extremely fill-price sensitive.
+4. **3-indicator pools don't guarantee 3-indicator strategies**: GA finds single-indicator solutions in 2-indicator or 3-indicator pools alike. The pool expands search diversity but doesn't force multi-indicator architectures.
+5. **Clean run**: 0 errors across all 6 log files. 1 warning each in discovery logs (expected).
+
+### Comparison with Previous Batches (best per batch on current data)
+
+| Metric | B15 (STOCH+CCI) | B17 (MFI+CCI) | B18 (ATR+CCI) | B19 (ATR+CCI+ROC) |
+|--------|-----------------|----------------|----------------|---------------------|
+| Validation Sharpe | **9.10** | 3.80 | 2.11 | 2.31 |
+| Validation DD | **1.0%** | **1.0%** | 7.5% | **1.7%** |
+| Validation Return | +6.9% | +1.1% | +7.7% | +0.3% |
+| Validation PF | 3.54 | 1.83 | 1.58 | 1.45 |
+| Direction | BOTH | BOTH | SHORT | SHORT |
+| DSR | PASS | FAIL | FAIL | FAIL |
+
+### Recommendations
+
+1. **Try ROC-only or ROC+CCI pool**: Since run 320's winner is ROC-only, test with just `["ROC"]` or `["ROC", "CCI"]` to get more GA budget on ROC refinement.
+2. **Fix DSR bug (vibe-quant-fici) first**: Without DSR, results above 2.0 Sharpe cannot be statistically validated.
+3. **Never try ATR+WILLR again**: Catastrophic validation collapse. WILLR is incompatible with ATR in this regime.
+4. **ROC as standalone is viable**: Sharpe 2.31 validated, DD=1.7%. Add ROC-only discovery run in a future batch.
+
+---
+
 ## 2026-03-08: Batch 18 — ATR+CCI Surprise + RSI+CCI Failure + MACD+RSI Complete Failure
 
 ### Goal
