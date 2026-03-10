@@ -264,7 +264,7 @@ class TestBuiltinIndicators:
         spec = indicator_registry.get("BBANDS")
         assert spec is not None
         assert spec.default_params == {"period": 20, "std_dev": 2.0}
-        assert spec.output_names == ("upper", "middle", "lower")
+        assert spec.output_names == ("upper", "middle", "lower", "percent_b", "bandwidth")
 
     def test_atr_registered(self) -> None:
         """ATR indicator is registered."""
@@ -345,7 +345,7 @@ class TestBuiltinIndicators:
         """Donchian Channel is registered."""
         spec = indicator_registry.get("DONCHIAN")
         assert spec is not None
-        assert spec.output_names == ("upper", "middle", "lower")
+        assert spec.output_names == ("upper", "middle", "lower", "position")
 
     def test_roc_registered(self) -> None:
         """Rate of Change is registered."""

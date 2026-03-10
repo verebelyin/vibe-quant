@@ -32,9 +32,10 @@ def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
         name: dict(ind_def.param_ranges) for name, ind_def in _GENOME_POOL.items()
     }
     # Extra oscillator indicators with bounded output ranges.
-    # Price-relative indicators (SMA, WMA, DEMA, TEMA, BBANDS, KC, DONCHIAN)
+    # Price-relative indicators (SMA, WMA, DEMA, TEMA, KC)
     # are excluded because they require indicator-vs-indicator comparison
     # (not indicator-vs-threshold) to produce meaningful conditions.
+    # BBANDS and DONCHIAN use normalized sub-values (percent_b, bandwidth, position).
     _extras: dict[str, dict[str, tuple[float, float]]] = {
         "CCI": {"period": (10, 50)},
         "WILLR": {"period": (5, 30)},
@@ -220,7 +221,6 @@ THRESHOLD_RANGES: dict[str, tuple[float, float]] = {}
 _PRICE_RELATIVE_INDICATORS = frozenset(
     {
         "EMA",
-        "BBANDS",
     }
 )
 
@@ -255,11 +255,23 @@ def _random_gene() -> StrategyGene:
         threshold = round(random.uniform(0, 100), 4)
         condition = random.choice(_CONDITION_TYPES)
 
+    # Sub-values for multi-output indicators
+    sub_value = None
+    if ind == "MACD":
+        sub_value = random.choice([None, "signal", "histogram"])
+    elif ind == "BBANDS":
+        sub_value = random.choice(["percent_b", "bandwidth"])
+        if sub_value == "bandwidth":
+            threshold = round(random.uniform(0.0, 0.2), 4)
+    elif ind == "DONCHIAN":
+        sub_value = "position"
+
     return StrategyGene(
         indicator_type=ind,
         parameters=_random_params(ind),
         condition=condition,
         threshold=threshold,
+        sub_value=sub_value,
     )
 
 
@@ -568,6 +580,17 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
             gene.threshold = round(random.uniform(tlo, thi), 4)
         elif new_ind in _PRICE_RELATIVE_INDICATORS:
             gene.threshold = 0.0
+        # Reset sub_value for new indicator type
+        if new_ind == "MACD":
+            gene.sub_value = random.choice([None, "signal", "histogram"])
+        elif new_ind == "BBANDS":
+            gene.sub_value = random.choice(["percent_b", "bandwidth"])
+            if gene.sub_value == "bandwidth":
+                gene.threshold = round(random.uniform(0.0, 0.2), 4)
+        elif new_ind == "DONCHIAN":
+            gene.sub_value = "position"
+        else:
+            gene.sub_value = None
 
     elif mutation_type == 1:
         # Perturb parameters

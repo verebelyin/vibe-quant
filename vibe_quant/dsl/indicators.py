@@ -450,7 +450,7 @@ def _bbands_spec() -> IndicatorSpec:
         pandas_ta_func="bbands",
         default_params={"period": 20, "std_dev": 2.0},
         param_schema={"period": int, "std_dev": float},
-        output_names=("upper", "middle", "lower"),
+        output_names=("upper", "middle", "lower", "percent_b", "bandwidth"),
     )
 
 
@@ -474,7 +474,7 @@ def _donchian_spec() -> IndicatorSpec:
         pandas_ta_func="donchian",
         default_params={"period": 20},
         param_schema={"period": int},
-        output_names=("upper", "middle", "lower"),
+        output_names=("upper", "middle", "lower", "position"),
     )
 
 

@@ -97,7 +97,18 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
         default_threshold_range=(-0.05, 0.05),
         dsl_type="MACD",
     ),
-    # BBANDS excluded: price-relative indicator, threshold=0 produces no trades
+    "BBANDS": IndicatorDef(
+        name="BBANDS",
+        param_ranges={"period": (5, 50), "std_dev": (1.0, 3.0)},
+        default_threshold_range=(0.0, 1.0),
+        dsl_type="BBANDS",
+    ),
+    "DONCHIAN": IndicatorDef(
+        name="DONCHIAN",
+        param_ranges={"period": (5, 50)},
+        default_threshold_range=(0.0, 1.0),
+        dsl_type="DONCHIAN",
+    ),
     "ATR": IndicatorDef(
         name="ATR",
         param_ranges={"period": (5, 30)},
@@ -199,10 +210,17 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
     tlo, thi = ind_def.default_threshold_range
     threshold = tlo if tlo == thi else round(r.uniform(tlo, thi), 4)
 
-    # MACD can use signal or histogram sub-values
+    # Sub-values for multi-output indicators
     sub_value = None
     if ind_name == "MACD":
         sub_value = r.choice([None, "signal", "histogram"])
+    elif ind_name == "BBANDS":
+        sub_value = r.choice(["percent_b", "bandwidth"])
+        if sub_value == "bandwidth":
+            tlo, thi = 0.0, 0.2
+            threshold = round(r.uniform(tlo, thi), 4)
+    elif ind_name == "DONCHIAN":
+        sub_value = "position"
 
     return StrategyGene(
         indicator_type=ind_name,
@@ -371,6 +389,8 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
     elif gene.indicator_type == "BBANDS":
         cfg["period"] = int(gene.parameters.get("period", 20))
         cfg["std_dev"] = float(gene.parameters.get("std_dev", 2.0))
+    elif gene.indicator_type == "DONCHIAN":
+        cfg["period"] = int(gene.parameters.get("period", 20))
     elif gene.indicator_type == "ATR":
         cfg["period"] = int(gene.parameters.get("period", 14))
     else:

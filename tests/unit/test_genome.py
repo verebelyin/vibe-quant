@@ -525,3 +525,111 @@ class TestPerDirectionSLTPGenome:
         )
         errors = validate_chromosome(chrom)
         assert any("stop_loss_long" in e for e in errors)
+
+
+# =============================================================================
+# BBANDS/DONCHIAN normalized sub-values
+# =============================================================================
+
+
+class TestBBandsDonchianGenome:
+    def test_bbands_in_indicator_pool(self) -> None:
+        assert "BBANDS" in INDICATOR_POOL
+        assert INDICATOR_POOL["BBANDS"].default_threshold_range == (0.0, 1.0)
+
+    def test_donchian_in_indicator_pool(self) -> None:
+        assert "DONCHIAN" in INDICATOR_POOL
+        assert INDICATOR_POOL["DONCHIAN"].default_threshold_range == (0.0, 1.0)
+
+    def test_bbands_gene_with_percent_b(self) -> None:
+        g = StrategyGene(
+            "BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b"
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[g],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        dsl_dict = chromosome_to_dsl(chrom)
+        strategy = StrategyDSL(**dsl_dict)
+        assert "bbands_entry_0" in strategy.indicators
+        # Condition should reference percent_b sub-value
+        long_conds = strategy.entry_conditions.long
+        assert any("percent_b" in c for c in long_conds)
+
+    def test_bbands_gene_with_bandwidth(self) -> None:
+        g = StrategyGene(
+            "BBANDS", {"period": 20, "std_dev": 2.0}, "<", 0.05, sub_value="bandwidth"
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[g],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        dsl_dict = chromosome_to_dsl(chrom)
+        strategy = StrategyDSL(**dsl_dict)
+        long_conds = strategy.entry_conditions.long
+        assert any("bandwidth" in c for c in long_conds)
+
+    def test_donchian_gene_with_position(self) -> None:
+        g = StrategyGene(
+            "DONCHIAN", {"period": 20}, ">", 0.9, sub_value="position"
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[g],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        dsl_dict = chromosome_to_dsl(chrom)
+        strategy = StrategyDSL(**dsl_dict)
+        assert "donchian_entry_0" in strategy.indicators
+        long_conds = strategy.entry_conditions.long
+        assert any("position" in c for c in long_conds)
+
+    def test_bbands_validation_passes(self) -> None:
+        g = StrategyGene(
+            "BBANDS", {"period": 20, "std_dev": 2.0}, ">", 0.8, sub_value="percent_b"
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[g],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        errors = validate_chromosome(chrom)
+        assert errors == []
+
+    def test_donchian_validation_passes(self) -> None:
+        g = StrategyGene(
+            "DONCHIAN", {"period": 20}, ">", 0.5, sub_value="position"
+        )
+        chrom = StrategyChromosome(
+            entry_genes=[g],
+            exit_genes=[StrategyGene("RSI", {"period": 14}, "<", 30.0)],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+        )
+        errors = validate_chromosome(chrom)
+        assert errors == []
+
+    def test_random_chromosomes_with_bbands_donchian(self) -> None:
+        """Random chromosomes can include BBANDS/DONCHIAN and remain valid."""
+        rng = random.Random(42)
+        bbands_seen = False
+        donchian_seen = False
+        for _ in range(500):
+            chrom = generate_random_chromosome(rng)
+            errors = validate_chromosome(chrom)
+            assert errors == [], f"Invalid chromosome: {errors}"
+            for gene in chrom.entry_genes + chrom.exit_genes:
+                if gene.indicator_type == "BBANDS":
+                    bbands_seen = True
+                    assert gene.sub_value in ("percent_b", "bandwidth")
+                elif gene.indicator_type == "DONCHIAN":
+                    donchian_seen = True
+                    assert gene.sub_value == "position"
+        assert bbands_seen, "BBANDS not seen in 500 random chromosomes"
+        assert donchian_seen, "DONCHIAN not seen in 500 random chromosomes"

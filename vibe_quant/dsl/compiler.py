@@ -579,6 +579,9 @@ class StrategyCompiler:
             "        # Previous indicator values for crossover detection",
             "        self._prev_values: dict[str, float] = {}",
             "",
+            "        # Last close price for computed indicator outputs (percent_b, position)",
+            "        self._last_close: float = 0.0",
+            "",
         ]
 
         # Add pandas-ta bar buffer if any indicators need it
@@ -825,6 +828,9 @@ class StrategyCompiler:
 
         lines.extend(
             [
+                "    # Track last close for computed indicator outputs",
+                "    self._last_close = float(bar.close)",
+                "",
                 "    # Check if indicators are ready",
                 "    if not self._indicators_ready():",
                 "        return",
@@ -1008,6 +1014,15 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
+    # Computed outputs derived from channel indicator bands + close price
+    _COMPUTED_OUTPUTS: frozenset[tuple[str, str]] = frozenset(
+        {
+            ("BBANDS", "percent_b"),
+            ("BBANDS", "bandwidth"),
+            ("DONCHIAN", "position"),
+        }
+    )
+
     def _generate_get_indicator_value(self, indicators: list[IndicatorInfo]) -> list[str]:
         """Generate _get_indicator_value method.
 
@@ -1044,6 +1059,12 @@ class StrategyCompiler:
             # Register sub-names for each output of multi-output indicators
             if info.spec.output_names != ("value",):
                 for output_name in info.spec.output_names:
+                    # Computed outputs: derive from band values + close price
+                    if (info.config.type, output_name) in self._COMPUTED_OUTPUTS:
+                        lines.extend(
+                            self._generate_computed_output_code(info, output_name)
+                        )
+                        continue
                     attr = self._output_to_nt_attr(info.config.type, output_name)
                     if (
                         info.config.type == "MACD"
@@ -1061,6 +1082,52 @@ class StrategyCompiler:
                     lines.append("        return float(_v) if _v is not None else 0.0")
 
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
+        return lines
+
+    def _generate_computed_output_code(
+        self, info: IndicatorInfo, output_name: str
+    ) -> list[str]:
+        """Generate code for computed indicator outputs (percent_b, bandwidth, position).
+
+        These are derived from channel indicator bands + close price, not direct NT attrs.
+        """
+        lines: list[str] = []
+        ind_var = info.indicator_var
+
+        if output_name == "percent_b":
+            # %B = (close - lower) / (upper - lower), range ~0-1
+            lines.extend(
+                [
+                    f'    if name == "{info.name}_percent_b":',
+                    f"        _upper = float({ind_var}.upper)",
+                    f"        _lower = float({ind_var}.lower)",
+                    "        _range = _upper - _lower",
+                    "        return (self._last_close - _lower) / _range if _range > 0 else 0.5",
+                ]
+            )
+        elif output_name == "bandwidth":
+            # Bandwidth = (upper - lower) / middle
+            lines.extend(
+                [
+                    f'    if name == "{info.name}_bandwidth":',
+                    f"        _upper = float({ind_var}.upper)",
+                    f"        _lower = float({ind_var}.lower)",
+                    f"        _middle = float({ind_var}.middle)",
+                    "        return (_upper - _lower) / _middle if _middle > 0 else 0.0",
+                ]
+            )
+        elif output_name == "position":
+            # Position = (close - lower) / (upper - lower), range ~0-1
+            lines.extend(
+                [
+                    f'    if name == "{info.name}_position":',
+                    f"        _upper = float({ind_var}.upper)",
+                    f"        _lower = float({ind_var}.lower)",
+                    "        _range = _upper - _lower",
+                    "        return (self._last_close - _lower) / _range if _range > 0 else 0.5",
+                ]
+            )
+
         return lines
 
     @staticmethod
@@ -1121,10 +1188,16 @@ class StrategyCompiler:
                 # Also store sub-outputs for multi-output indicators
                 if info.spec.output_names != ("value",):
                     for output_name in info.spec.output_names:
-                        attr = self._output_to_nt_attr(info.config.type, output_name)
-                        lines.append(
-                            f'    self._prev_values["{info.name}_{output_name}"] = float({info.indicator_var}.{attr})'
-                        )
+                        if (info.config.type, output_name) in self._COMPUTED_OUTPUTS:
+                            # Use _get_indicator_value for computed outputs
+                            lines.append(
+                                f'    self._prev_values["{info.name}_{output_name}"] = self._get_indicator_value("{info.name}_{output_name}")'
+                            )
+                        else:
+                            attr = self._output_to_nt_attr(info.config.type, output_name)
+                            lines.append(
+                                f'    self._prev_values["{info.name}_{output_name}"] = float({info.indicator_var}.{attr})'
+                            )
             elif info.spec.pandas_ta_func is not None:
                 has_any = True
                 lines.append(
@@ -1252,6 +1325,49 @@ class StrategyCompiler:
                         f"        _result = ta.willr(_high, _low, _close, length={period})",
                         "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
                         f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
+                    ]
+                )
+            elif config.type == "BBANDS":
+                # BBANDS returns DataFrame: BBL, BBM, BBU, BBB (bandwidth), BBP (percent_b)
+                period = config.period or spec.default_params.get("period", 20)
+                std_dev = config.std_dev or spec.default_params.get("std_dev", 2.0)
+                lines.extend(
+                    [
+                        "        _close = pd.Series(self._pta_close, dtype=float)",
+                        f"        _bb_df = ta.bbands(_close, length={period}, std={std_dev})",
+                        "        if _bb_df is not None and len(_bb_df) > 0:",
+                        "            _last = _bb_df.iloc[-1]",
+                        "            if not pd.isna(_last.iloc[0]):",
+                        f'                self._pta_values["{info.name}_lower"] = float(_last.iloc[0])',
+                        f'                self._pta_values["{info.name}_middle"] = float(_last.iloc[1])',
+                        f'                self._pta_values["{info.name}_upper"] = float(_last.iloc[2])',
+                        f'                self._pta_values["{info.name}"] = float(_last.iloc[1])',
+                        "            if len(_last) > 3 and not pd.isna(_last.iloc[3]):",
+                        f'                self._pta_values["{info.name}_bandwidth"] = float(_last.iloc[3])',
+                        "            if len(_last) > 4 and not pd.isna(_last.iloc[4]):",
+                        f'                self._pta_values["{info.name}_percent_b"] = float(_last.iloc[4])',
+                    ]
+                )
+            elif config.type == "DONCHIAN":
+                # DONCHIAN returns DataFrame: DCL, DCM, DCU
+                period = config.period or spec.default_params.get("period", 20)
+                lines.extend(
+                    [
+                        "        _high = pd.Series(self._pta_high, dtype=float)",
+                        "        _low = pd.Series(self._pta_low, dtype=float)",
+                        f"        _dc_df = ta.donchian(_high, _low, lower_length={period}, upper_length={period})",
+                        "        if _dc_df is not None and len(_dc_df) > 0:",
+                        "            _last = _dc_df.iloc[-1]",
+                        "            if not pd.isna(_last.iloc[0]):",
+                        f'                self._pta_values["{info.name}_lower"] = float(_last.iloc[0])',
+                        f'                self._pta_values["{info.name}_middle"] = float(_last.iloc[1])',
+                        f'                self._pta_values["{info.name}_upper"] = float(_last.iloc[2])',
+                        f'                self._pta_values["{info.name}"] = float(_last.iloc[1])',
+                        "                _range = float(_last.iloc[2]) - float(_last.iloc[0])",
+                        "                if _range > 0:",
+                        f'                    self._pta_values["{info.name}_position"] = (self._last_close - float(_last.iloc[0])) / _range',
+                        "                else:",
+                        f'                    self._pta_values["{info.name}_position"] = 0.5',
                     ]
                 )
             else:
