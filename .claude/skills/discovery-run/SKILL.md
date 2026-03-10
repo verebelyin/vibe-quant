@@ -181,7 +181,7 @@ conn = sqlite3.connect('data/state/vibe_quant.db')
 for sid in [STRATEGY_IDS]:
     cursor = conn.execute(
         'INSERT INTO backtest_runs (strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status) VALUES (?,?,?,?,?,?,?,?)',
-        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'retail'}), 'pending'))
+        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'cloud'}), 'pending'))
     print(f'Created validation run {cursor.lastrowid} for strategy {sid}')
 conn.commit()
 "
@@ -426,7 +426,7 @@ conn = sqlite3.connect('data/state/vibe_quant.db')
 for sid in [STRATEGY_IDS]:
     cursor = conn.execute(
         'INSERT INTO backtest_runs (strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status) VALUES (?,?,?,?,?,?,?,?)',
-        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'retail'}), 'pending'))
+        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'cloud'}), 'pending'))
     print(f'Created validation run {cursor.lastrowid} for strategy {sid}')
 conn.commit()
 "
@@ -438,7 +438,7 @@ done
 wait
 ```
 
-Expected: same trades, degraded metrics (5-20% Sharpe drop normal due to fill model + 200ms latency + fees).
+Expected: same trades, degraded metrics (5-20% Sharpe drop normal due to fill model + 60ms cloud latency + fees).
 Fetch results with `/api/results/runs/{validation_run_id}`.
 
 ### Phase 8: Log File Audit

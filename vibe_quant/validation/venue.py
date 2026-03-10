@@ -106,7 +106,7 @@ def create_venue_config_for_validation(
     starting_balance_usdt: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
-    latency_preset: LatencyPreset | str = LatencyPreset.RETAIL,
+    latency_preset: LatencyPreset | str = LatencyPreset.CLOUD,
     impact_coefficient: float = 0.1,
 ) -> VenueConfig:
     """Create VenueConfig optimized for validation mode.

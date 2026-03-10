@@ -509,7 +509,7 @@ class ValidationRunner:
         if db_latency:
             return str(db_latency)
 
-        return LatencyPreset.RETAIL  # Default
+        return LatencyPreset.CLOUD  # Default
 
     def _create_venue_config(
         self,
@@ -530,7 +530,7 @@ class ValidationRunner:
             balance = 1_000
         return create_venue_config_for_validation(
             starting_balance_usdt=int(balance),
-            latency_preset=latency_preset or LatencyPreset.RETAIL,
+            latency_preset=latency_preset or LatencyPreset.CLOUD,
         )
 
     def _run_backtest(

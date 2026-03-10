@@ -13,6 +13,7 @@ class LatencyPreset(StrEnum):
 
     COLOCATED = "co_located"
     DOMESTIC = "domestic"
+    CLOUD = "cloud"
     INTERNATIONAL = "international"
     RETAIL = "retail"
 
@@ -48,7 +49,7 @@ class LatencyValues:
 
 # Latency presets based on typical network conditions
 # Values represent one-way latency from order submission to exchange
-# SPEC values: co-located 1ms, domestic 20ms, international 100ms, retail 200ms
+# SPEC values: co-located 1ms, domestic 20ms, cloud 60ms, international 100ms, retail 200ms
 LATENCY_PRESETS: dict[LatencyPreset, LatencyValues] = {
     # Co-located: Server in same datacenter as exchange (SPEC: 1ms)
     LatencyPreset.COLOCATED: LatencyValues(
@@ -60,6 +61,13 @@ LATENCY_PRESETS: dict[LatencyPreset, LatencyValues] = {
     # Domestic: Same country/region as exchange (SPEC: 20ms)
     LatencyPreset.DOMESTIC: LatencyValues(
         base_ms=20.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
+    ),
+    # Cloud: VPS/cloud server near exchange region (60ms)
+    LatencyPreset.CLOUD: LatencyValues(
+        base_ms=60.0,
         insert_ms=0.0,
         update_ms=0.0,
         cancel_ms=0.0,
