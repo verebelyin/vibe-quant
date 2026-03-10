@@ -215,3 +215,94 @@ Data range: 2025-03-10 to 2026-03-10. BTCUSDT 1m. 3 parallel runs on 32GB M3 Max
 6. **Paper trade STOCH+ROC (sid=135)** — still the top 1m strategy. Nothing from Batch 2 challenges it.
 
 ---
+
+## 2026-03-10: Batch 3 — Trinity Combos + BOTH Direction Test
+
+### Goal
+
+Test the remaining untried combinations from the proven 1m indicator set (STOCH, CCI, ROC). Also test forced BOTH direction to see if bidirectional strategies are viable on 1m. All combos are Rust-native.
+
+### Bug Fixes Applied
+
+1. **Direction enum case** — `"BOTH"` (uppercase) rejected by Discovery API. Correct value: `"both"` (lowercase). Relaunch required (run 462 → 464).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 461 | CCI+ROC | 16 | 14 | 224 | random | ~26min | completed |
+| 464 | STOCH+ROC | 16 | 14 | 224 | both | ~24min | completed (FAIL) |
+| 463 | STOCH+CCI+ROC | 14 | 12 | 168 | random | ~20min | completed |
+
+Data range: 2025-03-10 to 2026-03-10. BTCUSDT 1m. 3 parallel runs.
+
+### Full Pipeline Results
+
+| Stage | 461 CCI+ROC | 464 STOCH+ROC both | 463 STOCH+CCI+ROC |
+|-------|------------|-------------------|-------------------|
+| **Direction** | SHORT | BOTH (long+short) | SHORT |
+| **Discovery** score | 0.4148 | 0.3587 | **0.4308** |
+| **Discovery** sharpe | 1.09 | 0.06 | 0.96 |
+| **Discovery** dd | 23.8% | 12.4% | **11.6%** |
+| **Discovery** trades | 53 | 197 | **301** |
+| **Discovery** return | +5.2% | -2.2% | +0.8% |
+| **Discovery** PF | 1.19 | 1.01 | 1.15 |
+| **DSR** | **PASS 2/5** | FAIL 0/5 | **PASS 2/5** |
+| **Screening** match | **exact** ✓ | — | **exact** ✓ |
+| **Validation** sharpe | 6.29 (1 trade) | — | **1.02** (+6%) |
+| **Validation** sortino | 28.59 (noise) | — | 1.28 |
+| **Validation** dd | 0.0% | — | 11.4% |
+| **Validation** trades | **1** (FAIL) | — | **299** (−0.7%) |
+| **Validation** PF | 3.55 (noise) | — | **1.17** |
+| **Validation** WR | 100% (noise) | — | **92.6%** |
+| **Validation** return | 5.4% (noise) | — | **+1.6%** (+100%) |
+| **Validation** fees | $0.81 | — | $47.64 |
+
+### Issues Found
+
+1. **BOTH direction is unviable on 1m** — run 464 produced Sharpe 0.06, all 5 strategies had negative returns. GA cannot find bidirectional strategies on 1m. SHORT-only bias continues.
+2. **CCI+ROC collapsed to 1 trade in validation** — despite 53 discovery trades and passing DSR. The strategy is too sensitive to fill timing.
+3. **Direction enum case sensitivity** — API accepts lowercase `"both"`, not `"BOTH"`. Not documented.
+
+### Key Findings
+
+1. **STOCH+CCI+ROC triple is modestly robust** — validation improved +6% Sharpe (0.96→1.02), near-identical trade count (301→299), return doubled (+0.8%→+1.6%). 92.6% WR. But absolute Sharpe (1.02) is well below Batch 1 champions.
+2. **CCI+ROC fails validation** — 53 trades → 1 trade. CCI+ROC without STOCH is too fragile. CCI needs STOCH as a stabilizer.
+3. **BOTH direction confirmed unviable on 1m** — third evidence (after Batch 1's both-winners-SHORT and now explicit BOTH test). 1m strategies must be directional.
+4. **SHORT bias persists** — all 3 Batch 3 runs converged SHORT (464 was forced BOTH). All 5 passing strategies across all 3 batches are SHORT.
+5. **Triple combo adds trades, not quality** — 301 trades vs 155 (STOCH+ROC) or 40 (STOCH+CCI), but Sharpe 1.02 vs 2.60/2.50. More indicators = more trades but diluted signal.
+6. **STOCH remains essential** — CCI+ROC (no STOCH) collapsed to 1 validation trade. Every surviving 1m strategy includes STOCH.
+
+### Comparison with Previous Batches
+
+| Metric | B1 STOCH+ROC | B1 STOCH+CCI | B3 STOCH+CCI+ROC | B3 CCI+ROC |
+|--------|-------------|-------------|------------------|------------|
+| Disc Sharpe | 2.13 | 2.47 | 0.96 | 1.09 |
+| Val Sharpe | **2.60** | **2.50** | 1.02 | — (1 trade) |
+| Val Trades | 155 | 40 | **299** | 1 |
+| Val DD | **5.2%** | 11.7% | 11.4% | — |
+| Val WR | **94.8%** | 52.5% | 92.6% | — |
+| Val PF | **1.52** | **1.53** | 1.17 | — |
+| Verdict | **CHAMPION** | **#2** | #3 (modest) | FAIL |
+
+### 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Dir |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|-----|
+| 1 | B1 | STOCH+ROC | **2.60** | 3.53 | 5.2% | 155 | 1.52 | **94.8%** | SHORT |
+| 2 | B1 | STOCH+CCI | **2.50** | 5.69 | 11.7% | 40 | 1.53 | 52.5% | SHORT |
+| 3 | B3 | STOCH+CCI+ROC | 1.02 | 1.28 | 11.4% | 299 | 1.17 | 92.6% | SHORT |
+| — | B2 | CCI+BBANDS | 0.31 | 0.41 | 7.3% | 52 | 1.05 | 53.8% | LONG |
+| — | B2 | STOCH+DONCHIAN | −0.88 | −1.00 | 11.9% | 105 | 0.84 | 34.3% | LONG |
+| — | B3 | CCI+ROC | — | — | — | 1 | — | — | SHORT |
+
+### Recommendations
+
+1. **STOCH+ROC is the definitive 1m champion** — 3 batches tested, nothing challenges Sharpe 2.60 / 94.8% WR / 5.2% DD. Focus optimization efforts here.
+2. **Try STOCH+ROC with higher budget** — still the #1 untested recommendation. Pop=20, gens=15 (solo or 2 parallel max). The 4h journal showed +41% improvement with 3x budget.
+3. **Try STOCH+ROC with 3mo data** (as in Batch 1) — Batch 2+3 used 12mo. Compare whether 3mo produces better strategies (more recent patterns, less noise).
+4. **STOCH is mandatory on 1m** — every combo without STOCH failed validation. CCI and ROC only work as STOCH companions.
+5. **Stop testing new indicator combos on 1m** — 3 batches exhausted all reasonable Rust-native combos. Remaining value is in optimizing STOCH+ROC parameters, not indicator selection.
+6. **Paper trade STOCH+ROC (sid=135)** — still the top candidate. 3 batches of evidence support it.
+
+---
