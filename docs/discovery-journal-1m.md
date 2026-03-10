@@ -127,3 +127,91 @@ Data range: 2025-12-10 to 2026-03-10. BTCUSDT 1m. ~130K bars.
 6. **File bead for orphan worker cleanup** — multiprocessing workers survive parent death. Need process group management.
 
 ---
+
+## 2026-03-10: Batch 2 — BBANDS/DONCHIAN First Test
+
+### Goal
+
+First test of newly added BBANDS and DONCHIAN indicators on 1m timeframe. These were added to the genome pool via normalized sub-values (commit `c327717`). Test whether volatility/channel indicators complement the proven 1m indicators (STOCH, CCI, ROC).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 454 | STOCH+BBANDS | 16 | 14 | 224 | random | ~35min | completed |
+| 455 | STOCH+DONCHIAN | 16 | 14 | 224 | random | ~38min | completed |
+| 456 | CCI+BBANDS | 16 | 14 | 224 | random | ~42min | completed |
+
+Data range: 2025-03-10 to 2026-03-10. BTCUSDT 1m. 3 parallel runs on 32GB M3 Max.
+
+**Note:** API used 12-month data range (full available) rather than intended 3-month window. Future runs should specify date range if API supports it.
+
+### Full Pipeline Results
+
+| Stage | 454 STOCH+BBANDS | 455 STOCH+DONCHIAN | 456 CCI+BBANDS |
+|-------|-----------------|-------------------|----------------|
+| **Direction** | SHORT | LONG | LONG |
+| **Discovery** score | 0.3576 | 0.5779 | **0.6760** |
+| **Discovery** sharpe | 0.37 | 2.87 | **4.22** |
+| **Discovery** dd | 23.0% | 4.1% | **1.4%** |
+| **Discovery** trades | 73 | 182 | 70 |
+| **Discovery** return | +0.8% | -4.1% | +1.1% |
+| **Discovery** PF | 1.05 | 1.59 | **1.80** |
+| **DSR** | PASS 1/5 | **FAIL 0/5** (neg return) | **PASS 1/5** |
+| **Screening** match | — | **exact** ✓ | **exact** ✓ |
+| **Validation** sharpe | — | **-0.88** (−131%) | **0.31** (−93%) |
+| **Validation** sortino | — | -1.00 | 0.41 |
+| **Validation** dd | — | 11.9% | 7.3% |
+| **Validation** trades | — | 105 (−42%) | 52 (−26%) |
+| **Validation** PF | — | 0.84 | 1.05 |
+| **Validation** WR | — | 34.3% | 53.8% |
+| **Validation** return | — | -6.5% | -0.9% |
+| **Validation** fees | — | $22.59 | $10.93 |
+
+### Issues Found
+
+1. **No winning strategies** — both validated strategies degraded catastrophically. 456 (CCI+BBANDS) went from Sharpe 4.22 → 0.31 (−93%). 455 (STOCH+DONCHIAN) went from 2.87 → −0.88 (−131%).
+2. **STOCH+BBANDS too weak** — best fitness only 0.41, Sharpe 0.37. Not worth promoting.
+3. **STOCH+DONCHIAN negative return paradox** — Sharpe 2.87 with −4.1% return. High Sharpe from consistent small wins that don't overcome the negative drift. Guardrails correctly rejected all 5 strategies.
+4. **Data range mismatch** — API used 12mo (2025-03-10 → 2026-03-10) not the intended 3mo. Batch 1 used 3mo. This may explain different behavior — more data doesn't always mean better discovery.
+
+### Key Findings
+
+1. **BBANDS and DONCHIAN fail validation on 1m** — discovery scores looked promising (0.58–0.68) but collapsed under realistic fills/latency. The normalized sub-values work mechanically but don't produce robust strategies.
+2. **Contrast with Batch 1** — STOCH+ROC *improved* +22% in validation; STOCH+CCI improved +1%. BBANDS/DONCHIAN combos degraded 93–131%. The original 1m trinity (STOCH, CCI, ROC) remains unchallenged.
+3. **High discovery fitness ≠ validation robustness** — run 456 had the highest 1m fitness ever (0.676) but worst validation degradation. Overfitting risk is real even with DSR pass.
+4. **BBANDS normalized sub-values may overfit** — the 0.0–1.0 %B range gives GA a "too easy" parameter space. GA finds strategies that exploit the exact position within bands, which is highly sensitive to fill timing.
+5. **DONCHIAN similar issue** — channel position (0–1) is inherently price-path-dependent. Small fill timing differences shift position dramatically on 1m bars.
+6. **All 3 runs converged to different directions** — 454 SHORT, 455/456 LONG. No consistent directional signal from new indicators.
+
+### Comparison with Previous Batches
+
+| Metric | B1 STOCH+ROC | B1 STOCH+CCI | B2 CCI+BBANDS | B2 STOCH+DONCHIAN |
+|--------|-------------|-------------|---------------|-------------------|
+| Disc Sharpe | 2.13 | 2.47 | **4.22** | 2.87 |
+| Val Sharpe | **2.60** (+22%) | **2.50** (+1%) | 0.31 (−93%) | −0.88 (−131%) |
+| Val Trades | 155 | 40 | 52 | 105 |
+| Val DD | 5.2% | 11.7% | 7.3% | 11.9% |
+| Val WR | **94.8%** | 52.5% | 53.8% | 34.3% |
+| Val PF | 1.52 | 1.53 | 1.05 | 0.84 |
+| Verdict | **CHAMPION** | **#2** | FAIL | FAIL |
+
+### 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Dir |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|-----|
+| 1 | B1 | STOCH+ROC | **2.60** | 3.53 | 5.2% | 155 | 1.52 | **94.8%** | SHORT |
+| 2 | B1 | STOCH+CCI | **2.50** | 5.69 | 11.7% | 40 | 1.53 | 52.5% | SHORT |
+| — | B2 | CCI+BBANDS | 0.31 | 0.41 | 7.3% | 52 | 1.05 | 53.8% | LONG |
+| — | B2 | STOCH+DONCHIAN | −0.88 | −1.00 | 11.9% | 105 | 0.84 | 34.3% | LONG |
+
+### Recommendations
+
+1. **BBANDS/DONCHIAN not viable for 1m discovery** — remove from 1m indicator recommendations. Keep in genome pool for 4h where fill timing matters less.
+2. **Re-focus on STOCH+CCI+ROC trinity** — these are the only indicators that survive 1m validation.
+3. **Try STOCH+ROC higher budget** (journal rec from Batch 1) — still untested. The champion deserves a bigger search budget (pop=20, gens=15).
+4. **Try CCI+ROC** — another untested Batch 1 rec. Combine the two non-STOCH 1m winners.
+5. **Investigate 3mo vs 12mo data impact** — Batch 2 used 12mo accidentally. If 1m discovery works better on 3mo (less noise, more recent patterns), that's important to establish.
+6. **Paper trade STOCH+ROC (sid=135)** — still the top 1m strategy. Nothing from Batch 2 challenges it.
+
+---
