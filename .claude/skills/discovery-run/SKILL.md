@@ -1,6 +1,6 @@
 ---
 name: discovery-run
-description: Run a full discovery cycle — 5 parallel GA discoveries (20min max), 3min status reports, overfitting validation, backtesting, journal entry, and error triage. Use when user says /discovery-run, "run discoveries", "find new strategies", or "discovery batch". Triggers the complete pipeline from discovery through validation with automated monitoring and journaling.
+description: Run a full discovery cycle — parallel GA discoveries (CPU-scaled), 3min status reports, overfitting validation, backtesting, journal entry, and error triage. Use when user says /discovery-run, "run discoveries", "find new strategies", or "discovery batch". Triggers the complete pipeline from discovery through validation with automated monitoring and journaling.
 ---
 
 # Discovery Run
@@ -250,14 +250,45 @@ if row: print(dict(row))
 - CCI's wide threshold [-200,200] dominates — GA frequently picks pure CCI
 - Indicators NOT yet in genome pool are fair game — add them first, then discover
 
-### Phase 2: Launch 5 Parallel Discoveries
+### Phase 2: Launch Parallel Discoveries
 
 **Pre-launch checklist:**
 
 1. Verify backend is running: `lsof -i :8000`
 2. Verify genome pool: `rg "INDICATOR_POOL" vibe_quant/discovery/genome.py -A 3 | head -40`
+3. **Calculate parallelism from CPU cores** (see below)
 
-Launch all 5 via API concurrently. Use these defaults (adjust based on 20min budget):
+#### Parallelism Calculation (CRITICAL)
+
+Each discovery run spawns `--max-workers 4` multiprocessing workers. All workers run at ~75-90% CPU. To avoid CPU starvation, distribute workers evenly across cores with breathing room:
+
+```
+cpu_cores = sysctl -n hw.ncpu        # e.g., 10 on M1 Pro
+workers_per_run = 4                   # default --max-workers
+reserved_cores = 2                    # headroom for OS, backend, monitoring
+max_parallel_runs = floor((cpu_cores - reserved_cores) / workers_per_run)
+```
+
+| CPU Cores | Max Parallel Runs | Total Workers | Load |
+|-----------|-------------------|---------------|------|
+| 8         | 1                 | 4             | 50%  |
+| 10        | 2                 | 8             | 80%  |
+| 12-14     | 3                 | 12            | ~90% |
+| 16+       | 3-4               | 12-16         | ~80% |
+
+**Always check first:**
+
+```bash
+echo "CPU cores: $(sysctl -n hw.ncpu)"
+```
+
+**Rules:**
+- **Never exceed `(cores - 2) / 4` parallel runs** — causes CPU starvation, zombie workers, and slower total time
+- **3 parallel on 10 cores works but is tight** — runs compete for CPU, the slowest run takes ~30% longer
+- **2 parallel is the safe default for 10-core machines** — each run gets full 4-core utilization, minimal contention
+- If user requests more runs than fit in one wave, run them in waves (e.g., 5 runs = 2 waves of 2 + 1)
+
+**Default GA parameters** (adjust based on time budget):
 
 ```
 Population: 12
@@ -268,11 +299,13 @@ Direction: null (random)
 Convergence generations: 5
 ```
 
-**Time budget**: 20 minutes total. If combos include slow indicators (pandas-ta), reduce pop/gens:
+**Time budget scaling** — if combos include slow indicators (pandas-ta), reduce pop/gens:
 
 - All Rust-native: pop=12, gens=8
 - 1 pandas-ta indicator: pop=10, gens=6
 - 2 pandas-ta indicators: pop=8, gens=5
+
+**For higher-budget runs** (30-40 min target): pop=20, gens=20 with Rust-native indicators.
 
 Launch command (repeat for each combo):
 
@@ -289,7 +322,7 @@ curl -s -X POST http://localhost:8000/api/discovery/launch \
   }'
 ```
 
-Record all `run_id` values. Launch all 5 as parallel Bash tool calls.
+Record all `run_id` values. **Record the launch timestamp** — you'll need it for the journal timing column. Launch all runs as parallel Bash tool calls.
 
 ### Phase 3: Monitor Every 3 Minutes
 
@@ -490,7 +523,7 @@ Append a new batch entry to `docs/discovery-journal.md` following the exact form
 1. **Date and batch number** (increment from last batch)
 2. **Goal** — what combos were tested and why
 3. **Bug Fixes Applied** — any fixes made during the run
-4. **Configuration table** — run IDs, indicators, pop, gens, TF, time, status
+4. **Configuration table** — run IDs, indicators, pop, gens, TF, **wall-clock time per run** (from launch to completion), status
 5. **Full Pipeline Results table** — all stages for all runs
 6. **Winning Strategies** — detailed breakdown of top performers
 7. **Issues Found** — numbered list of any problems
