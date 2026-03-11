@@ -306,3 +306,106 @@ Data range: 2025-03-10 to 2026-03-10. BTCUSDT 1m. 3 parallel runs.
 6. **Paper trade STOCH+ROC (sid=135)** — still the top candidate. 3 batches of evidence support it.
 
 ---
+
+## 2026-03-11: Batch 4 — Higher Budget Optimization (12mo Data)
+
+### Goal
+
+Test the two proven 1m combos (STOCH+ROC, STOCH+CCI) with higher GA budget (pop=20, gens=20 = 400 trials, ~3.3x Batch 1). Also test STOCH+ROC long to definitively settle the directional question. Used forced direction (short/long) per journal recommendations.
+
+**Note:** Discovery API date range bug (vibe-quant-tonx) caused 12mo data (2025-03-11→2026-03-11) instead of intended 3mo. This means results test 12mo robustness — different experiment than intended but still valuable.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 469 | STOCH+ROC | 20 | 20 | 400 | **short** | ~51min | **completed** |
+| 470 | STOCH+CCI | 20 | 20 | 400 | **short** | ~67min | **completed** |
+| 471 | STOCH+ROC | 20 | 20 | 400 | **long** | ~53min | completed (FAIL) |
+
+Data range: 2025-03-11 to 2026-03-11. BTCUSDT 1m. 3 parallel runs on M1 Pro (10 cores).
+
+### Full Pipeline Results
+
+| Stage | 469 STOCH+ROC short | 470 STOCH+CCI short | 471 STOCH+ROC long |
+|-------|-------------------|--------------------|--------------------|
+| **Direction** | SHORT | SHORT | LONG |
+| **Discovery** score | 0.4784 | **0.5072** | 0.3538 |
+| **Discovery** sharpe | 1.67 | **1.94** | 0.23 |
+| **Discovery** dd | 20.0% | **7.5%** | 19.8% |
+| **Discovery** trades | 55 | **95** | 88 |
+| **Discovery** return | +8.6% | +7.4% | -0.9% |
+| **Discovery** PF | 1.48 | 1.47 | 1.03 |
+| **DSR** | PASS 2/5 | PASS 1/5 | **FAIL 0/5** |
+| **Screening** match | **exact** ✓ | **exact** ✓ | — |
+| **Validation** sharpe | 1.12 (−33%) | **2.06 (+6%)** | — |
+| **Validation** sortino | 3.16 | **3.77** | — |
+| **Validation** dd | 1.7% | 7.5% | — |
+| **Validation** trades | **7** (−87% FAIL) | **94** (−1%) | — |
+| **Validation** PF | 1.20 | **1.51** | — |
+| **Validation** WR | 14.3% | **47.9%** | — |
+| **Validation** return | +4.6% | **+8.2%** (+10.8%) | — |
+| **Validation** fees | $3.89 | $30.85 | — |
+
+### Winning Strategy
+
+**Run 470 — STOCH+CCI (Short)** — Strategy `genome_e00faabc11ca` (sid=141)
+- Entry: CCI(36) crosses_above -76.2 AND STOCH(10,3) crosses_above 44.7 AND CCI(31) > 45.1 → short
+- Exit: STOCH(15,9) < 44.3 AND STOCH(17,3) crosses_above 59.6
+- SL: 6.17% / TP: 9.4%
+- Validated **Sharpe 2.06**, Sortino 3.77, **94 trades**, **+8.2% return**, 7.5% DD, PF 1.51, 47.9% WR
+- **Validation improved +6% Sharpe, +10.8% return** with near-identical trade count (94 vs 95)
+- CCI-dominated entry (2/3 conditions are CCI) with STOCH confirmation + STOCH-only exit
+- Unlike Batch 1's STOCH+CCI (40 trades, tight-TP scalper), this is a medium-frequency strategy with balanced SL/TP
+
+### Issues Found
+
+1. **Discovery API date range bug** — uses full catalog data (12mo) instead of 3mo window. Filed as vibe-quant-tonx.
+2. **Worker idle under contention** — run 470 had 2/4 workers at 0% CPU while competing for CPU with runs 469/471. Filed as vibe-quant-pkda.
+3. **STOCH+ROC collapsed to 7 trades in validation** (469) — similar to Batch 3's CCI+ROC collapse. STOCH+ROC on 12mo data is too sensitive to fill timing.
+
+### Key Findings
+
+1. **STOCH+CCI is the 12mo champion** — Sharpe 2.06 validated on 12mo data with near-perfect trade preservation (94/95). More robust than any Batch 1 strategy on a per-month basis.
+2. **STOCH+ROC degrades on 12mo data** — 55→7 trades in validation. The 3mo Batch 1 champion (Sharpe 2.60) may be period-specific. STOCH+ROC needs shorter data windows.
+3. **Higher budget (400 trials) produced better STOCH+CCI** — Batch 1 had 120 trials with Sharpe 2.47 discovery / 2.50 validated (40 trades). This batch had 400 trials with Sharpe 1.94 / 2.06 validated (94 trades). The higher budget found a more robust strategy with 2.35x more validated trades.
+4. **LONG definitively unviable on 1m** — 4th evidence: Batch 1 (both winners SHORT), Batch 3 (forced BOTH fail), and now forced LONG (0/5 passed, all negative returns). This is conclusive.
+5. **12mo data favors CCI over ROC for stability** — ROC's momentum signals are too sensitive to fill timing over longer periods. CCI's oscillator nature provides more stable entry/exit signals.
+6. **CPU contention significantly impacts parallel runs** — 470 took 67min vs 469's 51min despite same config, due to CPU starvation from 3 parallel runs with 12 total workers on 10 cores.
+
+### Comparison with Previous Batches
+
+| Metric | B1 STOCH+ROC (3mo) | B1 STOCH+CCI (3mo) | B4 STOCH+CCI (12mo) | B4 STOCH+ROC (12mo) |
+|--------|-------|-------|-------|-------|
+| Disc Sharpe | 2.13 | 2.47 | **1.94** | 1.67 |
+| Val Sharpe | **2.60** | **2.50** | **2.06** | 1.12 (7 trades) |
+| Val Trades | 155 | 40 | **94** | 7 |
+| Val DD | 5.2% | 11.7% | 7.5% | 1.7% |
+| Val WR | **94.8%** | 52.5% | 47.9% | 14.3% |
+| Val PF | 1.52 | 1.53 | **1.51** | 1.20 |
+| Val Return | +5.8% | +15.5% | **+8.2%** | +4.6% |
+| Data Window | 3mo | 3mo | **12mo** | 12mo |
+| Verdict | **1m CHAMPION** | **#2 (3mo)** | **#2 (12mo) — most robust** | FAIL (7 trades) |
+
+### 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Dir | Data |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|-----|------|
+| 1 | B1 | STOCH+ROC | **2.60** | 3.53 | 5.2% | 155 | 1.52 | **94.8%** | SHORT | 3mo |
+| 2 | B1 | STOCH+CCI | **2.50** | 5.69 | 11.7% | 40 | 1.53 | 52.5% | SHORT | 3mo |
+| 3 | **B4** | **STOCH+CCI** | **2.06** | 3.77 | 7.5% | **94** | 1.51 | 47.9% | SHORT | **12mo** |
+| 4 | B3 | STOCH+CCI+ROC | 1.02 | 1.28 | 11.4% | 299 | 1.17 | 92.6% | SHORT | 12mo |
+| — | B4 | STOCH+ROC | 1.12 | 3.16 | 1.7% | 7 | 1.20 | 14.3% | SHORT | 12mo |
+| — | B2 | CCI+BBANDS | 0.31 | 0.41 | 7.3% | 52 | 1.05 | 53.8% | LONG | 12mo |
+| — | B2 | STOCH+DONCHIAN | −0.88 | −1.00 | 11.9% | 105 | 0.84 | 34.3% | LONG | 12mo |
+
+### Recommendations
+
+1. **Fix discovery API date range (vibe-quant-tonx)** — this is blocking all "3mo data" experiments. Must fix before next batch.
+2. **Re-run STOCH+ROC on 3mo data with higher budget** — Batch 1's champion was 3mo. Higher budget (400 trials) hasn't been tested on 3mo yet.
+3. **Paper trade both top strategies** — sid=135 (B1 STOCH+ROC, 3mo scalper) and sid=141 (B4 STOCH+CCI, 12mo balanced). They have complementary profiles.
+4. **STOCH+CCI (sid=141) is the most robust 1m strategy** — 94 validated trades on 12mo with validation improvement. Better risk-adjusted than the 3mo strategies.
+5. **Reduce parallel runs to 2** — 3 parallel with 12 workers on 10 cores causes contention. 2 runs × 4 workers = 8 workers fits cleanly on 10 cores.
+6. **LONG direction is closed on 1m** — 4 batches, 0 viable long strategies. Stop testing.
+
+---
