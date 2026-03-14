@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -13,6 +14,8 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.persistence.catalog import ParquetDataCatalog
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import sqlite3
@@ -332,11 +335,27 @@ class CatalogManager:
 
     @property
     def catalog(self) -> ParquetDataCatalog:
-        """Get or create catalog."""
+        """Get or create catalog, cleaning up corrupt epoch-timestamp files first."""
         if self._catalog is None:
             self._catalog_path.mkdir(parents=True, exist_ok=True)
+            self._cleanup_epoch_parquet()
             self._catalog = ParquetDataCatalog(str(self._catalog_path))
         return self._catalog
+
+    def _cleanup_epoch_parquet(self) -> None:
+        """Remove corrupt epoch-timestamp parquet files from catalog.
+
+        Parallel validation/BacktestNode can write ~4-byte placeholder parquet
+        files with 1970-01-01 timestamps that poison subsequent catalog reads
+        with ArrowInvalid. Remove them proactively.
+        """
+        epoch_pattern = "1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet"
+        data_dir = self._catalog_path / "data"
+        if not data_dir.exists():
+            return
+        for corrupt_file in data_dir.rglob(epoch_pattern):
+            logger.warning("Removing corrupt epoch-timestamp parquet: %s", corrupt_file)
+            corrupt_file.unlink(missing_ok=True)
 
     def write_instrument(self, instrument: CryptoPerpetual) -> None:
         """Write instrument to catalog.
