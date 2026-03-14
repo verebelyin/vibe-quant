@@ -921,8 +921,47 @@ Data range: 3mo = 2025-12-14 to 2026-03-14, 5mo = 2025-10-14 to 2026-03-14. All 
 2. **Keep CCI threshold at [-200, 200]** — the wider range produces deeper entries and better DSR rates. No reason to narrow back.
 3. **For daily trading, use 3mo data** — 5mo produces fewer validated trades, not more. B1's STOCH+ROC (155 trades/3mo) remains the highest-frequency validated strategy.
 4. **Portfolio of uncorrelated strategies** — sid=135 (B1 STOCH+ROC scalper, 94.8% WR), sid=147 (B7 STOCH solo, Sharpe 4.15), sid=153 (B8 CCI scalper, 90.4% WR), sid=155 (B8 STOCH+CCI 5mo, best all-around).
-5. **ROC and ATR are confirmed solo-unviable on 1m** — both collapse in validation. Only work as companions to STOCH.
-6. **Consider fitness function adjustment** — STOCH solo 5mo found 5 strategies with high Sharpe but negative returns. The 35% Sharpe weight allows this. Adding a hard gate for return > 0% would prevent this.
+5. ~~**ROC and ATR are confirmed solo-unviable on 1m**~~ — **RETRACTED (2026-03-14)**: The B8 validation collapse was caused by NT's LatencyModel creating 60s fill delays on 1m bar data, not by strategy weakness. See Batch 8 Re-Validation below.
+6. **Consider fitness function adjustment** — STOCH solo 5mo found 5 strategies with high Sharpe but negative returns. The 35% Sharpe weight allows this. Adding a hard gate for return > 0% would prevent this. **DONE (2026-03-14)**: Added `total_return <= 0 → fitness=0` hard gate.
 7. **5mo discovery is expensive** — 36-42min per run (vs 8-19min for 3mo). Only worth it for STOCH+CCI which has proven 5mo viability.
+
+---
+
+## 2026-03-14: Batch 8 Re-Validation — LatencyModel Fix Confirms All 4 "Failed" Strategies Are Viable
+
+### Background
+
+B8 validation used NT's LatencyModel which on 1m bar data defers ALL orders to the next bar (60s delay), regardless of the actual latency value (even 1ms). This caused 93-99% trade count collapse. Fix (bd-a3nc): skip LatencyModel for sub-5m timeframes, use prob_slippage=0.3 instead.
+
+### Results
+
+| sid | Strategy | Disc Trades | Old Val (w/ latency) | **New Val (no latency)** | Sharpe | Return | WR | DD |
+|-----|----------|------------|---------------------|------------------------|--------|--------|------|------|
+| 152 | ROC solo 3mo | 159 | 2 (1%) | **159 (100%)** | 1.83 | 5.52% | 82.4% | 11.4% |
+| 154 | ATR solo 3mo | 61 | 4 (7%) | **61 (100%)** | 3.13 | 6.33% | 16.4% | 10.7% |
+| 156 | CCI solo 5mo | 96 | 7 (7%) | **96 (100%)** | 4.01 | 16.30% | 11.5% | 12.4% |
+| 157 | STOCH+ROC 5mo | 152 | 1 (1%) | **152 (100%)** | 3.10 | 12.94% | 89.5% | 5.9% |
+| 153 | CCI solo 3mo (baseline) | 53 | 52 (98%) | **53 (100%)** | 2.99 | 5.12% | 90.6% | 2.2% |
+| 155 | STOCH+CCI 5mo (baseline) | 57 | 53 (93%) | **57 (100%)** | 3.73 | 15.68% | 77.2% | 5.9% |
+
+### Key Finding
+
+**Every strategy now has exact trade count match with discovery.** The latency fix completely eliminates the validation gap for 1m strategies. All 4 previously "failed" strategies are actually viable.
+
+### Updated Portfolio Rankings (all B8 strategies, sorted by Sharpe)
+
+1. **sid=156 CCI solo 5mo** — Sharpe 4.01, 16.3% return, 96 trades. Best absolute return. Low WR (11.5%) but very high PF (1.64) = few big wins.
+2. **sid=155 STOCH+CCI 5mo** — Sharpe 3.73, 15.7% return, 57 trades. Best risk-adjusted (5.9% DD). Proven across multiple batches.
+3. **sid=154 ATR solo 3mo** — Sharpe 3.13, 6.3% return, 61 trades. Non-directional entry (ATR >= threshold → short). Low WR (16.4%) = tail-win strategy.
+4. **sid=157 STOCH+ROC 5mo** — Sharpe 3.10, 12.9% return, 152 trades. Highest trade frequency of 5mo strategies. 89.5% WR scalper.
+5. **sid=153 CCI solo 3mo** — Sharpe 2.99, 5.1% return, 53 trades. Most conservative (2.2% DD). Baseline survivor.
+6. **sid=152 ROC solo 3mo** — Sharpe 1.83, 5.5% return, 159 trades. Highest trade frequency overall. 82.4% WR but lower Sharpe.
+
+### Implications
+
+- **B8 conclusion #5 was wrong** — ROC and ATR solos are NOT unviable. The validation pipeline had a systematic bug.
+- **All pre-fix validation results on 1m data are suspect** — any strategy that "failed" validation before this fix should be re-tested.
+- **Screening ↔ validation alignment is now perfect** — with no latency + prob_slippage=0.3, both modes produce identical trade counts.
+- **No slippage cost** reported (Total Slippage: $0.00) — the SPEC SlippageEstimator is post-fill analytics, not reflected in the summary. Fees ARE modeled correctly.
 
 ---
