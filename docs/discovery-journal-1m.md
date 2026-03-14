@@ -770,3 +770,159 @@ Data range: 3mo = 2025-12-14 to 2026-03-14, 12mo = 2025-03-14 to 2026-03-14. All
 8. **1m discovery landscape is fully mapped** — 7 batches, every indicator solo and combo tested. Top 4 strategies span 4 architectures. Focus entirely on paper trading and portfolio construction.
 
 ---
+
+## 2026-03-14: Batch 8 — Solo Indicator Exploration (3mo) + 5mo Period Test
+
+### Goal
+
+Two-phase experiment: (1) **3mo solo indicators**: ROC solo (untested), CCI solo with wider threshold [-200,200] (B7 used [-100,100], only 1/5 DSR), ATR solo (untested). (2) **5mo data window**: test STOCH solo, STOCH+CCI, CCI solo, and STOCH+ROC on 5 months (2025-10-14 → 2026-03-14) to find strategies that trade daily (~150+ trades) and survive longer market phases. All forced SHORT.
+
+### Code Change
+
+Expanded CCI `default_threshold_range` from `(-100.0, 100.0)` to `(-200.0, 200.0)` in `vibe_quant/discovery/genome.py`. B7's CCI solo winner used deep entries at CCI < -88 — wider range lets GA explore deeper CCI levels matching the 4h journal's range.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Data | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|------|--------|
+| 510 | ROC solo | 16 | 16 | 256 | short | 3mo | 465s (8m) | completed |
+| 511 | CCI solo [-200,200] | 16 | 16 | 256 | short | 3mo | 1151s (19m) | **completed** |
+| 512 | ATR solo | 20 | 20 | 400 | short | 3mo | 882s (15m) | **completed** |
+| 513 | STOCH solo | 16 | 16 | 256 | short | **5mo** | 2496s (42m) | completed (FAIL) |
+| 514 | STOCH+CCI | 16 | 16 | 256 | short | **5mo** | 2158s (36m) | **completed** |
+| 521 | CCI solo | 16 | 16 | 256 | short | **5mo** | 2243s (37m) | completed (val FAIL) |
+| 522 | STOCH+ROC | 16 | 16 | 256 | short | **5mo** | 2184s (36m) | completed (val FAIL) |
+
+Data range: 3mo = 2025-12-14 to 2026-03-14, 5mo = 2025-10-14 to 2026-03-14. All 3mo runs launched simultaneously, then 5mo runs launched as CPU freed up (max 4 concurrent).
+
+### Full Pipeline Results — 3mo Runs
+
+| Stage | 510 ROC solo | 511 CCI solo [-200,200] | 512 ATR solo |
+|-------|-------------|------------------------|-------------|
+| **Direction** | SHORT | SHORT | SHORT |
+| **Discovery** score | 0.5388 | **0.6162** | **0.6167** |
+| **Discovery** sharpe | 1.83 | **2.99** | **3.13** |
+| **Discovery** dd | 11.4% | **2.2%** | 10.7% |
+| **Discovery** trades | **159** | 53 | 61 |
+| **Discovery** return | +5.5% | +5.1% | **+6.3%** |
+| **Discovery** PF | 1.21 | **1.57** | 1.34 |
+| **DSR** | PASS 1/2 | **PASS 4/5** | **PASS 5/5** |
+| **Screening** match | **exact** ✓ | **exact** ✓ | **exact** ✓ |
+| **Validation** sharpe | −7.02 (FAIL) | **2.23 (−25%)** | 18.90 (NOISE) |
+| **Validation** sortino | −8.43 | 2.78 | 71.51 (noise) |
+| **Validation** dd | 3.0% | **3.8%** | 0.0% (noise) |
+| **Validation** trades | **2** (−99% FAIL) | **52** (−2%) | **4** (−93% FAIL) |
+| **Validation** PF | 0.35 | **1.43** | 22.79 (noise) |
+| **Validation** WR | 0.0% | **90.4%** | 100% (noise) |
+| **Validation** return | −2.6% | **+4.1%** | +15.5% (noise) |
+| **Validation** fees | $1.58 | $7.52 | $3.52 |
+
+### Full Pipeline Results — 5mo Runs
+
+| Stage | 513 STOCH solo | 514 STOCH+CCI | 521 CCI solo | 522 STOCH+ROC |
+|-------|---------------|---------------|-------------|---------------|
+| **Direction** | SHORT | SHORT | SHORT | SHORT |
+| **Discovery** score | 0.6835 | **0.6675** | **0.6521** | 0.6385 |
+| **Discovery** sharpe | 3.84 | **3.73** | **4.01** | 3.10 |
+| **Discovery** dd | **4.4%** | 5.9% | 12.4% | **5.9%** |
+| **Discovery** trades | 111 | 57 | 96 | **152** |
+| **Discovery** return | **−4.4%** (neg!) | **+15.7%** | **+16.3%** | +12.9% |
+| **Discovery** PF | **2.05** | 1.59 | **1.64** | 1.52 |
+| **DSR** | **FAIL 0/5** (all neg return) | PASS 4/5 | **PASS 5/5** | **PASS 5/5** |
+| **Screening** match | — | **exact** ✓ | **exact** ✓ | **exact** ✓ |
+| **Validation** sharpe | — | **2.90 (−22%)** | 21.70 (NOISE) | — |
+| **Validation** sortino | — | 4.12 | 169.50 (noise) | — |
+| **Validation** dd | — | **5.8%** | 0.4% (noise) | — |
+| **Validation** trades | — | **53** (−7%) | **7** (−93% FAIL) | **1** (−99% FAIL) |
+| **Validation** PF | — | **1.46** | 22.79 (noise) | — |
+| **Validation** WR | — | **75.5%** | 85.7% (noise) | — |
+| **Validation** return | — | **+10.2%** | +30.9% (noise) | — |
+| **Validation** fees | — | $13.23 | $6.05 | $0.00 |
+
+### Winning Strategies
+
+**#1: Run 511 — CCI solo [-200,200] (Short, 3mo)** — Strategy `genome_2a94de9be116` (sid=153)
+- Entry: CCI(18) <= 40.84 AND CCI(32) crosses_below -143.30 → short
+- Exit: CCI(36) >= 134.80 AND CCI(39) < 36.44
+- SL: 9.99% / **TP: 1.52%** (scalper)
+- Validated **Sharpe 2.23**, Sortino 2.78, **52 trades** (−2%), +4.1% return, **3.8% DD**, PF 1.43, **90.4% WR**
+- **Wider CCI threshold worked** — CCI(32) crosses_below −143.30 was impossible with old [-100, 100] range. The wider [-200, 200] range let GA find this deep CCI entry.
+- Near-perfect trade preservation: 52/53 validated trades (−2%). Most robust in batch.
+- 90.4% WR scalper with 1.52% TP — takes many small wins.
+- Comparable to B7's CCI solo (Sharpe 2.08, 65 trades) but with different architecture (1.52% TP vs 3.59% TP).
+
+**#2: Run 514 — STOCH+CCI (Short, 5mo)** — Strategy `genome_3ee1011698e1` (sid=155)
+- Entry: STOCH(5,5) crosses_above 42.53 → short
+- Exit: CCI(18) crosses_below -70.99 AND CCI(12) crosses_above -7.29 AND CCI(44) <= -104.11
+- SL: 6.95% / **TP: 3.29%**
+- Validated **Sharpe 2.90**, Sortino 4.12, **53 trades** (−7%), **+10.2% return**, 5.8% DD, PF 1.46, 75.5% WR
+- **Best 5mo validated strategy** — only 5mo run to survive validation with meaningful trade count.
+- STOCH entry with CCI-dominated exit (3 CCI conditions) — the proven STOCH+CCI architecture scales to 5mo.
+- 53 trades in 5mo = ~10.6 trades/month = ~2.5 trades/week. Not quite daily.
+
+### Issues Found
+
+1. **ROC solo collapsed in validation** — 159→2 trades (−99%). ROC threshold conditions are extremely fill-sensitive. ROC is not viable as a standalone indicator on 1m.
+2. **ATR solo collapsed in validation** — 61→4 trades (−93%). Same pattern as all previous ATR strategies. ATR thresholds sit near edges that shift with realistic fills.
+3. **STOCH solo 5mo: ALL strategies have negative returns** — 5/5 best strategies had negative absolute return despite high Sharpe (up to 3.84). The fitness function's 35% Sharpe weight allows negative-return strategies to score well. STOCH solo does NOT scale from 3mo to 5mo.
+4. **CCI solo 5mo collapsed in validation** — 96→7 trades (−93%). Despite impressive discovery (Sharpe 4.01, 5/5 DSR), CCI solo on 5mo is fill-sensitive.
+5. **STOCH+ROC 5mo collapsed in validation** — 152→1 trade (−99%). Despite 152 trades and 5/5 DSR, the strategy is completely fill-sensitive on 5mo.
+6. **5mo data fundamentally harder** — only 1/4 5mo runs survived validation (514 STOCH+CCI). The longer window includes diverse market phases that most strategies can't handle under realistic fills.
+
+### Key Findings
+
+1. **Wider CCI threshold [-200,200] produces viable deep entries** — CCI(32) crosses_below −143.30 was impossible with [-100,100]. The wider range improved DSR (4/5 vs B7's 1/5) and found a robust 90.4% WR scalper.
+2. **ROC solo is not viable on 1m** — 159 discovery trades but only 2 survived validation. ROC threshold conditions are too fill-sensitive for standalone use.
+3. **ATR solo confirms the ATR selectivity pattern** — same −93% trade loss as all previous ATR strategies (B5: −68%, B6: −65%, B8: −93%). ATR works only as a companion and even then loses most trades in validation.
+4. **5mo is mostly too long for 1m strategies** — 3/4 5mo runs collapsed in validation. Only STOCH+CCI survived, and with only 53 trades (not the daily trading the user wanted).
+5. **STOCH+CCI is the most robust 1m combo across ALL data windows** — B1 (3mo): 2.50, B4 (12mo): 2.06, B6 (3mo): 2.00, B8 (5mo): 2.90. Every STOCH+CCI run validates above 2.0.
+6. **High-frequency daily trading on 1m requires 3mo data** — B1's STOCH+ROC (155 trades/3mo = ~1.7/day) is the only strategy approaching daily trading. 5mo data produces fewer validated trades, not more.
+7. **Negative-return strategies can have high Sharpe** — B8 run 513's top strategy had Sharpe 3.84 but −4.4% return. The fitness function's Sharpe weight (35%) can mislead. All 5 strategies from STOCH solo 5mo had negative returns — a first in the journal.
+
+### Comparison with Previous Batches
+
+| Metric | B7 STOCH solo (3mo) | B6 STOCH+ATR (3mo) | B7 CCI solo (3mo) | B8 CCI [-200,200] (3mo) | B8 STOCH+CCI (5mo) |
+|--------|-----|-----|-----|-----|-----|
+| Disc Sharpe | 2.27 | **3.51** | 2.37 | 2.99 | **3.73** |
+| Val Sharpe | **4.15** | **3.64** | 2.08 | 2.23 | **2.90** |
+| Val Trades | 28 | 26 | **65** | **52** | **53** |
+| Val DD | 5.3% | **4.6%** | **3.6%** | 3.8% | 5.8% |
+| Val WR | 42.9% | 50.0% | 50.8% | **90.4%** | 75.5% |
+| Val PF | **1.96** | 1.66 | 1.35 | 1.43 | 1.46 |
+| Val Return | **+16.5%** | +7.0% | +5.3% | +4.1% | **+10.2%** |
+| Architecture | Multi-STOCH | ATR-filter | Deep-CCI | **Deep-CCI [-200]** | **STOCH entry + CCI exit** |
+| Data | 3mo | 3mo | 3mo | **3mo** | **5mo** |
+| Verdict | 3mo Sharpe champ | 3mo #2 | #7 | **New #8** | **5mo CHAMPION** |
+
+### 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Dir | Data |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|-----|------|
+| 1 | B7 | STOCH solo | **4.15** | 9.86 | 5.3% | 28 | **1.96** | 42.9% | SHORT | 3mo |
+| 2 | B6 | STOCH+ATR | 3.64 | 6.56 | 4.6% | 26 | 1.66 | 50.0% | SHORT | 3mo |
+| 3 | **B8** | **STOCH+CCI (5mo)** | **2.90** | 4.12 | 5.8% | **53** | 1.46 | 75.5% | SHORT | **5mo** |
+| 4 | B5 | STOCH+ROC | 2.63 | 5.86 | 11.7% | 55 | 1.37 | 21.8% | SHORT | 3mo |
+| 5 | B1 | STOCH+ROC | 2.60 | 3.53 | 5.2% | 155 | 1.52 | **94.8%** | SHORT | 3mo |
+| 6 | B1 | STOCH+CCI | 2.50 | 5.69 | 11.7% | 40 | 1.53 | 52.5% | SHORT | 3mo |
+| 7 | B5 | STOCH+ATR | 2.39 | 4.36 | 8.4% | 24 | 1.56 | 41.7% | SHORT | 3mo |
+| 8 | **B8** | **CCI solo [-200,200]** | **2.23** | 2.78 | **3.8%** | **52** | 1.43 | **90.4%** | SHORT | **3mo** |
+| 9 | B7 | CCI solo | 2.08 | 3.17 | **3.6%** | **65** | 1.35 | 50.8% | SHORT | 3mo |
+| 10 | B4 | STOCH+CCI | 2.06 | 3.77 | 7.5% | 94 | 1.51 | 47.9% | SHORT | 12mo |
+| 11 | B6 | STOCH+CCI | 2.00 | 3.99 | 10.8% | 76 | 1.27 | 31.6% | SHORT | 3mo |
+| — | **B8** | ROC solo | — | — | — | 2 | — | — | SHORT | 3mo |
+| — | **B8** | ATR solo | — | — | — | 4 | — | — | SHORT | 3mo |
+| — | **B8** | STOCH solo (5mo) | — | — | — | 0/5 neg return | — | — | SHORT | 5mo |
+| — | **B8** | CCI solo (5mo) | — | — | — | 7 | — | — | SHORT | 5mo |
+| — | **B8** | STOCH+ROC (5mo) | — | — | — | 1 | — | — | SHORT | 5mo |
+
+### Recommendations
+
+1. **Paper trade STOCH+CCI 5mo (sid=155)** — new 5mo champion (Sharpe 2.90, +10.2% return, 53 trades). STOCH+CCI is the only combo that reliably validates on any data window (3mo/5mo/12mo).
+2. **Keep CCI threshold at [-200, 200]** — the wider range produces deeper entries and better DSR rates. No reason to narrow back.
+3. **For daily trading, use 3mo data** — 5mo produces fewer validated trades, not more. B1's STOCH+ROC (155 trades/3mo) remains the highest-frequency validated strategy.
+4. **Portfolio of uncorrelated strategies** — sid=135 (B1 STOCH+ROC scalper, 94.8% WR), sid=147 (B7 STOCH solo, Sharpe 4.15), sid=153 (B8 CCI scalper, 90.4% WR), sid=155 (B8 STOCH+CCI 5mo, best all-around).
+5. **ROC and ATR are confirmed solo-unviable on 1m** — both collapse in validation. Only work as companions to STOCH.
+6. **Consider fitness function adjustment** — STOCH solo 5mo found 5 strategies with high Sharpe but negative returns. The 35% Sharpe weight allows this. Adding a hard gate for return > 0% would prevent this.
+7. **5mo discovery is expensive** — 36-42min per run (vs 8-19min for 3mo). Only worth it for STOCH+CCI which has proven 5mo viability.
+
+---

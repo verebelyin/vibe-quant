@@ -14,6 +14,7 @@ Full-cycle automated discovery: journal review, 5 parallel discoveries, monitori
 3. **Don't embed `$rid` inside python3 heredocs** — shell expands it before python sees it. Use the python3 `-c` approach where `$rid` stays in the shell layer, not inside python strings.
 4. **USE `sleep N &&` for polling waits** — combine `sleep 180 && <poll_command>` in a single Bash tool call with `timeout: 300000`. This prevents spamming the user with rapid tool calls. Each poll should wait 3 minutes via sleep before checking.
 5. **Parallel background commands**: use `cmd1 & cmd2 & wait` pattern. Check exit codes after `wait`.
+6. **ALWAYS use `dangerouslyDisableSandbox: true`** for ALL Bash tool calls that use `curl` to localhost or run `python3 -c` with sqlite3. The sandbox blocks localhost network connections and may block DB file access. This applies to discovery launch, progress polling, results fetching, promote calls, and any sqlite3 queries. Without this flag, curl returns empty responses causing JSON parse errors.
 
 **Working polling script (copy-paste safe):**
 
