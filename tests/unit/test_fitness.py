@@ -189,10 +189,44 @@ class TestMinTradeFilter:
                 "max_drawdown": 0.2,
                 "profit_factor": 2.0,
                 "total_trades": MIN_TRADES,
+                "total_return": 0.05,
             }
 
         results = evaluate_population([chrom], bt_fn)
         assert results[0].adjusted_score > 0.0
+
+    def test_negative_return_gets_zero_score(self) -> None:
+        """High Sharpe but negative return → zero fitness (GA efficiency gate)."""
+        chrom = _make_chromosome()
+
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {
+                "sharpe_ratio": 3.84,
+                "max_drawdown": 0.044,
+                "profit_factor": 2.05,
+                "total_trades": 111,
+                "total_return": -0.044,
+            }
+
+        results = evaluate_population([chrom], bt_fn)
+        assert results[0].adjusted_score == 0.0
+        assert results[0].raw_score > 0.0
+
+    def test_zero_return_gets_zero_score(self) -> None:
+        """Exactly zero return → zero fitness."""
+        chrom = _make_chromosome()
+
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {
+                "sharpe_ratio": 2.0,
+                "max_drawdown": 0.1,
+                "profit_factor": 1.5,
+                "total_trades": MIN_TRADES,
+                "total_return": 0.0,
+            }
+
+        results = evaluate_population([chrom], bt_fn)
+        assert results[0].adjusted_score == 0.0
 
     def test_zero_trades(self) -> None:
         chrom = _make_chromosome()
@@ -355,6 +389,7 @@ class TestEvaluatePopulation:
                 "max_drawdown": 0.2,
                 "profit_factor": 1.5,
                 "total_trades": 100,
+                "total_return": 0.05,
             }
 
         results = evaluate_population([chrom], bt_fn)

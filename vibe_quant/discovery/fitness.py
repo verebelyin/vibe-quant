@@ -380,8 +380,11 @@ def _evaluate_single(
     # Compute raw score including total return
     raw = compute_fitness_score(sharpe, max_dd, pf, total_return)
 
-    # Apply minimum trade filter + all penalties
-    adjusted = 0.0 if trades < MIN_TRADES else max(0.0, raw - complexity_pen - overtrade_pen)
+    # Hard gates: insufficient trades or negative return → zero fitness
+    if trades < MIN_TRADES or total_return <= 0:
+        adjusted = 0.0
+    else:
+        adjusted = max(0.0, raw - complexity_pen - overtrade_pen)
 
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
