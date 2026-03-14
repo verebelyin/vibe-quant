@@ -13,6 +13,7 @@ import random
 import statistics
 import time
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -236,6 +237,28 @@ class DiscoveryPipeline:
 
     # -- public API ---------------------------------------------------------
 
+    @staticmethod
+    def _create_executor(
+        max_workers: int | None, population_size: int
+    ) -> ProcessPoolExecutor | None:
+        """Create a reusable worker pool for the entire discovery run.
+
+        Returns None if parallelism is disabled (max_workers=None or 1)
+        or if pool creation fails (macOS sandbox, Rust runtime conflicts).
+        Falls back to per-generation pool creation in evaluate_population.
+        """
+        if max_workers is None or max_workers == 1:
+            return None
+        import os
+
+        workers = max_workers if max_workers > 0 else (os.cpu_count() or 4)
+        workers = min(workers, population_size)
+        try:
+            return ProcessPoolExecutor(max_workers=workers)
+        except (OSError, RuntimeError):
+            logger.warning("Failed to create shared worker pool, falling back to per-generation pools")
+            return None
+
     def _apply_indicator_pool_filter(self) -> None:
         """Filter operators.INDICATOR_POOL to only include configured indicators.
 
@@ -306,6 +329,10 @@ class DiscoveryPipeline:
             cfg.indicator_pool or "all",
         )
 
+        # Create a long-lived worker pool to avoid per-generation pool startup
+        # overhead (fixes idle workers when pool creation is slower than work)
+        executor = self._create_executor(cfg.max_workers, cfg.population_size)
+
         for gen in range(cfg.max_generations):
             gen_start = time.monotonic()
 
@@ -315,6 +342,7 @@ class DiscoveryPipeline:
                 self._backtest_fn,
                 self._filter_fn,
                 max_workers=cfg.max_workers,
+                executor=executor,
             )
             last_fitness_results = fitness_results
             total_evaluated += len(population)
@@ -517,6 +545,10 @@ class DiscoveryPipeline:
                     "  Diversity intervention: entropy=%.3f < %.1f, injected %d random immigrants",
                     entropy, cfg.entropy_threshold, n_immigrants,
                 )
+
+        # Shut down worker pool after all generations complete
+        if executor is not None:
+            executor.shutdown(wait=True)
 
         # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
