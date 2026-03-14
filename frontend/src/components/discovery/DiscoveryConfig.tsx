@@ -56,10 +56,21 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
   const datasetRange = useDatasetDateRange();
 
-  // Auto-populate dates from dataset coverage
+  // Auto-populate dates: default to last 3 months of available data
   useEffect(() => {
-    if (!startDate && datasetRange.minStart) setStartDate(datasetRange.minStart);
     if (!endDate && datasetRange.maxEnd) setEndDate(datasetRange.maxEnd);
+    if (!startDate && datasetRange.maxEnd) {
+      // 3 months before dataset end (not full range — avoids 4x runtime on 1m)
+      const end = new Date(datasetRange.maxEnd);
+      end.setMonth(end.getMonth() - 3);
+      const threeMonthsBack = end.toISOString().slice(0, 10);
+      // Use whichever is later: 3mo back or dataset start
+      const bounded =
+        datasetRange.minStart && threeMonthsBack < datasetRange.minStart
+          ? datasetRange.minStart
+          : threeMonthsBack;
+      setStartDate(bounded);
+    }
   }, [datasetRange.minStart, datasetRange.maxEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const indicators: Array<{ name: string; [key: string]: unknown }> =
