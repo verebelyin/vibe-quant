@@ -247,10 +247,18 @@ class TestVenueConfig:
         """Create validation venue config."""
         config = create_venue_config_for_validation()
         assert config.name == "BINANCE"
-        assert config.latency_preset == LatencyPreset.RETAIL
+        assert config.latency_preset == LatencyPreset.CLOUD
         assert config.use_volume_slippage
         assert isinstance(config.fill_config, VolumeSlippageFillModelConfig)
         assert config.fill_config.prob_slippage == 0.0
+
+    def test_create_venue_config_for_validation_no_latency(self) -> None:
+        """No-latency validation uses prob_slippage=0.3 to compensate."""
+        config = create_venue_config_for_validation(latency_preset=None)
+        assert config.latency_preset is None
+        assert config.use_volume_slippage
+        assert isinstance(config.fill_config, VolumeSlippageFillModelConfig)
+        assert config.fill_config.prob_slippage == 0.3
 
     def test_create_venue_config_for_validation_custom(self) -> None:
         """Create validation venue config with custom values."""

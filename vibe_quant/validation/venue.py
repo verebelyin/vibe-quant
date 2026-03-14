@@ -106,26 +106,34 @@ def create_venue_config_for_validation(
     starting_balance_usdt: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
-    latency_preset: LatencyPreset | str = LatencyPreset.CLOUD,
+    latency_preset: LatencyPreset | str | None = LatencyPreset.CLOUD,
     impact_coefficient: float = 0.1,
 ) -> VenueConfig:
     """Create VenueConfig optimized for validation mode.
 
     Validation mode uses:
-    - Realistic latency simulation
+    - Realistic latency simulation (when latency_preset is set)
     - Post-fill SPEC slippage estimation (engine tick slippage disabled)
     - Standard fees from instrument definition
+
+    When latency_preset is None (sub-5m bar data), LatencyModel is skipped
+    because NT defers orders to the next bar regardless of actual delay.
+    Engine prob_slippage=0.3 compensates for fill quality degradation.
 
     Args:
         starting_balance_usdt: Starting balance.
         default_leverage: Default leverage.
         leverages: Per-instrument leverage overrides.
-        latency_preset: Latency preset for execution delays.
+        latency_preset: Latency preset for execution delays. None = no latency.
         impact_coefficient: Market impact coefficient for slippage.
 
     Returns:
         VenueConfig for validation.
     """
+    # When no latency model, use engine slippage to model fill degradation.
+    # With latency model, keep engine slippage disabled (SPEC post-fill handles it).
+    prob_slippage = 0.3 if latency_preset is None else 0.0
+
     return VenueConfig(
         name="BINANCE",
         starting_balance_usdt=starting_balance_usdt,
@@ -136,9 +144,7 @@ def create_venue_config_for_validation(
         fill_config=VolumeSlippageFillModelConfig(
             impact_coefficient=impact_coefficient,
             prob_fill_on_limit=0.8,
-            # Keep engine slippage disabled to prevent dual slippage models:
-            # costs are estimated post-fill via SlippageEstimator.
-            prob_slippage=0.0,
+            prob_slippage=prob_slippage,
         ),
     )
 

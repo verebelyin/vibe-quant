@@ -124,8 +124,10 @@ class ValidationRunner:
         # Determine latency preset
         effective_latency = self._resolve_latency(run_config, latency_preset)
 
-        # Configure venue
-        venue_config = self._create_venue_config(run_config, effective_latency)
+        # Configure venue (timeframe-aware: skips latency for sub-5m bars)
+        venue_config = self._create_venue_config(
+            run_config, effective_latency, timeframe=dsl.timeframe
+        )
 
         # Update run status to running
         self._state.update_backtest_run_status(run_id, "running")
@@ -219,7 +221,9 @@ class ValidationRunner:
         dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
         effective_latency = self._resolve_latency(run_config, latency_preset)
-        venue_config = self._create_venue_config(run_config, effective_latency)
+        venue_config = self._create_venue_config(
+            run_config, effective_latency, timeframe=dsl.timeframe
+        )
 
         range_start = self._parse_run_date(run_config.get("start_date"), "start_date")
         range_end = self._parse_run_date(run_config.get("end_date"), "end_date")
@@ -511,16 +515,26 @@ class ValidationRunner:
 
         return LatencyPreset.CLOUD  # Default
 
+    # Timeframes where LatencyModel causes artificial next-bar delay
+    # (bar data has no sub-bar timestamps, so any latency = full bar delay)
+    _SUB_BAR_TIMEFRAMES = frozenset({"1s", "1m", "3m", "5m"})
+
     def _create_venue_config(
         self,
         run_config: dict[str, object],
         latency_preset: LatencyPreset | str | None,
+        timeframe: str = "4h",
     ) -> VenueConfig:
         """Create venue configuration for validation.
+
+        For sub-5m timeframes, latency is skipped because NT's LatencyModel
+        defers orders to the next bar (60s on 1m data) regardless of the
+        actual latency value. Slippage probability compensates instead.
 
         Args:
             run_config: Run configuration.
             latency_preset: Latency preset to use.
+            timeframe: Strategy primary timeframe.
 
         Returns:
             Configured VenueConfig.
@@ -528,6 +542,15 @@ class ValidationRunner:
         balance = run_config.get("starting_balance", 1_000)
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
             balance = 1_000
+
+        # Skip latency for sub-5m timeframes — bar data has no sub-bar
+        # timestamps so any LatencyModel delay = full bar delay
+        if timeframe in self._SUB_BAR_TIMEFRAMES:
+            return create_venue_config_for_validation(
+                starting_balance_usdt=int(balance),
+                latency_preset=None,
+            )
+
         return create_venue_config_for_validation(
             starting_balance_usdt=int(balance),
             latency_preset=latency_preset or LatencyPreset.CLOUD,
