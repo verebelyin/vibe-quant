@@ -112,7 +112,7 @@ INDICATOR_POOL: dict[str, IndicatorDef] = {
     "ATR": IndicatorDef(
         name="ATR",
         param_ranges={"period": (5, 30)},
-        default_threshold_range=(0.001, 0.08),
+        default_threshold_range=(0.001, 0.15),
         dsl_type="ATR",
     ),
     "STOCH": IndicatorDef(
