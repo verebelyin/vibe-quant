@@ -14,6 +14,7 @@ Full-cycle automated discovery: journal review, 5 parallel discoveries, monitori
 3. **Don't embed `$rid` inside python3 heredocs** — shell expands it before python sees it. Use the python3 `-c` approach where `$rid` stays in the shell layer, not inside python strings.
 4. **USE `sleep N &&` for polling waits** — combine `sleep 180 && <poll_command>` in a single Bash tool call with `timeout: 300000`. This prevents spamming the user with rapid tool calls. Each poll should wait 3 minutes via sleep before checking.
 5. **Parallel background commands**: use `cmd1 & cmd2 & wait` pattern. Check exit codes after `wait`.
+6. **NEVER run more than 2 validations in parallel** — 3+ simultaneous validations create a corrupt epoch-timestamp parquet file (`1970-01-01T00-00-00-000000000Z_...parquet`) in the catalog that poisons all subsequent reads with `ArrowInvalid`. The file regenerates on re-run. Run validations sequentially or max 2 at a time. If you see this file, delete it before retrying: `rm -f data/catalog/data/crypto_perpetual/BTCUSDT-PERP.BINANCE/1970-01-01*`. (Bug: vibe-quant-ug0m)
 
 **Working polling script (copy-paste safe):**
 
@@ -464,11 +465,12 @@ for sid in [STRATEGY_IDS]:
 conn.commit()
 "
 
-# Launch validation (parallel, with log capture)
+# Launch validation SEQUENTIALLY (max 2 parallel — 3+ creates corrupt parquet, see gotcha #6)
+# Clean any leftover corrupt parquet before each run
 for rid in VALIDATION_RUN_IDS; do
-  .venv/bin/python -m vibe_quant validation run --run-id $rid 2>&1 | tee logs/validation_${rid}.log &
+  rm -f data/catalog/data/crypto_perpetual/BTCUSDT-PERP.BINANCE/1970-01-01*
+  .venv/bin/python -m vibe_quant validation run --run-id $rid 2>&1 | tee logs/validation_${rid}.log
 done
-wait
 ```
 
 Expected: same trades, degraded metrics (5-20% Sharpe drop normal due to fill model + 60ms cloud latency + fees).
