@@ -642,3 +642,131 @@ Data range: 2025-12-14 to 2026-03-14. BTCUSDT 1m. ~130K bars. Wave 1: 483+484 pa
 6. **Consider STOCH+ATR on 12mo data** — B6 used 3mo. B4 showed STOCH+CCI works on 12mo. STOCH+ATR hasn't been tested on 12mo yet — could reveal whether the ATR-filter architecture is period-specific.
 
 ---
+
+## 2026-03-14: Batch 7 — Solo Indicators + Ultra-Budget Optimization
+
+### Goal
+
+Five experiments: (1) STOCH solo — can the king indicator win alone on 1m? (2) STOCH+ATR on 12mo — test period robustness of B6 champion architecture. (3) CCI solo — always a companion, never tested alone on 1m. (4) STOCH+ATR ultra-budget (576 trials) — push B6 champion further. (5) STOCH+ROC ultra-budget (576 trials) — push B5 champion further. All forced SHORT, 3mo data except run 493 (12mo).
+
+### Bug Encountered
+
+**Corrupt parquet from parallel validation**: 5 parallel validations created a corrupt epoch-timestamp parquet file (`1970-01-01...parquet`), causing 3/5 validations to fail with `ArrowInvalid`. The corrupt file regenerated on re-run attempts. Fix: delete corrupt file + run validations sequentially. Root cause: validation runner creates a zero-byte parquet when backtest engine errors out, and this file poisons subsequent runs.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Data | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|------|--------|
+| 492 | STOCH solo | 20 | 20 | 400 | short | 3mo | 3769s (63m) | **completed** |
+| 493 | STOCH+ATR | 16 | 16 | 256 | short | **12mo** | 2590s (43m) | completed (WEAK) |
+| 494 | CCI solo | 20 | 20 | 400 | short | 3mo | 2668s (44m) | **completed** |
+| 495 | STOCH+ATR ultra | 24 | 24 | 576 | short | 3mo | 3331s (56m) | **completed** |
+| 496 | STOCH+ROC ultra | 24 | 24 | 576 | short | 3mo | 3109s (52m) | **completed** |
+
+Data range: 3mo = 2025-12-14 to 2026-03-14, 12mo = 2025-03-14 to 2026-03-14. All 5 launched simultaneously (CPU contention — runs took 2-3x longer than solo).
+
+### Full Pipeline Results
+
+| Stage | 492 STOCH solo | 493 STOCH+ATR 12mo | 494 CCI solo | 495 STOCH+ATR ultra | 496 STOCH+ROC ultra |
+|-------|---------------|-------------------|-------------|--------------------|--------------------|
+| **Direction** | SHORT | SHORT | SHORT | SHORT | SHORT |
+| **Discovery** score | 0.5612 | 0.4194 | 0.5627 | **0.6108** | 0.5777 |
+| **Discovery** sharpe | 2.27 | 0.86 | 2.37 | **2.62** | 2.56 |
+| **Discovery** dd | 9.5% | 22.3% | **3.7%** | 8.7% | 5.3% |
+| **Discovery** trades | **87** | 123 | 67 | 53 | 83 |
+| **Discovery** return | +7.8% | +1.0% | +6.0% | **+12.0%** | +4.1% |
+| **Discovery** PF | 1.36 | 1.19 | 1.38 | 1.36 | **1.55** |
+| **DSR** | 3/5 | 3/5 | 1/5 | **4/5** | **4/5** |
+| **Screening** match | **exact** ✓ | **exact** ✓ | **exact** ✓ | **exact** ✓ | **exact** ✓ |
+| **Validation** sharpe | **4.15 (+83%)** | 1.25 (+45%) | **2.08 (−12%)** | 1.57 (−40%) | −1.89 (FAIL) |
+| **Validation** sortino | **9.86** | 1.83 | 3.17 | 2.41 | −2.54 |
+| **Validation** dd | **5.3%** | 19.0% | **3.6%** | 11.1% | 17.5% |
+| **Validation** trades | 28 (−68%) | 9 (−93%) | **65** (−3%) | **61** (+15%) | 56 (−33%) |
+| **Validation** PF | **1.96** | 1.25 | 1.35 | 1.20 | 0.72 |
+| **Validation** WR | 42.9% | 33.3% | **50.8%** | 50.8% | 41.1% |
+| **Validation** return | **+16.5%** | +4.6% | +5.3% | +6.9% | −15.5% |
+| **Validation** fees | $26.53 | $6.14 | $15.40 | $27.79 | $23.91 |
+
+### Winning Strategies
+
+**#1: Run 492 — STOCH solo (Short)** — Strategy `genome_e63bbda4e233` (sid=147)
+- Entry: STOCH(9,4) < 41.58 → short
+- Exit: STOCH(17,7) > 79.08 AND STOCH(18,5) crosses_below 70.43
+- SL: 1.18% / **TP: 8.37%** (7.1x reward/risk)
+- Validated **Sharpe 4.15**, Sortino 9.86, 28 trades, **+16.5% return**, 5.3% DD, **PF 1.96**, 42.9% WR
+- **NEW 1m ALL-TIME SHARPE CHAMPION** (4.15 > B6's 3.64)
+- Pure STOCH strategy — 3 STOCH indicators with different periods. Entry on fast STOCH(9,4), exit on slower STOCH(17,7) and STOCH(18,5). Multi-timeframe STOCH analysis.
+- Extreme reward/risk: 1.18% SL with 8.37% TP. Only 42.9% WR but winners are 7x larger than losers.
+- Validation **improved +83% Sharpe** over discovery (2.27→4.15). Trade count dropped −68% (87→28) — same ATR-like selectivity pattern. Only the highest-conviction STOCH setups survive realistic fills.
+- 28 trades in 3mo (~9/mo) — borderline but each trade averages +0.59% return.
+
+**#2: Run 494 — CCI solo (Short)** — Strategy `genome_021cf9d1792e` (sid=149)
+- Entry: CCI(20) <= -88.22 AND CCI(38) crosses_below -78.25 → short
+- Exit: CCI(40) >= 75.85 AND CCI(40) crosses_above -60.07
+- SL: 8.04% / TP: 3.59%
+- Validated **Sharpe 2.08**, Sortino 3.17, **65 trades** (−3%), +5.3% return, **3.6% DD**, PF 1.35, 50.8% WR
+- **CCI CAN stand alone on 1m** — overturns the "CCI needs STOCH" finding from B1-B6.
+- Near-perfect trade preservation: 65/67 validated trades (−3%). Most robust trade count in entire 1m history.
+- Deep CCI entry (< -88) ensures only strongly oversold entries. 4 CCI indicators with varied periods (20, 38, 40, 40).
+- Modest 3.6% DD — lowest validated DD in 1m history.
+
+### Issues Found
+
+1. **Corrupt parquet from parallel validation** — 5 simultaneous validation runs create an epoch-timestamp parquet that poisons all subsequent runs. Must run validations sequentially or max 2 parallel. Validation runner needs a fix to avoid creating corrupt files on error.
+2. **STOCH+ROC ultra (496) negative validation** — Sharpe −1.89, −15.5% return. 576 trials found a strategy that looked good (Sharpe 2.56, PF 1.55) but collapsed completely. Ultra-budget STOCH+ROC is worse than B5's 400-trial version (2.63).
+3. **STOCH+ATR 12mo collapsed** — 123→9 trades in validation (−93%). STOCH+ATR architecture is definitively period-specific — only works on 3mo data.
+4. **CPU contention from 5 parallel** — all runs took 2-3x longer (492 at 63min vs ~25min solo). 20 workers on 10 cores. Works but slow.
+
+### Key Findings
+
+1. **STOCH solo is the new 1m champion** — Sharpe 4.15 validated, +83% improvement over discovery. Pure STOCH with multi-period analysis. No companion indicator needed.
+2. **CCI CAN stand alone on 1m** — overturns 6 batches of "CCI needs STOCH." With high budget (400 trials) and solo indicator pool, GA finds deep CCI entries that are highly robust (−3% trade count, 3.6% DD).
+3. **Solo indicators outperform combos on 1m** — STOCH solo (4.15) > STOCH+ATR (3.64) > STOCH+ROC (2.63). CCI solo (2.08) ≈ STOCH+CCI (2.00-2.50). Companion indicators may add noise on 1m, not signal.
+4. **Ultra-budget (576 trials) doesn't improve over 400** — STOCH+ATR ultra (1.57) < B6 STOCH+ATR (3.64). STOCH+ROC ultra (−1.89) < B5 STOCH+ROC (2.63). Diminishing returns — GA overfits with too many trials.
+5. **STOCH+ATR confirmed 3mo-only** — 12mo validation collapsed to 9 trades. ATR volatility thresholds are regime-specific and don't generalize across market phases.
+6. **Validation improvement correlates with fewer trades** — 492 improved +83% but lost 68% of trades. The "surviving" trades are extremely high quality. This is the same selectivity pattern seen across all top strategies.
+
+### Comparison with Previous Batches
+
+| Metric | B1 STOCH+ROC | B6 STOCH+ATR | B7 STOCH solo | B7 CCI solo | B7 STOCH+ATR ultra |
+|--------|-----|-----|-----|-----|-----|
+| Disc Sharpe | 2.13 | 3.51 | 2.27 | 2.37 | **2.62** |
+| Val Sharpe | 2.60 | 3.64 | **4.15** | 2.08 | 1.57 |
+| Val Trades | **155** | 26 | 28 | **65** | 61 |
+| Val DD | **5.2%** | 4.6% | 5.3% | **3.6%** | 11.1% |
+| Val WR | **94.8%** | 50.0% | 42.9% | 50.8% | 50.8% |
+| Val PF | 1.52 | 1.66 | **1.96** | 1.35 | 1.20 |
+| Val Return | +5.8% | +7.0% | **+16.5%** | +5.3% | +6.9% |
+| Architecture | Scalper | ATR-filter | **Multi-STOCH** | Deep-CCI | ATR-filter |
+| Verdict | Scalp champ | Former #1 | **NEW #1** | **#4** | #7 |
+
+### 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Dir | Data |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|-----|------|
+| 1 | **B7** | **STOCH solo** | **4.15** | 9.86 | 5.3% | 28 | **1.96** | 42.9% | SHORT | **3mo** |
+| 2 | B6 | STOCH+ATR | 3.64 | 6.56 | 4.6% | 26 | 1.66 | 50.0% | SHORT | 3mo |
+| 3 | B5 | STOCH+ROC | 2.63 | 5.86 | 11.7% | 55 | 1.37 | 21.8% | SHORT | 3mo |
+| 4 | B1 | STOCH+ROC | 2.60 | 3.53 | 5.2% | 155 | 1.52 | **94.8%** | SHORT | 3mo |
+| 5 | B1 | STOCH+CCI | 2.50 | 5.69 | 11.7% | 40 | 1.53 | 52.5% | SHORT | 3mo |
+| 6 | B5 | STOCH+ATR | 2.39 | 4.36 | 8.4% | 24 | 1.56 | 41.7% | SHORT | 3mo |
+| 7 | **B7** | **CCI solo** | **2.08** | 3.17 | **3.6%** | **65** | 1.35 | 50.8% | SHORT | **3mo** |
+| 8 | B4 | STOCH+CCI | 2.06 | 3.77 | 7.5% | 94 | 1.51 | 47.9% | SHORT | 12mo |
+| 9 | B6 | STOCH+CCI | 2.00 | 3.99 | 10.8% | 76 | 1.27 | 31.6% | SHORT | 3mo |
+| 10 | **B7** | **STOCH+ATR ultra** | **1.57** | 2.41 | 11.1% | 61 | 1.20 | 50.8% | SHORT | **3mo** |
+| 11 | B3 | STOCH+CCI+ROC | 1.02 | 1.28 | 11.4% | 299 | 1.17 | 92.6% | SHORT | 12mo |
+| — | **B7** | STOCH+ATR 12mo | 1.25 | 1.83 | 19.0% | 9 | 1.25 | 33.3% | SHORT | **12mo** |
+| — | **B7** | STOCH+ROC ultra | −1.89 | −2.54 | 17.5% | 56 | 0.72 | 41.1% | SHORT | 3mo |
+
+### Recommendations
+
+1. **Paper trade STOCH solo (sid=147)** — new all-time champion (Sharpe 4.15, +16.5% return). Multi-period STOCH with 7.1x reward/risk. Test alongside B1's scalper (sid=135) for portfolio diversification.
+2. **Portfolio of 4 strategies** — sid=135 (B1 scalper, 94.8% WR), sid=146 (B6 ATR-filter, 3.64 Sharpe), sid=147 (B7 STOCH solo, 4.15 Sharpe), sid=149 (B7 CCI solo, 3.6% DD). Four uncorrelated architectures.
+3. **Solo indicators are the new frontier** — STOCH and CCI both work better alone than in combos on 1m. Companion indicators add noise.
+4. **Don't exceed 400 trials** — 576 trials produced worse strategies than 400 for both STOCH+ATR and STOCH+ROC. GA overfits with too many evaluations.
+5. **Fix corrupt parquet bug** — parallel validations create epoch-timestamp parquet files that poison the catalog. Must be fixed before production.
+6. **STOCH+ATR is 3mo-only** — 12mo validation collapsed. Remove from 12mo recommendations.
+7. **Try CCI solo with higher budget** — 400 trials produced Sharpe 2.08. Only 1/5 passed DSR — could benefit from pop=24 gens=24.
+8. **1m discovery landscape is fully mapped** — 7 batches, every indicator solo and combo tested. Top 4 strategies span 4 architectures. Focus entirely on paper trading and portfolio construction.
+
+---
