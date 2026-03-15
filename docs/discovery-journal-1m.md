@@ -1863,6 +1863,53 @@ Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
 3. **2mo discovery is exhaustively explored** — 6 batches, every combo at multiple budget levels. Top strategies are stable. Move to paper trading.
 4. **Best portfolio candidates**: sid=173 (STOCH+ROC scalper, 93.7% WR, PF 1.92), sid=178 (CCI+ROC tail-win, Sortino 8.63), sid=177 (STOCH+ATR, 4.3% DD).
 
+---
+
+## 2026-03-15: Batch 17 — 2.5mo Window Test (Champion Combos)
+
+### Goal
+
+Test whether 2.5mo (2026-01-01 → 2026-03-15, ~107K bars) is a better sweet spot between 2mo and 3mo. Used the 3 champion combos: STOCH+ROC, CCI+ROC, STOCH+CCI. Direction=null, pop=28 gens=28.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 614 | STOCH+ROC | 28 | 28 | 784 | random | ~35min (converged gen 27) | completed (WEAK) |
+| 615 | CCI+ROC | 28 | 28 | 784 | random | ~40min | **completed** |
+| 616 | STOCH+CCI | 28 | 28 | 784 | random | ~45min | completed |
+
+Data: 2026-01-01 to 2026-03-15 (2.5 months, ~107K bars).
+
+### Full Pipeline Results
+
+| Stage | 614 STOCH+ROC | 615 CCI+ROC | 616 STOCH+CCI |
+|-------|-------------|------------|--------------|
+| Disc score | 0.4964 | **0.6270** | 0.5850 |
+| Disc sharpe | 1.78 | **2.91** | 2.61 |
+| Disc trades | 85 | **88** | 79 |
+| Val sharpe | 1.78 | **2.91** | 2.61 |
+| Val sortino | 2.44 | 4.15 | **4.20** |
+| Val DD | **4.4%** | **3.4%** | 4.1% |
+| Val PF | 1.32 | **1.54** | 1.53 |
+| Val WR | 89.4% | **93.2%** | 55.7% |
+| Val return | 5.1% | 5.7% | **7.6%** |
+| Strategy ID | sid=182 | **sid=183** | sid=184 |
+
+### Key Findings
+
+1. **2.5mo is worse than 2mo across all combos** — CCI+ROC: 2.91 (2.5mo) vs 4.13 (2mo). STOCH+CCI: 2.61 vs 3.68. STOCH+ROC: 1.78 vs 4.01. The extra 2 weeks of data hurts, not helps.
+2. **2mo is definitively the optimal window** — tested 2mo (B11-16), 2.5mo (B17), 3mo (B14), 4mo (B9-10), 5mo (B8), 12mo (B2-4). 2mo consistently produces the highest Sharpe strategies.
+3. **Low DD across all 2.5mo strategies** — 3.4-4.4% DD is excellent. The longer window produces more conservative strategies but with lower returns.
+4. **Still all SHORT** — 17th consecutive batch.
+5. **100% trade match** — 10th consecutive perfect batch.
+
+### Recommendations
+
+1. **Stop exploring data windows** — 2mo is proven optimal across 7 batches of comparisons. Future batches should use 2mo exclusively.
+2. **Discovery landscape is fully mapped** — 17 batches, every combo at multiple budget levels and data windows. Move to paper trading phase.
+
+
 
 
 
