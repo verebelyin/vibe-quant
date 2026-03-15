@@ -2056,6 +2056,51 @@ Data: 2025-12-01 to 2026-03-15 (3.5 months, ~152K bars).
 2. **RSI+CCI and RSI+ROC not competitive** — skip these combos in future batches.
 3. **Next: try ADX combos and MFI combos on 2mo** — these are the truly unexplored exotic indicators on 2mo.
 
+---
+
+## 2026-03-15: Batch 20 — ADX+STOCH, RSI Solo, CCI+STOCH on 3.5mo
+
+### Goal
+
+Test truly exotic combos: ADX+STOCH (ADX never worked on 1m), RSI solo on 3.5mo, and CCI+STOCH (the all-time consistent combo on a longer window). Direction=null, pop=30 gens=30.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 641 | ADX+STOCH | 30 | 30 | 900 | random | ~95min | completed (WEAK) |
+| 642 | RSI solo | 30 | 30 | 900 | random | ~30min | completed (WEAK) |
+| 643 | CCI+STOCH | 30 | 30 | 900 | random | ~120min (converged gen 20) | completed (WEAK) |
+
+Data: 2025-12-01 to 2026-03-15 (3.5 months, ~152K bars).
+
+### Full Pipeline Results
+
+| Stage | 641 ADX+STOCH | 642 RSI solo | 643 CCI+STOCH |
+|-------|-------------|-------------|--------------|
+| Disc score | 0.4896 | 0.5193 | 0.4515 |
+| Disc sharpe | 1.39 | 1.83 | 1.36 |
+| Disc trades | 111 | 73 | **155** |
+| Val sharpe | 1.39 | 1.83 | 1.36 |
+| Val trades | **111 (100%)** | **73 (100%)** | **155 (100%)** |
+| Strategy ID | sid=192 | sid=191 | sid=193 |
+
+### Key Findings
+
+1. **ADX confirmed dead on 1m** — Sharpe 1.39 with ADX+STOCH on 3.5mo. ADX has now failed on 3mo (B1), 4mo (B10 was ATR solo, not ADX), and 3.5mo (B20). ADX captures noise not trends on 1m.
+2. **RSI solo is weak (1.83)** — RSI needs a companion (ATR best, STOCH second) to produce competitive strategies. Solo RSI on 3.5mo can't match B18's RSI+STOCH (6.05) or RSI+ATR (3.93).
+3. **CCI+STOCH slow and weak on 3.5mo** — 120 minutes for Sharpe 1.36. CCI on 3.5mo with pop=30 is computationally crushing (~4min/gen). The combo that shines on 2-4mo (Sharpe 3-4) degrades to 1.36 on 3.5mo.
+4. **3.5mo with CCI/ADX is too slow** — 95-120min per run. Not worth the compute time given weak results.
+5. **All SHORT** — 20th consecutive batch.
+
+### Recommendations
+
+1. **Stop testing ADX on 1m** — confirmed dead across all data windows and combos.
+2. **RSI only viable with companions** — RSI+ATR and RSI+STOCH are strong but RSI solo is weak.
+3. **For 3.5mo, avoid CCI** — too slow for the marginal improvement. Use STOCH/ROC/ATR/RSI only.
+4. **Next batch: back to 2mo with RSI reruns** — B18 showed random reruns can dramatically improve results. Try RSI+STOCH and RSI+ATR again.
+
+
 
 
 
