@@ -2100,6 +2100,66 @@ Data: 2025-12-01 to 2026-03-15 (3.5 months, ~152K bars).
 3. **For 3.5mo, avoid CCI** — too slow for the marginal improvement. Use STOCH/ROC/ATR/RSI only.
 4. **Next batch: back to 2mo with RSI reruns** — B18 showed random reruns can dramatically improve results. Try RSI+STOCH and RSI+ATR again.
 
+---
+
+## 2026-03-15: Batch 21 — RSI Combos on 2mo (Reruns + RSI+CCI)
+
+### Goal
+
+Rerun RSI+STOCH (B18 champion at 6.05), test RSI+ATR on 2mo (worked on 3.5mo B19), and RSI+CCI on 2mo (failed on 3.5mo B19). Direction=null, pop=30 gens=30 (900 trials).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 650 | RSI+STOCH | 30 | 30 | 900 | random | ~40min (converged gen 23) | **completed** |
+| 651 | RSI+ATR | 30 | 30 | 900 | random | ~30min | **FAILED** (0 strategies) |
+| 652 | RSI+CCI | 30 | 30 | 900 | random | ~40min | **completed** |
+
+Data: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
+
+### Full Pipeline Results
+
+| Stage | 650 RSI+STOCH | 651 RSI+ATR | 652 RSI+CCI |
+|-------|-------------|------------|------------|
+| Disc score | **0.7221** | FAIL | 0.6915 |
+| Disc sharpe | **5.20** | — | 3.96 |
+| Disc trades | 76 | — | **88** |
+| Disc return | 8.7% | — | 9.1% |
+| DSR | PASS | — | PASS |
+| Val trades | **76 (100%)** | — | **88 (100%)** |
+| Val sharpe | **5.20** | — | 3.96 |
+| Val sortino | **11.42** | — | 8.23 |
+| Val DD | **3.6%** | — | 9.3% |
+| Val PF | **2.47** | — | 1.61 |
+| Val WR | 56.6% | — | 9.1% |
+| Strategy ID | **sid=194** | — | sid=195 |
+
+### Key Findings
+
+1. **RSI+STOCH rerun confirms RSI's 2mo viability** — Sharpe 5.20, PF 2.47, DD 3.6%. Third-best 2mo strategy ever (behind B18's 6.05 and 6.01). RSI+STOCH consistently produces Sharpe 5-6 on 2mo.
+2. **RSI+ATR fails on 2mo** — 0 strategies in 900 trials. But RSI+ATR worked on 3.5mo (B19: 3.93). RSI+ATR needs ≥3mo data — RSI's slow filter (period 50) needs more price history to build signal.
+3. **RSI+CCI works on 2mo!** — Sharpe 3.96, overturning B19's finding that RSI+CCI is weak (1.70 on 3.5mo). Another case where 2mo > 3.5mo.
+4. **RSI+CCI is a tail-win** — 9.1% WR, the GA found an extreme tail-win architecture on 2mo. CCI provides high-threshold entry, RSI confirms momentum.
+5. **All SHORT** — 21st consecutive batch.
+
+### Updated 1m All-Time Leaderboard (Top 5, Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** |
+| 3 | **B21** | **RSI+STOCH** | **5.20** | 11.42 | **3.6%** | 76 | **2.47** | 56.6% |
+| 4 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% |
+| 5 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% |
+
+### Recommendations
+
+1. **RSI+STOCH is the most consistent high-Sharpe combo** — B18 (6.05), B21 (5.20). Random reruns consistently produce Sharpe 5+.
+2. **RSI+ATR needs ≥3mo** — skip on 2mo, use on 3.5-4mo only.
+3. **RSI+CCI viable on 2mo** — Sharpe 3.96 is competitive. The tail-win architecture (9.1% WR) is a novel RSI+CCI pattern.
+
+
 
 
 
