@@ -1688,6 +1688,94 @@ Data range: 2025-12-15 to 2026-03-15 (3 months, ~130K bars). 3 parallel on 10 co
 2. **Force SHORT if continuing 3mo experiments** — direction=null wastes half the search space on LONG which never works.
 3. **Focus on paper trading the B11-B13 winners** — sid=166 (STOCH+ATR, 4.27), sid=170 (CCI, 3.24), sid=173 (STOCH+ROC, 4.01).
 
+---
+
+## 2026-03-15: Batch 15 — ATR Solo, STOCH+ATR, CCI+ROC on 2mo (High Budget)
+
+### Goal
+
+Return to 2mo window after B14's weak 3mo results. Test ATR solo (strong on 4mo, never on 2mo), STOCH+ATR (all-time champion architecture), and CCI+ROC (B11 got 3.05). All direction=null, pop=28 gens=28.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 596 | ATR solo | 28 | 28 | 784 | random | ~11min (converged gen 26) | **completed** |
+| 597 | STOCH+ATR | 28 | 28 | 784 | random | ~30min | **completed** |
+| 598 | CCI+ROC | 28 | 28 | 784 | random | ~14min (converged gen 20) | **completed** |
+
+Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
+
+### Winning Strategy DSL Details
+
+**Run 596 (ATR solo) — sid=176**
+- Entry: ATR(22) >= 0.1171 → short (high volatility entry)
+- Exit: ATR(?) < 0.0396 (volatility collapse)
+- SL: 0.88% / TP: 5.79% — tight SL, wide TP = tail-win (18.1% WR)
+
+**Run 597 (STOCH+ATR) — sid=177**
+- Entry: STOCH >= 58.27 AND STOCH crosses_above 29.61 → short
+- Exit: ATR < 0.1219 AND STOCH <= 24.48
+- SL: 6.22% / TP: 2.03% — 80.4% WR scalper
+
+**Run 598 (CCI+ROC) — sid=178**
+- Entry: CCI(?) crosses_below 141.57 → short (overbought reversal)
+- Exit: ROC crosses_above -0.83 AND CCI >= 101.63
+- SL: 0.66% / TP: 10.65% — ultra-tight 0.66% SL, wide 10.65% TP = extreme tail-win (11.3% WR)
+
+### Full Pipeline Results
+
+| Stage | 596 ATR solo | 597 STOCH+ATR | 598 CCI+ROC |
+|-------|-------------|--------------|-------------|
+| Disc score | 0.6636 | 0.6932 | **0.7071** |
+| Disc sharpe | 3.51 | 4.01 | **4.13** |
+| Disc trades | **105** | 51 | 62 |
+| Disc return | 10.0% | 10.1% | **11.6%** |
+| DSR | PASS 1/1 | PASS 5/5 | PASS 2/2 |
+| Screen trades | 105 ✓ | 51 ✓ | 62 ✓ |
+| Val trades | **105 (100%)** | **51 (100%)** | **62 (100%)** |
+| Val sharpe | 3.51 | 4.01 | **4.13** |
+| Val sortino | 6.07 | 5.74 | **8.63** |
+| Val return | 10.0% | 10.1% | **11.6%** |
+| Val DD | 12.6% | **4.3%** | 7.8% |
+| Val PF | 1.41 | 1.76 | **1.81** |
+| Val WR | 18.1% | **80.4%** | 11.3% |
+| Val fees | $56.76 | $13.82 | $34.38 |
+| Strategy ID | sid=176 | **sid=177** | **sid=178** |
+
+### Key Findings
+
+1. **CCI+ROC (sid=178) is the new 2mo Sharpe champion** — 4.13, beating B13's STOCH+ROC (4.01). Sortino 8.63 is the highest ever on 2mo. CCI overbought reversal entry + ROC/CCI exit. Extreme tail-win architecture (0.66% SL / 10.65% TP, 11.3% WR).
+2. **STOCH+ATR (sid=177) on 2mo is excellent** — Sharpe 4.01, 4.3% DD (lowest in batch), 80.4% WR scalper. Same architecture as B11's champion (4.27) but different parameter optimization.
+3. **ATR solo viable on 2mo** — Sharpe 3.51, 105 trades (~1.7/day). Simple volatility entry/exit. High trade frequency but 12.6% DD is the highest in this batch.
+4. **Three distinct architectures coexist** — tail-win (11.3% WR, 10.65% TP), scalper (80.4% WR, 2.03% TP), and volatility-filter (18.1% WR, 5.79% TP). All profitable with different risk profiles.
+5. **All SHORT** — 15th consecutive batch. The BTCUSDT 1m short-side edge is a fundamental market property in this period.
+6. **100% trade match** — 8th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe, 2mo window)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 2 | **B15** | **CCI+ROC** | **4.13** | **8.63** | 7.8% | 62 | **1.81** | 11.3% | **1.0** |
+| 3 | B13 | STOCH+ROC | 4.01 | 6.33 | **3.9%** | 95 | **1.92** | 93.7% | 1.6 |
+| 4 | **B15** | **STOCH+ATR** | **4.01** | 5.74 | **4.3%** | 51 | 1.76 | 80.4% | **0.9** |
+| 5 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 6 | **B15** | **ATR solo** | **3.51** | 6.07 | 12.6% | **105** | 1.41 | 18.1% | **1.7** |
+| 7 | B12 | CCI solo | 3.24 | 5.02 | 4.5% | 90 | 1.64 | 90.0% | 1.5 |
+| 8 | B12 | ATR+ROC | 3.22 | 5.00 | 5.7% | 83 | 1.50 | 88.0% | 1.4 |
+| 9 | B11 | CCI+ROC | 3.05 | 4.41 | 4.9% | 63 | 1.56 | 88.9% | 1.1 |
+| 10 | B12 | STOCH solo | 2.91 | 4.69 | 5.7% | 58 | 1.45 | 70.7% | 1.0 |
+| 11 | B11 | STOCH+ROC | 2.86 | 4.45 | 9.0% | **151** | 1.51 | 90.1% | **2.5** |
+
+### Recommendations
+
+1. **Paper trade sid=178 (CCI+ROC)** — new 2mo Sharpe champion (4.13, Sortino 8.63). Extreme tail-win architecture, low fees ($34).
+2. **Portfolio of 3: sid=173 + sid=177 + sid=178** — scalper (93.7% WR) + STOCH+ATR (80.4% WR) + tail-win (11.3% WR). Maximum architecture diversification.
+3. **2mo discovery is exhaustively explored** — 5 batches (B11-B15), every solo and combo tested. All 11 leaderboard strategies are profitable with distinct architectures.
+4. **Consider moving to paper trading phase** — diminishing returns from further discovery. Focus on live testing the top strategies.
+
+
 
 
 
