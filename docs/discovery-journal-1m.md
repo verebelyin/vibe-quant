@@ -2006,6 +2006,57 @@ take_profit: {type: fixed_pct, percent: 0.5}
 3. **RSI is viable on 2mo 1m** — the B1 finding that RSI fails on 1m was 3mo-specific. RSI(50) as a slow filter works on 2mo.
 4. **The 0.5% TP scalper (sid=186) needs careful live monitoring** — 98.3% WR means each loss is ~16x a typical win. A single bad streak could wipe significant gains. Paper trade with strict risk limits.
 
+---
+
+## 2026-03-15: Batch 19 — Exotic RSI Combos on 3.5mo
+
+### Goal
+
+Test exotic RSI-based combos on 3.5mo data (2025-12-01 → 2026-03-15, ~152K bars). RSI broke through in B18 (Sharpe 6.05). Test RSI paired with CCI, ROC, ATR — all first-time 1m combos. Direction=null, pop=30 gens=30 (900 trials).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 632 | RSI+CCI | 30 | 30 | 900 | random | ~80min | completed (WEAK) |
+| 633 | RSI+ROC | 30 | 30 | 900 | random | ~30min (converged gen 21) | completed (WEAK) |
+| 634 | RSI+ATR | 30 | 30 | 900 | random | ~30min (converged gen 21) | **completed** |
+
+Data: 2025-12-01 to 2026-03-15 (3.5 months, ~152K bars).
+
+### Full Pipeline Results
+
+| Stage | 632 RSI+CCI | 633 RSI+ROC | 634 RSI+ATR |
+|-------|------------|------------|-------------|
+| Disc score | 0.5371 | 0.5525 | **0.6807** |
+| Disc sharpe | 1.70 | 1.96 | **3.93** |
+| Disc trades | **108** | 60 | 53 |
+| Disc return | 7.1% | 6.8% | 6.8% |
+| DSR | PASS | PASS | PASS |
+| Val trades | **108 (100%)** | **60 (100%)** | **53 (100%)** |
+| Val sharpe | 1.70 | 1.96 | **3.93** |
+| Val sortino | 2.56 | 3.27 | **12.59** |
+| Val DD | 9.0% | 10.2% | **11.0%** |
+| Val PF | 1.22 | 1.24 | **1.54** |
+| Val WR | 73.1% | 43.3% | 7.5% |
+| Strategy ID | sid=190 | sid=188 | **sid=189** |
+
+### Key Findings
+
+1. **RSI+ATR on 3.5mo is strong** — Sharpe 3.93, Sortino 12.59. RSI entry + ATR exit pattern works on longer data windows too. 7.5% WR tail-win.
+2. **RSI+CCI is slow and weak** — CCI on 3.5mo with 900 trials took 80 minutes but only Sharpe 1.70. CCI with RSI doesn't synergize on 1m.
+3. **RSI+ROC is weak** — Sharpe 1.96. Two momentum indicators don't complement each other.
+4. **3.5mo produces lower Sharpe than 2mo across all combos** — consistent with B14/B17 findings. Longer windows dilute the short-side edge.
+5. **All SHORT** — 19th consecutive batch.
+6. **RSI works best with ATR exit** — same pattern as STOCH (best with ATR exit). ATR volatility exit is the universal best exit signal on 1m.
+
+### Recommendations
+
+1. **RSI+ATR (sid=189) viable for 3.5mo portfolio** — Sharpe 3.93, Sortino 12.59. Complementary to 2mo strategies for time diversification.
+2. **RSI+CCI and RSI+ROC not competitive** — skip these combos in future batches.
+3. **Next: try ADX combos and MFI combos on 2mo** — these are the truly unexplored exotic indicators on 2mo.
+
+
 
 
 
