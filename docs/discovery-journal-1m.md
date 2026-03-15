@@ -1427,3 +1427,119 @@ ROC+CCI dual entry with ROC momentum exit. 1.36% TP, 88.9% WR.
 6. **CCI+ROC improves on shorter data** — Sharpe 3.05 on 2mo vs 3.25 on 4mo, but with much lower DD (4.9% vs 8.0%). Shorter window produces lower-risk CCI+ROC strategies.
 7. **Consider higher budget on 2mo** — runs completed in 16-21min. Pop=30/gens=30 (900 trials) would take ~40-60min and is within the 1hr budget. Could push STOCH+ATR above 4.70.
 
+---
+
+## 2026-03-15: Batch 12 — Solo Indicators + ATR+ROC on 2mo, Higher Budget
+
+### Goal
+
+Test solo indicators (STOCH, CCI) and ATR+ROC on 2mo data with higher budget (pop=28, gens=28 = 784 trials). Direction=null to allow long strategies. Continue the B11 2mo window experiments with increased search budget.
+
+### Bug Fixes Applied
+
+1. **Epoch parquet cleanup broke instrument definitions** — the B11 fix (`cleanup_epoch_parquet`) was too aggressive, deleting `crypto_perpetual/` instrument parquet files that NT needs. All 3 initial runs (570-572) failed with "Instrument not found". Fixed: restrict cleanup to `bar/` subdirectories only. Rebuilt instrument definition.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 573 | STOCH solo | 28 | 28 | 784 | random | ~28min | **completed** |
+| 574 | CCI solo | 28 | 28 | 784 | random | ~27min (converged gen 23) | **completed** |
+| 575 | ATR+ROC | 28 | 28 | 784 | random | ~17min (converged gen 21) | **completed** |
+
+Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m. ~87K bars.
+
+Failed runs: 570-572 (instrument not found due to epoch parquet cleanup bug).
+
+### Winning Strategy DSL Details
+
+**Run 573 (STOCH solo) — sid=169**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 crosses_above 38.58", "stoch_entry_1 crosses_above 38.58"]  # STOCH(14,3) dual crossover
+exit_conditions:
+  short: ["stoch_exit_0 crosses_above 48.31", "stoch_exit_1 crosses_below 56.75"]  # STOCH(6,7) + STOCH(18,3)
+stop_loss: {type: fixed_pct, percent: 9.23}
+take_profit: {type: fixed_pct, percent: 2.3}
+```
+Multi-STOCH with dual identical entry conditions (STOCH 14,3 crosses above 38.6). 2.3% TP scalper.
+
+**Run 574 (CCI solo) — sid=170**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 > -2.49", "cci_entry_1 > -28.63"]  # CCI(42) + CCI(48) near neutral
+exit_conditions:
+  short: ["cci_exit_0 crosses_below -173.19", "cci_exit_1 crosses_below 193.86"]  # CCI(13) + CCI(49)
+stop_loss: {type: fixed_pct, percent: 6.89}
+take_profit: {type: fixed_pct, percent: 1.12}
+```
+4 CCI indicators, ultra-tight 1.12% TP, 90.0% WR. CCI entry near neutral (-2 to -29), exit on extreme CCI moves.
+
+**Run 575 (ATR+ROC) — sid=171**
+```yaml
+entry_conditions:
+  short: ["atr_entry_0 >= 0.1382"]  # ATR(22) volatility gate
+exit_conditions:
+  short: ["roc_exit_0 < -1.48", "atr_exit_1 crosses_below 0.0597"]  # ROC(29) + ATR(5)
+stop_loss: {type: fixed_pct, percent: 6.66}
+take_profit: {type: fixed_pct, percent: 1.25}
+```
+ATR volatility entry + dual ROC/ATR exit. 1.25% TP, 88.0% WR.
+
+### Full Pipeline Results
+
+| Stage | 573 STOCH solo | 574 CCI solo | 575 ATR+ROC |
+|-------|---------------|-------------|-------------|
+| Disc score | 0.5968 | **0.6338** | **0.6426** |
+| Disc sharpe | 2.91 | **3.24** | 3.21 |
+| Disc trades | 58 | **90** | 83 |
+| Disc return | 3.8% | **8.8%** | 7.7% |
+| DSR | PASS 4/4 | PASS 3/3 | PASS 5/5 |
+| Screen trades | 58 ✓ | 90 ✓ | 83 ✓ |
+| Screen sharpe | 2.91 ✓ | 3.24 ✓ | 3.21 ✓ |
+| Val trades | **58 (100%)** | **90 (100%)** | **83 (100%)** |
+| Val sharpe | 2.91 | **3.24** | 3.22 |
+| Val sortino | 4.69 | **5.02** | 5.00 |
+| Val return | 3.8% | **8.8%** | 7.7% |
+| Val DD | 5.7% | **4.5%** | 5.7% |
+| Val PF | 1.45 | **1.64** | 1.50 |
+| Val WR | 70.7% | **90.0%** | 88.0% |
+| Val fees | $10.60 | $20.94 | $20.05 |
+| Strategy ID | sid=169 | **sid=170** | sid=171 |
+
+### Issues Found
+
+1. **Epoch parquet cleanup deleted instrument definitions** — runs 570-572 all failed with "Instrument not found: BTCUSDT-PERP.BINANCE". Root cause: the new `cleanup_epoch_parquet()` function (added in this session) used `rglob` on all of `data/` which includes `crypto_perpetual/` — but NT stores instrument definitions as epoch-timestamp parquet files by design. Fixed: restrict cleanup to `bar/` subdirectories only.
+
+### Key Findings
+
+1. **CCI solo on 2mo is excellent** — Sharpe 3.24, 90 trades (~1.5/day), 90.0% WR, 4.5% DD. Best CCI solo result in journal history. Ultra-tight 1.12% TP scalper.
+2. **ATR+ROC on 2mo improves over 4mo** — Sharpe 3.22 (2mo) vs 2.22 (B10 4mo). 83 trades at 88.0% WR. ATR volatility entry + dual exit is strong.
+3. **STOCH solo on 2mo underperforms** — Sharpe 2.91 is below B7's 4.15 (3mo). Higher budget (784 vs 400 trials) didn't help. STOCH solo may need ≥3mo data to find the multi-timeframe patterns.
+4. **LONG still dead** — 12th batch with direction=null, still 100% SHORT convergence. All 12 strategies across all runs are SHORT.
+5. **100% trade match continues** — 6th consecutive batch with perfect pipeline alignment.
+6. **Higher budget (784 trials) produced diminishing returns** — CCI (3.24) and ATR+ROC (3.22) are good but not better than B10's STOCH+ATR (4.70). The extra trials don't overcome combo choice.
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | DD | Trades | PF | WR | Dir | Data | Trades/day |
+|------|-------|-------|--------|-----|--------|-----|-----|-----|------|------------|
+| 1 | B10 | STOCH+ATR | **4.70** | 9.4% | 62 | 1.79 | 8.1% | SHORT | 4mo | 0.5 |
+| 2 | B11 | STOCH+ATR | 4.27 | 5.6% | 73 | 1.80 | 87.7% | SHORT | 2mo | 1.2 |
+| 3 | B7 | STOCH solo | 4.15 | 5.3% | 28 | 1.96 | 42.9% | SHORT | 3mo | 0.3 |
+| 4 | B9 | STOCH+ROC | 4.02 | 11.0% | 108 | 1.63 | 9.3% | SHORT | 4mo | 0.9 |
+| 5 | **B12** | **CCI solo** | **3.24** | **4.5%** | **90** | **1.64** | **90.0%** | SHORT | **2mo** | **1.5** |
+| 6 | **B12** | **ATR+ROC** | **3.22** | 5.7% | 83 | 1.50 | 88.0% | SHORT | **2mo** | **1.4** |
+| 7 | B11 | CCI+ROC | 3.05 | 4.9% | 63 | 1.56 | 88.9% | SHORT | 2mo | 1.1 |
+| 8 | **B12** | **STOCH solo** | **2.91** | 5.7% | 58 | 1.45 | 70.7% | SHORT | **2mo** | **1.0** |
+| 9 | B11 | STOCH+ROC | 2.86 | 9.0% | 151 | 1.51 | 90.1% | SHORT | 2mo | 2.5 |
+
+### Recommendations
+
+1. **CCI solo (sid=170) is the best 2mo CCI strategy ever** — 90 trades, 90.0% WR, 4.5% DD. Add to paper trading portfolio.
+2. **ATR+ROC confirmed viable on shorter windows** — 3.22 (2mo) vs 2.22 (4mo). The volatility-entry pattern works better on recent data.
+3. **STOCH solo needs ≥3mo data** — 2.91 (2mo) vs 4.15 (3mo). The multi-timeframe STOCH analysis needs more price history.
+4. **LONG is definitively dead on 1m BTCUSDT** — 12 batches, every possible indicator, direction=null. Zero long strategies found. The edge is short-only.
+5. **Next batch: try STOCH+CCI on 2mo** — the most consistent combo across all data windows, never tested on 2mo with high budget.
+
+
