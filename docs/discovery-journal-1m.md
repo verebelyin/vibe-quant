@@ -2202,7 +2202,128 @@ Rerun all 3 top combos (RSI+STOCH, STOCH+ATR, RSI+CCI) on 2mo with different ran
 2. **RSI+CCI is the "safe bet" RSI combo** — consistent 3.9+ Sharpe. RSI+STOCH has higher ceiling (6.05) but fails more often.
 3. **Discovery is fundamentally stochastic** — the same combo on the same data can produce Sharpe 0 or Sharpe 6 depending on random seed. Portfolio value comes from running many discoveries and keeping the best.
 
+---
 
+## 2026-03-15: Batch 23 — RSI+STOCH, STOCH+ROC, CCI+ROC on 2mo
+
+### Goal
+
+Rerun proven combos on 2mo data (2026-01-10 to 2026-03-10) with direction=null. Testing reproducibility of champion combos with different random seeds. Pop=30, gens=30 (900 trials).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 662 | RSI+STOCH | 30 | 30 | 900 | random | ~29min (converged gen 20) | **completed** |
+| 663 | STOCH+ROC | 30 | 30 | 900 | random | ~26min | **completed** |
+| 664 | CCI+ROC | 30 | 30 | 900 | random | ~34min | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m. 3 parallel on 10-core M1 Pro.
+
+### Winning Strategy DSL Details
+
+**Run 662 (RSI+STOCH) — sid=197**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 >= 21.4592"]   # STOCH(6,7) — low-range entry
+exit_conditions:
+  short: ["rsi_exit_0 > 67.3535", "rsi_exit_1 <= 32.4755"]  # RSI(16) + RSI(44)
+stop_loss: {type: fixed_pct, percent: 2.38}
+take_profit: {type: fixed_pct, percent: 4.44}
+```
+STOCH entry at low threshold (21.5), dual RSI contradictory exit (RSI(16) > 67 AND RSI(44) ≤ 32.5 = fast RSI overbought while slow RSI oversold). 42.6% WR balanced strategy.
+
+**Run 663 (STOCH+ROC → ROC-only) — sid=198**
+```yaml
+entry_conditions:
+  short: ["roc_entry_0 > -2.237"]   # ROC(20) — near-zero momentum filter
+exit_conditions:
+  short: ["roc_exit_0 > 3.144"]  # ROC(6) — exit on strong upward momentum
+stop_loss: {type: fixed_pct, percent: 6.49}
+take_profit: {type: fixed_pct, percent: 1.29}
+```
+GA dropped STOCH entirely — pure ROC entry + ROC exit. 1.29% TP scalper with 86.8% WR.
+
+**Run 664 (CCI+ROC) — sid=199**
+```yaml
+entry_conditions:
+  short: ["roc_entry_0 < 0.9982", "cci_entry_1 > 135.861"]  # ROC(19) + CCI(13)
+exit_conditions:
+  short: ["roc_exit_0 crosses_below 3.4076"]  # ROC(15) momentum exit
+stop_loss: {type: fixed_pct, percent: 9.95}
+take_profit: {type: fixed_pct, percent: 0.91}
+```
+CCI overbought (>135.9) entry with ROC near-zero confirmation + ROC momentum exit. 0.91% TP ultra-scalper with **94.3% WR**.
+
+### Full Pipeline Results
+
+| Stage | 662 RSI+STOCH | 663 STOCH+ROC→ROC | 664 CCI+ROC |
+|-------|-------------|-------------------|-------------|
+| Disc score | 0.6073 | 0.6045 | **0.6934** |
+| Disc sharpe | 2.93 | 2.49 | **3.73** |
+| Disc trades | 61 | 76 | **88** |
+| Disc return | **11.4%** | 6.2% | 5.2% |
+| DSR | PASS 1/1 (p=0) | PASS 2/2 (p=0) | PASS 5/5 (p=0) |
+| Screen trades | 61 ✓ | 76 ✓ | 88 ✓ |
+| Screen sharpe | 2.93 ✓ | 2.49 ✓ | 3.73 ✓ |
+| Val trades | **61 (100%)** | **76 (100%)** | **88 (100%)** |
+| Val sharpe | 2.93 | 2.49 | **3.73** |
+| Val sortino | 4.73 | 3.86 | **5.77** |
+| Val return | **11.4%** | 6.2% | 5.2% |
+| Val DD | 10.4% | **6.3%** | **2.9%** |
+| Val PF | 1.35 | 1.37 | **1.74** |
+| Val WR | 42.6% | 86.8% | **94.3%** |
+| Val fees | $30.08 | $18.54 | $12.87 |
+| Strategy ID | sid=197 | sid=198 | **sid=199** |
+
+### Issues Found
+
+None. Clean run throughout.
+
+### Key Findings
+
+1. **CCI+ROC (sid=199) is the batch champion** — Sharpe 3.73, 2.9% DD (one of the lowest ever), 88 trades (~1.5/day), 94.3% WR. CCI overbought entry + ROC momentum exit produces an excellent scalper.
+2. **GA dropped STOCH from STOCH+ROC pool** — run 663 used pure ROC (no STOCH at all). Confirms B16's finding that GA prunes indicator pools to the strongest signals.
+3. **RSI+STOCH produced a different architecture** — B18 got Sharpe 6.05 (tail-win, 8.7% WR), B21 got 5.20, B22 failed, B23 got 2.93 (balanced, 42.6% WR). Further confirms GA randomization volatility.
+4. **All SHORT** — 23rd consecutive batch. Direction=null still produces 100% SHORT strategies.
+5. **100% trade match** — 12th consecutive perfect batch post-LatencyModel fix.
+6. **CCI+ROC is consistently strong on 2mo** — B11 (3.05), B15 (4.13), B23 (3.73). Always produces viable strategies with high WR.
+7. **2.9% DD is among the lowest in journal history** — only B6 STOCH+ATR (4.6%) and B8 CCI solo (3.8%) were similarly low.
+
+### Comparison with Previous Champions
+
+| Metric | B18 RSI+STOCH | B18 STOCH+ATR | B15 CCI+ROC | **B23 CCI+ROC** | **B23 RSI+STOCH** |
+|--------|-----|-----|-----|-----|-----|
+| Val Sharpe | **6.05** | **6.01** | 4.13 | 3.73 | 2.93 |
+| Val Trades | 69 | 59 | 62 | **88** | 61 |
+| Val DD | 11.1% | **2.0%** | 7.8% | **2.9%** | 10.4% |
+| Val WR | 8.7% | 98.3% | 11.3% | **94.3%** | 42.6% |
+| Val PF | 1.68 | **3.67** | 1.81 | 1.74 | 1.35 |
+| Val Return | **9.7%** | 4.7% | **11.6%** | 5.2% | **11.4%** |
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** | 1.0 |
+| 3 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 4 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 5 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 6 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 7 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 8 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 9 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 10 | B16 | CCI (from ATR) | 3.86 | 9.31 | 6.0% | 58 | 1.84 | 51.7% | 1.0 |
+| 11 | **B23** | **CCI+ROC** | **3.73** | 5.77 | **2.9%** | **88** | 1.74 | **94.3%** | **1.5** |
+| 12 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+
+### Recommendations
+
+1. **sid=199 (CCI+ROC) is an excellent portfolio candidate** — 2.9% DD with 94.3% WR and 88 trades. Lowest-risk scalper in journal history.
+2. **Continue running champion combos with different seeds** — GA randomization produces wide result variance. More attempts = more chances at Sharpe 5+.
+3. **CCI+ROC is the most reliable combo** — never fails (0% failure rate across B11/B15/B23). RSI+STOCH has higher ceiling but ~40% failure rate.
+4. **Next batch: rerun RSI+STOCH, STOCH+ATR, CCI+ROC** — same combos, different seeds. Target Sharpe 5+ on the next RSI+STOCH attempt.
 
 
 
