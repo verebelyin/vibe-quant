@@ -1639,5 +1639,55 @@ Ultra-tight 0.97% TP scalper with 93.7% WR. ROC entry filter (>= -3.27 means "no
 3. **ROC solo definitively needs ≥4mo data** — failed on 2mo (0 strategies) and 3mo (2 trades val). Only viable on 4mo+.
 4. **2mo discovery landscape is mature** — 3 batches (B11-B13) tested all reasonable combos. Top 5 strategies span 3 architectures.
 
+---
+
+## 2026-03-15: Batch 14 — 3mo Window Test (STOCH+ATR, CCI+ATR, Triple)
+
+### Goal
+
+Test combos on 3mo data (2025-12-15 → 2026-03-15) with direction=null: STOCH+ATR (all-time champion on 4mo), CCI+ATR (previously failed on forced SHORT), STOCH+CCI+ROC triple. Pop=28, gens=28.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 589 | STOCH+ATR | 28 | 28 | 784 | random | ~35min | **FAILED** (0 strategies) |
+| 590 | CCI+ATR | 28 | 28 | 784 | random | ~40min (converged gen 24) | completed (WEAK) |
+| 591 | STOCH+CCI+ROC | 28 | 28 | 784 | random | ~42min (converged gen 23) | completed (WEAK) |
+
+Data range: 2025-12-15 to 2026-03-15 (3 months, ~130K bars). 3 parallel on 10 cores.
+
+### Full Pipeline Results
+
+| Stage | 589 STOCH+ATR | 590 CCI+ATR | 591 STOCH+CCI+ROC |
+|-------|-------------|------------|-------------------|
+| Disc score | FAIL | 0.5013 | 0.4922 |
+| Disc sharpe | — | 1.85 | 1.74 |
+| Disc trades | — | 186 | 94 |
+| Disc return | — | 4.1% | 6.2% |
+| DSR | — | PASS 1/1 | PASS 1/1 |
+| Val trades | — | **186 (100%)** | **94 (100%)** |
+| Val sharpe | — | 1.85 | 1.74 |
+| Val DD | — | 9.8% | 11.5% |
+| Val PF | — | 1.18 | 1.21 |
+| Val WR | — | 55.4% | 39.4% |
+| Strategy ID | — | sid=174 | sid=175 |
+
+### Key Findings
+
+1. **STOCH+ATR fails on 3mo with direction=null** — 0 strategies in 784 trials. Previously succeeded on 3mo with forced SHORT (B5: 2.63, B6: 3.64). The direction=null search space is too large for STOCH+ATR on 3mo.
+2. **3mo with 3 parallel is too slow for high-budget runs** — 35-42min per run vs 17-28min on 2mo. CPU contention from 12 workers on 10 cores slows everything.
+3. **CCI+ATR weak on 3mo** — Sharpe 1.85 with 186 trades. Not competitive with 2mo results.
+4. **Triple combo weak on 3mo** — Sharpe 1.74. Consistent with B3 (1.02 on 12mo). Triple combos don't work on 1m regardless of data window.
+5. **2mo data is definitively the optimal window for discovery** — B11-B13 (2mo) produced Sharpe 2.86-4.27. B14 (3mo) produced 1.74-1.85. Shorter data = stronger strategies.
+6. **Still all SHORT** — 14 batches.
+
+### Recommendations
+
+1. **Return to 2mo for future batches** — 3mo adds computation time without improving results.
+2. **Force SHORT if continuing 3mo experiments** — direction=null wastes half the search space on LONG which never works.
+3. **Focus on paper trading the B11-B13 winners** — sid=166 (STOCH+ATR, 4.27), sid=170 (CCI, 3.24), sid=173 (STOCH+ROC, 4.01).
+
+
 
 
