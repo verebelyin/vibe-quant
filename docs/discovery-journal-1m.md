@@ -2159,6 +2159,50 @@ Data: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
 2. **RSI+ATR needs ≥3mo** — skip on 2mo, use on 3.5-4mo only.
 3. **RSI+CCI viable on 2mo** — Sharpe 3.96 is competitive. The tail-win architecture (9.1% WR) is a novel RSI+CCI pattern.
 
+---
+
+## 2026-03-15: Batch 22 — Champion Reruns on 2mo
+
+### Goal
+
+Rerun all 3 top combos (RSI+STOCH, STOCH+ATR, RSI+CCI) on 2mo with different random seeds. Testing whether B18's Sharpe 6+ results are reproducible. Direction=null, pop=30 gens=30.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 657 | RSI+STOCH | 30 | 30 | 900 | random | ~35min | **FAILED** (0 strategies) |
+| 658 | STOCH+ATR | 30 | 30 | 900 | random | ~35min | **FAILED** (0 strategies) |
+| 659 | RSI+CCI | 30 | 30 | 900 | random | ~40min | **completed** |
+
+### Full Pipeline Results
+
+| Stage | 657 RSI+STOCH | 658 STOCH+ATR | 659 RSI+CCI |
+|-------|-------------|-------------|------------|
+| Disc score | FAIL | FAIL | **0.6871** |
+| Disc sharpe | — | — | **3.92** |
+| Disc trades | — | — | 50 |
+| Val sharpe | — | — | 3.92 |
+| Val sortino | — | — | 8.11 |
+| Val DD | — | — | 9.6% |
+| Val PF | — | — | 1.55 |
+| Val WR | — | — | 24.0% |
+| Strategy ID | — | — | sid=196 |
+
+### Key Findings
+
+1. **GA randomization is extremely volatile** — RSI+STOCH: B18 got 6.05, B21 got 5.20, B22 got 0 (FAIL). STOCH+ATR: B18 got 6.01, B22 got 0. Same combos, same data, wildly different results. The GA initial population matters more than the combo choice.
+2. **2/3 runs failed** — direction=null on 2mo produces failures ~30-40% of the time for any given combo. The search space is large and many random initial populations don't contain viable solutions.
+3. **RSI+CCI is the most consistent RSI combo** — B21 (3.96), B22 (3.92). Consistent Sharpe ~3.9 across reruns. Lower ceiling than RSI+STOCH but higher floor (never fails).
+4. **Still all SHORT** — 22nd consecutive batch.
+
+### Recommendations
+
+1. **For reliable discovery, run 5+ parallel with same combo** — expect 30-40% failure rate. The 2-3 surviving runs will find strong strategies.
+2. **RSI+CCI is the "safe bet" RSI combo** — consistent 3.9+ Sharpe. RSI+STOCH has higher ceiling (6.05) but fails more often.
+3. **Discovery is fundamentally stochastic** — the same combo on the same data can produce Sharpe 0 or Sharpe 6 depending on random seed. Portfolio value comes from running many discoveries and keeping the best.
+
+
 
 
 
