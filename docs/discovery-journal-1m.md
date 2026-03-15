@@ -1542,4 +1542,102 @@ ATR volatility entry + dual ROC/ATR exit. 1.25% TP, 88.0% WR.
 4. **LONG is definitively dead on 1m BTCUSDT** — 12 batches, every possible indicator, direction=null. Zero long strategies found. The edge is short-only.
 5. **Next batch: try STOCH+CCI on 2mo** — the most consistent combo across all data windows, never tested on 2mo with high budget.
 
+---
+
+## 2026-03-15: Batch 13 — STOCH+CCI, STOCH+ROC, ROC Solo on 2mo
+
+### Goal
+
+Test the two most proven combos (STOCH+CCI, STOCH+ROC) and ROC solo on 2mo data with high budget (pop=28, gens=28 = 784 trials). Direction=null. STOCH+CCI is the #1 all-time most consistent combo but never tested on 2mo.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 582 | STOCH+CCI | 28 | 28 | 784 | random | ~25min (converged gen 20) | **completed** |
+| 583 | STOCH+ROC | 28 | 28 | 784 | random | ~27min (converged gen 22) | **completed** |
+| 584 | ROC solo | 28 | 28 | 784 | random | ~12min | **FAILED** (0 strategies) |
+
+Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m. ~87K bars.
+
+### Winning Strategy DSL Details
+
+**Run 582 (STOCH+CCI) — sid=172**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 crosses_below 55.67", "cci_entry_1 >= -128.09"]  # STOCH(21,4) + CCI(49)
+exit_conditions:
+  short: ["stoch_exit_0 crosses_above 52.86", "cci_exit_1 crosses_below -9.38"]  # STOCH(19,9) + CCI(14)
+stop_loss: {type: fixed_pct, percent: 2.86}
+take_profit: {type: fixed_pct, percent: 18.91}
+```
+Extreme reward/risk (18.91% TP / 2.86% SL = 6.6x). Only 52.2% WR but winners are massive. Trend-follower architecture.
+
+**Run 583 (STOCH+ROC) — sid=173**
+```yaml
+entry_conditions:
+  short: ["roc_entry_0 >= -3.27", "stoch_entry_1 crosses_below 69.36"]  # ROC(12) + STOCH(13,7)
+exit_conditions:
+  short: ["stoch_exit_0 <= 42.51", "stoch_exit_1 > 77.40"]  # STOCH(11,8) + STOCH(11,6)
+stop_loss: {type: fixed_pct, percent: 8.98}
+take_profit: {type: fixed_pct, percent: 0.97}
+```
+Ultra-tight 0.97% TP scalper with 93.7% WR. ROC entry filter (>= -3.27 means "not strongly falling") + STOCH mid-range crossdown. Dual STOCH contradictory exit (≤42.5 AND >77.4) — effectively exits on STOCH divergence.
+
+### Full Pipeline Results
+
+| Stage | 582 STOCH+CCI | 583 STOCH+ROC | 584 ROC solo |
+|-------|--------------|--------------|-------------|
+| Disc score | 0.6555 | **0.6991** | FAIL |
+| Disc sharpe | 3.68 | **4.01** | — |
+| Disc trades | 69 | **95** | — |
+| Disc return | **9.7%** | 7.7% | — |
+| DSR | PASS 2/2 | PASS 5/5 | — |
+| Screen trades | 69 ✓ | 95 ✓ | — |
+| Val trades | **69 (100%)** | **95 (100%)** | — |
+| Val sharpe | 3.68 | **4.01** | — |
+| Val sortino | **6.59** | 6.33 | — |
+| Val return | **9.7%** | 7.7% | — |
+| Val DD | 7.1% | **3.9%** | — |
+| Val PF | 1.56 | **1.92** | — |
+| Val WR | 52.2% | **93.7%** | — |
+| Val fees | $37.90 | $16.58 | — |
+| Strategy ID | sid=172 | **sid=173** | — |
+
+### Issues Found
+
+1. **ROC solo completely fails on 2mo** — 0 strategies found in 784 trials across 20 gens. ROC solo needs ≥3mo data (B8 re-val showed 1.83 Sharpe on 3mo). On 2mo, ROC thresholds can't find viable entries.
+
+### Key Findings
+
+1. **STOCH+ROC (sid=173) is the new 2mo champion** — Sharpe 4.01, 95 trades (~1.6/day), 93.7% WR, 3.9% DD, PF 1.92. Best PF in 2mo history. Ultra-tight 0.97% TP scalper.
+2. **STOCH+CCI on 2mo produces a trend-follower** — Sharpe 3.68, 52.2% WR, 18.91% TP. Completely different architecture from the scalpers. STOCH+CCI adapts to 2mo by widening TP rather than tightening it.
+3. **ROC solo is definitively dead on 2mo** — 0 strategies found. Combined with B8's 2-trade validation collapse on 3mo, ROC solo needs ≥4mo data (B9: 3.74 on 4mo).
+4. **All SHORT again** — 13th consecutive batch, direction=null, 100% SHORT. This is no longer a finding — it's a fundamental property of 1m BTCUSDT.
+5. **STOCH+ROC has the best 2mo PF (1.92)** — significantly above any other 2mo strategy. The ROC entry filter removes bad setups effectively.
+6. **100% trade match continues** — 7th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | DD | Trades | PF | WR | Dir | Data | Trades/day |
+|------|-------|-------|--------|-----|--------|-----|-----|-----|------|------------|
+| 1 | B10 | STOCH+ATR | **4.70** | 9.4% | 62 | 1.79 | 8.1% | SHORT | 4mo | 0.5 |
+| 2 | B11 | STOCH+ATR | 4.27 | 5.6% | 73 | 1.80 | 87.7% | SHORT | 2mo | 1.2 |
+| 3 | B7 | STOCH solo | 4.15 | 5.3% | 28 | 1.96 | 42.9% | SHORT | 3mo | 0.3 |
+| 4 | B9 | STOCH+ROC | 4.02 | 11.0% | 108 | 1.63 | 9.3% | SHORT | 4mo | 0.9 |
+| 5 | **B13** | **STOCH+ROC** | **4.01** | **3.9%** | **95** | **1.92** | **93.7%** | SHORT | **2mo** | **1.6** |
+| 6 | **B13** | **STOCH+CCI** | **3.68** | 7.1% | 69 | 1.56 | 52.2% | SHORT | **2mo** | **1.2** |
+| 7 | B12 | CCI solo | 3.24 | 4.5% | 90 | 1.64 | 90.0% | SHORT | 2mo | 1.5 |
+| 8 | B12 | ATR+ROC | 3.22 | 5.7% | 83 | 1.50 | 88.0% | SHORT | 2mo | 1.4 |
+| 9 | B11 | CCI+ROC | 3.05 | 4.9% | 63 | 1.56 | 88.9% | SHORT | 2mo | 1.1 |
+| 10 | B12 | STOCH solo | 2.91 | 5.7% | 58 | 1.45 | 70.7% | SHORT | 2mo | 1.0 |
+
+### Recommendations
+
+1. **Paper trade sid=173 (STOCH+ROC, 2mo)** — Sharpe 4.01, PF 1.92, 93.7% WR, 3.9% DD. Best risk-adjusted 2mo strategy. Ultra-tight 0.97% TP.
+2. **Portfolio: sid=173 (scalper) + sid=172 (trend-follower)** — same indicators (STOCH+CCI/ROC), opposite architectures (0.97% vs 18.91% TP). Potentially uncorrelated.
+3. **ROC solo definitively needs ≥4mo data** — failed on 2mo (0 strategies) and 3mo (2 trades val). Only viable on 4mo+.
+4. **2mo discovery landscape is mature** — 3 batches (B11-B13) tested all reasonable combos. Top 5 strategies span 3 architectures.
+
+
 
