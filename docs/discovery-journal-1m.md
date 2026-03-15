@@ -1125,3 +1125,164 @@ None. Clean run throughout.
 5. **Next batch suggestion: explore long-side** — 9 consecutive batches of short-only strategies. Either the GA parameters strongly bias short, or the data period is genuinely short-biased. Test with `direction: long` forced to check if any viable long strategies exist.
 6. **ROC as exit is a strong pattern** — both STOCH+ROC (run 536) and CCI+ROC (run 538) use ROC as exit only. Pure ROC also works as entry (run 535). ROC is more versatile than previously known.
 
+
+---
+
+## 2026-03-15: Batch 10 — ATR+ROC First Test, STOCH+ATR 4mo, Solo Indicators 4mo
+
+### Goal
+
+Complete the combinatorial space: test the only completely untried 2-indicator combo (ATR+ROC), plus STOCH+ATR and solo indicators on the new 4-month data window (2025-11-15 to 2026-03-15). All Rust-native, all force-SHORT.
+
+Combos:
+1. **ATR+ROC** — first ever test. The only 2-indicator combo from {STOCH,CCI,ROC,ATR} never tried
+2. **STOCH+ATR** (4mo) — B6 champion (Sharpe 3.64) on 3mo, first time on 4mo
+3. **ATR solo** (4mo) — B8 re-val showed Sharpe 3.13 on 3mo, first time on 4mo
+4. **CCI solo** (4mo) — B7 Sharpe 2.08 (3mo), B8 Sharpe 4.01 (5mo), first time on 4mo
+
+### Bug Found
+
+**Corrupt parquet in crypto_perpetual/ path** — parallel validation created `1970-01-01T00-00-00-000000000Z.parquet` in `data/catalog/data/crypto_perpetual/BTCUSDT-PERP.BINANCE/` rather than the `data/bar/` path. The `CatalogManager._cleanup_epoch_parquet()` only scans `data_dir/data/` rglob, which covers bar data but apparently not instrument parquet files. Caused validation 556 (STOCH+ATR) to fail with `ArrowInvalid` on first attempt. Fixed by manually deleting the corrupt file and re-running. Filed as vibe-quant-tdu3.
+
+**Note:** Pool assignment swapped for runs 549/550 due to parallel curl ordering — run 549 got ATR pool, run 550 got CCI pool (reversed from plan). Both combos were still tested.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 547 | ATR+ROC | 20 | 20 | 400 | short | 15m32s | **completed** |
+| 548 | STOCH+ATR | 20 | 20 | 400 | short | 23m12s | **completed** |
+| 549 | ATR solo | 20 | 20 | 400 | short | 19m33s | **completed** |
+| 550 | CCI solo | 20 | 20 | 400 | short | 33m8s | **completed** |
+
+Data: 2025-11-15 to 2026-03-15 (4 months, ~175K bars). 4 parallel runs on 10-core M1 Pro.
+
+### Discovery Results (Top Strategy per Run)
+
+| Run | Combo | Score | Sharpe | DD | Trades | Return | PF | DSR |
+|-----|-------|-------|--------|-----|--------|--------|-----|-----|
+| 547 | ATR+ROC | 0.5633 | 2.22 | 7.0% | 76 | 8.9% | 1.32 | PASS 5/5 (p≈0) |
+| 548 | STOCH+ATR | **0.7024** | **4.70** | 9.4% | 62 | 11.7% | 1.79 | PASS 5/5 (p≈0) |
+| 549 | ATR solo | 0.6316 | 3.16 | 9.4% | 88 | 7.8% | 1.55 | PASS 4/4 (p≈0) |
+| 550 | CCI solo | 0.5770 | 2.50 | 10.6% | 72 | 13.0% | 1.33 | PASS 5/5 (p≈0) |
+
+### Winning Strategy DSL Details
+
+**Run 547 (ATR+ROC) — sid=162**
+```yaml
+entry_conditions:
+  short: ["roc_entry_0 <= 3.3523"]   # ROC(8) — enter short if ROC <= 3.35 (weak upward momentum)
+exit_conditions:
+  short: ["atr_exit_0 crosses_below 0.1423", "roc_exit_1 > -1.6403"]  # ATR(27) volatility collapse exit
+stop_loss: {type: fixed_pct, percent: 5.7}
+take_profit: {type: fixed_pct, percent: 2.21}
+```
+ATR as exit: volatility-collapse exit (ATR drops below threshold = momentum exhausted).
+
+**Run 548 (STOCH+ATR) — sid=163**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 > 67.478"]   # STOCH(20,3) overbought
+exit_conditions:
+  short: ["atr_exit_0 <= 0.1408", "atr_exit_1 >= 0.0284"]  # ATR(19) ≤ 0.1408 AND ATR(16) ≥ 0.0284
+stop_loss: {type: fixed_pct, percent: 0.69}
+take_profit: {type: fixed_pct, percent: 16.27}
+```
+Dual ATR range exit: exits when fast ATR is in a specific volatility band (between 0.0284 and 0.1408). Tight SL (0.69%) + wide TP (16.27%) = tail-win architecture like B7's STOCH solo.
+
+**Run 549 (ATR solo) — sid=164**
+```yaml
+entry_conditions:
+  short: ["atr_entry_0 >= 0.0915", "atr_entry_1 > 0.0766"]  # ATR(17) AND ATR(28)
+exit_conditions:
+  short: ["atr_exit_0 crosses_above 0.0175"]  # ATR(22) — exit on volatility expansion
+stop_loss: {type: fixed_pct, percent: 0.56}
+take_profit: {type: fixed_pct, percent: 13.14}
+```
+Pure ATR volatility strategy: enter when multi-timeframe ATR above threshold, exit on ATR spike.
+
+**Run 550 (CCI solo) — sid=165**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 < -185.123"]   # CCI(11) deeply oversold → entry for short
+exit_conditions:
+  short: ["cci_exit_0 crosses_below 74.9914", "cci_exit_1 crosses_above 173.501"]
+stop_loss: {type: fixed_pct, percent: 2.45}
+take_profit: {type: fixed_pct, percent: 4.69}
+```
+CCI at extreme -185 boundary (near -200 floor) = counterintuitive short on extreme oversold, same pattern as B9 CCI+ROC.
+
+### Full Pipeline Results
+
+| Stage | 547 ATR+ROC | 548 STOCH+ATR | 549 ATR solo | 550 CCI solo |
+|-------|------------|--------------|-------------|-------------|
+| Disc score | 0.5633 | **0.7024** | 0.6316 | 0.5770 |
+| Disc sharpe | 2.22 | **4.70** | 3.16 | 2.50 |
+| Disc trades | 76 | 62 | 88 | 72 |
+| Disc return | 8.9% | 11.7% | 7.8% | 13.0% |
+| DSR | PASS | PASS | PASS | PASS |
+| Screen trades | 76 ✓ | 62 ✓ | 88 ✓ | 72 ✓ |
+| Screen sharpe | 2.22 ✓ | 4.70 ✓ | 3.16 ✓ | 2.50 ✓ |
+| Val trades | **76 (100%)** | **62 (100%)** | **88 (100%)** | **72 (100%)** |
+| Val sharpe | 2.22 | **4.70** | 3.16 | 2.50 |
+| Val return | 8.9% | 11.7% | 7.8% | 13.0% |
+| Val DD | 7.0% | 9.4% | 9.4% | 10.6% |
+| Val PF | 1.32 | **1.79** | 1.55 | 1.33 |
+| Val WR | 76.3% | 8.1% | 6.8% | 41.7% |
+| Val fees | $22.15 | $32.51 | $45.91 | $34.13 |
+| Strategy ID | sid=162 | **sid=163** | sid=164 | sid=165 |
+
+### Issues Found
+
+1. **Corrupt epoch parquet in crypto_perpetual/ path** — `CatalogManager._cleanup_epoch_parquet()` doesn't clean instrument parquet files, only bar data. Validation 556 failed first attempt. Fixed manually, filed vibe-quant-tdu3.
+2. **Parallel curl ordering** — when launching 4 simultaneous curls with `&`, pool assignment order may not match curl command order. Run 549 got ATR pool instead of CCI, run 550 got CCI instead of ATR. Verify in DB after launch.
+
+### Key Findings
+
+1. **STOCH+ATR on 4mo is the new all-time 1m champion** — Sharpe **4.70** validated (was 4.15 for B7 STOCH solo). Dual ATR exit (0.0284 ≤ ATR ≤ 0.1408) captures a specific volatility band. Exact 100% trade match validation.
+2. **ATR solo is highly viable on 4mo** — Sharpe 3.16, 88 trades (highest this batch). Multi-timeframe ATR entry + ATR spike exit. ATR solo on 3mo (B8 re-val) was Sharpe 3.13, confirming consistent ATR edge regardless of data window.
+3. **ATR+ROC first test: modest but viable** — Sharpe 2.22, 76 trades, 100% validation match. ROC entry + ATR exit is a valid architecture. Not a new champion but confirmed viable combo.
+4. **CCI solo (4mo): lowest score but high return** — Sharpe 2.50, 13.0% return, 72 trades. CCI at -185 extreme as entry is same pattern seen in B9. Consistent across data windows.
+5. **100% validation match — 4th consecutive perfect batch** — B8 re-val, B9, and B10 all show 0% trade drop in validation. The 1m pipeline fix (bd-a3nc) is fully stable.
+6. **ATR as exit is the dominant pattern this batch** — 3/4 winning strategies use ATR in exit conditions. ATR measures when volatility collapses/expands — excellent exit signal for 1m scalpers.
+7. **STOCH+ATR dual-ATR exit is novel** — B6 used ATR as exit threshold (`ATR < 0.141`). B10 found a RANGE condition (`ATR <= 0.1408 AND ATR >= 0.0284`) — only exit when volatility is in a "sweet spot". This is a new exit architecture.
+
+### Comparison with Previous Champions
+
+| Metric | B7 STOCH solo | B9 STOCH+ROC | **B10 STOCH+ATR** | B10 ATR solo | B10 ATR+ROC |
+|--------|-------------|-------------|-----------------|------------|------------|
+| Data window | 3mo | 4mo | **4mo** | **4mo** | **4mo** |
+| Val Sharpe | 4.15 | 4.02 | **4.70** | 3.16 | 2.22 |
+| Val Trades | 28 | 108 | 62 | **88** | 76 |
+| Val DD | 5.3% | 11.0% | 9.4% | 9.4% | **7.0%** |
+| Val WR | 42.9% | 9.3% | 8.1% | 6.8% | **76.3%** |
+| Val PF | 1.96 | 1.63 | **1.79** | 1.55 | 1.32 |
+| Val Return | 16.5% | 13.4% | **11.7%** | 7.8% | 8.9% |
+| Architecture | STOCH-exit | STOCH-entry ROC-exit | **STOCH-entry dual-ATR-exit** | ATR-filter | ROC-entry ATR-exit |
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe)
+
+| Rank | Batch | Combo | Sharpe | DD | Trades | PF | WR | Dir | Data |
+|------|-------|-------|--------|-----|--------|-----|-----|-----|------|
+| 1 | **B10** | **STOCH+ATR** | **4.70** | 9.4% | 62 | **1.79** | 8.1% | SHORT | **4mo** |
+| 2 | B7 | STOCH solo | 4.15 | 5.3% | 28 | 1.96 | 42.9% | SHORT | 3mo |
+| 3 | B9 | STOCH+ROC | 4.02 | 11.0% | **108** | 1.63 | 9.3% | SHORT | 4mo |
+| 4 | B8* | CCI solo 5mo | 4.01 | 12.4% | 96 | 1.64 | 11.5% | SHORT | 5mo |
+| 5 | B8* | STOCH+CCI 5mo | 3.73 | 5.9% | 57 | 1.46 | 77.2% | SHORT | 5mo |
+| 6 | B9 | ROC solo | 3.74 | 8.7% | 54 | 2.25 | 7.4% | SHORT | 4mo |
+| 7 | B6 | STOCH+ATR | 3.64 | **4.6%** | 26 | 1.66 | 50.0% | SHORT | 3mo |
+| 8 | **B10** | **ATR solo** | **3.16** | 9.4% | **88** | 1.55 | 6.8% | SHORT | **4mo** |
+| 9 | B8* | ATR solo 3mo | 3.13 | 10.7% | 61 | 1.44 | 16.4% | SHORT | 3mo |
+| 10 | B9 | STOCH+CCI | 3.26 | 10.4% | 57 | 1.44 | 52.6% | SHORT | 4mo |
+
+*B8 figures from 2026-03-14 re-validation with LatencyModel fix.
+
+### Recommendations
+
+1. **Paper trade sid=163 (STOCH+ATR, 4mo)** — new all-time champion at Sharpe 4.70. Dual ATR exit at volatility band [0.0284, 0.1408] is a novel architecture worth live-testing.
+2. **ATR is the key exit signal on 1m** — B6 STOCH+ATR (Sharpe 3.64), B10 STOCH+ATR (4.70), B10 ATR+ROC (2.22), B10 ATR solo (3.16). ATR in exit positions consistently produces high-quality strategies.
+3. **ATR solo on 4mo is now confirmed viable** — 88 trades (highest frequency this batch), Sharpe 3.16. Consistent with B8's 3mo result. Add to paper trading portfolio.
+4. **Portfolio of 4-month strategies** — sid=159 (B9 STOCH+ROC, 108 trades), sid=163 (B10 STOCH+ATR, 62 trades), sid=164 (B10 ATR solo, 88 trades). Three complementary architectures.
+5. **Try STOCH+ATR on 3mo with new dual-ATR exit understanding** — B6 used single ATR threshold as exit. The B10 discovery of a RANGE condition (`ATR between 0.028 and 0.141`) may be more robust. Worth specifically testing this exit structure.
+6. **ATR+ROC combo confirmed viable** — Sharpe 2.22 is modest but 100% trade retention and 76.3% WR. Could be valuable as a diversifying strategy in a portfolio.
+
