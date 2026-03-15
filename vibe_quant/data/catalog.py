@@ -322,19 +322,20 @@ def get_bar_type(symbol: str, interval: str) -> BarType:
 
 
 def cleanup_epoch_parquet(catalog_path: Path) -> None:
-    """Remove corrupt epoch-timestamp parquet files from a catalog directory.
+    """Remove corrupt epoch-timestamp bar parquet files from a catalog directory.
 
-    NautilusTrader's BacktestEngine writes instrument definitions with
-    ts_event=0/ts_init=0 on every dispose(), creating epoch-timestamp
-    parquet files. These poison subsequent catalog reads with ArrowInvalid.
+    NautilusTrader's BacktestEngine can write epoch-timestamp parquet files
+    in bar subdirectories during dispose(). These poison subsequent reads.
 
-    Call after every backtest run's node.dispose() to prevent accumulation.
+    NOTE: Instrument definitions in crypto_perpetual/ also use epoch timestamps
+    (ts_event=0, ts_init=0) — this is intentional by NT. Do NOT delete those.
+    Only clean bar/ subdirectories.
     """
     epoch_pattern = "1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet"
-    data_dir = catalog_path / "data"
-    if not data_dir.exists():
+    bar_dir = catalog_path / "data" / "bar"
+    if not bar_dir.exists():
         return
-    for corrupt_file in data_dir.rglob(epoch_pattern):
+    for corrupt_file in bar_dir.rglob(epoch_pattern):
         corrupt_file.unlink(missing_ok=True)
 
 
@@ -362,9 +363,8 @@ class CatalogManager:
     def _cleanup_epoch_parquet(self) -> None:
         """Remove corrupt epoch-timestamp parquet files from catalog.
 
-        NautilusTrader's BacktestEngine writes instrument definitions with
-        ts_event=0/ts_init=0 on every dispose(), creating epoch-timestamp
-        parquet files that poison subsequent catalog reads with ArrowInvalid.
+        Only cleans bar/ subdirectories — instrument definitions in
+        crypto_perpetual/ intentionally use epoch timestamps.
         """
         cleanup_epoch_parquet(self._catalog_path)
 
