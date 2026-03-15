@@ -745,6 +745,11 @@ class ValidationRunner:
                     eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
 
+            # NT writes corrupt epoch-timestamp instrument parquet on dispose()
+            from vibe_quant.data.catalog import cleanup_epoch_parquet
+
+            cleanup_epoch_parquet(catalog_path)
+
     def _register_statistics(self, node: object) -> None:
         """Register portfolio statistics on the engine's analyzer.
 

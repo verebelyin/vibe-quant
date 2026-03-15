@@ -321,6 +321,23 @@ def get_bar_type(symbol: str, interval: str) -> BarType:
     )
 
 
+def cleanup_epoch_parquet(catalog_path: Path) -> None:
+    """Remove corrupt epoch-timestamp parquet files from a catalog directory.
+
+    NautilusTrader's BacktestEngine writes instrument definitions with
+    ts_event=0/ts_init=0 on every dispose(), creating epoch-timestamp
+    parquet files. These poison subsequent catalog reads with ArrowInvalid.
+
+    Call after every backtest run's node.dispose() to prevent accumulation.
+    """
+    epoch_pattern = "1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet"
+    data_dir = catalog_path / "data"
+    if not data_dir.exists():
+        return
+    for corrupt_file in data_dir.rglob(epoch_pattern):
+        corrupt_file.unlink(missing_ok=True)
+
+
 class CatalogManager:
     """Manager for NautilusTrader ParquetDataCatalog."""
 
@@ -345,17 +362,11 @@ class CatalogManager:
     def _cleanup_epoch_parquet(self) -> None:
         """Remove corrupt epoch-timestamp parquet files from catalog.
 
-        Parallel validation/BacktestNode can write ~4-byte placeholder parquet
-        files with 1970-01-01 timestamps that poison subsequent catalog reads
-        with ArrowInvalid. Remove them proactively.
+        NautilusTrader's BacktestEngine writes instrument definitions with
+        ts_event=0/ts_init=0 on every dispose(), creating epoch-timestamp
+        parquet files that poison subsequent catalog reads with ArrowInvalid.
         """
-        epoch_pattern = "1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet"
-        data_dir = self._catalog_path / "data"
-        if not data_dir.exists():
-            return
-        for corrupt_file in data_dir.rglob(epoch_pattern):
-            logger.warning("Removing corrupt epoch-timestamp parquet: %s", corrupt_file)
-            corrupt_file.unlink(missing_ok=True)
+        cleanup_epoch_parquet(self._catalog_path)
 
     def write_instrument(self, instrument: CryptoPerpetual) -> None:
         """Write instrument to catalog.

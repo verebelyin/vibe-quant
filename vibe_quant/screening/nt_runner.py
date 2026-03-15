@@ -259,6 +259,11 @@ class NTScreeningRunner:
                     eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
 
+            # NT writes corrupt epoch-timestamp instrument parquet on dispose()
+            from vibe_quant.data.catalog import cleanup_epoch_parquet
+
+            cleanup_epoch_parquet(catalog_path)
+
     def _extract_metrics(
         self,
         params: dict[str, float | int],
