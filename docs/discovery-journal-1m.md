@@ -1775,6 +1775,95 @@ Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
 3. **2mo discovery is exhaustively explored** — 5 batches (B11-B15), every solo and combo tested. All 11 leaderboard strategies are profitable with distinct architectures.
 4. **Consider moving to paper trading phase** — diminishing returns from further discovery. Focus on live testing the top strategies.
 
+---
+
+## 2026-03-15: Batch 16 — Ultra-Budget 1024 Trials (STOCH+CCI, CCI+ATR, Triple)
+
+### Goal
+
+Push budget to pop=32 gens=32 (1024 trials) on 2mo. Test STOCH+CCI (higher budget than B13), CCI+ATR (first time on 2mo), and STOCH+ROC+ATR triple. Direction=null.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 605 | STOCH+CCI | 32 | 32 | 1024 | random | ~55min | **completed** |
+| 606 | CCI+ATR | 32 | 32 | 1024 | random | ~28min (converged gen 21) | **completed** |
+| 607 | STOCH+ROC+ATR | 32 | 32 | 1024 | random | ~35min (converged gen 24) | **completed** |
+
+Data range: 2026-01-15 to 2026-03-15 (2 months). BTCUSDT 1m.
+
+### Winning Strategy DSL Details
+
+**Run 605 (STOCH+CCI) — sid=179**
+- Entry: STOCH <= 78.33 → short. Exit: STOCH < 30.86, CCI crosses_above -19.37
+- SL: 4.62% / TP: 13.58%. 54.1% WR balanced strategy.
+- **GA used STOCH+CCI as intended** — good multi-indicator combo.
+
+**Run 606 (CCI+ATR → pure CCI) — sid=180**
+- Entry: CCI crosses_above -159.56 → short. Exit: CCI crosses_below 42.25, CCI < -139.78
+- SL: 6.31% / TP: 8.64%. **GA ignored ATR entirely** — 3 CCI indicators, 0 ATR.
+- Sortino **9.31** — highest in batch. Deep CCI oversold entry.
+
+**Run 607 (STOCH+ROC+ATR → STOCH+ROC) — sid=181**
+- Entry: STOCH crosses_above 48.57 → short. Exit: ROC > 2.81
+- SL: 1.23% / TP: 6.39%. **GA dropped ATR** — used STOCH entry + ROC exit only.
+- 24.6% WR tail-win with tight 1.23% SL.
+
+### Full Pipeline Results
+
+| Stage | 605 STOCH+CCI | 606 CCI+ATR→CCI | 607 Triple→STOCH+ROC |
+|-------|--------------|-----------------|---------------------|
+| Disc score | 0.6165 | 0.7016 | **0.7144** |
+| Disc sharpe | 3.03 | 3.86 | **4.08** |
+| Disc trades | **98** | 58 | 57 |
+| Disc return | 7.7% | 9.3% | **13.7%** |
+| DSR | PASS 5/5 | PASS 5/5 | PASS 5/5 |
+| Val trades | **98 (100%)** | **58 (100%)** | **57 (100%)** |
+| Val sharpe | 3.03 | 3.86 | **4.08** |
+| Val sortino | 4.29 | **9.31** | 8.26 |
+| Val return | 7.7% | 9.3% | **13.7%** |
+| Val DD | 10.1% | **6.0%** | 10.4% |
+| Val PF | 1.45 | **1.84** | 1.62 |
+| Val WR | **54.1%** | 51.7% | 24.6% |
+| Val fees | $45.60 | $19.13 | $31.05 |
+| Strategy ID | sid=179 | **sid=180** | **sid=181** |
+
+### Key Findings
+
+1. **Triple combo (607) produces STOCH+ROC** — GA dropped ATR from the {STOCH,ROC,ATR} pool, reverting to the proven 2-indicator combo. Sharpe 4.08, 13.7% return. Confirms triple combos add complexity without value — GA naturally simplifies.
+2. **CCI+ATR → pure CCI** — GA ignored ATR entirely from the {CCI,ATR} pool, using 3 CCI indicators. Sharpe 3.86, Sortino 9.31 (highest ever on 2mo for CCI). GA prefers indicator purity on 1m.
+3. **1024 trials didn't beat 784 trials** — B13's STOCH+ROC at 784 trials got Sharpe 4.01 (PF 1.92). B16's STOCH+ROC at 1024 got 4.08 (PF 1.62). Marginal Sharpe gain but lower PF. Diminishing returns confirmed.
+4. **STOCH+CCI is the weakest 2mo combo** — Sharpe 3.03 at 1024 trials, vs B13's 3.68 at 784 trials. Higher budget actually produced a weaker strategy — GA may overfit with too many trials on this combo.
+5. **All SHORT** — 16th consecutive batch.
+6. **100% trade match** — 9th consecutive perfect batch.
+7. **GA indicator pruning is consistent** — when given 3-indicator pools, GA drops the weakest. ATR is always dropped in favor of STOCH/CCI/ROC.
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 2 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 3 | **B16** | **STOCH+ROC** | **4.08** | 8.26 | 10.4% | 57 | 1.62 | 24.6% | **1.0** |
+| 4 | B13 | STOCH+ROC | 4.01 | 6.33 | **3.9%** | 95 | **1.92** | 93.7% | 1.6 |
+| 5 | **B16** | **CCI (from ATR pool)** | **3.86** | **9.31** | **6.0%** | 58 | 1.84 | 51.7% | **1.0** |
+| 6 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 7 | B15 | ATR solo | 3.51 | 6.07 | 12.6% | 105 | 1.41 | 18.1% | 1.7 |
+| 8 | B12 | CCI solo | 3.24 | 5.02 | 4.5% | 90 | 1.64 | 90.0% | 1.5 |
+| 9 | B12 | ATR+ROC | 3.22 | 5.00 | 5.7% | 83 | 1.50 | 88.0% | 1.4 |
+| 10 | B11 | CCI+ROC | 3.05 | 4.41 | 4.9% | 63 | 1.56 | 88.9% | 1.1 |
+| 11 | **B16** | **STOCH+CCI** | **3.03** | 4.29 | 10.1% | **98** | 1.45 | 54.1% | **1.6** |
+| 12 | B11 | STOCH+ROC | 2.86 | 4.45 | 9.0% | **151** | 1.51 | 90.1% | **2.5** |
+
+### Recommendations
+
+1. **1024 trials offer diminishing returns** — stick with 784 (pop=28, gens=28) for future batches.
+2. **GA naturally prunes to 2 indicators** — triple pools waste budget. Use explicit 2-indicator pools.
+3. **2mo discovery is exhaustively explored** — 6 batches, every combo at multiple budget levels. Top strategies are stable. Move to paper trading.
+4. **Best portfolio candidates**: sid=173 (STOCH+ROC scalper, 93.7% WR, PF 1.92), sid=178 (CCI+ROC tail-win, Sortino 8.63), sid=177 (STOCH+ATR, 4.3% DD).
+
+
 
 
 
