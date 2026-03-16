@@ -2777,6 +2777,120 @@ take_profit: {type: fixed_pct, percent: 13.61}
 3. **GA indicator pruning is universal** — RSI drops companions, CCI drops companions. 1m discovery increasingly favors single-indicator strategies.
 4. **CCI+ROC failure rate now ~20%** — not 0% as previously thought. Still the most reliable combo but plan for occasional failures.
 
+---
+
+## 2026-03-16: Batch 28 — CCI Solo, STOCH+ATR Forced Short (NEW ALL-TIME CHAMPION)
+
+### Goal
+
+CCI solo (dedicated run per B27 findings), STOCH+ATR forced short (B25 produced 2.00, try again). Direction: CCI=null, STOCH+ATR=short. Pop=30, gens=30.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 703 | CCI solo | 30 | 30 | 900 | random | ~45min | **completed** |
+| 704 | STOCH+ATR | 30 | 30 | 900 | **short** | ~45min | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m. 2 parallel on 10-core M1 Pro.
+
+### Winning Strategy DSL Details
+
+**Run 703 (CCI solo) — sid=210**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 <= 163.522"]   # CCI(17)
+exit_conditions:
+  short: ["cci_exit_0 > -53.987", "cci_exit_1 crosses_below -135.13"]  # CCI(50) + CCI(47)
+stop_loss: {type: fixed_pct, percent: 0.59}
+take_profit: {type: fixed_pct, percent: 13.08}
+```
+3 CCI indicators. Entry on CCI(17) below overbought, exit on dual CCI deep oversold. Ultra-tight 0.59% SL with 13.08% TP = 22.2x reward/risk. 7.5% WR extreme tail-win.
+
+**Run 704 (STOCH+ATR) — sid=211 (score #0)**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 < 68.2413"]   # STOCH(20) below overbought
+exit_conditions:
+  short: ["atr_exit_0 crosses_above 0.1126"]  # ATR(5) volatility spike exit
+stop_loss: {type: fixed_pct, percent: 3.31}
+take_profit: {type: fixed_pct, percent: 12.76}
+```
+Simple STOCH entry + ATR exit. Sharpe 4.71, PF 2.34.
+
+**Run 704 (STOCH+ATR) — sid=212 (score #1) — NEW ALL-TIME 1m CHAMPION**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 crosses_above 25.2013", "stoch_entry_1 > 51.4797"]  # STOCH(15) + STOCH(16)
+exit_conditions:
+  short: ["atr_exit_0 <= 0.0427", "atr_exit_1 crosses_above 0.0156"]  # ATR(11) + ATR(17)
+stop_loss: {type: fixed_pct, percent: 0.59}
+take_profit: {type: fixed_pct, percent: 10.55}
+```
+**Sharpe 6.76, Sortino 34.98, PF 3.01, DD 3.8%, Return +23.8%!** Dual STOCH confirmation (crosses_above 25.2 AND >51.5) + dual ATR volatility-collapse exit. Ultra-tight 0.59% SL with 10.55% TP = 17.9x reward/risk. 16.0% WR but each winner is massive.
+
+### Full Pipeline Results
+
+| Stage | 703 CCI solo | 704 STOCH+ATR #0 | 704 STOCH+ATR #1 |
+|-------|-------------|-----------------|-----------------|
+| Disc score | 0.6833 | **0.7541** | **0.7536** |
+| Disc sharpe | 3.86 | 4.71 | **6.76** |
+| Disc trades | 67 | 55 | 50 |
+| Disc return | 8.3% | 9.8% | **23.8%** |
+| DSR | PASS 5/5 | PASS 5/5 | PASS 5/5 |
+| Val trades | **67 (100%)** | **55 (100%)** | **50 (100%)** |
+| Val sharpe | 3.86 | 4.71 | **6.76** |
+| Val sortino | 8.46 | 11.89 | **34.98** |
+| Val return | 8.3% | 9.8% | **23.8%** |
+| Val DD | 9.5% | 5.1% | **3.8%** |
+| Val PF | 1.62 | **2.34** | **3.01** |
+| Val WR | 7.5% | 20.0% | 16.0% |
+| Val fees | $35.03 | $25.86 | $27.43 |
+| Strategy ID | sid=210 | sid=211 | **sid=212** |
+
+### Issues Found
+
+None. Clean batch.
+
+### Key Findings
+
+1. **sid=212 is the NEW ALL-TIME 1m SHARPE CHAMPION** — Sharpe 6.76, beating B18 RSI+STOCH (6.05) and STOCH+ATR (6.01). Sortino 34.98 is unprecedented. PF 3.01 is the 2nd highest ever (B18 STOCH+ATR was 3.67).
+2. **Forced short STOCH+ATR is the key** — B25 forced short: 2.00. B28 forced short: **4.71 and 6.76**. Same combo, same data, different seeds produce wildly different results. But forced short prevents the overtrade death that killed B24.
+3. **All 5 STOCH+ATR strategies from run 704 are excellent** — Sharpe range 4.38-6.76, PF range 1.94-3.01. The entire population converged to high-quality strategies. Forced short + 2mo data is the magic formula.
+4. **CCI solo produces consistent Sharpe ~3.9** — 3.86 (B28), 4.17 (B27), 3.24 (B12). CCI solo on 2mo is the most reliable non-STOCH strategy.
+5. **0.59% SL appears twice** — both sid=210 (CCI) and sid=212 (STOCH+ATR) use 0.59% SL. The GA converges to ultra-tight stops on 1m, relying on high TP ratios for profitability.
+6. **Dual ATR exit is the dominant exit pattern** — sid=212 uses ATR(11) ≤ 0.0427 AND ATR(17) crosses_above 0.0156. Same dual-ATR pattern as B10/B11 champions. ATR volatility-collapse exit is the single most important 1m signal.
+7. **All SHORT** — 28th consecutive batch.
+8. **100% trade match** — 17th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Top 15, Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | **B28** | **STOCH+ATR** | **6.76** | **34.98** | **3.8%** | 50 | **3.01** | 16.0% | **0.8** |
+| 2 | B18 | RSI+STOCH | 6.05 | 13.48 | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 3 | B18 | STOCH+ATR | 6.01 | 6.88 | 2.0% | 59 | 3.67 | 98.3% | 1.0 |
+| 4 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 5 | **B28** | **STOCH+ATR #0** | **4.71** | 11.89 | 5.1% | 55 | **2.34** | 20.0% | **0.9** |
+| 6 | B25 | CCI+ROC | 4.58 | 7.03 | 4.0% | 100 | 1.78 | 91.0% | 1.7 |
+| 7 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 8 | B27 | CCI (from RSI) | 4.17 | 11.09 | 2.6% | 62 | 2.31 | 33.9% | 1.0 |
+| 9 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 10 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 11 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 12 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 13 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 14 | **B28** | **CCI solo** | **3.86** | 8.46 | 9.5% | 67 | 1.62 | 7.5% | **1.1** |
+| 15 | B23 | CCI+ROC | 3.73 | 5.77 | 2.9% | 88 | 1.74 | 94.3% | 1.5 |
+
+### Recommendations
+
+1. **Paper trade sid=212 immediately** — NEW ALL-TIME CHAMPION. Sharpe 6.76, Sortino 34.98, PF 3.01, DD 3.8%, +23.8% return. Dual STOCH entry + dual ATR exit.
+2. **Portfolio: sid=212 (tail-win, 16% WR) + sid=204 (B25 CCI+ROC scalper, 91% WR)** — maximally different architectures, likely uncorrelated.
+3. **Keep running STOCH+ATR forced short** — it's the highest-ceiling combo. Each seed has a chance at Sharpe 5-7.
+4. **CCI solo + STOCH+ATR forced short is the optimal 2-wave combination** — CCI solo is reliable (never fails), STOCH+ATR forced short has the highest ceiling.
+
+
 
 
 
