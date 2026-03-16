@@ -2325,6 +2325,118 @@ None. Clean run throughout.
 3. **CCI+ROC is the most reliable combo** — never fails (0% failure rate across B11/B15/B23). RSI+STOCH has higher ceiling but ~40% failure rate.
 4. **Next batch: rerun RSI+STOCH, STOCH+ATR, CCI+ROC** — same combos, different seeds. Target Sharpe 5+ on the next RSI+STOCH attempt.
 
+---
+
+## 2026-03-16: Batch 24 — RSI+STOCH, STOCH+ATR, CCI+ROC Reruns on 2mo
+
+### Goal
+
+Rerun the 3 champion combos from B23 recommendations with different random seeds. Direction=null, pop=30, gens=30 (900 trials). Same data window (2026-01-10 to 2026-03-10).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 671 | RSI+STOCH | 30 | 30 | 900 | random | ~210min | **completed** |
+| 672 | STOCH+ATR | 30 | 30 | 900 | random | killed gen 11 | **FAILED** (0 strategies) |
+| 673 | CCI+ROC | 30 | 30 | 900 | random | ~590min (converged gen 20) | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m. 3 parallel on 10-core M1 Pro.
+
+**Note:** Run times were extremely long due to CPU contention from 3 parallel runs + run 672 consuming CPU for 25+ min before being killed. Run 673 suffered most — 590min vs typical 30-40min.
+
+### Bug Analysis: Run 672 (STOCH+ATR) Death
+
+Run 672 was stuck at **0 fitness for all 11 generations** (`zero_score=30/30` every gen). Root cause:
+
+1. **Overtrade penalty floor** — the fitness function penalizes strategies with >300 trades. The penalty caps at 0.3 for >900 trades. STOCH+ATR on this data window generates 5,000-8,000+ trades (ATR thresholds too loose), giving all chromosomes a raw score ~0.17 minus 0.3 overtrade = 0.
+2. **Zero-fitness plateau** — with every chromosome scoring 0, tournament selection has no gradient. Evolution is random walks through zero-fitness space. The GA can't learn to reduce trade count.
+3. **Specific to this seed+data** — B18 STOCH+ATR got 6.01 on 2026-01-15 to 2026-03-15. The 5-day data shift plus different random seed put the initial population entirely in the overtrading regime.
+
+**Implication:** The overtrade threshold of 300 was designed for 4h. For 1m scalpers doing 88+ trades/day, this threshold is too restrictive. However, the strategies that DO pass (50-150 trades in 2mo) are high quality, so the filter works as designed — it just makes STOCH+ATR discovery highly seed-dependent.
+
+### Winning Strategy DSL Details
+
+**Run 671 (RSI+STOCH → pure RSI) — sid=200**
+```yaml
+entry_conditions:
+  short: ["rsi_entry_0 <= 36.4779"]   # RSI(28) — oversold entry
+exit_conditions:
+  short: ["rsi_exit_0 >= 53.0131", "rsi_exit_1 > 62.2879"]  # RSI(34) + RSI(34) dual threshold
+stop_loss: {type: fixed_pct, percent: 0.93}
+take_profit: {type: fixed_pct, percent: 8.36}
+```
+GA dropped STOCH entirely — 3 RSI indicators only. Entry on RSI(28) oversold, exit on dual RSI(34) overbought. Tight 0.93% SL with 8.36% TP = 9x reward/risk. 14.9% WR tail-win.
+
+**Run 673 (CCI+ROC) — sid=201**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 crosses_above -170.53"]   # CCI(14) deep oversold crossover
+exit_conditions:
+  short: ["cci_exit_0 >= -94.2732", "roc_exit_1 crosses_below 1.3239"]  # CCI(24) + ROC(8)
+stop_loss: {type: fixed_pct, percent: 2.07}
+take_profit: {type: fixed_pct, percent: 4.34}
+```
+CCI deep oversold entry (-170.5) with CCI+ROC dual exit. 39.3% WR balanced strategy.
+
+### Full Pipeline Results
+
+| Stage | 671 RSI+STOCH→RSI | 672 STOCH+ATR | 673 CCI+ROC |
+|-------|-------------------|---------------|-------------|
+| Disc score | **0.6342** | FAIL (0 strategies) | 0.5600 |
+| Disc sharpe | **3.27** | — | 2.32 |
+| Disc trades | **74** | — | 56 |
+| Disc return | **8.8%** | — | 8.1% |
+| DSR | PASS 5/5 (p=0) | — | PASS 1/1 (p=0) |
+| Screen trades | 74 ✓ | — | 56 ✓ |
+| Val trades | **74 (100%)** | — | **56 (100%)** |
+| Val sharpe | **3.27** | — | 2.32 |
+| Val sortino | **6.29** | — | 4.27 |
+| Val return | **8.8%** | — | 8.1% |
+| Val DD | 10.1% | — | 10.6% |
+| Val PF | **1.45** | — | 1.30 |
+| Val WR | 14.9% | — | 39.3% |
+| Val fees | $38.93 | — | $26.98 |
+| Strategy ID | **sid=200** | — | sid=201 |
+
+### Issues Found
+
+1. **STOCH+ATR overtrade death** — 672 stuck at 0 fitness for 11 gens. All chromosomes overtrade (5000+ trades). Killed manually. See bug analysis above.
+2. **Extreme CPU contention** — 3 parallel + run 672 consuming CPU before kill made runs 671/673 take 3-10x longer than typical. 673 took 590 minutes.
+
+### Key Findings
+
+1. **GA drops STOCH from RSI+STOCH pool** — run 671 used pure RSI (3 RSI indicators, 0 STOCH). Same behavior as B23 run 663 (dropped STOCH from STOCH+ROC). GA increasingly prefers indicator purity on 1m.
+2. **RSI solo produces consistent Sharpe 3+ on 2mo** — B24 pure RSI: 3.27. B18 RSI+STOCH: 6.05 (but RSI was primary). RSI with periods 28-50 as entry filter is a reliable 1m pattern.
+3. **STOCH+ATR has ~50% failure rate on 2mo with direction=null** — B11: 4.27, B15: 4.01, B18: 6.01, B22: FAIL, B24: FAIL. The combo needs short-only direction or lucky seed.
+4. **CCI+ROC continues reliable** — B23: 3.73, B24: 2.32. Lower this time but still viable. 0% failure rate maintained.
+5. **All SHORT** — 24th consecutive batch.
+6. **100% trade match** — 13th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** | 1.0 |
+| 3 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 4 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 5 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 6 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 7 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 8 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 9 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 10 | B16 | CCI (from ATR) | 3.86 | 9.31 | 6.0% | 58 | 1.84 | 51.7% | 1.0 |
+| 11 | B23 | CCI+ROC | 3.73 | 5.77 | 2.9% | 88 | 1.74 | 94.3% | 1.5 |
+| 12 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 13 | **B24** | **RSI (from STOCH)** | **3.27** | 6.29 | 10.1% | 74 | 1.45 | 14.9% | **1.2** |
+
+### Recommendations
+
+1. **Force direction=short for STOCH+ATR** — the combo fails ~50% with direction=null. Forcing short eliminates the wasted search space and produced Sharpe 6.01 in B18.
+2. **RSI solo deserves dedicated runs** — GA keeps dropping companions from RSI pools. Run RSI solo with pop=30 gens=30 on 2mo.
+3. **Run only 2 parallel on 10 cores** — 3 parallel caused extreme contention (673 took 590min). 2 parallel is the safe max.
+4. **CCI+ROC remains the safest bet** — 0% failure rate, consistent Sharpe 2.3-3.7. Always include in batch.
 
 
 
