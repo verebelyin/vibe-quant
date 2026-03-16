@@ -2438,6 +2438,131 @@ CCI deep oversold entry (-170.5) with CCI+ROC dual exit. 39.3% WR balanced strat
 3. **Run only 2 parallel on 10 cores** — 3 parallel caused extreme contention (673 took 590min). 2 parallel is the safe max.
 4. **CCI+ROC remains the safest bet** — 0% failure rate, consistent Sharpe 2.3-3.7. Always include in batch.
 
+---
+
+## 2026-03-16: Batch 25 — RSI Solo, STOCH+ATR Forced Short, CCI+ROC (2-Wave)
+
+### Goal
+
+Apply B24 learnings: (1) RSI solo (GA keeps dropping companions), (2) STOCH+ATR forced short (eliminate overtrade death), (3) CCI+ROC (safest bet). Run in 2 waves of 2 to avoid CPU contention. Pop=30, gens=30. 2mo data.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 678 | RSI solo | 30 | 30 | 900 | random | ~25min (converged gen 28) | **completed** |
+| 679 | STOCH+ATR | 30 | 30 | 900 | **short** | ~25min (converged gen 20) | **completed** |
+| 680 | CCI+ROC | 30 | 30 | 900 | random | ~18min (wave 2, solo) | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m. Wave 1: 678+679 parallel. Wave 2: 680 solo.
+
+### Winning Strategy DSL Details
+
+**Run 678 (RSI solo) — sid=202**
+```yaml
+entry_conditions:
+  short: ["rsi_entry_0 <= 43.0495"]   # RSI(16) — moderate oversold
+exit_conditions:
+  short: ["rsi_exit_0 >= 26.6024", "rsi_exit_1 <= 35.0106", "rsi_exit_2 < 32.9219"]  # RSI(36) + RSI(42) + RSI(29)
+stop_loss: {type: fixed_pct, percent: 5.15}
+take_profit: {type: fixed_pct, percent: 2.16}
+```
+4 RSI indicators. Entry on RSI(16) oversold, exit on triple RSI convergence in oversold zone. 78.0% WR scalper with 2.16% TP.
+
+**Run 679 (STOCH+ATR forced short) — sid=203**
+```yaml
+entry_conditions:
+  short: ["atr_entry_0 >= 0.1223"]   # ATR(9) volatility gate
+exit_conditions:
+  short: ["atr_exit_0 >= 0.0425", "stoch_exit_1 < 55.1644", "stoch_exit_2 >= 73.7026"]
+stop_loss: {type: fixed_pct, percent: 5.13}
+take_profit: {type: fixed_pct, percent: 11.93}
+```
+ATR entry (high volatility) + ATR+STOCH triple exit. 11.93% TP wide target, 52.2% WR balanced. **136 trades = ~2.3 trades/day** — highest frequency this batch.
+
+**Run 680 (CCI+ROC) — sid=204 — BATCH CHAMPION**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 crosses_above 149.824", "cci_entry_1 >= 51.0781"]  # CCI(36) + CCI(40)
+exit_conditions:
+  short: ["roc_exit_0 crosses_above -1.9195", "cci_exit_1 crosses_above 162.855"]  # ROC(29) + CCI(29)
+stop_loss: {type: fixed_pct, percent: 5.44}
+take_profit: {type: fixed_pct, percent: 0.91}
+```
+Dual CCI overbought entry (>149.8 AND >51.1) + ROC/CCI exit. Ultra-tight 0.91% TP, **91.0% WR**, **100 trades (~1.7/day)**.
+
+### Full Pipeline Results
+
+| Stage | 678 RSI solo | 679 STOCH+ATR short | 680 CCI+ROC |
+|-------|-------------|---------------------|-------------|
+| Disc score | 0.6209 | 0.5226 | **0.6955** |
+| Disc sharpe | 3.28 | 2.00 | **4.58** |
+| Disc trades | 50 | **136** | **100** |
+| Disc return | 8.6% | 4.0% | **11.6%** |
+| DSR | PASS 1/1 (p=0) | PASS 1/1 (p=0) | PASS 5/5 (p=0) |
+| Screen trades | 50 ✓ | 136 ✓ | 100 ✓ |
+| Val trades | **50 (100%)** | **136 (100%)** | **100 (100%)** |
+| Val sharpe | 3.28 | 2.00 | **4.58** |
+| Val sortino | 5.35 | 3.39 | **7.03** |
+| Val return | 8.6% | 4.0% | **11.6%** |
+| Val DD | 8.1% | 7.9% | **4.0%** |
+| Val PF | 1.47 | 1.33 | **1.78** |
+| Val WR | **78.0%** | 52.2% | **91.0%** |
+| Val fees | $16.32 | $53.14 | $28.95 |
+| Strategy ID | sid=202 | sid=203 | **sid=204** |
+
+### Issues Found
+
+None. Clean run. 2-wave approach eliminated CPU contention.
+
+### Key Findings
+
+1. **CCI+ROC (sid=204) is the new CCI+ROC all-time best** — Sharpe 4.58, 100 trades, 91.0% WR, 4.0% DD, PF 1.78. Dual CCI overbought entry is a powerful pattern. Best CCI+ROC ever (previous best: B15's 4.13).
+2. **Forcing STOCH+ATR to short works** — 136 trades, Sharpe 2.00. Not spectacular but no overtrade death (B24's direction=null produced 0 strategies). The forced-short search space is manageable.
+3. **RSI solo confirmed** — Sharpe 3.28, 78.0% WR scalper. Consistent with B24's RSI (3.27). RSI solo on 2mo reliably produces Sharpe 3.2-3.3.
+4. **2-wave approach is superior** — wave 1 (2 parallel) took ~25min each, wave 2 (solo) took ~18min. Total ~45min wall clock. Much better than B24's 590min from 3 parallel.
+5. **CCI+ROC solo produces better results than parallel** — run 680 solo got 4.58 vs B23's parallel CCI+ROC at 3.73. No CPU contention = faster convergence = better strategies.
+6. **All SHORT** — 25th consecutive batch.
+7. **100% trade match** — 14th consecutive perfect batch.
+
+### Comparison with Previous Champions
+
+| Metric | B18 RSI+STOCH | B18 STOCH+ATR | B15 CCI+ROC | **B25 CCI+ROC** | **B25 RSI solo** |
+|--------|-----|-----|-----|-----|-----|
+| Val Sharpe | **6.05** | **6.01** | 4.13 | **4.58** | 3.28 |
+| Val Trades | 69 | 59 | 62 | **100** | 50 |
+| Val DD | 11.1% | **2.0%** | 7.8% | **4.0%** | 8.1% |
+| Val WR | 8.7% | 98.3% | 11.3% | **91.0%** | 78.0% |
+| Val PF | 1.68 | **3.67** | 1.81 | **1.78** | 1.47 |
+| Val Return | 9.7% | 4.7% | 11.6% | **11.6%** | 8.6% |
+
+### Updated 1m All-Time Leaderboard (Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** | 1.0 |
+| 3 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 4 | **B25** | **CCI+ROC** | **4.58** | 7.03 | **4.0%** | **100** | 1.78 | **91.0%** | **1.7** |
+| 5 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 6 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 7 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 8 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 9 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 10 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 11 | B23 | CCI+ROC | 3.73 | 5.77 | 2.9% | 88 | 1.74 | 94.3% | 1.5 |
+| 12 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 13 | B24 | RSI solo | 3.27 | 6.29 | 10.1% | 74 | 1.45 | 14.9% | 1.2 |
+| 14 | **B25** | **RSI solo** | **3.28** | 5.35 | 8.1% | 50 | 1.47 | **78.0%** | **0.8** |
+
+### Recommendations
+
+1. **Paper trade sid=204 (CCI+ROC)** — new #4 all-time, 100 trades, 91.0% WR, 4.0% DD. Excellent scalper.
+2. **2-wave execution is the new standard** — wave 1 (2 parallel), wave 2 (1 solo). Eliminates contention, produces better results.
+3. **STOCH+ATR must always be forced short** — direction=null causes overtrade death ~50% of the time.
+4. **Next batch: try RSI+ATR, RSI+ROC on 2mo** — RSI combos haven't been tested on this data window. B19 showed RSI+ATR works on 3.5mo.
+
+
 
 
 
