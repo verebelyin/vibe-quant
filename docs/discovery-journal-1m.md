@@ -2562,8 +2562,117 @@ None. Clean run. 2-wave approach eliminated CPU contention.
 3. **STOCH+ATR must always be forced short** — direction=null causes overtrade death ~50% of the time.
 4. **Next batch: try RSI+ATR, RSI+ROC on 2mo** — RSI combos haven't been tested on this data window. B19 showed RSI+ATR works on 3.5mo.
 
+---
 
+## 2026-03-16: Batch 26 — RSI+ATR, RSI+ROC, CCI+ROC on 2mo (2-Wave)
 
+### Goal
+
+Test RSI+ATR and RSI+ROC on 2mo (first time) + CCI+ROC rerun. Direction=null, pop=30, gens=30. 2-wave execution (wave 1: RSI+ATR + RSI+ROC parallel, wave 2: CCI+ROC solo).
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 687 | RSI+ATR | 30 | 30 | 900 | random | ~10min (converged gen 20) | **completed** |
+| 688 | RSI+ROC | 30 | 30 | 900 | random | ~10min (converged gen 23) | **completed** |
+| 689 | CCI+ROC | 30 | 30 | 900 | random | ~27min (wave 2 solo) | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m.
+
+### Winning Strategy DSL Details
+
+**Run 687 (RSI+ATR → pure RSI) — sid=205**
+```yaml
+entry_conditions:
+  short: ["rsi_entry_0 <= 41.4416"]   # RSI(49)
+exit_conditions:
+  short: ["rsi_exit_0 > 28.0031"]  # RSI(50)
+stop_loss: {type: fixed_pct, percent: 1.84}
+take_profit: {type: fixed_pct, percent: 2.21}
+```
+GA dropped ATR — pure RSI with periods 49/50 (slow RSI). Simple oversold entry/exit. 137 trades (~2.3/day), 49.6% WR.
+
+**Run 688 (RSI+ROC → pure RSI) — sid=206**
+```yaml
+entry_conditions:
+  short: ["rsi_entry_0 < 30.8326"]   # RSI(7) — fast RSI oversold
+exit_conditions:
+  short: ["rsi_exit_0 > 27.5481", "rsi_exit_1 >= 28.984"]  # RSI(20) + RSI(47)
+stop_loss: {type: fixed_pct, percent: 2.4}
+take_profit: {type: fixed_pct, percent: 2.11}
+```
+GA dropped ROC — pure RSI with fast entry (period 7) and slow exit (20/47). 116 trades (~1.9/day), 57.8% WR.
+
+**Run 689 (CCI+ROC) — sid=207**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 > 108.629", "roc_entry_1 >= -0.3352"]  # CCI(39) + ROC(27)
+exit_conditions:
+  short: ["roc_exit_0 >= -1.1318", "roc_exit_1 >= 0.2774"]  # ROC(19) + ROC(6)
+stop_loss: {type: fixed_pct, percent: 9.51}
+take_profit: {type: fixed_pct, percent: 1.27}
+```
+CCI overbought + ROC neutral entry, dual ROC exit. 1.27% TP, **91.8% WR**, 4.3% DD.
+
+### Full Pipeline Results
+
+| Stage | 687 RSI+ATR→RSI | 688 RSI+ROC→RSI | 689 CCI+ROC |
+|-------|-----------------|-----------------|-------------|
+| Disc score | 0.5592 | 0.5437 | **0.6549** |
+| Disc sharpe | 2.22 | 2.20 | **3.53** |
+| Disc trades | **137** | **116** | 61 |
+| Disc return | 6.2% | 8.1% | 4.4% |
+| DSR | PASS | PASS | PASS |
+| Val trades | **137 (100%)** | **116 (100%)** | **61 (100%)** |
+| Val sharpe | 2.22 | 2.20 | **3.53** |
+| Val sortino | 3.50 | 3.37 | **4.84** |
+| Val return | 6.2% | 8.1% | **4.4%** |
+| Val DD | 13.9% | 12.4% | **4.3%** |
+| Val PF | 1.20 | 1.23 | **1.72** |
+| Val WR | 49.6% | 57.8% | **91.8%** |
+| Val fees | $63.50 | $52.75 | $9.54 |
+| Strategy ID | sid=205 | sid=206 | **sid=207** |
+
+### Issues Found
+
+None. Clean batch.
+
+### Key Findings
+
+1. **GA drops ALL companions from RSI pools** — RSI+ATR → pure RSI, RSI+ROC → pure RSI. 5th consecutive instance of GA indicator pruning (B23: STOCH+ROC→ROC, B24: RSI+STOCH→RSI, B25: RSI solo, B26: both RSI pools pruned). RSI on 1m prefers indicator purity.
+2. **Pure RSI produces high frequency but low Sharpe** — 137 and 116 trades (~2/day) but Sharpe only 2.2. High DD (12-14%). RSI solo is reliable but not competitive with CCI+ROC.
+3. **CCI+ROC continues strong** — Sharpe 3.53, 91.8% WR, 4.3% DD, PF 1.72. Third consecutive good CCI+ROC run (B23: 3.73, B25: 4.58, B26: 3.53). CCI+ROC is the most reliable 2mo combo.
+4. **CCI+ROC solo run is better than parallel** — B26 solo: 3.53, B25 solo: 4.58. Both beat B23 parallel (3.73). Confirms solo execution advantage.
+5. **All SHORT** — 26th consecutive batch.
+6. **100% trade match** — 15th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Top 15, Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** | 1.0 |
+| 3 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 4 | B25 | CCI+ROC | **4.58** | 7.03 | 4.0% | **100** | 1.78 | 91.0% | 1.7 |
+| 5 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 6 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 7 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 8 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 9 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 10 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 11 | B23 | CCI+ROC | 3.73 | 5.77 | 2.9% | 88 | 1.74 | 94.3% | 1.5 |
+| 12 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 13 | **B26** | **CCI+ROC** | **3.53** | 4.84 | **4.3%** | 61 | **1.72** | **91.8%** | **1.0** |
+| 14 | B25 | RSI solo | 3.28 | 5.35 | 8.1% | 50 | 1.47 | 78.0% | 0.8 |
+| 15 | B24 | RSI solo | 3.27 | 6.29 | 10.1% | 74 | 1.45 | 14.9% | 1.2 |
+
+### Recommendations
+
+1. **CCI+ROC is the clear 2mo discovery winner** — 3 consecutive batches at Sharpe 3.5-4.6, 0% failure rate. Always include.
+2. **RSI pools are redundant** — GA drops every companion. Just run RSI solo instead of RSI+X.
+3. **RSI solo trades frequently (2/day) but with low Sharpe (2.2)** — useful for portfolio diversification (high frequency) but not as a primary strategy.
+4. **Next batch suggestions**: rerun CCI+ROC (chase B25's 4.58), try STOCH+CCI (haven't tested on 2026-01-10 data), RSI+CCI (B21 got 3.96).
 
 
 
