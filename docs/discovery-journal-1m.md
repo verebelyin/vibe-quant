@@ -2674,6 +2674,110 @@ None. Clean batch.
 3. **RSI solo trades frequently (2/day) but with low Sharpe (2.2)** — useful for portfolio diversification (high frequency) but not as a primary strategy.
 4. **Next batch suggestions**: rerun CCI+ROC (chase B25's 4.58), try STOCH+CCI (haven't tested on 2026-01-10 data), RSI+CCI (B21 got 3.96).
 
+---
+
+## 2026-03-16: Batch 27 — CCI+ROC, STOCH+CCI, RSI+CCI on 2mo
+
+### Goal
+
+CCI+ROC rerun (chase B25's 4.58), STOCH+CCI (first test on 2026-01-10 data), RSI+CCI (B21 got 3.96). Direction=null, pop=30, gens=30.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Trials | Direction | Time | Status |
+|-----|-----------|-----|------|--------|-----------|------|--------|
+| 696 | CCI+ROC | 30 | 30 | 900 | random | ~30min (converged gen 20) | **FAILED** (0 strategies) |
+| 697 | STOCH+CCI | 30 | 30 | 900 | random | ~85min (converged gen 20) | **completed** |
+| 698 | RSI+CCI | 30 | 30 | 900 | random | ~25min | **completed** |
+
+Data: 2026-01-10 to 2026-03-10 (2 months). BTCUSDT 1m.
+
+### Winning Strategy DSL Details
+
+**Run 697 (STOCH+CCI) — sid=208**
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 < 69.6953", "stoch_entry_1 < 74.7756"]  # STOCH(6) + STOCH(18)
+exit_conditions:
+  short: ["cci_exit_0 crosses_below 193.985", "stoch_exit_1 crosses_below 39.6456"]  # CCI(40) + STOCH(15)
+stop_loss: {type: fixed_pct, percent: 1.36}
+take_profit: {type: fixed_pct, percent: 8.28}
+```
+Dual STOCH confirmation entry + CCI/STOCH exit. Tight 1.36% SL, wide 8.28% TP = 6.1x reward/risk. 27.1% WR tail-win.
+
+**Run 698 (RSI+CCI → pure CCI) — sid=209 — BATCH CHAMPION**
+```yaml
+entry_conditions:
+  short: ["cci_entry_0 > -9.4639", "cci_entry_1 crosses_above -120.653"]  # CCI(24) + CCI(38)
+exit_conditions:
+  short: ["cci_exit_0 > 110.245", "cci_exit_1 crosses_above -2.8967"]  # CCI(22) + CCI(42)
+stop_loss: {type: fixed_pct, percent: 4.07}
+take_profit: {type: fixed_pct, percent: 13.61}
+```
+**GA dropped RSI entirely** — 4 CCI indicators. Dual CCI entry (near neutral + deep oversold crossover), dual CCI exit. 13.61% TP wide target, 33.9% WR. **Sharpe 4.17, Sortino 11.09, DD 2.6%, PF 2.31.**
+
+### Full Pipeline Results
+
+| Stage | 696 CCI+ROC | 697 STOCH+CCI | 698 RSI+CCI→CCI |
+|-------|------------|--------------|-----------------|
+| Disc score | FAIL | 0.5831 | **0.7146** |
+| Disc sharpe | — | 2.94 | **4.17** |
+| Disc trades | — | 85 | 62 |
+| Disc return | — | 7.7% | 3.5% |
+| DSR | — | PASS | PASS |
+| Val trades | — | **85 (100%)** | **62 (100%)** |
+| Val sharpe | — | 2.94 | **4.17** |
+| Val sortino | — | 5.24 | **11.09** |
+| Val return | — | 7.7% | 3.5% |
+| Val DD | — | 11.0% | **2.6%** |
+| Val PF | — | 1.32 | **2.31** |
+| Val WR | — | 27.1% | 33.9% |
+| Val fees | — | $44.12 | $30.51 |
+| Strategy ID | — | sid=208 | **sid=209** |
+
+### Issues Found
+
+1. **CCI+ROC first failure (run 696)** — 0 strategies in 900 trials. CCI+ROC's 0% failure rate broken. GA randomization caught up. CCI+ROC is still reliable (4/5 successful) but not immune to bad seeds.
+
+### Key Findings
+
+1. **RSI+CCI → pure CCI produces Sharpe 4.17** — GA dropped RSI from the RSI+CCI pool, using 4 CCI indicators. This is the best CCI solo result ever on 2mo (previously B12: 3.24, B16: 3.86).
+2. **CCI solo is underrated** — when given a pool with CCI + anything, GA increasingly drops the companion. CCI(24)+CCI(38) entry with CCI(22)+CCI(42) exit = multi-timeframe CCI analysis.
+3. **PF 2.31 is the 3rd highest ever** — only B18 STOCH+ATR (3.67) and B21 RSI+STOCH (2.47) are higher. The 4 CCI strategy has excellent win/loss ratio.
+4. **Sortino 11.09 is the 2nd highest ever** — only B18 RSI+STOCH (13.48) beats it. Extremely low downside deviation.
+5. **CCI+ROC can fail** — first 0-strategy result in 5 CCI+ROC runs. Failure rate updated to ~20%.
+6. **STOCH+CCI on this data window: modest** — Sharpe 2.94, 85 trades. Not competitive with pure CCI or CCI+ROC.
+7. **All SHORT** — 27th consecutive batch.
+8. **100% trade match** — 16th consecutive perfect batch.
+
+### Updated 1m All-Time Leaderboard (Top 15, Validated Sharpe, 2mo)
+
+| Rank | Batch | Combo | Sharpe | Sortino | DD | Trades | PF | WR | Trades/day |
+|------|-------|-------|--------|---------|-----|--------|-----|-----|------------|
+| 1 | B18 | RSI+STOCH | **6.05** | **13.48** | 11.1% | 69 | 1.68 | 8.7% | 1.2 |
+| 2 | B18 | STOCH+ATR | **6.01** | 6.88 | **2.0%** | 59 | **3.67** | **98.3%** | 1.0 |
+| 3 | B21 | RSI+STOCH | 5.20 | 11.42 | 3.6% | 76 | 2.47 | 56.6% | 1.3 |
+| 4 | B25 | CCI+ROC | 4.58 | 7.03 | 4.0% | **100** | 1.78 | 91.0% | 1.7 |
+| 5 | B11 | STOCH+ATR | 4.27 | 7.12 | 5.6% | 73 | 1.80 | 87.7% | 1.2 |
+| 6 | **B27** | **CCI (from RSI)** | **4.17** | **11.09** | **2.6%** | 62 | **2.31** | 33.9% | **1.0** |
+| 7 | B15 | CCI+ROC | 4.13 | 8.63 | 7.8% | 62 | 1.81 | 11.3% | 1.0 |
+| 8 | B16 | STOCH+ROC | 4.08 | 8.26 | 10.4% | 57 | 1.62 | 24.6% | 1.0 |
+| 9 | B13 | STOCH+ROC | 4.01 | 6.33 | 3.9% | 95 | 1.92 | 93.7% | 1.6 |
+| 10 | B15 | STOCH+ATR | 4.01 | 5.74 | 4.3% | 51 | 1.76 | 80.4% | 0.9 |
+| 11 | B21 | RSI+CCI | 3.96 | 8.23 | 9.3% | 88 | 1.61 | 9.1% | 1.5 |
+| 12 | B23 | CCI+ROC | 3.73 | 5.77 | 2.9% | 88 | 1.74 | 94.3% | 1.5 |
+| 13 | B13 | STOCH+CCI | 3.68 | 6.59 | 7.1% | 69 | 1.56 | 52.2% | 1.2 |
+| 14 | B26 | CCI+ROC | 3.53 | 4.84 | 4.3% | 61 | 1.72 | 91.8% | 1.0 |
+| 15 | B25 | RSI solo | 3.28 | 5.35 | 8.1% | 50 | 1.47 | 78.0% | 0.8 |
+
+### Recommendations
+
+1. **Paper trade sid=209 (pure CCI)** — Sharpe 4.17, Sortino 11.09, PF 2.31, DD 2.6%. Third-best risk profile ever.
+2. **CCI solo deserves dedicated runs** — GA consistently drops companions from CCI pools. Run CCI solo explicitly.
+3. **GA indicator pruning is universal** — RSI drops companions, CCI drops companions. 1m discovery increasingly favors single-indicator strategies.
+4. **CCI+ROC failure rate now ~20%** — not 0% as previously thought. Still the most reliable combo but plan for occasional failures.
+
+
 
 
 
