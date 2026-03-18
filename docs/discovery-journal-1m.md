@@ -3039,7 +3039,72 @@ Ultra-tight **0.7% TP scalper** with 82.1% WR. STOCH(18) > 50.9 AND STOCH(16) cr
 3. **Run 5+ seeds per discovery session** — the Sharpe distribution is wide (2.3-5.5). More seeds = better chance of finding the tail.
 4. **Tail-win > scalper for robustness** — prioritize wide TP strategies for production deployment.
 
+### Seeds 12-14 Update (Runs 744-746)
 
+Three more seeds on fresh 2mo (Jan 17-Mar 17), bringing total to 14.
+
+| Run | Sharpe | DD | Trades | PF | Return |
+|-----|--------|-----|--------|-----|--------|
+| **744 #1** | **4.64** | 5.7% | 58 | 1.59 | 16.4% |
+| **746 #0** | **3.91** | **4.2%** | **113** | **1.71** | 7.5% |
+| 745 | 2.62 | 8.9% | 104 | 1.40 | 6.0% |
+
+**Two notable strategies promoted:**
+
+**sid=219 (run 744 #1, Sharpe 4.64) — Balanced architecture**
+```yaml
+entry: STOCH(10,9) <= 30.47, STOCH(18,4) crosses_above 32.68
+exit: ATR(14) crosses_below 0.1239, ATR(5) >= 0.0967
+SL: 2.11% / TP: 3.67%. 48.3% WR.
+```
+Dual-ATR exit similar to sid=212. Moderate SL/TP ratio (1:1.7).
+
+**sid=220 (run 746 #0, Sharpe 3.91) — Ultra-low DD scalper**
+```yaml
+entry: STOCH(18,5) crosses_above 37.83, STOCH(12,6) crosses_above 70.62
+exit: ATR(10) crosses_above 0.0904
+SL: 7.18% / TP: 0.85%. 92.9% WR.
+```
+Dual STOCH crosses_above entry (mid-range + overbought) + single ATR exit. Wide SL (7.18%) with ultra-tight TP (0.85%). 92.9% WR scalper.
+
+### Full Robustness Comparison — Top 3 STOCH+ATR Strategies
+
+| | **sid=212 (B28 champ)** | **sid=219 (balanced)** | **sid=220 (low-DD scalper)** |
+|---|---|---|---|
+| **2mo Sharpe** | **4.74** | 4.64 | 3.91 |
+| **3mo Sharpe** | **3.06** | 2.07 | 2.54 |
+| **4mo Sharpe** | **3.22** | 2.00 | **2.90** |
+| **2mo Return** | **16.0%** | **16.4%** | 7.5% |
+| **3mo Return** | **12.6%** | 7.0% | 4.6% |
+| **4mo Return** | **14.6%** | 8.2% | **8.5%** |
+| **2mo DD** | 5.7% | 5.7% | **4.2%** |
+| **3mo DD** | 7.4% | 7.4% | **4.2%** |
+| **4mo DD** | 9.4% | 11.8% | **4.0%** |
+| **2mo PF** | **2.38** | 1.59 | 1.71 |
+| **3mo PF** | **1.76** | 1.25 | 1.43 |
+| **4mo PF** | **1.81** | 1.25 | 1.51 |
+| WR | ~12% (tail-win) | ~45% (balanced) | **~92% (scalper)** |
+| Trades/day | ~0.8 | ~1.0 | **~1.9** |
+| Architecture | Tail-win | Balanced | **Scalper** |
+| SL/TP | 0.59/10.55 | 2.11/3.67 | 7.18/0.85 |
+
+### Updated Key Findings (14 seeds total)
+
+1. **sid=212 is still the Sharpe + return king** — highest Sharpe and return on every window. The dual-STOCH crosses_above + dual-ATR exit architecture remains unmatched for raw performance.
+2. **sid=220 is the risk king** — DD stays at 4.0-4.2% across ALL windows (2mo/3mo/4mo). This is unprecedented consistency. 92% WR scalper with ~2 trades/day. Lower Sharpe (2.9-3.9) but the tightest risk profile of any 1m strategy.
+3. **sid=219 degrades like other balanced strategies** — Sharpe halves from 4.64→2.00 on longer windows. 45% WR strategies aren't robust on 1m.
+4. **Three architecture tiers on 1m:**
+   - **Tail-win (sid=212)**: best Sharpe + return, moderate DD. Paper trade for max profit.
+   - **Scalper (sid=220)**: best DD + WR + trade frequency. Paper trade for consistency.
+   - **Balanced (sid=219)**: worst of both worlds on longer windows. Avoid for production.
+5. **Sharpe distribution after 14 seeds**: mean=3.42, top quartile=4.36+, Sharpe 4.5+ at ~21% (3/14).
+
+### Updated Recommendations
+
+1. **Paper trade BOTH sid=212 and sid=220** — complementary architectures. sid=212 captures rare large moves (tail-win), sid=220 captures many small wins (scalper). Combined: ~2.7 trades/day with hedged risk.
+2. **sid=220 is ideal for risk-averse deployment** — 4% DD everywhere, 92% WR. The 0.85% TP means each loss is ~8.4x a typical win, so position sizing is critical.
+3. **sid=212 for aggressive deployment** — 16% return on 2mo with Sharpe 4.74. Higher DD (5-9%) but much higher absolute returns.
+4. **Stop searching for better params** — 14 seeds, the landscape is well-mapped. sid=212 (tail-win) and sid=220 (scalper) represent the two viable STOCH+ATR architectures on 1m.
 
 
 
