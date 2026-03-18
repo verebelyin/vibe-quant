@@ -2973,7 +2973,71 @@ Downloaded BTCUSDT 1m data through March 17 via Binance REST API. 8,937 new klin
 3. **Paper trade sid=214 (3mo scalper)** — 85% WR, 4.2% DD, 10.2% return on 3 months. Most balanced risk profile.
 4. **For maximum Sharpe, run multiple seeds** — B28 found 6.76 from one seed. Running 5-10 parallel STOCH+ATR forced short would increase chances of finding another 5+ Sharpe.
 
+---
 
+## 2026-03-17/18: Batch 30 — STOCH+ATR Seed Hunt (11 seeds on fresh 2mo data)
+
+### Goal
+
+Find parameters that beat sid=212's Sharpe 6.76 on fresh data (Jan 17-Mar 17). Run many STOCH+ATR forced-short seeds on 2mo with pop=30 gens=30. Also test robustness of best finds on 3mo/4mo windows.
+
+### Results — 11 Seeds on Fresh 2mo (Jan 17-Mar 17)
+
+| Run | Sharpe | DD | Trades | PF | Return | WR |
+|-----|--------|-----|--------|-----|--------|-----|
+| **737 #1** | **5.55** | **2.9%** | **78** | **1.87** | 7.9% | **82.1%** |
+| 729 | 4.74 | 9.6% | 52 | 1.74 | 7.3% | 7.7% |
+| 736 | 4.36 | 5.2% | 52 | 2.26 | **15.4%** | 13.5% |
+| 734 | 4.01 | 13.2% | 53 | 1.44 | 5.3% | — |
+| 723 | 3.61 | 8.6% | 61 | 1.55 | 11.1% | — |
+| 735 | 3.29 | 5.4% | 116 | 1.59 | 5.0% | — |
+| 724 | 3.08 | 4.5% | 57 | 1.53 | 5.3% | — |
+| 727 | 2.93 | 5.8% | 99 | 1.48 | 6.0% | — |
+| 725 | 2.49 | 12.3% | 58 | 1.30 | 8.8% | — |
+| 728 | 2.34 | 12.3% | 88 | 1.33 | 4.5% | — |
+| 726 | 2.32 | 14.5% | 113 | 1.36 | 5.8% | — |
+
+**Sharpe distribution:** mean=3.52, median=3.29, min=2.32, max=5.55. ~18% chance of Sharpe 4.5+.
+
+### Champion Strategy — sid=217 (Run 737 #1, Sharpe 5.55)
+
+```yaml
+entry_conditions:
+  short: ["stoch_entry_0 > 50.9405", "stoch_entry_1 crosses_below 32.93"]  # STOCH(18,8) + STOCH(16,8)
+exit_conditions:
+  short: ["atr_exit_0 crosses_below 0.1042", "stoch_exit_1 <= 30.5497"]  # ATR(18) + STOCH(20,7)
+stop_loss: {type: fixed_pct, percent: 1.71}
+take_profit: {type: fixed_pct, percent: 0.7}
+```
+Ultra-tight **0.7% TP scalper** with 82.1% WR. STOCH(18) > 50.9 AND STOCH(16) crosses_below 32.9 = contradictory entry (one above mid, one crossing down from low). ATR + STOCH exit.
+
+### Robustness Comparison — Top 3 Strategies Across Windows
+
+| | **sid=212 (B28)** | **sid=217 (new scalper)** | **sid=216 (ATR-entry)** |
+|---|---|---|---|
+| **2mo Sharpe** | 4.74 | **5.55** | 4.74 |
+| **3mo Sharpe** | **3.06** | 0.70 ❌ | 2.07 |
+| **4mo Sharpe** | **3.22** | 1.16 ❌ | 2.30 |
+| **3mo Return** | **+12.6%** | -2.1% ❌ | +1.3% |
+| **4mo Return** | **+14.6%** | -1.2% ❌ | +2.4% |
+| Architecture | Tail-win (16% WR) | Scalper (82% WR) | Tail-win (8% WR) |
+| SL/TP | 0.59/10.55 | 1.71/0.70 | 0.61/12.59 |
+| **Robust?** | **YES** | NO (2mo only) | Moderate |
+
+### Key Findings
+
+1. **sid=212 remains the most robust STOCH+ATR strategy** — Sharpe 3-5 across all windows, profitable everywhere. The dual-STOCH crosses_above entry + dual-ATR exit generalizes because it captures large moves.
+2. **Scalper architectures (tight TP) don't generalize** — sid=217 (0.7% TP, 82% WR) is amazing on its 2mo training window but collapses on 3mo/4mo with negative returns. The tight TP is fit to the specific mean-reversion dynamics of Jan-Mar 2026.
+3. **Tail-win architectures (wide TP) generalize** — sid=212 (10.55% TP, 16% WR) and sid=216 (12.59% TP, 8% WR) both stay profitable across all windows. Wide TP captures regime-independent large moves.
+4. **Sharpe 5+ requires a lucky seed** — 11 seeds, only 1 hit 5.55 (~9% hit rate). Sharpe 4+ at ~27% (3/11). The typical STOCH+ATR produces Sharpe 2.3-3.6.
+5. **B28's 6.76 is the all-time ceiling** — not replicated on fresh data in 11 attempts. The Jan 10-Mar 10 window may have had uniquely favorable volatility for the dual-ATR exit pattern.
+
+### Recommendations
+
+1. **sid=212 is the strategy to paper trade** — most robust across all windows. Not the highest 2mo Sharpe but the only one that stays profitable everywhere.
+2. **For 2mo-only deployment, sid=217 is superior** — Sharpe 5.55 with 82% WR and 2.9% DD. But requires re-discovery every 2 months on fresh data.
+3. **Run 5+ seeds per discovery session** — the Sharpe distribution is wide (2.3-5.5). More seeds = better chance of finding the tail.
+4. **Tail-win > scalper for robustness** — prioritize wide TP strategies for production deployment.
 
 
 
