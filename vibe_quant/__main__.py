@@ -124,6 +124,36 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validation_batch(args: argparse.Namespace) -> int:
+    """Run multiple validation scenarios over one date window."""
+    from pathlib import Path
+
+    from vibe_quant.db.connection import DEFAULT_DB_PATH
+    from vibe_quant.validation.batch import (
+        format_batch_results_markdown,
+        parse_strategy_ids,
+        run_validation_batch,
+    )
+
+    db_path = Path(args.db) if getattr(args, "db", None) else DEFAULT_DB_PATH
+    strategy_ids = parse_strategy_ids(args.strategy_ids)
+    results = run_validation_batch(
+        strategy_ids,
+        symbol=args.symbol,
+        timeframe=args.timeframe,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        db_path=db_path,
+        latency_preset=args.latency,
+        ensure_data=args.ensure_data,
+        verbose=True,
+    )
+
+    print()
+    print(format_batch_results_markdown(results))
+    return 0
+
+
 def cmd_data(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to data module CLI.
 
@@ -279,6 +309,61 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum runs to show (default: 20)",
     )
     val_list_parser.set_defaults(func=cmd_validation_list)
+
+    # validation batch
+    val_batch_parser = validation_subparsers.add_parser(
+        "batch",
+        help="Run validation for multiple strategies on one scenario window",
+    )
+    val_batch_parser.add_argument(
+        "--strategy-ids",
+        type=str,
+        required=True,
+        help="Comma-separated strategy IDs to validate (for example: 212,220)",
+    )
+    val_batch_parser.add_argument(
+        "--symbol",
+        type=str,
+        default="BTCUSDT",
+        help="Symbol to validate (default: BTCUSDT)",
+    )
+    val_batch_parser.add_argument(
+        "--timeframe",
+        type=str,
+        default="1m",
+        help="Timeframe for the validation run (default: 1m)",
+    )
+    val_batch_parser.add_argument(
+        "--start-date",
+        type=str,
+        required=True,
+        help="Scenario start date (YYYY-MM-DD)",
+    )
+    val_batch_parser.add_argument(
+        "--end-date",
+        type=str,
+        required=True,
+        help="Scenario end date (YYYY-MM-DD)",
+    )
+    val_batch_parser.add_argument(
+        "--latency",
+        type=str,
+        choices=["co_located", "domestic", "international", "retail"],
+        default=None,
+        help="Override latency preset (default: from database or validation default)",
+    )
+    val_batch_parser.add_argument(
+        "--ensure-data",
+        action="store_true",
+        help="Download missing raw 1m data before running the batch",
+    )
+    val_batch_parser.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="Database path",
+    )
+    val_batch_parser.set_defaults(func=cmd_validation_batch)
 
     return parser
 

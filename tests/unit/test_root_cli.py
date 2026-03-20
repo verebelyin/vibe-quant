@@ -175,6 +175,79 @@ def test_cmd_validation_list_formats_fraction_as_percent(
     assert "5.6%" in output
 
 
+def test_cmd_validation_batch_formats_markdown_results(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    """Validation batch output should render a markdown summary table."""
+
+    module = ModuleType("vibe_quant.validation.batch")
+
+    class FakeBatchResult(SimpleNamespace):
+        pass
+
+    def fake_parse_strategy_ids(raw_value: str) -> list[int]:
+        assert raw_value == "212,220"
+        return [212, 220]
+
+    def fake_run_validation_batch(  # noqa: PLR0913
+        strategy_ids: list[int],
+        *,
+        symbol: str,
+        timeframe: str,
+        start_date: str,
+        end_date: str,
+        db_path: Any,
+        latency_preset: str | None,
+        ensure_data: bool,
+        verbose: bool,
+    ) -> list[FakeBatchResult]:
+        assert strategy_ids == [212, 220]
+        assert symbol == "BTCUSDT"
+        assert timeframe == "1m"
+        assert start_date == "2024-10-01"
+        assert end_date == "2024-12-31"
+        assert latency_preset == "retail"
+        assert ensure_data is True
+        assert verbose is True
+        return [
+            FakeBatchResult(
+                strategy_id=212,
+                strategy_name="champion",
+                run_id=900,
+                total_return=0.123,
+                sharpe_ratio=1.23,
+                max_drawdown=0.045,
+                total_trades=50,
+                win_rate=0.55,
+                profit_factor=1.7,
+            )
+        ]
+
+    def fake_format_batch_results_markdown(results: list[FakeBatchResult]) -> str:
+        assert len(results) == 1
+        return "| Strategy ID | Return |\n| --- | --- |\n| 212 | 12.30% |"
+
+    module.parse_strategy_ids = fake_parse_strategy_ids
+    module.run_validation_batch = fake_run_validation_batch
+    module.format_batch_results_markdown = fake_format_batch_results_markdown
+    monkeypatch.setitem(sys.modules, "vibe_quant.validation.batch", module)
+
+    args = argparse.Namespace(
+        strategy_ids="212,220",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start_date="2024-10-01",
+        end_date="2024-12-31",
+        latency="retail",
+        ensure_data=True,
+        db=None,
+    )
+    assert root_cli.cmd_validation_batch(args) == 0
+    output = capsys.readouterr().out
+    assert "| 212 | 12.30% |" in output
+
+
 def test_cmd_data_forwards_argv_without_mutating_sys_argv(monkeypatch: Any) -> None:
     """Root data command should forward argv directly and keep sys.argv untouched."""
     captured: dict[str, list[str]] = {}
