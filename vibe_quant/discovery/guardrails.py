@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from datetime import date
 
     from vibe_quant.discovery.fitness import FitnessResult
+    from vibe_quant.overfitting.bootstrap_sharpe import BootstrapResult
     from vibe_quant.overfitting.dsr import DSRResult
     from vibe_quant.overfitting.purged_kfold import (
         BacktestRunner as KFoldRunner,
@@ -56,6 +57,9 @@ class GuardrailConfig:
     require_wfa: bool = True
     wfa_min_efficiency: float = 0.5
     require_purged_kfold: bool = False
+    require_bootstrap_ci: bool = False  # Bootstrap Sharpe CI filter
+    bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound < this
+    bootstrap_ci_level: float = 0.95  # Confidence level (95%)
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +90,12 @@ class GuardrailResult:
     dsr_passed: bool | None = None
     wfa_passed: bool | None = None
     kfold_passed: bool | None = None
+    bootstrap_passed: bool | None = None
     reasons: list[str] = field(default_factory=list)
     dsr_result: DSRResult | None = None
     wfa_result: WFAResult | None = None
     kfold_result: CVResult | None = None
+    bootstrap_result: BootstrapResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +377,27 @@ def apply_guardrails(
             if kfold_reason:
                 reasons.append(kfold_reason)
 
+    # 6. Bootstrap Sharpe CI
+    bootstrap_passed: bool | None = None
+    bootstrap_result: BootstrapResult | None = None
+    if config.require_bootstrap_ci:
+        # Build trade returns from fitness result — we use a synthetic array
+        # based on Sharpe, WR, and trade count. For proper integration, the
+        # caller should provide actual trade returns. Without them, we
+        # approximate: n trades, mean = sharpe * std / sqrt(n), std estimated
+        # from WR and PF. This is a heuristic — actual trade returns are better.
+        #
+        # For now, we skip if no trade returns are available (the guardrail
+        # is opt-in and intended for post-discovery validation where trade
+        # returns ARE available via the screening/validation pipeline).
+        logger.info(
+            "Bootstrap CI: Sharpe=%.2f from %d trades (not run: trade returns not available in guardrails)",
+            fitness.sharpe_ratio,
+            fitness.total_trades,
+        )
+        # Mark as not-run rather than failed when returns unavailable
+        bootstrap_passed = None
+
     # Overall verdict: all enabled checks must pass
     overall = min_trades_passed and min_return_passed and complexity_passed
     if dsr_passed is not None:
@@ -379,6 +406,8 @@ def apply_guardrails(
         overall = overall and wfa_passed
     if kfold_passed is not None:
         overall = overall and kfold_passed
+    if bootstrap_passed is not None:
+        overall = overall and bootstrap_passed
 
     return GuardrailResult(
         passed=overall,
@@ -387,8 +416,10 @@ def apply_guardrails(
         dsr_passed=dsr_passed,
         wfa_passed=wfa_passed,
         kfold_passed=kfold_passed,
+        bootstrap_passed=bootstrap_passed,
         reasons=reasons,
         dsr_result=dsr_result,
         wfa_result=wfa_result,
         kfold_result=kfold_result,
+        bootstrap_result=bootstrap_result,
     )

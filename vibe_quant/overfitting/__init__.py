@@ -7,6 +7,10 @@ Provides toggleable filters for detecting overfit strategies:
 - Pipeline Orchestrator: toggleable filter chain
 """
 
+from vibe_quant.overfitting.bootstrap_sharpe import (
+    BootstrapResult,
+    bootstrap_sharpe_ci,
+)
 from vibe_quant.overfitting.dsr import (
     DeflatedSharpeRatio,
     DSRResult,
@@ -36,6 +40,9 @@ from vibe_quant.overfitting.wfa import (
 )
 
 __all__ = [
+    # Bootstrap Sharpe CI
+    "BootstrapResult",
+    "bootstrap_sharpe_ci",
     # Deflated Sharpe Ratio
     "DSRResult",
     "DeflatedSharpeRatio",
