@@ -121,7 +121,7 @@ class TestFitnessResultFields:
         fr = FitnessResult(
             sharpe_ratio=1.0, max_drawdown=0.1, profit_factor=1.5,
             total_trades=100, total_return=0.1, complexity_penalty=0.0,
-            overtrade_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
+            overtrade_penalty=0.0, sl_tp_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
             passed_filters=True, filter_results={},
         )
         assert fr.skewness == 0.0
@@ -133,7 +133,7 @@ class TestFitnessResultFields:
         fr = FitnessResult(
             sharpe_ratio=1.0, max_drawdown=0.1, profit_factor=1.5,
             total_trades=100, total_return=0.1, complexity_penalty=0.0,
-            overtrade_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
+            overtrade_penalty=0.0, sl_tp_penalty=0.0, raw_score=0.5, adjusted_score=0.5,
             passed_filters=True, filter_results={},
             skewness=-0.8, kurtosis=4.5,
         )

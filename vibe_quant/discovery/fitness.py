@@ -51,6 +51,13 @@ COMMISSION_RATE_PER_TRADE: float = 0.001
 OVERTRADE_THRESHOLD: int = 300
 OVERTRADE_PENALTY_SCALE: float = 0.05  # penalty per 100 excess trades
 
+# SL/TP imbalance penalty: discourages ultra-tight TP scalpers that
+# don't generalize beyond the training window (bd-v7zj).
+# Penalty kicks in when SL/TP ratio > SL_TP_RATIO_THRESHOLD (e.g. 7% SL / 0.7% TP = 10x).
+SL_TP_RATIO_THRESHOLD: float = 5.0
+SL_TP_RATIO_PENALTY_SCALE: float = 0.02  # per unit above threshold
+SL_TP_RATIO_PENALTY_CAP: float = 0.15
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -82,6 +89,7 @@ class FitnessResult:
     total_return: float
     complexity_penalty: float
     overtrade_penalty: float
+    sl_tp_penalty: float
     raw_score: float
     adjusted_score: float
     passed_filters: bool
@@ -200,6 +208,28 @@ def compute_complexity_penalty(num_genes: int) -> float:
         return 0.0
     penalty = COMPLEXITY_PENALTY_PER_GENE * (num_genes - COMPLEXITY_FREE_GENES)
     return min(penalty, COMPLEXITY_PENALTY_CAP)
+
+
+def compute_sl_tp_penalty(sl_pct: float, tp_pct: float) -> float:
+    """Compute penalty for extreme SL/TP ratios.
+
+    Ultra-tight TP scalpers (e.g. 7% SL / 0.7% TP = 10x ratio) look great
+    in-sample but don't generalize. Penalty kicks in at SL/TP > 5x.
+
+    Args:
+        sl_pct: Stop loss percentage.
+        tp_pct: Take profit percentage.
+
+    Returns:
+        Penalty value in [0, SL_TP_RATIO_PENALTY_CAP].
+    """
+    if tp_pct <= 0 or sl_pct <= 0:
+        return 0.0
+    ratio = sl_pct / tp_pct
+    if ratio <= SL_TP_RATIO_THRESHOLD:
+        return 0.0
+    excess = ratio - SL_TP_RATIO_THRESHOLD
+    return min(SL_TP_RATIO_PENALTY_CAP, SL_TP_RATIO_PENALTY_SCALE * excess)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +357,7 @@ def _evaluate_single(
         total_return=-1.0,
         complexity_penalty=0.0,
         overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
         raw_score=0.0,
         adjusted_score=0.0,
         passed_filters=False,
@@ -374,6 +405,7 @@ def _evaluate_single(
     num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
     complexity_pen = compute_complexity_penalty(num_genes)
     overtrade_pen = compute_overtrade_penalty(trades)
+    sl_tp_pen = compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)
 
     # Filter evaluation
     filter_results = filter_fn(chrom, bt) if filter_fn is not None else {}
@@ -386,15 +418,16 @@ def _evaluate_single(
     if trades < min_trades or total_return <= 0:
         adjusted = 0.0
     else:
-        adjusted = max(0.0, raw - complexity_pen - overtrade_pen)
+        adjusted = max(0.0, raw - complexity_pen - overtrade_pen - sl_tp_pen)
 
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
         logger.debug(
-            "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f = adjusted=%.4f "
-            "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d)",
-            chrom.uid, raw, complexity_pen, overtrade_pen, adjusted,
+            "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
+            "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d sl=%.2f%% tp=%.2f%%)",
+            chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
             sharpe, max_dd, pf, total_return, trades, num_genes,
+            chrom.stop_loss_pct, chrom.take_profit_pct,
         )
 
     return FitnessResult(
@@ -405,6 +438,7 @@ def _evaluate_single(
         total_return=total_return,
         complexity_penalty=complexity_pen,
         overtrade_penalty=overtrade_pen,
+        sl_tp_penalty=sl_tp_pen,
         raw_score=raw,
         adjusted_score=adjusted,
         passed_filters=passed_filters,
@@ -530,6 +564,7 @@ def _evaluate_parallel(
         total_return=-1.0,
         complexity_penalty=0.0,
         overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
         raw_score=0.0,
         adjusted_score=0.0,
         passed_filters=False,

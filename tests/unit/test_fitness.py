@@ -10,9 +10,11 @@ from vibe_quant.discovery.fitness import (
     COMPLEXITY_PENALTY_CAP,
     MIN_TRADES,
     MIN_TRADES_1M,
+    SL_TP_RATIO_PENALTY_CAP,
     FitnessResult,
     compute_complexity_penalty,
     compute_fitness_score,
+    compute_sl_tp_penalty,
     evaluate_population,
     pareto_dominates,
     pareto_rank,
@@ -67,6 +69,7 @@ def _make_result(
         total_return=0.1,
         complexity_penalty=penalty,
         overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
         raw_score=raw,
         adjusted_score=adjusted,
         passed_filters=passed,
@@ -486,6 +489,45 @@ class TestEdgeCases:
         # Sharpe=0 norm=1/5=0.2, DD=1.0, PF=0.0, Return=0 norm=1/3=0.333
         # 0.35*0.2 + 0.25*1.0 + 0.20*0.0 + 0.20*0.333 = 0.07+0.25+0+0.0667 = 0.3867
         assert score == pytest.approx(0.3867, abs=1e-3)
+
+class TestSlTpPenalty:
+    def test_no_penalty_balanced(self) -> None:
+        """SL/TP ratio <= 5x → no penalty."""
+        assert compute_sl_tp_penalty(sl_pct=5.0, tp_pct=5.0) == 0.0  # 1x
+        assert compute_sl_tp_penalty(sl_pct=5.0, tp_pct=1.0) == 0.0  # 5x = threshold
+
+    def test_penalty_above_threshold(self) -> None:
+        """SL/TP ratio > 5x → penalty."""
+        pen = compute_sl_tp_penalty(sl_pct=7.0, tp_pct=0.7)  # 10x
+        assert pen > 0.0
+        # (10 - 5) * 0.02 = 0.10
+        assert pen == pytest.approx(0.10, abs=1e-3)
+
+    def test_penalty_capped(self) -> None:
+        """Extreme ratio should be capped."""
+        pen = compute_sl_tp_penalty(sl_pct=10.0, tp_pct=0.5)  # 20x
+        assert pen == pytest.approx(SL_TP_RATIO_PENALTY_CAP)
+
+    def test_zero_tp(self) -> None:
+        """TP=0 should not crash."""
+        assert compute_sl_tp_penalty(sl_pct=5.0, tp_pct=0.0) == 0.0
+
+    def test_zero_sl(self) -> None:
+        """SL=0 should not crash."""
+        assert compute_sl_tp_penalty(sl_pct=0.0, tp_pct=5.0) == 0.0
+
+    def test_scalper_penalized(self) -> None:
+        """sid=186 style: SL=7.9% TP=0.5% = 15.8x → penalized."""
+        pen = compute_sl_tp_penalty(sl_pct=7.9, tp_pct=0.5)
+        assert pen > 0.0
+        # (15.8 - 5) * 0.02 = 0.216 → capped at 0.15
+        assert pen == SL_TP_RATIO_PENALTY_CAP
+
+    def test_tailwin_not_penalized(self) -> None:
+        """sid=212 style: SL=0.59% TP=10.55% = 0.056x → no penalty."""
+        pen = compute_sl_tp_penalty(sl_pct=0.59, tp_pct=10.55)
+        assert pen == 0.0
+
 
     def test_min_trades_1m_constant(self) -> None:
         """MIN_TRADES_1M should be higher than MIN_TRADES."""

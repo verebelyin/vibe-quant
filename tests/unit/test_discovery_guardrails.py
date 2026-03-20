@@ -33,6 +33,7 @@ def _make_fitness(
         total_return=0.2,
         complexity_penalty=0.0,
         overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
         raw_score=0.7,
         adjusted_score=0.7,
         passed_filters=True,

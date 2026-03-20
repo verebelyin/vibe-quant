@@ -397,6 +397,7 @@ def _make_fitness(sharpe: float, dd: float, pf: float) -> FitnessResult:
         total_return=0.1,
         complexity_penalty=0.0,
         overtrade_penalty=0.0,
+        sl_tp_penalty=0.0,
         raw_score=0.5,
         adjusted_score=0.5,
         passed_filters=True,
