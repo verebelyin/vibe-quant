@@ -35,7 +35,7 @@ from vibe_quant.discovery.operators import (
 from vibe_quant.utils import compute_bar_count
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from vibe_quant.discovery.operators import Direction
 
@@ -122,7 +122,7 @@ class DiscoveryConfig:
 
         # Auto-set min_trades for sub-5m timeframes if left at default (50).
         # 1m strategies need 100+ trades for statistical significance (bd-yu02).
-        if self.min_trades == 50 and self.timeframe in ("1m", "2m", "3m", "5m"):
+        if self.min_trades == 50 and self.timeframe in ("1m", "2m", "3m"):
             from vibe_quant.discovery.fitness import MIN_TRADES_1M
 
             object.__setattr__(self, "min_trades", MIN_TRADES_1M)
@@ -176,7 +176,7 @@ class DiscoveryResult:
 
 
 def _select_diverse_top_k(
-    scored: list[tuple[StrategyChromosome, FitnessResult | float]],
+    scored: Sequence[tuple[StrategyChromosome, FitnessResult | float]],
     top_k: int = 5,
     min_distance: float = 0.15,
 ) -> list[tuple[StrategyChromosome, FitnessResult | float]]:

@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 
 if TYPE_CHECKING:
@@ -273,6 +275,7 @@ def apply_guardrails(
     kfold_cv: PurgedKFoldCV | None = None,
     kfold_n_samples: int = 0,
     kfold_runner: KFoldRunner | None = None,
+    trade_returns: np.ndarray | None = None,
 ) -> GuardrailResult:
     """Run all enabled guard rails on a candidate.
 
@@ -381,22 +384,36 @@ def apply_guardrails(
     bootstrap_passed: bool | None = None
     bootstrap_result: BootstrapResult | None = None
     if config.require_bootstrap_ci:
-        # Build trade returns from fitness result — we use a synthetic array
-        # based on Sharpe, WR, and trade count. For proper integration, the
-        # caller should provide actual trade returns. Without them, we
-        # approximate: n trades, mean = sharpe * std / sqrt(n), std estimated
-        # from WR and PF. This is a heuristic — actual trade returns are better.
-        #
-        # For now, we skip if no trade returns are available (the guardrail
-        # is opt-in and intended for post-discovery validation where trade
-        # returns ARE available via the screening/validation pipeline).
-        logger.info(
-            "Bootstrap CI: Sharpe=%.2f from %d trades (not run: trade returns not available in guardrails)",
-            fitness.sharpe_ratio,
-            fitness.total_trades,
-        )
-        # Mark as not-run rather than failed when returns unavailable
-        bootstrap_passed = None
+        if trade_returns is not None and len(trade_returns) >= 5:
+            from vibe_quant.overfitting.bootstrap_sharpe import bootstrap_sharpe_ci
+
+            bootstrap_result = bootstrap_sharpe_ci(
+                trade_returns,
+                ci_level=config.bootstrap_ci_level,
+                min_sharpe=config.bootstrap_min_sharpe,
+            )
+            bootstrap_passed = bootstrap_result.passed
+            if not bootstrap_passed:
+                reasons.append(
+                    f"Bootstrap CI lower bound {bootstrap_result.ci_lower:.2f} "
+                    f"< {config.bootstrap_min_sharpe:.1f} "
+                    f"(observed Sharpe={bootstrap_result.observed_sharpe:.2f}, "
+                    f"n={bootstrap_result.n_trades})"
+                )
+            else:
+                logger.info(
+                    "Bootstrap CI passed: [%.2f, %.2f] (n=%d)",
+                    bootstrap_result.ci_lower,
+                    bootstrap_result.ci_upper,
+                    bootstrap_result.n_trades,
+                )
+        else:
+            bootstrap_passed = False
+            n_ret = len(trade_returns) if trade_returns is not None else 0
+            reasons.append(
+                f"Bootstrap CI required but insufficient trade returns "
+                f"(got {n_ret}, need ≥5)"
+            )
 
     # Overall verdict: all enabled checks must pass
     overall = min_trades_passed and min_return_passed and complexity_passed

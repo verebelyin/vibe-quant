@@ -89,6 +89,8 @@ def load_ohlc(
     )
 
     conn = sqlite3.connect(str(archive_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         rows = conn.execute(
             "SELECT open_time, open, high, low, close FROM raw_klines "
@@ -275,8 +277,8 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
 
     # Profit factor
     gross_profit = float(np.sum(wins)) if len(wins) > 0 else 0.0
-    gross_loss = float(np.abs(np.sum(losses))) if len(losses) > 0 else 1e-10
-    profit_factor = gross_profit / gross_loss if gross_loss > 1e-10 else 0.0
+    gross_loss = float(np.abs(np.sum(losses))) if len(losses) > 0 else 0.0
+    profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else float("inf")
 
     # Total fees
     total_fees_pct = taker_fee * 100.0 * 2.0 * n

@@ -544,6 +544,13 @@ class TestSlTpPenalty:
         cfg_4h = DiscoveryConfig(timeframe="4h", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
         assert cfg_4h.min_trades == MIN_TRADES
 
+    def test_discovery_config_5m_keeps_default(self) -> None:
+        """5m should NOT auto-upgrade to 100 trades (only sub-5m does)."""
+        from vibe_quant.discovery.pipeline import DiscoveryConfig
+
+        cfg_5m = DiscoveryConfig(timeframe="5m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        assert cfg_5m.min_trades == MIN_TRADES  # 50, not 100
+
     def test_discovery_config_explicit_min_trades_override(self) -> None:
         """Explicit min_trades should NOT be overridden by auto-detection."""
         from vibe_quant.discovery.pipeline import DiscoveryConfig

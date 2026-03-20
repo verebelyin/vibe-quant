@@ -380,8 +380,8 @@ class CatalogManager:
     def _cleanup_epoch_parquet(self) -> None:
         """Remove corrupt epoch-timestamp parquet files from catalog.
 
-        Only cleans bar/ subdirectories — instrument definitions in
-        crypto_perpetual/ intentionally use epoch timestamps.
+        Cleans bar/ subdirectories unconditionally and removes corrupt
+        (<1KB) epoch stubs from crypto_perpetual/ (see bd-tdu3).
         """
         cleanup_epoch_parquet(self._catalog_path)
 

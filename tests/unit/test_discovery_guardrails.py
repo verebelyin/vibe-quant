@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from vibe_quant.discovery.fitness import FitnessResult
 from vibe_quant.discovery.guardrails import (
     GuardrailConfig,
@@ -265,6 +267,55 @@ class TestApplyGuardrails:
 
         assert result.kfold_passed is False
         assert result.passed is False
+
+    def test_bootstrap_ci_pass(self) -> None:
+        """Bootstrap CI with strong returns -> pass."""
+        rng = np.random.default_rng(42)
+        returns = rng.normal(0.5, 1.0, 100)
+        cfg = GuardrailConfig(
+            require_dsr=False,
+            require_wfa=False,
+            require_bootstrap_ci=True,
+            bootstrap_min_sharpe=1.0,
+        )
+        fitness = _make_fitness(trades=100)
+        result = apply_guardrails(
+            fitness, num_genes=4, config=cfg, trade_returns=returns,
+        )
+        assert result.bootstrap_passed is True
+        assert result.bootstrap_result is not None
+        assert result.passed is True
+
+    def test_bootstrap_ci_fail(self) -> None:
+        """Bootstrap CI with weak/noisy returns -> fail."""
+        rng = np.random.default_rng(42)
+        returns = rng.normal(0.0, 1.0, 20)  # Zero-mean, few trades
+        cfg = GuardrailConfig(
+            require_dsr=False,
+            require_wfa=False,
+            require_bootstrap_ci=True,
+            bootstrap_min_sharpe=1.0,
+        )
+        fitness = _make_fitness(trades=20)
+        result = apply_guardrails(
+            fitness, num_genes=4, config=cfg, trade_returns=returns,
+        )
+        assert result.bootstrap_passed is False
+        assert result.passed is False
+        assert any("Bootstrap CI" in r for r in result.reasons)
+
+    def test_bootstrap_ci_no_returns_fails(self) -> None:
+        """Bootstrap CI required but no trade returns -> fail."""
+        cfg = GuardrailConfig(
+            require_dsr=False,
+            require_wfa=False,
+            require_bootstrap_ci=True,
+        )
+        fitness = _make_fitness(trades=100)
+        result = apply_guardrails(fitness, num_genes=4, config=cfg)
+        assert result.bootstrap_passed is False
+        assert result.passed is False
+        assert any("insufficient" in r for r in result.reasons)
 
     def test_disabled_checks_skipped(self) -> None:
         """Disabled checks return None, not False."""
