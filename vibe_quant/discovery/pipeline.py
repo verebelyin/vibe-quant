@@ -92,6 +92,8 @@ class DiscoveryConfig:
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
     train_test_split: float = 0.0  # 0 = disabled; >0 = fraction for train (e.g. 0.5)
+    holdout_start_date: str = ""  # Pre-computed holdout start (set by CLI, not re-split)
+    holdout_end_date: str = ""  # Pre-computed holdout end
     cross_window_months: list[int] = field(default_factory=list)  # shifted windows, e.g. [1, 2]
     cross_window_min_pass: int = 2  # min windows (of total) that must pass
     cross_window_min_sharpe: float = 0.5  # min Sharpe on each window to count as pass
@@ -751,31 +753,27 @@ class DiscoveryPipeline:
                         f" sub={gene.sub_value}" if gene.sub_value else "",
                     )
 
-        # Holdout evaluation: run top strategies on unseen data
+        # --- Validation phase: all steps run on the SAME strategy list ---
+        # Filtering happens at the end to keep arrays aligned.
         holdout_results: list[HoldoutResult] = []
         train_dates: tuple[str, str] | None = None
         holdout_dates: tuple[str, str] | None = None
+        cross_window_results: list[CrossWindowResult] = []
+        wfa_results: list[WFARollingResult] = []
+
         if self._holdout_backtest_fn is not None and top_strategies and cfg.train_test_split > 0:
             holdout_results = self._evaluate_holdout(top_strategies)
-            # Compute split dates for metadata
-            from vibe_quant.utils import split_date_range
-            ts, te, hs, he = split_date_range(cfg.start_date, cfg.end_date, cfg.train_test_split)
-            train_dates = (ts, te)
-            holdout_dates = (hs, he)
+            train_dates = (cfg.start_date, cfg.end_date)
+            holdout_dates = (cfg.holdout_start_date, cfg.holdout_end_date)
 
-        # Cross-window validation: run top strategies on shifted date windows
-        cross_window_results: list[CrossWindowResult] = []
         if (
             cfg.cross_window_months
             and self._backtest_fn_factory is not None
             and top_strategies
         ):
-            cross_window_results, top_strategies = self._evaluate_cross_windows(
-                top_strategies,
-            )
+            # Don't filter here — just compute results
+            cross_window_results, _ = self._evaluate_cross_windows(top_strategies)
 
-        # WFA rolling OOS validation
-        wfa_results: list[WFARollingResult] = []
         if (
             cfg.wfa_oos_step_days > 0
             and cfg.train_test_split > 0
@@ -783,9 +781,33 @@ class DiscoveryPipeline:
             and self._backtest_fn_factory is not None
             and top_strategies
         ):
-            wfa_results, top_strategies = self._evaluate_wfa_rolling(
+            wfa_results, _ = self._evaluate_wfa_rolling(
                 top_strategies, holdout_dates[0], holdout_dates[1],
             )
+
+        # Filter all arrays in sync: keep only strategies that passed all validations
+        if cross_window_results or wfa_results:
+            keep = []
+            for i in range(len(top_strategies)):
+                cw_ok = cross_window_results[i].passed if i < len(cross_window_results) else True
+                wfa_ok = wfa_results[i].passed if i < len(wfa_results) else True
+                if cw_ok and wfa_ok:
+                    keep.append(i)
+
+            if keep and len(keep) < len(top_strategies):
+                top_strategies = [top_strategies[i] for i in keep]
+                if holdout_results:
+                    holdout_results = [holdout_results[i] for i in keep]
+                if cross_window_results:
+                    cross_window_results = [cross_window_results[i] for i in keep]
+                if wfa_results:
+                    wfa_results = [wfa_results[i] for i in keep]
+                logger.info(
+                    "Post-validation filter: %d/%d strategies kept",
+                    len(keep), len(top_strategies) + (len(top_strategies) - len(keep)),
+                )
+            elif not keep:
+                logger.warning("All strategies failed validation — keeping originals")
 
         return DiscoveryResult(
             generations=generation_results,

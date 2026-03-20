@@ -221,16 +221,13 @@ def _run_multi_seed(
     """
     import statistics
 
-    from vibe_quant.discovery.pipeline import (
-        _select_diverse_top_k,
-    )
-
     all_strategies: list[tuple[StrategyChromosome, object]] = []
     all_generations: list[object] = []
     total_evaluated = 0
     seed_stats: list[dict[str, float]] = []
     any_converged = False
     convergence_gen: int | None = None
+    last_result: DiscoveryResult | None = None
 
     for seed_idx in range(num_seeds):
         seed_val = seed_idx * 7919 + 42  # Deterministic but varied seeds
@@ -250,6 +247,7 @@ def _run_multi_seed(
             seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
+        last_result = result
 
         # Collect per-seed stats
         if result.top_strategies:
@@ -302,28 +300,57 @@ def _run_multi_seed(
         failure_count / num_seeds * 100 if num_seeds else 0,
     )
 
-    # Merge and deduplicate across all seeds
-    all_strategies.sort(key=lambda t: t[1].adjusted_score, reverse=True)
-    top_merged = _select_diverse_top_k(
-        all_strategies,
-        top_k=config.top_k,
-        min_distance=config.min_diversity_distance,
-    )
-    top_strategies = [
-        (c, f) for c, f in top_merged  # type: ignore[misc]
-    ]
+    # Group strategies by structural similarity, rank by median Sharpe
+    from vibe_quant.discovery.distance import chromosome_distance
+
+    # Build groups: strategies within min_distance are "the same"
+    groups: list[list[tuple[StrategyChromosome, object]]] = []
+    for chrom, fit in all_strategies:
+        placed = False
+        for group in groups:
+            rep_chrom = group[0][0]
+            if chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance:
+                group.append((chrom, fit))
+                placed = True
+                break
+        if not placed:
+            groups.append([(chrom, fit)])
+
+    # Rank groups by median Sharpe (not best single-run score)
+    def _group_median_sharpe(group: list[tuple[StrategyChromosome, object]]) -> float:
+        sharpes = [f.sharpe_ratio for _, f in group]  # type: ignore[union-attr]
+        return statistics.median(sharpes) if sharpes else 0.0
+
+    groups.sort(key=_group_median_sharpe, reverse=True)
+
+    # Select best representative from each top group (by adjusted_score)
+    top_strategies = []
+    for group in groups[:config.top_k]:
+        best = max(group, key=lambda t: t[1].adjusted_score)  # type: ignore[union-attr]
+        top_strategies.append(best)
+        median_sr = _group_median_sharpe(group)
+        logger.info(
+            "  Group: %d seeds, median_sharpe=%.2f, representative=%s",
+            len(group), median_sr, best[0].uid,  # type: ignore[union-attr]
+        )
 
     logger.info(
-        "  Merged: %d unique strategies from %d total candidates",
-        len(top_strategies), len(all_strategies),
+        "  Merged: %d groups from %d total candidates (%d groups)",
+        len(top_strategies), len(all_strategies), len(groups),
     )
 
+    # Propagate validation metadata from last seed (shared config → same dates)
     return DiscoveryResult(
         generations=all_generations,
-        top_strategies=top_strategies,
+        top_strategies=top_strategies,  # type: ignore[arg-type]
         total_candidates_evaluated=total_evaluated,
         converged=any_converged,
         convergence_generation=convergence_gen,
+        holdout_results=last_result.holdout_results if last_result else [],
+        train_dates=last_result.train_dates if last_result else None,
+        holdout_dates=last_result.holdout_dates if last_result else None,
+        cross_window_results=last_result.cross_window_results if last_result else [],
+        wfa_results=last_result.wfa_results if last_result else [],
     )
 
 
@@ -522,6 +549,8 @@ def main() -> int:
             indicator_pool=ind_pool,
             direction=args.direction,
             train_test_split=split_ratio,
+            holdout_start_date=holdout_start or "",
+            holdout_end_date=holdout_end or "",
             cross_window_months=cross_window_months,
             cross_window_min_sharpe=args.cross_window_min_sharpe,
             wfa_oos_step_days=args.wfa_oos_step_days,
@@ -571,9 +600,10 @@ def main() -> int:
                     end_date=holdout_end,
                 )
 
-        # Create backtest factory for cross-window validation
+        # Create backtest factory for cross-window and/or WFA validation
         backtest_fn_factory = None
-        if cross_window_months:
+        needs_factory = bool(cross_window_months) or args.wfa_oos_step_days > 0
+        if needs_factory:
             if use_mock:
                 backtest_fn_factory = lambda s, e: _mock_backtest  # noqa: E731
             else:

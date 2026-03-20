@@ -413,9 +413,12 @@ class TestHoldoutEvaluation:
 
     def test_holdout_results_populated_when_split_enabled(self) -> None:
         """When holdout_backtest_fn is provided, holdout_results should be populated."""
+        # Simulate CLI pre-split: train=Jan-Mar, holdout=Mar-Jun
         cfg = _make_config(
             population_size=6, max_generations=2, top_k=2, elite_count=1,
-            train_test_split=0.5, start_date="2024-01-01", end_date="2024-06-01",
+            train_test_split=0.5,
+            start_date="2024-01-01", end_date="2024-03-16",
+            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
         )
 
         def holdout_backtest(chrom: StrategyChromosome) -> dict[str, Any]:
@@ -434,8 +437,9 @@ class TestHoldoutEvaluation:
         assert len(result.holdout_results) == len(result.top_strategies)
         assert result.train_dates is not None
         assert result.holdout_dates is not None
-        # Holdout period should start where train ends
+        # Train end == holdout start (pre-computed by CLI)
         assert result.train_dates[1] == result.holdout_dates[0]
+        assert result.holdout_dates == ("2024-03-16", "2024-06-01")
         for hr in result.holdout_results:
             assert hr.sharpe_ratio > 0
             assert hr.total_trades > 0
@@ -610,7 +614,8 @@ class TestWFARollingValidation:
         cfg = _make_config(
             population_size=6, max_generations=2, top_k=2, elite_count=1,
             train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-06-01",
+            start_date="2024-01-01", end_date="2024-03-16",
+            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
             wfa_oos_step_days=30,  # ~1 month windows
             wfa_min_consistency=0.5,
         )
