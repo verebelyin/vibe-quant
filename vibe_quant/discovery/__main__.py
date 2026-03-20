@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
+from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,142 @@ def _check_data_available(symbols: list[str]) -> bool:
         return False
 
 
+def _run_multi_seed(
+    num_seeds: int,
+    config: DiscoveryConfig,
+    backtest_fn: object,
+    progress_file: str,
+    holdout_backtest_fn: object = None,
+    backtest_fn_factory: object = None,
+    seed_chromosomes: list[StrategyChromosome] | None = None,
+) -> DiscoveryResult:
+    """Run the discovery pipeline multiple times with different random seeds.
+
+    Aggregates results across all seeds:
+    - Collects all top strategies from all runs
+    - Applies diversity dedup across the merged pool
+    - Reports per-seed distribution stats
+
+    Args:
+        num_seeds: Number of random seeds to run.
+        config: Discovery configuration (shared across seeds).
+        backtest_fn: Backtest callable.
+        progress_file: Progress file path template.
+        holdout_backtest_fn: Optional holdout backtest callable.
+        backtest_fn_factory: Optional factory for cross-window.
+        seed_chromosomes: Optional seed chromosomes for warm-start.
+
+    Returns:
+        Merged DiscoveryResult with aggregated stats.
+    """
+    import statistics
+
+    from vibe_quant.discovery.pipeline import (
+        _select_diverse_top_k,
+    )
+
+    all_strategies: list[tuple[StrategyChromosome, object]] = []
+    all_generations: list[object] = []
+    total_evaluated = 0
+    seed_stats: list[dict[str, float]] = []
+    any_converged = False
+    convergence_gen: int | None = None
+
+    for seed_idx in range(num_seeds):
+        seed_val = seed_idx * 7919 + 42  # Deterministic but varied seeds
+        random.seed(seed_val)
+
+        logger.info(
+            "=== MULTI-SEED RUN %d/%d (seed=%d) ===",
+            seed_idx + 1, num_seeds, seed_val,
+        )
+
+        pipeline = DiscoveryPipeline(
+            config=config,
+            backtest_fn=backtest_fn,  # type: ignore[arg-type]
+            progress_file=progress_file,
+            holdout_backtest_fn=holdout_backtest_fn,  # type: ignore[arg-type]
+            backtest_fn_factory=backtest_fn_factory,  # type: ignore[arg-type]
+            seed_chromosomes=seed_chromosomes,
+        )
+        result = pipeline.run()
+
+        # Collect per-seed stats
+        if result.top_strategies:
+            sharpes = [f.sharpe_ratio for _, f in result.top_strategies]
+            best_sharpe = max(sharpes)
+            seed_stats.append({
+                "seed": seed_val,
+                "best_sharpe": best_sharpe,
+                "best_score": result.top_strategies[0][1].adjusted_score,
+                "num_strategies": len(result.top_strategies),
+            })
+        else:
+            seed_stats.append({
+                "seed": seed_val,
+                "best_sharpe": 0.0,
+                "best_score": 0.0,
+                "num_strategies": 0,
+            })
+
+        all_strategies.extend(result.top_strategies)
+        all_generations.extend(result.generations)
+        total_evaluated += result.total_candidates_evaluated
+        if result.converged:
+            any_converged = True
+            convergence_gen = result.convergence_generation
+
+    # Log multi-seed distribution stats
+    sharpe_list = [s["best_sharpe"] for s in seed_stats]
+    score_list = [s["best_score"] for s in seed_stats]
+    failure_count = sum(1 for s in seed_stats if s["num_strategies"] == 0)
+
+    logger.info("=== MULTI-SEED SUMMARY (%d seeds) ===", num_seeds)
+    if sharpe_list:
+        logger.info(
+            "  Best Sharpe: mean=%.2f median=%.2f min=%.2f max=%.2f std=%.2f",
+            statistics.mean(sharpe_list),
+            statistics.median(sharpe_list),
+            min(sharpe_list),
+            max(sharpe_list),
+            statistics.stdev(sharpe_list) if len(sharpe_list) > 1 else 0,
+        )
+        logger.info(
+            "  Best Score: mean=%.4f median=%.4f",
+            statistics.mean(score_list),
+            statistics.median(score_list),
+        )
+    logger.info(
+        "  Seed failures: %d/%d (%.0f%%)",
+        failure_count, num_seeds,
+        failure_count / num_seeds * 100 if num_seeds else 0,
+    )
+
+    # Merge and deduplicate across all seeds
+    all_strategies.sort(key=lambda t: t[1].adjusted_score, reverse=True)
+    top_merged = _select_diverse_top_k(
+        all_strategies,
+        top_k=config.top_k,
+        min_distance=config.min_diversity_distance,
+    )
+    top_strategies = [
+        (c, f) for c, f in top_merged  # type: ignore[misc]
+    ]
+
+    logger.info(
+        "  Merged: %d unique strategies from %d total candidates",
+        len(top_strategies), len(all_strategies),
+    )
+
+    return DiscoveryResult(
+        generations=all_generations,
+        top_strategies=top_strategies,
+        total_candidates_evaluated=total_evaluated,
+        converged=any_converged,
+        convergence_generation=convergence_gen,
+    )
+
+
 def _load_seed_chromosomes(
     state: object,
     run_id: int,
@@ -282,6 +418,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Seed initial population with top chromosomes from a prior discovery run ID",
+    )
+    parser.add_argument(
+        "--num-seeds",
+        type=int,
+        default=1,
+        help="Number of random seeds to run. >1 enables multi-seed ensemble: "
+        "runs GA N times, ranks by median Sharpe (default: 1)",
     )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
@@ -440,16 +583,31 @@ def main() -> int:
                     args.seed_from_run,
                 )
 
+        num_seeds = max(1, args.num_seeds)
         progress_file = f"logs/discovery_{args.run_id}_progress.json"
-        pipeline = DiscoveryPipeline(
-            config=config,
-            backtest_fn=backtest_fn,
-            progress_file=progress_file,
-            holdout_backtest_fn=holdout_backtest_fn,
-            backtest_fn_factory=backtest_fn_factory,
-            seed_chromosomes=seed_chromosomes,
-        )
-        result = pipeline.run()
+
+        if num_seeds == 1:
+            # Single-seed run (default)
+            pipeline = DiscoveryPipeline(
+                config=config,
+                backtest_fn=backtest_fn,
+                progress_file=progress_file,
+                holdout_backtest_fn=holdout_backtest_fn,
+                backtest_fn_factory=backtest_fn_factory,
+                seed_chromosomes=seed_chromosomes,
+            )
+            result = pipeline.run()
+        else:
+            # Multi-seed ensemble: run N times with different seeds
+            result = _run_multi_seed(
+                num_seeds=num_seeds,
+                config=config,
+                backtest_fn=backtest_fn,
+                progress_file=progress_file,
+                holdout_backtest_fn=holdout_backtest_fn,
+                backtest_fn_factory=backtest_fn_factory,
+                seed_chromosomes=seed_chromosomes,
+            )
 
         if not result.top_strategies:
             raise RuntimeError("Discovery produced no strategies")
@@ -529,6 +687,7 @@ def main() -> int:
                         "train_dates": list(result.train_dates) if result.train_dates else None,
                         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
                         "cross_window_months": cross_window_months or None,
+                        "num_seeds": num_seeds if num_seeds > 1 else None,
                         "top_strategies": top_dsls,
                     }
                 ),

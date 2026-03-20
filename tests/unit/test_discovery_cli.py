@@ -92,3 +92,53 @@ def test_main_runs_and_persists_result(tmp_path: Path, monkeypatch) -> None:
     assert run["status"] == "completed"
     assert result is not None
     assert result["total_trades"] >= 0
+
+
+def test_multi_seed_runs(tmp_path: Path, monkeypatch) -> None:
+    """Multi-seed discovery should run N seeds and aggregate results."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--num-seeds",
+            "3",
+            "--db",
+            str(db_path),
+            "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    result = state.get_backtest_result(run_id)
+    state.close()
+
+    assert run is not None
+    assert run["status"] == "completed"
+    assert result is not None
+
+    import json
+
+    notes = json.loads(result["notes"])
+    assert notes.get("num_seeds") == 3

@@ -226,6 +226,8 @@ async def launch_discovery(
     if body.cross_window_months:
         command.extend(["--cross-window-months", ",".join(str(m) for m in body.cross_window_months)])
         command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
+    if body.num_seeds > 1:
+        command.extend(["--num-seeds", str(body.num_seeds)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)
