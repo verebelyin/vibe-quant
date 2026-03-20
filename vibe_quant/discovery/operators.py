@@ -682,19 +682,44 @@ def apply_elitism(
 
 
 def initialize_population(
-    size: int = 50, direction_constraint: Direction | None = None
+    size: int = 50,
+    direction_constraint: Direction | None = None,
+    seed_chromosomes: list[StrategyChromosome] | None = None,
 ) -> list[StrategyChromosome]:
-    """Generate a population of random valid chromosomes.
+    """Generate a population, optionally seeded with known-good chromosomes.
+
+    When seed_chromosomes is provided, they are cloned (with mutations)
+    into the initial population. Remaining slots are filled with random
+    chromosomes to maintain exploration.
 
     Args:
         size: Number of chromosomes to generate.
         direction_constraint: If set, all chromosomes use this direction.
+        seed_chromosomes: Pre-existing chromosomes to seed the population.
 
     Returns:
-        List of valid random chromosomes.
+        List of valid chromosomes (size elements).
     """
     population: list[StrategyChromosome] = []
-    for _ in range(size):
+
+    if seed_chromosomes:
+        import logging
+
+        _logger = logging.getLogger(__name__)
+        # Clone seeds into population (cap at half the population to preserve exploration)
+        max_seeds = min(len(seed_chromosomes), size // 2)
+        for chrom in seed_chromosomes[:max_seeds]:
+            clone = chrom.clone()
+            if direction_constraint is not None:
+                clone.direction = direction_constraint
+            population.append(clone)
+        _logger.info(
+            "Warm-start: seeded %d/%d slots from prior chromosomes",
+            len(population), size,
+        )
+
+    # Fill remaining slots with random chromosomes
+    while len(population) < size:
         population.append(_random_chromosome(direction_constraint=direction_constraint))
     return population
 

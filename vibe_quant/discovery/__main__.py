@@ -191,6 +191,39 @@ def _check_data_available(symbols: list[str]) -> bool:
         return False
 
 
+def _load_seed_chromosomes(
+    state: object,
+    run_id: int,
+) -> list[StrategyChromosome] | None:
+    """Load top chromosomes from a prior discovery run for warm-starting.
+
+    Reads the 'chromosome' field from stored top_strategies if available.
+    Falls back to None if data is missing or unparseable.
+    """
+    import json
+
+    from vibe_quant.discovery.genome import serializable_to_chromosome
+
+    result = state.get_backtest_result(run_id)  # type: ignore[union-attr]
+    if result is None:
+        return None
+    notes = result.get("notes", "")
+    if not notes or not isinstance(notes, str):
+        return None
+    try:
+        data = json.loads(notes)
+        strategies = data.get("top_strategies", [])
+        chromosomes: list[StrategyChromosome] = []
+        for entry in strategies:
+            chrom_data = entry.get("chromosome")
+            if chrom_data and isinstance(chrom_data, dict):
+                chromosomes.append(serializable_to_chromosome(chrom_data))
+        return chromosomes if chromosomes else None
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+        logger.warning("Failed to load seed chromosomes from run %d", run_id, exc_info=True)
+        return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser for discovery jobs."""
     parser = argparse.ArgumentParser(
@@ -243,6 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.5,
         help="Min Sharpe on each shifted window to count as a pass (default: 0.5)",
+    )
+    parser.add_argument(
+        "--seed-from-run",
+        type=int,
+        default=None,
+        help="Seed initial population with top chromosomes from a prior discovery run ID",
     )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
@@ -386,6 +425,21 @@ def main() -> int:
                 def backtest_fn_factory(s: str, e: str) -> _NTBacktestFn:
                     return _NTBacktestFn(_syms, _tf, s, e)
 
+        # Load seed chromosomes from prior run if requested
+        seed_chromosomes = None
+        if args.seed_from_run is not None:
+            seed_chromosomes = _load_seed_chromosomes(state, args.seed_from_run)
+            if seed_chromosomes:
+                logger.info(
+                    "Loaded %d seed chromosomes from run %d",
+                    len(seed_chromosomes), args.seed_from_run,
+                )
+            else:
+                logger.warning(
+                    "No chromosomes found in run %d — starting with random population",
+                    args.seed_from_run,
+                )
+
         progress_file = f"logs/discovery_{args.run_id}_progress.json"
         pipeline = DiscoveryPipeline(
             config=config,
@@ -393,6 +447,7 @@ def main() -> int:
             progress_file=progress_file,
             holdout_backtest_fn=holdout_backtest_fn,
             backtest_fn_factory=backtest_fn_factory,
+            seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
 
@@ -405,7 +460,7 @@ def main() -> int:
         # Save top strategies as DSL dicts in notes
         import json
 
-        from vibe_quant.discovery.genome import chromosome_to_dsl
+        from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable
 
         top_dsls = []
         for idx, (chrom, fitness) in enumerate(result.top_strategies[:5]):
@@ -413,6 +468,7 @@ def main() -> int:
             dsl["timeframe"] = args.timeframe
             entry: dict[str, object] = {
                 "dsl": dsl,
+                "chromosome": chromosome_to_serializable(chrom),
                 "score": fitness.adjusted_score,
                 "sharpe": fitness.sharpe_ratio,
                 "max_dd": fitness.max_drawdown,

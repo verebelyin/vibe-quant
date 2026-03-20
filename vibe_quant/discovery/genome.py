@@ -504,3 +504,83 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         dsl["time_filters"] = chrom.time_filters
 
     return dsl
+
+
+def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
+    """Serialize chromosome to a JSON-safe dict for storage and reconstruction.
+
+    Unlike chromosome_to_dsl (which produces DSL format for backtesting),
+    this preserves the exact gene structure for warm-start seeding.
+    """
+
+    def _gene_dict(g: StrategyGene) -> dict[str, object]:
+        return {
+            "indicator_type": g.indicator_type,
+            "parameters": dict(g.parameters),
+            "condition": g.condition.value,
+            "threshold": g.threshold,
+            "sub_value": g.sub_value,
+        }
+
+    d: dict[str, object] = {
+        "entry_genes": [_gene_dict(g) for g in chrom.entry_genes],
+        "exit_genes": [_gene_dict(g) for g in chrom.exit_genes],
+        "stop_loss_pct": chrom.stop_loss_pct,
+        "take_profit_pct": chrom.take_profit_pct,
+        "direction": chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction),
+    }
+    if chrom.stop_loss_long_pct is not None:
+        d["stop_loss_long_pct"] = chrom.stop_loss_long_pct
+    if chrom.stop_loss_short_pct is not None:
+        d["stop_loss_short_pct"] = chrom.stop_loss_short_pct
+    if chrom.take_profit_long_pct is not None:
+        d["take_profit_long_pct"] = chrom.take_profit_long_pct
+    if chrom.take_profit_short_pct is not None:
+        d["take_profit_short_pct"] = chrom.take_profit_short_pct
+    if chrom.time_filters:
+        d["time_filters"] = dict(chrom.time_filters)
+    return d
+
+
+def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
+    """Reconstruct a StrategyChromosome from a serialized dict.
+
+    Inverse of chromosome_to_serializable.
+    """
+
+    def _parse_gene(g: dict[str, object]) -> StrategyGene:
+        params_raw = g.get("parameters", {})
+        params: dict[str, float] = {
+            str(k): float(v) for k, v in params_raw.items()  # type: ignore[union-attr]
+        }
+        return StrategyGene(
+            indicator_type=str(g["indicator_type"]),
+            parameters=params,
+            condition=ConditionType(str(g["condition"])),
+            threshold=float(g["threshold"]),  # type: ignore[arg-type]
+            sub_value=str(g["sub_value"]) if g.get("sub_value") else None,
+        )
+
+    entry_genes_raw = d.get("entry_genes", [])
+    exit_genes_raw = d.get("exit_genes", [])
+    entry_genes = [_parse_gene(g) for g in entry_genes_raw]  # type: ignore[union-attr]
+    exit_genes = [_parse_gene(g) for g in exit_genes_raw]  # type: ignore[union-attr]
+
+    direction_raw = d.get("direction", "long")
+    direction = Direction(str(direction_raw))
+
+    tf_raw = d.get("time_filters")
+    time_filters: dict[str, object] = dict(tf_raw) if tf_raw and isinstance(tf_raw, dict) else {}
+
+    return StrategyChromosome(
+        entry_genes=entry_genes,
+        exit_genes=exit_genes,
+        stop_loss_pct=float(d.get("stop_loss_pct", 2.0)),  # type: ignore[arg-type]
+        take_profit_pct=float(d.get("take_profit_pct", 3.0)),  # type: ignore[arg-type]
+        direction=direction,
+        stop_loss_long_pct=float(d["stop_loss_long_pct"]) if d.get("stop_loss_long_pct") is not None else None,  # type: ignore[arg-type]
+        stop_loss_short_pct=float(d["stop_loss_short_pct"]) if d.get("stop_loss_short_pct") is not None else None,  # type: ignore[arg-type]
+        take_profit_long_pct=float(d["take_profit_long_pct"]) if d.get("take_profit_long_pct") is not None else None,  # type: ignore[arg-type]
+        take_profit_short_pct=float(d["take_profit_short_pct"]) if d.get("take_profit_short_pct") is not None else None,  # type: ignore[arg-type]
+        time_filters=time_filters,
+    )

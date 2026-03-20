@@ -504,6 +504,61 @@ class TestCrossWindowValidation:
         assert result.cross_window_results == []
 
 
+class TestWarmStart:
+    """Tests for warm-starting GA with seed chromosomes."""
+
+    def test_seed_chromosomes_in_initial_population(self) -> None:
+        """Seed chromosomes should appear in the initial population."""
+        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+
+        seed_gene = StrategyGene(
+            indicator_type="CCI", parameters={"period": 20.0},
+            condition=ConditionType.GT, threshold=100.0,
+        )
+        seed = StrategyChromosome(
+            entry_genes=[seed_gene], exit_genes=[seed_gene.clone()],
+            stop_loss_pct=3.0, take_profit_pct=6.0, direction=Direction.SHORT,
+        )
+
+        pop = initialize_population(10, seed_chromosomes=[seed])
+        # First chromosome should be the seed (cloned)
+        assert pop[0].entry_genes[0].indicator_type == "CCI"
+        assert pop[0].stop_loss_pct == 3.0
+        assert len(pop) == 10
+
+    def test_seed_capped_at_half_population(self) -> None:
+        """Seeds can't exceed half the population."""
+        seeds = [initialize_population(1)[0] for _ in range(10)]
+        pop = initialize_population(6, seed_chromosomes=seeds)
+        assert len(pop) == 6
+        # At most 3 seeds (6 // 2)
+
+    def test_chromosome_round_trip_serialization(self) -> None:
+        """chromosome_to_serializable → serializable_to_chromosome should round-trip."""
+        from vibe_quant.discovery.genome import chromosome_to_serializable, serializable_to_chromosome
+        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+
+        gene = StrategyGene(
+            indicator_type="STOCH", parameters={"k_period": 14.0, "d_period": 3.0},
+            condition=ConditionType.LT, threshold=20.0, sub_value="k",
+        )
+        original = StrategyChromosome(
+            entry_genes=[gene], exit_genes=[gene.clone()],
+            stop_loss_pct=2.5, take_profit_pct=4.0, direction=Direction.SHORT,
+        )
+        d = chromosome_to_serializable(original)
+        restored = serializable_to_chromosome(d)
+
+        assert restored.entry_genes[0].indicator_type == "STOCH"
+        assert restored.entry_genes[0].parameters == {"k_period": 14.0, "d_period": 3.0}
+        assert restored.entry_genes[0].condition == ConditionType.LT
+        assert restored.entry_genes[0].threshold == 20.0
+        assert restored.entry_genes[0].sub_value == "k"
+        assert restored.stop_loss_pct == 2.5
+        assert restored.take_profit_pct == 4.0
+        assert restored.direction == Direction.SHORT
+
+
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:
         cfg = _make_config(population_size=8, elite_count=2, use_crowding=False)

@@ -286,6 +286,7 @@ class DiscoveryPipeline:
         progress_file: str | Path | None = None,
         holdout_backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]] | None = None,
         backtest_fn_factory: Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]] | None = None,
+        seed_chromosomes: list[StrategyChromosome] | None = None,
     ) -> None:
         self.config = config
         self._backtest_fn = backtest_fn
@@ -293,6 +294,7 @@ class DiscoveryPipeline:
         self._progress_file = Path(progress_file) if progress_file else None
         self._holdout_backtest_fn = holdout_backtest_fn
         self._backtest_fn_factory = backtest_fn_factory
+        self._seed_chromosomes = seed_chromosomes
         self._direction_constraint: Direction | None = None
 
     # -- public API ---------------------------------------------------------
@@ -357,7 +359,11 @@ class DiscoveryPipeline:
             direction_constraint = Direction(cfg.direction)
         self._direction_constraint = direction_constraint
 
-        population = initialize_population(cfg.population_size, direction_constraint=direction_constraint)
+        population = initialize_population(
+            cfg.population_size,
+            direction_constraint=direction_constraint,
+            seed_chromosomes=self._seed_chromosomes,
+        )
         generation_results: list[GenerationResult] = []
         total_evaluated = 0
         last_fitness_results: list[FitnessResult] = []
