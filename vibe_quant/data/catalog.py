@@ -322,21 +322,38 @@ def get_bar_type(symbol: str, interval: str) -> BarType:
 
 
 def cleanup_epoch_parquet(catalog_path: Path) -> None:
-    """Remove corrupt epoch-timestamp bar parquet files from a catalog directory.
+    """Remove corrupt epoch-timestamp parquet files from a catalog directory.
 
     NautilusTrader's BacktestEngine can write epoch-timestamp parquet files
-    in bar subdirectories during dispose(). These poison subsequent reads.
+    during dispose(). In bar/ subdirectories these are always corrupt and can
+    be deleted unconditionally. In crypto_perpetual/ the epoch-timestamp file
+    is a legitimate instrument definition (~7KB) — only delete if it's a
+    corrupt stub (< 1KB, typically 0 bytes from a failed parallel run).
 
-    NOTE: Instrument definitions in crypto_perpetual/ also use epoch timestamps
-    (ts_event=0, ts_init=0) — this is intentional by NT. Do NOT delete those.
-    Only clean bar/ subdirectories.
+    See bd-tdu3 for the original bug report.
     """
     epoch_pattern = "1970-01-01T00-00-00-000000000Z_1970-01-01T00-00-00-000000000Z.parquet"
+
+    # 1. Clean bar/ subdirectories unconditionally (always corrupt)
     bar_dir = catalog_path / "data" / "bar"
-    if not bar_dir.exists():
-        return
-    for corrupt_file in bar_dir.rglob(epoch_pattern):
-        corrupt_file.unlink(missing_ok=True)
+    if bar_dir.exists():
+        for corrupt_file in bar_dir.rglob(epoch_pattern):
+            logger.info("Removing corrupt epoch parquet: %s", corrupt_file)
+            corrupt_file.unlink(missing_ok=True)
+
+    # 2. Clean crypto_perpetual/ ONLY if the file is a corrupt stub (< 1KB).
+    #    Legitimate instrument definitions are ~5-10KB.
+    perp_dir = catalog_path / "data" / "crypto_perpetual"
+    if perp_dir.exists():
+        for epoch_file in perp_dir.rglob(epoch_pattern):
+            size = epoch_file.stat().st_size
+            if size < 1024:
+                logger.info(
+                    "Removing corrupt instrument epoch parquet (%d bytes): %s",
+                    size,
+                    epoch_file,
+                )
+                epoch_file.unlink(missing_ok=True)
 
 
 class CatalogManager:
