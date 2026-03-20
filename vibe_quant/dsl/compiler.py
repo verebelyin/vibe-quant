@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 _ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "__future__",
     "datetime",
+    "random",
     "typing",
     "warnings",
     "zoneinfo",
@@ -344,6 +345,7 @@ class StrategyCompiler:
             "",
             "from datetime import time as dt_time",
             "from typing import TYPE_CHECKING",
+            "import random",
             "import zoneinfo",
             "",
             "from nautilus_trader.core.uuid import UUID4",
@@ -423,6 +425,9 @@ class StrategyCompiler:
         lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
         lines.append(
             "    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)"
+        )
+        lines.append(
+            "    execution_delay_probability: float = 0.0  # Validation-only one-bar delay"
         )
         lines.append("")
 
@@ -575,6 +580,7 @@ class StrategyCompiler:
             "        # Position tracking",
             "        self._position_open = False",
             "        self._position_side: OrderSide | None = None",
+            "        self._pending_validation_action: str | None = None",
             "",
             "        # Previous indicator values for crossover detection",
             "        self._prev_values: dict[str, float] = {}",
@@ -835,6 +841,11 @@ class StrategyCompiler:
                 "    if not self._indicators_ready():",
                 "        return",
                 "",
+                "    # Execute any validation-only delayed action before new signals",
+                "    if self._dispatch_pending_validation_action(bar):",
+                "        self._update_prev_values()",
+                "        return",
+                "",
             ]
         )
 
@@ -857,13 +868,15 @@ class StrategyCompiler:
         lines.append("    if not self._position_open:")
         if dsl.entry_conditions.long:
             lines.append("        if self._check_long_entry(bar):")
-            lines.append("            self._submit_long_entry(bar)")
+            lines.append("            if not self._maybe_delay_validation_action('long_entry'):")
+            lines.append("                self._submit_long_entry(bar)")
         if dsl.entry_conditions.short:
             if dsl.entry_conditions.long:
                 lines.append("        elif self._check_short_entry(bar):")
             else:
                 lines.append("        if self._check_short_entry(bar):")
-            lines.append("            self._submit_short_entry(bar)")
+            lines.append("            if not self._maybe_delay_validation_action('short_entry'):")
+            lines.append("                self._submit_short_entry(bar)")
 
         # Exit conditions
         if dsl.exit_conditions.long or dsl.exit_conditions.short:
@@ -873,14 +886,16 @@ class StrategyCompiler:
             if dsl.exit_conditions.long:
                 lines.append("        if self._position_side == OrderSide.BUY:")
                 lines.append("            if self._check_long_exit(bar):")
-                lines.append("                self._submit_exit(bar)")
+                lines.append("                if not self._maybe_delay_validation_action('exit'):")
+                lines.append("                    self._submit_exit(bar)")
             if dsl.exit_conditions.short:
                 if dsl.exit_conditions.long:
                     lines.append("        elif self._position_side == OrderSide.SELL:")
                 else:
                     lines.append("        if self._position_side == OrderSide.SELL:")
                 lines.append("            if self._check_short_exit(bar):")
-                lines.append("                self._submit_exit(bar)")
+                lines.append("                if not self._maybe_delay_validation_action('exit'):")
+                lines.append("                    self._submit_exit(bar)")
 
         # Trailing stop update
         has_trailing = (

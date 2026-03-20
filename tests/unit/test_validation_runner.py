@@ -319,6 +319,35 @@ class TestValidationRunner:
         with pytest.raises(ValidationRunnerError, match="not found"):
             runner.run(run_id=9999)
 
+    def test_sub_bar_validation_adds_execution_delay_param(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+    ) -> None:
+        """Sub-5m validation should inject one-bar delay by default."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        params = runner._augment_strategy_params_for_validation({}, timeframe="1m")
+
+        assert params["execution_delay_probability"] == 0.3
+        runner.close()
+
+    def test_validation_param_override_is_preserved(
+        self,
+        temp_db: Path,
+        temp_logs: Path,
+    ) -> None:
+        """Explicit run parameters should beat the default sub-bar delay."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        params = runner._augment_strategy_params_for_validation(
+            {"execution_delay_probability": 0.45},
+            timeframe="1m",
+        )
+
+        assert params["execution_delay_probability"] == 0.45
+        runner.close()
+
         runner.close()
 
     def test_runner_run_wrong_mode(

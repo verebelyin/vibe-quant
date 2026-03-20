@@ -7,6 +7,8 @@ from nautilus_trader.config import (
     BacktestVenueConfig,
     LatencyModelConfig,
 )
+from nautilus_trader.model.objects import Price
+from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
 from vibe_quant.validation import (
     BINANCE_MAKER_FEE,
@@ -126,6 +128,8 @@ class TestFillModels:
         config = VolumeSlippageFillModelConfig()
         assert config.impact_coefficient == 0.1
         assert config.prob_fill_on_limit == 0.8
+        assert config.prob_best_price_fill == 1.0
+        assert config.max_adverse_ticks == 1
         assert config.prob_slippage == 0.0
 
     def test_create_screening_fill_model(self) -> None:
@@ -149,18 +153,61 @@ class TestFillModels:
         model = create_validation_fill_model()
         assert isinstance(model, VolumeSlippageFillModel)
         assert model.impact_coefficient == 0.1
+        assert model.prob_best_price_fill == 1.0
+        assert model.max_adverse_ticks == 1
 
     def test_create_validation_fill_model_with_config(self) -> None:
         """Create validation fill model with custom config."""
         config = VolumeSlippageFillModelConfig(
             impact_coefficient=0.2,
             prob_fill_on_limit=0.7,
+            prob_best_price_fill=0.6,
+            max_adverse_ticks=2,
             prob_slippage=0.9,
         )
         model = create_validation_fill_model(config)
         assert model.impact_coefficient == 0.2
         assert model.prob_fill_on_limit == 0.7
+        assert model.prob_best_price_fill == 0.6
+        assert model.max_adverse_ticks == 2
         assert model.prob_slippage == 0.9
+
+    def test_volume_slippage_fill_model_best_price_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Best-price branch should keep the synthetic book at current best levels."""
+        monkeypatch.setattr("random.random", lambda: 0.2)
+        instrument = TestInstrumentProvider.btcusdt_binance()
+        model = create_validation_fill_model(
+            VolumeSlippageFillModelConfig(prob_best_price_fill=0.7, max_adverse_ticks=2)
+        )
+
+        book = model.get_orderbook_for_fill_simulation(
+            instrument,
+            object(),
+            Price(100_000.00, precision=2),
+            Price(100_000.10, precision=2),
+        )
+
+        assert book.best_bid_price().as_double() == pytest.approx(100_000.0)
+        assert book.best_ask_price().as_double() == pytest.approx(100_000.1)
+
+    def test_volume_slippage_fill_model_adverse_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Adverse branch should shift the synthetic book away from best prices."""
+        monkeypatch.setattr("random.random", lambda: 0.95)
+        monkeypatch.setattr("random.randint", lambda start, stop: 2)
+        instrument = TestInstrumentProvider.btcusdt_binance()
+        model = create_validation_fill_model(
+            VolumeSlippageFillModelConfig(prob_best_price_fill=0.7, max_adverse_ticks=2)
+        )
+
+        book = model.get_orderbook_for_fill_simulation(
+            instrument,
+            object(),
+            Price(100_000.00, precision=2),
+            Price(100_000.10, precision=2),
+        )
+
+        assert book.best_bid_price().as_double() == pytest.approx(99_999.98)
+        assert book.best_ask_price().as_double() == pytest.approx(100_000.12)
 
     def test_slippage_estimator_calculate(self) -> None:
         """SlippageEstimator calculates slippage factor correctly.
@@ -253,12 +300,15 @@ class TestVenueConfig:
         assert config.fill_config.prob_slippage == 0.0
 
     def test_create_venue_config_for_validation_no_latency(self) -> None:
-        """No-latency validation uses prob_slippage=0.3 to compensate."""
+        """No-latency validation uses probabilistic book degradation."""
         config = create_venue_config_for_validation(latency_preset=None)
         assert config.latency_preset is None
         assert config.use_volume_slippage
         assert isinstance(config.fill_config, VolumeSlippageFillModelConfig)
-        assert config.fill_config.prob_slippage == 0.3
+        assert config.fill_config.prob_fill_on_limit == 0.7
+        assert config.fill_config.prob_best_price_fill == 0.7
+        assert config.fill_config.max_adverse_ticks == 2
+        assert config.fill_config.prob_slippage == 0.0
 
     def test_create_venue_config_for_validation_custom(self) -> None:
         """Create validation venue config with custom values."""

@@ -44,6 +44,7 @@ ON_RESET_LINES: tuple[str, ...] = (
     '    """Reset strategy state between backtest runs."""',
     "    self._position_open = False",
     "    self._position_side = None",
+    "    self._pending_validation_action = None",
 )
 
 # ---------------------------------------------------------------------------
@@ -338,4 +339,32 @@ ORDER_METHODS_LINES: tuple[str, ...] = (
     "            return",
     "    self._position_open = False",
     "    self._position_side = None",
+    "",
+    # _maybe_delay_validation_action
+    "def _maybe_delay_validation_action(self, action: str) -> bool:",
+    '    """Delay an action by one bar when validation asks for sub-bar degradation."""',
+    "    delay_prob = getattr(self.config, 'execution_delay_probability', 0.0)",
+    "    if delay_prob <= 0.0:",
+    "        return False",
+    "    if self._pending_validation_action is not None:",
+    "        return False",
+    "    if random.random() >= delay_prob:",
+    "        return False",
+    "    self._pending_validation_action = action",
+    "    return True",
+    "",
+    # _dispatch_pending_validation_action
+    "def _dispatch_pending_validation_action(self, bar: Bar) -> bool:",
+    '    """Execute a delayed validation action on the next primary bar."""',
+    "    action = self._pending_validation_action",
+    "    if action is None:",
+    "        return False",
+    "    self._pending_validation_action = None",
+    "    if action == 'long_entry':",
+    "        self._submit_long_entry(bar)",
+    "    elif action == 'short_entry':",
+    "        self._submit_short_entry(bar)",
+    "    elif action == 'exit':",
+    "        self._submit_exit(bar)",
+    "    return True",
 )

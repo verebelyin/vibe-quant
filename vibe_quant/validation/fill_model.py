@@ -9,6 +9,7 @@ Provides:
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 
 from nautilus_trader.backtest.models import FillModel
@@ -26,6 +27,10 @@ class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
             Higher values = more slippage. Default 0.1.
         prob_fill_on_limit: Probability of limit order fill when price touches.
             Default 0.8.
+        prob_best_price_fill: Probability aggressive orders fill at the current
+            bar's best price. Lower values degrade to an adverse synthetic book.
+        max_adverse_ticks: Maximum ticks of adverse movement when the fill is
+            degraded away from the best price.
         prob_slippage: Probability that market orders experience slippage.
             Default 0.0 in validation to avoid double-counting with
             post-fill SPEC slippage estimation.
@@ -33,6 +38,8 @@ class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
 
     impact_coefficient: float = 0.1
     prob_fill_on_limit: float = 0.8
+    prob_best_price_fill: float = 1.0
+    max_adverse_ticks: int = 1
     prob_slippage: float = 0.0
 
 
@@ -51,6 +58,9 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
     This class:
     1. Stores `impact_coefficient` for use by SlippageEstimator.
     2. Keeps explicit fill-probability controls for limit orders.
+    3. Optionally simulates an adverse L2 order book for market orders, which
+       gives sub-5m validation a realistic degradation path without forcing a
+       catastrophic full-bar LatencyModel delay.
 
     For realistic slippage *cost* estimation per the SPEC formula, use
     SlippageEstimator separately in post-fill analytics.
@@ -62,7 +72,9 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         *,
         impact_coefficient: float = 0.1,
         prob_fill_on_limit: float = 0.8,
-        prob_slippage: float = 1.0,
+        prob_best_price_fill: float = 1.0,
+        max_adverse_ticks: int = 1,
+        prob_slippage: float = 0.0,
     ) -> None:
         """Initialize VolumeSlippageFillModel.
 
@@ -70,12 +82,23 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
             config: Configuration object. If provided, other args are ignored.
             impact_coefficient: Market impact coefficient k.
             prob_fill_on_limit: Probability of limit fill.
+            prob_best_price_fill: Probability aggressive orders fill at best.
+            max_adverse_ticks: Maximum adverse ticks when degrading a fill.
             prob_slippage: Probability of slippage.
         """
         if config is not None:
             impact_coefficient = config.impact_coefficient
             prob_fill_on_limit = config.prob_fill_on_limit
+            prob_best_price_fill = config.prob_best_price_fill
+            max_adverse_ticks = config.max_adverse_ticks
             prob_slippage = config.prob_slippage
+
+        if not 0.0 <= prob_best_price_fill <= 1.0:
+            raise ValueError(
+                f"prob_best_price_fill must be between 0 and 1, got {prob_best_price_fill}"
+            )
+        if max_adverse_ticks < 1:
+            raise ValueError(f"max_adverse_ticks must be >= 1, got {max_adverse_ticks}")
 
         super().__init__(
             prob_fill_on_limit=prob_fill_on_limit,
@@ -83,11 +106,81 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         )
 
         self._impact_coefficient = impact_coefficient
+        self._prob_best_price_fill = prob_best_price_fill
+        self._max_adverse_ticks = max_adverse_ticks
 
     @property
     def impact_coefficient(self) -> float:
         """Get market impact coefficient."""
         return self._impact_coefficient
+
+    @property
+    def prob_best_price_fill(self) -> float:
+        """Get best-price fill probability for aggressive orders."""
+        return self._prob_best_price_fill
+
+    @property
+    def max_adverse_ticks(self) -> int:
+        """Get the maximum adverse ticks applied when degrading fills."""
+        return self._max_adverse_ticks
+
+    def is_slipped(self) -> bool:
+        """Disable engine one-tick slippage in favor of simulated book fills."""
+        return False
+
+    def get_orderbook_for_fill_simulation(self, instrument, order, best_bid, best_ask):
+        """Return a synthetic L2 book for moderate sub-bar fill degradation."""
+        from nautilus_trader.core.rust.model import BookType, OrderSide
+        from nautilus_trader.model.book import OrderBook
+        from nautilus_trader.model.data import BookOrder
+        from nautilus_trader.model.objects import Quantity
+
+        del order
+
+        book = OrderBook(
+            instrument_id=instrument.id,
+            book_type=BookType.L2_MBP,
+        )
+        unlimited_size = Quantity(1_000_000, instrument.size_precision)
+        bid_price = best_bid
+        ask_price = best_ask
+
+        if random.random() > self._prob_best_price_fill:
+            adverse_ticks = (
+                1
+                if self._max_adverse_ticks == 1
+                else random.randint(1, self._max_adverse_ticks)
+            )
+            bid_price = self._shift_price(best_bid, instrument.price_increment, -adverse_ticks)
+            ask_price = self._shift_price(best_ask, instrument.price_increment, adverse_ticks)
+
+        book.add(
+            BookOrder(
+                side=OrderSide.BUY,
+                price=bid_price,
+                size=unlimited_size,
+                order_id=1,
+            ),
+            0,
+            0,
+        )
+        book.add(
+            BookOrder(
+                side=OrderSide.SELL,
+                price=ask_price,
+                size=unlimited_size,
+                order_id=2,
+            ),
+            0,
+            0,
+        )
+
+        return book
+
+    def _shift_price(self, price, tick, steps: int):
+        """Move a price up or down by N instrument ticks."""
+        shifted_value = price.as_double() + tick.as_double() * steps
+        return type(price)(shifted_value, precision=price.precision)
 
 
 class SlippageEstimator:

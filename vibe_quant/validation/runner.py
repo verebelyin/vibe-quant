@@ -638,7 +638,10 @@ class ValidationRunner:
             raise ValidationRunnerError(msg)
 
         # Build strategy config dict: instrument_id + any override parameters
-        strategy_params = self._build_strategy_params(run_config)
+        strategy_params = self._augment_strategy_params_for_validation(
+            self._build_strategy_params(run_config),
+            timeframe=dsl.timeframe,
+        )
 
         # Build strategy configs (one per symbol)
         strategy_configs: list[ImportableStrategyConfig] = []
@@ -814,6 +817,18 @@ class ValidationRunner:
             params[key] = value
 
         return params
+
+    def _augment_strategy_params_for_validation(
+        self,
+        params: dict[str, object],
+        *,
+        timeframe: str,
+    ) -> dict[str, object]:
+        """Inject validation-only runtime degradation knobs when appropriate."""
+        augmented = dict(params)
+        if timeframe in self._SUB_BAR_TIMEFRAMES:
+            augmented.setdefault("execution_delay_probability", 0.3)
+        return augmented
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.

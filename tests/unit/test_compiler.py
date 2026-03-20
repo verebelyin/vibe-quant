@@ -210,6 +210,8 @@ class TestCompileMinimalStrategy:
         assert "class TestMinimalStrategy(Strategy):" in source
         assert "def on_start(self)" in source
         assert "def on_bar(self, bar: Bar)" in source
+        assert "_maybe_delay_validation_action" in source
+        assert "_dispatch_pending_validation_action" in source
 
     @pytest.mark.skip(reason="Requires indicator registry NT class loading fix")
     def test_compile_generates_indicator_import(
@@ -487,6 +489,15 @@ class TestConfigClassGeneration:
         assert "rsi_period" in source
         assert "rsi_1h_period" in source
         assert "ema_trend_period" in source
+
+    def test_config_has_validation_execution_delay_param(
+        self, compiler: StrategyCompiler, minimal_strategy_yaml: str
+    ) -> None:
+        """Config should expose validation-only execution delay control."""
+        dsl = parse_strategy_string(minimal_strategy_yaml)
+        source = compiler.compile(dsl)
+
+        assert "execution_delay_probability: float = 0.0" in source
 
     def test_config_has_stop_loss_params(
         self, compiler: StrategyCompiler, minimal_strategy_yaml: str

@@ -118,7 +118,8 @@ def create_venue_config_for_validation(
 
     When latency_preset is None (sub-5m bar data), LatencyModel is skipped
     because NT defers orders to the next bar regardless of actual delay.
-    Engine prob_slippage=0.3 compensates for fill quality degradation.
+    Instead we use a probabilistic synthetic order book plus stricter
+    limit-touch fills to introduce moderate degradation without full-bar lag.
 
     Args:
         starting_balance_usdt: Starting balance.
@@ -130,9 +131,18 @@ def create_venue_config_for_validation(
     Returns:
         VenueConfig for validation.
     """
-    # When no latency model, use engine slippage to model fill degradation.
-    # With latency model, keep engine slippage disabled (SPEC post-fill handles it).
-    prob_slippage = 0.3 if latency_preset is None else 0.0
+    # With a latency model, keep market fills optimistic and let the latency path
+    # plus post-fill SPEC slippage provide degradation. Without latency (sub-5m),
+    # use a probabilistic synthetic book to make aggressive orders worse 30% of
+    # the time and lower limit-touch fill quality to 70%.
+    if latency_preset is None:
+        prob_fill_on_limit = 0.7
+        prob_best_price_fill = 0.7
+        max_adverse_ticks = 2
+    else:
+        prob_fill_on_limit = 0.8
+        prob_best_price_fill = 1.0
+        max_adverse_ticks = 1
 
     return VenueConfig(
         name="BINANCE",
@@ -143,8 +153,10 @@ def create_venue_config_for_validation(
         use_volume_slippage=True,
         fill_config=VolumeSlippageFillModelConfig(
             impact_coefficient=impact_coefficient,
-            prob_fill_on_limit=0.8,
-            prob_slippage=prob_slippage,
+            prob_fill_on_limit=prob_fill_on_limit,
+            prob_best_price_fill=prob_best_price_fill,
+            max_adverse_ticks=max_adverse_ticks,
+            prob_slippage=0.0,
         ),
     )
 
@@ -224,6 +236,8 @@ def _create_importable_fill_model_config(
             config={
                 "impact_coefficient": fill_cfg.impact_coefficient,
                 "prob_fill_on_limit": fill_cfg.prob_fill_on_limit,
+                "prob_best_price_fill": fill_cfg.prob_best_price_fill,
+                "max_adverse_ticks": fill_cfg.max_adverse_ticks,
                 "prob_slippage": fill_cfg.prob_slippage,
             },
         )
