@@ -29,6 +29,13 @@ from vibe_quant.validation.latency import (
     create_custom_latency_model,
     get_latency_model,
 )
+from vibe_quant.validation.random_baseline import (
+    BaselineConfig,
+    BaselineResult,
+    load_ohlc,
+    run_all_champions,
+    run_random_short_baseline,
+)
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.runner import (
     ValidationRunner,
@@ -77,4 +84,10 @@ __all__ = [
     "ValidationResult",
     "TradeRecord",
     "list_validation_runs",
+    # Random baseline
+    "BaselineConfig",
+    "BaselineResult",
+    "run_random_short_baseline",
+    "run_all_champions",
+    "load_ohlc",
 ]
