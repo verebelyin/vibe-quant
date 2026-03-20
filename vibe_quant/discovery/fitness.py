@@ -40,8 +40,9 @@ COMPLEXITY_PENALTY_PER_GENE: float = 0.02
 COMPLEXITY_FREE_GENES: int = 2
 COMPLEXITY_PENALTY_CAP: float = 0.1
 
-# Minimum trade threshold
-MIN_TRADES: int = 50
+# Minimum trade thresholds
+MIN_TRADES: int = 50  # Default for 4h and longer timeframes
+MIN_TRADES_1M: int = 100  # For 1m timeframe (more trades needed for statistical significance)
 
 # Overtrading penalty: commission-aware
 # Assumes ~0.1% round-trip commission (taker fees on crypto perps)
@@ -315,6 +316,7 @@ def _evaluate_single(
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
     | None = None,
+    min_trades: int = MIN_TRADES,
 ) -> FitnessResult:
     """Evaluate fitness for a single chromosome (picklable for multiprocessing)."""
     _zero = FitnessResult(
@@ -381,7 +383,7 @@ def _evaluate_single(
     raw = compute_fitness_score(sharpe, max_dd, pf, total_return)
 
     # Hard gates: insufficient trades or negative return → zero fitness
-    if trades < MIN_TRADES or total_return <= 0:
+    if trades < min_trades or total_return <= 0:
         adjusted = 0.0
     else:
         adjusted = max(0.0, raw - complexity_pen - overtrade_pen)
@@ -471,6 +473,7 @@ def evaluate_population(
     *,
     max_workers: int | None = None,
     executor: object | None = None,
+    min_trades: int = MIN_TRADES,
 ) -> list[FitnessResult]:
     """Evaluate fitness for an entire population, optionally in parallel.
 
@@ -484,6 +487,7 @@ def evaluate_population(
             sharpe_ratio, max_drawdown, profit_factor, total_trades, total_return.
         filter_fn: Optional callable that returns per-filter pass/fail dict.
         max_workers: Max parallel workers. None = sequential. 0 = auto (cpu_count).
+        min_trades: Minimum trades hard gate (default 50 for 4h, use 100 for 1m).
 
     Returns:
         FitnessResult for each chromosome, parallel to input.
@@ -491,12 +495,12 @@ def evaluate_population(
     global _parallel_broken  # noqa: PLW0603
     if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
-            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor)
+            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades)
         except Exception:
             _parallel_broken = True
             logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
 
-    return [_evaluate_single(chrom, backtest_fn, filter_fn) for chrom in chromosomes]
+    return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades) for chrom in chromosomes]
 
 
 def _evaluate_parallel(
@@ -505,6 +509,7 @@ def _evaluate_parallel(
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None,
     max_workers: int | None,
     executor: object | None = None,
+    min_trades: int = MIN_TRADES,
 ) -> list[FitnessResult]:
     """Evaluate population using ProcessPoolExecutor.
 
@@ -535,7 +540,7 @@ def _evaluate_parallel(
 
     def _run_with(pool: Executor) -> None:
         future_to_idx = {
-            pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn): i
+            pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn, min_trades): i
             for i, chrom in enumerate(chromosomes)
         }
         for future in as_completed(future_to_idx):

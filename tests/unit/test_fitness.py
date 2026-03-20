@@ -9,6 +9,7 @@ import pytest
 from vibe_quant.discovery.fitness import (
     COMPLEXITY_PENALTY_CAP,
     MIN_TRADES,
+    MIN_TRADES_1M,
     FitnessResult,
     compute_complexity_penalty,
     compute_fitness_score,
@@ -227,6 +228,27 @@ class TestMinTradeFilter:
 
         results = evaluate_population([chrom], bt_fn)
         assert results[0].adjusted_score == 0.0
+
+    def test_custom_min_trades_gate(self) -> None:
+        """min_trades parameter controls the trade count hard gate."""
+        chrom = _make_chromosome()
+
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {
+                "sharpe_ratio": 3.0,
+                "max_drawdown": 0.1,
+                "profit_factor": 3.0,
+                "total_trades": 80,  # Above MIN_TRADES(50) but below MIN_TRADES_1M(100)
+                "total_return": 0.10,
+            }
+
+        # Default min_trades=50: passes
+        results_default = evaluate_population([chrom], bt_fn)
+        assert results_default[0].adjusted_score > 0.0
+
+        # min_trades=100: fails (80 < 100)
+        results_1m = evaluate_population([chrom], bt_fn, min_trades=MIN_TRADES_1M)
+        assert results_1m[0].adjusted_score == 0.0
 
     def test_zero_trades(self) -> None:
         chrom = _make_chromosome()
@@ -464,6 +486,28 @@ class TestEdgeCases:
         # Sharpe=0 norm=1/5=0.2, DD=1.0, PF=0.0, Return=0 norm=1/3=0.333
         # 0.35*0.2 + 0.25*1.0 + 0.20*0.0 + 0.20*0.333 = 0.07+0.25+0+0.0667 = 0.3867
         assert score == pytest.approx(0.3867, abs=1e-3)
+
+    def test_min_trades_1m_constant(self) -> None:
+        """MIN_TRADES_1M should be higher than MIN_TRADES."""
+        assert MIN_TRADES_1M > MIN_TRADES
+        assert MIN_TRADES_1M == 100
+
+    def test_discovery_config_auto_min_trades_1m(self) -> None:
+        """DiscoveryConfig should auto-set min_trades=100 for 1m timeframe."""
+        from vibe_quant.discovery.pipeline import DiscoveryConfig
+
+        cfg_1m = DiscoveryConfig(timeframe="1m", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        assert cfg_1m.min_trades == MIN_TRADES_1M
+
+        cfg_4h = DiscoveryConfig(timeframe="4h", symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        assert cfg_4h.min_trades == MIN_TRADES
+
+    def test_discovery_config_explicit_min_trades_override(self) -> None:
+        """Explicit min_trades should NOT be overridden by auto-detection."""
+        from vibe_quant.discovery.pipeline import DiscoveryConfig
+
+        cfg = DiscoveryConfig(timeframe="1m", min_trades=75, symbols=["BTCUSDT"], start_date="2026-01-01", end_date="2026-03-01")
+        assert cfg.min_trades == 75  # Should keep explicit value, not override to 100
 
     def test_fitness_result_is_frozen(self) -> None:
         r = _make_result()

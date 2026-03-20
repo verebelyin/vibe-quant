@@ -120,6 +120,13 @@ class DiscoveryConfig:
         if errors:
             raise ValueError("; ".join(errors))
 
+        # Auto-set min_trades for sub-5m timeframes if left at default (50).
+        # 1m strategies need 100+ trades for statistical significance (bd-yu02).
+        if self.min_trades == 50 and self.timeframe in ("1m", "2m", "3m", "5m"):
+            from vibe_quant.discovery.fitness import MIN_TRADES_1M
+
+            object.__setattr__(self, "min_trades", MIN_TRADES_1M)
+
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
@@ -343,6 +350,7 @@ class DiscoveryPipeline:
                 self._filter_fn,
                 max_workers=cfg.max_workers,
                 executor=executor,
+                min_trades=cfg.min_trades,
             )
             last_fitness_results = fitness_results
             total_evaluated += len(population)
