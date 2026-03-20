@@ -20,6 +20,8 @@ class DiscoveryLaunchRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     train_test_split: float = 0.0  # 0=disabled, 0.5=50/50 train/holdout split
+    cross_window_months: list[int] | None = None  # e.g. [1, 2] for +1mo, +2mo shifted windows
+    cross_window_min_sharpe: float = 0.5  # min Sharpe on shifted windows
 
 
 class DiscoveryJobResponse(BaseModel):

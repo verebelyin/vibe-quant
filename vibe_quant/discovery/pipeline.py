@@ -92,6 +92,9 @@ class DiscoveryConfig:
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
     train_test_split: float = 0.0  # 0 = disabled; >0 = fraction for train (e.g. 0.5)
+    cross_window_months: list[int] = field(default_factory=list)  # shifted windows, e.g. [1, 2]
+    cross_window_min_pass: int = 2  # min windows (of total) that must pass
+    cross_window_min_sharpe: float = 0.5  # min Sharpe on each window to count as pass
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -179,6 +182,23 @@ class HoldoutResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossWindowResult:
+    """Cross-window validation result for a single strategy.
+
+    Attributes:
+        window_results: Per-window HoldoutResult (index 0 = original, 1+ = shifted).
+        windows_passed: Number of windows where strategy passed thresholds.
+        total_windows: Total number of windows evaluated.
+        passed: Whether strategy met cross_window_min_pass.
+    """
+
+    window_results: list[HoldoutResult]
+    windows_passed: int
+    total_windows: int
+    passed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DiscoveryResult:
     """Final output of the discovery pipeline.
 
@@ -201,6 +221,7 @@ class DiscoveryResult:
     holdout_results: list[HoldoutResult] = field(default_factory=list)
     train_dates: tuple[str, str] | None = None
     holdout_dates: tuple[str, str] | None = None
+    cross_window_results: list[CrossWindowResult] = field(default_factory=list)
 
 
 def _select_diverse_top_k(
@@ -264,12 +285,14 @@ class DiscoveryPipeline:
         | None = None,
         progress_file: str | Path | None = None,
         holdout_backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]] | None = None,
+        backtest_fn_factory: Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]] | None = None,
     ) -> None:
         self.config = config
         self._backtest_fn = backtest_fn
         self._filter_fn = filter_fn
         self._progress_file = Path(progress_file) if progress_file else None
         self._holdout_backtest_fn = holdout_backtest_fn
+        self._backtest_fn_factory = backtest_fn_factory
         self._direction_constraint: Direction | None = None
 
     # -- public API ---------------------------------------------------------
@@ -710,6 +733,17 @@ class DiscoveryPipeline:
             train_dates = (ts, te)
             holdout_dates = (hs, he)
 
+        # Cross-window validation: run top strategies on shifted date windows
+        cross_window_results: list[CrossWindowResult] = []
+        if (
+            cfg.cross_window_months
+            and self._backtest_fn_factory is not None
+            and top_strategies
+        ):
+            cross_window_results, top_strategies = self._evaluate_cross_windows(
+                top_strategies,
+            )
+
         return DiscoveryResult(
             generations=generation_results,
             top_strategies=top_strategies,
@@ -719,6 +753,7 @@ class DiscoveryPipeline:
             holdout_results=holdout_results,
             train_dates=train_dates,
             holdout_dates=holdout_dates,
+            cross_window_results=cross_window_results,
         )
 
     def _evaluate_holdout(
@@ -792,6 +827,144 @@ class DiscoveryPipeline:
             )
 
         return results
+
+    def _evaluate_cross_windows(
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+    ) -> tuple[list[CrossWindowResult], list[tuple[StrategyChromosome, FitnessResult]]]:
+        """Evaluate top strategies across shifted time windows.
+
+        Creates shifted windows by offsetting start/end dates by N months.
+        Filters strategies that don't pass on enough windows.
+
+        Returns:
+            (cross_window_results, filtered_top_strategies)
+        """
+        assert self._backtest_fn_factory is not None
+        cfg = self.config
+        offsets = cfg.cross_window_months
+        min_sharpe = cfg.cross_window_min_sharpe
+        min_pass = cfg.cross_window_min_pass
+
+        from datetime import datetime as _dt
+
+        from dateutil.relativedelta import relativedelta
+
+        base_start = _dt.strptime(cfg.start_date, "%Y-%m-%d")
+        base_end = _dt.strptime(cfg.end_date, "%Y-%m-%d")
+
+        # Build list of windows: original + shifted
+        windows: list[tuple[str, str]] = [(cfg.start_date, cfg.end_date)]
+        for months in offsets:
+            ws = (base_start + relativedelta(months=months)).strftime("%Y-%m-%d")
+            we = (base_end + relativedelta(months=months)).strftime("%Y-%m-%d")
+            windows.append((ws, we))
+
+        logger.info(
+            "=== CROSS-WINDOW VALIDATION: %d strategies × %d windows ===",
+            len(top_strategies), len(windows),
+        )
+        for i, (ws, we) in enumerate(windows):
+            label = "original" if i == 0 else f"+{offsets[i-1]}mo"
+            logger.info("  Window %d (%s): %s → %s", i, label, ws, we)
+
+        cross_results: list[CrossWindowResult] = []
+        filtered: list[tuple[StrategyChromosome, FitnessResult]] = []
+
+        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
+            window_hrs: list[HoldoutResult] = []
+            passes = 0
+
+            for w_idx, (ws, we) in enumerate(windows):
+                try:
+                    if w_idx == 0:
+                        # Original window — use train fitness directly
+                        hr = HoldoutResult(
+                            sharpe_ratio=train_fit.sharpe_ratio,
+                            max_drawdown=train_fit.max_drawdown,
+                            profit_factor=train_fit.profit_factor,
+                            total_trades=train_fit.total_trades,
+                            total_return=train_fit.total_return,
+                        )
+                    else:
+                        bt_fn = self._backtest_fn_factory(ws, we)
+                        bt = bt_fn(chrom)
+                        import math as _math
+                        sharpe = float(bt.get("sharpe_ratio", 0.0))
+                        max_dd = float(bt.get("max_drawdown", 1.0))
+                        pf = float(bt.get("profit_factor", 0.0))
+                        trades = int(bt.get("total_trades", 0))
+                        ret = float(bt.get("total_return", 0.0))
+                        if _math.isnan(sharpe):
+                            sharpe = 0.0
+                        if _math.isnan(max_dd):
+                            max_dd = 1.0
+                        if _math.isnan(pf):
+                            pf = 0.0
+                        if _math.isnan(ret):
+                            ret = 0.0
+                        hr = HoldoutResult(
+                            sharpe_ratio=sharpe,
+                            max_drawdown=max_dd,
+                            profit_factor=pf,
+                            total_trades=trades,
+                            total_return=ret,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Cross-window eval failed: %s window %d", chrom.uid, w_idx,
+                        exc_info=True,
+                    )
+                    hr = HoldoutResult(
+                        sharpe_ratio=0.0, max_drawdown=1.0,
+                        profit_factor=0.0, total_trades=0, total_return=0.0,
+                    )
+
+                window_hrs.append(hr)
+                if hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe:
+                    passes += 1
+
+            passed = passes >= min_pass
+            cwr = CrossWindowResult(
+                window_results=window_hrs,
+                windows_passed=passes,
+                total_windows=len(windows),
+                passed=passed,
+            )
+            cross_results.append(cwr)
+
+            # Log per-strategy cross-window summary
+            window_strs = []
+            for i, hr in enumerate(window_hrs):
+                label = "W0" if i == 0 else f"W+{offsets[i-1]}mo"
+                status = "PASS" if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else "FAIL"
+                window_strs.append(
+                    f"{label}: sharpe={hr.sharpe_ratio:.2f} ret={hr.total_return*100:.1f}% [{status}]"
+                )
+            logger.info(
+                "  #%d %s: %s → %d/%d windows %s",
+                rank, chrom.uid,
+                " | ".join(window_strs),
+                passes, len(windows),
+                "PROMOTED" if passed else "REJECTED",
+            )
+
+            if passed:
+                filtered.append((chrom, train_fit))
+
+        logger.info(
+            "  Cross-window summary: %d/%d strategies promoted",
+            len(filtered), len(top_strategies),
+        )
+
+        # If all rejected, keep original strategies with a warning
+        if not filtered:
+            logger.warning(
+                "All strategies failed cross-window validation — keeping originals"
+            )
+            filtered = top_strategies
+
+        return cross_results, filtered
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""

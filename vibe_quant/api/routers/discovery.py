@@ -223,6 +223,9 @@ async def launch_discovery(
         command.extend(["--direction", body.direction])
     if body.train_test_split > 0:
         command.extend(["--train-test-split", str(body.train_test_split)])
+    if body.cross_window_months:
+        command.extend(["--cross-window-months", ",".join(str(m) for m in body.cross_window_months)])
+        command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)

@@ -45,9 +45,11 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     # Estimate total return from metrics
     total_return = max(-0.5, (sharpe * 0.15) - (max_drawdown * 0.3) + rng.uniform(-0.1, 0.2))
 
-    # Generate synthetic per-trade returns for bootstrap CI guardrail
+    # Generate synthetic per-trade returns for bootstrap CI guardrail.
+    # Std must be small relative to mean for bootstrap CI to pass.
+    mean_ret = total_return / max(1, total_trades)
     trade_returns = tuple(
-        rng.gauss(total_return / max(1, total_trades), 0.01)
+        rng.gauss(mean_ret, abs(mean_ret) * 0.5 + 0.0001)
         for _ in range(total_trades)
     )
 
@@ -229,6 +231,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Train/test split ratio (0=disabled, 0.5=50/50 split). "
         "GA trains on first portion, validates on remainder.",
     )
+    parser.add_argument(
+        "--cross-window-months",
+        type=str,
+        default=None,
+        help="Comma-separated month offsets for cross-window validation (e.g. '1,2'). "
+        "Re-runs top strategies on shifted windows; must pass on 2/3 to be promoted.",
+    )
+    parser.add_argument(
+        "--cross-window-min-sharpe",
+        type=float,
+        default=0.5,
+        help="Min Sharpe on each shifted window to count as a pass (default: 0.5)",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -289,6 +304,13 @@ def main() -> int:
                 split_ratio, train_start, train_end, holdout_start, holdout_end,
             )
 
+        # Parse cross-window months
+        cross_window_months: list[int] = []
+        if args.cross_window_months:
+            cross_window_months = [
+                int(m.strip()) for m in args.cross_window_months.split(",") if m.strip()
+            ]
+
         config = DiscoveryConfig(
             population_size=args.population_size,
             max_generations=args.max_generations,
@@ -305,6 +327,8 @@ def main() -> int:
             indicator_pool=ind_pool,
             direction=args.direction,
             train_test_split=split_ratio,
+            cross_window_months=cross_window_months,
+            cross_window_min_sharpe=args.cross_window_min_sharpe,
         )
 
         # Log environment details for debugging and journal entries
@@ -350,12 +374,25 @@ def main() -> int:
                     end_date=holdout_end,
                 )
 
+        # Create backtest factory for cross-window validation
+        backtest_fn_factory = None
+        if cross_window_months:
+            if use_mock:
+                backtest_fn_factory = lambda s, e: _mock_backtest  # noqa: E731
+            else:
+                _syms = symbols
+                _tf = args.timeframe
+
+                def backtest_fn_factory(s: str, e: str) -> _NTBacktestFn:
+                    return _NTBacktestFn(_syms, _tf, s, e)
+
         progress_file = f"logs/discovery_{args.run_id}_progress.json"
         pipeline = DiscoveryPipeline(
             config=config,
             backtest_fn=backtest_fn,
             progress_file=progress_file,
             holdout_backtest_fn=holdout_backtest_fn,
+            backtest_fn_factory=backtest_fn_factory,
         )
         result = pipeline.run()
 
@@ -393,6 +430,24 @@ def main() -> int:
                     "trades": hr.total_trades,
                     "return_pct": hr.total_return,
                 }
+            # Attach cross-window results if available
+            if idx < len(result.cross_window_results):
+                cwr = result.cross_window_results[idx]
+                entry["cross_window"] = {
+                    "windows_passed": cwr.windows_passed,
+                    "total_windows": cwr.total_windows,
+                    "passed": cwr.passed,
+                    "windows": [
+                        {
+                            "sharpe": w.sharpe_ratio,
+                            "max_dd": w.max_drawdown,
+                            "pf": w.profit_factor,
+                            "trades": w.total_trades,
+                            "return_pct": w.total_return,
+                        }
+                        for w in cwr.window_results
+                    ],
+                }
             top_dsls.append(entry)
 
         state.save_backtest_result(
@@ -417,6 +472,7 @@ def main() -> int:
                         "train_test_split": split_ratio if split_ratio > 0 else None,
                         "train_dates": list(result.train_dates) if result.train_dates else None,
                         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
+                        "cross_window_months": cross_window_months or None,
                         "top_strategies": top_dsls,
                     }
                 ),

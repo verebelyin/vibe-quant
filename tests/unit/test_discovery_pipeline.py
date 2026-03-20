@@ -457,6 +457,53 @@ class TestHoldoutEvaluation:
             _make_config(train_test_split=-0.1)
 
 
+class TestCrossWindowValidation:
+    """Tests for cross-window shifted date validation."""
+
+    def test_cross_window_filters_strategies(self) -> None:
+        """Strategies must pass on shifted windows to be promoted."""
+        call_log: list[str] = []
+
+        def _window_backtest(start: str, end: str) -> Any:
+            """Factory that returns backtest fns for different windows."""
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                call_log.append(f"{start}-{end}")
+                n = len(chrom.entry_genes) + len(chrom.exit_genes)
+                return {
+                    "sharpe_ratio": 1.5 + n * 0.1,
+                    "max_drawdown": 0.1,
+                    "profit_factor": 1.8,
+                    "total_trades": 120,
+                    "total_return": 0.3,
+                }
+            return bt
+
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            cross_window_months=[1, 2],
+        )
+        pipe = DiscoveryPipeline(
+            cfg, _mock_backtest, backtest_fn_factory=_window_backtest,
+        )
+        result = pipe.run()
+
+        # Should have cross-window results for each top strategy
+        assert len(result.cross_window_results) > 0
+        for cwr in result.cross_window_results:
+            assert cwr.total_windows == 3  # original + 2 shifted
+            assert len(cwr.window_results) == 3
+
+        # Factory should have been called for shifted windows
+        assert len(call_log) > 0
+
+    def test_no_cross_window_when_disabled(self) -> None:
+        """No cross-window when cross_window_months is empty."""
+        cfg = _make_config(population_size=6, max_generations=2, top_k=2, elite_count=1)
+        pipe = DiscoveryPipeline(cfg, _mock_backtest)
+        result = pipe.run()
+        assert result.cross_window_results == []
+
+
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:
         cfg = _make_config(population_size=8, elite_count=2, use_crowding=False)
