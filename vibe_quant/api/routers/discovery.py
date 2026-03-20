@@ -228,6 +228,9 @@ async def launch_discovery(
         command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
     if body.num_seeds > 1:
         command.extend(["--num-seeds", str(body.num_seeds)])
+    if body.wfa_oos_step_days > 0:
+        command.extend(["--wfa-oos-step-days", str(body.wfa_oos_step_days)])
+        command.extend(["--wfa-min-consistency", str(body.wfa_min_consistency)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)

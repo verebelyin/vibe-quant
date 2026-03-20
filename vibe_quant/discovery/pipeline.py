@@ -95,6 +95,8 @@ class DiscoveryConfig:
     cross_window_months: list[int] = field(default_factory=list)  # shifted windows, e.g. [1, 2]
     cross_window_min_pass: int = 2  # min windows (of total) that must pass
     cross_window_min_sharpe: float = 0.5  # min Sharpe on each window to count as pass
+    wfa_oos_step_days: int = 0  # >0 enables WFA: split holdout into rolling windows of N days
+    wfa_min_consistency: float = 0.75  # fraction of OOS windows that must be profitable
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -199,6 +201,27 @@ class CrossWindowResult:
 
 
 @dataclass(frozen=True, slots=True)
+class WFARollingResult:
+    """Walk-forward rolling OOS validation for a single strategy.
+
+    Attributes:
+        oos_windows: Per-window HoldoutResult for each rolling OOS window.
+        window_dates: (start, end) for each OOS window.
+        windows_profitable: Number of profitable OOS windows.
+        total_windows: Total OOS windows.
+        consistency: Fraction of profitable windows.
+        passed: Whether consistency >= wfa_min_consistency.
+    """
+
+    oos_windows: list[HoldoutResult]
+    window_dates: list[tuple[str, str]]
+    windows_profitable: int
+    total_windows: int
+    consistency: float
+    passed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DiscoveryResult:
     """Final output of the discovery pipeline.
 
@@ -222,6 +245,7 @@ class DiscoveryResult:
     train_dates: tuple[str, str] | None = None
     holdout_dates: tuple[str, str] | None = None
     cross_window_results: list[CrossWindowResult] = field(default_factory=list)
+    wfa_results: list[WFARollingResult] = field(default_factory=list)
 
 
 def _select_diverse_top_k(
@@ -750,6 +774,19 @@ class DiscoveryPipeline:
                 top_strategies,
             )
 
+        # WFA rolling OOS validation
+        wfa_results: list[WFARollingResult] = []
+        if (
+            cfg.wfa_oos_step_days > 0
+            and cfg.train_test_split > 0
+            and holdout_dates is not None
+            and self._backtest_fn_factory is not None
+            and top_strategies
+        ):
+            wfa_results, top_strategies = self._evaluate_wfa_rolling(
+                top_strategies, holdout_dates[0], holdout_dates[1],
+            )
+
         return DiscoveryResult(
             generations=generation_results,
             top_strategies=top_strategies,
@@ -760,6 +797,7 @@ class DiscoveryPipeline:
             train_dates=train_dates,
             holdout_dates=holdout_dates,
             cross_window_results=cross_window_results,
+            wfa_results=wfa_results,
         )
 
     def _evaluate_holdout(
@@ -971,6 +1009,131 @@ class DiscoveryPipeline:
             filtered = top_strategies
 
         return cross_results, filtered
+
+    def _evaluate_wfa_rolling(
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+        holdout_start: str,
+        holdout_end: str,
+    ) -> tuple[list[WFARollingResult], list[tuple[StrategyChromosome, FitnessResult]]]:
+        """Walk-Forward rolling OOS validation.
+
+        Splits the holdout period into rolling windows of wfa_oos_step_days
+        and evaluates each strategy on every window. Filters strategies that
+        don't meet wfa_min_consistency.
+
+        Returns:
+            (wfa_results, filtered_strategies)
+        """
+        assert self._backtest_fn_factory is not None
+        cfg = self.config
+        step = cfg.wfa_oos_step_days
+        min_consistency = cfg.wfa_min_consistency
+
+        from datetime import datetime as _dt
+        from datetime import timedelta
+
+        start = _dt.strptime(holdout_start, "%Y-%m-%d")
+        end = _dt.strptime(holdout_end, "%Y-%m-%d")
+
+        # Generate rolling OOS windows
+        windows: list[tuple[str, str]] = []
+        current = start
+        while current + timedelta(days=step) <= end:
+            ws = current.strftime("%Y-%m-%d")
+            we = (current + timedelta(days=step)).strftime("%Y-%m-%d")
+            windows.append((ws, we))
+            current += timedelta(days=step)
+
+        if not windows:
+            logger.warning("WFA: holdout period too short for rolling windows")
+            return [], top_strategies
+
+        logger.info(
+            "=== WFA ROLLING VALIDATION: %d strategies × %d windows (%dd each) ===",
+            len(top_strategies), len(windows), step,
+        )
+        for i, (ws, we) in enumerate(windows):
+            logger.info("  Window %d: %s → %s", i, ws, we)
+
+        wfa_results: list[WFARollingResult] = []
+        filtered: list[tuple[StrategyChromosome, FitnessResult]] = []
+
+        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
+            oos_results: list[HoldoutResult] = []
+            profitable = 0
+
+            for ws, we in windows:
+                try:
+                    bt_fn = self._backtest_fn_factory(ws, we)
+                    bt = bt_fn(chrom)
+                    import math as _math
+                    sharpe = float(bt.get("sharpe_ratio", 0.0))
+                    max_dd = float(bt.get("max_drawdown", 1.0))
+                    pf = float(bt.get("profit_factor", 0.0))
+                    trades = int(bt.get("total_trades", 0))
+                    ret = float(bt.get("total_return", 0.0))
+                    if _math.isnan(sharpe):
+                        sharpe = 0.0
+                    if _math.isnan(max_dd):
+                        max_dd = 1.0
+                    if _math.isnan(pf):
+                        pf = 0.0
+                    if _math.isnan(ret):
+                        ret = 0.0
+                    hr = HoldoutResult(
+                        sharpe_ratio=sharpe, max_drawdown=max_dd,
+                        profit_factor=pf, total_trades=trades, total_return=ret,
+                    )
+                except Exception:
+                    logger.warning("WFA eval failed: %s", chrom.uid, exc_info=True)
+                    hr = HoldoutResult(
+                        sharpe_ratio=0.0, max_drawdown=1.0,
+                        profit_factor=0.0, total_trades=0, total_return=0.0,
+                    )
+
+                oos_results.append(hr)
+                if hr.total_return > 0:
+                    profitable += 1
+
+            consistency = profitable / len(windows) if windows else 0.0
+            passed = consistency >= min_consistency
+
+            wfa = WFARollingResult(
+                oos_windows=oos_results,
+                window_dates=list(windows),
+                windows_profitable=profitable,
+                total_windows=len(windows),
+                consistency=consistency,
+                passed=passed,
+            )
+            wfa_results.append(wfa)
+
+            # Per-window detail log
+            w_strs = [
+                f"W{i}: ret={hr.total_return*100:.1f}% {'OK' if hr.total_return > 0 else 'LOSS'}"
+                for i, hr in enumerate(oos_results)
+            ]
+            logger.info(
+                "  #%d %s: %s → %d/%d profitable (%.0f%%) %s",
+                rank, chrom.uid, " | ".join(w_strs),
+                profitable, len(windows), consistency * 100,
+                "PASS" if passed else "FAIL",
+            )
+
+            if passed:
+                filtered.append((chrom, train_fit))
+
+        logger.info(
+            "  WFA summary: %d/%d passed (min_consistency=%.0f%%)",
+            len(filtered), len(top_strategies), min_consistency * 100,
+        )
+
+        if not filtered:
+            logger.warning("All strategies failed WFA — keeping originals")
+            filtered = top_strategies
+
+        return wfa_results, filtered
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""

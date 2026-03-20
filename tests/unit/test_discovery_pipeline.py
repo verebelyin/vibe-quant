@@ -496,6 +496,38 @@ class TestCrossWindowValidation:
         # Factory should have been called for shifted windows
         assert len(call_log) > 0
 
+    def test_cross_window_rejects_bad_strategies(self) -> None:
+        """Strategies that fail on shifted windows should be rejected."""
+        call_count = [0]
+
+        def _failing_factory(start: str, end: str) -> Any:
+            """Factory returning backtest that fails on shifted windows."""
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                call_count[0] += 1
+                return {
+                    "sharpe_ratio": 0.1,  # Below min_sharpe
+                    "max_drawdown": 0.5,
+                    "profit_factor": 0.8,
+                    "total_trades": 30,
+                    "total_return": -0.1,  # Negative return
+                }
+            return bt
+
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            cross_window_months=[1],  # One shifted window
+            cross_window_min_pass=2,  # Need 2/2 to pass
+        )
+        pipe = DiscoveryPipeline(
+            cfg, _mock_backtest, backtest_fn_factory=_failing_factory,
+        )
+        result = pipe.run()
+
+        # All strategies should fail cross-window (shifted window returns negative)
+        for cwr in result.cross_window_results:
+            # Window 0 (original) passes, Window 1 (shifted) fails → 1/2 < 2 → rejected
+            assert not cwr.passed or cwr.windows_passed < 2
+
     def test_no_cross_window_when_disabled(self) -> None:
         """No cross-window when cross_window_months is empty."""
         cfg = _make_config(population_size=6, max_generations=2, top_k=2, elite_count=1)
@@ -557,6 +589,42 @@ class TestWarmStart:
         assert restored.stop_loss_pct == 2.5
         assert restored.take_profit_pct == 4.0
         assert restored.direction == Direction.SHORT
+
+
+class TestWFARollingValidation:
+    """Tests for WFA rolling OOS validation."""
+
+    def test_wfa_rolling_produces_results(self) -> None:
+        """WFA rolling should evaluate on multiple OOS windows."""
+        def _factory(start: str, end: str) -> Any:
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                return {
+                    "sharpe_ratio": 1.5,
+                    "max_drawdown": 0.1,
+                    "profit_factor": 1.8,
+                    "total_trades": 80,
+                    "total_return": 0.15,
+                }
+            return bt
+
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            train_test_split=0.5,
+            start_date="2024-01-01", end_date="2024-06-01",
+            wfa_oos_step_days=30,  # ~1 month windows
+            wfa_min_consistency=0.5,
+        )
+        pipe = DiscoveryPipeline(
+            cfg, _mock_backtest,
+            holdout_backtest_fn=_mock_backtest,
+            backtest_fn_factory=_factory,
+        )
+        result = pipe.run()
+
+        assert len(result.wfa_results) > 0
+        for wfa in result.wfa_results:
+            assert wfa.total_windows > 0
+            assert len(wfa.oos_windows) == wfa.total_windows
 
 
 class TestElitePreservation:

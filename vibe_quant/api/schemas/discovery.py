@@ -23,6 +23,8 @@ class DiscoveryLaunchRequest(BaseModel):
     cross_window_months: list[int] | None = None  # e.g. [1, 2] for +1mo, +2mo shifted windows
     cross_window_min_sharpe: float = 0.5  # min Sharpe on shifted windows
     num_seeds: int = 1  # >1 enables multi-seed ensemble
+    wfa_oos_step_days: int = 0  # >0 enables WFA rolling validation (e.g. 30 = monthly)
+    wfa_min_consistency: float = 0.75  # min profitable fraction for WFA
 
 
 class DiscoveryJobResponse(BaseModel):

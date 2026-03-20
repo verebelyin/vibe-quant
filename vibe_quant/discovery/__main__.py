@@ -420,6 +420,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seed initial population with top chromosomes from a prior discovery run ID",
     )
     parser.add_argument(
+        "--wfa-oos-step-days",
+        type=int,
+        default=0,
+        help="WFA rolling window step in days (0=disabled). "
+        "Requires --train-test-split. Splits holdout into rolling windows.",
+    )
+    parser.add_argument(
+        "--wfa-min-consistency",
+        type=float,
+        default=0.75,
+        help="Min fraction of profitable WFA windows (default: 0.75 = 3/4)",
+    )
+    parser.add_argument(
         "--num-seeds",
         type=int,
         default=1,
@@ -511,6 +524,8 @@ def main() -> int:
             train_test_split=split_ratio,
             cross_window_months=cross_window_months,
             cross_window_min_sharpe=args.cross_window_min_sharpe,
+            wfa_oos_step_days=args.wfa_oos_step_days,
+            wfa_min_consistency=args.wfa_min_consistency,
         )
 
         # Log environment details for debugging and journal entries
@@ -662,6 +677,24 @@ def main() -> int:
                         for w in cwr.window_results
                     ],
                 }
+            # Attach WFA rolling results if available
+            if idx < len(result.wfa_results):
+                wfa = result.wfa_results[idx]
+                entry["wfa"] = {
+                    "windows_profitable": wfa.windows_profitable,
+                    "total_windows": wfa.total_windows,
+                    "consistency": wfa.consistency,
+                    "passed": wfa.passed,
+                    "windows": [
+                        {
+                            "dates": wfa.window_dates[j] if j < len(wfa.window_dates) else None,
+                            "sharpe": w.sharpe_ratio,
+                            "return_pct": w.total_return,
+                            "trades": w.total_trades,
+                        }
+                        for j, w in enumerate(wfa.oos_windows)
+                    ],
+                }
             top_dsls.append(entry)
 
         state.save_backtest_result(
@@ -687,6 +720,7 @@ def main() -> int:
                         "train_dates": list(result.train_dates) if result.train_dates else None,
                         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
                         "cross_window_months": cross_window_months or None,
+                        "wfa_oos_step_days": args.wfa_oos_step_days if args.wfa_oos_step_days > 0 else None,
                         "num_seeds": num_seeds if num_seeds > 1 else None,
                         "top_strategies": top_dsls,
                     }
