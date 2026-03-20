@@ -31,6 +31,7 @@ router = APIRouter(prefix="/api/discovery", tags=["discovery"])
 # Maximum concurrent discovery jobs. Prevents resource contention
 # (each discovery run spawns --max-workers backtests in parallel).
 _MAX_CONCURRENT_DISCOVERIES = 5
+_REGIME_RETURN_THRESHOLD = 0.05
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
@@ -112,6 +113,26 @@ def _job_info_to_discovery_response(
 # --- Helpers ---
 
 
+def _load_discovery_payload(state: StateManager, run_id: int) -> dict[str, object]:
+    """Load raw discovery payload from backtest_results notes JSON."""
+    import json
+
+    result = state.get_backtest_result(run_id)
+    if result is None:
+        return {}
+
+    notes = result.get("notes", "")
+    if not notes or not isinstance(notes, str):
+        return {}
+
+    try:
+        data = json.loads(notes)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
 def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
     """Sync status for all running discovery jobs and return the still-running ones.
 
@@ -163,8 +184,18 @@ async def launch_discovery(
     }
     if body.indicator_pool is not None:
         params["indicator_pool"] = body.indicator_pool
+    if body.direction is not None:
+        params["direction"] = body.direction
     if body.train_test_split > 0:
         params["train_test_split"] = body.train_test_split
+    if body.cross_window_months:
+        params["cross_window_months"] = body.cross_window_months
+        params["cross_window_min_sharpe"] = body.cross_window_min_sharpe
+    if body.num_seeds > 1:
+        params["num_seeds"] = body.num_seeds
+    if body.wfa_oos_step_days > 0:
+        params["wfa_oos_step_days"] = body.wfa_oos_step_days
+        params["wfa_min_consistency"] = body.wfa_min_consistency
 
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
@@ -291,24 +322,164 @@ async def kill_discovery_job(run_id: int, jobs: JobMgr, state: StateMgr, ws: WsM
 
 def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[str, object]]:
     """Load discovered strategies from backtest_results notes JSON."""
-    import json
-
-    result = state.get_backtest_result(run_id)
-    if result is None:
-        return []
-    notes = result.get("notes", "")
-    if not notes or not isinstance(notes, str):
-        return []
-    try:
-        data = json.loads(notes)
-        if isinstance(data, dict) and "top_strategies" in data:
-            strategies = data["top_strategies"]
-            if isinstance(strategies, list):
-                return strategies  # type narrowed to list
-        return []
-    except (json.JSONDecodeError, TypeError):
-        pass
+    data = _load_discovery_payload(state, run_id)
+    strategies = data.get("top_strategies")
+    if isinstance(strategies, list):
+        return strategies  # type narrowed to list
     return []
+
+
+def _discovery_entry_is_short_only(entry: dict[str, object]) -> bool:
+    """Return True when a discovery result only trades the short side."""
+    chrom_raw = entry.get("chromosome")
+    if isinstance(chrom_raw, dict):
+        direction = chrom_raw.get("direction")
+        if direction == "short":
+            return True
+        if direction in {"long", "both"}:
+            return False
+
+    dsl_raw = entry.get("dsl")
+    if not isinstance(dsl_raw, dict):
+        return False
+
+    entry_conditions = dsl_raw.get("entry_conditions")
+    if isinstance(entry_conditions, dict):
+        has_long = bool(entry_conditions.get("long"))
+        has_short = bool(entry_conditions.get("short"))
+        return has_short and not has_long
+
+    return False
+
+
+def _window_regime_sign(symbol: str, start_date: str, end_date: str) -> int:
+    """Classify a window as bull (+1), bear (-1), or neutral (0)."""
+    from vibe_quant.validation.random_baseline import load_ohlc
+
+    bars = load_ohlc(symbol, "1m", start_date, end_date)
+    if len(bars) < 2 or bars[0].open <= 0:
+        return 0
+
+    total_return = (bars[-1].close - bars[0].open) / bars[0].open
+    if abs(total_return) < _REGIME_RETURN_THRESHOLD:
+        return 0
+    return 1 if total_return > 0 else -1
+
+
+def _shift_window(start_date: str, end_date: str, months: int) -> tuple[str, str]:
+    """Shift a date window by N months."""
+    from datetime import datetime as _dt
+
+    from dateutil.relativedelta import relativedelta
+
+    start = _dt.strptime(start_date, "%Y-%m-%d")
+    end = _dt.strptime(end_date, "%Y-%m-%d")
+    shifted_start = (start + relativedelta(months=months)).strftime("%Y-%m-%d")
+    shifted_end = (end + relativedelta(months=months)).strftime("%Y-%m-%d")
+    return shifted_start, shifted_end
+
+
+def _passes_opposing_regime_gate(
+    state: StateManager,
+    run_id: int,
+    discovery_run: dict[str, object],
+    entry: dict[str, object],
+) -> bool:
+    """Check whether a 1m short strategy passed on at least one opposing regime."""
+    payload = _load_discovery_payload(state, run_id)
+    offsets_raw = payload.get("cross_window_months")
+    cross_window_raw = entry.get("cross_window")
+
+    if not isinstance(offsets_raw, list) or not offsets_raw:
+        return False
+    if not isinstance(cross_window_raw, dict):
+        return False
+
+    windows_raw = cross_window_raw.get("windows")
+    if not isinstance(windows_raw, list) or len(windows_raw) < 2:
+        return False
+
+    symbol = ""
+    symbols_raw = discovery_run.get("symbols", [])
+    if isinstance(symbols_raw, list) and symbols_raw:
+        symbol = str(symbols_raw[0])
+    elif isinstance(symbols_raw, str) and symbols_raw:
+        import json
+
+        try:
+            parsed = json.loads(symbols_raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = [symbols_raw]
+        if isinstance(parsed, list) and parsed:
+            symbol = str(parsed[0])
+    if not symbol:
+        return False
+
+    start_date = str(discovery_run.get("start_date", ""))
+    end_date = str(discovery_run.get("end_date", ""))
+    if not start_date or not end_date:
+        return False
+
+    base_sign = _window_regime_sign(symbol, start_date, end_date)
+    if base_sign == 0:
+        return False
+
+    min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
+    try:
+        min_sharpe = float(min_sharpe_raw)
+    except (TypeError, ValueError):
+        min_sharpe = 0.5
+
+    max_idx = min(len(offsets_raw), len(windows_raw) - 1)
+    for idx in range(max_idx):
+        try:
+            months = int(offsets_raw[idx])
+        except (TypeError, ValueError):
+            continue
+
+        shifted_start, shifted_end = _shift_window(start_date, end_date, months)
+        shifted_sign = _window_regime_sign(symbol, shifted_start, shifted_end)
+        if shifted_sign == 0 or shifted_sign == base_sign:
+            continue
+
+        shifted_window = windows_raw[idx + 1]
+        if not isinstance(shifted_window, dict):
+            continue
+
+        try:
+            sharpe = float(shifted_window.get("sharpe", 0.0) or 0.0)
+            total_return = float(shifted_window.get("return_pct", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+
+        if sharpe >= min_sharpe and total_return > 0:
+            return True
+
+    return False
+
+
+def _enforce_short_1m_cross_regime_gate(
+    state: StateManager,
+    run_id: int,
+    discovery_run: dict[str, object],
+    entry: dict[str, object],
+) -> None:
+    """Block promotion of fragile 1m short champions without opposing-regime proof."""
+    if discovery_run.get("timeframe") != "1m":
+        return
+    if not _discovery_entry_is_short_only(entry):
+        return
+    if _passes_opposing_regime_gate(state, run_id, discovery_run, entry):
+        return
+
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "1m short champions must pass at least one opposing-regime cross-window "
+            "validation before promotion. Re-run discovery with shifted windows "
+            "covering an opposite BTC market regime."
+        ),
+    )
 
 
 @router.get("/results/latest", response_model=DiscoveryResultResponse)
@@ -455,6 +626,7 @@ async def promote_discovered_strategy(
 
     discovery_run = _get_discovery_run_config(state, run_id)
     entry = _get_genome_entry(state, run_id, strategy_index)
+    _enforce_short_1m_cross_regime_gate(state, run_id, discovery_run, entry)
 
     # Export genome to strategies table (reuse export logic)
     import json

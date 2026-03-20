@@ -801,7 +801,11 @@ def main() -> int:
                         "train_test_split": split_ratio if split_ratio > 0 else None,
                         "train_dates": list(result.train_dates) if result.train_dates else None,
                         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
+                        "direction": args.direction,
                         "cross_window_months": cross_window_months or None,
+                        "cross_window_min_sharpe": (
+                            args.cross_window_min_sharpe if cross_window_months else None
+                        ),
                         "wfa_oos_step_days": args.wfa_oos_step_days if args.wfa_oos_step_days > 0 else None,
                         "num_seeds": num_seeds if num_seeds > 1 else None,
                         "top_strategies": top_dsls,

@@ -42,13 +42,20 @@ async def client(tmp_db: Path):
     state_mgr.close()
 
 
-def _create_discovery_run_with_results(state: StateManager) -> int:
+def _create_discovery_run_with_results(
+    state: StateManager,
+    *,
+    timeframe: str = "4h",
+    symbols: list[str] | None = None,
+    top_strategies: list[dict[str, object]] | None = None,
+    notes_extra: dict[str, object] | None = None,
+) -> int:
     """Create a completed discovery run with genome results in notes."""
     run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="discovery",
-        symbols=["BTCUSDT", "ETHUSDT"],
-        timeframe="4h",
+        symbols=symbols or ["BTCUSDT", "ETHUSDT"],
+        timeframe=timeframe,
         start_date="2024-01-01",
         end_date="2025-01-01",
         parameters={"population": 20, "generations": 10},
@@ -62,12 +69,17 @@ def _create_discovery_run_with_results(state: StateManager) -> int:
         "entry": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": "<", "value": 30}]},
         "exit": {"conditions": [{"indicator": "RSI", "params": {"period": 14}, "operator": ">", "value": 70}]},
     }
-    notes = json.dumps({
-        "top_strategies": [
+    notes_payload: dict[str, object] = {
+        "top_strategies": top_strategies
+        or [
             {"dsl": genome_dsl, "score": 1.5, "trades": 42, "sharpe": 1.8},
             {"dsl": {**genome_dsl, "name": "ga_winner_2"}, "score": 1.2, "trades": 30, "sharpe": 1.5},
         ]
-    })
+    }
+    if notes_extra:
+        notes_payload.update(notes_extra)
+
+    notes = json.dumps(notes_payload)
     state.conn.execute(
         "INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)",
         (run_id, notes),
@@ -161,6 +173,94 @@ async def test_promote_non_discovery_run(client: tuple[AsyncClient, StateManager
     )
     r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
     assert r.status_code == 400
+
+
+async def test_promote_blocks_1m_short_without_opposing_regime_pass(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ac, state = client
+    short_entry = {
+        "dsl": {
+            "name": "ga_short_1m",
+            "strategy_type": "momentum",
+            "entry_conditions": {"short": ["rsi_entry < 30"]},
+            "exit_conditions": {"short": ["rsi_exit > 70"]},
+        },
+        "chromosome": {"direction": "short"},
+        "score": 2.4,
+        "trades": 50,
+        "sharpe": 2.1,
+        "cross_window": {
+            "windows_passed": 1,
+            "total_windows": 2,
+            "passed": False,
+            "windows": [
+                {"sharpe": 2.1, "return_pct": 0.18, "trades": 50},
+                {"sharpe": -1.2, "return_pct": -0.09, "trades": 41},
+            ],
+        },
+    }
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[short_entry],
+        notes_extra={"cross_window_months": [-15], "cross_window_min_sharpe": 0.5},
+    )
+
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.discovery._window_regime_sign",
+        lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
+    )
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    assert r.status_code == 409
+    assert "opposing-regime cross-window validation" in r.json()["detail"]
+
+
+async def test_promote_allows_1m_short_with_opposing_regime_pass(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ac, state = client
+    short_entry = {
+        "dsl": {
+            "name": "ga_short_1m_pass",
+            "strategy_type": "momentum",
+            "entry_conditions": {"short": ["rsi_entry < 30"]},
+            "exit_conditions": {"short": ["rsi_exit > 70"]},
+        },
+        "chromosome": {"direction": "short"},
+        "score": 2.7,
+        "trades": 48,
+        "sharpe": 2.3,
+        "cross_window": {
+            "windows_passed": 2,
+            "total_windows": 2,
+            "passed": True,
+            "windows": [
+                {"sharpe": 2.3, "return_pct": 0.16, "trades": 48},
+                {"sharpe": 0.9, "return_pct": 0.04, "trades": 35},
+            ],
+        },
+    }
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[short_entry],
+        notes_extra={"cross_window_months": [-15], "cross_window_min_sharpe": 0.5},
+    )
+
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.discovery._window_regime_sign",
+        lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
+    )
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    assert r.status_code == 201
+    assert r.json()["name"] == "ga_short_1m_pass"
 
 
 # --- Replay tests ---

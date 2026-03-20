@@ -144,6 +144,57 @@ def test_multi_seed_runs(tmp_path: Path, monkeypatch) -> None:
     assert notes.get("num_seeds") == 3
 
 
+def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -> None:
+    """Discovery notes should retain direction and cross-window config."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1m",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--direction",
+            "short",
+            "--cross-window-months=-1",
+            "--cross-window-min-sharpe",
+            "0.8",
+            "--db",
+            str(db_path),
+            "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    state = StateManager(db_path)
+    result = state.get_backtest_result(run_id)
+    state.close()
+
+    assert result is not None
+
+    import json
+
+    notes = json.loads(result["notes"])
+    assert notes["direction"] == "short"
+    assert notes["cross_window_months"] == [-1]
+    assert notes["cross_window_min_sharpe"] == 0.8
+
 def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, monkeypatch) -> None:
     """Merged winners should keep their own holdout metrics, not another seed's."""
     db_path = tmp_path / "state.db"

@@ -141,6 +141,43 @@ async def test_dead_processes_dont_block_launch(
     assert r.status_code == 201
 
 
+async def test_launch_persists_gate_related_metadata(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """Launch stores direction and cross-window config for later promotion gates."""
+    ac, state, job_mgr = client
+
+    body = {
+        **_LAUNCH_BODY,
+        "symbols": ["BTCUSDT"],
+        "timeframes": ["1m"],
+        "direction": "short",
+        "cross_window_months": [-15],
+        "cross_window_min_sharpe": 0.8,
+        "num_seeds": 3,
+        "wfa_oos_step_days": 30,
+        "wfa_min_consistency": 0.9,
+    }
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        r = await ac.post("/api/discovery/launch", json=body)
+
+    assert r.status_code == 201
+    run = state.get_backtest_run(r.json()["run_id"])
+    assert run is not None
+    params = run["parameters"]
+    assert params["direction"] == "short"
+    assert params["cross_window_months"] == [-15]
+    assert params["cross_window_min_sharpe"] == 0.8
+    assert params["num_seeds"] == 3
+    assert params["wfa_oos_step_days"] == 30
+    assert params["wfa_min_consistency"] == 0.9
+
+
 async def test_list_jobs_syncs_dead_processes(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
