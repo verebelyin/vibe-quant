@@ -586,10 +586,12 @@ class DiscoveryPipeline:
                 len(sharpes), mean_sr, var_sr ** 0.5, min(sharpes), max(sharpes),
             )
 
-        # Validate top strategies with guardrails (DSR + min trades + complexity)
+        # Validate top strategies with guardrails (DSR + min trades + complexity + bootstrap CI)
         validated = self._validate_top_strategies(top_strategies, total_evaluated)
-        if validated:
-            top_strategies = validated
+        if validated is None:
+            pass  # Soft failures only — keep unfiltered
+        else:
+            top_strategies = validated  # May be empty if hard guardrails rejected all
 
         # Final summary
         total_time = time.monotonic() - pipeline_start
@@ -899,7 +901,12 @@ class DiscoveryPipeline:
         """Apply guardrails (DSR, complexity, min trades) to top strategies.
 
         Logs validation results and filters out strategies that fail.
-        Returns None if all fail (caller keeps original list).
+
+        When all candidates fail:
+        - If any "hard" guardrail failed (bootstrap CI, min trades), returns
+          empty list — the run found nothing statistically significant.
+        - If only "soft" guardrails failed (DSR, complexity), returns None
+          so the caller keeps best-available candidates.
 
         DSR uses theoretical variance (1/(T-1)) rather than empirical
         cross-strategy variance, which inflates SR₀ beyond what any
@@ -919,11 +926,13 @@ class DiscoveryPipeline:
             self.config.start_date, self.config.end_date, self.config.timeframe,
         )
 
+        import numpy as np
+
         validated: list[tuple[StrategyChromosome, FitnessResult]] = []
+        any_hard_failure = False
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
             num_obs = bar_count if bar_count else max(100, fitness.total_trades * 5)
-            import numpy as np
 
             trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None
             result: GuardrailResult = apply_guardrails(
@@ -949,6 +958,9 @@ class DiscoveryPipeline:
                     fitness.total_trades,
                 )
             else:
+                # Track hard guardrail failures (bootstrap CI, min trades)
+                if not result.min_trades_passed or result.bootstrap_passed is False:
+                    any_hard_failure = True
                 logger.info(
                     "Guardrail FAIL: %s score=%.4f reasons=%s",
                     chrom.uid,
@@ -957,7 +969,13 @@ class DiscoveryPipeline:
                 )
 
         if not validated:
-            logger.warning("All top strategies failed guardrails, keeping unfiltered")
+            if any_hard_failure:
+                logger.warning(
+                    "All top strategies failed hard guardrails (bootstrap CI / min trades) "
+                    "— run found nothing statistically significant"
+                )
+                return []
+            logger.warning("All top strategies failed soft guardrails, keeping unfiltered")
             return None
 
         logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
