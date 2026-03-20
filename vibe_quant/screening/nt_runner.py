@@ -386,8 +386,8 @@ class NTScreeningRunner:
         except Exception:
             logger.warning("Could not extract fees from engine cache", exc_info=True)
 
-        # Compute return distribution moments (skewness/kurtosis) for DSR
-        metrics.skewness, metrics.kurtosis = self._compute_return_moments(engine)
+        # Compute return distribution moments (skewness/kurtosis) and per-trade returns
+        metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)
 
         # Screening mode doesn't model funding; set explicitly for DB storage
         metrics.total_funding = 0.0
@@ -400,14 +400,14 @@ class NTScreeningRunner:
         return metrics
 
     @staticmethod
-    def _compute_return_moments(engine: object) -> tuple[float, float]:
-        """Compute skewness and kurtosis from closed positions' realized PnL %.
+    def _compute_return_moments(engine: object) -> tuple[float, float, tuple[float, ...]]:
+        """Compute skewness, kurtosis, and per-trade returns from closed positions.
 
         Uses adjusted Fisher-Pearson G1 (skewness) and G2 (excess kurtosis)
         formulas — the same as scipy.stats.skew(bias=False) and
         scipy.stats.kurtosis(bias=False). Returns full kurtosis (G2 + 3).
 
-        Falls back to (0.0, 3.0) — normal distribution defaults — if
+        Falls back to (0.0, 3.0, ()) — normal distribution defaults — if
         fewer than 4 trades or computation fails.
         """
         import math
@@ -417,7 +417,7 @@ class NTScreeningRunner:
             all_positions = list(cache.positions()) + list(cache.position_snapshots())
             closed = [p for p in all_positions if p.is_closed]
             if len(closed) < 4:
-                return 0.0, 3.0
+                return 0.0, 3.0, ()
 
             # Per-trade return as fraction of notional entry value
             returns: list[float] = []
@@ -429,14 +429,14 @@ class NTScreeningRunner:
 
             n = len(returns)
             if n < 4:
-                return 0.0, 3.0
+                return 0.0, 3.0, tuple(returns)
 
             mean = sum(returns) / n
             diffs = [r - mean for r in returns]
             # Biased central moments (population moments)
             m2 = sum(d * d for d in diffs) / n
             if m2 == 0:
-                return 0.0, 3.0
+                return 0.0, 3.0, tuple(returns)
 
             m3 = sum(d**3 for d in diffs) / n
             m4 = sum(d**4 for d in diffs) / n
@@ -457,10 +457,10 @@ class NTScreeningRunner:
             # Clamp kurtosis to valid range (>=1 per DSR validator)
             kurtosis = max(1.0, kurtosis)
 
-            return round(skewness, 4), round(kurtosis, 4)
+            return round(skewness, 4), round(kurtosis, 4), tuple(returns)
         except Exception:
             logger.warning("Could not compute return moments", exc_info=True)
-            return 0.0, 3.0
+            return 0.0, 3.0, ()
 
     def _compute_max_drawdown(
         self,

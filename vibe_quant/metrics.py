@@ -30,3 +30,4 @@ class PerformanceMetrics:
     execution_time_seconds: float = 0.0
     skewness: float = 0.0  # Return distribution skewness (0 = symmetric)
     kurtosis: float = 3.0  # Return distribution kurtosis (3 = normal)
+    trade_returns: tuple[float, ...] = ()  # Per-trade PnL returns (fraction)

@@ -98,6 +98,7 @@ class _NTBacktestFn:
                 "total_return": getattr(result, "total_return", 0.0),
                 "skewness": getattr(result, "skewness", 0.0),
                 "kurtosis": getattr(result, "kurtosis", 3.0),
+                "trade_returns": getattr(result, "trade_returns", ()),  # type: ignore[arg-type,dict-item]
             }
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)

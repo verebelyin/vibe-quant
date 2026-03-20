@@ -911,6 +911,7 @@ class DiscoveryPipeline:
             require_dsr=True,
             require_wfa=False,  # WFA requires separate out-of-sample data
             require_purged_kfold=False,
+            require_bootstrap_ci=True,
         )
 
         # Use actual bar count for DSR (not total_trades * 5 proxy)
@@ -922,6 +923,9 @@ class DiscoveryPipeline:
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
             num_obs = bar_count if bar_count else max(100, fitness.total_trades * 5)
+            import numpy as np
+
+            trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None
             result: GuardrailResult = apply_guardrails(
                 fitness=fitness,
                 num_genes=num_genes,
@@ -930,6 +934,7 @@ class DiscoveryPipeline:
                 num_observations=num_obs,
                 skewness=fitness.skewness,
                 kurtosis=fitness.kurtosis,
+                trade_returns=trade_ret,
                 # trials_sharpe_variance intentionally omitted — use theoretical
                 # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
                 # the paper's V[{SR_n}] measures (see vibe-quant-fici).

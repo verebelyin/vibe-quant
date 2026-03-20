@@ -96,6 +96,7 @@ class FitnessResult:
     filter_results: dict[str, bool]
     skewness: float = 0.0
     kurtosis: float = 3.0
+    trade_returns: tuple[float, ...] = ()
 
 
 # Pre-compute inverse ranges for normalization to avoid repeated division
@@ -445,6 +446,7 @@ def _evaluate_single(
         filter_results=filter_results,
         skewness=float(bt.get("skewness", 0.0)),
         kurtosis=float(bt.get("kurtosis", 3.0)),
+        trade_returns=tuple(bt.get("trade_returns", ())),  # type: ignore[arg-type]
     )
 
 
