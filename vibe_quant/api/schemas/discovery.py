@@ -19,6 +19,7 @@ class DiscoveryLaunchRequest(BaseModel):
     direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
+    train_test_split: float = 0.0  # 0=disabled, 0.5=50/50 train/holdout split
 
 
 class DiscoveryJobResponse(BaseModel):

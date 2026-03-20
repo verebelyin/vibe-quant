@@ -91,6 +91,7 @@ class DiscoveryConfig:
     immigrant_fraction: float = 0.15  # Fraction of population replaced when entropy is low
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
+    train_test_split: float = 0.0  # 0 = disabled; >0 = fraction for train (e.g. 0.5)
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -117,6 +118,8 @@ class DiscoveryConfig:
             object.__setattr__(self, "convergence_generations", max_conv)
         if self.top_k < 1:
             errors.append("top_k must be >= 1")
+        if self.train_test_split < 0.0 or self.train_test_split >= 1.0:
+            errors.append("train_test_split must be in [0, 1)")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -157,6 +160,25 @@ class GenerationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HoldoutResult:
+    """Holdout (out-of-sample) evaluation for a single strategy.
+
+    Attributes:
+        sharpe_ratio: Holdout Sharpe ratio.
+        max_drawdown: Holdout max drawdown.
+        profit_factor: Holdout profit factor.
+        total_trades: Holdout trade count.
+        total_return: Holdout total return.
+    """
+
+    sharpe_ratio: float
+    max_drawdown: float
+    profit_factor: float
+    total_trades: int
+    total_return: float
+
+
+@dataclass(frozen=True, slots=True)
 class DiscoveryResult:
     """Final output of the discovery pipeline.
 
@@ -166,6 +188,9 @@ class DiscoveryResult:
         total_candidates_evaluated: Cumulative evaluations across all generations.
         converged: Whether the pipeline terminated due to convergence.
         convergence_generation: Generation index where convergence detected (None if not).
+        holdout_results: Per-strategy holdout metrics (parallel to top_strategies). Empty if no split.
+        train_dates: (start, end) for train period. None if no split.
+        holdout_dates: (start, end) for holdout period. None if no split.
     """
 
     generations: list[GenerationResult]
@@ -173,6 +198,9 @@ class DiscoveryResult:
     total_candidates_evaluated: int
     converged: bool
     convergence_generation: int | None
+    holdout_results: list[HoldoutResult] = field(default_factory=list)
+    train_dates: tuple[str, str] | None = None
+    holdout_dates: tuple[str, str] | None = None
 
 
 def _select_diverse_top_k(
@@ -235,11 +263,13 @@ class DiscoveryPipeline:
         filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
         | None = None,
         progress_file: str | Path | None = None,
+        holdout_backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]] | None = None,
     ) -> None:
         self.config = config
         self._backtest_fn = backtest_fn
         self._filter_fn = filter_fn
         self._progress_file = Path(progress_file) if progress_file else None
+        self._holdout_backtest_fn = holdout_backtest_fn
         self._direction_constraint: Direction | None = None
 
     # -- public API ---------------------------------------------------------
@@ -668,13 +698,100 @@ class DiscoveryPipeline:
                         f" sub={gene.sub_value}" if gene.sub_value else "",
                     )
 
+        # Holdout evaluation: run top strategies on unseen data
+        holdout_results: list[HoldoutResult] = []
+        train_dates: tuple[str, str] | None = None
+        holdout_dates: tuple[str, str] | None = None
+        if self._holdout_backtest_fn is not None and top_strategies and cfg.train_test_split > 0:
+            holdout_results = self._evaluate_holdout(top_strategies)
+            # Compute split dates for metadata
+            from vibe_quant.utils import split_date_range
+            ts, te, hs, he = split_date_range(cfg.start_date, cfg.end_date, cfg.train_test_split)
+            train_dates = (ts, te)
+            holdout_dates = (hs, he)
+
         return DiscoveryResult(
             generations=generation_results,
             top_strategies=top_strategies,
             total_candidates_evaluated=total_evaluated,
             converged=converged,
             convergence_generation=convergence_gen,
+            holdout_results=holdout_results,
+            train_dates=train_dates,
+            holdout_dates=holdout_dates,
         )
+
+    def _evaluate_holdout(
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+    ) -> list[HoldoutResult]:
+        """Evaluate top strategies on holdout (out-of-sample) period.
+
+        Returns HoldoutResult for each strategy, parallel to top_strategies.
+        """
+        assert self._holdout_backtest_fn is not None
+        holdout_fn = self._holdout_backtest_fn
+        results: list[HoldoutResult] = []
+
+        logger.info("=== HOLDOUT EVALUATION: %d strategies ===", len(top_strategies))
+
+        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
+            try:
+                bt = holdout_fn(chrom)
+                import math as _math
+                sharpe = float(bt.get("sharpe_ratio", 0.0))
+                max_dd = float(bt.get("max_drawdown", 1.0))
+                pf = float(bt.get("profit_factor", 0.0))
+                trades = int(bt.get("total_trades", 0))
+                ret = float(bt.get("total_return", 0.0))
+                if _math.isnan(sharpe):
+                    sharpe = 0.0
+                if _math.isnan(max_dd):
+                    max_dd = 1.0
+                if _math.isnan(pf):
+                    pf = 0.0
+                if _math.isnan(ret):
+                    ret = 0.0
+                hr = HoldoutResult(
+                    sharpe_ratio=sharpe,
+                    max_drawdown=max_dd,
+                    profit_factor=pf,
+                    total_trades=trades,
+                    total_return=ret,
+                )
+            except Exception:
+                logger.warning("Holdout eval failed for %s", chrom.uid, exc_info=True)
+                hr = HoldoutResult(
+                    sharpe_ratio=0.0, max_drawdown=1.0,
+                    profit_factor=0.0, total_trades=0, total_return=0.0,
+                )
+            results.append(hr)
+
+            # Log train vs holdout comparison
+            logger.info(
+                "  #%d %s: TRAIN sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d → "
+                "HOLDOUT sharpe=%.2f dd=%.1f%% ret=%.1f%% trades=%d",
+                rank, chrom.uid,
+                train_fit.sharpe_ratio, train_fit.max_drawdown * 100,
+                train_fit.total_return * 100, train_fit.total_trades,
+                hr.sharpe_ratio, hr.max_drawdown * 100,
+                hr.total_return * 100, hr.total_trades,
+            )
+
+        # Summary: how much did strategies degrade on holdout?
+        if results:
+            train_sharpes = [f.sharpe_ratio for _, f in top_strategies]
+            holdout_sharpes = [h.sharpe_ratio for h in results]
+            avg_train = sum(train_sharpes) / len(train_sharpes)
+            avg_holdout = sum(holdout_sharpes) / len(holdout_sharpes)
+            degradation = (avg_train - avg_holdout) / avg_train * 100 if avg_train > 0 else 0
+            logger.info(
+                "  Holdout summary: avg_train_sharpe=%.2f → avg_holdout_sharpe=%.2f "
+                "(%.1f%% degradation)",
+                avg_train, avg_holdout, degradation,
+            )
+
+        return results
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""

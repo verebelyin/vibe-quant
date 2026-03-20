@@ -39,6 +39,42 @@ def compute_bar_count(
     return max(int(total_minutes / tf_minutes), 1)
 
 
+def split_date_range(
+    start_date: str,
+    end_date: str,
+    split_ratio: float,
+) -> tuple[str, str, str, str]:
+    """Split a date range into train and holdout periods.
+
+    Args:
+        start_date: Start date (ISO format YYYY-MM-DD).
+        end_date: End date (ISO format YYYY-MM-DD).
+        split_ratio: Fraction of total range for training (0-1).
+            E.g. 0.5 = first 50% train, last 50% holdout.
+
+    Returns:
+        (train_start, train_end, holdout_start, holdout_end) as ISO strings.
+
+    Raises:
+        ValueError: If split_ratio not in (0, 1) or dates invalid.
+    """
+    if not (0.0 < split_ratio < 1.0):
+        raise ValueError(f"split_ratio must be in (0, 1), got {split_ratio}")
+    start = _datetime.strptime(start_date, "%Y-%m-%d")
+    end = _datetime.strptime(end_date, "%Y-%m-%d")
+    total_days = (end - start).days
+    if total_days < 2:
+        raise ValueError(f"Date range too short for split: {total_days} days")
+    train_days = max(1, int(total_days * split_ratio))
+    split_point = start + __import__("datetime").timedelta(days=train_days)
+    return (
+        start_date,
+        split_point.strftime("%Y-%m-%d"),
+        split_point.strftime("%Y-%m-%d"),
+        end_date,
+    )
+
+
 def generate_month_range(start_date: datetime, end_date: datetime) -> Generator[tuple[int, int]]:
     """Generate (year, month) tuples between two dates.
 

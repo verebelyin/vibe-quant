@@ -26,12 +26,22 @@ from vibe_quant.discovery.pipeline import (
 
 def _mock_backtest(chrom: StrategyChromosome) -> dict[str, Any]:
     """Deterministic mock backtest: more entry genes -> slightly better sharpe."""
+    import random as _rng
+
     n_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+    total_return = 0.5 + n_genes * 0.05
+    total_trades = 150
+    # Generate synthetic trade returns with strong positive mean for bootstrap CI
+    r = _rng.Random(n_genes)
+    mean_ret = total_return / total_trades  # ~0.003+
+    trade_returns = tuple(r.gauss(mean_ret, mean_ret * 0.3) for _ in range(total_trades))
     return {
-        "sharpe_ratio": 1.0 + n_genes * 0.1,
-        "max_drawdown": 0.1,
-        "profit_factor": 1.5,
-        "total_trades": 100,
+        "sharpe_ratio": 2.0 + n_genes * 0.1,
+        "max_drawdown": 0.08,
+        "profit_factor": 2.0,
+        "total_trades": total_trades,
+        "total_return": total_return,
+        "trade_returns": trade_returns,
     }
 
 
@@ -378,6 +388,73 @@ class TestStructuralDedup:
 # ---------------------------------------------------------------------------
 # Elite preservation
 # ---------------------------------------------------------------------------
+
+
+class TestSplitDateRange:
+    """Tests for the date range splitting utility."""
+
+    def test_50_50_split(self) -> None:
+        from vibe_quant.utils import split_date_range
+        ts, te, hs, he = split_date_range("2024-01-01", "2024-05-01", 0.5)
+        assert ts == "2024-01-01"
+        assert te == hs  # train end == holdout start
+        assert he == "2024-05-01"
+
+    def test_invalid_ratio(self) -> None:
+        from vibe_quant.utils import split_date_range
+        with pytest.raises(ValueError, match="split_ratio"):
+            split_date_range("2024-01-01", "2024-05-01", 0.0)
+        with pytest.raises(ValueError, match="split_ratio"):
+            split_date_range("2024-01-01", "2024-05-01", 1.0)
+
+
+class TestHoldoutEvaluation:
+    """Tests for train/test split holdout evaluation."""
+
+    def test_holdout_results_populated_when_split_enabled(self) -> None:
+        """When holdout_backtest_fn is provided, holdout_results should be populated."""
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            train_test_split=0.5, start_date="2024-01-01", end_date="2024-06-01",
+        )
+
+        def holdout_backtest(chrom: StrategyChromosome) -> dict[str, Any]:
+            """Holdout returns slightly worse metrics."""
+            n = len(chrom.entry_genes) + len(chrom.exit_genes)
+            return {
+                "sharpe_ratio": 0.8 + n * 0.05,
+                "max_drawdown": 0.15,
+                "profit_factor": 1.2,
+                "total_trades": 80,
+                "total_return": 0.1,
+            }
+
+        pipe = DiscoveryPipeline(cfg, _mock_backtest, holdout_backtest_fn=holdout_backtest)
+        result = pipe.run()
+        assert len(result.holdout_results) == len(result.top_strategies)
+        assert result.train_dates is not None
+        assert result.holdout_dates is not None
+        # Holdout period should start where train ends
+        assert result.train_dates[1] == result.holdout_dates[0]
+        for hr in result.holdout_results:
+            assert hr.sharpe_ratio > 0
+            assert hr.total_trades > 0
+
+    def test_no_holdout_when_split_disabled(self) -> None:
+        """With train_test_split=0, no holdout evaluation occurs."""
+        cfg = _make_config(population_size=6, max_generations=2, top_k=2, elite_count=1)
+        pipe = DiscoveryPipeline(cfg, _mock_backtest)
+        result = pipe.run()
+        assert result.holdout_results == []
+        assert result.train_dates is None
+        assert result.holdout_dates is None
+
+    def test_invalid_train_test_split(self) -> None:
+        """Split ratio must be in [0, 1)."""
+        with pytest.raises(ValueError, match="train_test_split"):
+            _make_config(train_test_split=1.0)
+        with pytest.raises(ValueError, match="train_test_split"):
+            _make_config(train_test_split=-0.1)
 
 
 class TestElitePreservation:

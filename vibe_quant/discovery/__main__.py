@@ -45,12 +45,19 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     # Estimate total return from metrics
     total_return = max(-0.5, (sharpe * 0.15) - (max_drawdown * 0.3) + rng.uniform(-0.1, 0.2))
 
+    # Generate synthetic per-trade returns for bootstrap CI guardrail
+    trade_returns = tuple(
+        rng.gauss(total_return / max(1, total_trades), 0.01)
+        for _ in range(total_trades)
+    )
+
     return {
         "sharpe_ratio": sharpe,
         "max_drawdown": max_drawdown,
         "profit_factor": profit_factor,
         "total_trades": total_trades,
         "total_return": total_return,
+        "trade_returns": trade_returns,
     }
 
 
@@ -215,6 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Direction constraint: long, short, both, or omit for random",
     )
+    parser.add_argument(
+        "--train-test-split",
+        type=float,
+        default=0.0,
+        help="Train/test split ratio (0=disabled, 0.5=50/50 split). "
+        "GA trains on first portion, validates on remainder.",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -256,6 +270,25 @@ def main() -> int:
             if args.indicator_pool
             else None
         )
+
+        # Train/test split: split date range if requested
+        train_start = args.start_date
+        train_end = args.end_date
+        holdout_start: str | None = None
+        holdout_end: str | None = None
+        split_ratio = args.train_test_split
+
+        if split_ratio > 0:
+            from vibe_quant.utils import split_date_range
+
+            train_start, train_end, holdout_start, holdout_end = split_date_range(
+                args.start_date, args.end_date, split_ratio,
+            )
+            logger.info(
+                "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
+                split_ratio, train_start, train_end, holdout_start, holdout_end,
+            )
+
         config = DiscoveryConfig(
             population_size=args.population_size,
             max_generations=args.max_generations,
@@ -267,10 +300,11 @@ def main() -> int:
             max_workers=max_workers,
             symbols=symbols,
             timeframe=args.timeframe,
-            start_date=args.start_date,
-            end_date=args.end_date,
+            start_date=train_start,
+            end_date=train_end,
             indicator_pool=ind_pool,
             direction=args.direction,
+            train_test_split=split_ratio,
         )
 
         # Log environment details for debugging and journal entries
@@ -299,15 +333,29 @@ def main() -> int:
             backtest_fn = _make_nt_backtest_fn(
                 symbols=symbols,
                 timeframe=args.timeframe,
-                start_date=args.start_date,
-                end_date=args.end_date,
+                start_date=train_start,
+                end_date=train_end,
             )
+
+        # Create holdout backtest function if train/test split enabled
+        holdout_backtest_fn = None
+        if split_ratio > 0 and holdout_start and holdout_end:
+            if use_mock:
+                holdout_backtest_fn = _mock_backtest
+            else:
+                holdout_backtest_fn = _make_nt_backtest_fn(
+                    symbols=symbols,
+                    timeframe=args.timeframe,
+                    start_date=holdout_start,
+                    end_date=holdout_end,
+                )
 
         progress_file = f"logs/discovery_{args.run_id}_progress.json"
         pipeline = DiscoveryPipeline(
             config=config,
             backtest_fn=backtest_fn,
             progress_file=progress_file,
+            holdout_backtest_fn=holdout_backtest_fn,
         )
         result = pipeline.run()
 
@@ -323,20 +371,29 @@ def main() -> int:
         from vibe_quant.discovery.genome import chromosome_to_dsl
 
         top_dsls = []
-        for chrom, fitness in result.top_strategies[:5]:
+        for idx, (chrom, fitness) in enumerate(result.top_strategies[:5]):
             dsl = chromosome_to_dsl(chrom)
             dsl["timeframe"] = args.timeframe
-            top_dsls.append(
-                {
-                    "dsl": dsl,
-                    "score": fitness.adjusted_score,
-                    "sharpe": fitness.sharpe_ratio,
-                    "max_dd": fitness.max_drawdown,
-                    "pf": fitness.profit_factor,
-                    "trades": fitness.total_trades,
-                    "return_pct": fitness.total_return,
+            entry: dict[str, object] = {
+                "dsl": dsl,
+                "score": fitness.adjusted_score,
+                "sharpe": fitness.sharpe_ratio,
+                "max_dd": fitness.max_drawdown,
+                "pf": fitness.profit_factor,
+                "trades": fitness.total_trades,
+                "return_pct": fitness.total_return,
+            }
+            # Attach holdout metrics if available
+            if idx < len(result.holdout_results):
+                hr = result.holdout_results[idx]
+                entry["holdout"] = {
+                    "sharpe": hr.sharpe_ratio,
+                    "max_dd": hr.max_drawdown,
+                    "pf": hr.profit_factor,
+                    "trades": hr.total_trades,
+                    "return_pct": hr.total_return,
                 }
-            )
+            top_dsls.append(entry)
 
         state.save_backtest_result(
             args.run_id,
@@ -357,6 +414,9 @@ def main() -> int:
                         "converged": result.converged,
                         "mock": use_mock,
                         "compiler_version": _get_compiler_version(),
+                        "train_test_split": split_ratio if split_ratio > 0 else None,
+                        "train_dates": list(result.train_dates) if result.train_dates else None,
+                        "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
                         "top_strategies": top_dsls,
                     }
                 ),

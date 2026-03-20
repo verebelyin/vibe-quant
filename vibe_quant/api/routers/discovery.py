@@ -163,6 +163,8 @@ async def launch_discovery(
     }
     if body.indicator_pool is not None:
         params["indicator_pool"] = body.indicator_pool
+    if body.train_test_split > 0:
+        params["train_test_split"] = body.train_test_split
 
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
@@ -219,6 +221,8 @@ async def launch_discovery(
         command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
     if body.direction is not None:
         command.extend(["--direction", body.direction])
+    if body.train_test_split > 0:
+        command.extend(["--train-test-split", str(body.train_test_split)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)
