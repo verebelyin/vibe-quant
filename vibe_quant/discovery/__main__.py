@@ -221,13 +221,20 @@ def _run_multi_seed(
     """
     import statistics
 
-    all_strategies: list[tuple[StrategyChromosome, object]] = []
+    all_strategies: list[
+        tuple[
+            StrategyChromosome,
+            object,
+            DiscoveryResult,
+            int,
+        ]
+    ] = []
     all_generations: list[object] = []
     total_evaluated = 0
     seed_stats: list[dict[str, float]] = []
     any_converged = False
     convergence_gen: int | None = None
-    last_result: DiscoveryResult | None = None
+    result_metadata: DiscoveryResult | None = None
 
     for seed_idx in range(num_seeds):
         seed_val = seed_idx * 7919 + 42  # Deterministic but varied seeds
@@ -247,7 +254,8 @@ def _run_multi_seed(
             seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
-        last_result = result
+        if result_metadata is None:
+            result_metadata = result
 
         # Collect per-seed stats
         if result.top_strategies:
@@ -267,7 +275,10 @@ def _run_multi_seed(
                 "num_strategies": 0,
             })
 
-        all_strategies.extend(result.top_strategies)
+        all_strategies.extend(
+            (chrom, fit, result, idx)
+            for idx, (chrom, fit) in enumerate(result.top_strategies)
+        )
         all_generations.extend(result.generations)
         total_evaluated += result.total_candidates_evaluated
         if result.converged:
@@ -304,53 +315,94 @@ def _run_multi_seed(
     from vibe_quant.discovery.distance import chromosome_distance
 
     # Build groups: strategies within min_distance are "the same"
-    groups: list[list[tuple[StrategyChromosome, object]]] = []
-    for chrom, fit in all_strategies:
+    groups: list[
+        list[
+            tuple[
+                StrategyChromosome,
+                object,
+                DiscoveryResult,
+                int,
+            ]
+        ]
+    ] = []
+    for chrom, fit, result, idx in all_strategies:
         placed = False
         for group in groups:
             rep_chrom = group[0][0]
             if chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance:
-                group.append((chrom, fit))
+                group.append((chrom, fit, result, idx))
                 placed = True
                 break
         if not placed:
-            groups.append([(chrom, fit)])
+            groups.append([(chrom, fit, result, idx)])
 
     # Rank groups by median Sharpe (not best single-run score)
-    def _group_median_sharpe(group: list[tuple[StrategyChromosome, object]]) -> float:
-        sharpes = [f.sharpe_ratio for _, f in group]  # type: ignore[union-attr]
+    def _group_median_sharpe(
+        group: list[
+            tuple[
+                StrategyChromosome,
+                object,
+                DiscoveryResult,
+                int,
+            ]
+        ]
+    ) -> float:
+        sharpes = [f.sharpe_ratio for _, f, _, _ in group]  # type: ignore[union-attr]
         return statistics.median(sharpes) if sharpes else 0.0
 
     groups.sort(key=_group_median_sharpe, reverse=True)
 
     # Select best representative from each top group (by adjusted_score)
-    top_strategies = []
+    selected_entries: list[
+        tuple[
+            StrategyChromosome,
+            object,
+            DiscoveryResult,
+            int,
+        ]
+    ] = []
     for group in groups[:config.top_k]:
         best = max(group, key=lambda t: t[1].adjusted_score)  # type: ignore[union-attr]
-        top_strategies.append(best)
+        selected_entries.append(best)
         median_sr = _group_median_sharpe(group)
         logger.info(
             "  Group: %d seeds, median_sharpe=%.2f, representative=%s",
             len(group), median_sr, best[0].uid,  # type: ignore[union-attr]
         )
 
+    top_strategies = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
+    holdout_results = [
+        result.holdout_results[idx]
+        for _, _, result, idx in selected_entries
+        if idx < len(result.holdout_results)
+    ]
+    cross_window_results = [
+        result.cross_window_results[idx]
+        for _, _, result, idx in selected_entries
+        if idx < len(result.cross_window_results)
+    ]
+    wfa_results = [
+        result.wfa_results[idx]
+        for _, _, result, idx in selected_entries
+        if idx < len(result.wfa_results)
+    ]
+
     logger.info(
         "  Merged: %d groups from %d total candidates (%d groups)",
         len(top_strategies), len(all_strategies), len(groups),
     )
 
-    # Propagate validation metadata from last seed (shared config → same dates)
     return DiscoveryResult(
         generations=all_generations,
         top_strategies=top_strategies,  # type: ignore[arg-type]
         total_candidates_evaluated=total_evaluated,
         converged=any_converged,
         convergence_generation=convergence_gen,
-        holdout_results=last_result.holdout_results if last_result else [],
-        train_dates=last_result.train_dates if last_result else None,
-        holdout_dates=last_result.holdout_dates if last_result else None,
-        cross_window_results=last_result.cross_window_results if last_result else [],
-        wfa_results=last_result.wfa_results if last_result else [],
+        holdout_results=holdout_results,
+        train_dates=result_metadata.train_dates if result_metadata else None,
+        holdout_dates=result_metadata.holdout_dates if result_metadata else None,
+        cross_window_results=cross_window_results,
+        wfa_results=wfa_results,
     )
 
 

@@ -142,3 +142,61 @@ def test_multi_seed_runs(tmp_path: Path, monkeypatch) -> None:
 
     notes = json.loads(result["notes"])
     assert notes.get("num_seeds") == 3
+
+
+def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, monkeypatch) -> None:
+    """Merged winners should keep their own holdout metrics, not another seed's."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--max-workers",
+            "-1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-03-01",
+            "--train-test-split",
+            "0.5",
+            "--num-seeds",
+            "3",
+            "--db",
+            str(db_path),
+            "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    state = StateManager(db_path)
+    result = state.get_backtest_result(run_id)
+    state.close()
+
+    assert result is not None
+
+    import json
+
+    notes = json.loads(result["notes"])
+    strategies = notes["top_strategies"]
+    assert strategies
+    for strategy in strategies:
+        holdout = strategy.get("holdout")
+        assert holdout is not None
+        assert holdout["sharpe"] == strategy["sharpe"]
+        assert holdout["trades"] == strategy["trades"]
+        assert holdout["return_pct"] == strategy["return_pct"]
