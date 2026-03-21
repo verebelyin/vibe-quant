@@ -268,6 +268,18 @@ class TestGetBarType:
         assert bar_type.spec.step == 4
         assert bar_type.spec.aggregation == BarAggregation.HOUR
 
+    def test_get_bar_type_1s(self) -> None:
+        """1s bar type has correct spec."""
+        bar_type = get_bar_type("BTCUSDT", "1s")
+        assert bar_type.spec.step == 1
+        assert bar_type.spec.aggregation == BarAggregation.SECOND
+
+    def test_get_bar_type_5s(self) -> None:
+        """5s bar type has correct spec."""
+        bar_type = get_bar_type("BTCUSDT", "5s")
+        assert bar_type.spec.step == 5
+        assert bar_type.spec.aggregation == BarAggregation.SECOND
+
     def test_get_bar_type_instrument_id(self) -> None:
         """Bar type has correct instrument ID."""
         bar_type = get_bar_type("ETHUSDT", "5m")

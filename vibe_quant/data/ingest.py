@@ -32,26 +32,54 @@ from vibe_quant.data.verify import verify_symbol
 def _interval_to_minutes(interval: str) -> int:
     """Convert interval string to minutes.
 
-    Supports 'm' (minutes), 'h' (hours), 'd' (days) suffixes.
+    Supports 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days) suffixes.
 
     Args:
-        interval: Interval string like '1m', '5m', '1h', '4h', '1d'.
+        interval: Interval string like '5s', '1m', '5m', '1h', '4h', '1d'.
 
     Returns:
-        Number of minutes.
+        Number of minutes. Sub-minute intervals return 0.
 
     Raises:
         ValueError: If interval format is unrecognized.
     """
     interval = interval.strip().lower()
-    if interval.endswith("m"):
+    if interval.endswith("s"):
+        return 0  # Sub-minute: cannot aggregate from 1m bars
+    elif interval.endswith("m"):
         return int(interval[:-1])
     elif interval.endswith("h"):
         return int(interval[:-1]) * 60
     elif interval.endswith("d"):
         return int(interval[:-1]) * 1440
     else:
-        msg = f"Unrecognized interval format '{interval}'. Use suffixes: m, h, d"
+        msg = f"Unrecognized interval format '{interval}'. Use suffixes: s, m, h, d"
+        raise ValueError(msg)
+
+
+def _interval_to_seconds(interval: str) -> int:
+    """Convert interval string to seconds.
+
+    Args:
+        interval: Interval string like '1s', '5s', '1m', '5m'.
+
+    Returns:
+        Number of seconds.
+
+    Raises:
+        ValueError: If interval format is unrecognized.
+    """
+    interval = interval.strip().lower()
+    if interval.endswith("s"):
+        return int(interval[:-1])
+    elif interval.endswith("m"):
+        return int(interval[:-1]) * 60
+    elif interval.endswith("h"):
+        return int(interval[:-1]) * 3600
+    elif interval.endswith("d"):
+        return int(interval[:-1]) * 86400
+    else:
+        msg = f"Unrecognized interval format '{interval}'. Use suffixes: s, m, h, d"
         raise ValueError(msg)
 
 
@@ -466,6 +494,103 @@ def ingest_funding_rates(
     return 0
 
 
+def ingest_detail_data(
+    symbol: str,
+    interval: str = "5s",
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    archive: RawDataArchive | None = None,
+    catalog: CatalogManager | None = None,
+    verbose: bool = True,
+) -> dict[str, int]:
+    """Ingest sub-minute detail data for a symbol via REST API.
+
+    Downloads 1s or 5s kline data from Binance REST API, archives it,
+    and writes to ParquetDataCatalog. Used for sub-bar fill simulation
+    in validation backtests.
+
+    Note: Binance Vision monthly archives don't include sub-minute data,
+    so this always uses the REST API. Download times are significantly
+    longer than 1m data (12x for 5s, 60x for 1s).
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTCUSDT').
+        interval: Sub-minute interval ('1s' or '5s').
+        start_date: Start date (required).
+        end_date: End date (defaults to now).
+        archive: Raw data archive (created if not provided).
+        catalog: Catalog manager (created if not provided).
+        verbose: Print progress messages.
+
+    Returns:
+        Dict with counts: {'klines_fetched': N, 'klines_inserted': N, 'bars': N}
+    """
+    if interval not in ("1s", "5s"):
+        msg = f"Detail interval must be '1s' or '5s', got '{interval}'"
+        raise ValueError(msg)
+
+    if symbol not in INSTRUMENT_CONFIGS:
+        supported = sorted(INSTRUMENT_CONFIGS.keys())
+        raise ValueError(f"Unsupported symbol '{symbol}'. Supported: {supported}")
+
+    if start_date is None:
+        msg = "start_date is required for detail data ingestion"
+        raise ValueError(msg)
+
+    if archive is None:
+        archive = RawDataArchive()
+    if catalog is None:
+        catalog = CatalogManager()
+
+    effective_end = end_date or datetime.now(UTC)
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(effective_end.timestamp() * 1000)
+    counts: dict[str, int] = {"klines_fetched": 0, "klines_inserted": 0, "bars": 0}
+
+    if verbose:
+        secs = _interval_to_seconds(interval)
+        est_candles = (end_ms - start_ms) // (secs * 1000)
+        est_requests = est_candles // 1000 + 1
+        print(
+            f"Downloading {symbol} {interval} data: ~{est_candles:,} candles, "
+            f"~{est_requests:,} API requests"
+        )
+
+    # Download via REST API (paginated)
+    klines = download_recent_klines(symbol, interval, start_ms, end_ms)
+    if not klines:
+        if verbose:
+            print(f"  No {interval} data available")
+        return counts
+
+    # Archive raw data
+    inserted = archive.insert_klines(symbol, interval, klines, "binance_api")
+    counts["klines_fetched"] = len(klines)
+    counts["klines_inserted"] = inserted
+    if verbose:
+        print(f"  Archived {len(klines):,} klines ({inserted:,} new)")
+
+    # Write to catalog
+    instrument = create_instrument(symbol)
+    catalog.write_instrument(instrument)
+
+    # Clear existing detail data to avoid disjoint interval errors
+    catalog.clear_bar_data(symbol, interval)
+
+    # Get all archived klines for this interval (may include prior downloads)
+    all_klines = archive.get_klines(symbol, interval)
+    bar_type = get_bar_type(symbol, interval)
+    size_prec = instrument.size_precision
+    price_prec = instrument.price_precision
+    bars = klines_to_bars(all_klines, instrument.id, bar_type, size_prec, price_prec)
+    catalog.write_bars(bars)
+    counts["bars"] = len(bars)
+    if verbose:
+        print(f"  Wrote {len(bars):,} {interval} bars to catalog")
+
+    return counts
+
+
 def ingest_all(
     symbols: list[str] | None = None,
     years: int = 2,
@@ -672,8 +797,24 @@ def get_status(
                 "end": end_dt.isoformat(),
             }
 
+        # Detail interval archive info (sub-minute data)
+        for detail_interval in ["1s", "5s"]:
+            detail_count = archive.get_kline_count(symbol, detail_interval)
+            if detail_count > 0:
+                detail_range = archive.get_date_range(symbol, detail_interval)
+                if detail_range:
+                    d_start = datetime.fromtimestamp(detail_range[0] / 1000, tz=UTC)
+                    d_end = datetime.fromtimestamp(detail_range[1] / 1000, tz=UTC)
+                    if "detail" not in sym_status:
+                        sym_status["detail"] = {}
+                    sym_status["detail"][detail_interval] = {
+                        "klines": detail_count,
+                        "start": d_start.isoformat(),
+                        "end": d_end.isoformat(),
+                    }
+
         # Catalog info
-        for interval in ["1m", "5m", "15m", "1h", "4h"]:
+        for interval in ["1s", "5s", "1m", "5m", "15m", "1h", "4h"]:
             bar_count = catalog.get_bar_count(symbol, interval)
             if bar_count > 0:
                 if "catalog" not in sym_status:
@@ -772,6 +913,20 @@ def rebuild_from_archive(
             if verbose:
                 print(f"Wrote {len(agg_bars)} {interval} bars")
 
+        # Rebuild detail (sub-minute) data if present in archive
+        for detail_interval in ["1s", "5s"]:
+            detail_klines = archive.get_klines(symbol, detail_interval)
+            if detail_klines:
+                catalog.clear_bar_data(symbol, detail_interval)
+                detail_bar_type = get_bar_type(symbol, detail_interval)
+                detail_bars = klines_to_bars(
+                    detail_klines, instrument.id, detail_bar_type, size_prec, price_prec
+                )
+                catalog.write_bars(detail_bars)
+                counts[f"bars_{detail_interval}"] = len(detail_bars)
+                if verbose:
+                    print(f"Wrote {len(detail_bars):,} {detail_interval} bars")
+
         results[symbol] = counts
 
     archive.close()
@@ -841,6 +996,36 @@ def main(argv: list[str] | None = None) -> int:
         help="Rebuild catalog from raw SQLite archive (required)",
     )
 
+    # Detail data command (sub-minute data for validation)
+    detail_parser = subparsers.add_parser(
+        "detail", help="Download sub-minute (1s/5s) detail data for validation"
+    )
+    detail_parser.add_argument(
+        "--symbols",
+        type=str,
+        default="BTCUSDT",
+        help="Comma-separated symbols",
+    )
+    detail_parser.add_argument(
+        "--interval",
+        type=str,
+        default="5s",
+        choices=["1s", "5s"],
+        help="Detail interval (default: 5s)",
+    )
+    detail_parser.add_argument(
+        "--start",
+        type=str,
+        required=True,
+        help="Start date YYYY-MM-DD (required)",
+    )
+    detail_parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="End date YYYY-MM-DD (defaults to today)",
+    )
+
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
     verify_parser.add_argument(
@@ -883,9 +1068,39 @@ def main(argv: list[str] | None = None) -> int:
                 a = info["archive"]
                 print(f"  Archive: {a['klines_1m']} klines")
                 print(f"    Range: {a['start']} to {a['end']}")
+            if "detail" in info:
+                for intv, d in info["detail"].items():
+                    print(f"  Detail {intv}: {d['klines']:,} klines")
+                    print(f"    Range: {d['start']} to {d['end']}")
             if "catalog" in info:
                 for key, count in info["catalog"].items():
                     print(f"  Catalog {key}: {count}")
+    elif args.command == "detail":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        try:
+            start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=UTC)
+            end_date = (
+                datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=UTC) if args.end else None
+            )
+        except ValueError as e:
+            print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
+            return 1
+        archive = RawDataArchive()
+        catalog = CatalogManager()
+        for symbol in symbols:
+            print(f"\n{'=' * 50}")
+            print(f"Detail data: {symbol} @ {args.interval}")
+            print(f"{'=' * 50}")
+            ingest_detail_data(
+                symbol=symbol,
+                interval=args.interval,
+                start_date=start_date,
+                end_date=end_date,
+                archive=archive,
+                catalog=catalog,
+                verbose=True,
+            )
+        archive.close()
     elif args.command == "update":
         symbols = [s.strip() for s in args.symbols.split(",")]
         update_all(symbols=symbols, verbose=True)

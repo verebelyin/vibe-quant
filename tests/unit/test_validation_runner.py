@@ -709,6 +709,94 @@ class TestValidationRunner:
         assert result.max_drawdown < 1.0  # Not percentage points
 
 
+class TestDetailTimeframe:
+    """Tests for sub-bar detail timeframe resolution."""
+
+    def test_resolve_detail_explicit_override(
+        self, temp_db: Path, temp_logs: Path
+    ) -> None:
+        """Explicit detail_timeframe override is used directly."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        result = runner._resolve_detail_timeframe(
+            run_config={"symbols": '["BTCUSDT"]'},
+            strategy_timeframe="1m",
+            override="1s",
+        )
+        assert result == "1s"
+        runner.close()
+
+    def test_resolve_detail_non_sub_bar_timeframe(
+        self, temp_db: Path, temp_logs: Path
+    ) -> None:
+        """Non-sub-bar timeframes (4h, 1h) return None — no detail needed."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        result = runner._resolve_detail_timeframe(
+            run_config={"symbols": '["BTCUSDT"]'},
+            strategy_timeframe="4h",
+            override=None,
+        )
+        assert result is None
+        runner.close()
+
+    def test_resolve_detail_from_run_config_parameters(
+        self, temp_db: Path, temp_logs: Path
+    ) -> None:
+        """detail_timeframe in run parameters is used."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        result = runner._resolve_detail_timeframe(
+            run_config={
+                "symbols": '["BTCUSDT"]',
+                "parameters": {"detail_timeframe": "5s"},
+            },
+            strategy_timeframe="1m",
+            override=None,
+        )
+        assert result == "5s"
+        runner.close()
+
+    def test_venue_config_with_detail_data_enables_latency(
+        self, temp_db: Path, temp_logs: Path, state_with_strategy: StateManager
+    ) -> None:
+        """When has_detail_data=True, latency is NOT skipped for 1m strategies."""
+        state_with_strategy.close()
+
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        # Without detail data: latency should be None for 1m
+        config_no_detail = runner._create_venue_config(
+            {"starting_balance": 1000}, "cloud", timeframe="1m", has_detail_data=False
+        )
+        assert config_no_detail.latency_preset is None
+
+        # With detail data: latency should be set
+        config_with_detail = runner._create_venue_config(
+            {"starting_balance": 1000}, "cloud", timeframe="1m", has_detail_data=True
+        )
+        assert config_with_detail.latency_preset is not None
+
+        runner.close()
+
+    def test_augment_params_no_delay_with_detail(
+        self, temp_db: Path, temp_logs: Path
+    ) -> None:
+        """execution_delay_probability not injected when detail data available."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+
+        # Without detail: delay probability is injected
+        params_no_detail = runner._augment_strategy_params_for_validation(
+            {}, timeframe="1m", has_detail_data=False
+        )
+        assert "execution_delay_probability" in params_no_detail
+
+        # With detail: no delay probability
+        params_with_detail = runner._augment_strategy_params_for_validation(
+            {}, timeframe="1m", has_detail_data=True
+        )
+        assert "execution_delay_probability" not in params_with_detail
+
+        runner.close()
+
+
 class TestListValidationRuns:
     """Tests for list_validation_runs function."""
 

@@ -72,6 +72,8 @@ INSTRUMENT_CONFIGS = {
 
 # Bar aggregation mapping
 INTERVAL_TO_AGGREGATION = {
+    "1s": (1, BarAggregation.SECOND),
+    "5s": (5, BarAggregation.SECOND),
     "1m": (1, BarAggregation.MINUTE),
     "5m": (5, BarAggregation.MINUTE),
     "15m": (15, BarAggregation.MINUTE),

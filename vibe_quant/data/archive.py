@@ -352,7 +352,11 @@ class RawDataArchive:
         _, days_in_month = calendar.monthrange(year, month)
 
         # Expected klines per interval
-        if interval == "1m":
+        if interval == "1s":
+            expected = days_in_month * 24 * 3600
+        elif interval == "5s":
+            expected = days_in_month * 24 * 720  # 3600/5
+        elif interval == "1m":
             expected = days_in_month * 24 * 60
         elif interval == "5m":
             expected = days_in_month * 24 * 12

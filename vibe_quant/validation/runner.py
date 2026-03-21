@@ -87,12 +87,19 @@ class ValidationRunner:
         self,
         run_id: int,
         latency_preset: LatencyPreset | str | None = None,
+        detail_timeframe: str | None = None,
     ) -> ValidationResult:
         """Run validation backtest for a given run_id.
 
         Args:
             run_id: Backtest run ID from database.
             latency_preset: Override latency preset from database.
+            detail_timeframe: Sub-bar timeframe for realistic fill simulation
+                (e.g., '5s'). When provided and data exists in catalog,
+                loads detail bars alongside strategy bars so the matching
+                engine can fill orders at sub-bar resolution. This enables
+                LatencyModel for 1m strategies (normally skipped because
+                bar data has no sub-bar timestamps).
 
         Returns:
             ValidationResult with metrics and trades.
@@ -121,12 +128,22 @@ class ValidationRunner:
         # Validate strategy DSL (compilation happens in _run_backtest)
         dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
-        # Determine latency preset
+        # Resolve detail timeframe: auto-detect 5s for 1m strategies
+        effective_detail = self._resolve_detail_timeframe(
+            run_config, dsl.timeframe, detail_timeframe
+        )
+
+        # Determine latency preset — re-enable when detail data provides
+        # sub-bar resolution for the matching engine
         effective_latency = self._resolve_latency(run_config, latency_preset)
 
-        # Configure venue (timeframe-aware: skips latency for sub-5m bars)
+        # Configure venue (timeframe-aware: skips latency for sub-5m bars
+        # unless detail data provides sub-bar resolution)
         venue_config = self._create_venue_config(
-            run_config, effective_latency, timeframe=dsl.timeframe
+            run_config,
+            effective_latency,
+            timeframe=dsl.timeframe,
+            has_detail_data=effective_detail is not None,
         )
 
         # Update run status to running
@@ -144,6 +161,7 @@ class ValidationRunner:
                     venue_config=venue_config,
                     run_config=run_config,
                     writer=writer,
+                    detail_timeframe=effective_detail,
                 )
 
                 self._write_completion_event(writer, run_id, strategy_name, result)
@@ -174,6 +192,7 @@ class ValidationRunner:
         test_days: int = 30,
         step_days: int | None = None,
         latency_preset: LatencyPreset | str | None = None,
+        detail_timeframe: str | None = None,
     ) -> list[ValidationResult]:
         """Run walk-forward validation over multiple rolling windows.
 
@@ -187,6 +206,7 @@ class ValidationRunner:
             test_days: Out-of-sample test window size in days.
             step_days: Step size between windows. Defaults to test_days.
             latency_preset: Optional latency override.
+            detail_timeframe: Sub-bar timeframe for fill resolution (e.g., '5s').
 
         Returns:
             List of ValidationResult objects, one per test window.
@@ -220,9 +240,15 @@ class ValidationRunner:
         dsl_config = strategy_data["dsl_config"]
         dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
+        effective_detail = self._resolve_detail_timeframe(
+            run_config, dsl.timeframe, detail_timeframe
+        )
         effective_latency = self._resolve_latency(run_config, latency_preset)
         venue_config = self._create_venue_config(
-            run_config, effective_latency, timeframe=dsl.timeframe
+            run_config,
+            effective_latency,
+            timeframe=dsl.timeframe,
+            has_detail_data=effective_detail is not None,
         )
 
         range_start = self._parse_run_date(run_config.get("start_date"), "start_date")
@@ -275,6 +301,7 @@ class ValidationRunner:
                         venue_config=venue_config,
                         run_config=window_run_config,
                         writer=writer,
+                        detail_timeframe=effective_detail,
                     )
                     window_results.append(window_result)
                     writer.write(
@@ -524,17 +551,24 @@ class ValidationRunner:
         run_config: dict[str, object],
         latency_preset: LatencyPreset | str | None,
         timeframe: str = "4h",
+        *,
+        has_detail_data: bool = False,
     ) -> VenueConfig:
         """Create venue configuration for validation.
 
-        For sub-5m timeframes, latency is skipped because NT's LatencyModel
-        defers orders to the next bar (60s on 1m data) regardless of the
-        actual latency value. Slippage probability compensates instead.
+        For sub-5m timeframes WITHOUT detail data, latency is skipped because
+        NT's LatencyModel defers orders to the next bar (60s on 1m data)
+        regardless of actual latency value. Slippage probability compensates.
+
+        When detail data IS available (e.g., 5s bars alongside 1m bars),
+        LatencyModel is re-enabled because the matching engine can process
+        orders at sub-bar resolution (next 5s bar instead of next 1m bar).
 
         Args:
             run_config: Run configuration.
             latency_preset: Latency preset to use.
             timeframe: Strategy primary timeframe.
+            has_detail_data: Whether sub-bar detail data is loaded.
 
         Returns:
             Configured VenueConfig.
@@ -543,9 +577,9 @@ class ValidationRunner:
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
             balance = 1_000
 
-        # Skip latency for sub-5m timeframes — bar data has no sub-bar
-        # timestamps so any LatencyModel delay = full bar delay
-        if timeframe in self._SUB_BAR_TIMEFRAMES:
+        # Skip latency for sub-5m timeframes ONLY when no detail data
+        # provides sub-bar resolution for the matching engine
+        if timeframe in self._SUB_BAR_TIMEFRAMES and not has_detail_data:
             return create_venue_config_for_validation(
                 starting_balance_usdt=int(balance),
                 latency_preset=None,
@@ -564,12 +598,20 @@ class ValidationRunner:
         venue_config: VenueConfig,
         run_config: dict[str, object],
         writer: EventWriter,
+        detail_timeframe: str | None = None,
     ) -> ValidationResult:
         """Run NautilusTrader backtest with full-fidelity execution.
 
         Compiles the strategy DSL to a NautilusTrader Strategy, loads market
         data from the ParquetDataCatalog, configures the venue with latency
         and slippage models, and runs a BacktestNode.
+
+        When detail_timeframe is provided (e.g., '5s'), loads sub-bar data
+        alongside strategy bars. NT processes all data chronologically, so
+        the matching engine can fill orders at the next detail bar instead
+        of the next strategy bar. This enables realistic latency simulation
+        on 1m strategies (e.g., 60ms latency fills at next 5s bar = ~5s
+        delay instead of 60s).
 
         Args:
             run_id: Run ID.
@@ -578,6 +620,7 @@ class ValidationRunner:
             venue_config: Venue configuration.
             run_config: Run configuration from database.
             writer: Event writer for logging.
+            detail_timeframe: Sub-bar timeframe for fill resolution (e.g., '5s').
 
         Returns:
             ValidationResult with real metrics and trades.
@@ -641,6 +684,7 @@ class ValidationRunner:
         strategy_params = self._augment_strategy_params_for_validation(
             self._build_strategy_params(run_config),
             timeframe=dsl.timeframe,
+            has_detail_data=detail_timeframe is not None,
         )
 
         # Build strategy configs (one per symbol)
@@ -676,6 +720,31 @@ class ValidationRunner:
                     )
                 )
 
+            # Add detail (sub-bar) data for fill resolution if requested
+            if detail_timeframe and detail_timeframe not in all_timeframes:
+                if detail_timeframe in INTERVAL_TO_AGGREGATION:
+                    detail_step, detail_agg = INTERVAL_TO_AGGREGATION[detail_timeframe]
+                    data_configs.append(
+                        BacktestDataConfig(
+                            catalog_path=str(catalog_path.resolve()),
+                            data_cls="nautilus_trader.model.data:Bar",
+                            instrument_id=instrument_id,
+                            bar_spec=f"{detail_step}-{detail_agg.name}-LAST",
+                            start_time=start_date,
+                            end_time=end_date,
+                        )
+                    )
+                    logger.info(
+                        "Loading %s detail bars for sub-bar fill resolution (run %d)",
+                        detail_timeframe,
+                        run_id,
+                    )
+                else:
+                    logger.warning(
+                        "Unknown detail timeframe %s, skipping sub-bar data",
+                        detail_timeframe,
+                    )
+
         if not data_configs:
             msg = "No valid data configurations could be built"
             raise ValidationRunnerError(msg)
@@ -700,11 +769,13 @@ class ValidationRunner:
             dispose_on_completion=False,
         )
 
+        detail_info = f", detail={detail_timeframe}" if detail_timeframe else ""
         logger.info(
-            "Starting NautilusTrader backtest for run %d: %d symbols, %d timeframes, %s to %s",
+            "Starting NautilusTrader backtest for run %d: %d symbols, %d timeframes%s, %s to %s",
             run_id,
             len(symbols),
             len(all_timeframes),
+            detail_info,
             start_date,
             end_date,
         )
@@ -823,12 +894,82 @@ class ValidationRunner:
         params: dict[str, object],
         *,
         timeframe: str,
+        has_detail_data: bool = False,
     ) -> dict[str, object]:
-        """Inject validation-only runtime degradation knobs when appropriate."""
+        """Inject validation-only runtime degradation knobs when appropriate.
+
+        When detail data provides sub-bar resolution, LatencyModel handles
+        degradation so execution_delay_probability is not needed.
+        """
         augmented = dict(params)
-        if timeframe in self._SUB_BAR_TIMEFRAMES:
+        if timeframe in self._SUB_BAR_TIMEFRAMES and not has_detail_data:
             augmented.setdefault("execution_delay_probability", 0.3)
         return augmented
+
+    # Default detail timeframe for sub-5m strategies when detail data exists
+    _DEFAULT_DETAIL_TIMEFRAME = "5s"
+
+    def _resolve_detail_timeframe(
+        self,
+        run_config: dict[str, object],
+        strategy_timeframe: str,
+        override: str | None,
+    ) -> str | None:
+        """Resolve the effective detail timeframe for sub-bar fill resolution.
+
+        Auto-detects available detail data for sub-5m strategies. Returns
+        None if no detail data is needed or available.
+
+        Args:
+            run_config: Run configuration from database.
+            strategy_timeframe: Primary strategy timeframe.
+            override: Explicit detail timeframe override.
+
+        Returns:
+            Detail timeframe string (e.g., '5s') or None.
+        """
+        # Explicit override always wins
+        if override is not None:
+            return override
+
+        # Only relevant for sub-5m timeframes
+        if strategy_timeframe not in self._SUB_BAR_TIMEFRAMES:
+            return None
+
+        # Check run config for detail_timeframe parameter
+        params = run_config.get("parameters")
+        if isinstance(params, dict) and params.get("detail_timeframe"):
+            return str(params["detail_timeframe"])
+
+        # Auto-detect: check if default detail data exists in catalog
+        from vibe_quant.data.catalog import (
+            DEFAULT_CATALOG_PATH,
+            INTERVAL_TO_AGGREGATION,
+            CatalogManager,
+        )
+
+        symbols = self._parse_symbols(run_config)
+        if not symbols:
+            return None
+
+        detail_tf = self._DEFAULT_DETAIL_TIMEFRAME
+        if detail_tf not in INTERVAL_TO_AGGREGATION:
+            return None
+
+        catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
+        # Check if at least one symbol has detail data
+        for symbol in symbols:
+            bar_count = catalog_mgr.get_bar_count(symbol, detail_tf)
+            if bar_count > 0:
+                logger.info(
+                    "Auto-detected %s detail data for %s (%d bars)",
+                    detail_tf,
+                    symbol,
+                    bar_count,
+                )
+                return detail_tf
+
+        return None
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.

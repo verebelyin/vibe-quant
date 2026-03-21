@@ -12,6 +12,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run validation backtest")
     parser.add_argument("--run-id", type=int, required=True, help="Backtest run ID")
     parser.add_argument("--db", type=str, default=None, help="Database path")
+    parser.add_argument(
+        "--detail-timeframe",
+        type=str,
+        default=None,
+        choices=["1s", "5s"],
+        help="Sub-bar timeframe for realistic fill simulation (auto-detects if omitted)",
+    )
     args = parser.parse_args()
 
     from vibe_quant.db.connection import DEFAULT_DB_PATH
@@ -23,7 +30,7 @@ def main() -> int:
 
     runner = ValidationRunner(db_path=db_path)
     try:
-        result = runner.run(args.run_id)
+        result = runner.run(args.run_id, detail_timeframe=args.detail_timeframe)
         job_manager.mark_completed(args.run_id)
         # total_return is stored as a fraction (0.15 = 15%); multiply by 100 for display
         print(
