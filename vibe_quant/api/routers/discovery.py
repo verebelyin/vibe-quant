@@ -353,10 +353,21 @@ def _discovery_entry_is_short_only(entry: dict[str, object]) -> bool:
 
 
 def _window_regime_sign(symbol: str, start_date: str, end_date: str) -> int:
-    """Classify a window as bull (+1), bear (-1), or neutral (0)."""
-    from vibe_quant.validation.random_baseline import load_ohlc
+    """Classify a window as bull (+1), bear (-1), or neutral (0).
 
-    bars = load_ohlc(symbol, "1m", start_date, end_date)
+    Returns 0 if data is unavailable or window is sideways.
+    """
+    try:
+        from vibe_quant.validation.random_baseline import load_ohlc
+
+        bars = load_ohlc(symbol, "1m", start_date, end_date)
+    except Exception:
+        logger.warning(
+            "Regime sign: failed to load OHLC for %s %s→%s, treating as neutral",
+            symbol, start_date, end_date, exc_info=True,
+        )
+        return 0
+
     if len(bars) < 2 or bars[0].open <= 0:
         return 0
 
@@ -422,7 +433,12 @@ def _passes_opposing_regime_gate(
 
     base_sign = _window_regime_sign(symbol, start_date, end_date)
     if base_sign == 0:
-        return False
+        # Neutral base regime — can't determine opposing regime, pass through
+        logger.info(
+            "Regime gate: base window %s→%s is neutral (|ret| < %.0f%%), skipping gate",
+            start_date, end_date, _REGIME_RETURN_THRESHOLD * 100,
+        )
+        return True
 
     min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
     try:

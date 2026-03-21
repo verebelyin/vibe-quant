@@ -78,7 +78,12 @@ def validate_archive_window(
 
             available_start = datetime.fromtimestamp(date_range[0] / 1000, tz=UTC).date()
             available_end = datetime.fromtimestamp(date_range[1] / 1000, tz=UTC).date()
-            if available_start > start or available_end < end:
+            # date_range[1] is the open_time of the last bar, not its close.
+            # For 1m bars ending at 23:59, the open is on the previous day.
+            # Allow 1 day tolerance so we don't flag complete data as missing.
+            from datetime import timedelta
+
+            if available_start > start or available_end + timedelta(days=1) < end:
                 missing.append(symbol)
 
         return missing

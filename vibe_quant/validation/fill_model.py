@@ -108,6 +108,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         self._impact_coefficient = impact_coefficient
         self._prob_best_price_fill = prob_best_price_fill
         self._max_adverse_ticks = max_adverse_ticks
+        self._prob_slippage = prob_slippage
 
     @property
     def impact_coefficient(self) -> float:
@@ -125,8 +126,16 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         return self._max_adverse_ticks
 
     def is_slipped(self) -> bool:
-        """Disable engine one-tick slippage in favor of simulated book fills."""
-        return False
+        """Apply engine slippage based on configured prob_slippage.
+
+        Default is 0.0 (disabled) to avoid double-counting with post-fill
+        SPEC slippage estimation. Non-zero values enable probabilistic slippage.
+        """
+        if self._prob_slippage <= 0.0:
+            return False
+        if self._prob_slippage >= 1.0:
+            return True
+        return random.random() < self._prob_slippage
 
     def get_orderbook_for_fill_simulation(self, instrument, order, best_bid, best_ask):
         """Return a synthetic L2 book for moderate sub-bar fill degradation."""
