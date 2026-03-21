@@ -718,7 +718,11 @@ class TestDetailTimeframe:
         """Explicit detail_timeframe override is used directly."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         result = runner._resolve_detail_timeframe(
-            run_config={"symbols": '["BTCUSDT"]'},
+            run_config={
+                "symbols": '["BTCUSDT"]',
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+            },
             strategy_timeframe="1m",
             override="1s",
         )
@@ -731,7 +735,11 @@ class TestDetailTimeframe:
         """Non-sub-bar timeframes (4h, 1h) return None — no detail needed."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         result = runner._resolve_detail_timeframe(
-            run_config={"symbols": '["BTCUSDT"]'},
+            run_config={
+                "symbols": '["BTCUSDT"]',
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+            },
             strategy_timeframe="4h",
             override=None,
         )
@@ -746,12 +754,27 @@ class TestDetailTimeframe:
         result = runner._resolve_detail_timeframe(
             run_config={
                 "symbols": '["BTCUSDT"]',
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
                 "parameters": {"detail_timeframe": "5s"},
             },
             strategy_timeframe="1m",
             override=None,
         )
         assert result == "5s"
+        runner.close()
+
+    def test_resolve_detail_no_dates_returns_none(
+        self, temp_db: Path, temp_logs: Path
+    ) -> None:
+        """Missing run dates prevents auto-detection (returns None)."""
+        runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
+        result = runner._resolve_detail_timeframe(
+            run_config={"symbols": '["BTCUSDT"]'},
+            strategy_timeframe="1m",
+            override=None,
+        )
+        assert result is None
         runner.close()
 
     def test_venue_config_with_detail_data_enables_latency(

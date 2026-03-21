@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_run_parser.add_argument(
         "--latency",
         type=str,
-        choices=["co_located", "domestic", "international", "retail"],
+        choices=["co_located", "near_exchange", "domestic", "international", "retail"],
         default=None,
         help="Override latency preset (default: from database or retail)",
     )
@@ -348,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_batch_parser.add_argument(
         "--latency",
         type=str,
-        choices=["co_located", "domestic", "international", "retail"],
+        choices=["co_located", "near_exchange", "domestic", "international", "retail"],
         default=None,
         help="Override latency preset (default: from database or validation default)",
     )

@@ -941,7 +941,12 @@ class ValidationRunner:
         if isinstance(params, dict) and params.get("detail_timeframe"):
             return str(params["detail_timeframe"])
 
-        # Auto-detect: check if default detail data exists in catalog
+        # Auto-detect: check if default detail data covers the run window
+        # for ALL symbols. Venue config (latency on/off) and strategy params
+        # (execution_delay_probability) are run-wide, so partial coverage
+        # would remove degradation for symbols without sub-bar data.
+        from datetime import datetime as dt
+
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
             INTERVAL_TO_AGGREGATION,
@@ -956,20 +961,59 @@ class ValidationRunner:
         if detail_tf not in INTERVAL_TO_AGGREGATION:
             return None
 
+        # Parse run date window for coverage check
+        run_start = run_config.get("start_date")
+        run_end = run_config.get("end_date")
+        if not isinstance(run_start, str) or not isinstance(run_end, str):
+            return None
+
+        try:
+            window_start = dt.fromisoformat(run_start)
+            window_end = dt.fromisoformat(run_end)
+        except ValueError:
+            return None
+
         catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
-        # Check if at least one symbol has detail data
+
+        # Require ALL symbols to have detail data covering the run window
         for symbol in symbols:
-            bar_count = catalog_mgr.get_bar_count(symbol, detail_tf)
-            if bar_count > 0:
+            date_range = catalog_mgr.get_bar_date_range(symbol, detail_tf)
+            if date_range is None:
                 logger.info(
-                    "Auto-detected %s detail data for %s (%d bars)",
+                    "No %s detail data for %s — skipping sub-bar resolution",
                     detail_tf,
                     symbol,
-                    bar_count,
                 )
-                return detail_tf
+                return None
 
-        return None
+            data_start, data_end = date_range
+            # Require detail data to cover at least the run window
+            # (allow small gaps at boundaries via timezone-naive comparison)
+            if data_start.replace(tzinfo=None) > window_start.replace(tzinfo=None):
+                logger.info(
+                    "Detail %s data for %s starts %s, after run start %s — skipping",
+                    detail_tf,
+                    symbol,
+                    data_start.isoformat(),
+                    run_start,
+                )
+                return None
+            if data_end.replace(tzinfo=None) < window_end.replace(tzinfo=None):
+                logger.info(
+                    "Detail %s data for %s ends %s, before run end %s — skipping",
+                    detail_tf,
+                    symbol,
+                    data_end.isoformat(),
+                    run_end,
+                )
+                return None
+
+        logger.info(
+            "Auto-detected %s detail data covering run window for all %d symbols",
+            detail_tf,
+            len(symbols),
+        )
+        return detail_tf
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.
