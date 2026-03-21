@@ -37,6 +37,7 @@ class TestLatencyPresets:
     def test_latency_preset_enum_values(self) -> None:
         """All preset enum values are defined."""
         assert LatencyPreset.COLOCATED.value == "co_located"
+        assert LatencyPreset.NEAR_EXCHANGE.value == "near_exchange"
         assert LatencyPreset.DOMESTIC.value == "domestic"
         assert LatencyPreset.INTERNATIONAL.value == "international"
         assert LatencyPreset.RETAIL.value == "retail"
@@ -54,6 +55,11 @@ class TestLatencyPresets:
         assert isinstance(config, LatencyModelConfig)
         # Co-located: 1ms base (SPEC value)
         assert config.base_latency_nanos == 1_000_000
+
+    def test_get_near_exchange_preset(self) -> None:
+        """Near-exchange preset has 10ms latency."""
+        config = get_latency_model(LatencyPreset.NEAR_EXCHANGE)
+        assert config.base_latency_nanos == 10_000_000
 
     def test_get_latency_model_by_string(self) -> None:
         """Get latency model using string."""
@@ -105,11 +111,13 @@ class TestLatencyPresets:
     def test_preset_latency_ordering(self) -> None:
         """Presets are ordered by increasing latency."""
         colocated = LATENCY_PRESETS[LatencyPreset.COLOCATED]
+        near_exchange = LATENCY_PRESETS[LatencyPreset.NEAR_EXCHANGE]
         domestic = LATENCY_PRESETS[LatencyPreset.DOMESTIC]
         international = LATENCY_PRESETS[LatencyPreset.INTERNATIONAL]
         retail = LATENCY_PRESETS[LatencyPreset.RETAIL]
 
-        assert colocated.base_ms < domestic.base_ms
+        assert colocated.base_ms < near_exchange.base_ms
+        assert near_exchange.base_ms < domestic.base_ms
         assert domestic.base_ms < international.base_ms
         assert international.base_ms < retail.base_ms
 

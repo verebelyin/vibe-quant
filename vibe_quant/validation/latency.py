@@ -12,6 +12,7 @@ class LatencyPreset(StrEnum):
     """Latency preset for execution simulation."""
 
     COLOCATED = "co_located"
+    NEAR_EXCHANGE = "near_exchange"
     DOMESTIC = "domestic"
     CLOUD = "cloud"
     INTERNATIONAL = "international"
@@ -54,6 +55,15 @@ LATENCY_PRESETS: dict[LatencyPreset, LatencyValues] = {
     # Co-located: Server in same datacenter as exchange (SPEC: 1ms)
     LatencyPreset.COLOCATED: LatencyValues(
         base_ms=1.0,
+        insert_ms=0.0,
+        update_ms=0.0,
+        cancel_ms=0.0,
+    ),
+    # Near-exchange: Cheap VPS in same city as exchange (10ms)
+    # e.g., Tokyo VPS for Binance Futures (AWS ap-northeast-1)
+    # Network: 1-5ms, total with app overhead: 5-15ms
+    LatencyPreset.NEAR_EXCHANGE: LatencyValues(
+        base_ms=10.0,
         insert_ms=0.0,
         update_ms=0.0,
         cancel_ms=0.0,
