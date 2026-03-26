@@ -75,6 +75,44 @@ def split_date_range(
     )
 
 
+def split_into_windows(
+    start_date: str,
+    end_date: str,
+    n: int,
+) -> list[tuple[str, str]]:
+    """Split a date range into N non-overlapping sub-windows.
+
+    Args:
+        start_date: Start date (ISO format YYYY-MM-DD).
+        end_date: End date (ISO format YYYY-MM-DD).
+        n: Number of windows (must be >= 2).
+
+    Returns:
+        List of (start, end) date string pairs.
+
+    Raises:
+        ValueError: If n < 2 or date range too short.
+    """
+    if n < 2:
+        raise ValueError(f"Need at least 2 windows, got {n}")
+    start = _datetime.strptime(start_date, "%Y-%m-%d")
+    end = _datetime.strptime(end_date, "%Y-%m-%d")
+    total_days = (end - start).days
+    if total_days < n * 7:
+        raise ValueError(f"Date range too short ({total_days}d) for {n} windows")
+    window_days = total_days // n
+    windows: list[tuple[str, str]] = []
+    for i in range(n):
+        w_start = start + __import__("datetime").timedelta(days=i * window_days)
+        w_end = (
+            start + __import__("datetime").timedelta(days=(i + 1) * window_days)
+            if i < n - 1
+            else end
+        )
+        windows.append((w_start.strftime("%Y-%m-%d"), w_end.strftime("%Y-%m-%d")))
+    return windows
+
+
 def generate_month_range(start_date: datetime, end_date: datetime) -> Generator[tuple[int, int]]:
     """Generate (year, month) tuples between two dates.
 

@@ -186,6 +186,8 @@ async def launch_discovery(
         params["indicator_pool"] = body.indicator_pool
     if body.direction is not None:
         params["direction"] = body.direction
+    if body.eval_windows > 1:
+        params["eval_windows"] = body.eval_windows
     if body.train_test_split > 0:
         params["train_test_split"] = body.train_test_split
     if body.cross_window_months:
@@ -252,6 +254,8 @@ async def launch_discovery(
         command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
     if body.direction is not None:
         command.extend(["--direction", body.direction])
+    if body.eval_windows > 1:
+        command.extend(["--eval-windows", str(body.eval_windows)])
     if body.train_test_split > 0:
         command.extend(["--train-test-split", str(body.train_test_split)])
     if body.cross_window_months:

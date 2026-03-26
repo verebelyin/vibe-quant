@@ -67,6 +67,9 @@ class _NTBacktestFn:
     """Picklable backtest callable for ProcessPoolExecutor.
 
     Must be a top-level class (not a closure) so multiprocessing can pickle it.
+    Supports multi-window evaluation: when ``windows`` has 2+ entries, runs
+    the backtest on each window and returns worst-case metrics across all
+    windows, forcing the GA to find regime-robust strategies.
     """
 
     def __init__(
@@ -75,40 +78,104 @@ class _NTBacktestFn:
         timeframe: str,
         start_date: str,
         end_date: str,
+        windows: list[tuple[str, str]] | None = None,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
         self.start_date = start_date
         self.end_date = end_date
+        self.windows = windows
+
+    def _run_single(
+        self,
+        chromosome: StrategyChromosome,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, float | int]:
+        from vibe_quant.discovery.genome import chromosome_to_dsl
+        from vibe_quant.screening.nt_runner import NTScreeningRunner
+
+        dsl_dict = chromosome_to_dsl(chromosome)
+        dsl_dict["timeframe"] = self.timeframe
+
+        runner = NTScreeningRunner(
+            dsl_dict=dsl_dict,
+            symbols=self.symbols,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        result = runner({})
+
+        return {
+            "sharpe_ratio": result.sharpe_ratio
+            if result.sharpe_ratio != float("-inf")
+            else -1.0,
+            "max_drawdown": result.max_drawdown,
+            "profit_factor": result.profit_factor,
+            "total_trades": result.total_trades,
+            "total_return": getattr(result, "total_return", 0.0),
+            "skewness": getattr(result, "skewness", 0.0),
+            "kurtosis": getattr(result, "kurtosis", 3.0),
+            "trade_returns": getattr(result, "trade_returns", ()),  # type: ignore[arg-type,dict-item]
+        }
+
+    @staticmethod
+    def _aggregate_multi_window(
+        results: list[dict[str, float | int]],
+    ) -> dict[str, float | int]:
+        """Aggregate metrics across multiple window results.
+
+        Strategy: require ALL windows to produce trades. If any window
+        has 0 trades, return failure metrics. Otherwise:
+        - total_trades: sum (statistical significance across all data)
+        - sharpe_ratio: mean (consistent performance)
+        - max_drawdown: max (worst case)
+        - profit_factor: trade-weighted mean
+        - total_return: mean per-window return
+        """
+        n = len(results)
+        per_window_trades = [int(r["total_trades"]) for r in results]
+
+        # If any window has 0 trades, strategy doesn't cover that regime
+        if any(t == 0 for t in per_window_trades):
+            return {
+                "sharpe_ratio": -1.0,
+                "max_drawdown": 1.0,
+                "profit_factor": 0.0,
+                "total_trades": 0,
+                "total_return": 0.0,
+            }
+
+        total_trades_sum = sum(per_window_trades)
+
+        # Trade-weighted profit factor
+        pf_weighted = sum(
+            float(r["profit_factor"]) * t
+            for r, t in zip(results, per_window_trades)
+        ) / total_trades_sum
+
+        return {
+            "sharpe_ratio": sum(float(r["sharpe_ratio"]) for r in results) / n,
+            "max_drawdown": max(float(r["max_drawdown"]) for r in results),
+            "profit_factor": pf_weighted,
+            "total_trades": total_trades_sum,
+            "total_return": sum(float(r["total_return"]) for r in results) / n,
+            "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
+            "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
+            "trade_returns": sum(
+                (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
+            ),
+        }
 
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         try:
-            from vibe_quant.discovery.genome import chromosome_to_dsl
-            from vibe_quant.screening.nt_runner import NTScreeningRunner
-
-            dsl_dict = chromosome_to_dsl(chromosome)
-            dsl_dict["timeframe"] = self.timeframe
-
-            runner = NTScreeningRunner(
-                dsl_dict=dsl_dict,
-                symbols=self.symbols,
-                start_date=self.start_date,
-                end_date=self.end_date,
-            )
-            result = runner({})
-
-            return {
-                "sharpe_ratio": result.sharpe_ratio
-                if result.sharpe_ratio != float("-inf")
-                else -1.0,
-                "max_drawdown": result.max_drawdown,
-                "profit_factor": result.profit_factor,
-                "total_trades": result.total_trades,
-                "total_return": getattr(result, "total_return", 0.0),
-                "skewness": getattr(result, "skewness", 0.0),
-                "kurtosis": getattr(result, "kurtosis", 3.0),
-                "trade_returns": getattr(result, "trade_returns", ()),  # type: ignore[arg-type,dict-item]
-            }
+            if self.windows and len(self.windows) >= 2:
+                results = [
+                    self._run_single(chromosome, ws, we)
+                    for ws, we in self.windows
+                ]
+                return self._aggregate_multi_window(results)
+            return self._run_single(chromosome, self.start_date, self.end_date)
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
             return {
@@ -124,9 +191,10 @@ def _make_nt_backtest_fn(
     timeframe: str,
     start_date: str,
     end_date: str,
+    windows: list[tuple[str, str]] | None = None,
 ) -> _NTBacktestFn:
     """Create a picklable backtest function using real NautilusTrader screening runner."""
-    return _NTBacktestFn(symbols, timeframe, start_date, end_date)
+    return _NTBacktestFn(symbols, timeframe, start_date, end_date, windows=windows)
 
 
 def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
@@ -473,6 +541,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Direction constraint: long, short, both, or omit for random",
     )
     parser.add_argument(
+        "--eval-windows",
+        type=int,
+        default=1,
+        help="Split date range into N sub-windows, evaluate fitness on worst-case. "
+        "Forces GA to find regime-robust strategies (default: 1 = single window).",
+    )
+    parser.add_argument(
         "--train-test-split",
         type=float,
         default=0.0,
@@ -585,6 +660,19 @@ def main() -> int:
                 int(m.strip()) for m in args.cross_window_months.split(",") if m.strip()
             ]
 
+        # Multi-window evaluation: split date range into sub-windows
+        eval_windows_count = max(1, args.eval_windows)
+        eval_windows: list[tuple[str, str]] | None = None
+        if eval_windows_count >= 2:
+            from vibe_quant.utils import split_into_windows
+
+            eval_windows = split_into_windows(train_start, train_end, eval_windows_count)
+            logger.info(
+                "Multi-window fitness: %d windows — %s",
+                eval_windows_count,
+                " | ".join(f"{s}→{e}" for s, e in eval_windows),
+            )
+
         config = DiscoveryConfig(
             population_size=args.population_size,
             max_generations=args.max_generations,
@@ -600,6 +688,7 @@ def main() -> int:
             end_date=train_end,
             indicator_pool=ind_pool,
             direction=args.direction,
+            eval_windows=eval_windows_count,
             train_test_split=split_ratio,
             holdout_start_date=holdout_start or "",
             holdout_end_date=holdout_end or "",
@@ -637,6 +726,7 @@ def main() -> int:
                 timeframe=args.timeframe,
                 start_date=train_start,
                 end_date=train_end,
+                windows=eval_windows,
             )
 
         # Create holdout backtest function if train/test split enabled
@@ -798,6 +888,8 @@ def main() -> int:
                         "converged": result.converged,
                         "mock": use_mock,
                         "compiler_version": _get_compiler_version(),
+                        "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
+                        "eval_window_ranges": eval_windows if eval_windows else None,
                         "train_test_split": split_ratio if split_ratio > 0 else None,
                         "train_dates": list(result.train_dates) if result.train_dates else None,
                         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,

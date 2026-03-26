@@ -19,6 +19,7 @@ class DiscoveryLaunchRequest(BaseModel):
     direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
+    eval_windows: int = 1  # 1=single window, 2+=multi-window worst-case fitness
     train_test_split: float = 0.0  # 0=disabled, 0.5=50/50 train/holdout split
     cross_window_months: list[int] | None = None  # e.g. [1, 2] for +1mo, +2mo shifted windows
     cross_window_min_sharpe: float = 0.5  # min Sharpe on shifted windows
