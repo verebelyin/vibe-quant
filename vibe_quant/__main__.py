@@ -6,6 +6,13 @@ import argparse
 import sys
 
 
+def _latency_presets() -> type:
+    """Lazy import of LatencyPreset enum for CLI choices."""
+    from vibe_quant.validation.latency import LatencyPreset
+
+    return LatencyPreset
+
+
 def _format_fraction_as_percent(value: float | int | None, *, decimals: int = 2) -> str:
     """Format a fraction (0.05) as a percentage string (5.00%)."""
     if not isinstance(value, (int, float)):
@@ -291,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_run_parser.add_argument(
         "--latency",
         type=str,
-        choices=["co_located", "near_exchange", "domestic", "international", "retail"],
+        choices=[p.value for p in _latency_presets()],
         default=None,
         help="Override latency preset (default: from database or retail)",
     )
@@ -348,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     val_batch_parser.add_argument(
         "--latency",
         type=str,
-        choices=["co_located", "near_exchange", "domestic", "international", "retail"],
+        choices=[p.value for p in _latency_presets()],
         default=None,
         help="Override latency preset (default: from database or validation default)",
     )

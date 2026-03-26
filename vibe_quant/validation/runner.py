@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime as dt, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -945,8 +945,6 @@ class ValidationRunner:
         # for ALL symbols. Venue config (latency on/off) and strategy params
         # (execution_delay_probability) are run-wide, so partial coverage
         # would remove degradation for symbols without sub-bar data.
-        from datetime import datetime as dt
-
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
             INTERVAL_TO_AGGREGATION,
@@ -987,9 +985,12 @@ class ValidationRunner:
                 return None
 
             data_start, data_end = date_range
-            # Require detail data to cover at least the run window
-            # (allow small gaps at boundaries via timezone-naive comparison)
-            if data_start.replace(tzinfo=None) > window_start.replace(tzinfo=None):
+            # Compare timezone-naive to handle mixed tz/naive dates
+            data_s = data_start.replace(tzinfo=None)
+            data_e = data_end.replace(tzinfo=None)
+            win_s = window_start.replace(tzinfo=None)
+            win_e = window_end.replace(tzinfo=None)
+            if data_s > win_s:
                 logger.info(
                     "Detail %s data for %s starts %s, after run start %s — skipping",
                     detail_tf,
@@ -998,7 +999,7 @@ class ValidationRunner:
                     run_start,
                 )
                 return None
-            if data_end.replace(tzinfo=None) < window_end.replace(tzinfo=None):
+            if data_e < win_e:
                 logger.info(
                     "Detail %s data for %s ends %s, before run end %s — skipping",
                     detail_tf,

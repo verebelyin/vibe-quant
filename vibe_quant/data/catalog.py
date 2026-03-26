@@ -498,6 +498,8 @@ class CatalogManager:
     def get_bar_date_range(self, symbol: str, interval: str) -> tuple[datetime, datetime] | None:
         """Get date range of bars for a symbol and interval.
 
+        Uses parquet metadata statistics to avoid loading data into RAM.
+
         Args:
             symbol: Trading symbol.
             interval: Candle interval.
@@ -506,15 +508,44 @@ class CatalogManager:
             (start_datetime, end_datetime) or None if no data.
         """
         bar_type = get_bar_type(symbol, interval)
-        bars = self.catalog.bars(bar_types=[bar_type])
-
-        if not bars:
+        bar_dir = self._catalog_path / "data" / "bar" / str(bar_type)
+        if not bar_dir.exists():
             return None
+        try:
+            import pyarrow.parquet as pq
 
-        # Convert nanoseconds to datetime
-        start_ns = bars[0].ts_event
-        end_ns = bars[-1].ts_event
-        start_dt = datetime.fromtimestamp(start_ns / 1e9, tz=UTC)
-        end_dt = datetime.fromtimestamp(end_ns / 1e9, tz=UTC)
+            min_ns: int | None = None
+            max_ns: int | None = None
+            for pq_file in bar_dir.glob("*.parquet"):
+                meta = pq.read_metadata(pq_file)
+                schema = pq.read_schema(pq_file)
+                col_idx = schema.get_field_index("ts_event")
+                if col_idx < 0:
+                    continue
+                for rg in range(meta.num_row_groups):
+                    stats = meta.row_group(rg).column(col_idx).statistics
+                    if stats is None:
+                        continue
+                    if min_ns is None or stats.min < min_ns:
+                        min_ns = stats.min
+                    if max_ns is None or stats.max > max_ns:
+                        max_ns = stats.max
 
-        return (start_dt, end_dt)
+            if min_ns is None or max_ns is None:
+                return None
+
+            return (
+                datetime.fromtimestamp(min_ns / 1e9, tz=UTC),
+                datetime.fromtimestamp(max_ns / 1e9, tz=UTC),
+            )
+        except Exception:
+            # Fallback to loading bars if parquet metadata read fails
+            bars = self.catalog.bars(bar_types=[bar_type])
+            if not bars:
+                return None
+            start_ns = bars[0].ts_event
+            end_ns = bars[-1].ts_event
+            return (
+                datetime.fromtimestamp(start_ns / 1e9, tz=UTC),
+                datetime.fromtimestamp(end_ns / 1e9, tz=UTC),
+            )
