@@ -42,7 +42,7 @@ COMPLEXITY_PENALTY_CAP: float = 0.1
 
 # Minimum trade thresholds
 MIN_TRADES: int = 50  # Default for 4h and longer timeframes
-MIN_TRADES_1M: int = 100  # For 1m timeframe (more trades needed for statistical significance)
+MIN_TRADES_1M: int = 50  # For 1m timeframe (lowered from 100 — 3mo windows produce fewer trades in some regimes)
 
 # Overtrading penalty: commission-aware
 # Assumes ~0.1% round-trip commission (taker fees on crypto perps)

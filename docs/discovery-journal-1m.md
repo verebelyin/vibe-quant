@@ -3106,5 +3106,61 @@ Dual STOCH crosses_above entry (mid-range + overbought) + single ATR exit. Wide 
 3. **sid=212 for aggressive deployment** — 16% return on 2mo with Sharpe 4.74. Higher DD (5-9%) but much higher absolute returns.
 4. **Stop searching for better params** — 14 seeds, the landscape is well-mapped. sid=212 (tail-win) and sid=220 (scalper) represent the two viable STOCH+ATR architectures on 1m.
 
+---
+
+## 2026-03-26: Batch 31 — Q4 2024 Bull Regime Test (vibe-quant-y8wj)
+
+### Goal
+
+Test whether STOCH/CCI/ATR/ROC combos can find long or bidirectional strategies on the Q4 2024 bull window (2024-10-01 → 2024-12-31). sid=212 and sid=220 both lost money on this period, confirming short champions are regime-biased. Also validates refactored `get_bar_date_range` (parquet metadata) and lowered `MIN_TRADES_1M` 100→50.
+
+### Configuration
+
+| Run | Indicators | Pop | Gens | Direction | Rationale |
+|-----|-----------|-----|------|-----------|-----------|
+| 762 | STOCH+ATR | 8 | 4 | long | Direct long search (MIN_TRADES=100, pre-fix) |
+| 763 | STOCH+ATR | 8 | 4 | both | Bidirectional (MIN_TRADES=100, pre-fix) |
+| 764 | STOCH+CCI | 12 | 6 | random | Strong 1m combo (MIN_TRADES=100, pre-fix) |
+| 765 | STOCH+CCI+ROC | 12 | 6 | random | Triple combo (MIN_TRADES=100, pre-fix) |
+| 766 | STOCH+ATR | 12 | 6 | long | Retry with MIN_TRADES=50 |
+| 767 | STOCH+ATR | 12 | 6 | both | Retry with MIN_TRADES=50 |
+| 768 | STOCH+CCI | 12 | 6 | random | Retry with MIN_TRADES=50 |
+| 769 | STOCH+CCI+ROC | 12 | 6 | random | Retry with MIN_TRADES=50 |
+
+Data range: 2024-10-01 to 2024-12-31 (~131K 1m bars). Two waves: first 4 at MIN_TRADES=100, then lowered to 50.
+
+### Results
+
+**Wave 1 (MIN_TRADES=100):**
+
+| Run | Best Score | Failure Reason |
+|-----|-----------|---------------|
+| 762 | 0.0000 | All strategies <100 trades or overtrade (-90% return) |
+| 763 | 0.0000 | Same — zero_score 8/8 every gen |
+| 764 | 0.6178 | BOTH-dir Sharpe 3.17, 170 trades — failed bootstrap CI (lb=-0.80 < 1.0) |
+| 765 | 0.0000 | Zero_score every gen |
+
+**Wave 2 (MIN_TRADES=50):**
+
+| Run | Best Score | Trades | Obs. Sharpe | Bootstrap CI lb | Failure |
+|-----|-----------|--------|-------------|----------------|---------|
+| 766 | 0.6475 | 89 | 1.18 | -0.87 | Bootstrap CI |
+| 767 | 0.7324 | 116 | 1.56 | -0.45 | Bootstrap CI |
+| 768 | 0.5099 | 159 | 0.62 | -1.37 | Bootstrap CI |
+| 769 | 0.0000 | 5257 | 5.32 | — | Overtrade -93% |
+
+### Key Findings
+
+1. **Q4 2024 bull window cannot produce statistically robust 1m strategies** with STOCH/CCI/ATR/ROC. All bootstrap CI lower bounds are deeply negative (-0.45 to -1.37), meaning observed Sharpes are indistinguishable from noise.
+2. **Lowering MIN_TRADES_1M 100→50 was necessary** — wave 1 couldn't even evaluate strategies on this shorter window. Wave 2 let strategies through the trade gate, revealing the bootstrap CI as the real barrier.
+3. **Regime bias confirmed** — the short-dominant architectures from Batches 28-30 are specific to the Jan-Mar 2026 window. The Q4 2024 bull market doesn't support similar signal structures.
+4. **767 was the strongest candidate** — STOCH+ATR both, 116 trades, observed Sharpe 1.56 — but bootstrap CI lb=-0.45 means the true Sharpe could be negative.
+5. **Refactored code validated** — `get_bar_date_range` parquet metadata path executed correctly during data checks. Pipeline ran without issues.
+
+### Recommendations
+
+1. **Keep MIN_TRADES_1M=50** — the old 100 was too restrictive for 3-month 1m windows
+2. **Q4 bull regime needs different approach**: either (a) much longer window (6+ months spanning regime change), or (b) different indicator families (trend-following: EMA/SMA crossovers), or (c) accept that 1m scalping is regime-dependent and pair short+long strategies for different market conditions
+3. **Cross-asset test (vibe-quant-zo4o) becomes more important** — if SHORT universality holds across ETH/SOL, it's structural (funding rates), not just BTC Q1 2026 artifact
 
 
