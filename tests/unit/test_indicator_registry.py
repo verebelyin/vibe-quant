@@ -545,7 +545,9 @@ class TestExtendedIndicatorSpecFields:
         b = IndicatorSpec(
             name="B", nt_class=None, pandas_ta_func="b", default_params={}, param_schema={}
         )
-        # Frozen dataclass — use object.__setattr__ to mutate via the dict API
+        # frozen=True blocks attribute rebinding, not mutation of a mutable
+        # dict stored on the spec — so in-place .__setitem__ works and this
+        # test asserts each spec got its own dict from the default_factory.
         a.nt_output_attrs["extra"] = "x"
         assert "extra" not in b.nt_output_attrs
 

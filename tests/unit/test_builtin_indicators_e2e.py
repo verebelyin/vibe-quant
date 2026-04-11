@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from vibe_quant.dsl.compiler import StrategyCompiler
+from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 from vibe_quant.dsl.parser import validate_strategy_dict
 
@@ -118,8 +118,7 @@ def test_every_spec_compiles_minimal_strategy(spec: IndicatorSpec) -> None:
 
     assert source, f"Empty compiled source for {spec.name}"
     assert "class " in source, f"Compiled source for {spec.name} missing class"
-    # Every strategy class is named after the DSL name in CamelCase.
-    camel = "".join(word.capitalize() for word in dsl.name.split("_"))
+    camel = _to_class_name(dsl.name)
     assert f"class {camel}Strategy" in source, (
         f"Missing strategy class in compiled output for {spec.name}"
     )
@@ -138,7 +137,7 @@ def test_every_spec_compiles_to_importable_module(spec: IndicatorSpec) -> None:
     compiler = StrategyCompiler()
     module = compiler.compile_to_module(dsl)
 
-    camel = "".join(word.capitalize() for word in dsl.name.split("_"))
+    camel = _to_class_name(dsl.name)
     strategy_cls = getattr(module, f"{camel}Strategy", None)
     config_cls = getattr(module, f"{camel}Config", None)
     assert strategy_cls is not None, f"No Strategy class on compiled module for {spec.name}"

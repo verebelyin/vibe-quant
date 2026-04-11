@@ -108,7 +108,7 @@ class IndicatorSpec:
     param_schema: dict[str, type]
     output_names: tuple[str, ...] = field(default=("value",))
 
-    # Callback-based dispatch (optional; populated during Phase 3 migration).
+    # Callback-based dispatch.
     nt_kwargs_fn: Callable[[dict[str, object]], dict[str, object]] | None = None
     compute_fn: (
         Callable[[pd.DataFrame, dict[str, object]], Any]
@@ -120,17 +120,17 @@ class IndicatorSpec:
     computed_outputs: dict[str, str] = field(default_factory=dict)
     pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
 
-    # Price-source requirements.
     requires_high_low: bool = False
     requires_volume: bool = False
 
-    # UI / catalog metadata (absorbed from indicator_metadata.py in Phase 7).
+    # UI / catalog metadata.
     display_name: str = ""
     description: str = ""
     category: str = "Custom"
     popular: bool = False
 
-    # GA enrollment metadata (absorbed from discovery/genome.py in Phase 6).
+    # GA enrollment metadata. threshold_range=None + empty param_ranges →
+    # the spec is excluded from build_indicator_pool().
     param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     threshold_range: tuple[float, float] | None = None
 
@@ -377,10 +377,9 @@ def _get_nt_class(module_path: str, class_name: str) -> type | None:
 
 
 # -----------------------------------------------------------------------------
-# Built-in compute_fn imports (populated on specs below; compiler ignores them
-# until Phase 4). Keeping the imports here (rather than lazily) means every
-# compute_fn is eagerly resolved at registration time so a typo surfaces at
-# startup instead of during a backtest.
+# Built-in compute_fn imports. Eagerly resolved at registration time so a typo
+# surfaces at startup instead of mid-backtest. The pandas_ta_classic import is
+# deferred inside compute_builtins itself so this line stays cheap.
 # -----------------------------------------------------------------------------
 
 from vibe_quant.dsl.compute_builtins import (  # noqa: E402
@@ -405,33 +404,17 @@ from vibe_quant.dsl.compute_builtins import (  # noqa: E402
     compute_vwap,
     compute_willr,
     compute_wma,
+    int_param,
 )
 
 # -----------------------------------------------------------------------------
-# Per-indicator nt_kwargs_fn helpers. Each one takes merged params and returns
-# the kwargs dict passed to the NT indicator constructor. Mirrors the existing
-# hardcoded elif chain in ``IndicatorRegistry._build_nt_kwargs`` — the compiler
-# still uses that elif chain until Phase 4; these helpers let the new callback
-# path light up without touching the compiler.
+# Per-indicator nt_kwargs_fn helpers: each one takes merged params and returns
+# the kwargs dict passed to the NT indicator constructor.
 # -----------------------------------------------------------------------------
 
 
-def _int_from(params: dict[str, object], key: str, default: int) -> int:
-    """Coerce a dict entry to int with a fallback.
-
-    ``IndicatorSpec`` stores params as ``dict[str, object]`` because the
-    compiler receives both literal ints and pydantic-validated floats.
-    Callback helpers need a uniform way to pull ints out without sprinkling
-    ``# type: ignore`` comments everywhere.
-    """
-    val = params.get(key, default)
-    if isinstance(val, (int, float)):
-        return int(val)
-    return default
-
-
 def _period_kwargs(params: dict[str, object]) -> dict[str, object]:
-    return {"period": params["period"]} if "period" in params else {}
+    return {"period": params.get("period", 14)}
 
 
 def _macd_kwargs(params: dict[str, object]) -> dict[str, object]:
@@ -468,12 +451,6 @@ def _donchian_kwargs(params: dict[str, object]) -> dict[str, object]:
 
 # -----------------------------------------------------------------------------
 # Register built-in indicators
-#
-# Every built-in spec populates the new callback/UI/GA fields even though the
-# compiler still reads only the pre-P1 fields (nt_class, pandas_ta_func,
-# default_params, output_names). Phase 4 will flip the compiler to read the
-# new fields; Phase 3 just puts the data in place so the migration is a pure
-# code-deletion step.
 # -----------------------------------------------------------------------------
 
 # Trend indicators
@@ -582,7 +559,7 @@ def _tema_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         compute_fn=compute_tema,
-        pta_lookback_fn=lambda p: _int_from(p, "period", 14) * 3,
+        pta_lookback_fn=lambda p: int_param(p, "period", 14) * 3,
         display_name="Triple EMA",
         description="Triple-smoothed EMA with even less lag than DEMA.",
         category="Trend",
@@ -607,7 +584,7 @@ def _macd_spec() -> IndicatorSpec:
         compute_fn=compute_macd,
         nt_kwargs_fn=_macd_kwargs,
         nt_output_attrs={"value": "value"},  # Only macd line on NT; sub-values force compute_fn.
-        pta_lookback_fn=lambda p: _int_from(p, "slow_period", 26) + _int_from(p, "signal_period", 9),
+        pta_lookback_fn=lambda p: int_param(p, "slow_period", 26) + int_param(p, "signal_period", 9),
         display_name="MACD (Moving Average Convergence Divergence)",
         description=(
             "Trend-following momentum indicator showing the relationship between "
@@ -911,9 +888,9 @@ def _ichimoku_spec() -> IndicatorSpec:
         compute_fn=compute_ichimoku,
         requires_high_low=True,
         pta_lookback_fn=lambda p: max(
-            _int_from(p, "tenkan", 9),
-            _int_from(p, "kijun", 26),
-            _int_from(p, "senkou", 52),
+            int_param(p, "tenkan", 9),
+            int_param(p, "kijun", 26),
+            int_param(p, "senkou", 52),
         ),
         display_name="Ichimoku Cloud",
         description=(
