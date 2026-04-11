@@ -78,80 +78,50 @@ class IndicatorDef:
     dsl_type: str
 
 
-INDICATOR_POOL: dict[str, IndicatorDef] = {
-    "RSI": IndicatorDef(
-        name="RSI",
-        param_ranges={"period": (5, 50)},
-        default_threshold_range=(25.0, 75.0),
-        dsl_type="RSI",
-    ),
-    # EMA excluded: price-relative indicator, threshold=0 produces no trades
-    # Requires indicator-vs-indicator comparison (not yet supported)
-    "MACD": IndicatorDef(
-        name="MACD",
-        param_ranges={
-            "fast_period": (8, 21),
-            "slow_period": (21, 50),
-            "signal_period": (5, 13),
-        },
-        default_threshold_range=(-0.05, 0.05),
-        dsl_type="MACD",
-    ),
-    "BBANDS": IndicatorDef(
-        name="BBANDS",
-        param_ranges={"period": (5, 50), "std_dev": (1.0, 3.0)},
-        default_threshold_range=(0.0, 1.0),
-        dsl_type="BBANDS",
-    ),
-    "DONCHIAN": IndicatorDef(
-        name="DONCHIAN",
-        param_ranges={"period": (5, 50)},
-        default_threshold_range=(0.0, 1.0),
-        dsl_type="DONCHIAN",
-    ),
-    "ATR": IndicatorDef(
-        name="ATR",
-        param_ranges={"period": (5, 30)},
-        default_threshold_range=(0.001, 0.15),
-        dsl_type="ATR",
-    ),
-    "STOCH": IndicatorDef(
-        name="STOCH",
-        param_ranges={"k_period": (5, 21), "d_period": (3, 9)},
-        default_threshold_range=(20.0, 80.0),
-        dsl_type="STOCH",
-    ),
-    "MFI": IndicatorDef(
-        name="MFI",
-        param_ranges={"period": (5, 30)},
-        default_threshold_range=(20.0, 80.0),
-        dsl_type="MFI",
-    ),
-    "ADX": IndicatorDef(
-        name="ADX",
-        param_ranges={"period": (7, 30)},
-        default_threshold_range=(15.0, 60.0),
-        dsl_type="ADX",
-    ),
-    "CCI": IndicatorDef(
-        name="CCI",
-        param_ranges={"period": (10, 50)},
-        default_threshold_range=(-200.0, 200.0),
-        dsl_type="CCI",
-    ),
-    "WILLR": IndicatorDef(
-        name="WILLR",
-        param_ranges={"period": (5, 30)},
-        default_threshold_range=(-80.0, -20.0),
-        dsl_type="WILLR",
-    ),
-    "ROC": IndicatorDef(
-        name="ROC",
-        param_ranges={"period": (5, 30)},
-        default_threshold_range=(-5.0, 5.0),
-        dsl_type="ROC",
-    ),
-}
+def build_indicator_pool() -> dict[str, IndicatorDef]:
+    """Assemble the GA indicator pool from the live ``indicator_registry``.
+
+    Rules:
+
+    - Any spec with a non-None ``threshold_range`` AND a non-empty
+      ``param_ranges`` dict is auto-enrolled.
+    - Specs that leave ``threshold_range=None`` (EMA/SMA/WMA/DEMA/TEMA and
+      other price-relative indicators) are excluded — threshold=0 against
+      an absolute price is never a meaningful condition.
+    - Param bounds are copied verbatim from the spec; the GA's
+      ``_random_gene`` handles the int-vs-float heuristic.
+
+    Plugins dropped into ``vibe_quant/dsl/plugins/`` slot in here by
+    simply declaring the two fields on their spec — no edits to this
+    file. ``build_indicator_pool`` is called at import time so callers
+    that read ``INDICATOR_POOL`` as a plain dict keep working. If a
+    plugin is registered AFTER module import (unit tests), call
+    ``build_indicator_pool()`` again to pick it up.
+
+    Returns:
+        Dict keyed by indicator name → ``IndicatorDef``.
+    """
+    # Local import deferred to avoid a circular import at package init
+    # time: discovery/operators imports discovery/genome.
+    from vibe_quant.dsl.indicators import indicator_registry
+
+    pool: dict[str, IndicatorDef] = {}
+    for spec in indicator_registry.all_specs():
+        if spec.threshold_range is None or not spec.param_ranges:
+            continue
+        pool[spec.name] = IndicatorDef(
+            name=spec.name,
+            param_ranges=dict(spec.param_ranges),
+            default_threshold_range=spec.threshold_range,
+            dsl_type=spec.name,
+        )
+    return pool
+
+
+# Module-level pool materialized from the registry at import time. Kept
+# as a plain dict (not a @property / callable) to preserve the legacy
+# consumer API where code reads ``INDICATOR_POOL`` directly.
+INDICATOR_POOL: dict[str, IndicatorDef] = build_indicator_pool()
 
 
 def _normalize_condition(condition: ConditionType | str) -> ConditionType | None:

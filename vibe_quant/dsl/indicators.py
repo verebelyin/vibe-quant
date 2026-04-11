@@ -627,10 +627,13 @@ def _stoch_spec() -> IndicatorSpec:
             "Values 0-100 with 20/80 OB/OS levels."
         ),
         category="Momentum",
-        # Note: genome.py uses k_period/d_period keys for the GA param sweep;
-        # the DSL-level field names are period_k/period_d. Populate both
-        # conventions so build_indicator_pool() can find either spelling.
-        param_ranges={"period_k": (5.0, 21.0), "period_d": (3.0, 9.0)},
+        # GA param ranges use the legacy ``k_period`` / ``d_period`` spelling
+        # to stay wire-compatible with ``_gene_to_indicator_config`` (which
+        # reads ``gene.parameters.get("k_period"/"d_period")``). These are
+        # distinct from the NT constructor kwargs (``period_k``/``period_d``)
+        # and the DSL schema fields (``period``/``d_period``); the spec's
+        # ``default_params`` + ``nt_kwargs_fn`` handle the NT-side mapping.
+        param_ranges={"k_period": (5.0, 21.0), "d_period": (3.0, 9.0)},
         threshold_range=(20.0, 80.0),
     )
 
@@ -937,3 +940,15 @@ def _volsma_spec() -> IndicatorSpec:
         description="Simple moving average of volume — baseline for volume-anomaly filters.",
         category="Volume",
     )
+
+
+# -----------------------------------------------------------------------------
+# Plugin auto-discovery — runs AFTER every built-in spec has registered so a
+# plugin name collision can only overwrite a built-in, never the other way
+# round. The loader catches and logs plugin import failures; a broken plugin
+# can't take down the registry.
+# -----------------------------------------------------------------------------
+
+from vibe_quant.dsl.plugin_loader import load_builtin_plugins  # noqa: E402
+
+load_builtin_plugins()
