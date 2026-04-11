@@ -377,7 +377,103 @@ def _get_nt_class(module_path: str, class_name: str) -> type | None:
 
 
 # -----------------------------------------------------------------------------
+# Built-in compute_fn imports (populated on specs below; compiler ignores them
+# until Phase 4). Keeping the imports here (rather than lazily) means every
+# compute_fn is eagerly resolved at registration time so a typo surfaces at
+# startup instead of during a backtest.
+# -----------------------------------------------------------------------------
+
+from vibe_quant.dsl.compute_builtins import (  # noqa: E402
+    compute_adx,
+    compute_atr,
+    compute_bbands,
+    compute_cci,
+    compute_dema,
+    compute_donchian,
+    compute_ema,
+    compute_ichimoku,
+    compute_kc,
+    compute_macd,
+    compute_mfi,
+    compute_obv,
+    compute_roc,
+    compute_rsi,
+    compute_sma,
+    compute_stoch,
+    compute_tema,
+    compute_volsma,
+    compute_vwap,
+    compute_willr,
+    compute_wma,
+)
+
+# -----------------------------------------------------------------------------
+# Per-indicator nt_kwargs_fn helpers. Each one takes merged params and returns
+# the kwargs dict passed to the NT indicator constructor. Mirrors the existing
+# hardcoded elif chain in ``IndicatorRegistry._build_nt_kwargs`` — the compiler
+# still uses that elif chain until Phase 4; these helpers let the new callback
+# path light up without touching the compiler.
+# -----------------------------------------------------------------------------
+
+
+def _int_from(params: dict[str, object], key: str, default: int) -> int:
+    """Coerce a dict entry to int with a fallback.
+
+    ``IndicatorSpec`` stores params as ``dict[str, object]`` because the
+    compiler receives both literal ints and pydantic-validated floats.
+    Callback helpers need a uniform way to pull ints out without sprinkling
+    ``# type: ignore`` comments everywhere.
+    """
+    val = params.get(key, default)
+    if isinstance(val, (int, float)):
+        return int(val)
+    return default
+
+
+def _period_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {"period": params["period"]} if "period" in params else {}
+
+
+def _macd_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {
+        "fast_period": params.get("fast_period", 12),
+        "slow_period": params.get("slow_period", 26),
+    }
+
+
+def _bbands_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {
+        "period": params.get("period", 20),
+        "k": params.get("std_dev", 2.0),
+    }
+
+
+def _stoch_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {
+        "period_k": params.get("period_k", params.get("period", 14)),
+        "period_d": params.get("period_d", 3),
+    }
+
+
+def _kc_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {
+        "period": params.get("period", 20),
+        "k_multiplier": params.get("atr_multiplier", 2.0),
+    }
+
+
+def _donchian_kwargs(params: dict[str, object]) -> dict[str, object]:
+    return {"period": params.get("period", 20)}
+
+
+# -----------------------------------------------------------------------------
 # Register built-in indicators
+#
+# Every built-in spec populates the new callback/UI/GA fields even though the
+# compiler still reads only the pre-P1 fields (nt_class, pandas_ta_func,
+# default_params, output_names). Phase 4 will flip the compiler to read the
+# new fields; Phase 3 just puts the data in place so the migration is a pure
+# code-deletion step.
 # -----------------------------------------------------------------------------
 
 # Trend indicators
@@ -391,6 +487,17 @@ def _rsi_spec() -> IndicatorSpec:
         pandas_ta_func="rsi",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_rsi,
+        display_name="Relative Strength Index",
+        description=(
+            "Oscillator (0-100) measuring speed and magnitude of price changes. "
+            "Classic overbought/oversold indicator."
+        ),
+        category="Momentum",
+        popular=True,
+        param_ranges={"period": (5.0, 50.0)},
+        threshold_range=(25.0, 75.0),
     )
 
 
@@ -402,6 +509,17 @@ def _ema_spec() -> IndicatorSpec:
         pandas_ta_func="ema",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_ema,
+        display_name="Exponential Moving Average",
+        description=(
+            "Weighted moving average giving more weight to recent prices. "
+            "Reacts faster than SMA."
+        ),
+        category="Trend",
+        popular=True,
+        # Price-relative indicator → intentionally excluded from GA
+        # (threshold_range=None keeps it out of the GA pool).
     )
 
 
@@ -413,6 +531,11 @@ def _sma_spec() -> IndicatorSpec:
         pandas_ta_func="sma",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_sma,
+        display_name="Simple Moving Average",
+        description="Equal-weighted average of last N closing prices. Smooth but lagging.",
+        category="Trend",
     )
 
 
@@ -424,6 +547,11 @@ def _wma_spec() -> IndicatorSpec:
         pandas_ta_func="wma",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_wma,
+        display_name="Weighted Moving Average",
+        description="Linearly-weighted moving average. Middle ground between SMA and EMA.",
+        category="Trend",
     )
 
 
@@ -435,18 +563,29 @@ def _dema_spec() -> IndicatorSpec:
         pandas_ta_func="dema",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_dema,
+        display_name="Double EMA",
+        description="Double-smoothed EMA that reduces lag while maintaining smoothness.",
+        category="Trend",
     )
 
 
 @indicator_registry.register("TEMA")
 def _tema_spec() -> IndicatorSpec:
-    # NT does not have TripleExponentialMovingAverage; use pandas-ta fallback
+    # NT does not have TripleExponentialMovingAverage; compute_fn is the
+    # only path for runtime evaluation.
     return IndicatorSpec(
         name="TEMA",
         nt_class=None,
         pandas_ta_func="tema",
         default_params={"period": 14},
         param_schema={"period": int},
+        compute_fn=compute_tema,
+        pta_lookback_fn=lambda p: _int_from(p, "period", 14) * 3,
+        display_name="Triple EMA",
+        description="Triple-smoothed EMA with even less lag than DEMA.",
+        category="Trend",
     )
 
 
@@ -455,9 +594,9 @@ def _tema_spec() -> IndicatorSpec:
 
 @indicator_registry.register("MACD")
 def _macd_spec() -> IndicatorSpec:
-    # Always use pandas-ta: NT's MovingAverageConvergenceDivergence only exposes
-    # MACD line (.value), not signal or histogram. Strategies using signal crossover
-    # silently compute wrong conditions with NT class.
+    # Always uses pandas-ta: NT's MovingAverageConvergenceDivergence only
+    # exposes the MACD line (.value), not signal or histogram. Strategies
+    # using signal crossover silently compute wrong conditions with NT class.
     return IndicatorSpec(
         name="MACD",
         nt_class=None,
@@ -465,6 +604,23 @@ def _macd_spec() -> IndicatorSpec:
         default_params={"fast_period": 12, "slow_period": 26, "signal_period": 9},
         param_schema={"fast_period": int, "slow_period": int, "signal_period": int},
         output_names=("macd", "signal", "histogram"),
+        compute_fn=compute_macd,
+        nt_kwargs_fn=_macd_kwargs,
+        nt_output_attrs={"value": "value"},  # Only macd line on NT; sub-values force compute_fn.
+        pta_lookback_fn=lambda p: _int_from(p, "slow_period", 26) + _int_from(p, "signal_period", 9),
+        display_name="MACD (Moving Average Convergence Divergence)",
+        description=(
+            "Trend-following momentum indicator showing the relationship between "
+            "two EMAs. Signal line crossovers generate entries."
+        ),
+        category="Momentum",
+        popular=True,
+        param_ranges={
+            "fast_period": (8.0, 21.0),
+            "slow_period": (21.0, 50.0),
+            "signal_period": (5.0, 13.0),
+        },
+        threshold_range=(-0.05, 0.05),
     )
 
 
@@ -477,6 +633,21 @@ def _stoch_spec() -> IndicatorSpec:
         default_params={"period_k": 14, "period_d": 3},
         param_schema={"period_k": int, "period_d": int},
         output_names=("k", "d"),
+        compute_fn=compute_stoch,
+        nt_kwargs_fn=_stoch_kwargs,
+        nt_output_attrs={"k": "value_k", "d": "value_d"},
+        requires_high_low=True,
+        display_name="Stochastic Oscillator",
+        description=(
+            "Compares closing price to the range over N periods. "
+            "Values 0-100 with 20/80 OB/OS levels."
+        ),
+        category="Momentum",
+        # Note: genome.py uses k_period/d_period keys for the GA param sweep;
+        # the DSL-level field names are period_k/period_d. Populate both
+        # conventions so build_indicator_pool() can find either spelling.
+        param_ranges={"period_k": (5.0, 21.0), "period_d": (3.0, 9.0)},
+        threshold_range=(20.0, 80.0),
     )
 
 
@@ -488,6 +659,17 @@ def _cci_spec() -> IndicatorSpec:
         pandas_ta_func="cci",
         default_params={"period": 20},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_cci,
+        requires_high_low=True,
+        display_name="Commodity Channel Index",
+        description=(
+            "Measures price deviation from statistical mean. "
+            "Values typically between -200 and +200."
+        ),
+        category="Momentum",
+        param_ranges={"period": (10.0, 50.0)},
+        threshold_range=(-200.0, 200.0),
     )
 
 
@@ -500,6 +682,13 @@ def _willr_spec() -> IndicatorSpec:
         pandas_ta_func="willr",
         default_params={"period": 14},
         param_schema={"period": int},
+        compute_fn=compute_willr,
+        requires_high_low=True,
+        display_name="Williams %R",
+        description="Momentum oscillator (-100 to 0). Similar to Stochastic but inverted scale.",
+        category="Momentum",
+        param_ranges={"period": (5.0, 30.0)},
+        threshold_range=(-80.0, -20.0),
     )
 
 
@@ -511,6 +700,13 @@ def _roc_spec() -> IndicatorSpec:
         pandas_ta_func="roc",
         default_params={"period": 10},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_roc,
+        display_name="Rate of Change",
+        description="Percentage change between current price and N periods ago.",
+        category="Momentum",
+        param_ranges={"period": (5.0, 30.0)},
+        threshold_range=(-5.0, 5.0),
     )
 
 
@@ -522,6 +718,14 @@ def _adx_spec() -> IndicatorSpec:
         pandas_ta_func="adx",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_adx,
+        requires_high_low=True,
+        display_name="Average Directional Index",
+        description="Measures trend strength. ADX > 25 = trending, ADX < 20 = ranging.",
+        category="Momentum",
+        param_ranges={"period": (7.0, 30.0)},
+        threshold_range=(15.0, 60.0),
     )
 
 
@@ -536,6 +740,18 @@ def _atr_spec() -> IndicatorSpec:
         pandas_ta_func="atr",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_atr,
+        requires_high_low=True,
+        display_name="Average True Range",
+        description=(
+            "Measures market volatility by averaging the true range over N periods. "
+            "Essential for position sizing and stop placement."
+        ),
+        category="Volatility",
+        popular=True,
+        param_ranges={"period": (5.0, 30.0)},
+        threshold_range=(0.001, 0.15),
     )
 
 
@@ -548,6 +764,22 @@ def _bbands_spec() -> IndicatorSpec:
         default_params={"period": 20, "std_dev": 2.0},
         param_schema={"period": int, "std_dev": float},
         output_names=("upper", "middle", "lower", "percent_b", "bandwidth"),
+        compute_fn=compute_bbands,
+        nt_kwargs_fn=_bbands_kwargs,
+        nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
+        computed_outputs={
+            "percent_b": "compute_percent_b",
+            "bandwidth": "compute_bandwidth",
+        },
+        display_name="Bollinger Bands",
+        description=(
+            "Upper/lower bands at N standard deviations from SMA. "
+            "Bands expand in high volatility, contract in low volatility."
+        ),
+        category="Volatility",
+        popular=True,
+        param_ranges={"period": (5.0, 50.0), "std_dev": (1.0, 3.0)},
+        threshold_range=(0.0, 1.0),
     )
 
 
@@ -560,6 +792,16 @@ def _kc_spec() -> IndicatorSpec:
         default_params={"period": 20, "atr_multiplier": 2.0},
         param_schema={"period": int, "atr_multiplier": float},
         output_names=("upper", "middle", "lower"),
+        compute_fn=compute_kc,
+        nt_kwargs_fn=_kc_kwargs,
+        nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
+        computed_outputs={"bandwidth": "compute_bandwidth"},
+        requires_high_low=True,
+        display_name="Keltner Channel",
+        description="ATR-based envelope around EMA. More stable than Bollinger Bands.",
+        category="Volatility",
+        # KC is not in the legacy INDICATOR_POOL → stays out of GA
+        # (threshold_range=None keeps build_indicator_pool from enrolling it).
     )
 
 
@@ -572,6 +814,19 @@ def _donchian_spec() -> IndicatorSpec:
         default_params={"period": 20},
         param_schema={"period": int},
         output_names=("upper", "middle", "lower", "position"),
+        compute_fn=compute_donchian,
+        nt_kwargs_fn=_donchian_kwargs,
+        nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
+        computed_outputs={"position": "compute_position"},
+        requires_high_low=True,
+        display_name="Donchian Channel",
+        description=(
+            "Highest high and lowest low over N periods. "
+            "Classic breakout indicator (turtle trading)."
+        ),
+        category="Volatility",
+        param_ranges={"period": (5.0, 50.0)},
+        threshold_range=(0.0, 1.0),
     )
 
 
@@ -586,6 +841,14 @@ def _obv_spec() -> IndicatorSpec:
         pandas_ta_func="obv",
         default_params={},
         param_schema={},
+        compute_fn=compute_obv,
+        requires_volume=True,
+        display_name="On-Balance Volume",
+        description=(
+            "Cumulative volume indicator: adds volume on up days, subtracts on down days. "
+            "Leading indicator."
+        ),
+        category="Volume",
     )
 
 
@@ -597,18 +860,38 @@ def _vwap_spec() -> IndicatorSpec:
         pandas_ta_func="vwap",
         default_params={},
         param_schema={},
+        compute_fn=compute_vwap,
+        requires_high_low=True,
+        requires_volume=True,
+        display_name="Volume-Weighted Average Price",
+        description=(
+            "Average price weighted by volume. Resets daily. Institutional benchmark."
+        ),
+        category="Volume",
+        popular=True,
     )
 
 
 @indicator_registry.register("MFI")
 def _mfi_spec() -> IndicatorSpec:
-    # NT 1.222 doesn't have MoneyFlowIndex as a top-level indicator
+    # NT 1.222 doesn't expose MoneyFlowIndex as a top-level indicator.
     return IndicatorSpec(
         name="MFI",
         nt_class=_get_nt_class("nautilus_trader.indicators", "MoneyFlowIndex"),
         pandas_ta_func="mfi",
         default_params={"period": 14},
         param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        compute_fn=compute_mfi,
+        requires_high_low=True,
+        requires_volume=True,
+        display_name="Money Flow Index",
+        description=(
+            "Volume-weighted RSI. Oscillator 0-100 incorporating both price and volume."
+        ),
+        category="Volume",
+        param_ranges={"period": (5.0, 30.0)},
+        threshold_range=(20.0, 80.0),
     )
 
 
@@ -617,7 +900,7 @@ def _mfi_spec() -> IndicatorSpec:
 
 @indicator_registry.register("ICHIMOKU")
 def _ichimoku_spec() -> IndicatorSpec:
-    # NT doesn't have Ichimoku built-in; use pandas-ta fallback
+    # NT doesn't have Ichimoku built-in; compute_fn is the only path.
     return IndicatorSpec(
         name="ICHIMOKU",
         nt_class=None,
@@ -625,6 +908,19 @@ def _ichimoku_spec() -> IndicatorSpec:
         default_params={"tenkan": 9, "kijun": 26, "senkou": 52},
         param_schema={"tenkan": int, "kijun": int, "senkou": int},
         output_names=("conversion", "base", "span_a", "span_b"),
+        compute_fn=compute_ichimoku,
+        requires_high_low=True,
+        pta_lookback_fn=lambda p: max(
+            _int_from(p, "tenkan", 9),
+            _int_from(p, "kijun", 26),
+            _int_from(p, "senkou", 52),
+        ),
+        display_name="Ichimoku Cloud",
+        description=(
+            "Multi-line trend system: conversion/base lines plus a forward-projected "
+            "cloud of support/resistance."
+        ),
+        category="Trend",
     )
 
 
@@ -633,11 +929,16 @@ def _ichimoku_spec() -> IndicatorSpec:
 
 @indicator_registry.register("VOLSMA")
 def _volsma_spec() -> IndicatorSpec:
-    # Volume SMA: SMA applied to volume. No dedicated NT class; pandas-ta fallback.
+    # Volume SMA: SMA applied to the volume column. No dedicated NT class.
     return IndicatorSpec(
         name="VOLSMA",
         nt_class=None,
         pandas_ta_func="sma",  # Applied to volume column
         default_params={"period": 20},
         param_schema={"period": int},
+        compute_fn=compute_volsma,
+        requires_volume=True,
+        display_name="Volume SMA",
+        description="Simple moving average of volume — baseline for volume-anomaly filters.",
+        category="Volume",
     )

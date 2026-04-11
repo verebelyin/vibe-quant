@@ -1,0 +1,666 @@
+"""Auto-generated NautilusTrader Strategy from DSL.
+
+Strategy: macd_crossover
+Generated: <timestamp-stripped>
+"""
+
+from __future__ import annotations
+
+from datetime import time as dt_time
+from typing import TYPE_CHECKING
+import random
+import zoneinfo
+
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.data import Bar, BarType
+from nautilus_trader.model.enums import OrderSide, PositionSide, TimeInForce
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.instruments import Instrument
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.events import OrderFilled, PositionOpened, PositionClosed
+from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder
+from nautilus_trader.trading.strategy import Strategy, StrategyConfig
+
+# Indicator imports
+from nautilus_trader.indicators.volatility import AverageTrueRange
+from nautilus_trader.indicators.averages import ExponentialMovingAverage
+
+# pandas-ta-classic fallback for indicators without NT class
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+import pandas as pd
+import pandas_ta_classic as ta
+
+if TYPE_CHECKING:
+    pass
+
+class MacdCrossoverConfig(StrategyConfig):
+    """Configuration for MacdCrossover strategy.
+
+    Generated from DSL: macd_crossover
+    """
+
+    # Instrument configuration
+    instrument_id: str = ""  # Must be set at runtime
+
+    # Position sizing (override via ImportableStrategyConfig.config)
+    risk_per_trade: float = 0.02  # 2% risk per trade
+    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)
+    execution_delay_probability: float = 0.0  # Validation-only one-bar delay
+
+    # Indicator parameters
+    macd_fast_period: int = 12
+    macd_slow_period: int = 26
+    macd_signal_period: int = 9
+    ema_fast_period: int = 9
+    ema_slow_period: int = 21
+    atr_period: int = 14
+
+    # Stop loss parameters
+    stop_loss_type: str = "atr_fixed"
+    stop_loss_atr_multiplier: float = 1.5
+    stop_loss_indicator: str = "atr"
+
+    # Take profit parameters
+    take_profit_type: str = "atr_fixed"
+    take_profit_atr_multiplier: float = 3.0
+    take_profit_indicator: str = "atr"
+
+    # Condition thresholds (can be overridden)
+    macd_0_0_threshold: float = 0.0
+
+class MacdCrossoverStrategy(Strategy):
+    """NautilusTrader Strategy: macd_crossover.
+
+    Auto-generated from DSL.
+    """
+
+    def __init__(self, config: MacdCrossoverConfig) -> None:
+        """Initialize MacdCrossoverStrategy."""
+        super().__init__(config)
+
+        # Position tracking
+        self._position_open = False
+        self._position_side: OrderSide | None = None
+        self._pending_validation_action: str | None = None
+
+        # Previous indicator values for crossover detection
+        self._prev_values: dict[str, float] = {}
+
+        # Last close price for computed indicator outputs (percent_b, position)
+        self._last_close: float = 0.0
+
+        # Bar data buffer for pandas-ta indicators
+        self._pta_close: list[float] = []
+        self._pta_high: list[float] = []
+        self._pta_low: list[float] = []
+        self._pta_open: list[float] = []
+        self._pta_volume: list[float] = []
+        self._pta_values: dict[str, float] = {}
+
+    def on_start(self) -> None:
+        """Strategy startup: subscribe to bars and register indicators."""
+        # Resolve instrument
+        self.instrument_id = InstrumentId.from_str(self.config.instrument_id)
+        self.instrument = self.cache.instrument(self.instrument_id)
+        if self.instrument is None:
+            self.log.error(f"Instrument not found: {self.config.instrument_id}")
+            return
+
+        # Define bar types for all timeframes
+        self.bar_type_15m = BarType.from_str(
+            f"{self.instrument_id}-15-MINUTE-LAST-EXTERNAL"
+        )
+
+        self.primary_bar_type = self.bar_type_15m
+
+        # Subscribe to bars for all timeframes
+        self.subscribe_bars(self.bar_type_15m)
+
+        # Initialize and register indicators
+        # macd (MACD): pandas-ta fallback via ta.macd
+        self.ind_ema_fast = ExponentialMovingAverage(period=self.config.ema_fast_period)
+        self.register_indicator_for_bars(self.bar_type_15m, self.ind_ema_fast)
+        self.ind_ema_slow = ExponentialMovingAverage(period=self.config.ema_slow_period)
+        self.register_indicator_for_bars(self.bar_type_15m, self.ind_ema_slow)
+        self.ind_atr = AverageTrueRange(period=self.config.atr_period)
+        self.register_indicator_for_bars(self.bar_type_15m, self.ind_atr)
+
+    def on_bar(self, bar: Bar) -> None:
+        """Handle bar updates."""
+        # Only process primary timeframe bars
+        if bar.bar_type != self.primary_bar_type:
+            return
+
+        # Feed bar data to pandas-ta buffer
+        self._pta_close.append(float(bar.close))
+        self._pta_high.append(float(bar.high))
+        self._pta_low.append(float(bar.low))
+        self._pta_open.append(float(bar.open))
+        self._pta_volume.append(float(bar.volume))
+        self._update_pta_indicators()
+
+        # Track last close for computed indicator outputs
+        self._last_close = float(bar.close)
+
+        # Check if indicators are ready
+        if not self._indicators_ready():
+            return
+
+        # Execute any validation-only delayed action before new signals
+        if self._dispatch_pending_validation_action(bar):
+            self._update_prev_values()
+            return
+
+        # Check time filters
+        if not self._check_time_filters(bar.ts_event):
+            return
+
+        # Evaluate entry conditions
+        if not self._position_open:
+            if self._check_long_entry(bar):
+                if not self._maybe_delay_validation_action('long_entry'):
+                    self._submit_long_entry(bar)
+            elif self._check_short_entry(bar):
+                if not self._maybe_delay_validation_action('short_entry'):
+                    self._submit_short_entry(bar)
+
+        # Evaluate exit conditions
+        if self._position_open:
+            if self._position_side == OrderSide.BUY:
+                if self._check_long_exit(bar):
+                    if not self._maybe_delay_validation_action('exit'):
+                        self._submit_exit(bar)
+            elif self._position_side == OrderSide.SELL:
+                if self._check_short_exit(bar):
+                    if not self._maybe_delay_validation_action('exit'):
+                        self._submit_exit(bar)
+
+        # Update previous values for crossover detection
+        self._update_prev_values()
+
+    def on_event(self, event) -> None:
+        """Handle strategy events for position tracking and SL/TP submission."""
+        if isinstance(event, PositionOpened):
+            if event.instrument_id == self.instrument_id:
+                self._sync_position_state()
+                # Submit SL/TP using actual fill price from opened position
+                pos = self.cache.position(event.position_id)
+                if pos is not None:
+                    entry_price = float(pos.avg_px_open)
+                    entry_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+                    self._submit_sl_tp_orders(entry_price, entry_side, pos.quantity)
+        elif isinstance(event, PositionClosed):
+            if event.instrument_id == self.instrument_id:
+                self._position_open = False
+                self._position_side = None
+                self.cancel_all_orders(self.instrument_id)
+        elif isinstance(event, OrderFilled):
+            if event.instrument_id == self.instrument_id:
+                self._sync_position_state()
+
+    def on_stop(self) -> None:
+        """Strategy shutdown: cancel orders and close positions."""
+        self.cancel_all_orders(self.instrument_id)
+        self.close_all_positions(self.instrument_id)
+
+    def on_reset(self) -> None:
+        """Reset strategy state between backtest runs."""
+        self._position_open = False
+        self._position_side = None
+        self._pending_validation_action = None
+
+    def _indicators_ready(self) -> bool:
+        """Check if all indicators have enough data."""
+        if "macd" not in self._pta_values:
+            return False
+        if "macd_macd" not in self._pta_values:
+            return False
+        if "macd_signal" not in self._pta_values:
+            return False
+        if "macd_histogram" not in self._pta_values:
+            return False
+        if not self.ind_ema_fast.initialized:
+            return False
+        if not self.ind_ema_slow.initialized:
+            return False
+        if not self.ind_atr.initialized:
+            return False
+        return True
+
+    def _get_indicator_value(self, name: str) -> float:
+        """Get current value of an indicator by name."""
+        if name == "macd":
+            return self._pta_values.get("macd", 0.0)
+        if name == "macd_macd":
+            return self._pta_values.get("macd_macd", 0.0)
+        if name == "macd_signal":
+            return self._pta_values.get("macd_signal", 0.0)
+        if name == "macd_histogram":
+            return self._pta_values.get("macd_histogram", 0.0)
+        if name == "ema_fast":
+            _v = self.ind_ema_fast.value
+            return float(_v) if _v is not None else 0.0
+        if name == "ema_slow":
+            _v = self.ind_ema_slow.value
+            return float(_v) if _v is not None else 0.0
+        if name == "atr":
+            _v = self.ind_atr.value
+            return float(_v) if _v is not None else 0.0
+        raise ValueError(f"Unknown indicator: {name}")
+
+    def _update_prev_values(self) -> None:
+        """Store current indicator values for crossover detection."""
+        self._prev_values["macd"] = self._pta_values.get("macd", 0.0)
+        self._prev_values["macd_macd"] = self._pta_values.get("macd_macd", 0.0)
+        self._prev_values["macd_signal"] = self._pta_values.get("macd_signal", 0.0)
+        self._prev_values["macd_histogram"] = self._pta_values.get("macd_histogram", 0.0)
+        self._prev_values["ema_fast"] = float(self.ind_ema_fast.value)
+        self._prev_values["ema_slow"] = float(self.ind_ema_slow.value)
+        self._prev_values["atr"] = float(self.ind_atr.value)
+
+    def _update_pta_indicators(self) -> None:
+        """Compute pandas-ta indicators from bar buffer."""
+        # macd (MACD) via ta.macd
+        if len(self._pta_close) >= 35:
+            _close = pd.Series(self._pta_close, dtype=float)
+            _macd_df = ta.macd(_close, fast=12, slow=26, signal=9)
+            if _macd_df is not None and len(_macd_df) > 0:
+                _last = _macd_df.iloc[-1]
+                if not pd.isna(_last.iloc[0]):
+                    self._pta_values["macd"] = float(_last.iloc[0])
+                    self._pta_values["macd_macd"] = float(_last.iloc[0])
+                if len(_last) > 1 and not pd.isna(_last.iloc[1]):
+                    self._pta_values["macd_histogram"] = float(_last.iloc[1])
+                if len(_last) > 2 and not pd.isna(_last.iloc[2]):
+                    self._pta_values["macd_signal"] = float(_last.iloc[2])
+
+    def _check_time_filters(self, ts_ns: int) -> bool:
+        """Check if current time passes time filters."""
+        from datetime import datetime, timezone
+
+        dt = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc)
+
+        blocked_days = [5, 6]
+        if dt.weekday() in blocked_days:
+            return False
+
+        # Check allowed sessions
+        in_session = False
+        # Session 1: 00:00-08:00 UTC
+        local_time_0 = dt.time()
+        session_start_0 = dt_time(0, 0)
+        session_end_0 = dt_time(8, 0)
+        if session_start_0 <= session_end_0:
+            if session_start_0 <= local_time_0 <= session_end_0:
+                in_session = True
+        else:
+            # Overnight session (start > end)
+            if local_time_0 >= session_start_0 or local_time_0 <= session_end_0:
+                in_session = True
+        # Session 2: 08:00-16:00 UTC
+        local_time_1 = dt.time()
+        session_start_1 = dt_time(8, 0)
+        session_end_1 = dt_time(16, 0)
+        if session_start_1 <= session_end_1:
+            if session_start_1 <= local_time_1 <= session_end_1:
+                in_session = True
+        else:
+            # Overnight session (start > end)
+            if local_time_1 >= session_start_1 or local_time_1 <= session_end_1:
+                in_session = True
+        if not in_session:
+            return False
+
+        return True
+
+    def _check_long_entry(self, bar: Bar) -> bool:
+        """Check long entry conditions."""
+        # Condition: ema_fast crosses_above ema_slow
+        cond_0 = ("ema_fast" in self._prev_values and "ema_slow" in self._prev_values) and (self._get_indicator_value("ema_fast") > self._get_indicator_value("ema_slow")) and (self._prev_values.get("ema_fast", 0.0) <= self._prev_values.get("ema_slow", 0.0))
+        if not cond_0:
+            return False
+
+        # Condition: macd > 0
+        cond_1 = self._get_indicator_value("macd") > self.config.macd_0_0_threshold
+        if not cond_1:
+            return False
+
+        return True
+
+    def _check_short_entry(self, bar: Bar) -> bool:
+        """Check short entry conditions."""
+        # Condition: ema_fast crosses_below ema_slow
+        cond_0 = ("ema_fast" in self._prev_values and "ema_slow" in self._prev_values) and (self._get_indicator_value("ema_fast") < self._get_indicator_value("ema_slow")) and (self._prev_values.get("ema_fast", 0.0) >= self._prev_values.get("ema_slow", 0.0))
+        if not cond_0:
+            return False
+
+        # Condition: macd < 0
+        cond_1 = self._get_indicator_value("macd") < self.config.macd_0_0_threshold
+        if not cond_1:
+            return False
+
+        return True
+
+    def _check_long_exit(self, bar: Bar) -> bool:
+        """Check long exit conditions."""
+        # Condition: ema_fast crosses_below ema_slow
+        cond_0 = ("ema_fast" in self._prev_values and "ema_slow" in self._prev_values) and (self._get_indicator_value("ema_fast") < self._get_indicator_value("ema_slow")) and (self._prev_values.get("ema_fast", 0.0) >= self._prev_values.get("ema_slow", 0.0))
+        if not cond_0:
+            return False
+
+        return True
+
+    def _check_short_exit(self, bar: Bar) -> bool:
+        """Check short exit conditions."""
+        # Condition: ema_fast crosses_above ema_slow
+        cond_0 = ("ema_fast" in self._prev_values and "ema_slow" in self._prev_values) and (self._get_indicator_value("ema_fast") > self._get_indicator_value("ema_slow")) and (self._prev_values.get("ema_fast", 0.0) <= self._prev_values.get("ema_slow", 0.0))
+        if not cond_0:
+            return False
+
+        return True
+
+    def _submit_long_entry(self, bar: Bar) -> None:
+        """Submit a long entry order with SL/TP."""
+        if self._position_open:
+            return
+
+        qty = self._calculate_position_size(bar, is_long=True)
+        if qty is None:
+            return
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=OrderSide.BUY,
+            quantity=qty,
+            time_in_force=TimeInForce.IOC,
+        )
+        self.submit_order(order)
+        # SL/TP orders are submitted from on_event(PositionOpened) after fill
+
+    def _submit_short_entry(self, bar: Bar) -> None:
+        """Submit a short entry order with SL/TP."""
+        if self._position_open:
+            return
+
+        qty = self._calculate_position_size(bar, is_long=False)
+        if qty is None:
+            return
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=OrderSide.SELL,
+            quantity=qty,
+            time_in_force=TimeInForce.IOC,
+        )
+        self.submit_order(order)
+        # SL/TP orders are submitted from on_event(PositionOpened) after fill
+
+    def _submit_exit(self, bar: Bar) -> None:
+        """Submit an exit order using actual position quantity from cache."""
+        if not self._position_open:
+            return
+
+        # Cancel existing SL/TP orders
+        self.cancel_all_orders(self.instrument_id)
+
+        # Determine exit side and get actual position quantity from cache
+        exit_side = OrderSide.SELL if self._position_side == OrderSide.BUY else OrderSide.BUY
+        quantity = None
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                quantity = pos.quantity
+                break
+
+        if quantity is None:
+            return
+
+        order = self.order_factory.market(
+            instrument_id=self.instrument_id,
+            order_side=exit_side,
+            quantity=quantity,
+            time_in_force=TimeInForce.IOC,
+        )
+        self.submit_order(order)
+
+    def _submit_sl_tp_orders(self, entry_price: float, side: OrderSide, qty: Quantity) -> None:
+        """Submit stop-loss and take-profit orders after entry."""
+        is_long = side == OrderSide.BUY
+
+        # Calculate and submit stop-loss order
+        sl_price = self._calculate_sl_price(entry_price, is_long)
+        if sl_price is not None and sl_price <= 0:
+            sl_price = None  # skip invalid negative/zero price
+        if sl_price is not None:
+            sl_side = OrderSide.SELL if is_long else OrderSide.BUY
+            sl_order = self.order_factory.stop_market(
+                instrument_id=self.instrument_id,
+                order_side=sl_side,
+                quantity=qty,
+                trigger_price=self.instrument.make_price(sl_price),
+                time_in_force=TimeInForce.GTC,
+                reduce_only=True,
+            )
+            self.submit_order(sl_order)
+
+        # Calculate and submit take-profit order
+        tp_price = self._calculate_tp_price(entry_price, is_long)
+        if tp_price is not None and tp_price <= 0:
+            tp_price = None  # skip invalid negative/zero price
+        if tp_price is not None:
+            tp_side = OrderSide.SELL if is_long else OrderSide.BUY
+            tp_order = self.order_factory.limit(
+                instrument_id=self.instrument_id,
+                order_side=tp_side,
+                quantity=qty,
+                price=self.instrument.make_price(tp_price),
+                time_in_force=TimeInForce.GTC,
+                reduce_only=True,
+            )
+            self.submit_order(tp_order)
+
+    def _calculate_sl_price(self, entry_price: float, is_long: bool) -> float | None:
+        """Calculate stop-loss price based on config type (per-direction aware)."""
+        dir_suffix = 'long' if is_long else 'short'
+        sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)
+        if sl_type is not None:
+            prefix = f'stop_loss_{dir_suffix}'
+        else:
+            sl_type = self.config.stop_loss_type
+            prefix = 'stop_loss'
+        if sl_type == "fixed_pct":
+            pct = getattr(self.config, f'{prefix}_percent')
+            if is_long:
+                return entry_price * (1 - pct / 100)
+            else:
+                return entry_price * (1 + pct / 100)
+        elif sl_type in ("atr_fixed", "atr_trailing"):
+            sl_ind = getattr(self.config, f'{prefix}_indicator', None)
+            if sl_ind is None:
+                return None
+            atr_value = self._get_indicator_value(sl_ind)
+            multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+            if is_long:
+                return entry_price - atr_value * multiplier
+            else:
+                return entry_price + atr_value * multiplier
+        return None
+
+    def _update_trailing_stop(self, bar: Bar) -> None:
+        """Update trailing stop loss as price moves favorably."""
+        if not self._position_open:
+            return
+        is_long = self._position_side == OrderSide.BUY
+        dir_suffix = 'long' if is_long else 'short'
+        sl_type = getattr(self.config, f'stop_loss_{dir_suffix}_type', None)
+        if sl_type is not None:
+            prefix = f'stop_loss_{dir_suffix}'
+        else:
+            sl_type = self.config.stop_loss_type
+            prefix = 'stop_loss'
+        if sl_type != "atr_trailing":
+            return
+        sl_ind = getattr(self.config, f'{prefix}_indicator', None)
+        if sl_ind is None:
+            return
+        atr_value = self._get_indicator_value(sl_ind)
+        multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+        current_price = float(bar.close.as_double())
+        if is_long:
+            new_sl = current_price - atr_value * multiplier
+            best = getattr(self, '_trailing_best_sl', None)
+            if best is None or new_sl > best:
+                self._trailing_best_sl = new_sl
+            else:
+                return  # SL hasn't improved
+        else:
+            new_sl = current_price + atr_value * multiplier
+            best = getattr(self, '_trailing_best_sl', None)
+            if best is None or new_sl < best:
+                self._trailing_best_sl = new_sl
+            else:
+                return  # SL hasn't improved
+        if self._trailing_best_sl <= 0:
+            return  # skip invalid negative/zero price
+        # Cancel existing SL orders and resubmit at new price
+        for order in self.cache.orders_open(venue=self.instrument_id.venue):
+            if (order.instrument_id == self.instrument_id
+                    and order.is_reduce_only and hasattr(order, 'trigger_price')):
+                self.cancel_order(order)
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                sl_side = OrderSide.SELL if is_long else OrderSide.BUY
+                sl_order = self.order_factory.stop_market(
+                    instrument_id=self.instrument_id,
+                    order_side=sl_side,
+                    quantity=pos.quantity,
+                    trigger_price=self.instrument.make_price(self._trailing_best_sl),
+                    time_in_force=TimeInForce.GTC,
+                    reduce_only=True,
+                )
+                self.submit_order(sl_order)
+                break
+
+    def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:
+        """Calculate take-profit price based on config type (per-direction aware)."""
+        dir_suffix = 'long' if is_long else 'short'
+        tp_type = getattr(self.config, f'take_profit_{dir_suffix}_type', None)
+        if tp_type is not None:
+            prefix = f'take_profit_{dir_suffix}'
+        else:
+            tp_type = self.config.take_profit_type
+            prefix = 'take_profit'
+        if tp_type == "fixed_pct":
+            pct = getattr(self.config, f'{prefix}_percent')
+            if is_long:
+                return entry_price * (1 + pct / 100)
+            else:
+                return entry_price * (1 - pct / 100)
+        elif tp_type == "atr_fixed":
+            tp_ind = getattr(self.config, f'{prefix}_indicator', None)
+            if tp_ind is None:
+                return None
+            atr_value = self._get_indicator_value(tp_ind)
+            multiplier = getattr(self.config, f'{prefix}_atr_multiplier')
+            if is_long:
+                return entry_price + atr_value * multiplier
+            else:
+                return entry_price - atr_value * multiplier
+        elif tp_type == "risk_reward":
+            sl_price = self._calculate_sl_price(entry_price, is_long)
+            if sl_price is not None:
+                sl_distance = abs(entry_price - sl_price)
+                ratio = getattr(self.config, f'{prefix}_risk_reward')
+                if is_long:
+                    return entry_price + sl_distance * ratio
+                else:
+                    return entry_price - sl_distance * ratio
+        return None
+
+    def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:
+        """Calculate position size based on risk config."""
+        # Get account equity from cache
+        account = self.cache.account_for_venue(self.instrument_id.venue)
+        if account is None:
+            return self.instrument.make_qty(1.0)
+
+        equity = float(account.balance_total(account.currencies()[0]))
+        if equity <= 0:
+            return self.instrument.make_qty(1.0)
+
+        price = float(bar.close)
+        if price <= 0:
+            return self.instrument.make_qty(1.0)
+
+        # Fixed fractional sizing: risk_per_trade % of equity
+        risk_pct = getattr(self.config, 'risk_per_trade', 0.02)
+        risk_amount = equity * risk_pct
+
+        # Use stop loss distance if available, otherwise use 2% of price
+        sl_price = self._calculate_sl_price(price, is_long)
+        if sl_price is not None and sl_price > 0:
+            stop_distance = abs(price - sl_price)
+        else:
+            stop_distance = price * 0.02  # 2% default stop distance
+
+        if stop_distance <= 0:
+            stop_distance = price * 0.02
+
+        # Size = risk_amount / stop_distance
+        raw_size = risk_amount / stop_distance
+
+        # Apply max position limit (configurable, default 50% of equity)
+        max_pos_pct = getattr(self.config, 'max_position_pct', 0.5)
+        max_size = (equity * max_pos_pct) / price
+        final_size = min(raw_size, max_size)
+
+        # Ensure minimum quantity: 1% of equity at current price
+        min_size = (equity * 0.01) / price if price > 0 else 0.001
+        if final_size <= 0:
+            final_size = min_size
+
+        # Clamp to instrument minimums
+        if self.instrument.min_quantity is not None:
+            final_size = max(final_size, float(self.instrument.min_quantity))
+        # Guard: skip entry if size rounds to zero (below lot size precision)
+        try:
+            return self.instrument.make_qty(final_size)
+        except ValueError:
+            return None
+
+    def _sync_position_state(self) -> None:
+        """Sync position tracking state from cache."""
+        positions = self.cache.positions_open(venue=self.instrument_id.venue)
+        for pos in positions:
+            if pos.instrument_id == self.instrument_id and pos.is_open:
+                self._position_open = True
+                self._position_side = OrderSide.BUY if pos.side == PositionSide.LONG else OrderSide.SELL
+                return
+        self._position_open = False
+        self._position_side = None
+
+    def _maybe_delay_validation_action(self, action: str) -> bool:
+        """Delay an action by one bar when validation asks for sub-bar degradation."""
+        delay_prob = getattr(self.config, 'execution_delay_probability', 0.0)
+        if delay_prob <= 0.0:
+            return False
+        if self._pending_validation_action is not None:
+            return False
+        if random.random() >= delay_prob:
+            return False
+        self._pending_validation_action = action
+        return True
+
+    def _dispatch_pending_validation_action(self, bar: Bar) -> bool:
+        """Execute a delayed validation action on the next primary bar."""
+        action = self._pending_validation_action
+        if action is None:
+            return False
+        self._pending_validation_action = None
+        if action == 'long_entry':
+            self._submit_long_entry(bar)
+        elif action == 'short_entry':
+            self._submit_short_entry(bar)
+        elif action == 'exit':
+            self._submit_exit(bar)
+        return True

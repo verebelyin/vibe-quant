@@ -563,7 +563,11 @@ class TestBuiltinSpecsBackwardCompat:
         assert spec.output_names == ("value",)
         # New fields default cleanly
         assert spec.nt_output_attrs == {"value": "value"}
-        assert spec.threshold_range is None  # Phase 3 will populate
+        # Populated by P3 migration — matches legacy INDICATOR_POOL range.
+        assert spec.threshold_range == (25.0, 75.0)
+        assert spec.param_ranges == {"period": (5.0, 50.0)}
+        assert spec.category == "Momentum"
+        assert spec.compute_fn is not None
 
     def test_macd_backward_compat(self) -> None:
         spec = indicator_registry.get("MACD")
