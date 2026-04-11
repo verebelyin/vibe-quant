@@ -120,6 +120,20 @@ class IndicatorSpec:
     computed_outputs: dict[str, str] = field(default_factory=dict)
     pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
 
+    # Code-generation metadata: maps each NT constructor kwarg name to the
+    # DSL IndicatorConfig field it sources from. Used by the compiler to
+    # emit ``{kwarg}=self.config.{ind_name}_{dsl_field}`` lines. Defaults
+    # to an empty tuple — the compiler falls back to ``period=...`` when
+    # the spec declares ``period`` in ``default_params``. Specs that use
+    # no NT kwargs (OBV/VWAP) keep the empty default.
+    nt_codegen_kwargs: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+
+    # Name of the output returned when the indicator is referenced without
+    # a sub-value. Defaults to ``output_names[0]``. Channel indicators
+    # (BBANDS/KC/DONCHIAN) override to ``"middle"`` to preserve the
+    # historical behavior of the ``bbands``-without-sub-value resolution.
+    primary_output: str = ""
+
     requires_high_low: bool = False
     requires_volume: bool = False
 
@@ -294,35 +308,20 @@ class IndicatorRegistry:
         params: dict[str, object],
         bar_type: BarType | None,
     ) -> dict[str, object]:
-        """Build kwargs for NT indicator constructor.
+        """Build kwargs for an NT indicator constructor.
 
-        Maps DSL param names to NT constructor args.
+        Thin dispatcher: delegates to ``spec.nt_kwargs_fn`` if set, else
+        falls back to a ``{"period": ...}`` default for the typical
+        single-period indicator. ``bar_type`` is appended when provided
+        and not already present in the kwargs — a few NT indicators accept
+        it as an optional constructor argument.
         """
-        name = spec.name
-        kwargs: dict[str, object] = {}
+        if spec.nt_kwargs_fn is not None:
+            kwargs: dict[str, object] = dict(spec.nt_kwargs_fn(params))
+        else:
+            kwargs = {"period": params.get("period", 14)}
 
-        # Common mapping from DSL names to NT names
-        if name in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "ADX"}:
-            if "period" in params:
-                kwargs["period"] = params["period"]
-        elif name == "MACD":
-            kwargs["fast_period"] = params.get("fast_period", 12)
-            kwargs["slow_period"] = params.get("slow_period", 26)
-            # NT MovingAverageConvergenceDivergence does not accept signal_period
-        elif name == "BBANDS":
-            kwargs["period"] = params.get("period", 20)
-            kwargs["k"] = params.get("std_dev", 2.0)
-        elif name == "STOCH":
-            kwargs["period_k"] = params.get("period_k", params.get("period", 14))
-            kwargs["period_d"] = params.get("period_d", 3)
-        elif name == "KC":
-            kwargs["period"] = params.get("period", 20)
-            kwargs["k_multiplier"] = params.get("atr_multiplier", 2.0)
-        elif name == "DONCHIAN":
-            kwargs["period"] = params.get("period", 20)
-
-        # Add bar_type if provided (some indicators need it)
-        if bar_type is not None:
+        if bar_type is not None and "bar_type" not in kwargs:
             kwargs["bar_type"] = bar_type
 
         return kwargs
@@ -465,6 +464,7 @@ def _rsi_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_rsi,
         display_name="Relative Strength Index",
         description=(
@@ -487,6 +487,7 @@ def _ema_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_ema,
         display_name="Exponential Moving Average",
         description=(
@@ -509,6 +510,7 @@ def _sma_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_sma,
         display_name="Simple Moving Average",
         description="Equal-weighted average of last N closing prices. Smooth but lagging.",
@@ -525,6 +527,7 @@ def _wma_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_wma,
         display_name="Weighted Moving Average",
         description="Linearly-weighted moving average. Middle ground between SMA and EMA.",
@@ -541,6 +544,7 @@ def _dema_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_dema,
         display_name="Double EMA",
         description="Double-smoothed EMA that reduces lag while maintaining smoothness.",
@@ -612,6 +616,9 @@ def _stoch_spec() -> IndicatorSpec:
         output_names=("k", "d"),
         compute_fn=compute_stoch,
         nt_kwargs_fn=_stoch_kwargs,
+        # DSL fields are ``period`` / ``d_period`` (schema.py), NT kwargs are
+        # ``period_k`` / ``period_d``.
+        nt_codegen_kwargs=(("period_k", "period"), ("period_d", "d_period")),
         nt_output_attrs={"k": "value_k", "d": "value_d"},
         requires_high_low=True,
         display_name="Stochastic Oscillator",
@@ -637,6 +644,7 @@ def _cci_spec() -> IndicatorSpec:
         default_params={"period": 20},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_cci,
         requires_high_low=True,
         display_name="Commodity Channel Index",
@@ -678,6 +686,7 @@ def _roc_spec() -> IndicatorSpec:
         default_params={"period": 10},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_roc,
         display_name="Rate of Change",
         description="Percentage change between current price and N periods ago.",
@@ -696,6 +705,7 @@ def _adx_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_adx,
         requires_high_low=True,
         display_name="Average Directional Index",
@@ -718,6 +728,7 @@ def _atr_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_atr,
         requires_high_low=True,
         display_name="Average True Range",
@@ -743,11 +754,13 @@ def _bbands_spec() -> IndicatorSpec:
         output_names=("upper", "middle", "lower", "percent_b", "bandwidth"),
         compute_fn=compute_bbands,
         nt_kwargs_fn=_bbands_kwargs,
+        nt_codegen_kwargs=(("period", "period"), ("k", "std_dev")),
         nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
         computed_outputs={
             "percent_b": "compute_percent_b",
             "bandwidth": "compute_bandwidth",
         },
+        primary_output="middle",
         display_name="Bollinger Bands",
         description=(
             "Upper/lower bands at N standard deviations from SMA. "
@@ -771,8 +784,10 @@ def _kc_spec() -> IndicatorSpec:
         output_names=("upper", "middle", "lower"),
         compute_fn=compute_kc,
         nt_kwargs_fn=_kc_kwargs,
+        nt_codegen_kwargs=(("period", "period"), ("k_multiplier", "atr_multiplier")),
         nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
         computed_outputs={"bandwidth": "compute_bandwidth"},
+        primary_output="middle",
         requires_high_low=True,
         display_name="Keltner Channel",
         description="ATR-based envelope around EMA. More stable than Bollinger Bands.",
@@ -793,8 +808,10 @@ def _donchian_spec() -> IndicatorSpec:
         output_names=("upper", "middle", "lower", "position"),
         compute_fn=compute_donchian,
         nt_kwargs_fn=_donchian_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
         computed_outputs={"position": "compute_position"},
+        primary_output="middle",
         requires_high_low=True,
         display_name="Donchian Channel",
         description=(
@@ -859,6 +876,7 @@ def _mfi_spec() -> IndicatorSpec:
         default_params={"period": 14},
         param_schema={"period": int},
         nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_mfi,
         requires_high_low=True,
         requires_volume=True,

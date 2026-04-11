@@ -25,11 +25,11 @@ from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from nautilus_trader.indicators.volatility import AverageTrueRange
 from nautilus_trader.indicators.averages import ExponentialMovingAverage
 
-# pandas-ta-classic fallback for indicators without NT class
+# compute_fn imports for indicators without NT class
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 import pandas as pd
-import pandas_ta_classic as ta
+from vibe_quant.dsl.compute_builtins import compute_macd
 
 if TYPE_CHECKING:
     pass
@@ -260,20 +260,28 @@ class MacdCrossoverStrategy(Strategy):
         self._prev_values["atr"] = float(self.ind_atr.value)
 
     def _update_pta_indicators(self) -> None:
-        """Compute pandas-ta indicators from bar buffer."""
-        # macd (MACD) via ta.macd
+        """Compute compute_fn-path indicators from bar buffer."""
+        _df = pd.DataFrame({
+            "open": self._pta_open,
+            "high": self._pta_high,
+            "low": self._pta_low,
+            "close": self._pta_close,
+            "volume": self._pta_volume,
+        })
+        # macd (MACD) via compute_macd — lookback 35
         if len(self._pta_close) >= 35:
-            _close = pd.Series(self._pta_close, dtype=float)
-            _macd_df = ta.macd(_close, fast=12, slow=26, signal=9)
-            if _macd_df is not None and len(_macd_df) > 0:
-                _last = _macd_df.iloc[-1]
-                if not pd.isna(_last.iloc[0]):
-                    self._pta_values["macd"] = float(_last.iloc[0])
-                    self._pta_values["macd_macd"] = float(_last.iloc[0])
-                if len(_last) > 1 and not pd.isna(_last.iloc[1]):
-                    self._pta_values["macd_histogram"] = float(_last.iloc[1])
-                if len(_last) > 2 and not pd.isna(_last.iloc[2]):
-                    self._pta_values["macd_signal"] = float(_last.iloc[2])
+            _res = compute_macd(_df, {"fast_period": 12, "slow_period": 26, "signal_period": 9})
+            if isinstance(_res, dict):
+                _primary = _res.get("macd")
+                if _primary is not None and len(_primary) > 0:
+                    _v = _primary.iloc[-1]
+                    if not pd.isna(_v):
+                        self._pta_values["macd"] = float(_v)
+                for _k, _s in _res.items():
+                    if _s is not None and len(_s) > 0:
+                        _v = _s.iloc[-1]
+                        if not pd.isna(_v):
+                            self._pta_values["macd_" + _k] = float(_v)
 
     def _check_time_filters(self, ts_ns: int) -> bool:
         """Check if current time passes time filters."""

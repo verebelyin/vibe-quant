@@ -151,34 +151,47 @@ class StrategyCompiler:
         # Gather indicator info
         indicators = self._gather_indicator_info(dsl)
 
-        # Force MACD to pandas-ta when signal/histogram outputs are used in conditions
-        # (NT MACD only exposes .value = MACD line, not signal or histogram)
+        # Generalized sub-output coverage check (formerly the MACD force-pta
+        # block). If a condition references a sub-value (e.g. ``macd.signal``
+        # or ``macd_histogram``) that is NOT in ``spec.nt_output_attrs`` AND
+        # NOT in ``spec.computed_outputs``, force the ``compute_fn`` path for
+        # that indicator by rebuilding its info with ``nt_class=None``.
+        # Applies uniformly to any multi-output indicator where NT exposes
+        # only a subset of the outputs the DSL knows about.
         all_condition_text = " ".join(
             dsl.entry_conditions.long
             + dsl.entry_conditions.short
             + dsl.exit_conditions.long
             + dsl.exit_conditions.short
         )
-        for info in indicators:
-            if (
-                info.config.type == "MACD"
-                and info.spec.nt_class is not None
-                and info.spec.pandas_ta_func is not None
-                and (
-                    f"{info.name}.signal" in all_condition_text
-                    or f"{info.name}.histogram" in all_condition_text
-                    or f"{info.name}_signal" in all_condition_text
-                    or f"{info.name}_histogram" in all_condition_text
-                )
-            ):
+        for i in range(len(indicators)):
+            info = indicators[i]
+            if info.spec.nt_class is None or info.spec.compute_fn is None:
+                continue
+            missing: list[str] = []
+            for output_name in info.spec.output_names:
+                if output_name == "value":
+                    continue
+                if output_name in info.spec.nt_output_attrs:
+                    continue
+                if output_name in info.spec.computed_outputs:
+                    continue
+                if (
+                    f"{info.name}.{output_name}" in all_condition_text
+                    or f"{info.name}_{output_name}" in all_condition_text
+                ):
+                    missing.append(output_name)
+            if missing:
                 from dataclasses import replace as _dc_replace
 
-                # IndicatorInfo is frozen; rebuild with replaced spec
                 new_spec = _dc_replace(info.spec, nt_class=None)
-                indicators[indicators.index(info)] = _dc_replace(info, spec=new_spec)
+                indicators[i] = _dc_replace(info, spec=new_spec)
                 logger.info(
-                    "MACD '%s' forced to pandas-ta: signal/histogram outputs referenced",
+                    "Indicator '%s' (%s) forced to compute_fn: sub-outputs %s "
+                    "not in nt_output_attrs/computed_outputs",
                     info.name,
+                    info.config.type,
+                    missing,
                 )
 
         # Add sub-output names for multi-output indicators (e.g., bbands_upper)
@@ -361,14 +374,26 @@ class StrategyCompiler:
 
         # Collect unique indicator classes
         nt_classes: dict[str, str] = {}  # class_name -> module_path
+        compute_fn_imports: dict[str, set[str]] = {}  # module_path -> {fn_name}
         has_pta = False
         for info in indicators:
             if info.spec.nt_class is not None:
                 class_name = info.spec.nt_class.__name__
                 module_path = info.spec.nt_class.__module__
                 nt_classes[class_name] = module_path
-            elif info.spec.pandas_ta_func is not None:
+            elif info.spec.compute_fn is not None:
                 has_pta = True
+                fn = info.spec.compute_fn
+                compute_fn_imports.setdefault(fn.__module__, set()).add(fn.__name__)
+
+        # Collect derived-output helpers (percent_b, bandwidth, position, ...)
+        # from specs whose computed_outputs dict is non-empty AND which are on
+        # the NT path (compute_fn path returns the derived values directly).
+        derived_helpers: set[str] = set()
+        for info in indicators:
+            if info.spec.nt_class is not None and info.spec.computed_outputs:
+                for helper_name in info.spec.computed_outputs.values():
+                    derived_helpers.add(helper_name)
 
         # Add indicator imports
         if nt_classes:
@@ -377,14 +402,23 @@ class StrategyCompiler:
             for class_name, module_path in sorted(nt_classes.items()):
                 imports.append(f"from {module_path} import {class_name}")
 
-        # Add pandas-ta imports for fallback indicators
+        # Add compute_fn + pandas imports for compute_fn-path indicators
         if has_pta:
             imports.append("")
-            imports.append("# pandas-ta-classic fallback for indicators without NT class")
+            imports.append("# compute_fn imports for indicators without NT class")
             imports.append("import warnings")
             imports.append("warnings.filterwarnings('ignore', category=FutureWarning)")
             imports.append("import pandas as pd")
-            imports.append("import pandas_ta_classic as ta")
+            for module_path in sorted(compute_fn_imports):
+                names = ", ".join(sorted(compute_fn_imports[module_path]))
+                imports.append(f"from {module_path} import {names}")
+
+        # Add derived-output helper imports
+        if derived_helpers:
+            imports.append("")
+            imports.append("# Derived-output helpers (percent_b, bandwidth, position, ...)")
+            names = ", ".join(sorted(derived_helpers))
+            imports.append(f"from vibe_quant.dsl.derived import {names}")
 
         imports.append("")
         imports.append("if TYPE_CHECKING:")
@@ -592,7 +626,7 @@ class StrategyCompiler:
 
         # Add pandas-ta bar buffer if any indicators need it
         has_pta = any(
-            i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators
+            i.spec.nt_class is None and i.spec.compute_fn is not None for i in indicators
         )
         if has_pta:
             lines.extend(
@@ -735,51 +769,29 @@ class StrategyCompiler:
     def _generate_indicator_init(self, info: IndicatorInfo) -> list[str]:
         """Generate indicator initialization code.
 
-        Args:
-            info: IndicatorInfo for the indicator
-
-        Returns:
-            Lines of code for indicator initialization
+        Thin dispatcher: delegates per-indicator kwarg mapping to
+        ``spec.nt_codegen_kwargs`` so new indicators (including plugins)
+        don't need compiler edits. Indicators without an NT class emit a
+        marker comment and skip registration — their values come from
+        ``_update_pta_indicators`` instead.
         """
         lines: list[str] = []
-        config = info.config
         spec = info.spec
 
-        if spec.nt_class is None and spec.pandas_ta_func is not None:
-            # pandas-ta fallback: store config for _update_pta_indicators()
+        if spec.nt_class is None:
+            label = spec.pandas_ta_func or (
+                spec.compute_fn.__name__ if spec.compute_fn is not None else "?"
+            )
             lines.append(
-                f"    # {info.name} ({config.type}): pandas-ta fallback via ta.{spec.pandas_ta_func}"
+                f"    # {info.name} ({info.config.type}): pandas-ta fallback via ta.{label}"
             )
             return lines
 
-        assert spec.nt_class is not None  # guarded by caller check
         class_name = spec.nt_class.__name__
-
-        # Build constructor arguments
-        args: list[str] = []
-
-        # Map DSL params to NT params based on indicator type
-        if config.type in {"RSI", "EMA", "SMA", "WMA", "DEMA", "TEMA", "ATR", "CCI", "ROC", "MFI", "ADX"}:
-            args.append(f"period=self.config.{info.name}_period")
-        elif config.type == "MACD":
-            args.append(f"fast_period=self.config.{info.name}_fast_period")
-            args.append(f"slow_period=self.config.{info.name}_slow_period")
-            # NT MACD does not accept signal_period
-        elif config.type == "BBANDS":
-            args.append(f"period=self.config.{info.name}_period")
-            args.append(f"k=self.config.{info.name}_std_dev")
-        elif config.type == "STOCH":
-            args.append(f"period_k=self.config.{info.name}_period")
-            args.append(f"period_d=self.config.{info.name}_d_period")
-        elif config.type == "KC":
-            args.append(f"period=self.config.{info.name}_period")
-            args.append(f"k_multiplier=self.config.{info.name}_atr_multiplier")
-        elif config.type == "DONCHIAN":
-            args.append(f"period=self.config.{info.name}_period")
-        elif config.type in {"OBV", "VWAP"}:
-            # No parameters
-            pass
-
+        args = [
+            f"{nt_kwarg}=self.config.{info.name}_{dsl_field}"
+            for nt_kwarg, dsl_field in spec.nt_codegen_kwargs
+        ]
         args_str = ", ".join(args)
         lines.append(f"    {info.indicator_var} = {class_name}({args_str})")
         lines.append(
@@ -805,7 +817,7 @@ class StrategyCompiler:
             on_bar method source code
         """
         has_pta = any(
-            i.spec.nt_class is None and i.spec.pandas_ta_func is not None for i in indicators
+            i.spec.nt_class is None and i.spec.compute_fn is not None for i in indicators
         )
 
         lines = [
@@ -941,16 +953,21 @@ class StrategyCompiler:
             ]
         )
         for info in indicators:
-            if info.spec.nt_class is not None:
+            spec = info.spec
+            if spec.nt_class is not None:
                 lines.append(f"    if not {info.indicator_var}.initialized:")
                 lines.append("        return False")
-            elif info.spec.pandas_ta_func is not None:
-                # Check pandas-ta indicator has computed a value
+            elif spec.compute_fn is not None:
+                # Check compute_fn indicator has computed a value
                 lines.append(f'    if "{info.name}" not in self._pta_values:')
                 lines.append("        return False")
-                # Also check multi-output sub-names
-                if info.spec.output_names != ("value",):
-                    for output_name in info.spec.output_names:
+                # Multi-output sub-names (computed_outputs are derived at read
+                # time, so they never land in _pta_values and should be skipped
+                # from the readiness check).
+                if spec.output_names != ("value",):
+                    for output_name in spec.output_names:
+                        if output_name in spec.computed_outputs:
+                            continue
                         lines.append(f'    if "{info.name}_{output_name}" not in self._pta_values:')
                         lines.append("        return False")
         lines.append("    return True")
@@ -964,9 +981,9 @@ class StrategyCompiler:
         lines.extend(self._generate_update_prev_values(indicators))
         lines.append("")
 
-        # _update_pta_indicators (if any pandas-ta indicators exist)
+        # _update_pta_indicators (if any compute_fn indicators exist)
         pta_indicators = [
-            i for i in indicators if i.spec.nt_class is None and i.spec.pandas_ta_func is not None
+            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
         ]
         if pta_indicators:
             lines.extend(self._generate_update_pta_indicators(pta_indicators))
@@ -1029,23 +1046,28 @@ class StrategyCompiler:
 
         return "\n".join(lines)
 
-    # Computed outputs derived from channel indicator bands + close price
-    _COMPUTED_OUTPUTS: frozenset[tuple[str, str]] = frozenset(
-        {
-            ("BBANDS", "percent_b"),
-            ("BBANDS", "bandwidth"),
-            ("DONCHIAN", "position"),
-        }
-    )
+    @staticmethod
+    def _effective_primary(spec: IndicatorSpec) -> str:
+        """Return the output name that resolves when the indicator is
+        referenced without a sub-value (e.g. ``bbands`` vs ``bbands.upper``).
+
+        Defaults to ``spec.primary_output`` if set (BBANDS/KC/DONCHIAN pin
+        this to ``"middle"``), else the first entry in ``output_names``,
+        else the plain ``"value"`` sentinel.
+        """
+        if spec.primary_output:
+            return spec.primary_output
+        if spec.output_names:
+            return spec.output_names[0]
+        return "value"
 
     def _generate_get_indicator_value(self, indicators: list[IndicatorInfo]) -> list[str]:
-        """Generate _get_indicator_value method.
+        """Generate the ``_get_indicator_value`` lookup.
 
-        Args:
-            indicators: List of indicator info
-
-        Returns:
-            Method source code as lines
+        Spec-driven: reads from ``_pta_values`` for compute_fn-path
+        indicators, from ``spec.nt_output_attrs`` for NT-path indicators,
+        and from ``spec.computed_outputs`` (-> derived helpers) for
+        outputs that are derived at read time from the raw bands.
         """
         lines = [
             "def _get_indicator_value(self, name: str) -> float:",
@@ -1053,139 +1075,57 @@ class StrategyCompiler:
         ]
 
         for info in indicators:
-            if info.spec.nt_class is None and info.spec.pandas_ta_func is not None:
-                # pandas-ta fallback: read from _pta_values buffer
+            spec = info.spec
+            if spec.nt_class is None:
+                # compute_fn path: read from _pta_values buffer
                 lines.append(f'    if name == "{info.name}":')
                 lines.append(f'        return self._pta_values.get("{info.name}", 0.0)')
-                # Multi-output sub-names
-                if info.spec.output_names != ("value",):
-                    for output_name in info.spec.output_names:
+                if spec.output_names != ("value",):
+                    for output_name in spec.output_names:
+                        # Derived outputs are computed at read time by the
+                        # compute_fn already (see compute_bbands), so they
+                        # live in _pta_values under the sub-key too.
                         lines.append(f'    if name == "{info.name}_{output_name}":')
                         lines.append(
                             f'        return self._pta_values.get("{info.name}_{output_name}", 0.0)'
                         )
                 continue
 
-            nt_attr = self._get_default_output_attr(info)
+            # NT path
+            primary = self._effective_primary(spec)
+            primary_attr = spec.nt_output_attrs.get(primary, "value")
             lines.append(f'    if name == "{info.name}":')
-            lines.append(f"        _v = {info.indicator_var}.{nt_attr}")
+            lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
             lines.append("        return float(_v) if _v is not None else 0.0")
 
-            # Register sub-names for each output of multi-output indicators
-            if info.spec.output_names != ("value",):
-                for output_name in info.spec.output_names:
-                    # Computed outputs: derive from band values + close price
-                    if (info.config.type, output_name) in self._COMPUTED_OUTPUTS:
-                        lines.extend(
-                            self._generate_computed_output_code(info, output_name)
+            if spec.output_names != ("value",):
+                for output_name in spec.output_names:
+                    key = f"{info.name}_{output_name}"
+                    if output_name in spec.computed_outputs:
+                        helper = spec.computed_outputs[output_name]
+                        lines.append(f'    if name == "{key}":')
+                        lines.append(
+                            f"        return {helper}({info.indicator_var}, self._last_close)"
                         )
-                        continue
-                    attr = self._output_to_nt_attr(info.config.type, output_name)
-                    if (
-                        info.config.type == "MACD"
-                        and output_name in ("signal", "histogram")
-                        and not getattr(self, "_macd_fallback_warned", False)
-                    ):
-                        logger.warning(
-                            "MACD signal/histogram not available in NT — "
-                            "returns MACD line (.value) instead. "
-                            "Use pandas-ta fallback for signal/histogram.",
-                        )
-                        self._macd_fallback_warned = True
-                    lines.append(f'    if name == "{info.name}_{output_name}":')
-                    lines.append(f"        _v = {info.indicator_var}.{attr}")
-                    lines.append("        return float(_v) if _v is not None else 0.0")
+                    elif output_name in spec.nt_output_attrs:
+                        attr = spec.nt_output_attrs[output_name]
+                        lines.append(f'    if name == "{key}":')
+                        lines.append(f"        _v = {info.indicator_var}.{attr}")
+                        lines.append("        return float(_v) if _v is not None else 0.0")
+                    # else: sub-value is not covered by NT and no derived
+                    # helper — the compile-time sub-value fallback would
+                    # have already forced this indicator to the compute_fn
+                    # path, so this branch is unreachable for well-formed
+                    # specs.
 
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
         return lines
 
-    def _generate_computed_output_code(
-        self, info: IndicatorInfo, output_name: str
-    ) -> list[str]:
-        """Generate code for computed indicator outputs (percent_b, bandwidth, position).
-
-        These are derived from channel indicator bands + close price, not direct NT attrs.
-        """
-        lines: list[str] = []
-        ind_var = info.indicator_var
-
-        if output_name == "percent_b":
-            # %B = (close - lower) / (upper - lower), range ~0-1
-            lines.extend(
-                [
-                    f'    if name == "{info.name}_percent_b":',
-                    f"        _upper = float({ind_var}.upper)",
-                    f"        _lower = float({ind_var}.lower)",
-                    "        _range = _upper - _lower",
-                    "        return (self._last_close - _lower) / _range if _range > 0 else 0.5",
-                ]
-            )
-        elif output_name == "bandwidth":
-            # Bandwidth = (upper - lower) / middle
-            lines.extend(
-                [
-                    f'    if name == "{info.name}_bandwidth":',
-                    f"        _upper = float({ind_var}.upper)",
-                    f"        _lower = float({ind_var}.lower)",
-                    f"        _middle = float({ind_var}.middle)",
-                    "        return (_upper - _lower) / _middle if _middle > 0 else 0.0",
-                ]
-            )
-        elif output_name == "position":
-            # Position = (close - lower) / (upper - lower), range ~0-1
-            lines.extend(
-                [
-                    f'    if name == "{info.name}_position":',
-                    f"        _upper = float({ind_var}.upper)",
-                    f"        _lower = float({ind_var}.lower)",
-                    "        _range = _upper - _lower",
-                    "        return (self._last_close - _lower) / _range if _range > 0 else 0.5",
-                ]
-            )
-
-        return lines
-
-    @staticmethod
-    def _output_to_nt_attr(indicator_type: str, output_name: str) -> str:
-        """Map DSL output name to NautilusTrader attribute name."""
-        # MACD: NT only exposes .value (the MACD line = fast_ema - slow_ema).
-        # Signal line and histogram are NOT available in NT's MACD class.
-        if indicator_type == "MACD":
-            if output_name == "macd":
-                return "value"
-            # signal/histogram not available — map to value to prevent crash,
-            # but log warning at codegen time (caller should prefer pandas-ta fallback)
-            return "value"
-        # STOCH outputs use value_ prefix in NT
-        if indicator_type == "STOCH":
-            return f"value_{output_name}"  # k -> value_k, d -> value_d
-        # BBANDS/KC/DONCHIAN: output name matches NT attr directly
-        return output_name  # upper -> upper, middle -> middle, lower -> lower
-
-    @staticmethod
-    def _get_default_output_attr(info: IndicatorInfo) -> str:
-        """Get the default NT attribute for an indicator's primary output."""
-        if info.spec.output_names == ("value",):
-            return "value"
-        # Channel indicators: default to middle band
-        if info.config.type in {"BBANDS", "KC", "DONCHIAN"}:
-            return "middle"
-        # Stochastics: default to K line
-        if info.config.type == "STOCH":
-            return "value_k"
-        # MACD: only has .value in NT
-        if info.config.type == "MACD":
-            return "value"
-        return "value"
-
     def _generate_update_prev_values(self, indicators: list[IndicatorInfo]) -> list[str]:
-        """Generate _update_prev_values method.
+        """Generate the ``_update_prev_values`` helper.
 
-        Args:
-            indicators: List of indicator info
-
-        Returns:
-            Method source code as lines
+        Mirrors ``_generate_get_indicator_value`` but writes into
+        ``self._prev_values`` for crossover detection on the next bar.
         """
         lines = [
             "def _update_prev_values(self) -> None:",
@@ -1194,32 +1134,35 @@ class StrategyCompiler:
 
         has_any = False
         for info in indicators:
-            if info.spec.nt_class is not None:
+            spec = info.spec
+            if spec.nt_class is not None:
                 has_any = True
-                nt_attr = self._get_default_output_attr(info)
+                primary = self._effective_primary(spec)
+                primary_attr = spec.nt_output_attrs.get(primary, "value")
                 lines.append(
-                    f'    self._prev_values["{info.name}"] = float({info.indicator_var}.{nt_attr})'
+                    f'    self._prev_values["{info.name}"] = float({info.indicator_var}.{primary_attr})'
                 )
-                # Also store sub-outputs for multi-output indicators
-                if info.spec.output_names != ("value",):
-                    for output_name in info.spec.output_names:
-                        if (info.config.type, output_name) in self._COMPUTED_OUTPUTS:
-                            # Use _get_indicator_value for computed outputs
+                if spec.output_names != ("value",):
+                    for output_name in spec.output_names:
+                        key = f"{info.name}_{output_name}"
+                        if output_name in spec.computed_outputs:
+                            # Derived outputs need the same runtime helper path
+                            # used by _get_indicator_value to stay consistent.
                             lines.append(
-                                f'    self._prev_values["{info.name}_{output_name}"] = self._get_indicator_value("{info.name}_{output_name}")'
+                                f'    self._prev_values["{key}"] = self._get_indicator_value("{key}")'
                             )
-                        else:
-                            attr = self._output_to_nt_attr(info.config.type, output_name)
+                        elif output_name in spec.nt_output_attrs:
+                            attr = spec.nt_output_attrs[output_name]
                             lines.append(
-                                f'    self._prev_values["{info.name}_{output_name}"] = float({info.indicator_var}.{attr})'
+                                f'    self._prev_values["{key}"] = float({info.indicator_var}.{attr})'
                             )
-            elif info.spec.pandas_ta_func is not None:
+            elif spec.compute_fn is not None:
                 has_any = True
                 lines.append(
                     f'    self._prev_values["{info.name}"] = self._pta_values.get("{info.name}", 0.0)'
                 )
-                if info.spec.output_names != ("value",):
-                    for output_name in info.spec.output_names:
+                if spec.output_names != ("value",):
+                    for output_name in spec.output_names:
                         lines.append(
                             f'    self._prev_values["{info.name}_{output_name}"] = self._pta_values.get("{info.name}_{output_name}", 0.0)'
                         )
@@ -1230,208 +1173,119 @@ class StrategyCompiler:
         return lines
 
     def _generate_update_pta_indicators(self, pta_indicators: list[IndicatorInfo]) -> list[str]:
-        """Generate _update_pta_indicators method for pandas-ta fallback.
+        """Generate ``_update_pta_indicators`` for compute_fn-path indicators.
 
-        Computes pandas-ta indicators from accumulated bar data buffer.
-        Called on each bar before _indicators_ready check.
+        Emits a generic dispatcher that builds a single OHLCV DataFrame per
+        bar, then for each compute_fn-path indicator imports the spec's
+        ``compute_fn`` by name and calls it with the merged params. Results
+        are unpacked into ``self._pta_values`` either as a single scalar
+        (single-output) or namespaced by sub-output key (multi-output).
 
-        Args:
-            pta_indicators: Indicators with nt_class=None and pandas_ta_func set
-
-        Returns:
-            Method source code as lines
+        This replaces the ~200-line per-type elif chain from the P4
+        refactor; new plugins with a ``compute_fn`` slot in without
+        touching the compiler.
         """
         lines = [
             "def _update_pta_indicators(self) -> None:",
-            '    """Compute pandas-ta indicators from bar buffer."""',
+            '    """Compute compute_fn-path indicators from bar buffer."""',
+            "    _df = pd.DataFrame({",
+            '        "open": self._pta_open,',
+            '        "high": self._pta_high,',
+            '        "low": self._pta_low,',
+            '        "close": self._pta_close,',
+            '        "volume": self._pta_volume,',
+            "    })",
         ]
 
         for info in pta_indicators:
             spec = info.spec
-            config = info.config
-            func_name = spec.pandas_ta_func
-
-            # Determine minimum lookback from indicator params
+            if spec.compute_fn is None:
+                continue
+            fn_name = spec.compute_fn.__name__
             lookback = self._get_pta_lookback(info)
+            params_literal = self._compile_pta_params_literal(info)
+            primary = self._effective_primary(spec)
 
-            lines.append(f"    # {info.name} ({config.type}) via ta.{func_name}")
+            lines.append(f"    # {info.name} ({info.config.type}) via {fn_name} — lookback {lookback}")
             lines.append(f"    if len(self._pta_close) >= {lookback}:")
+            lines.append(f"        _res = {fn_name}(_df, {params_literal})")
 
-            if config.type == "ICHIMOKU":
-                # Ichimoku returns (ichimoku_df, span_df) tuple
-                tenkan = config.period or spec.default_params.get("tenkan", 9)
-                kijun = spec.default_params.get("kijun", 26)
-                senkou = spec.default_params.get("senkou", 52)
-                lines.extend(
-                    [
-                        "        _high = pd.Series(self._pta_high, dtype=float)",
-                        "        _low = pd.Series(self._pta_low, dtype=float)",
-                        "        _close = pd.Series(self._pta_close, dtype=float)",
-                        f"        _ichi = ta.ichimoku(_high, _low, _close, tenkan={tenkan}, kijun={kijun}, senkou={senkou})",
-                        "        if _ichi is not None and isinstance(_ichi, tuple) and len(_ichi) >= 1:",
-                        "            _df = _ichi[0]",
-                        "            if _df is not None and len(_df) > 0:",
-                        "                _last = _df.iloc[-1]",
-                        "                if not pd.isna(_last.iloc[0]):",
-                        f'                    self._pta_values["{info.name}_conversion"] = float(_last.iloc[0])',
-                        f'                    self._pta_values["{info.name}_base"] = float(_last.iloc[1])',
-                        f'                    self._pta_values["{info.name}"] = float(_last.iloc[0])',
-                        "            # Span values are in _ichi[1] (span DataFrame)",
-                        "            if len(_ichi) >= 2 and _ichi[1] is not None and len(_ichi[1]) > 0:",
-                        "                _span_last = _ichi[1].iloc[-1]",
-                        "                if len(_span_last) >= 2 and not pd.isna(_span_last.iloc[0]):",
-                        f'                    self._pta_values["{info.name}_span_a"] = float(_span_last.iloc[0])',
-                        f'                    self._pta_values["{info.name}_span_b"] = float(_span_last.iloc[1])',
-                    ]
-                )
-            elif config.type == "VOLSMA":
-                # SMA applied to volume
-                period = config.period or spec.default_params.get("period", 20)
-                lines.extend(
-                    [
-                        "        _vol = pd.Series(self._pta_volume, dtype=float)",
-                        f"        _result = ta.sma(_vol, length={period})",
-                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                    ]
-                )
-            elif config.type == "MACD":
-                # MACD returns DataFrame with 3 columns: MACD line, histogram, signal
-                fast = config.fast_period or spec.default_params.get("fast_period", 12)
-                slow = config.slow_period or spec.default_params.get("slow_period", 26)
-                signal = config.signal_period or spec.default_params.get("signal_period", 9)
-                lines.extend(
-                    [
-                        "        _close = pd.Series(self._pta_close, dtype=float)",
-                        f"        _macd_df = ta.macd(_close, fast={fast}, slow={slow}, signal={signal})",
-                        "        if _macd_df is not None and len(_macd_df) > 0:",
-                        "            _last = _macd_df.iloc[-1]",
-                        "            if not pd.isna(_last.iloc[0]):",
-                        f'                self._pta_values["{info.name}"] = float(_last.iloc[0])',
-                        f'                self._pta_values["{info.name}_macd"] = float(_last.iloc[0])',
-                        "            if len(_last) > 1 and not pd.isna(_last.iloc[1]):",
-                        f'                self._pta_values["{info.name}_histogram"] = float(_last.iloc[1])',
-                        "            if len(_last) > 2 and not pd.isna(_last.iloc[2]):",
-                        f'                self._pta_values["{info.name}_signal"] = float(_last.iloc[2])',
-                    ]
-                )
-            elif config.type == "MFI":
-                # MFI needs high, low, close, volume (cast to float to avoid FutureWarning)
-                period = config.period or spec.default_params.get("period", 14)
-                lines.extend(
-                    [
-                        "        _high = pd.Series(self._pta_high, dtype=float)",
-                        "        _low = pd.Series(self._pta_low, dtype=float)",
-                        "        _close = pd.Series(self._pta_close, dtype=float)",
-                        "        _vol = pd.Series(self._pta_volume, dtype=float)",
-                        f"        _result = ta.mfi(_high, _low, _close, _vol, length={period})",
-                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                    ]
-                )
-            elif config.type == "WILLR":
-                # Williams %R needs high, low, close
-                period = config.period or spec.default_params.get("period", 14)
-                lines.extend(
-                    [
-                        "        _high = pd.Series(self._pta_high, dtype=float)",
-                        "        _low = pd.Series(self._pta_low, dtype=float)",
-                        "        _close = pd.Series(self._pta_close, dtype=float)",
-                        f"        _result = ta.willr(_high, _low, _close, length={period})",
-                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                    ]
-                )
-            elif config.type == "BBANDS":
-                # BBANDS returns DataFrame: BBL, BBM, BBU, BBB (bandwidth), BBP (percent_b)
-                period = config.period or spec.default_params.get("period", 20)
-                std_dev = config.std_dev or spec.default_params.get("std_dev", 2.0)
-                lines.extend(
-                    [
-                        "        _close = pd.Series(self._pta_close, dtype=float)",
-                        f"        _bb_df = ta.bbands(_close, length={period}, std={std_dev})",
-                        "        if _bb_df is not None and len(_bb_df) > 0:",
-                        "            _last = _bb_df.iloc[-1]",
-                        "            if not pd.isna(_last.iloc[0]):",
-                        f'                self._pta_values["{info.name}_lower"] = float(_last.iloc[0])',
-                        f'                self._pta_values["{info.name}_middle"] = float(_last.iloc[1])',
-                        f'                self._pta_values["{info.name}_upper"] = float(_last.iloc[2])',
-                        f'                self._pta_values["{info.name}"] = float(_last.iloc[1])',
-                        "            if len(_last) > 3 and not pd.isna(_last.iloc[3]):",
-                        f'                self._pta_values["{info.name}_bandwidth"] = float(_last.iloc[3])',
-                        "            if len(_last) > 4 and not pd.isna(_last.iloc[4]):",
-                        f'                self._pta_values["{info.name}_percent_b"] = float(_last.iloc[4])',
-                    ]
-                )
-            elif config.type == "DONCHIAN":
-                # DONCHIAN returns DataFrame: DCL, DCM, DCU
-                period = config.period or spec.default_params.get("period", 20)
-                lines.extend(
-                    [
-                        "        _high = pd.Series(self._pta_high, dtype=float)",
-                        "        _low = pd.Series(self._pta_low, dtype=float)",
-                        f"        _dc_df = ta.donchian(_high, _low, lower_length={period}, upper_length={period})",
-                        "        if _dc_df is not None and len(_dc_df) > 0:",
-                        "            _last = _dc_df.iloc[-1]",
-                        "            if not pd.isna(_last.iloc[0]):",
-                        f'                self._pta_values["{info.name}_lower"] = float(_last.iloc[0])',
-                        f'                self._pta_values["{info.name}_middle"] = float(_last.iloc[1])',
-                        f'                self._pta_values["{info.name}_upper"] = float(_last.iloc[2])',
-                        f'                self._pta_values["{info.name}"] = float(_last.iloc[1])',
-                        "                _range = float(_last.iloc[2]) - float(_last.iloc[0])",
-                        "                if _range > 0:",
-                        f'                    self._pta_values["{info.name}_position"] = (self._last_close - float(_last.iloc[0])) / _range',
-                        "                else:",
-                        f'                    self._pta_values["{info.name}_position"] = 0.5',
-                    ]
+            if len(spec.output_names) > 1:
+                lines.append("        if isinstance(_res, dict):")
+                lines.append(f'            _primary = _res.get("{primary}")')
+                lines.append("            if _primary is not None and len(_primary) > 0:")
+                lines.append("                _v = _primary.iloc[-1]")
+                lines.append("                if not pd.isna(_v):")
+                lines.append(f'                    self._pta_values["{info.name}"] = float(_v)')
+                lines.append("            for _k, _s in _res.items():")
+                lines.append("                if _s is not None and len(_s) > 0:")
+                lines.append("                    _v = _s.iloc[-1]")
+                lines.append("                    if not pd.isna(_v):")
+                lines.append(
+                    f'                        self._pta_values["{info.name}_" + _k] = float(_v)'
                 )
             else:
-                # Generic single-output indicator (TEMA, etc.) on close series
-                period = config.period or spec.default_params.get("period", 14)
-                source = config.source or "close"
-                source_var = (
-                    f"self._pta_{source}"
-                    if source in ("close", "high", "low", "open", "volume")
-                    else "self._pta_close"
-                )
-                lines.extend(
-                    [
-                        f"        _series = pd.Series({source_var}, dtype=float)",
-                        f"        _result = ta.{func_name}(_series, length={period})",
-                        "        if _result is not None and len(_result) > 0 and not pd.isna(_result.iloc[-1]):",
-                        f'            self._pta_values["{info.name}"] = float(_result.iloc[-1])',
-                    ]
-                )
+                lines.append("        if _res is not None and len(_res) > 0:")
+                lines.append("            _v = _res.iloc[-1]")
+                lines.append("            if not pd.isna(_v):")
+                lines.append(f'                self._pta_values["{info.name}"] = float(_v)')
 
         return lines
 
     @staticmethod
+    def _compile_pta_params_literal(info: IndicatorInfo) -> str:
+        """Build a Python-literal dict string for the ``compute_fn`` call.
+
+        Starts from ``spec.default_params`` and overlays any
+        IndicatorConfig fields that were explicitly set in the DSL, so
+        user overrides flow through even though the compute_fn call is
+        emitted with hardcoded values (matching pre-refactor behavior).
+        """
+        merged: dict[str, object] = dict(info.spec.default_params)
+        for dsl_field in (
+            "period",
+            "fast_period",
+            "slow_period",
+            "signal_period",
+            "d_period",
+            "std_dev",
+            "atr_multiplier",
+        ):
+            val = getattr(info.config, dsl_field, None)
+            if val is not None:
+                merged[dsl_field] = val
+        pairs = ", ".join(f'"{k}": {v!r}' for k, v in merged.items())
+        return "{" + pairs + "}"
+
+    @staticmethod
     def _get_pta_lookback(info: IndicatorInfo) -> int:
-        """Get minimum lookback bars needed for a pandas-ta indicator."""
-        config = info.config
-        defaults = info.spec.default_params
+        """Minimum lookback bars needed before a compute_fn is valid.
 
-        def _int_param(key: str, fallback: int) -> int:
-            val = defaults.get(key, fallback)
-            return val if isinstance(val, int) else fallback
-
-        if config.type == "MACD":
-            # MACD needs slow_period + signal_period bars for convergence
-            slow = config.slow_period or _int_param("slow_period", 26)
-            signal = config.signal_period or _int_param("signal_period", 9)
-            return slow + signal
-        if config.type == "ICHIMOKU":
-            return max(
-                _int_param("tenkan", 9),
-                _int_param("kijun", 26),
-                _int_param("senkou", 52),
-            )
-        if config.type == "TEMA":
-            # TEMA needs ~3x period for convergence
-            period = config.period or _int_param("period", 14)
-            return period * 3
-        period = config.period or _int_param("period", 14)
-        return period
+        Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD,
+        ICHIMOKU have custom formulas). Default: read ``period`` from the
+        effective param dict — matches pre-refactor behavior for every
+        single-period pandas-ta indicator.
+        """
+        spec = info.spec
+        merged: dict[str, object] = dict(spec.default_params)
+        for dsl_field in (
+            "period",
+            "fast_period",
+            "slow_period",
+            "signal_period",
+            "d_period",
+            "std_dev",
+            "atr_multiplier",
+        ):
+            val = getattr(info.config, dsl_field, None)
+            if val is not None:
+                merged[dsl_field] = val
+        if spec.pta_lookback_fn is not None:
+            return int(spec.pta_lookback_fn(merged))
+        period = merged.get("period")
+        if isinstance(period, (int, float)):
+            return int(period)
+        return 14
 
     def _generate_time_filter_method(self, time_filters: TimeFilterConfig) -> list[str]:
         """Generate _check_time_filters method.

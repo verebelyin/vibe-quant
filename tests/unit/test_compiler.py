@@ -621,12 +621,12 @@ take_profit:
         source = compiler.compile(dsl)
 
         compile(source, "<generated>", "exec")
-        # Must use pandas-ta (ta.macd), not NT MACD class
-        assert "ta.macd(" in source
-        # Must extract all 3 sub-outputs
-        assert '"macd_signal"' in source
-        assert '"macd_histogram"' in source
-        assert '"macd_macd"' in source
+        # Must use compute_fn path (compute_macd), not NT MACD class
+        assert "compute_macd(" in source
+        assert "from vibe_quant.dsl.compute_builtins import compute_macd" in source
+        # Must extract all 3 sub-outputs into _pta_values via the generic
+        # multi-output dispatcher (emits ``self._pta_values["macd_" + _k]``).
+        assert '"macd_" + _k' in source
         # Must NOT instantiate NT MACD
         assert "MovingAverageConvergenceDivergence(" not in source
 

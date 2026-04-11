@@ -55,14 +55,16 @@ take_profit:
         # Should NOT contain assignment to None that would crash at runtime
         assert "self.ind_tema = None" not in source
         assert "self.ind_tema.initialized" not in source
-        # Should have pandas-ta imports
-        assert "import pandas_ta_classic as ta" in source
+        # Should import pandas + the compute_tema callable (post-P4 refactor:
+        # generated code routes through vibe_quant.dsl.compute_builtins instead
+        # of importing pandas_ta_classic directly).
         assert "import pandas as pd" in source
+        assert "from vibe_quant.dsl.compute_builtins import compute_tema" in source
         # Should have bar buffer init
         assert "self._pta_close" in source
         assert "self._pta_values" in source
-        # Should compute TEMA via ta.tema
-        assert "ta.tema" in source
+        # Should compute TEMA via compute_tema
+        assert "compute_tema(" in source
         # Should read from _pta_values not return hardcoded 0.0
         assert '_pta_values.get("tema"' in source
         # Should check readiness via _pta_values
@@ -91,7 +93,8 @@ take_profit:
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
-        assert "ta.willr" in source
+        assert "compute_willr(" in source
+        assert "from vibe_quant.dsl.compute_builtins import compute_willr" in source
         assert '_pta_values.get("willr"' in source
 
     def test_ichimoku_strategy_compiles_with_multi_output(self) -> None:
@@ -116,9 +119,14 @@ take_profit:
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
-        assert "ta.ichimoku" in source
-        assert '"ichimoku_conversion"' in source
-        assert '"ichimoku_base"' in source
+        assert "compute_ichimoku(" in source
+        assert "from vibe_quant.dsl.compute_builtins import compute_ichimoku" in source
+        # Multi-output extraction emits the generic dispatcher; the sub-output
+        # keys land in _pta_values via ``"ichimoku_" + _k`` at runtime.
+        assert '"ichimoku_" + _k' in source
+        # Readiness check still pins specific sub-output keys.
+        assert '"ichimoku_conversion" not in self._pta_values' in source
+        assert '"ichimoku_base" not in self._pta_values' in source
 
     def test_volsma_uses_volume_series(self) -> None:
         """VOLSMA should apply SMA to volume, not close price."""
@@ -143,8 +151,12 @@ take_profit:
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
+        # The OHLCV DataFrame the compute_fn receives wires self._pta_volume
+        # into its "volume" column, so the reference must be present.
         assert "self._pta_volume" in source
-        assert "ta.sma" in source
+        # VOLSMA routes through compute_volsma (applies SMA to the volume
+        # column internally) instead of calling ta.sma directly.
+        assert "compute_volsma(" in source
 
 
 # =============================================================================

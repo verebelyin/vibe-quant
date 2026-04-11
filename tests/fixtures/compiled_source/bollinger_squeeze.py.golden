@@ -27,6 +27,9 @@ from nautilus_trader.indicators.volatility import BollingerBands
 from nautilus_trader.indicators.averages import ExponentialMovingAverage
 from nautilus_trader.indicators.momentum import RelativeStrengthIndex
 
+# Derived-output helpers (percent_b, bandwidth, position, ...)
+from vibe_quant.dsl.derived import compute_bandwidth, compute_percent_b
+
 if TYPE_CHECKING:
     pass
 
@@ -221,15 +224,9 @@ class BollingerSqueezeStrategy(Strategy):
             _v = self.ind_bbands.lower
             return float(_v) if _v is not None else 0.0
         if name == "bbands_percent_b":
-            _upper = float(self.ind_bbands.upper)
-            _lower = float(self.ind_bbands.lower)
-            _range = _upper - _lower
-            return (self._last_close - _lower) / _range if _range > 0 else 0.5
+            return compute_percent_b(self.ind_bbands, self._last_close)
         if name == "bbands_bandwidth":
-            _upper = float(self.ind_bbands.upper)
-            _lower = float(self.ind_bbands.lower)
-            _middle = float(self.ind_bbands.middle)
-            return (_upper - _lower) / _middle if _middle > 0 else 0.0
+            return compute_bandwidth(self.ind_bbands, self._last_close)
         if name == "atr":
             _v = self.ind_atr.value
             return float(_v) if _v is not None else 0.0
