@@ -49,8 +49,11 @@ class TestIndicatorSpec:
         assert spec.pandas_ta_func is not None
 
     def test_invalid_spec_neither(self) -> None:
-        """Spec with neither nt_class nor pandas_ta_func raises ValueError."""
-        with pytest.raises(ValueError, match="must have nt_class or pandas_ta_func"):
+        """Spec with none of nt_class / compute_fn / pandas_ta_func raises."""
+        with pytest.raises(
+            ValueError,
+            match="must have nt_class, compute_fn, or pandas_ta_func",
+        ):
             IndicatorSpec(
                 name="TEST",
                 nt_class=None,

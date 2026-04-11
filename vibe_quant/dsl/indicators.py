@@ -31,11 +31,12 @@ Example usage:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pandas as pd
     from nautilus_trader.indicators.base import Indicator
     from nautilus_trader.model.data import BarType
 
@@ -44,13 +45,60 @@ if TYPE_CHECKING:
 class IndicatorSpec:
     """Specification for a technical indicator.
 
+    An IndicatorSpec is the single source of truth for a technical indicator. It
+    can be constructed with any combination of three execution paths (at least
+    one is required):
+
+    1. ``nt_class`` — NautilusTrader Rust-native indicator class (fastest path)
+    2. ``compute_fn`` — pure Python callback taking a DataFrame + params
+    3. ``pandas_ta_func`` — legacy pandas-ta-classic function name (kept for
+       backward compatibility while the compiler is migrated to callbacks)
+
+    The compiler picks the first available path, preferring NT when the spec
+    declares it and all referenced outputs live in ``nt_output_attrs``. Missing
+    sub-values automatically force the ``compute_fn`` fallback.
+
     Attributes:
         name: Canonical indicator name (uppercase)
         nt_class: NautilusTrader indicator class (None if not available)
         pandas_ta_func: pandas-ta-classic function name (None if not available)
         default_params: Default parameter values
         param_schema: Parameter name to type mapping for validation
-        output_names: Names of output values (e.g., ["value"] or ["upper", "middle", "lower"])
+        output_names: Names of output values (e.g., ("value",) or
+            ("upper", "middle", "lower"))
+        nt_kwargs_fn: Callable mapping merged params → kwargs dict passed to
+            ``nt_class(**kwargs)``. If None, defaults to
+            ``{"period": params.get("period", 14)}``.
+        compute_fn: Pure Python indicator computation from a rolling bar buffer.
+            Signature: ``(df, params) -> pd.Series | dict[str, pd.Series]``
+            where ``df`` has columns ``[open, high, low, close, volume]``.
+            Single-output indicators return a Series; multi-output return a
+            dict keyed by output name.
+        nt_output_attrs: Maps ``output_name`` → NT indicator instance attribute
+            name. Defaults to ``{"value": "value"}``. Outputs not present in
+            this map force the ``compute_fn`` fallback path at compile time
+            (generalizes the MACD signal/histogram quirk).
+        computed_outputs: Output names whose values are derived at runtime from
+            other outputs. Value is the name of a helper function in
+            ``vibe_quant/dsl/derived.py``. e.g. BBANDS:
+            ``{"percent_b": "compute_percent_b"}``.
+        pta_lookback_fn: Callable returning the minimum number of bars required
+            before ``compute_fn`` output is valid. If None, the compiler falls
+            back to ``max(int params) * 2``.
+        requires_high_low: Indicator needs high/low price series (ATR, STOCH,
+            CCI, ADX, WILLR, KC, DONCHIAN, etc.).
+        requires_volume: Indicator needs volume series (MFI, OBV, VWAP,
+            VOLSMA).
+        display_name: Human-readable name for UI (falls back to ``name``).
+        description: One-line description for UI tooltips.
+        category: UI category — one of ``"Trend"``, ``"Momentum"``,
+            ``"Volatility"``, ``"Volume"``, or ``"Custom"``.
+        popular: Flag used by the UI to highlight commonly-used indicators.
+        param_ranges: Bounds the GA uses when mutating parameters, e.g.
+            ``{"period": (5, 50)}``.
+        threshold_range: Expected output range for threshold mutation in the
+            GA, e.g. ``(25.0, 75.0)`` for RSI. ``None`` excludes the indicator
+            from GA discovery (for price-relative indicators like EMA/SMA).
     """
 
     name: str
@@ -60,10 +108,47 @@ class IndicatorSpec:
     param_schema: dict[str, type]
     output_names: tuple[str, ...] = field(default=("value",))
 
+    # Callback-based dispatch (optional; populated during Phase 3 migration).
+    nt_kwargs_fn: Callable[[dict[str, object]], dict[str, object]] | None = None
+    compute_fn: (
+        Callable[[pd.DataFrame, dict[str, object]], Any]
+        | None
+    ) = None
+    nt_output_attrs: dict[str, str] = field(
+        default_factory=lambda: {"value": "value"}
+    )
+    computed_outputs: dict[str, str] = field(default_factory=dict)
+    pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
+
+    # Price-source requirements.
+    requires_high_low: bool = False
+    requires_volume: bool = False
+
+    # UI / catalog metadata (absorbed from indicator_metadata.py in Phase 7).
+    display_name: str = ""
+    description: str = ""
+    category: str = "Custom"
+    popular: bool = False
+
+    # GA enrollment metadata (absorbed from discovery/genome.py in Phase 6).
+    param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
+    threshold_range: tuple[float, float] | None = None
+
     def __post_init__(self) -> None:
-        """Validate indicator spec."""
-        if self.nt_class is None and self.pandas_ta_func is None:
-            msg = f"Indicator '{self.name}' must have nt_class or pandas_ta_func"
+        """Validate indicator spec.
+
+        A spec must be runnable via at least one execution path: ``nt_class``,
+        ``compute_fn``, or ``pandas_ta_func``.
+        """
+        if (
+            self.nt_class is None
+            and self.compute_fn is None
+            and self.pandas_ta_func is None
+        ):
+            msg = (
+                f"Indicator '{self.name}' must have nt_class, compute_fn, "
+                "or pandas_ta_func"
+            )
             raise ValueError(msg)
 
 
@@ -132,6 +217,18 @@ class IndicatorRegistry:
             Sorted list of indicator names
         """
         return sorted(self._indicators.keys())
+
+    def all_specs(self) -> list[IndicatorSpec]:
+        """Return every registered spec in name-sorted order.
+
+        Used by dynamic consumers (GA pool builder, frontend catalog API,
+        plugin discovery sanity checks) that need the full spec payload
+        rather than just names.
+
+        Returns:
+            List of IndicatorSpec sorted by name.
+        """
+        return [self._indicators[name] for name in sorted(self._indicators)]
 
     def is_nt_available(self) -> bool:
         """Check if NautilusTrader is available.
