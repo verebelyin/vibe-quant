@@ -411,3 +411,186 @@ class TestIndicatorRegistryIntegration:
         assert not missing, f"Schema indicators not in registry: {missing}"
 
         # Note: registry may have more than schema (registry is superset)
+
+
+class TestExtendedIndicatorSpecFields:
+    """Coverage for the callback-dispatch fields added by P1."""
+
+    def test_spec_accepts_compute_fn_without_nt_class(self) -> None:
+        """A spec with only compute_fn (no nt_class, no pandas_ta_func) is valid."""
+        # compute_fn is only type-checked; the runtime only checks the callable
+        # is not None, so a plain stub callable suffices (avoids importing
+        # pandas inside the test which triggers a numpy double-import under
+        # --cov in some environments).
+        def _noop_compute(
+            df: object, params: dict[str, object]
+        ) -> object:
+            return df
+
+        spec = IndicatorSpec(
+            name="COMPUTE_ONLY",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 14},
+            param_schema={"period": int},
+            compute_fn=_noop_compute,  # type: ignore[arg-type]
+        )
+        assert spec.nt_class is None
+        assert spec.pandas_ta_func is None
+        assert spec.compute_fn is _noop_compute
+
+    def test_spec_rejects_when_all_execution_paths_none(self) -> None:
+        """__post_init__ rejects a spec with none of the three paths."""
+        with pytest.raises(
+            ValueError,
+            match="must have nt_class, compute_fn, or pandas_ta_func",
+        ):
+            IndicatorSpec(
+                name="NO_PATH",
+                nt_class=None,
+                pandas_ta_func=None,
+                default_params={},
+                param_schema={},
+            )
+
+    def test_all_specs_returns_registered_set(self) -> None:
+        """all_specs() returns every registered spec in name-sorted order."""
+        registry = IndicatorRegistry()
+        registry.register_spec(
+            IndicatorSpec(
+                name="ZZZ",
+                nt_class=None,
+                pandas_ta_func="z",
+                default_params={},
+                param_schema={},
+            )
+        )
+        registry.register_spec(
+            IndicatorSpec(
+                name="AAA",
+                nt_class=None,
+                pandas_ta_func="a",
+                default_params={},
+                param_schema={},
+            )
+        )
+        specs = registry.all_specs()
+        assert [s.name for s in specs] == ["AAA", "ZZZ"]
+        assert all(isinstance(s, IndicatorSpec) for s in specs)
+
+    def test_all_specs_on_singleton_matches_list_indicators(self) -> None:
+        """The singleton registry's all_specs() and list_indicators() agree."""
+        names_from_specs = [s.name for s in indicator_registry.all_specs()]
+        names_from_list = indicator_registry.list_indicators()
+        assert names_from_specs == names_from_list
+
+    def test_extended_metadata_fields_persisted(self) -> None:
+        """Extended UI/GA fields round-trip through IndicatorSpec unchanged."""
+        spec = IndicatorSpec(
+            name="EXT",
+            nt_class=None,
+            pandas_ta_func="ext",
+            default_params={"period": 14},
+            param_schema={"period": int},
+            display_name="Extended",
+            description="Sample extended metadata",
+            category="Momentum",
+            popular=True,
+            param_ranges={"period": (5.0, 50.0)},
+            threshold_range=(20.0, 80.0),
+            requires_high_low=True,
+            requires_volume=False,
+            nt_output_attrs={"value": "value", "k": "k"},
+            computed_outputs={"percent_b": "compute_percent_b"},
+        )
+        assert spec.display_name == "Extended"
+        assert spec.description == "Sample extended metadata"
+        assert spec.category == "Momentum"
+        assert spec.popular is True
+        assert spec.param_ranges == {"period": (5.0, 50.0)}
+        assert spec.threshold_range == (20.0, 80.0)
+        assert spec.requires_high_low is True
+        assert spec.requires_volume is False
+        assert spec.nt_output_attrs == {"value": "value", "k": "k"}
+        assert spec.computed_outputs == {"percent_b": "compute_percent_b"}
+
+    def test_default_extended_metadata_fields(self) -> None:
+        """Extended fields have sensible defaults on a minimal spec."""
+        spec = IndicatorSpec(
+            name="MIN",
+            nt_class=None,
+            pandas_ta_func="min",
+            default_params={},
+            param_schema={},
+        )
+        assert spec.nt_kwargs_fn is None
+        assert spec.compute_fn is None
+        assert spec.nt_output_attrs == {"value": "value"}
+        assert spec.computed_outputs == {}
+        assert spec.pta_lookback_fn is None
+        assert spec.requires_high_low is False
+        assert spec.requires_volume is False
+        assert spec.display_name == ""
+        assert spec.description == ""
+        assert spec.category == "Custom"
+        assert spec.popular is False
+        assert spec.param_ranges == {}
+        assert spec.threshold_range is None
+
+    def test_default_nt_output_attrs_are_independent_instances(self) -> None:
+        """Default factory for nt_output_attrs does not share state between specs."""
+        a = IndicatorSpec(
+            name="A", nt_class=None, pandas_ta_func="a", default_params={}, param_schema={}
+        )
+        b = IndicatorSpec(
+            name="B", nt_class=None, pandas_ta_func="b", default_params={}, param_schema={}
+        )
+        # Frozen dataclass — use object.__setattr__ to mutate via the dict API
+        a.nt_output_attrs["extra"] = "x"
+        assert "extra" not in b.nt_output_attrs
+
+
+class TestBuiltinSpecsBackwardCompat:
+    """Built-in specs keep their pre-P1 shape (RSI, MACD, STOCH, BBANDS)."""
+
+    def test_rsi_backward_compat(self) -> None:
+        spec = indicator_registry.get("RSI")
+        assert spec is not None
+        assert spec.name == "RSI"
+        assert spec.pandas_ta_func == "rsi"
+        assert spec.default_params == {"period": 14}
+        assert spec.param_schema == {"period": int}
+        assert spec.output_names == ("value",)
+        # New fields default cleanly
+        assert spec.nt_output_attrs == {"value": "value"}
+        assert spec.threshold_range is None  # Phase 3 will populate
+
+    def test_macd_backward_compat(self) -> None:
+        spec = indicator_registry.get("MACD")
+        assert spec is not None
+        assert spec.default_params == {
+            "fast_period": 12,
+            "slow_period": 26,
+            "signal_period": 9,
+        }
+        assert spec.output_names == ("macd", "signal", "histogram")
+        assert spec.pandas_ta_func == "macd"
+        assert spec.nt_class is None  # intentional — MACD always uses pandas-ta
+
+    def test_stoch_backward_compat(self) -> None:
+        spec = indicator_registry.get("STOCH")
+        assert spec is not None
+        assert spec.output_names == ("k", "d")
+        assert spec.default_params == {"period_k": 14, "period_d": 3}
+
+    def test_bbands_backward_compat(self) -> None:
+        spec = indicator_registry.get("BBANDS")
+        assert spec is not None
+        assert spec.default_params == {"period": 20, "std_dev": 2.0}
+        assert spec.output_names == (
+            "upper",
+            "middle",
+            "lower",
+            "percent_b",
+            "bandwidth",
+        )
