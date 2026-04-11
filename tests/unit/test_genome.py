@@ -633,3 +633,106 @@ class TestBBandsDonchianGenome:
                     assert gene.sub_value == "position"
         assert bbands_seen, "BBANDS not seen in 500 random chromosomes"
         assert donchian_seen, "DONCHIAN not seen in 500 random chromosomes"
+
+
+# =============================================================================
+# P6: dynamic indicator pool built from the registry
+# =============================================================================
+
+
+class TestDynamicIndicatorPool:
+    """The GA pool is now built from indicator_registry.all_specs()."""
+
+    def test_build_indicator_pool_from_registry(self) -> None:
+        """Every spec with threshold_range AND param_ranges lands in the pool."""
+        from vibe_quant.discovery.genome import build_indicator_pool
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        pool = build_indicator_pool()
+        assert pool, "build_indicator_pool returned an empty pool"
+
+        # Every entry must correspond to a real spec that satisfies the
+        # enrollment criteria.
+        for name, ind_def in pool.items():
+            spec = indicator_registry.get(name)
+            assert spec is not None, f"{name} in pool but not in registry"
+            assert spec.threshold_range is not None
+            assert spec.param_ranges
+            # IndicatorDef copies spec fields verbatim.
+            assert ind_def.default_threshold_range == spec.threshold_range
+            assert ind_def.dsl_type == spec.name
+
+    def test_price_relative_indicators_excluded(self) -> None:
+        """EMA/SMA/WMA/DEMA/TEMA set threshold_range=None and stay out."""
+        from vibe_quant.discovery.genome import build_indicator_pool
+
+        pool = build_indicator_pool()
+        for price_relative in ("EMA", "SMA", "WMA", "DEMA", "TEMA"):
+            assert price_relative not in pool, (
+                f"{price_relative} is price-relative and must not auto-enroll "
+                f"in the GA pool — threshold=0 against an absolute price "
+                f"produces no trades."
+            )
+
+    def test_custom_plugin_with_threshold_range_auto_enrolls(self) -> None:
+        """Register a throwaway spec with threshold_range + param_ranges and
+        observe that it shows up in build_indicator_pool() immediately."""
+        from vibe_quant.discovery.genome import build_indicator_pool
+        from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+
+        def _noop_compute(df, params):  # noqa: ARG001
+            return df["close"]
+
+        spec = IndicatorSpec(
+            name="TESTGA_ENROLLED",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 10},
+            param_schema={"period": int},
+            compute_fn=_noop_compute,
+            param_ranges={"period": (5.0, 30.0)},
+            threshold_range=(10.0, 90.0),
+        )
+        indicator_registry.register_spec(spec)
+        try:
+            pool = build_indicator_pool()
+            assert "TESTGA_ENROLLED" in pool
+            entry = pool["TESTGA_ENROLLED"]
+            assert entry.param_ranges == {"period": (5.0, 30.0)}
+            assert entry.default_threshold_range == (10.0, 90.0)
+        finally:
+            indicator_registry._indicators.pop(  # type: ignore[attr-defined]
+                "TESTGA_ENROLLED", None
+            )
+
+    def test_custom_plugin_without_threshold_range_excluded(self) -> None:
+        """A plugin with param_ranges but threshold_range=None is skipped.
+
+        This is the same rule EMA/SMA/etc. rely on: price-relative
+        indicators have no sensible numeric threshold, so the GA would
+        only generate broken conditions. threshold_range=None acts as
+        the explicit opt-out knob for plugin authors."""
+        from vibe_quant.discovery.genome import build_indicator_pool
+        from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+
+        def _noop_compute(df, params):  # noqa: ARG001
+            return df["close"]
+
+        spec = IndicatorSpec(
+            name="TESTGA_EXCLUDED",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 10},
+            param_schema={"period": int},
+            compute_fn=_noop_compute,
+            param_ranges={"period": (5.0, 30.0)},
+            threshold_range=None,
+        )
+        indicator_registry.register_spec(spec)
+        try:
+            pool = build_indicator_pool()
+            assert "TESTGA_EXCLUDED" not in pool
+        finally:
+            indicator_registry._indicators.pop(  # type: ignore[attr-defined]
+                "TESTGA_EXCLUDED", None
+            )
