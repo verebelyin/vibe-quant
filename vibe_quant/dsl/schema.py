@@ -13,37 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # Valid timeframes supported by the system
 VALID_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h"})
 
-# Valid indicator types (MVP set from SPEC.md)
-VALID_INDICATOR_TYPES = frozenset(
-    {
-        # Trend
-        "EMA",
-        "SMA",
-        "WMA",
-        "DEMA",
-        "TEMA",
-        "ICHIMOKU",
-        # Momentum
-        "RSI",
-        "MACD",
-        "STOCH",
-        "CCI",
-        "WILLR",
-        "ROC",
-        "ADX",
-        # Volatility
-        "ATR",
-        "BBANDS",
-        "KC",
-        "DONCHIAN",
-        # Volume
-        "OBV",
-        "VWAP",
-        "MFI",
-        "VOLSMA",
-    }
-)
-
 # Valid price sources for indicators
 VALID_SOURCES = frozenset({"open", "high", "low", "close", "volume", "hl2", "hlc3", "ohlc4"})
 
@@ -104,10 +73,20 @@ class IndicatorConfig(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_indicator_type(cls, v: str) -> str:
-        """Validate indicator type is supported."""
+        """Validate indicator type is registered in the indicator registry.
+
+        Queries ``indicator_registry`` at validation time so plugins dropped
+        into ``vibe_quant/dsl/plugins/`` (Phase 6+) are accepted the moment
+        their spec is registered — no schema edits required. The registry
+        is the single source of truth for valid indicator names.
+        """
+        # Local import avoids circular dependency: indicator_registry imports
+        # nothing from schema, but plugin loader can import from schema.
+        from vibe_quant.dsl.indicators import indicator_registry
+
         upper_v = v.upper()
-        if upper_v not in VALID_INDICATOR_TYPES:
-            valid_list = ", ".join(sorted(VALID_INDICATOR_TYPES))
+        if indicator_registry.get(upper_v) is None:
+            valid_list = ", ".join(indicator_registry.list_indicators())
             msg = f"Invalid indicator type '{v}'. Valid types: {valid_list}"
             raise ValueError(msg)
         return upper_v

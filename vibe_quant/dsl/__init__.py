@@ -62,7 +62,6 @@ from vibe_quant.dsl.parser import (
     validate_strategy_dict,
 )
 from vibe_quant.dsl.schema import (
-    VALID_INDICATOR_TYPES,
     VALID_SOURCES,
     VALID_STOP_LOSS_TYPES,
     VALID_TAKE_PROFIT_TYPES,
@@ -93,7 +92,6 @@ __all__ = [
     "PositionManagementConfig",
     # Schema constants
     "VALID_TIMEFRAMES",
-    "VALID_INDICATOR_TYPES",
     "VALID_SOURCES",
     "VALID_STOP_LOSS_TYPES",
     "VALID_TAKE_PROFIT_TYPES",

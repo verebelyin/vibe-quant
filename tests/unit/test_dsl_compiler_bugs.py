@@ -6,7 +6,6 @@ import pytest
 
 from vibe_quant.dsl import StrategyCompiler, parse_strategy_string
 from vibe_quant.dsl.indicators import indicator_registry
-from vibe_quant.dsl.schema import VALID_INDICATOR_TYPES
 
 # =============================================================================
 # Bug 1: vibe-quant-nhy7 -- TEMA nt_class=None
@@ -224,15 +223,11 @@ take_profit:
 
 
 class TestIchimokuVolsma:
-    """ICHIMOKU and VOLSMA must exist in schema and registry."""
+    """ICHIMOKU and VOLSMA must exist in the registry.
 
-    def test_ichimoku_in_valid_types(self) -> None:
-        """ICHIMOKU in VALID_INDICATOR_TYPES."""
-        assert "ICHIMOKU" in VALID_INDICATOR_TYPES
-
-    def test_volsma_in_valid_types(self) -> None:
-        """VOLSMA in VALID_INDICATOR_TYPES."""
-        assert "VOLSMA" in VALID_INDICATOR_TYPES
+    Post-P5 the schema validator queries ``indicator_registry`` directly,
+    so "in schema" and "in registry" collapsed to a single check.
+    """
 
     def test_ichimoku_in_registry(self) -> None:
         """ICHIMOKU registered with pandas-ta fallback."""
@@ -249,12 +244,6 @@ class TestIchimokuVolsma:
         assert spec.pandas_ta_func == "sma"
         assert spec.nt_class is None
         assert spec.default_params == {"period": 20}
-
-    def test_schema_and_registry_in_sync(self) -> None:
-        """All VALID_INDICATOR_TYPES are in registry."""
-        registered = set(indicator_registry.list_indicators())
-        missing = set(VALID_INDICATOR_TYPES) - registered
-        assert not missing, f"Schema types not in registry: {missing}"
 
     def test_volsma_strategy_parses(self) -> None:
         """Strategy using VOLSMA parses without error."""

@@ -192,18 +192,13 @@ def test_compile_multi_output_nt_partial_coverage(
     so a condition on ``foo.extra`` must flip the whole indicator onto the
     compute_fn path — we should NOT see ``MockNtInd(`` in the output and
     we SHOULD see a ``_compute_dummy_multi`` import + call.
-    """
-    # Patch schema validator: the DSL parser's validator reads
-    # ``VALID_INDICATOR_TYPES`` at import time and this frozenset is the
-    # authoritative gate until Phase 5 lands. Register the mock name into
-    # it so ``parse_strategy_string`` accepts ``TESTPARTIAL``.
-    from vibe_quant.dsl import schema as _schema
 
-    original = _schema.VALID_INDICATOR_TYPES
-    _schema.VALID_INDICATOR_TYPES = frozenset({*original, "TESTPARTIAL"})
-    try:
-        source = _compile(
-            """
+    Post-P5 the schema validator queries ``indicator_registry`` directly,
+    so registering ``TESTPARTIAL`` via the fixture is enough — no schema
+    monkey-patching needed.
+    """
+    source = _compile(
+        """
 name: partial_nt_cov
 timeframe: 5m
 indicators:
@@ -220,9 +215,7 @@ take_profit:
   type: fixed_pct
   percent: 3.0
 """
-        )
-    finally:
-        _schema.VALID_INDICATOR_TYPES = original
+    )
 
     # The mock "NT" class name must be absent — the indicator should have
     # been forced onto compute_fn by the sub-output fallback.

@@ -400,17 +400,26 @@ class TestNTIndicatorCreation:
 class TestIndicatorRegistryIntegration:
     """Integration tests for indicator registry with DSL schema."""
 
-    def test_all_schema_indicators_registered(self) -> None:
-        """All indicators in DSL schema VALID_INDICATOR_TYPES are registered."""
-        from vibe_quant.dsl.schema import VALID_INDICATOR_TYPES
+    def test_core_indicators_registered(self) -> None:
+        """The SPEC.md MVP indicator set must all live in the registry.
 
+        Post-P5 the schema is backed by the registry (no more static
+        ``VALID_INDICATOR_TYPES`` frozenset), so this test just pins the
+        MVP set so shrinking the registry never silently drops a core name.
+        """
+        required = {
+            # Trend
+            "EMA", "SMA", "WMA", "DEMA", "TEMA", "ICHIMOKU",
+            # Momentum
+            "RSI", "MACD", "STOCH", "CCI", "WILLR", "ROC", "ADX",
+            # Volatility
+            "ATR", "BBANDS", "KC", "DONCHIAN",
+            # Volume
+            "OBV", "VWAP", "MFI", "VOLSMA",
+        }
         registered = set(indicator_registry.list_indicators())
-        schema_types = set(VALID_INDICATOR_TYPES)
-
-        missing = schema_types - registered
-        assert not missing, f"Schema indicators not in registry: {missing}"
-
-        # Note: registry may have more than schema (registry is superset)
+        missing = required - registered
+        assert not missing, f"Core MVP indicators not in registry: {missing}"
 
 
 class TestExtendedIndicatorSpecFields:
