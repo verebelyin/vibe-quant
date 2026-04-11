@@ -26,7 +26,7 @@ Autonomous loop: pick bead, validate, implement, test, commit, push. Repeat.
    - Check if the code/feature it references still exists
    - Check if another bead already fixed it
    - If irrelevant → bd close <id> --reason="no longer relevant" → goto 1
-5. bd update <id> --status in_progress
+5. bd update <id> --claim
 6. IMPLEMENT:
    - Read relevant source files first
    - Follow existing code style and patterns
@@ -41,7 +41,6 @@ Autonomous loop: pick bead, validate, implement, test, commit, push. Repeat.
    - git add <specific_files>
    - git commit -m "<type>: <longer description about the changes> (bd-<short_id>)"
    - bd close <id>
-   - bd sync
    - git push
 9. goto 1
 ```

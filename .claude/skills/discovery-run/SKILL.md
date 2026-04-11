@@ -496,7 +496,7 @@ done
 
 ```bash
 bd create --title="[discovery-run] <error description>" --type=bug --priority=2
-bd sync && git push
+git push
 ```
 
 ### Phase 9: Summary Table
@@ -536,9 +536,7 @@ Append a new batch entry to `docs/discovery-journal.md` following the exact form
 
 ```bash
 git add docs/discovery-journal.md
-bd sync
 git commit -m "feat: Batch N discovery journal — <summary>"
-bd sync
 git push
 ```
 

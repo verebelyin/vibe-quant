@@ -1,16 +1,17 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **bd** (beads) for issue tracking. Run `bd prime` to load workflow context.
 
 ## Quick Reference
 
 ```bash
 bd ready              # Find available work
 bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
+bd update <id> --claim  # Claim work
 bd close <id>         # Complete work
-bd sync               # Sync with git
 ```
+
+**Version:** bd 1.0.0+ — embedded Dolt backend, no daemon, no `bd sync`. Auto-commits locally on every mutation. Rules: use `bd` for ALL task tracking (no TodoWrite / markdown lists); use `bd remember` for persistent project knowledge.
 
 ## Landing the Plane (Session Completion)
 
@@ -24,7 +25,6 @@ bd sync               # Sync with git
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -38,3 +38,4 @@ bd sync               # Sync with git
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+**Optional: memory durability.** `.beads/embeddeddolt/` is gitignored, so memories from `bd remember` are machine-local by default. If you want them backed up off-machine, run `bd dolt push` (writes to `refs/dolt/data` on the same remote). Not part of the mandatory flow — matches beads team's default.

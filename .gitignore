@@ -80,3 +80,10 @@ new-gpt-review*.md
 # uv
 .uv/
 uv.lock
+
+# Beads embedded-Dolt store (the rest is covered by .beads/.gitignore)
+.dolt/
+
+# Local-only bd v0.49 → v1.0.0 migration backups (disaster recovery)
+.beads.backup-v0.49/
+.beads.old-sqlite/
