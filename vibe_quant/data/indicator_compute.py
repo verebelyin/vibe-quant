@@ -14,29 +14,23 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from vibe_quant.api.schemas.data import IndicatorSeries, IndicatorSeriesPoint
-from vibe_quant.dsl.indicator_metadata import INDICATOR_CATALOG
+from vibe_quant.dsl.indicators import indicator_registry
 
 logger = logging.getLogger(__name__)
 
-# Indicator types that render on the price chart (overlay)
-_OVERLAY_CATEGORIES = {"Trend", "Volatility"}
-# These volatility indicators are overlays (bands on price)
-_OVERLAY_TYPES = {"BBANDS", "KC", "DONCHIAN", "ICHIMOKU", "VWAP"}
-# Everything else in Momentum/Volume goes to oscillator pane
-_OSCILLATOR_TYPES = {"RSI", "MACD", "STOCH", "CCI", "WILLR", "ROC", "ADX", "MFI", "OBV", "ATR"}
-
 
 def _classify_pane(indicator_type: str) -> str:
-    """Classify indicator as overlay or oscillator."""
-    upper = indicator_type.upper()
-    if upper in _OVERLAY_TYPES:
-        return "overlay"
-    if upper in _OSCILLATOR_TYPES:
+    """Classify indicator as overlay or oscillator.
+
+    Reads ``IndicatorSpec.chart_placement`` directly from the registry
+    (post-P7 single source of truth). Falls back to ``"oscillator"`` for
+    unknown types — matches the pre-refactor behavior for anything that
+    slipped through the old OVERLAY/OSCILLATOR sets.
+    """
+    spec = indicator_registry.get(indicator_type.upper())
+    if spec is None:
         return "oscillator"
-    meta = INDICATOR_CATALOG.get(upper)
-    if meta and meta.category in _OVERLAY_CATEGORIES:
-        return "overlay"
-    return "oscillator"
+    return spec.chart_placement
 
 
 def _make_display_label(indicator_type: str, output_name: str, params: dict[str, Any]) -> str:

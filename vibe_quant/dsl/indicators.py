@@ -142,6 +142,13 @@ class IndicatorSpec:
     description: str = ""
     category: str = "Custom"
     popular: bool = False
+    # How the indicator should be rendered on the frontend candlestick
+    # chart: ``"overlay"`` sits on top of the price panel (BBANDS, KC,
+    # DONCHIAN, ICHIMOKU, VWAP, moving averages), ``"oscillator"`` gets
+    # its own sub-pane below price (RSI, MACD, STOCH, ATR, etc.).
+    # Consumed by ``vibe_quant/data/indicator_compute.py`` and, in Phase 8,
+    # by the frontend catalog API.
+    chart_placement: str = "oscillator"
 
     # GA enrollment metadata. threshold_range=None + empty param_ranges →
     # the spec is excluded from build_indicator_pool().
@@ -496,6 +503,7 @@ def _ema_spec() -> IndicatorSpec:
         ),
         category="Trend",
         popular=True,
+        chart_placement="overlay",
         # Price-relative indicator → intentionally excluded from GA
         # (threshold_range=None keeps it out of the GA pool).
     )
@@ -515,6 +523,7 @@ def _sma_spec() -> IndicatorSpec:
         display_name="Simple Moving Average",
         description="Equal-weighted average of last N closing prices. Smooth but lagging.",
         category="Trend",
+        chart_placement="overlay",
     )
 
 
@@ -532,6 +541,7 @@ def _wma_spec() -> IndicatorSpec:
         display_name="Weighted Moving Average",
         description="Linearly-weighted moving average. Middle ground between SMA and EMA.",
         category="Trend",
+        chart_placement="overlay",
     )
 
 
@@ -549,6 +559,7 @@ def _dema_spec() -> IndicatorSpec:
         display_name="Double EMA",
         description="Double-smoothed EMA that reduces lag while maintaining smoothness.",
         category="Trend",
+        chart_placement="overlay",
     )
 
 
@@ -567,6 +578,7 @@ def _tema_spec() -> IndicatorSpec:
         display_name="Triple EMA",
         description="Triple-smoothed EMA with even less lag than DEMA.",
         category="Trend",
+        chart_placement="overlay",
     )
 
 
@@ -771,6 +783,7 @@ def _bbands_spec() -> IndicatorSpec:
         ),
         category="Volatility",
         popular=True,
+        chart_placement="overlay",
         param_ranges={"period": (5.0, 50.0), "std_dev": (1.0, 3.0)},
         threshold_range=(0.0, 1.0),
     )
@@ -795,6 +808,7 @@ def _kc_spec() -> IndicatorSpec:
         display_name="Keltner Channel",
         description="ATR-based envelope around EMA. More stable than Bollinger Bands.",
         category="Volatility",
+        chart_placement="overlay",
         # KC is not in the legacy INDICATOR_POOL → stays out of GA
         # (threshold_range=None keeps build_indicator_pool from enrolling it).
     )
@@ -822,6 +836,7 @@ def _donchian_spec() -> IndicatorSpec:
             "Classic breakout indicator (turtle trading)."
         ),
         category="Volatility",
+        chart_placement="overlay",
         param_ranges={"period": (5.0, 50.0)},
         threshold_range=(0.0, 1.0),
     )
@@ -866,6 +881,7 @@ def _vwap_spec() -> IndicatorSpec:
         ),
         category="Volume",
         popular=True,
+        chart_placement="overlay",
     )
 
 
@@ -919,6 +935,7 @@ def _ichimoku_spec() -> IndicatorSpec:
             "cloud of support/resistance."
         ),
         category="Trend",
+        chart_placement="overlay",
     )
 
 
@@ -940,6 +957,46 @@ def _volsma_spec() -> IndicatorSpec:
         description="Simple moving average of volume — baseline for volume-anomaly filters.",
         category="Volume",
     )
+
+
+# -----------------------------------------------------------------------------
+# Public name-suggestion helper (ported from indicator_metadata.py in P7).
+# Pure name logic — uses only the registry for the period lookup.
+# -----------------------------------------------------------------------------
+
+
+def suggest_indicator_name(type_name: str, existing_names: set[str]) -> str:
+    """Suggest a unique DSL-indicator name for a given type.
+
+    Patterns:
+        - ``RSI`` with no collision → ``rsi_14`` (period-suffixed)
+        - ``MACD`` (no period in defaults) → ``macd``
+        - Collision → append ``_2``, ``_3``, … until unique
+
+    Args:
+        type_name: Indicator type (case-insensitive).
+        existing_names: Names already in use in the current strategy.
+
+    Returns:
+        A name guaranteed not to be in ``existing_names``.
+    """
+    upper = type_name.upper()
+    spec = indicator_registry.get(upper)
+
+    period = None
+    if spec is not None:
+        period_val = spec.default_params.get("period")
+        if isinstance(period_val, (int, float)):
+            period = int(period_val)
+
+    base = f"{upper.lower()}_{period}" if period is not None else upper.lower()
+    if base not in existing_names:
+        return base
+    for i in range(2, 100):
+        candidate = f"{base}_{i}"
+        if candidate not in existing_names:
+            return candidate
+    return f"{base}_99"
 
 
 # -----------------------------------------------------------------------------
