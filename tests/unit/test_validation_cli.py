@@ -35,7 +35,7 @@ def test_main_unpacks_run_with_heartbeat_tuple(tmp_path: Path, monkeypatch) -> N
             self.db_path = db_path
             self.closed = False
 
-        def run(self, run_id: int):  # noqa: ANN001
+        def run(self, run_id: int, **kwargs: object):  # noqa: ANN001
             class Result:
                 sharpe_ratio = 1.23
                 total_return = 0.05
