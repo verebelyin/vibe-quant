@@ -372,28 +372,23 @@ class StrategyCompiler:
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
         ]
 
-        # Collect unique indicator classes
+        # Single pass: collect NT classes, compute_fn imports, and derived helpers.
         nt_classes: dict[str, str] = {}  # class_name -> module_path
         compute_fn_imports: dict[str, set[str]] = {}  # module_path -> {fn_name}
+        derived_helpers: set[str] = set()
         has_pta = False
         for info in indicators:
             if info.spec.nt_class is not None:
                 class_name = info.spec.nt_class.__name__
                 module_path = info.spec.nt_class.__module__
                 nt_classes[class_name] = module_path
+                # NT-path indicators with computed_outputs need derived helpers.
+                for helper_name in info.spec.computed_outputs.values():
+                    derived_helpers.add(helper_name)
             elif info.spec.compute_fn is not None:
                 has_pta = True
                 fn = info.spec.compute_fn
                 compute_fn_imports.setdefault(fn.__module__, set()).add(fn.__name__)
-
-        # Collect derived-output helpers (percent_b, bandwidth, position, ...)
-        # from specs whose computed_outputs dict is non-empty AND which are on
-        # the NT path (compute_fn path returns the derived values directly).
-        derived_helpers: set[str] = set()
-        for info in indicators:
-            if info.spec.nt_class is not None and info.spec.computed_outputs:
-                for helper_name in info.spec.computed_outputs.values():
-                    derived_helpers.add(helper_name)
 
         # Add indicator imports
         if nt_classes:
@@ -779,11 +774,12 @@ class StrategyCompiler:
         spec = info.spec
 
         if spec.nt_class is None:
-            label = spec.pandas_ta_func or (
-                spec.compute_fn.__name__ if spec.compute_fn is not None else "?"
+            label = (
+                spec.compute_fn.__name__ if spec.compute_fn is not None
+                else spec.pandas_ta_func or "?"
             )
             lines.append(
-                f"    # {info.name} ({info.config.type}): pandas-ta fallback via ta.{label}"
+                f"    # {info.name} ({info.config.type}): compute_fn path via {label}"
             )
             return lines
 
@@ -1188,13 +1184,7 @@ class StrategyCompiler:
         lines = [
             "def _update_pta_indicators(self) -> None:",
             '    """Compute compute_fn-path indicators from bar buffer."""',
-            "    _df = pd.DataFrame({",
-            '        "open": self._pta_open,',
-            '        "high": self._pta_high,',
-            '        "low": self._pta_low,',
-            '        "close": self._pta_close,',
-            '        "volume": self._pta_volume,',
-            "    })",
+            "    _df = None",
         ]
 
         for info in pta_indicators:
@@ -1208,6 +1198,8 @@ class StrategyCompiler:
 
             lines.append(f"    # {info.name} ({info.config.type}) via {fn_name} — lookback {lookback}")
             lines.append(f"    if len(self._pta_close) >= {lookback}:")
+            lines.append("        if _df is None:")
+            lines.append('            _df = pd.DataFrame({"open": self._pta_open, "high": self._pta_high, "low": self._pta_low, "close": self._pta_close, "volume": self._pta_volume})')
             lines.append(f"        _res = {fn_name}(_df, {params_literal})")
 
             if len(spec.output_names) > 1:
@@ -1232,28 +1224,34 @@ class StrategyCompiler:
 
         return lines
 
-    @staticmethod
-    def _compile_pta_params_literal(info: IndicatorInfo) -> str:
-        """Build a Python-literal dict string for the ``compute_fn`` call.
+    _DSL_CONFIG_FIELDS: tuple[str, ...] = (
+        "period",
+        "fast_period",
+        "slow_period",
+        "signal_period",
+        "d_period",
+        "std_dev",
+        "atr_multiplier",
+    )
 
-        Starts from ``spec.default_params`` and overlays any
-        IndicatorConfig fields that were explicitly set in the DSL, so
-        user overrides flow through even though the compute_fn call is
-        emitted with hardcoded values (matching pre-refactor behavior).
+    @staticmethod
+    def _merge_effective_params(info: IndicatorInfo) -> dict[str, object]:
+        """Overlay DSL IndicatorConfig overrides on top of spec defaults.
+
+        Called by both ``_compile_pta_params_literal`` and
+        ``_get_pta_lookback`` so the merge logic lives in one place.
         """
         merged: dict[str, object] = dict(info.spec.default_params)
-        for dsl_field in (
-            "period",
-            "fast_period",
-            "slow_period",
-            "signal_period",
-            "d_period",
-            "std_dev",
-            "atr_multiplier",
-        ):
+        for dsl_field in StrategyCompiler._DSL_CONFIG_FIELDS:
             val = getattr(info.config, dsl_field, None)
             if val is not None:
                 merged[dsl_field] = val
+        return merged
+
+    @staticmethod
+    def _compile_pta_params_literal(info: IndicatorInfo) -> str:
+        """Build a Python-literal dict string for the ``compute_fn`` call."""
+        merged = StrategyCompiler._merge_effective_params(info)
         pairs = ", ".join(f'"{k}": {v!r}' for k, v in merged.items())
         return "{" + pairs + "}"
 
@@ -1263,23 +1261,10 @@ class StrategyCompiler:
 
         Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD,
         ICHIMOKU have custom formulas). Default: read ``period`` from the
-        effective param dict — matches pre-refactor behavior for every
-        single-period pandas-ta indicator.
+        effective param dict.
         """
         spec = info.spec
-        merged: dict[str, object] = dict(spec.default_params)
-        for dsl_field in (
-            "period",
-            "fast_period",
-            "slow_period",
-            "signal_period",
-            "d_period",
-            "std_dev",
-            "atr_multiplier",
-        ):
-            val = getattr(info.config, dsl_field, None)
-            if val is not None:
-                merged[dsl_field] = val
+        merged = StrategyCompiler._merge_effective_params(info)
         if spec.pta_lookback_fn is not None:
             return int(spec.pta_lookback_fn(merged))
         period = merged.get("period")

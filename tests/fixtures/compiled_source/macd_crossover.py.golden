@@ -118,7 +118,7 @@ class MacdCrossoverStrategy(Strategy):
         self.subscribe_bars(self.bar_type_15m)
 
         # Initialize and register indicators
-        # macd (MACD): pandas-ta fallback via ta.macd
+        # macd (MACD): compute_fn path via compute_macd
         self.ind_ema_fast = ExponentialMovingAverage(period=self.config.ema_fast_period)
         self.register_indicator_for_bars(self.bar_type_15m, self.ind_ema_fast)
         self.ind_ema_slow = ExponentialMovingAverage(period=self.config.ema_slow_period)
@@ -261,15 +261,11 @@ class MacdCrossoverStrategy(Strategy):
 
     def _update_pta_indicators(self) -> None:
         """Compute compute_fn-path indicators from bar buffer."""
-        _df = pd.DataFrame({
-            "open": self._pta_open,
-            "high": self._pta_high,
-            "low": self._pta_low,
-            "close": self._pta_close,
-            "volume": self._pta_volume,
-        })
+        _df = None
         # macd (MACD) via compute_macd — lookback 35
         if len(self._pta_close) >= 35:
+            if _df is None:
+                _df = pd.DataFrame({"open": self._pta_open, "high": self._pta_high, "low": self._pta_low, "close": self._pta_close, "volume": self._pta_volume})
             _res = compute_macd(_df, {"fast_period": 12, "slow_period": 26, "signal_period": 9})
             if isinstance(_res, dict):
                 _primary = _res.get("macd")
