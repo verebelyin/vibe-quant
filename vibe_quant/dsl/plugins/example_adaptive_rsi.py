@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from vibe_quant.dsl.compute_builtins import float_param, int_param
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 if TYPE_CHECKING:
@@ -45,13 +46,17 @@ if TYPE_CHECKING:
 
 
 def _efficiency_ratio(close: np.ndarray, period: int) -> np.ndarray:
-    """Kaufman efficiency ratio: abs(direction) / volatility."""
+    """Kaufman efficiency ratio: abs(direction) / volatility.
+
+    Vectorized: uses ``np.convolve`` for the rolling sum of absolute
+    price changes instead of a Python-level loop.
+    """
     direction = np.abs(close[period:] - close[:-period])
-    volatility = np.zeros_like(direction)
     abs_diff = np.abs(np.diff(close))
-    for i in range(len(direction)):
-        volatility[i] = abs_diff[i : i + period].sum()
-    # Avoid division by zero
+    # Rolling sum of abs_diff over `period` bars via convolve.
+    volatility = np.convolve(abs_diff, np.ones(period), mode="full")[
+        period - 1 : period - 1 + len(direction)
+    ]
     with np.errstate(divide="ignore", invalid="ignore"):
         er = np.where(volatility > 0, direction / volatility, 0.0)
     return er
@@ -71,8 +76,8 @@ def compute_adaptive_rsi(
     """
     import pandas as pd
 
-    period = int(params.get("period", 14))  # type: ignore[arg-type]
-    alpha = float(params.get("alpha", 0.5))  # type: ignore[arg-type]
+    period = int_param(params, "period", 14)
+    alpha = float_param(params, "alpha", 0.5)
 
     close = df["close"].to_numpy(dtype=np.float64)
     n = len(close)

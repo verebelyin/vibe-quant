@@ -19,7 +19,7 @@ import {
   type IndicatorCategory,
   TIMEFRAMES,
 } from "./types";
-import { useIndicatorCatalog, type ApiIndicatorEntry } from "@/hooks/useIndicatorCatalog";
+import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
 
 interface IndicatorsTabProps {
   config: DslConfig;
@@ -28,6 +28,7 @@ interface IndicatorsTabProps {
 
 type ExtendedCategory = IndicatorCategory | "Custom";
 const CATEGORIES: ExtendedCategory[] = ["Trend", "Momentum", "Volatility", "Volume", "Custom"];
+const KNOWN_CATEGORIES = new Set<string>(CATEGORIES.filter((c) => c !== "Custom"));
 
 const CATEGORY_COLORS: Record<ExtendedCategory, string> = {
   Trend: "bg-blue-500/10 text-blue-600 border-blue-200",
@@ -49,11 +50,8 @@ interface CatalogDisplayEntry {
 /** Merge hardcoded catalog with API entries, adding plugin indicators. */
 function useMergedCatalog(): CatalogDisplayEntry[] {
   const catalogQuery = useIndicatorCatalog();
-  const apiEntries: ApiIndicatorEntry[] =
-    catalogQuery.data?.status === 200 ? catalogQuery.data.data.indicators : [];
 
   return useMemo(() => {
-    // Start with hardcoded entries (they have emoji + curated descriptions)
     const hardcodedByType = new Map(INDICATOR_CATALOG.map((e) => [e.type, e]));
     const merged: CatalogDisplayEntry[] = INDICATOR_CATALOG.map((e) => ({
       type: e.type,
@@ -64,7 +62,9 @@ function useMergedCatalog(): CatalogDisplayEntry[] {
       defaultParams: getDefaultParams(e.type),
     }));
 
-    // Append API-only entries (plugins) not in the hardcoded set
+    const apiEntries =
+      catalogQuery.data?.status === 200 ? catalogQuery.data.data.indicators : [];
+
     for (const api of apiEntries) {
       if (!hardcodedByType.has(api.type_name)) {
         merged.push({
@@ -72,7 +72,7 @@ function useMergedCatalog(): CatalogDisplayEntry[] {
           name: api.display_name || api.type_name,
           emoji: "\u{1F9EA}",
           description: api.description || "Custom indicator plugin",
-          category: (["Trend", "Momentum", "Volatility", "Volume"].includes(api.category)
+          category: (KNOWN_CATEGORIES.has(api.category)
             ? api.category
             : "Custom") as ExtendedCategory,
           defaultParams: api.default_params,
@@ -80,12 +80,17 @@ function useMergedCatalog(): CatalogDisplayEntry[] {
       }
     }
     return merged;
-  }, [apiEntries]);
+  }, [catalogQuery.data]);
 }
 
-function IndicatorCatalog({ onAdd }: { onAdd: (type: string, defaults: Record<string, number>) => void }) {
+function IndicatorCatalog({
+  catalog,
+  onAdd,
+}: {
+  catalog: CatalogDisplayEntry[];
+  onAdd: (type: string, defaults: Record<string, number>) => void;
+}) {
   const [filterCategory, setFilterCategory] = useState<ExtendedCategory | "all">("all");
-  const catalog = useMergedCatalog();
 
   const filtered =
     filterCategory === "all"
@@ -167,7 +172,6 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
   const [showCatalog, setShowCatalog] = useState(config.indicators.length === 0);
   const catalog = useMergedCatalog();
 
-  // Derive indicator type list from merged catalog
   const indicatorTypes = useMemo(() => catalog.map((c) => c.type), [catalog]);
 
   const updateIndicators = (indicators: DslIndicator[]) => {
@@ -221,7 +225,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
         </Button>
       </div>
 
-      {showCatalog && <IndicatorCatalog onAdd={addIndicator} />}
+      {showCatalog && <IndicatorCatalog catalog={catalog} onAdd={addIndicator} />}
 
       {config.indicators.length === 0 && !showCatalog && (
         <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">

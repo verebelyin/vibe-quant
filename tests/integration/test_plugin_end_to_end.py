@@ -149,14 +149,12 @@ def test_adaptive_rsi_golden_values() -> None:
     # Smoke: the adaptive RSI should not be constant (it adapts)
     assert valid.std() > 1.0, "Adaptive RSI has suspiciously low variance"
 
-    # Pin a few specific values (computed once and verified by hand).
-    # These catch formula regressions without being platform-brittle
-    # (we use a wide tolerance of 0.5 RSI points).
-    assert abs(result.iloc[20] - result.iloc[20]) < 0.01  # tautology sanity
-    # The 50th value should be somewhere reasonable (not NaN, not pegged)
-    v50 = result.iloc[50]
-    assert not np.isnan(v50)
-    assert 5.0 < v50 < 95.0, f"RSI at bar 50 seems extreme: {v50}"
+    # Pin a few specific values (computed once on seed=42 fixture and
+    # verified by hand). Tolerance of 0.5 RSI points absorbs minor
+    # floating-point platform differences.
+    assert abs(result.iloc[20] - 47.66) < 0.5, f"bar 20 regression: {result.iloc[20]:.4f}"
+    assert abs(result.iloc[50] - 42.77) < 0.5, f"bar 50 regression: {result.iloc[50]:.4f}"
+    assert abs(result.iloc[80] - 44.79) < 0.5, f"bar 80 regression: {result.iloc[80]:.4f}"
 
 
 def test_adaptive_rsi_edge_flat_market() -> None:
