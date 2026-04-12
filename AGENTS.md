@@ -39,3 +39,7 @@ bd close <id>         # Complete work
 - If push fails, resolve and retry until it succeeds
 
 **Optional: memory durability.** `.beads/embeddeddolt/` is gitignored, so memories from `bd remember` are machine-local by default. If you want them backed up off-machine, run `bd dolt push` (writes to `refs/dolt/data` on the same remote). Not part of the mandatory flow — matches beads team's default.
+
+## Custom Indicators (Plugin System)
+
+To add a new indicator: drop a `.py` file in `vibe_quant/dsl/plugins/`. The file registers an `IndicatorSpec` with `compute_fn`, `param_ranges`, and `threshold_range`. Auto-loaded at startup, auto-enrolled in GA discovery, auto-exposed via `/api/indicators/catalog`. See `vibe_quant/dsl/plugins/README.md` for the full field reference and a working example (`example_adaptive_rsi.py`).

@@ -152,7 +152,7 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 - **License:** MIT project. NautilusTrader (LGPL-3.0) used as unmodified library dependency -- this is acceptable. Never modify NT source. Avoid AGPL dependencies.
 - **Secrets:** API keys in env vars only, never in code.
 - **SQLite:** Always enable WAL mode (`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`) on every connection.
-- **Indicators:** Prefer NautilusTrader built-in (Rust) indicators. Fall back to `pandas-ta-classic` for exotic ones. Never use the original `pandas-ta` (compromised maintainership).
+- **Indicators:** Prefer NautilusTrader built-in (Rust) indicators. Fall back to `pandas-ta-classic` for exotic ones. Never use the original `pandas-ta` (compromised maintainership). Custom indicators: drop a `.py` file in `vibe_quant/dsl/plugins/` — see [`plugins/README.md`](vibe_quant/dsl/plugins/README.md) for the full extension API.
 - **Data:** Raw downloaded data archived in SQLite before processing to ParquetDataCatalog. Catalog is rebuildable from archive.
 
 ## Issue Tracking (Beads)

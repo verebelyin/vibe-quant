@@ -608,6 +608,8 @@ sweep:
 
 **Indicator mapping**: Each DSL indicator type maps to both a NautilusTrader built-in indicator class (Rust, used at runtime) and a pandas-ta-classic function (used for ad-hoc research). The NautilusTrader indicators are preferred at runtime for performance.
 
+**Plugin extension**: Custom indicators can be added by dropping a `.py` file in `vibe_quant/dsl/plugins/`. Each plugin registers an `IndicatorSpec` declaring its `compute_fn`, parameter metadata, and GA enrollment fields. The compiler, schema validator, GA pool, and frontend catalog all read from the live `indicator_registry` — no per-indicator edits required. See `vibe_quant/dsl/plugins/README.md` for the full API.
+
 ### Condition Operators
 
 ```
