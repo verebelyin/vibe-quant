@@ -1,13 +1,12 @@
 """Tests for population diversity metrics and interventions."""
 
-import math
 
 import pytest
 
 from vibe_quant.discovery.diversity import (
+    inject_random_immigrants,
     population_entropy,
     should_inject_immigrants,
-    inject_random_immigrants,
 )
 from vibe_quant.discovery.operators import (
     ConditionType,
@@ -47,9 +46,22 @@ class TestPopulationEntropy:
         assert ent == pytest.approx(0.0, abs=1e-6)
 
     def test_diverse_population_high_entropy(self) -> None:
-        """Population with varied indicators has high entropy."""
+        """Population with varied indicators, directions, and conditions has high entropy."""
         indicators = ["RSI", "ATR", "CCI", "MFI", "ADX", "STOCH", "WILLR", "ROC"]
-        pop = [_chrom(indicators[i % len(indicators)]) for i in range(16)]
+        directions = [Direction.LONG, Direction.SHORT]
+        conditions = [ConditionType.GT, ConditionType.LT, ConditionType.CROSSES_ABOVE, ConditionType.CROSSES_BELOW]
+        pop = []
+        for i in range(16):
+            ind = indicators[i % len(indicators)]
+            d = directions[i % len(directions)]
+            gene = StrategyGene(
+                indicator_type=ind, parameters={"period": 14.0},
+                condition=conditions[i % len(conditions)], threshold=50.0,
+            )
+            pop.append(StrategyChromosome(
+                entry_genes=[gene], exit_genes=[gene],
+                stop_loss_pct=2.0, take_profit_pct=5.0, direction=d,
+            ))
         ent = population_entropy(pop)
         assert ent > 0.3
 
