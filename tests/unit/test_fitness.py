@@ -241,17 +241,17 @@ class TestMinTradeFilter:
                 "sharpe_ratio": 3.0,
                 "max_drawdown": 0.1,
                 "profit_factor": 3.0,
-                "total_trades": 80,  # Above MIN_TRADES(50) but below MIN_TRADES_1M(100)
+                "total_trades": 80,
                 "total_return": 0.10,
             }
 
-        # Default min_trades=50: passes
+        # Default min_trades=50: passes (80 >= 50)
         results_default = evaluate_population([chrom], bt_fn)
         assert results_default[0].adjusted_score > 0.0
 
-        # min_trades=100: fails (80 < 100)
-        results_1m = evaluate_population([chrom], bt_fn, min_trades=MIN_TRADES_1M)
-        assert results_1m[0].adjusted_score == 0.0
+        # Explicit min_trades=100: fails (80 < 100)
+        results_strict = evaluate_population([chrom], bt_fn, min_trades=100)
+        assert results_strict[0].adjusted_score == 0.0
 
     def test_zero_trades(self) -> None:
         chrom = _make_chromosome()
@@ -530,9 +530,9 @@ class TestSlTpPenalty:
 
 
     def test_min_trades_1m_constant(self) -> None:
-        """MIN_TRADES_1M should be higher than MIN_TRADES."""
-        assert MIN_TRADES_1M > MIN_TRADES
-        assert MIN_TRADES_1M == 100
+        """MIN_TRADES_1M matches current policy (lowered to 50 for short windows)."""
+        assert MIN_TRADES_1M >= MIN_TRADES
+        assert MIN_TRADES_1M == 50
 
     def test_discovery_config_auto_min_trades_1m(self) -> None:
         """DiscoveryConfig should auto-set min_trades=100 for 1m timeframe."""
