@@ -55,16 +55,16 @@ def mock_nautilus_quantity(monkeypatch: pytest.MonkeyPatch) -> None:
         MockQuantity,
         raising=False,
     )
-    # Patch the import inside calculate_size
+    # Patch the import inside calculate_size (use monkeypatch.setitem for proper cleanup)
     import sys
 
     mock_nt = MagicMock()
     mock_nt.model = MagicMock()
     mock_nt.model.objects = MagicMock()
     mock_nt.model.objects.Quantity = MockQuantity
-    sys.modules["nautilus_trader"] = mock_nt
-    sys.modules["nautilus_trader.model"] = mock_nt.model
-    sys.modules["nautilus_trader.model.objects"] = mock_nt.model.objects
+    monkeypatch.setitem(sys.modules, "nautilus_trader", mock_nt)
+    monkeypatch.setitem(sys.modules, "nautilus_trader.model", mock_nt.model)
+    monkeypatch.setitem(sys.modules, "nautilus_trader.model.objects", mock_nt.model.objects)
 
 
 # --- SizerConfig Tests ---
