@@ -373,7 +373,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     markersRef.current = seriesMarkers;
 
     // Add indicator series
-    const indRefs: ISeriesApi<SeriesType>[] = [];
+    const indRefs: { key: string; series: ISeriesApi<SeriesType> }[] = [];
 
     // Group oscillators by indicator_type to assign panes
     const oscillatorTypes: string[] = [];
