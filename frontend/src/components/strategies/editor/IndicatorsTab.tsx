@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,32 +16,81 @@ import {
   type DslIndicator,
   getDefaultParams,
   INDICATOR_CATALOG,
-  INDICATOR_TYPES,
   type IndicatorCategory,
   TIMEFRAMES,
 } from "./types";
+import { useIndicatorCatalog, type ApiIndicatorEntry } from "@/hooks/useIndicatorCatalog";
 
 interface IndicatorsTabProps {
   config: DslConfig;
   onConfigChange: (config: DslConfig) => void;
 }
 
-const CATEGORIES: IndicatorCategory[] = ["Trend", "Momentum", "Volatility", "Volume"];
+type ExtendedCategory = IndicatorCategory | "Custom";
+const CATEGORIES: ExtendedCategory[] = ["Trend", "Momentum", "Volatility", "Volume", "Custom"];
 
-const CATEGORY_COLORS: Record<IndicatorCategory, string> = {
+const CATEGORY_COLORS: Record<ExtendedCategory, string> = {
   Trend: "bg-blue-500/10 text-blue-600 border-blue-200",
   Momentum: "bg-orange-500/10 text-orange-600 border-orange-200",
   Volatility: "bg-purple-500/10 text-purple-600 border-purple-200",
   Volume: "bg-green-500/10 text-green-600 border-green-200",
+  Custom: "bg-gray-500/10 text-gray-600 border-gray-200",
 };
 
-function IndicatorCatalog({ onAdd }: { onAdd: (type: string) => void }) {
-  const [filterCategory, setFilterCategory] = useState<IndicatorCategory | "all">("all");
+interface CatalogDisplayEntry {
+  type: string;
+  name: string;
+  emoji: string;
+  description: string;
+  category: ExtendedCategory;
+  defaultParams: Record<string, number>;
+}
+
+/** Merge hardcoded catalog with API entries, adding plugin indicators. */
+function useMergedCatalog(): CatalogDisplayEntry[] {
+  const catalogQuery = useIndicatorCatalog();
+  const apiEntries: ApiIndicatorEntry[] =
+    catalogQuery.data?.status === 200 ? catalogQuery.data.data.indicators : [];
+
+  return useMemo(() => {
+    // Start with hardcoded entries (they have emoji + curated descriptions)
+    const hardcodedByType = new Map(INDICATOR_CATALOG.map((e) => [e.type, e]));
+    const merged: CatalogDisplayEntry[] = INDICATOR_CATALOG.map((e) => ({
+      type: e.type,
+      name: e.name,
+      emoji: e.emoji,
+      description: e.description,
+      category: e.category,
+      defaultParams: getDefaultParams(e.type),
+    }));
+
+    // Append API-only entries (plugins) not in the hardcoded set
+    for (const api of apiEntries) {
+      if (!hardcodedByType.has(api.type_name)) {
+        merged.push({
+          type: api.type_name,
+          name: api.display_name || api.type_name,
+          emoji: "\u{1F9EA}",
+          description: api.description || "Custom indicator plugin",
+          category: (["Trend", "Momentum", "Volatility", "Volume"].includes(api.category)
+            ? api.category
+            : "Custom") as ExtendedCategory,
+          defaultParams: api.default_params,
+        });
+      }
+    }
+    return merged;
+  }, [apiEntries]);
+}
+
+function IndicatorCatalog({ onAdd }: { onAdd: (type: string, defaults: Record<string, number>) => void }) {
+  const [filterCategory, setFilterCategory] = useState<ExtendedCategory | "all">("all");
+  const catalog = useMergedCatalog();
 
   const filtered =
     filterCategory === "all"
-      ? INDICATOR_CATALOG
-      : INDICATOR_CATALOG.filter((i) => i.category === filterCategory);
+      ? catalog
+      : catalog.filter((i) => i.category === filterCategory);
 
   return (
     <div className="space-y-3">
@@ -72,7 +121,7 @@ function IndicatorCatalog({ onAdd }: { onAdd: (type: string) => void }) {
           <button
             key={entry.type}
             type="button"
-            onClick={() => onAdd(entry.type)}
+            onClick={() => onAdd(entry.type, entry.defaultParams)}
             className={`rounded-lg border p-3 text-left transition-colors hover:bg-accent ${CATEGORY_COLORS[entry.category]}`}
           >
             <div className="text-lg">{entry.emoji}</div>
@@ -116,13 +165,17 @@ function IndicatorParamFields({
 
 export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
   const [showCatalog, setShowCatalog] = useState(config.indicators.length === 0);
+  const catalog = useMergedCatalog();
+
+  // Derive indicator type list from merged catalog
+  const indicatorTypes = useMemo(() => catalog.map((c) => c.type), [catalog]);
 
   const updateIndicators = (indicators: DslIndicator[]) => {
     onConfigChange({ ...config, indicators });
   };
 
-  const addIndicator = (type: string) => {
-    updateIndicators([...config.indicators, { type, params: getDefaultParams(type) }]);
+  const addIndicator = (type: string, defaults: Record<string, number>) => {
+    updateIndicators([...config.indicators, { type, params: defaults }]);
     setShowCatalog(false);
   };
 
@@ -131,8 +184,10 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
   };
 
   const updateType = (idx: number, type: string) => {
+    const entry = catalog.find((c) => c.type === type);
+    const defaults = entry?.defaultParams ?? getDefaultParams(type);
     const updated = [...config.indicators];
-    updated[idx] = { type, params: getDefaultParams(type) };
+    updated[idx] = { type, params: defaults };
     updateIndicators(updated);
   };
 
@@ -175,7 +230,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
       )}
 
       {config.indicators.map((ind, idx) => {
-        const catalogEntry = INDICATOR_CATALOG.find((c) => c.type === ind.type);
+        const catalogEntry = catalog.find((c) => c.type === ind.type);
         return (
           <Card key={`ind-${idx.toString()}`}>
             <CardContent className="space-y-3 p-4">
@@ -187,7 +242,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {INDICATOR_TYPES.map((t) => (
+                      {indicatorTypes.map((t) => (
                         <SelectItem key={t} value={t}>
                           {t}
                         </SelectItem>
