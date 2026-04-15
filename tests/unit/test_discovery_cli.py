@@ -195,6 +195,76 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
     assert notes["cross_window_months"] == [-1]
     assert notes["cross_window_min_sharpe"] == 0.8
 
+def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
+    """When all candidates fail hard guardrails, run should exit 0 with a
+    structured summary — not crash with RuntimeError. Regression test for
+    vibe-quant-97oh.
+    """
+    from vibe_quant.discovery.pipeline import DiscoveryPipeline, DiscoveryResult
+
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    # Force the "no viable strategies" path: patch Pipeline.run to return
+    # a result with empty top_strategies (what happens when every top-K
+    # candidate fails hard guardrails).
+    def fake_run(self) -> DiscoveryResult:
+        return DiscoveryResult(
+            generations=[],
+            top_strategies=[],
+            total_candidates_evaluated=42,
+            converged=False,
+            convergence_generation=None,
+        )
+
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "6",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--db",
+            str(db_path),
+            "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    result = state.get_backtest_result(run_id)
+    state.close()
+
+    assert run is not None
+    assert run["status"] == "completed"
+    assert result is not None
+
+    import json
+
+    notes = json.loads(result["notes"])
+    assert notes["outcome"] == "no_viable_strategies"
+    assert notes["evaluated"] == 42
+    assert notes["top_strategies"] == []
+    assert "reason" in notes
+
+
 def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, monkeypatch) -> None:
     """Merged winners should keep their own holdout metrics, not another seed's."""
     db_path = tmp_path / "state.db"

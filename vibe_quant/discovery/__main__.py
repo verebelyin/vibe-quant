@@ -797,7 +797,62 @@ def main() -> int:
             )
 
         if not result.top_strategies:
-            raise RuntimeError("Discovery produced no strategies")
+            # No viable candidates — every top strategy failed a hard
+            # guardrail (bootstrap CI or min trades) or the population was
+            # empty. Persist a structured summary and complete cleanly
+            # rather than raising: this happens routinely with tight
+            # guardrails + bearish regimes + small populations and
+            # shouldn't look like a crash.
+            import json
+
+            execution_time = time.perf_counter() - started_at
+            best_gen_fitness = (
+                max((gr.best_fitness for gr in result.generations), default=0.0)
+                if result.generations
+                else 0.0
+            )
+            summary_notes = {
+                "type": "discovery",
+                "outcome": "no_viable_strategies",
+                "generations": len(result.generations),
+                "evaluated": result.total_candidates_evaluated,
+                "converged": result.converged,
+                "mock": use_mock,
+                "compiler_version": _get_compiler_version(),
+                "best_raw_score": best_gen_fitness,
+                "reason": (
+                    "All top-K candidates rejected by hard guardrails "
+                    "(bootstrap CI and/or min trades). Consider: longer "
+                    "date range, larger population, or relaxed guardrails."
+                ),
+                "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
+                "train_test_split": split_ratio if split_ratio > 0 else None,
+                "direction": args.direction,
+                "num_seeds": num_seeds if num_seeds > 1 else None,
+                "top_strategies": [],
+            }
+            state.save_backtest_result(
+                args.run_id,
+                {
+                    "total_return": 0.0,
+                    "sharpe_ratio": 0.0,
+                    "max_drawdown": 0.0,
+                    "profit_factor": 0.0,
+                    "total_trades": 0,
+                    "skewness": 0.0,
+                    "kurtosis": 0.0,
+                    "execution_time_seconds": execution_time,
+                    "notes": json.dumps(summary_notes),
+                },
+            )
+            state.update_backtest_run_status(args.run_id, "completed")
+            job_manager.mark_completed(args.run_id)
+            print(
+                "Discovery complete: no viable strategies "
+                f"(evaluated={result.total_candidates_evaluated}, "
+                f"best_raw_score={best_gen_fitness:.4f})"
+            )
+            return 0
 
         _best_chrom, best_fitness = result.top_strategies[0]
         execution_time = time.perf_counter() - started_at
