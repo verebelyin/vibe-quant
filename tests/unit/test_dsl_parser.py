@@ -359,6 +359,57 @@ class TestIndicatorConfig:
         assert config.std_dev == 2.0
 
 
+class TestPluginParams:
+    """Plugin indicators can declare extra params via spec.param_schema.
+
+    IndicatorConfig uses ``extra='allow'`` + a model_validator that checks
+    extras against the registered spec. Verifies builtins still reject
+    unknown fields (spec.param_schema gates this per-type).
+    """
+
+    @pytest.fixture
+    def dummy_plugin(self):
+        from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+
+        spec = IndicatorSpec(
+            name="DUMMYPLUGIN",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 14, "alpha": 0.5},
+            param_schema={"period": int, "alpha": float},
+            compute_fn=lambda df, params: df["close"],
+        )
+        indicator_registry.register_spec(spec)
+        try:
+            yield spec
+        finally:
+            indicator_registry._indicators.pop("DUMMYPLUGIN", None)
+
+    def test_plugin_extra_param_accepted(self, dummy_plugin) -> None:
+        cfg = IndicatorConfig(type="DUMMYPLUGIN", period=14, alpha=0.7)
+        assert cfg.type == "DUMMYPLUGIN"
+        assert cfg.alpha == 0.7  # extra exposed via attribute access
+        assert (cfg.model_extra or {}).get("alpha") == 0.7
+
+    def test_plugin_int_coerced_to_float(self, dummy_plugin) -> None:
+        cfg = IndicatorConfig(type="DUMMYPLUGIN", period=14, alpha=1)
+        assert cfg.alpha == 1.0
+        assert isinstance(cfg.model_extra["alpha"], float)
+
+    def test_plugin_unknown_param_rejected(self, dummy_plugin) -> None:
+        with pytest.raises(ValueError, match="unknown param 'foo'"):
+            IndicatorConfig(type="DUMMYPLUGIN", period=14, alpha=0.7, foo=1)
+
+    def test_plugin_wrong_type_rejected(self, dummy_plugin) -> None:
+        with pytest.raises(ValueError, match="expected float"):
+            IndicatorConfig(type="DUMMYPLUGIN", period=14, alpha="bad")
+
+    def test_builtin_rejects_extras_not_in_schema(self) -> None:
+        # RSI's param_schema is {"period": int}; unknown extras still rejected.
+        with pytest.raises(ValueError, match="unknown param 'alpha'"):
+            IndicatorConfig(type="RSI", period=14, alpha=0.5)
+
+
 class TestStrategyDSL:
     """Tests for StrategyDSL model."""
 

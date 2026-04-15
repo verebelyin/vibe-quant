@@ -1240,12 +1240,21 @@ class StrategyCompiler:
 
         Called by both ``_compile_pta_params_literal`` and
         ``_get_pta_lookback`` so the merge logic lives in one place.
+
+        Both schema-native fields (``period``, ``fast_period``, ...) and
+        plugin-declared extras (ADAPTIVE_RSI's ``alpha``, etc.) are folded
+        in. Extras are pulled from pydantic's ``model_extra`` so plugin
+        params flow through without schema edits.
         """
         merged: dict[str, object] = dict(info.spec.default_params)
         for dsl_field in StrategyCompiler._DSL_CONFIG_FIELDS:
             val = getattr(info.config, dsl_field, None)
             if val is not None:
                 merged[dsl_field] = val
+        extras = getattr(info.config, "model_extra", None) or {}
+        for key, val in extras.items():
+            if val is not None and key in info.spec.param_schema:
+                merged[key] = val
         return merged
 
     @staticmethod

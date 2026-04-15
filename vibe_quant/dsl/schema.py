@@ -6,7 +6,7 @@ conditions, time filters, stop loss, take profit, and sweep parameters.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -51,7 +51,10 @@ class IndicatorConfig(BaseModel):
         atr_multiplier: ATR multiplier for ATR-based indicators
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # extra="allow" lets plugin indicators declare arbitrary params
+    # (e.g. ADAPTIVE_RSI's ``alpha``) in YAML without schema edits. Extras
+    # are validated against ``spec.param_schema`` in ``validate_plugin_params``.
+    model_config = ConfigDict(extra="allow")
 
     type: str = Field(..., description="Indicator type (RSI, EMA, etc.)")
     period: int | None = Field(default=None, ge=1, le=2000, description="Lookback period")
@@ -69,6 +72,21 @@ class IndicatorConfig(BaseModel):
     # Bollinger Bands / Keltner
     std_dev: float | None = Field(default=None, ge=0.1, le=5.0)
     atr_multiplier: float | None = Field(default=None, ge=0.1, le=10.0)
+
+    # Names of schema-native fields that belong to the model itself, not to
+    # plugin param_schema. Used to distinguish "known builtin param" from
+    # "plugin-declared extra" when checking param_schema coverage.
+    _BUILTIN_PARAM_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "period",
+            "fast_period",
+            "slow_period",
+            "signal_period",
+            "d_period",
+            "std_dev",
+            "atr_multiplier",
+        }
+    )
 
     @field_validator("type")
     @classmethod
@@ -150,6 +168,51 @@ class IndicatorConfig(BaseModel):
         elif self.type == "ICHIMOKU":
             # Ichimoku uses its own param names; period not required
             pass
+        return self
+
+    @model_validator(mode="after")
+    def validate_plugin_params(self) -> IndicatorConfig:
+        """Validate plugin-declared extras against ``spec.param_schema``.
+
+        Plugin indicators drop a ``.py`` file in ``vibe_quant/dsl/plugins/``
+        and register an ``IndicatorSpec`` with a custom ``param_schema``
+        (e.g. ADAPTIVE_RSI's ``alpha: float``). Those names are not fields
+        on ``IndicatorConfig`` itself, so pydantic routes them to
+        ``model_extra``. Here we check every extra is declared in the
+        registered spec's ``param_schema`` and has a compatible type. Raw
+        ``int`` values are coerced to ``float`` when the spec expects one
+        (YAML often emits ``alpha: 1`` where ``1.0`` is meant).
+        """
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        spec = indicator_registry.get(self.type)
+        if spec is None:
+            # validate_indicator_type raised earlier if the type is unknown;
+            # nothing more to check.
+            return self
+
+        extras = dict(self.model_extra or {})
+        for key, value in extras.items():
+            if key not in spec.param_schema:
+                valid = sorted(set(spec.param_schema) | self._BUILTIN_PARAM_FIELDS)
+                msg = (
+                    f"Indicator '{self.type}' got unknown param '{key}'. "
+                    f"Valid params: {valid}"
+                )
+                raise ValueError(msg)
+            expected = spec.param_schema[key]
+            if expected is float and isinstance(value, int) and not isinstance(value, bool):
+                # Pydantic stores extras as-is without coercion — fix int→float.
+                object.__setattr__(self, key, float(value))
+                if self.__pydantic_extra__ is not None:
+                    self.__pydantic_extra__[key] = float(value)
+                continue
+            if not isinstance(value, expected):
+                msg = (
+                    f"Indicator '{self.type}' param '{key}' expected "
+                    f"{expected.__name__}, got {type(value).__name__}"
+                )
+                raise ValueError(msg)
         return self
 
 
