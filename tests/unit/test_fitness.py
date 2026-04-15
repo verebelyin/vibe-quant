@@ -10,10 +10,12 @@ from vibe_quant.discovery.fitness import (
     COMPLEXITY_PENALTY_CAP,
     MIN_TRADES,
     MIN_TRADES_1M,
+    OVERTRADE_THRESHOLD,
     SL_TP_RATIO_PENALTY_CAP,
     FitnessResult,
     compute_complexity_penalty,
     compute_fitness_score,
+    compute_overtrade_penalty,
     compute_sl_tp_penalty,
     evaluate_population,
     pareto_dominates,
@@ -160,6 +162,50 @@ class TestComplexityPenalty:
         assert compute_complexity_penalty(7) == pytest.approx(COMPLEXITY_PENALTY_CAP)
         # One below cap: (6-2)*0.02 = 0.08
         assert compute_complexity_penalty(6) == pytest.approx(0.08)
+
+
+# =============================================================================
+# Overtrade penalty (timeframe-scaled)
+# =============================================================================
+
+
+class TestOvertradePenalty:
+    """compute_overtrade_penalty scales threshold by timeframe (bd-pbgl).
+
+    Healthy 1m strategies emit thousands of trades; gating those at the
+    4h-calibrated 300 threshold zeroed out every adjusted_score in prod.
+    """
+
+    def test_below_threshold_no_penalty(self) -> None:
+        assert compute_overtrade_penalty(100, "4h") == 0.0
+        assert compute_overtrade_penalty(OVERTRADE_THRESHOLD, "4h") == 0.0
+
+    def test_above_4h_threshold_penalized(self) -> None:
+        # 4h threshold = 300 → 500 trades means 200 excess → 0.05 * 2 = 0.10
+        assert compute_overtrade_penalty(500, "4h") == pytest.approx(0.10)
+
+    def test_scales_by_timeframe(self) -> None:
+        # 2000 trades is healthy on 5m (threshold 1000) but excessive on 4h (300).
+        # 4h: excess=1700, penalty=0.05 * 17 → capped at 0.3
+        # 5m: excess=1000, penalty=0.05 * 10 = 0.5 → capped at 0.3
+        # So both hit the cap; use smaller counts to show divergence.
+        # At 700 trades: 4h hits 0.05 * 4 = 0.2; 5m under threshold → 0.0.
+        assert compute_overtrade_penalty(700, "4h") == pytest.approx(0.20)
+        assert compute_overtrade_penalty(700, "5m") == 0.0
+        # 15m (threshold 500): 700 → excess 200 → 0.10
+        assert compute_overtrade_penalty(700, "15m") == pytest.approx(0.10)
+        # 1m (threshold 3000): 2000 trades is below → 0.0
+        assert compute_overtrade_penalty(2000, "1m") == 0.0
+
+    def test_unknown_timeframe_falls_back_to_default(self) -> None:
+        # Unknown timeframes use the global 4h-calibrated threshold.
+        assert compute_overtrade_penalty(500, "7m") == pytest.approx(0.10)
+        assert compute_overtrade_penalty(500, None) == pytest.approx(0.10)
+
+    def test_penalty_capped_at_0_3(self) -> None:
+        # Massive trade count hits the 0.3 cap regardless of timeframe.
+        assert compute_overtrade_penalty(100000, "4h") == pytest.approx(0.3)
+        assert compute_overtrade_penalty(100000, "1m") == pytest.approx(0.3)
 
 
 # =============================================================================

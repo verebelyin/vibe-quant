@@ -47,9 +47,24 @@ MIN_TRADES_1M: int = 50  # For 1m timeframe (lowered from 100 — 3mo windows pr
 # Overtrading penalty: commission-aware
 # Assumes ~0.1% round-trip commission (taker fees on crypto perps)
 COMMISSION_RATE_PER_TRADE: float = 0.001
-# Trades above this threshold incur escalating penalty
+# Trades above this threshold incur escalating penalty. Historic default
+# calibrated for 4h (~300 trades/year is healthy); sub-4h timeframes
+# naturally generate far more trades, so we scale per timeframe below.
 OVERTRADE_THRESHOLD: int = 300
 OVERTRADE_PENALTY_SCALE: float = 0.05  # penalty per 100 excess trades
+
+# Timeframe-scaled thresholds. A healthy 1m strategy emits ~3000 trades
+# over a year; 15m ~500. Gating those at 300 zeros every adjusted_score
+# and causes the discovery bug seen in prod (bd-pbgl). Values picked to
+# match healthy-strategy trade counts seen in the discovery journal.
+OVERTRADE_THRESHOLD_BY_TIMEFRAME: dict[str, int] = {
+    "1m": 3000,
+    "5m": 1000,
+    "15m": 500,
+    "1h": 300,
+    "4h": 300,
+    "1d": 150,
+}
 
 # SL/TP imbalance penalty: discourages ultra-tight TP scalpers that
 # don't generalize beyond the training window (bd-v7zj).
@@ -175,21 +190,26 @@ def compute_fitness_score(
     )
 
 
-def compute_overtrade_penalty(total_trades: int) -> float:
-    """Compute commission-aware overtrading penalty.
+def compute_overtrade_penalty(total_trades: int, timeframe: str | None = None) -> float:
+    """Commission-aware overtrading penalty, timeframe-scaled.
 
-    Strategies exceeding OVERTRADE_THRESHOLD trades get penalized
-    proportionally to excess trade count, simulating commission drag.
+    Threshold scales per ``OVERTRADE_THRESHOLD_BY_TIMEFRAME`` because
+    healthy sub-4h strategies naturally generate many more trades (a 1m
+    year = ~525k bars vs 4h year = ~2k bars). Falls back to the global
+    ``OVERTRADE_THRESHOLD`` when ``timeframe`` is unknown.
 
     Args:
         total_trades: Number of trades executed.
+        timeframe: Strategy timeframe (e.g. "5m", "4h"). When ``None``,
+            the global 4h-calibrated threshold is used.
 
     Returns:
         Penalty value >= 0. Applied as subtraction from raw score.
     """
-    if total_trades <= OVERTRADE_THRESHOLD:
+    threshold = OVERTRADE_THRESHOLD_BY_TIMEFRAME.get(timeframe or "", OVERTRADE_THRESHOLD)
+    if total_trades <= threshold:
         return 0.0
-    excess = total_trades - OVERTRADE_THRESHOLD
+    excess = total_trades - threshold
     return min(0.3, OVERTRADE_PENALTY_SCALE * (excess / 100.0))
 
 
@@ -348,6 +368,7 @@ def _evaluate_single(
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]]
     | None = None,
     min_trades: int = MIN_TRADES,
+    timeframe: str | None = None,
 ) -> FitnessResult:
     """Evaluate fitness for a single chromosome (picklable for multiprocessing)."""
     _zero = FitnessResult(
@@ -405,7 +426,7 @@ def _evaluate_single(
 
     num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
     complexity_pen = compute_complexity_penalty(num_genes)
-    overtrade_pen = compute_overtrade_penalty(trades)
+    overtrade_pen = compute_overtrade_penalty(trades, timeframe)
     sl_tp_pen = compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)
 
     # Filter evaluation
@@ -510,6 +531,7 @@ def evaluate_population(
     max_workers: int | None = None,
     executor: object | None = None,
     min_trades: int = MIN_TRADES,
+    timeframe: str | None = None,
 ) -> list[FitnessResult]:
     """Evaluate fitness for an entire population, optionally in parallel.
 
@@ -531,12 +553,12 @@ def evaluate_population(
     global _parallel_broken  # noqa: PLW0603
     if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
-            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades)
+            return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades, timeframe=timeframe)
         except Exception:
             _parallel_broken = True
             logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
 
-    return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades) for chrom in chromosomes]
+    return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe) for chrom in chromosomes]
 
 
 def _evaluate_parallel(
@@ -546,6 +568,7 @@ def _evaluate_parallel(
     max_workers: int | None,
     executor: object | None = None,
     min_trades: int = MIN_TRADES,
+    timeframe: str | None = None,
 ) -> list[FitnessResult]:
     """Evaluate population using ProcessPoolExecutor.
 
@@ -577,7 +600,7 @@ def _evaluate_parallel(
 
     def _run_with(pool: Executor) -> None:
         future_to_idx = {
-            pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn, min_trades): i
+            pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn, min_trades, timeframe): i
             for i, chrom in enumerate(chromosomes)
         }
         for future in as_completed(future_to_idx):

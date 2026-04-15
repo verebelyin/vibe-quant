@@ -437,6 +437,7 @@ class DiscoveryPipeline:
                 max_workers=cfg.max_workers,
                 executor=executor,
                 min_trades=cfg.min_trades,
+                timeframe=cfg.timeframe,
             )
             last_fitness_results = fitness_results
             total_evaluated += len(population)
