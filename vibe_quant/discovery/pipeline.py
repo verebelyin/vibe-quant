@@ -91,7 +91,7 @@ class DiscoveryConfig:
     immigrant_fraction: float = 0.15  # Fraction of population replaced when entropy is low
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
-    eval_windows: int = 1  # 1 = single window (default); 2+ = multi-window fitness (worst-case)
+    eval_windows: int = 3  # 3 = default multi-window fitness (PKFOLD-biased); 1 = single-window
     train_test_split: float = 0.0  # 0 = disabled; >0 = fraction for train (e.g. 0.5)
     holdout_start_date: str = ""  # Pre-computed holdout start (set by CLI, not re-split)
     holdout_end_date: str = ""  # Pre-computed holdout end

@@ -427,9 +427,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--eval-windows",
         type=int,
-        default=1,
+        default=3,
         help="Split date range into N sub-windows, evaluate fitness on worst-case. "
-        "Forces GA to find regime-robust strategies (default: 1 = single window).",
+        "Forces GA to find regime-robust strategies (default: 3 — biases toward "
+        "PKFOLD-passing strategies; pass 1 to restore single-window behaviour).",
     )
     parser.add_argument(
         "--train-test-split",
