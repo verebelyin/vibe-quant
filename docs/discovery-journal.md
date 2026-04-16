@@ -50,6 +50,24 @@ Caveats:
 - SOL v1 (small smoke, found nothing — too tight budget): `id=784`, `logs/discovery_zo4o_sol.log`.
 - SOL v2 (pop=20, gens=10): `id=785`, `logs/discovery_zo4o_sol2.log`.
 
+### Addendum (same day): Q3 2025 regime check — hypothesis **refuted**
+
+Re-ran the exact same STOCH+ATR short config on 2025-07-01 → 2025-09-30 for all three assets (runs 787/788/789, identical pop=20/gens=10/no-bootstrap-ci, logs `zo4o_q3_{btc,eth,sol}.log`).
+
+| Asset | Run | Best Sharpe | Trades | Max DD | Return |
+|-------|-----|-------------|--------|--------|--------|
+| BTCUSDT | 787 | **-0.97** | 5366 | **80.0%** | **-80.0%** |
+| ETHUSDT | 788 | 0.00 | 1 (no trading) | 2.0% | -2.0% |
+| SOLUSDT | 789 | **-2.59** | 3166 | **84.3%** | **-84.3%** |
+
+All three runs produced `no viable strategies` with `best_raw_score=0` across 200 evaluated chromosomes each. BTC and SOL champions *did* trade (thousands of times) but lost catastrophically — classic bull-regime overtrading where mean-reversion shorts keep getting stopped out against the trend. ETH's best just failed to take any entry.
+
+**Correction to the earlier structural claim**: SHORT dominance on 1m STOCH+ATR is **regime-dependent**, not a liquidation-cascade microstructure effect. The 2025-12-28 → 2026-02-28 window that produced Sharpe 3.91–4.77 across all three assets happened to be a bearish / ranging regime where mean-reversion shorts profit. Transpose the same config to the 2025-07-01 → 2025-09-30 bull window and every variant loses 80%+ of capital.
+
+Implication: any "structural signal" claim needs at least two orthogonal windows before going into the journal. The original entry was written on one window and drew too strong a conclusion.
+
+Deployment guidance: a 1m STOCH+ATR short should NOT be paper-traded without an explicit regime filter (trend indicator to gate entries) — the Q3 behaviour means a live deployment launched into the wrong regime would blow up in days. Filed as a follow-up thought, not a new bead: add a trend/ADX gate to the DSL plugin library and re-test the strategy with regime gating in a future iteration.
+
 ---
 
 ## 2026-04-16: bd-mhz1 — End-to-End Champion Chain (OF → Validation → Paper)
