@@ -142,6 +142,32 @@ def test_contract_api_catalog(synthetic_plugin) -> None:
     assert entry["display_name"] == "CI Test Plugin"
     assert entry["category"] == "Custom"
 
+    # Frontend contract (bd-mgx7): the indicator picker renders params
+    # dynamically from `default_params` (see IndicatorsTab.tsx's merged
+    # catalog + IndicatorParamFields iterating Object.entries). Pin every
+    # key the TS ApiIndicatorEntry interface declares so a schema drop
+    # would be caught before it breaks the picker.
+    expected_keys = {
+        "type_name",
+        "display_name",
+        "description",
+        "category",
+        "popular",
+        "chart_placement",
+        "default_params",
+        "param_schema",
+        "output_names",
+        "requires_high_low",
+        "requires_volume",
+    }
+    assert expected_keys.issubset(entry.keys()), (
+        f"missing keys: {expected_keys - entry.keys()}"
+    )
+    # Plugin-declared params flow into default_params + param_schema so
+    # the picker can render them.
+    assert entry["default_params"] == {"period": 10, "gain": 1.5}
+    assert entry["param_schema"] == {"period": "int", "gain": "float"}
+
 
 # ---------------------------------------------------------------------------
 # 5. Compiler: DSL referencing the plugin compiles to a loadable module
