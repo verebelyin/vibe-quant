@@ -51,19 +51,40 @@ Latency preset: domestic (200ms). Full NT fidelity (fills, slippage, funding).
 
 Passes gate: Sharpe 10.09 >> 1.0, DD 1.07% << 15%. Validation actually **improved** metrics (likely because the strategy trades infrequently enough that latency/slippage don't dominate).
 
-### Stage 4: Paper trading
+### Stage 4: Paper trading (Binance futures testnet)
 
-Blocked on `BINANCE_API_KEY` / `BINANCE_API_SECRET` env vars. Handoff to operator.
+First real-venue run uncovered three integration bugs in `vibe_quant/paper/node.py` that the unit tests had masked by monkey-patching `_create_live_trading_node` (filed as **bd-qmx1**, fixed this session):
+
+1. `BinanceDataClientConfig` / `BinanceExecClientConfig` were built without an `instrument_provider`, so the `BinanceFuturesInstrumentProvider` warned "No loading configured" and the ExecEngine never reached a connected state.
+2. `_initialize` stored the compiler's *source text* in `_compiled_strategy` but never called `node.trader.add_strategy(...)`, so the TradingNode started with zero strategies and exited early.
+3. `_run_loop` wrapped the blocking `node.run()` in `asyncio.to_thread`; combined with `dispose()` in the outer `_shutdown` (which stops the event loop), teardown crashed with `RuntimeError: Event loop stopped before Future completed` and orphaned disconnect tasks.
+
+Post-fix smoke run (trader_id `MHZ1-SID82`, 10 min wall-clock, env `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET`):
+
+| Check | Result |
+|-------|--------|
+| Instrument load | `Loaded 1 instruments` (BTCUSDT-PERP) in ~4s |
+| DataClient WS | Connected to `wss://stream.binancefuture.com` |
+| ExecClient auth | `Binance API key authenticated`, listen key issued |
+| Account state | `BINANCE-USDT_FUTURES-master` registered, 5000 USDT + 5000 USDC + 0.01 BTC testnet balance |
+| Reconciliation | 0 orders / 0 fills / 0 positions — `Reconciliation for BINANCE succeeded` |
+| Strategy subscription | `Genome4013d00c6199Strategy` registered CCI(40) + STOCH(19,5) on `BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL` |
+| State persistence | 12 checkpoints in `paper_trading_checkpoints` over 10 min (1 initializing + 10 running at 60 s cadence + 1 stopped) |
+| Graceful shutdown | SIGTERM → clean stop in 12 s, 0 tracebacks, 0 orphaned tasks |
+
+No trades fired (expected — 4h timeframe, 10 min window, no bar closes). Longer runs deferred until a 1h / 15m champion is available; the 4h strategy can't produce a paper fill inside any reasonable smoke window.
 
 ### Summary
 
-End-to-end chain proven: OF → validation works with real NT runners. Validation outperformed screening for this low-frequency 4h strategy. PKFOLD reliably catches regime-bias in single-window discovery results. Paper stage blocked on external credentials only.
+End-to-end chain proven across all four stages for sid=82 (STOCH+CCI). Discovery → OF → validation works with real NT runners and showed validation *improved* metrics (Sharpe 8.13 → 10.09) for this low-frequency 4h strategy. PKFOLD reliably catches the regime-bias in single-window discovery results. Paper trading is functional on the Binance futures testnet with clean startup/shutdown and periodic state persistence.
 
 ### Follow-ups
 
-- **bd-bnb0**: multi-window / fold-penalty fitness in discovery to produce PKFOLD-robust candidates from the start.
-- **bd-b05l** (done): `--bootstrap-min-sharpe` / `--no-bootstrap-ci` CLI flags on discovery, shipped this session.
-- Next discovery iteration: run with `--eval-windows 3` to pre-bias toward regime-robust strategies.
+- **bd-bnb0** (done): discovery `--eval-windows` default bumped from 1 to 3 so GA fitness is PKFOLD-biased by construction. Shipped `8b0bd3c`.
+- **bd-b05l** (done): `--bootstrap-min-sharpe` / `--no-bootstrap-ci` CLI flags on discovery.
+- **bd-qmx1** (done): paper module wired for real Binance live trading (InstrumentProvider, strategy registration, async lifecycle). Shipped `f38d6c7`.
+- Next discovery iteration runs get the new `--eval-windows=3` default automatically — expect fewer PKFOLD failures on champions.
+- `_capture_checkpoint` still records empty `positions` / `orders` / `balance`; only `node_status` is populated. Worth filing separately before a real money-in-positions run.
 
 ---
 
