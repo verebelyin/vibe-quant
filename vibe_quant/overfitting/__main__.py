@@ -127,9 +127,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.end_date:
         data_end = date.fromisoformat(args.end_date)
 
-    # Create pipeline
+    # Create pipeline — optionally with a real NT-backed WFA runner so
+    # `--filters wfa` doesn't require `--allow-mock` (bd-yfbg).
     db_path = Path(args.db) if args.db else None
-    pipeline = OverfittingPipeline(db_path)
+    wfa_runner = None
+    if getattr(args, "real_wfa", False):
+        from vibe_quant.overfitting.nt_runner import NTWFARunner
+
+        resolved_db = db_path or Path("data/state.db")
+        wfa_runner = NTWFARunner(run_id=args.run_id, db_path=resolved_db)
+    pipeline = OverfittingPipeline(db_path, wfa_runner=wfa_runner)
 
     try:
         # Run pipeline
@@ -376,6 +383,14 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-mock",
         action="store_true",
         help="Allow MockBacktestRunner fallback for WFA/CV (synthetic results)",
+    )
+    run_parser.add_argument(
+        "--real-wfa",
+        action="store_true",
+        help=(
+            "Use real NT-backed backtest runner for WFA (loads DSL + "
+            "symbols from the run's strategy). Replaces the mock."
+        ),
     )
     # WFA window sizing — lets users shrink from the 360d default to fit
     # short screening ranges (bd-xbov). Leave unset to keep defaults.
