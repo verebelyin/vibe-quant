@@ -29,6 +29,8 @@ from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from vibe_quant.alerts.telegram import TelegramBot
     from vibe_quant.dsl.schema import StrategyDSL
 
@@ -39,10 +41,16 @@ class _TradingNodeLifecycle(Protocol):
     """Minimal lifecycle contract for live trading node integration."""
 
     def run(self, raise_exception: bool = False) -> None:
-        """Start and run the node."""
+        """Start and run the node (blocking — used only by legacy tests)."""
+
+    async def run_async(self) -> None:
+        """Start and run the node on the current event loop."""
 
     def stop(self) -> None:
         """Stop the node gracefully."""
+
+    async def stop_async(self) -> None:
+        """Stop the node gracefully on the current event loop."""
 
     def dispose(self) -> None:
         """Dispose resources."""
@@ -179,7 +187,8 @@ class PaperTradingNode:
         self._persistence: StatePersistence | None = None
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
-        self._compiled_strategy: object | None = None
+        self._compiled_module: ModuleType | None = None
+        self._compiled_strategies: list[object] = []
         self._error_handler = ErrorHandler(
             on_halt=self._on_error_halt,
             on_alert=self._on_error_alert,
@@ -298,22 +307,41 @@ class PaperTradingNode:
 
         return dsl
 
-    def _compile_strategy(self, dsl: StrategyDSL) -> object:
-        """Compile strategy DSL to NautilusTrader Strategy.
+    def _compile_strategy(self, dsl: StrategyDSL) -> ModuleType:
+        """Compile DSL to a live-loadable Python module.
 
-        Args:
-            dsl: Validated strategy DSL.
-
-        Returns:
-            Compiled NautilusTrader Strategy (str source or module).
-
-        Raises:
-            ConfigurationError: If compilation fails.
+        Returns the module containing the generated Strategy/Config classes;
+        instance construction happens in :meth:`_instantiate_strategies` so
+        each symbol gets its own strategy registered with the TradingNode.
         """
         try:
-            return self._compiler.compile(dsl)
+            return self._compiler.compile_to_module(dsl)
         except Exception as e:
             raise ConfigurationError(f"Strategy compilation failed: {e}") from e
+
+    def _instantiate_strategies(
+        self, module: ModuleType, dsl: StrategyDSL
+    ) -> list[object]:
+        """Build one Strategy instance per configured symbol.
+
+        Nautilus requires each Strategy in a TradingNode to have a unique
+        ``order_id_tag``; we derive it from the symbol index so two symbols
+        running the same generated class don't collide.
+        """
+        class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
+        strategy_cls = getattr(module, f"{class_name}Strategy", None)
+        config_cls = getattr(module, f"{class_name}Config", None)
+        if strategy_cls is None or config_cls is None:
+            raise ConfigurationError(
+                f"Compiled module missing {class_name}Strategy/{class_name}Config"
+            )
+
+        strategies: list[object] = []
+        for idx, symbol in enumerate(self._config.symbols):
+            instrument_id = f"{symbol}-PERP.BINANCE"
+            cfg = config_cls(instrument_id=instrument_id, order_id_tag=f"{idx:03d}")
+            strategies.append(strategy_cls(config=cfg))
+        return strategies
 
     def _create_live_trading_node(self) -> _TradingNodeLifecycle:
         """Create and build a NautilusTrader TradingNode instance.
@@ -332,8 +360,10 @@ class PaperTradingNode:
                 BinanceLiveDataClientFactory,
                 BinanceLiveExecClientFactory,
             )
+            from nautilus_trader.config import InstrumentProviderConfig
             from nautilus_trader.live.config import TradingNodeConfig
             from nautilus_trader.live.node import TradingNode
+            from nautilus_trader.model.identifiers import InstrumentId
         except ImportError as e:
             raise ConfigurationError(
                 f"NautilusTrader live trading dependencies not installed: {e}. "
@@ -353,6 +383,16 @@ class PaperTradingNode:
                 f"Unsupported Binance account_type '{self._config.binance.account_type}'",
             ) from e
 
+        # Without `instrument_provider` the Binance adapter logs
+        # "No loading configured" and the ExecEngine never reaches a
+        # connected state. Scope loading to the configured symbols so startup
+        # stays fast on USDT_FUTURES (~400 instruments otherwise).
+        load_ids = frozenset(
+            InstrumentId.from_str(f"{symbol}-PERP.BINANCE")
+            for symbol in self._config.symbols
+        )
+        instrument_provider = InstrumentProviderConfig(load_ids=load_ids)
+
         node_config = TradingNodeConfig(
             trader_id=self._config.trader_id,
             data_clients={
@@ -361,6 +401,7 @@ class PaperTradingNode:
                     api_secret=self._config.binance.api_secret,
                     account_type=account_type,
                     testnet=self._config.binance.testnet,
+                    instrument_provider=instrument_provider,
                 ),
             },
             exec_clients={
@@ -369,28 +410,33 @@ class PaperTradingNode:
                     api_secret=self._config.binance.api_secret,
                     account_type=account_type,
                     testnet=self._config.binance.testnet,
+                    instrument_provider=instrument_provider,
                 ),
             },
         )
         node = TradingNode(node_config)
+        # Strategies MUST be registered on the trader before ``node.build()``
+        # or the live engine starts with zero strategies and exits early.
+        for strategy in self._compiled_strategies:
+            node.trader.add_strategy(strategy)
         node.add_data_client_factory("BINANCE", BinanceLiveDataClientFactory)
         node.add_exec_client_factory("BINANCE", BinanceLiveExecClientFactory)
         node.build()
         return node
 
     def _setup_signal_handlers(self) -> None:
-        """Setup signal handlers for graceful shutdown and control.
+        """Setup signal handlers for halt/resume/close-all.
 
-        SIGINT/SIGTERM → graceful shutdown (closes positions)
+        SIGINT/SIGTERM are deliberately NOT registered here — Nautilus
+        installs its own graceful-shutdown handlers on the running loop
+        when ``run_async`` starts, and a double handler causes the
+        "Event loop stopped before Future completed" crash during teardown.
+
         SIGUSR1 → halt/pause trading
         SIGUSR2 → resume trading
+        SIGWINCH → close all positions (non-destructive keep-running)
         """
         loop = asyncio.get_running_loop()
-
-        def shutdown_handler(_sig: int) -> None:
-            self._status.state = NodeState.STOPPED
-            self._status.halt_reason = HaltReason.SIGNAL
-            self._shutdown_event.set()
 
         def halt_handler(_sig: int) -> None:
             if self._status.state == NodeState.RUNNING:
@@ -408,8 +454,6 @@ class PaperTradingNode:
             if self._status.state == NodeState.RUNNING:
                 self._close_all_positions()
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, shutdown_handler, sig)
         loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
         loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
         loop.add_signal_handler(signal.SIGWINCH, close_all_handler, signal.SIGWINCH)
@@ -515,9 +559,12 @@ class PaperTradingNode:
         self._status.state = NodeState.INITIALIZING
         self._status.updated_at = datetime.now(UTC)
 
-        # Load and compile strategy
+        # Load, compile, and instantiate strategy (one per symbol)
         self._strategy = self._load_strategy()
-        self._compiled_strategy = self._compile_strategy(self._strategy)
+        self._compiled_module = self._compile_strategy(self._strategy)
+        self._compiled_strategies = self._instantiate_strategies(
+            self._compiled_module, self._strategy
+        )
 
         # Create event writer
         self._config.logs_path.mkdir(parents=True, exist_ok=True)
@@ -576,7 +623,11 @@ class PaperTradingNode:
         if self._persistence is not None:
             await self._persistence.start_periodic_checkpointing(self._capture_checkpoint)
 
-        run_task = asyncio.create_task(asyncio.to_thread(self._trading_node.run, False))
+        # Run Nautilus on our event loop (run_async) instead of in a worker
+        # thread — wrapping the blocking ``run()`` in ``asyncio.to_thread``
+        # produces "Event loop stopped before Future completed" on shutdown
+        # because Nautilus spawns its own loop inside the thread.
+        run_task = asyncio.create_task(self._trading_node.run_async())
         shutdown_task = asyncio.create_task(self._shutdown_event.wait())
 
         done, pending = await asyncio.wait(
@@ -587,7 +638,7 @@ class PaperTradingNode:
         run_exc: BaseException | None = None
         try:
             if shutdown_task in done and not run_task.done():
-                self._trading_node.stop()
+                await self._trading_node.stop_async()
                 await run_task
             elif run_task in done:
                 self._shutdown_event.set()
@@ -626,12 +677,13 @@ class PaperTradingNode:
                 self._persistence.close()
             self._persistence = None
 
-        # Stop/dispose trading node
+        # Stop trading node. ``TradingNode.dispose()`` stops the running
+        # event loop (it was designed for ``run()`` which owns its own loop),
+        # so we intentionally skip it — the outer ``asyncio.run`` in the CLI
+        # tears the loop down cleanly on exit.
         if self._trading_node is not None:
             with contextlib.suppress(Exception):
-                self._trading_node.stop()
-            with contextlib.suppress(Exception):
-                self._trading_node.dispose()
+                await self._trading_node.stop_async()
             self._trading_node = None
 
         # Flush and close event writer

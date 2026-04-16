@@ -6,8 +6,6 @@ import asyncio
 import json
 import os
 import sqlite3
-import threading
-import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -572,10 +570,10 @@ class TestPaperTradingNode:
                 self.stop_calls = 0
                 self.dispose_calls = 0
 
-            def run(self, raise_exception: bool = False) -> None:
+            async def run_async(self) -> None:
                 return
 
-            def stop(self) -> None:
+            async def stop_async(self) -> None:
                 self.stop_calls += 1
 
             def dispose(self) -> None:
@@ -597,6 +595,59 @@ class TestPaperTradingNode:
             await node._shutdown()
 
     @pytest.mark.asyncio
+    async def test_initialize_populates_compiled_strategies(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """_initialize should compile + instantiate one Strategy per symbol.
+
+        Prior to qmx1 the paper node stored only the generated source string
+        in ``_compiled_strategy`` and never registered an instance, so the
+        TradingNode started with zero strategies and exited early on live
+        startup. Guard the contract that _initialize actually instantiates
+        the classes and yields real Strategy instances keyed to the
+        configured symbols.
+        """
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT", "ETHUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+
+        class _FakeTradingNode:
+            async def run_async(self) -> None:
+                return
+
+            async def stop_async(self) -> None:
+                return
+
+            def dispose(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            PaperTradingNode,
+            "_create_live_trading_node",
+            lambda _self: _FakeTradingNode(),
+        )
+
+        node = PaperTradingNode(config)
+        await node._initialize()
+        try:
+            assert node._compiled_module is not None
+            assert len(node._compiled_strategies) == 2
+            ids = [s.id.value for s in node._compiled_strategies]
+            assert ids[0] != ids[1], "Strategy ids must be unique (order_id_tag)"
+            for strat in node._compiled_strategies:
+                assert strat.config.instrument_id in {
+                    "BTCUSDT-PERP.BINANCE",
+                    "ETHUSDT-PERP.BINANCE",
+                }
+        finally:
+            await node._shutdown()
+
+    @pytest.mark.asyncio
     async def test_initialize_saves_initial_checkpoint(
         self, db_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -611,10 +662,10 @@ class TestPaperTradingNode:
         )
 
         class _FakeTradingNode:
-            def run(self, raise_exception: bool = False) -> None:
+            async def run_async(self) -> None:
                 return
 
-            def stop(self) -> None:
+            async def stop_async(self) -> None:
                 return
 
             def dispose(self) -> None:
@@ -652,15 +703,14 @@ class TestPaperTradingNode:
 
         class _BlockingTradingNode:
             def __init__(self) -> None:
-                self.run_started = threading.Event()
-                self.stop_called = threading.Event()
+                self.run_started = asyncio.Event()
+                self.stop_called = asyncio.Event()
 
-            def run(self, raise_exception: bool = False) -> None:
+            async def run_async(self) -> None:
                 self.run_started.set()
-                while not self.stop_called.is_set():
-                    time.sleep(0.01)
+                await self.stop_called.wait()
 
-            def stop(self) -> None:
+            async def stop_async(self) -> None:
                 self.stop_called.set()
 
             def dispose(self) -> None:
@@ -697,15 +747,14 @@ class TestPaperTradingNode:
 
         class _BlockingTradingNode:
             def __init__(self) -> None:
-                self.run_started = threading.Event()
-                self.stop_called = threading.Event()
+                self.run_started = asyncio.Event()
+                self.stop_called = asyncio.Event()
 
-            def run(self, raise_exception: bool = False) -> None:
+            async def run_async(self) -> None:
                 self.run_started.set()
-                while not self.stop_called.is_set():
-                    time.sleep(0.01)
+                await self.stop_called.wait()
 
-            def stop(self) -> None:
+            async def stop_async(self) -> None:
                 self.stop_called.set()
 
             def dispose(self) -> None:
@@ -748,15 +797,14 @@ class TestPaperTradingNode:
 
         class _BlockingTradingNode:
             def __init__(self) -> None:
-                self.run_started = threading.Event()
-                self.stop_called = threading.Event()
+                self.run_started = asyncio.Event()
+                self.stop_called = asyncio.Event()
 
-            def run(self, raise_exception: bool = False) -> None:
+            async def run_async(self) -> None:
                 self.run_started.set()
-                while not self.stop_called.is_set():
-                    time.sleep(0.01)
+                await self.stop_called.wait()
 
-            def stop(self) -> None:
+            async def stop_async(self) -> None:
                 self.stop_called.set()
 
             def dispose(self) -> None:
