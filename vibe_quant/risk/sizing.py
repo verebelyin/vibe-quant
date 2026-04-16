@@ -61,8 +61,10 @@ class KellyConfig(SizerConfig):
 
     Attributes:
         win_rate: Historical win rate (0.6 = 60% wins).
-        avg_win: Average winning trade size (absolute value).
-        avg_loss: Average losing trade size (absolute value).
+        avg_win: Average winning trade size. Must be in the SAME unit as
+            avg_loss (both dollars, both fractions of equity, or both ROI%).
+            Only the ratio avg_win/avg_loss matters, so units must match.
+        avg_loss: Average losing trade size (same unit as avg_win).
         kelly_fraction: Fraction of Kelly to use (0.5 = half-Kelly, default).
     """
 
@@ -81,6 +83,17 @@ class KellyConfig(SizerConfig):
             raise ValueError("avg_loss must be positive")
         if not (Decimal(0) < self.kelly_fraction <= Decimal(1)):
             raise ValueError("kelly_fraction must be in (0, 1]")
+        # Unit-consistency guard: mixing a fractional avg_win (e.g. 0.02)
+        # with a dollar-amount avg_loss (e.g. 10.0) silently mis-sizes
+        # positions by orders of magnitude. Require the ratio to stay
+        # within a sane band so a unit mixup is caught at construction.
+        ratio = self.avg_win / self.avg_loss
+        if ratio < Decimal("0.01") or ratio > Decimal("100"):
+            raise ValueError(
+                f"avg_win/avg_loss ratio {ratio!s} is outside [0.01, 100] — "
+                "likely a unit mismatch. avg_win and avg_loss must be in the "
+                "same unit (both dollars, both fractions, or both ROI%)."
+            )
 
 
 @dataclass(frozen=True)

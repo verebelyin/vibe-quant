@@ -195,6 +195,28 @@ class TestKellyConfig:
                 avg_loss=Decimal("0"),
             )
 
+    def test_unit_mismatch_raises(self) -> None:
+        """avg_win as fraction with avg_loss as dollars raises."""
+        with pytest.raises(ValueError, match="unit mismatch"):
+            KellyConfig(
+                max_leverage=Decimal("20"),
+                max_position_pct=Decimal("0.5"),
+                win_rate=Decimal("0.55"),
+                avg_win=Decimal("0.02"),  # fraction
+                avg_loss=Decimal("50"),  # dollars — ratio 0.0004, way out of band
+            )
+
+    def test_unit_mismatch_reverse_raises(self) -> None:
+        """avg_win as dollars with avg_loss as fraction raises."""
+        with pytest.raises(ValueError, match="unit mismatch"):
+            KellyConfig(
+                max_leverage=Decimal("20"),
+                max_position_pct=Decimal("0.5"),
+                win_rate=Decimal("0.55"),
+                avg_win=Decimal("500"),  # dollars
+                avg_loss=Decimal("0.01"),  # fraction — ratio 50000, out of band
+            )
+
 
 # --- ATRConfig Tests ---
 

@@ -537,6 +537,21 @@ class TestPurgedKFoldCVEdgeCases:
         total_test = sum(len(test) for _, test in splits)
         assert total_test == 100000
 
+    def test_default_purge_clamps_for_short_4h_dataset(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Default purge_pct=0.01 on 2000-bar 4h dataset is clamped to 50.
+
+        1% of 2000 = 20 bars, below the 50-bar floor, so the clamp kicks in
+        and a warning is emitted. Without this, EMA-50+ indicators would
+        leak across fold boundaries.
+        """
+        kfold = PurgedKFold(n_splits=5, purge_pct=0.01, embargo_pct=0.0)
+        with caplog.at_level("WARNING", logger="vibe_quant.overfitting.purged_kfold"):
+            splits = list(kfold.split(2000))
+        assert len(splits) == 5
+        assert any("clamping to 50" in rec.message for rec in caplog.records)
+
 
 # --- Integration Tests ---
 

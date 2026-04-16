@@ -4,6 +4,28 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-16: bd-vmc9 — Calculation audit (5 surgical fixes)
+
+Comprehensive code review across fitness, metric extraction, overfitting stats, risk sizing, and execution paths. Five fixes shipped; one alarm cleared.
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `screening/nt_runner.py` | `_compute_max_drawdown` now takes `starting_balance`; plumbed from venue config. Previously hardcoded $1000, silently wrong for non-default starting balances. |
+| 2 | `overfitting/wfa.py` | Efficiency guarded against near-zero IS return (`|mean_is| < 0.001 → 0`) and capped at 5.0. Previously a barely-positive IS return produced astronomical efficiency that always passed robustness. |
+| 3 | `overfitting/purged_kfold.py` | Default purge clamps to ≥50 bars when feasible, with warning. Protects 4h + long-period indicator strategies from silent lookahead. Caller-set `purge_pct=0` still respected. |
+| 4 | `risk/sizing.py` | `KellyConfig.__post_init__` rejects `avg_win/avg_loss` ratios outside `[0.01, 100]` — catches unit mixups (fractions vs dollars). |
+| 5 | `validation/extraction.py` | Single `logger.warning` per validation run noting funding fees are not modeled (NT Position API limitation). |
+
+**False alarms investigated and cleared:**
+- SQL injection at `db/state_manager.py:269` — `updates` list is hardcoded strings, not user input.
+- `max_drawdown = abs(fval)` without `/100` — DB inspection confirms NT already returns DD as fraction (all stored values in [0, 1)). Not a unit bug.
+- Screening `-999` sentinel — fitness hard-gate on `total_return <= 0` correctly excludes crashed trials.
+- DSR Gumbel approximation — matches Bailey-López de Prado exactly.
+
+No changes to fitness weights, DSL, GA operators, strategy templates, or data pipeline. All existing functionality preserved. Full suite: 1668 passed, 4 skipped, 0 failed.
+
+---
+
 ## 2026-04-16: bd-zo4o — Cross-Asset SHORT Universality on 1m STOCH+ATR
 
 ### Goal

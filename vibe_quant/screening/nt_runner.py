@@ -248,7 +248,13 @@ class NTScreeningRunner:
                 )
             bt_result = engine.get_result()
 
-            return self._extract_metrics(params, bt_result, engine, start_time)
+            return self._extract_metrics(
+                params,
+                bt_result,
+                engine,
+                start_time,
+                starting_balance=float(venue_config.starting_balance_usdt),
+            )
         finally:
             # Reset engines before dispose to avoid
             # InvalidStateTrigger('RUNNING -> DISPOSE')
@@ -270,8 +276,16 @@ class NTScreeningRunner:
         bt_result: Any,
         engine: Any,
         start_time: float,
+        starting_balance: float = 1000.0,
     ) -> BacktestMetrics:
-        """Extract BacktestMetrics from NT BacktestResult."""
+        """Extract BacktestMetrics from NT BacktestResult.
+
+        Args:
+            starting_balance: Venue starting balance (quote currency). Used only
+                by the fallback drawdown computation when NT does not populate
+                ``stats_pnls["max drawdown"]`` (NT >= 1.222). Defaults to 1000
+                to preserve legacy behaviour.
+        """
         from vibe_quant.screening.types import BacktestMetrics
 
         metrics = BacktestMetrics(
@@ -395,7 +409,9 @@ class NTScreeningRunner:
         # NT 1.222+ removed MaxDrawdown indicator, so stats may not contain it.
         # Compute from trade PnLs as fallback (same approach as validation).
         if metrics.max_drawdown == 0.0 and metrics.total_trades > 0:
-            metrics.max_drawdown = self._compute_max_drawdown(engine, start_time)
+            metrics.max_drawdown = self._compute_max_drawdown(
+                engine, start_time, starting_balance=starting_balance
+            )
 
         return metrics
 
@@ -466,6 +482,7 @@ class NTScreeningRunner:
         self,
         engine: object,
         start_time: float,
+        starting_balance: float = 1000.0,
     ) -> float:
         """Compute max drawdown from closed positions' realized PnL.
 
@@ -475,6 +492,9 @@ class NTScreeningRunner:
         Args:
             engine: BacktestEngine after run.
             start_time: Backtest start time (unused, kept for signature compat).
+            starting_balance: Initial account equity in the venue's quote
+                currency. Must match the venue config used for the backtest
+                or the DD fraction will be mis-scaled.
 
         Returns:
             Max drawdown as positive fraction (e.g. 0.12 for 12%).
@@ -489,8 +509,7 @@ class NTScreeningRunner:
             # Sort by close time for correct equity curve
             closed.sort(key=lambda p: int(p.ts_closed))
 
-            # Use a default balance of 1000 (screening uses fixed balance)
-            equity = 1000.0
+            equity = float(starting_balance)
             peak = equity
             max_dd = 0.0
 

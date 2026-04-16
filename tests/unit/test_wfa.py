@@ -708,6 +708,48 @@ class TestEdgeCases:
         # mean IS = 0 -> efficiency = 0 (no predictive value)
         assert result.efficiency == 0.0
 
+    def test_near_zero_is_return_zeros_efficiency(self) -> None:
+        """Near-zero IS return triggers the guard (no real IS edge)."""
+        cfg = WFAConfig(
+            in_sample_days=90,
+            out_of_sample_days=30,
+            step_days=30,
+            min_windows=2,
+        )
+        is_results = [
+            MockBacktestResult(sharpe=0.1, total_return=0.0001, params={}),
+            MockBacktestResult(sharpe=0.1, total_return=0.0001, params={}),
+        ]
+        oos_results = [
+            MockBacktestResult(sharpe=2.0, total_return=5.0, params={}),
+            MockBacktestResult(sharpe=2.0, total_return=5.0, params={}),
+        ]
+        runner = MockRunner(is_results=is_results, oos_results=oos_results)
+        wfa = WalkForwardAnalysis(config=cfg, runner=runner)
+        result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
+        assert result.efficiency == 0.0
+
+    def test_efficiency_is_capped(self) -> None:
+        """Large OOS/IS ratio is capped at 5.0."""
+        cfg = WFAConfig(
+            in_sample_days=90,
+            out_of_sample_days=30,
+            step_days=30,
+            min_windows=2,
+        )
+        is_results = [
+            MockBacktestResult(sharpe=1.0, total_return=1.0, params={}),
+            MockBacktestResult(sharpe=1.0, total_return=1.0, params={}),
+        ]
+        oos_results = [
+            MockBacktestResult(sharpe=3.0, total_return=100.0, params={}),
+            MockBacktestResult(sharpe=3.0, total_return=100.0, params={}),
+        ]
+        runner = MockRunner(is_results=is_results, oos_results=oos_results)
+        wfa = WalkForwardAnalysis(config=cfg, runner=runner)
+        result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
+        assert result.efficiency == 5.0
+
     def test_all_negative_returns(self) -> None:
         """Handles all negative returns."""
         cfg = WFAConfig(

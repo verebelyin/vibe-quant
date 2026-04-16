@@ -430,9 +430,16 @@ class WalkForwardAnalysis:
         aggregated_oos_return = sum_oos_return * inv_n
 
         # Efficiency: mean(OOS_return) / mean(IS_return)
-        # Negative IS return means strategy is unprofitable — efficiency undefined/zero
+        # Guard: near-zero IS return would produce astronomical efficiency that
+        # always passes the robustness gate despite no real IS edge. Require a
+        # minimum |mean_is_return| and cap the ratio to keep the metric bounded.
         mean_is_return = sum_is_return * inv_n
-        efficiency = 0.0 if mean_is_return <= 0 else aggregated_oos_return / mean_is_return
+        _MIN_IS_RETURN = 0.001  # 0.1% — below this, IS is effectively noise
+        _MAX_EFFICIENCY = 5.0
+        if mean_is_return <= 0 or abs(mean_is_return) < _MIN_IS_RETURN:
+            efficiency = 0.0
+        else:
+            efficiency = min(aggregated_oos_return / mean_is_return, _MAX_EFFICIENCY)
 
         avg_degradation = sum_degradation * inv_n
         consistency = profitable_count * inv_n

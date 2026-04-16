@@ -218,6 +218,11 @@ class PurgedKFold:
             ValueError: If n_samples is too small for the configuration.
         """
         # SPEC Section 8: purge period = max indicator lookback
+        # Safety floor: without an explicit indicator_lookback_bars, the default
+        # purge_pct=0.01 underpurges on low-bar-count datasets (e.g. 4h bars for
+        # 1y ≈ 2190 bars → 22 bars, insufficient for EMA-50+ warm-up). Clamp to
+        # a minimum so long-period indicators cannot leak across folds silently.
+        _MIN_DEFAULT_PURGE_BARS = 50
         if self.indicator_lookback_bars is not None and self.indicator_lookback_bars > 0:
             purge_len = self.indicator_lookback_bars
             computed_pct = purge_len / n_samples if n_samples > 0 else 0.0
@@ -231,7 +236,38 @@ class PurgedKFold:
                     n_samples,
                 )
         else:
-            purge_len = int(n_samples * self.purge_pct)
+            raw_purge_len = int(n_samples * self.purge_pct)
+            # Only clamp when purge is actually requested AND the dataset is
+            # large enough to absorb the clamp without breaking fold sizing.
+            # Required per-fold samples: n_splits * min_samples_per_fold(10) +
+            # total_gap * (n_splits - 1). Skip the clamp on synthetic small
+            # datasets where it would make splits infeasible.
+            min_fold_samples = 10
+            embargo_len_est = int(n_samples * self.embargo_pct)
+            headroom = n_samples - self.n_splits * min_fold_samples
+            max_feasible_purge = max(
+                raw_purge_len,
+                headroom // max(1, self.n_splits - 1) - embargo_len_est,
+            )
+            should_clamp = (
+                self.purge_pct > 0
+                and raw_purge_len < _MIN_DEFAULT_PURGE_BARS
+                and max_feasible_purge >= _MIN_DEFAULT_PURGE_BARS
+            )
+            if should_clamp:
+                logger.warning(
+                    "indicator_lookback_bars not set; purge_pct=%.4f of %d samples "
+                    "= %d bars, below minimum %d — clamping to %d. "
+                    "Pass indicator_lookback_bars to silence this warning.",
+                    self.purge_pct,
+                    n_samples,
+                    raw_purge_len,
+                    _MIN_DEFAULT_PURGE_BARS,
+                    _MIN_DEFAULT_PURGE_BARS,
+                )
+                purge_len = _MIN_DEFAULT_PURGE_BARS
+            else:
+                purge_len = raw_purge_len
         embargo_len = int(n_samples * self.embargo_pct)
         total_gap = purge_len + embargo_len
 
