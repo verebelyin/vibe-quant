@@ -321,3 +321,98 @@ def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, m
         assert holdout["sharpe"] == strategy["sharpe"]
         assert holdout["trades"] == strategy["trades"]
         assert holdout["return_pct"] == strategy["return_pct"]
+
+
+def test_guardrail_flags_default_to_enabled() -> None:
+    """Parser should default to bootstrap CI + DSR enabled, matching prior hardcoded behavior."""
+    args = build_parser().parse_args(["--run-id", "1"])
+    assert args.require_bootstrap_ci is True
+    assert args.require_dsr is True
+    assert args.bootstrap_min_sharpe == 1.0
+    assert args.bootstrap_ci_level == 0.95
+
+
+def test_guardrail_flags_relax_and_disable() -> None:
+    """--no-bootstrap-ci / --no-dsr / --bootstrap-min-sharpe should flow through the parser."""
+    args = build_parser().parse_args(
+        [
+            "--run-id",
+            "1",
+            "--no-bootstrap-ci",
+            "--no-dsr",
+            "--bootstrap-min-sharpe",
+            "0.25",
+            "--bootstrap-ci-level",
+            "0.9",
+        ]
+    )
+    assert args.require_bootstrap_ci is False
+    assert args.require_dsr is False
+    assert args.bootstrap_min_sharpe == 0.25
+    assert args.bootstrap_ci_level == 0.9
+
+
+def test_guardrail_flags_propagate_to_pipeline_config(tmp_path: Path, monkeypatch) -> None:
+    """CLI guardrail flags should reach DiscoveryPipeline via DiscoveryConfig."""
+    from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
+
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    captured: dict[str, DiscoveryConfig] = {}
+
+    original_init = DiscoveryPipeline.__init__
+
+    def capturing_init(self, config: DiscoveryConfig, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        captured["config"] = config
+        original_init(self, config, **kwargs)
+
+    def fake_run(self) -> DiscoveryResult:
+        return DiscoveryResult(
+            generations=[],
+            top_strategies=[],
+            total_candidates_evaluated=0,
+            converged=False,
+            convergence_generation=None,
+        )
+
+    monkeypatch.setattr(DiscoveryPipeline, "__init__", capturing_init)
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--population-size",
+            "4",
+            "--max-generations",
+            "2",
+            "--elite-count",
+            "1",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-02-01",
+            "--no-bootstrap-ci",
+            "--no-dsr",
+            "--bootstrap-min-sharpe",
+            "0.3",
+            "--bootstrap-ci-level",
+            "0.8",
+            "--db",
+            str(db_path),
+            "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    cfg = captured["config"]
+    assert cfg.require_bootstrap_ci is False
+    assert cfg.require_dsr is False
+    assert cfg.bootstrap_min_sharpe == 0.3
+    assert cfg.bootstrap_ci_level == 0.8

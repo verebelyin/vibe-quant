@@ -100,6 +100,10 @@ class DiscoveryConfig:
     cross_window_min_sharpe: float = 0.5  # min Sharpe on each window to count as pass
     wfa_oos_step_days: int = 0  # >0 enables WFA: split holdout into rolling windows of N days
     wfa_min_consistency: float = 0.75  # fraction of OOS windows that must be profitable
+    require_bootstrap_ci: bool = True  # Bootstrap Sharpe CI guardrail
+    bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound < this
+    bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
+    require_dsr: bool = True  # Deflated Sharpe Ratio guardrail
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -1398,10 +1402,12 @@ class DiscoveryPipeline:
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
             max_complexity=8,
-            require_dsr=True,
+            require_dsr=self.config.require_dsr,
             require_wfa=False,  # WFA requires separate out-of-sample data
             require_purged_kfold=False,
-            require_bootstrap_ci=True,
+            require_bootstrap_ci=self.config.require_bootstrap_ci,
+            bootstrap_min_sharpe=self.config.bootstrap_min_sharpe,
+            bootstrap_ci_level=self.config.bootstrap_ci_level,
         )
 
         # Use actual bar count for DSR (not total_trades * 5 proxy)

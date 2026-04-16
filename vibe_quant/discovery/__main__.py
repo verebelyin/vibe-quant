@@ -477,6 +477,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of random seeds to run. >1 enables multi-seed ensemble: "
         "runs GA N times, ranks by median Sharpe (default: 1)",
     )
+    parser.add_argument(
+        "--bootstrap-min-sharpe",
+        type=float,
+        default=1.0,
+        help="Bootstrap CI lower bound threshold. Candidates whose bootstrap "
+        "CI lower bound falls below this Sharpe are rejected (default: 1.0). "
+        "Lower values (e.g. 0.5) relax the hard guardrail.",
+    )
+    parser.add_argument(
+        "--bootstrap-ci-level",
+        type=float,
+        default=0.95,
+        help="Confidence level for bootstrap Sharpe CI (default: 0.95).",
+    )
+    parser.add_argument(
+        "--no-bootstrap-ci",
+        dest="require_bootstrap_ci",
+        action="store_false",
+        default=True,
+        help="Disable the bootstrap Sharpe CI hard guardrail.",
+    )
+    parser.add_argument(
+        "--no-dsr",
+        dest="require_dsr",
+        action="store_false",
+        default=True,
+        help="Disable the Deflated Sharpe Ratio soft guardrail.",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -580,6 +608,10 @@ def main() -> int:
             cross_window_min_sharpe=args.cross_window_min_sharpe,
             wfa_oos_step_days=args.wfa_oos_step_days,
             wfa_min_consistency=args.wfa_min_consistency,
+            require_bootstrap_ci=args.require_bootstrap_ci,
+            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
+            bootstrap_ci_level=args.bootstrap_ci_level,
+            require_dsr=args.require_dsr,
         )
 
         # Log environment details for debugging and journal entries
