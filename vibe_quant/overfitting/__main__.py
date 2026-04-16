@@ -127,16 +127,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.end_date:
         data_end = date.fromisoformat(args.end_date)
 
-    # Create pipeline — optionally with a real NT-backed WFA runner so
-    # `--filters wfa` doesn't require `--allow-mock` (bd-yfbg).
+    # Create pipeline — optionally with real NT-backed runners so
+    # `--filters wfa,pkfold` don't require `--allow-mock` (bd-yfbg, bd-xrli).
     db_path = Path(args.db) if args.db else None
     wfa_runner = None
+    cv_runner = None
     if getattr(args, "real_wfa", False):
         from vibe_quant.overfitting.nt_runner import NTWFARunner
 
         resolved_db = db_path or Path("data/state.db")
         wfa_runner = NTWFARunner(run_id=args.run_id, db_path=resolved_db)
-    pipeline = OverfittingPipeline(db_path, wfa_runner=wfa_runner)
+    if getattr(args, "real_cv", False):
+        from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
+
+        resolved_db = db_path or Path("data/state.db")
+        cv_runner = NTPurgedKFoldRunner(run_id=args.run_id, db_path=resolved_db)
+    pipeline = OverfittingPipeline(db_path, wfa_runner=wfa_runner, cv_runner=cv_runner)
 
     try:
         # Run pipeline
@@ -146,13 +152,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         print()
 
+        # When the real CV runner is wired, override --samples with the
+        # actual bar count from the catalog so PurgedKFold splits over the
+        # whole dataset, not the synthetic 1000-bar default.
+        effective_samples = args.samples
+        if cv_runner is not None and hasattr(cv_runner, "n_samples"):
+            effective_samples = cv_runner.n_samples
+
         result = pipeline.run(
             run_id=args.run_id,
             config=config,
             num_observations=args.observations,
             data_start=data_start,
             data_end=data_end,
-            n_samples=args.samples,
+            n_samples=effective_samples,
             allow_mock=args.allow_mock,
         )
 
@@ -390,6 +403,16 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Use real NT-backed backtest runner for WFA (loads DSL + "
             "symbols from the run's strategy). Replaces the mock."
+        ),
+    )
+    run_parser.add_argument(
+        "--real-cv",
+        action="store_true",
+        help=(
+            "Use real NT-backed backtest runner for purged k-fold CV. "
+            "Loads bar timestamps from the catalog and runs one NT "
+            "screening backtest per fold's train and test span. "
+            "--samples is auto-overridden by the catalog's bar count."
         ),
     )
     # WFA window sizing — lets users shrink from the 360d default to fit
