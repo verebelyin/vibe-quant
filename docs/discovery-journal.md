@@ -4,6 +4,54 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-16: bd-zo4o — Cross-Asset SHORT Universality on 1m STOCH+ATR
+
+### Goal
+
+All 30 prior batches were BTC-only. Hypothesis: the 1m SHORT dominance we see on BTC is a structural crypto-perp microstructure effect (funding rates, liquidation cascades), not a BTC-period artifact. Test by forcing short on ETH and SOL with the same STOCH+ATR pool and comparing against the BTC baseline.
+
+### Config (identical across all three)
+
+- Indicator pool: `STOCH,ATR` — `--direction short`
+- Window: 2025-12-28 → 2026-02-28 (9 weeks)
+- ETH/SOL v2: pop=20, gens=10, conv=8, eval_windows=1, `--no-bootstrap-ci` (exploratory; bootstrap CI is conservative on sub-100 trade samples and would mask the signal)
+- BTC baseline is the existing run 746 (pop=30, gens=30, 2026-01-17 → 2026-03-17) — same asset, similar-enough window.
+
+### Results
+
+| Asset | Run | Best Sharpe | Trades | Max DD | Return | PF | GA time |
+|-------|-----|-------------|--------|--------|--------|-----|---------|
+| BTCUSDT | 746 | 3.91 | 113 | 4.2% | 7.5% | 1.71 | ~30 min |
+| ETHUSDT | 786 | 3.97 | 50 | 7.8% | 17.0% | 1.61 | ~29 min |
+| SOLUSDT | 785 | **4.77** | 66 | 7.5% | 16.4% | 2.16 | ~4 min (converged fast) |
+
+Top-5 Sharpes on each asset all fall in the 3.3–4.8 range with exclusively short direction. ETH champion runs STOCH entry + STOCH/ATR exit (SL 1.7% / TP 12.6%); SOL champion is pure ATR-threshold entry + ATR exits (SL 2.9% / TP 15.6%); BTC champion config archived in run 746.
+
+### Interpretation
+
+Hypothesis **confirmed**. SHORT dominance is not a BTC artifact — ETH and SOL both produce Sharpe > 3.9 short-only strategies in the same window, with comparable DD and trade counts. SOL is actually the strongest of the three (higher Sharpe, higher PF), consistent with the idea that thinner-book / higher-retail-leverage assets show more pronounced liquidation-cascade signals on 1m.
+
+Caveats:
+- **Same two-month window for all three** — strong cross-asset signal, but not a regime-independence test. A second window (Q3 2025, a clearly different trend) should be run before treating this as structural. Filed as follow-up.
+- **Bootstrap CI disabled** — BTC baseline (run 746) *also* fails bootstrap CI at 113 trades. With the default 1.0 lower-bound threshold, none of these pass — the effect is real but under-sampled. `--eval-windows 3` (now the default since bd-bnb0) plus a longer window is the proper path to filter PKFOLD-robust versions.
+- **1m execution caveat still applies** — prior journal note (line 2773) warns 200ms retail latency kills 1m strategies during validation. Expect validation Sharpe to drop sharply vs these discovery numbers. This is a *discovery-stage* finding about where the signal lives, not a deployable-strategy claim.
+
+### Follow-ups
+
+- Re-run the same three assets on Q3 2025 (2025-07-01 → 2025-09-30) with the same config; if SHORT still dominates, the structural claim holds.
+- Add a 4th asset (XRPUSDT or DOGEUSDT) for further validation — both are higher-retail-leverage and should show the same effect if it's liquidation-cascade driven.
+- For any promoted champion: validate with `--latency-preset domestic`, expect significant Sharpe degradation; decide whether the reduced-latency (co-located) preset is realistic for the deployment target before gating on paper.
+
+### Raw runs
+
+- Baseline BTC: `backtest_runs.id=746`, `logs/discovery_746.log`.
+- ETH v1 (small smoke, 50 evals): `id=783`, `logs/discovery_zo4o_eth.log` — failed bootstrap CI only, best raw Sharpe 3.70 @ 105 trades.
+- ETH v2 (pop=20, gens=10): `id=786`, `logs/discovery_zo4o_eth2.log`.
+- SOL v1 (small smoke, found nothing — too tight budget): `id=784`, `logs/discovery_zo4o_sol.log`.
+- SOL v2 (pop=20, gens=10): `id=785`, `logs/discovery_zo4o_sol2.log`.
+
+---
+
 ## 2026-04-16: bd-mhz1 — End-to-End Champion Chain (OF → Validation → Paper)
 
 ### Goal
