@@ -21,6 +21,9 @@ from typing import TYPE_CHECKING, Protocol
 
 logger = logging.getLogger(__name__)
 
+_MIN_DEFAULT_PURGE_BARS = 50
+_MIN_FOLD_SAMPLES = 10
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -217,12 +220,9 @@ class PurgedKFold:
         Raises:
             ValueError: If n_samples is too small for the configuration.
         """
-        # SPEC Section 8: purge period = max indicator lookback
-        # Safety floor: without an explicit indicator_lookback_bars, the default
-        # purge_pct=0.01 underpurges on low-bar-count datasets (e.g. 4h bars for
-        # 1y ≈ 2190 bars → 22 bars, insufficient for EMA-50+ warm-up). Clamp to
-        # a minimum so long-period indicators cannot leak across folds silently.
-        _MIN_DEFAULT_PURGE_BARS = 50
+        # SPEC Section 8: purge period = max indicator lookback.
+        # Without an explicit lookback, default purge_pct=0.01 underpurges on
+        # low-bar-count datasets (4h × 1y → 22 bars; EMA-50+ leaks).
         if self.indicator_lookback_bars is not None and self.indicator_lookback_bars > 0:
             purge_len = self.indicator_lookback_bars
             computed_pct = purge_len / n_samples if n_samples > 0 else 0.0
@@ -237,14 +237,9 @@ class PurgedKFold:
                 )
         else:
             raw_purge_len = int(n_samples * self.purge_pct)
-            # Only clamp when purge is actually requested AND the dataset is
-            # large enough to absorb the clamp without breaking fold sizing.
-            # Required per-fold samples: n_splits * min_samples_per_fold(10) +
-            # total_gap * (n_splits - 1). Skip the clamp on synthetic small
-            # datasets where it would make splits infeasible.
-            min_fold_samples = 10
+            # Only clamp when the dataset can absorb it without making folds infeasible.
             embargo_len_est = int(n_samples * self.embargo_pct)
-            headroom = n_samples - self.n_splits * min_fold_samples
+            headroom = n_samples - self.n_splits * _MIN_FOLD_SAMPLES
             max_feasible_purge = max(
                 raw_purge_len,
                 headroom // max(1, self.n_splits - 1) - embargo_len_est,

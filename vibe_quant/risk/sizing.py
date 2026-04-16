@@ -83,10 +83,6 @@ class KellyConfig(SizerConfig):
             raise ValueError("avg_loss must be positive")
         if not (Decimal(0) < self.kelly_fraction <= Decimal(1)):
             raise ValueError("kelly_fraction must be in (0, 1]")
-        # Unit-consistency guard: mixing a fractional avg_win (e.g. 0.02)
-        # with a dollar-amount avg_loss (e.g. 10.0) silently mis-sizes
-        # positions by orders of magnitude. Require the ratio to stay
-        # within a sane band so a unit mixup is caught at construction.
         ratio = self.avg_win / self.avg_loss
         if ratio < Decimal("0.01") or ratio > Decimal("100"):
             raise ValueError(

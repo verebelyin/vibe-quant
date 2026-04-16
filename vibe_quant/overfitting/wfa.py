@@ -236,6 +236,10 @@ class BaseBacktestRunner(ABC):
         ...
 
 
+_MIN_IS_RETURN = 0.001
+_MAX_EFFICIENCY = 5.0
+
+
 class WalkForwardAnalysis:
     """Walk-Forward Analysis executor.
 
@@ -429,14 +433,9 @@ class WalkForwardAnalysis:
         aggregated_oos_sharpe = sum_oos_sharpe * inv_n
         aggregated_oos_return = sum_oos_return * inv_n
 
-        # Efficiency: mean(OOS_return) / mean(IS_return)
-        # Guard: near-zero IS return would produce astronomical efficiency that
-        # always passes the robustness gate despite no real IS edge. Require a
-        # minimum |mean_is_return| and cap the ratio to keep the metric bounded.
+        # Tiny IS denominators inflate ratio without real edge; cap output.
         mean_is_return = sum_is_return * inv_n
-        _MIN_IS_RETURN = 0.001  # 0.1% — below this, IS is effectively noise
-        _MAX_EFFICIENCY = 5.0
-        if mean_is_return <= 0 or abs(mean_is_return) < _MIN_IS_RETURN:
+        if mean_is_return < _MIN_IS_RETURN:
             efficiency = 0.0
         else:
             efficiency = min(aggregated_oos_return / mean_is_return, _MAX_EFFICIENCY)

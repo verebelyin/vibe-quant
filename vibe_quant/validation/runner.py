@@ -581,14 +581,9 @@ class ValidationRunner:
         # provides sub-bar resolution for the matching engine
         if timeframe in self._SUB_BAR_TIMEFRAMES and not has_detail_data:
             if latency_preset is not None:
-                # User (or the run config) asked for latency; surface the drop
-                # so the operator is not misled into thinking a 1m strategy
-                # was latency-tested when in fact it was not.
                 logger.warning(
-                    "Latency preset %r requested for %s strategy but no "
-                    "sub-bar detail data is loaded; latency is being skipped "
-                    "(NT LatencyModel defers orders by a full bar on 1m data). "
-                    "Pass detail_timeframe (e.g. '5s') to enable latency.",
+                    "latency preset %r dropped for %s: no sub-bar detail data "
+                    "(pass detail_timeframe e.g. '5s' to enable)",
                     latency_preset,
                     timeframe,
                 )

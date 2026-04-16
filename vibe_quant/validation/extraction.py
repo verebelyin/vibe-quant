@@ -359,15 +359,10 @@ def extract_trades(
     if result.total_trades > 0:
         result.win_rate = winning / result.total_trades
 
-    # Funding costs are not modeled (NT Position API does not expose cumulative
-    # funding). For multi-day perpetuals holds this can be 5–30% of PnL — log
-    # once per validation run so the omission is visible in the artefacts.
+    # NT Position API exposes no cumulative funding; multi-day holds may diverge.
     if result.total_trades > 0:
         logger.warning(
-            "Validation run %s: funding fees not modeled — reported PnL "
-            "excludes per-position funding (NT Position API limitation). "
-            "Multi-day holds may have true PnL materially different from "
-            "reported.",
+            "run %s: funding fees not modeled (NT Position API limitation)",
             result.run_id,
         )
 
