@@ -856,6 +856,114 @@ class TestPaperTradingNode:
         assert fake_persistence.save_calls >= 1
         assert fake_persistence.close_calls == 1
 
+    def test_capture_checkpoint_empty_when_no_trading_node(self, db_path: Path) -> None:
+        """Before build/after teardown the cache is absent; emit an empty snapshot."""
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+        node = PaperTradingNode(config)
+
+        checkpoint = node._capture_checkpoint()
+        assert checkpoint.positions == {}
+        assert checkpoint.orders == {}
+        assert checkpoint.balance == {}
+        # node_status should always populate so we can trace lifecycle across restarts
+        assert checkpoint.node_status.get("state") == NodeState.INITIALIZING.value
+
+    def test_capture_checkpoint_reads_cache(self, db_path: Path) -> None:
+        """Populated cache → positions/orders/balance make it into the snapshot,
+        and the whole structure is json.dumps-safe (regression for bd-hobf:
+        previously empty, which made crash-recovery checkpoints useless)."""
+        import json as _json
+
+        binance = BinanceTestnetConfig("key", "secret")
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=binance,
+            symbols=["BTCUSDT"],
+            strategy_id=1,
+            db_path=db_path,
+        )
+        node = PaperTradingNode(config)
+
+        class _Id:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+        class _Position:
+            def __init__(self, pid: str) -> None:
+                self.id = _Id(pid)
+
+            def to_dict(self) -> dict[str, str]:
+                return {"position_id": self.id.value, "quantity": "0.01"}
+
+        class _Order:
+            def __init__(self, oid: str) -> None:
+                self.client_order_id = _Id(oid)
+
+            def to_dict(self) -> dict[str, str]:
+                return {"client_order_id": self.client_order_id.value, "side": "BUY"}
+
+        class _Currency:
+            def __init__(self, code: str) -> None:
+                self.code = code
+
+        class _Money:
+            def __init__(self, amount: Decimal) -> None:
+                self._amount = amount
+
+            def as_decimal(self) -> Decimal:
+                return self._amount
+
+        class _Account:
+            id = _Id("BINANCE-USDT_FUTURES-master")
+
+            def balances_total(self) -> dict[_Currency, _Money]:
+                return {_Currency("USDT"): _Money(Decimal("5000.0"))}
+
+            def balances_free(self) -> dict[_Currency, _Money]:
+                return {_Currency("USDT"): _Money(Decimal("4990.0"))}
+
+            def balances_locked(self) -> dict[_Currency, _Money]:
+                return {_Currency("USDT"): _Money(Decimal("10.0"))}
+
+        class _Cache:
+            def positions_open(self):  # noqa: ANN202
+                return [_Position("BTCUSDT-PERP.BINANCE-LONG")]
+
+            def orders_open(self):  # noqa: ANN202
+                return [_Order("O-001")]
+
+            def accounts(self):  # noqa: ANN202
+                return [_Account()]
+
+        class _FakeTradingNode:
+            cache = _Cache()
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert "BTCUSDT-PERP.BINANCE-LONG" in checkpoint.positions
+        assert checkpoint.positions["BTCUSDT-PERP.BINANCE-LONG"]["quantity"] == "0.01"
+        assert "O-001" in checkpoint.orders
+        assert checkpoint.orders["O-001"]["side"] == "BUY"
+        account_bal = checkpoint.balance["BINANCE-USDT_FUTURES-master"]
+        assert account_bal["total"]["USDT"] == "5000.0"
+        assert account_bal["free"]["USDT"] == "4990.0"
+        assert account_bal["locked"]["USDT"] == "10.0"
+
+        # Critical: StatePersistence.save_checkpoint uses json.dumps on each
+        # dict — the snapshot must be directly serializable.
+        _json.dumps(checkpoint.positions)
+        _json.dumps(checkpoint.orders)
+        _json.dumps(checkpoint.balance)
+
 
 class TestNodeStateEnum:
     """Tests for NodeState enum."""

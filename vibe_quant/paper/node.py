@@ -459,14 +459,65 @@ class PaperTradingNode:
         loop.add_signal_handler(signal.SIGWINCH, close_all_handler, signal.SIGWINCH)
 
     def _capture_checkpoint(self) -> StateCheckpoint:
-        """Capture current node state for persistence."""
+        """Capture current node state for persistence.
+
+        Reads open positions/orders and per-account balances off the
+        TradingNode cache so a crash-restart can reconcile against the
+        live venue. Before ``node.build()`` and after teardown the cache
+        is unavailable — in those cases we emit an empty snapshot rather
+        than propagate an exception that would kill the periodic
+        checkpoint loop.
+        """
+        positions: dict[str, object] = {}
+        orders: dict[str, object] = {}
+        balance: dict[str, object] = {}
+
+        cache = getattr(self._trading_node, "cache", None)
+        if cache is not None:
+            with contextlib.suppress(Exception):
+                for pos in cache.positions_open():
+                    positions[pos.id.value] = pos.to_dict()
+            with contextlib.suppress(Exception):
+                for order in cache.orders_open():
+                    orders[order.client_order_id.value] = order.to_dict()
+            with contextlib.suppress(Exception):
+                for account in cache.accounts():
+                    balance[account.id.value] = self._serialize_account_balance(account)
+
         return StateCheckpoint(
             trader_id=self._config.trader_id,
-            positions={},
-            orders={},
-            balance={},
+            positions=positions,
+            orders=orders,
+            balance=balance,
             node_status=self._status.to_dict(),
         )
+
+    @staticmethod
+    def _serialize_account_balance(account: object) -> dict[str, dict[str, str]]:
+        """Serialize AccountBalance data to a JSON-friendly shape.
+
+        Returns ``{"total": {CCY: amount_str}, "free": {...}, "locked": {...}}``.
+        Decimal amounts are stringified so ``json.dumps`` in
+        :meth:`StatePersistence.save_checkpoint` doesn't choke.
+        """
+
+        def _as_currency_amounts(balances: object) -> dict[str, str]:
+            out: dict[str, str] = {}
+            if balances is None:
+                return out
+            # ``balances_total/free/locked`` return dict[Currency, Money].
+            items = balances.items() if hasattr(balances, "items") else []
+            for currency, money in items:
+                code = getattr(currency, "code", str(currency))
+                amount = money.as_decimal() if hasattr(money, "as_decimal") else money
+                out[code] = str(amount)
+            return out
+
+        return {
+            "total": _as_currency_amounts(getattr(account, "balances_total", lambda: None)()),
+            "free": _as_currency_amounts(getattr(account, "balances_free", lambda: None)()),
+            "locked": _as_currency_amounts(getattr(account, "balances_locked", lambda: None)()),
+        }
 
     def _write_event(self, event_type: EventType, data: dict[str, object]) -> None:
         """Write event to log.
