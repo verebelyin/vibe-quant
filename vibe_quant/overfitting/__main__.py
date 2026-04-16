@@ -16,31 +16,89 @@ from pathlib import Path
 
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig
+from vibe_quant.overfitting.wfa import WFAConfig
 
 
 def parse_filters(filters_str: str) -> FilterConfig:
     """Parse comma-separated filter names into FilterConfig.
 
-    Args:
-        filters_str: Comma-separated filter names (dsr, wfa, pkfold/cv).
-            Empty string or "all" enables all filters.
-
-    Returns:
-        FilterConfig with specified filters enabled.
+    Empty string or ``"all"`` enables all filters.
     """
     if not filters_str or filters_str.lower() == "all":
         return FilterConfig.default()
 
     filters = [f.strip().lower() for f in filters_str.split(",")]
-
     enable_dsr = "dsr" in filters
     enable_wfa = "wfa" in filters
     enable_cv = "pkfold" in filters or "cv" in filters
-
     return FilterConfig(
         enable_dsr=enable_dsr,
         enable_wfa=enable_wfa,
         enable_purged_kfold=enable_cv,
+    )
+
+
+def build_wfa_config(args: argparse.Namespace) -> WFAConfig | None:
+    """Build a WFAConfig from CLI args.
+
+    Returns ``None`` when no WFA overrides were passed (pipeline will use
+    ``WFAConfig.default()``). When ``--wfa-auto-size`` is set, derives
+    window sizes from ``--start-date``/``--end-date`` using the SPEC
+    ratios (IS=75% / OOS=25%, step=~8% of window, window=~75% of range)
+    so short screening ranges don't trip the default 360-day window
+    (bd-xbov).
+    """
+    defaults = WFAConfig.default()
+
+    # getattr fallbacks let callers that construct a minimal Namespace
+    # (older tests) skip this helper entirely without crashing.
+    is_days = getattr(args, "wfa_is_days", None)
+    oos_days = getattr(args, "wfa_oos_days", None)
+    step_days = getattr(args, "wfa_step_days", None)
+    min_windows = getattr(args, "wfa_min_windows", None)
+    auto_size = getattr(args, "wfa_auto_size", False)
+
+    if (
+        is_days is None
+        and oos_days is None
+        and step_days is None
+        and min_windows is None
+        and not auto_size
+    ):
+        return None
+
+    if auto_size:
+        start_date_str = getattr(args, "start_date", None)
+        end_date_str = getattr(args, "end_date", None)
+        if not (start_date_str and end_date_str):
+            msg = "--wfa-auto-size requires --start-date and --end-date"
+            raise ValueError(msg)
+        start = date.fromisoformat(start_date_str)
+        end = date.fromisoformat(end_date_str)
+        total_days = (end - start).days + 1
+        window = max(20, int(total_days * 0.75))
+        # SPEC ratios: IS=270, OOS=90 out of 360 → 3:1 split.
+        is_days = is_days or max(14, int(window * 0.75))
+        oos_days = oos_days or max(6, window - is_days)
+        step_days = step_days or max(3, int(window * 0.08))
+        # On short ranges 8 windows is impossible; estimate achievable.
+        if min_windows is None:
+            est = max(1, (total_days - (is_days + oos_days)) // step_days + 1)
+            min_windows = max(1, min(est, defaults.min_windows))
+
+    return WFAConfig(
+        in_sample_days=is_days if is_days is not None else defaults.in_sample_days,
+        out_of_sample_days=(
+            oos_days if oos_days is not None else defaults.out_of_sample_days
+        ),
+        step_days=step_days if step_days is not None else defaults.step_days,
+        min_windows=(
+            min_windows if min_windows is not None else defaults.min_windows
+        ),
+        min_oos_sharpe=defaults.min_oos_sharpe,
+        max_degradation=defaults.max_degradation,
+        min_consistency=defaults.min_consistency,
+        min_efficiency=defaults.min_efficiency,
     )
 
 
@@ -54,7 +112,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         Exit code (0 = success).
     """
     # Parse filter config
+    import dataclasses
+
     config = parse_filters(args.filters)
+    wfa_config = build_wfa_config(args)
+    if wfa_config is not None:
+        config = dataclasses.replace(config, wfa_config=wfa_config)
 
     # Parse dates if provided
     data_start = None
@@ -313,6 +376,37 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-mock",
         action="store_true",
         help="Allow MockBacktestRunner fallback for WFA/CV (synthetic results)",
+    )
+    # WFA window sizing — lets users shrink from the 360d default to fit
+    # short screening ranges (bd-xbov). Leave unset to keep defaults.
+    run_parser.add_argument(
+        "--wfa-is-days",
+        type=int,
+        help="WFA in-sample window days (default: 270)",
+    )
+    run_parser.add_argument(
+        "--wfa-oos-days",
+        type=int,
+        help="WFA out-of-sample window days (default: 90)",
+    )
+    run_parser.add_argument(
+        "--wfa-step-days",
+        type=int,
+        help="WFA window step days (default: 30)",
+    )
+    run_parser.add_argument(
+        "--wfa-min-windows",
+        type=int,
+        help="Minimum WFA windows required (default: 8)",
+    )
+    run_parser.add_argument(
+        "--wfa-auto-size",
+        action="store_true",
+        help=(
+            "Derive WFA window sizes from --start-date/--end-date using "
+            "SPEC ratios (IS=75%%, OOS=25%%, step=~8%% of window). "
+            "Useful for short screening ranges."
+        ),
     )
 
     # Report command

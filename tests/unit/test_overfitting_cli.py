@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from vibe_quant.overfitting.__main__ import (
+    build_wfa_config,
     cmd_report,
     cmd_run,
     main,
@@ -157,6 +158,78 @@ class TestParseFilters:
         config = parse_filters(" dsr , wfa ")
         assert config.enable_dsr is True
         assert config.enable_wfa is True
+
+
+class TestBuildWFAConfig:
+    """build_wfa_config lets the CLI override the 360d default so short
+    screening ranges stop tripping 'data range too short' (bd-xbov).
+    """
+
+    def _ns(self, **kw):
+        import argparse
+
+        defaults = {
+            "wfa_is_days": None,
+            "wfa_oos_days": None,
+            "wfa_step_days": None,
+            "wfa_min_windows": None,
+            "wfa_auto_size": False,
+            "start_date": None,
+            "end_date": None,
+        }
+        defaults.update(kw)
+        return argparse.Namespace(**defaults)
+
+    def test_no_overrides_returns_none(self) -> None:
+        assert build_wfa_config(self._ns()) is None
+
+    def test_explicit_days_honored(self) -> None:
+        cfg = build_wfa_config(
+            self._ns(wfa_is_days=60, wfa_oos_days=20, wfa_step_days=10, wfa_min_windows=2)
+        )
+        assert cfg is not None
+        assert cfg.in_sample_days == 60
+        assert cfg.out_of_sample_days == 20
+        assert cfg.step_days == 10
+        assert cfg.min_windows == 2
+
+    def test_partial_override_keeps_defaults(self) -> None:
+        cfg = build_wfa_config(self._ns(wfa_is_days=60))
+        assert cfg is not None
+        assert cfg.in_sample_days == 60
+        # Untouched fields retain WFAConfig.default() values.
+        assert cfg.out_of_sample_days == 90
+        assert cfg.step_days == 30
+
+    def test_auto_size_fits_short_range(self) -> None:
+        # 121-day range (the bd-xbov regression case: run 754).
+        cfg = build_wfa_config(
+            self._ns(wfa_auto_size=True, start_date="2025-11-17", end_date="2026-03-17")
+        )
+        assert cfg is not None
+        # Window should fit the range.
+        assert cfg.in_sample_days + cfg.out_of_sample_days <= 121
+        # Min_windows scaled to what the range can actually produce.
+        assert cfg.min_windows >= 1
+        # SPEC-ish ratio: IS > OOS.
+        assert cfg.in_sample_days > cfg.out_of_sample_days
+
+    def test_auto_size_requires_dates(self) -> None:
+        with pytest.raises(ValueError, match="requires --start-date"):
+            build_wfa_config(self._ns(wfa_auto_size=True))
+
+    def test_auto_size_with_explicit_override(self) -> None:
+        # Explicit values win over the auto-derived ones.
+        cfg = build_wfa_config(
+            self._ns(
+                wfa_auto_size=True,
+                start_date="2025-01-01",
+                end_date="2025-05-01",
+                wfa_is_days=50,
+            )
+        )
+        assert cfg is not None
+        assert cfg.in_sample_days == 50
 
 
 class TestCmdRun:
