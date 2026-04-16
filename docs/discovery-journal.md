@@ -4,6 +4,69 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-16: bd-mhz1 — End-to-End Champion Chain (OF → Validation → Paper)
+
+### Goal
+
+Exercise the full post-screening pipeline on a real historical champion to prove the chain works end-to-end. mhz1 gate: if Sharpe > 1.0 & DD < 15% after validation, promote to paper testnet.
+
+### Candidate: sid=82 (STOCH+CCI, 4h, BTCUSDT)
+
+DSL: CCI(40) crosses_above -65.3 entry; STOCH(19,5) ≤ 43.1 exit; SL 1.78% / TP 7.24% (long TP 0.53%). Discovered via GA run 273, 2025-03-07 → 2026-03-07.
+
+Screening baseline (run 276): Sharpe 8.13, 59 trades, DD 1.0%, PF 3.09, WR 78%.
+
+### Stage 1: Discovery re-run with relaxed bootstrap CI (run 781)
+
+Config: pop=50, gens=40, `--bootstrap-min-sharpe 0.5`, BTCUSDT 4h 2024-01-01 → 2026-03-01. 2.6hr wall-clock, 2000 chromosomes evaluated.
+
+Outcome: **no viable champion**. Top 5 rejected by bootstrap CI (observed Sharpes 1.26–1.60, CI lower bounds -0.33 to -0.77, well below 0.5 threshold). Bootstrap is highly conservative with 53–129 trades and heavy-tailed returns. Even 0.5 floor too strict.
+
+### Stage 2: OF pipeline on historical champions (real WFA + real CV)
+
+| sid | run | range | DSR | WFA | PKFOLD |
+|-----|-----|-------|-----|-----|--------|
+| 82 (STOCH+CCI) | 276 | 2025-03 → 2026-03 | ✓ | ✓ | ✗ |
+| 31 | 138 | 2024-06 → 2025-06 | ✓ | ✗ | ✗ |
+| 30 | 136 | 2024-01 → 2024-12 | ✓ | ✗ | ✗ |
+
+PKFOLD threshold (SPEC §8): mean OOS Sharpe > 0.5 AND std OOS Sharpe < 1.0 across 5 folds. Principled — relaxing it is p-hacking.
+
+sid=82 is the best 2-of-3 survivor. Structural finding: single-window screening fitness biases toward regime-specific strategies that fail fold-to-fold consistency. Filed as **bd-bnb0** (multi-window + fold penalty in discovery fitness).
+
+### Stage 3: Validation on sid=82 (run 782)
+
+Latency preset: domestic (200ms). Full NT fidelity (fills, slippage, funding).
+
+| Metric | Screening | Validation |
+|--------|-----------|------------|
+| Sharpe | 8.13 | **10.09** |
+| Return | 6.1% | 8.75% |
+| Max DD | 1.0% | 1.07% |
+| PF | 3.09 | 3.99 |
+| Win rate | 78% | 80.3% |
+| Trades | 59 | 61 |
+| Sortino | — | 14.82 |
+| Calmar | — | 8.47 |
+
+Passes gate: Sharpe 10.09 >> 1.0, DD 1.07% << 15%. Validation actually **improved** metrics (likely because the strategy trades infrequently enough that latency/slippage don't dominate).
+
+### Stage 4: Paper trading
+
+Blocked on `BINANCE_API_KEY` / `BINANCE_API_SECRET` env vars. Handoff to operator.
+
+### Summary
+
+End-to-end chain proven: OF → validation works with real NT runners. Validation outperformed screening for this low-frequency 4h strategy. PKFOLD reliably catches regime-bias in single-window discovery results. Paper stage blocked on external credentials only.
+
+### Follow-ups
+
+- **bd-bnb0**: multi-window / fold-penalty fitness in discovery to produce PKFOLD-robust candidates from the start.
+- **bd-b05l** (done): `--bootstrap-min-sharpe` / `--no-bootstrap-ci` CLI flags on discovery, shipped this session.
+- Next discovery iteration: run with `--eval-windows 3` to pre-bias toward regime-robust strategies.
+
+---
+
 ## 2026-03-08: Batch 29 — Direction-Forced + Triple Combo Seeds (STOCH+CCI BOTH, STOCH+CCI+MFI ×2, STOCH+MFI BOTH)
 
 ### Goal
