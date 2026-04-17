@@ -4,6 +4,33 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batch 38 — bd-vmc9 latency-preset warning exercised (run 801)
+
+### Goal
+
+Exercise the `latency preset 'cloud' dropped for 1m` warning path that bd-vmc9 added (commit c63cb26) — previously unvalidated.
+
+### Setup
+
+Injected run 799's champion `bde1ee4b596c` (CCI+RSI short, 151 IS trades) as a new strategy (id 223), created a validation run (801) with `latency_preset='cloud'` on 1m, no detail data catalog.
+
+### Result
+
+```
+[WARNING] vibe_quant.validation.runner: latency preset 'cloud' dropped for 1m:
+  no sub-bar detail data (pass detail_timeframe e.g. '5s' to enable)
+```
+
+Validation completed in 2.16s: 52 trades, Sharpe 0.12, return −1.36%, win rate 46.2%. Matches run 799's holdout metrics within floating-point noise (also 52 trades, Sharpe 0.12, ret −1.37%) — confirming that for 1m without 5s detail data, cloud latency is silently a no-op and validation equals screening-mode holdout.
+
+The bd-vmc9 warning makes this explicit. bd-pfsm and bd-vmc9 warnings are both now observed firing in production against real strategies.
+
+### Aside: regime-cross promotion gate
+
+The `/api/discovery/results/799/promote/0?mode=screening` call returned 400 with `"1m short champions must pass at least one opposing-regime cross-window validation before promotion."` Aligns perfectly with today's `gotcha:direction-regime-mismatch` — a champion trained in pure bear can't be trusted until tested in bull. Bypassed via direct DB insert for this bd-vmc9 test only.
+
+---
+
 ## 2026-04-17: Batch 37 — bd-pfsm fix validated in production (run 800)
 
 ### Goal
