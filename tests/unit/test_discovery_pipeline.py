@@ -632,6 +632,33 @@ class TestWFARollingValidation:
             assert len(wfa.oos_windows) == wfa.total_windows
 
 
+class TestIndicatorPoolFilter:
+    @pytest.fixture(autouse=True)
+    def _restore_pool(self) -> Any:
+        from vibe_quant.discovery.operators import INDICATOR_POOL, _INDICATOR_NAMES
+
+        saved = dict(INDICATOR_POOL), list(_INDICATOR_NAMES)
+        yield
+        INDICATOR_POOL.clear()
+        INDICATOR_POOL.update(saved[0])
+        _INDICATOR_NAMES.clear()
+        _INDICATOR_NAMES.extend(saved[1])
+
+    def test_unknown_indicator_raises(self) -> None:
+        cfg = _make_config(indicator_pool=["RSI", "KAMA"])
+        pipe = DiscoveryPipeline(cfg, _mock_backtest)
+        with pytest.raises(ValueError, match="not available for GA discovery"):
+            pipe._apply_indicator_pool_filter()
+
+    def test_known_subset_filters_cleanly(self) -> None:
+        cfg = _make_config(indicator_pool=["RSI", "ATR"])
+        pipe = DiscoveryPipeline(cfg, _mock_backtest)
+        pipe._apply_indicator_pool_filter()
+        from vibe_quant.discovery.operators import INDICATOR_POOL
+
+        assert set(INDICATOR_POOL.keys()) == {"RSI", "ATR"}
+
+
 class TestElitePreservation:
     def test_elites_present_in_next_generation(self) -> None:
         cfg = _make_config(population_size=8, elite_count=2, use_crowding=False)

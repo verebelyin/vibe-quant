@@ -367,6 +367,17 @@ class DiscoveryPipeline:
 
         _ensure_pool()
         allowed = set(self.config.indicator_pool)
+        available = set(INDICATOR_POOL.keys())
+        unknown = sorted(allowed - available)
+        if unknown:
+            # Moving-average-type plugins register with threshold_range=None and
+            # are excluded from the GA pool (gene structure is indicator-vs-threshold).
+            raise ValueError(
+                f"indicator_pool contains names not available for GA discovery: "
+                f"{unknown}. Available: {sorted(available)}. "
+                f"(Indicators with threshold_range=None, e.g. price-vs-MA plugins, "
+                f"are not yet supported by the genome — see bd-9c1g.)"
+            )
         to_remove = [k for k in INDICATOR_POOL if k not in allowed]
         for k in to_remove:
             del INDICATOR_POOL[k]
