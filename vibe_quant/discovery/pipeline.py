@@ -791,16 +791,27 @@ class DiscoveryPipeline:
             # Don't filter here — just compute results
             cross_window_results, _ = self._evaluate_cross_windows(top_strategies)
 
-        if (
-            cfg.wfa_oos_step_days > 0
-            and cfg.train_test_split > 0
-            and holdout_dates is not None
-            and self._backtest_fn_factory is not None
-            and top_strategies
-        ):
-            wfa_results, _ = self._evaluate_wfa_rolling(
-                top_strategies, holdout_dates[0], holdout_dates[1],
-            )
+        if cfg.wfa_oos_step_days > 0:
+            skip_reason: str | None = None
+            if cfg.train_test_split <= 0:
+                skip_reason = "train_test_split=0 (pass --train-test-split > 0)"
+            elif not top_strategies:
+                skip_reason = "no top strategies survived guardrails"
+            elif holdout_dates is None:
+                skip_reason = "holdout_dates unavailable"
+            elif self._backtest_fn_factory is None:
+                skip_reason = "no backtest_fn_factory configured"
+
+            if skip_reason is None:
+                assert holdout_dates is not None
+                wfa_results, _ = self._evaluate_wfa_rolling(
+                    top_strategies, holdout_dates[0], holdout_dates[1],
+                )
+            else:
+                logger.warning(
+                    "WFA requested (wfa_oos_step_days=%d) but skipped: %s",
+                    cfg.wfa_oos_step_days, skip_reason,
+                )
 
         # Filter all arrays in sync: keep only strategies that passed all validations
         if cross_window_results or wfa_results:

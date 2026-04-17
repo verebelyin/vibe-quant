@@ -631,6 +631,74 @@ class TestWFARollingValidation:
             assert wfa.total_windows > 0
             assert len(wfa.oos_windows) == wfa.total_windows
 
+    def test_wfa_skip_warns_when_train_test_split_zero(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """WFA requested but train_test_split=0 → warning, not silent skip."""
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            wfa_oos_step_days=30,  # requested
+            # train_test_split defaults to 0
+        )
+        pipe = DiscoveryPipeline(cfg, _mock_backtest)
+        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
+            pipe.run()
+        assert any(
+            "WFA requested" in r.message and "train_test_split=0" in r.message
+            for r in caplog.records
+        ), f"expected WFA skip warning for train_test_split=0, got: {[r.message for r in caplog.records]}"
+
+    def test_wfa_skip_warns_when_no_backtest_factory(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """WFA requested with split but no backtest_fn_factory → warning."""
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            train_test_split=0.5,
+            start_date="2024-01-01", end_date="2024-03-16",
+            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            wfa_oos_step_days=30,
+        )
+        # No backtest_fn_factory passed.
+        pipe = DiscoveryPipeline(cfg, _mock_backtest, holdout_backtest_fn=_mock_backtest)
+        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
+            pipe.run()
+        assert any(
+            "WFA requested" in r.message and "backtest_fn_factory" in r.message
+            for r in caplog.records
+        ), f"expected WFA skip warning for missing factory, got: {[r.message for r in caplog.records]}"
+
+    def test_wfa_skip_warns_when_no_top_strategies(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """WFA requested with everything wired but no top strategies → warning."""
+        def _factory(start: str, end: str) -> Any:
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                return {"sharpe_ratio": 1.5, "max_drawdown": 0.1,
+                        "profit_factor": 1.8, "total_trades": 80, "total_return": 0.15}
+            return bt
+
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=2, elite_count=1,
+            min_trades=9999,  # guarantees 0 strategies pass
+            train_test_split=0.5,
+            start_date="2024-01-01", end_date="2024-03-16",
+            holdout_start_date="2024-03-16", holdout_end_date="2024-06-01",
+            wfa_oos_step_days=30,
+        )
+        pipe = DiscoveryPipeline(
+            cfg, _mock_backtest_few_trades,
+            holdout_backtest_fn=_mock_backtest_few_trades,
+            backtest_fn_factory=_factory,
+        )
+        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
+            result = pipe.run()
+        assert len(result.top_strategies) == 0
+        assert any(
+            "WFA requested" in r.message and "no top strategies" in r.message
+            for r in caplog.records
+        ), f"expected WFA skip warning for empty top strategies, got: {[r.message for r in caplog.records]}"
+
 
 class TestIndicatorPoolFilter:
     @pytest.fixture(autouse=True)
