@@ -1,5 +1,7 @@
 import { useRouterState } from "@tanstack/react-router";
 
+import { KillSwitch } from "./KillSwitch";
+
 const routeTitles: Record<string, string> = {
   "/strategies": "Strategy Management",
   "/discovery": "Discovery",
@@ -33,6 +35,8 @@ export function Header() {
             Live
           </span>
         </div>
+
+        <KillSwitch />
       </div>
     </header>
   );

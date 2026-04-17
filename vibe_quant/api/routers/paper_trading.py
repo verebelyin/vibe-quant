@@ -53,6 +53,15 @@ async def start_paper(
     jobs: JobMgr,
     ws: WsMgr,
 ) -> PaperStatusResponse:
+    # Refuse to start when the system kill switch is engaged.
+    # 423 Locked is the canonical code for resource-in-a-locked-state.
+    sys_state = state.get_system_state()
+    if sys_state.get("kill_switch"):
+        raise HTTPException(
+            status_code=423,
+            detail=f"System kill switch engaged: {sys_state.get('reason') or 'no reason'}",
+        )
+
     params: dict[str, object] = {}
     if body.sizing_method is not None:
         params["sizing_method"] = body.sizing_method

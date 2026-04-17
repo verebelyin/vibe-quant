@@ -390,6 +390,58 @@ class StateManager:
             self.conn.execute("DELETE FROM risk_configs WHERE id = ?", (config_id,))
             self.conn.commit()
 
+    # --- System state (kill switch) ---
+
+    def get_system_state(self) -> JsonDict:
+        """Read the singleton system_state row. Always returns a dict.
+
+        Returns:
+            Dict with keys: kill_switch (bool), reason (str|None),
+            killed_at (str|None), killed_by (str|None), updated_at (str).
+        """
+        row = self.conn.execute(
+            "SELECT kill_switch, reason, killed_at, killed_by, updated_at "
+            "FROM system_state WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            # Defensive: row should have been inserted by init_schema.
+            return {
+                "kill_switch": False,
+                "reason": None,
+                "killed_at": None,
+                "killed_by": None,
+                "updated_at": None,
+            }
+        return {
+            "kill_switch": bool(row[0]),
+            "reason": row[1],
+            "killed_at": row[2],
+            "killed_by": row[3],
+            "updated_at": row[4],
+        }
+
+    def set_kill_switch(self, reason: str, killed_by: str | None = None) -> None:
+        """Engage the kill switch. Idempotent — re-setting updates reason."""
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE system_state SET kill_switch = 1, reason = ?, "
+                "killed_at = datetime('now'), killed_by = ?, updated_at = datetime('now') "
+                "WHERE id = 1",
+                (reason, killed_by),
+            )
+            self.conn.commit()
+
+    def clear_kill_switch(self, cleared_by: str | None = None) -> None:
+        """Release the kill switch. Logs who cleared it in ``killed_by``."""
+        with self._write_lock:
+            self.conn.execute(
+                "UPDATE system_state SET kill_switch = 0, reason = NULL, "
+                "killed_at = NULL, killed_by = ?, updated_at = datetime('now') "
+                "WHERE id = 1",
+                (cleared_by,),
+            )
+            self.conn.commit()
+
     # --- Backtest Run CRUD ---
 
     def create_backtest_run(

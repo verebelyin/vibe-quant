@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 3
+SCHEMA_VERSION: int = 4
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -180,6 +180,18 @@ CREATE TABLE IF NOT EXISTS consistency_checks (
     parameters TEXT NOT NULL,
     checked_at TEXT NOT NULL
 );
+
+-- System state (singleton row, id=1). Persistent kill-switch + halt metadata.
+-- One row, updated in place; never deleted.
+CREATE TABLE IF NOT EXISTS system_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    kill_switch INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    killed_at TEXT,
+    killed_by TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO system_state (id, kill_switch) VALUES (1, 0);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);
