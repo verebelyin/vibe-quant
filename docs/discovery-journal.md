@@ -4,6 +4,58 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batch 33 — 1m WFA-enabled proven-combos (runs 793/794/795)
+
+### Goal
+
+After Batch 32 revealed the MA plugins can't be exercised in GA, switch back to proven threshold indicators and actually enable WFA (`wfa_oos_step_days=30`) to stress the full new stack: real NT-backed WFA runner (bd-yfbg), PKFold bias (bd-bnb0), DSR + bootstrap CI guardrails (bd-b05l), timeframe-scaled overtrade penalty (acc4348), and the bd-vmc9 calc-audit fixes.
+
+### Config
+
+| Run | Pool | Dir | Pop | Gens | TF | Window | WFA | Duration |
+|-----|------|-----|-----|------|----|----|-----|----------|
+| 793 | CCI+RSI | random | 15 | 10 | 1m | 2025-09-01 → 2026-02-28 (6mo) | 30d step | ~20m |
+| 794 | STOCH+CCI | random | 15 | 10 | 1m | 6mo | 30d | ~26m |
+| 795 | STOCH+ATR | short | 15 | 10 | 1m | 6mo | 30d | ~17m |
+
+All 3 runs used the bd-8gbv filter fix (raises on unknown indicators).
+
+### Results — GA phase
+
+| Run | Best strategy | Sharpe | PF | DD | Return | Trades | DSR sig |
+|-----|---------------|--------|-----|-----|--------|--------|---------|
+| 793 | CCI entry + RSI exit, short, sl=4.1% tp=4.6% | 3.36 | 1.64 | 5.9% | 9.7% | 63 | p=0.0000 ✓ |
+| 794 | STOCH entry + CCI/STOCH exit, short | 1.54 | 1.24 | 4.3% | 0.6% | 310 | p=0.0000 ✓ |
+| 795 | STOCH entry + ATR exit, short, sl=3.1% tp=4.9% | 2.86 | 1.52 | 8.5% | 8.0% | 69 | p=0.0000 ✓ |
+
+**0 strategies promoted — all three failed the hard `bootstrap CI / min trades` gate**, even though DSR was significant on every top candidate.
+
+### What this tells us about the new stack
+
+Pipeline order confirmed: GA → DSR (pass) → bootstrap CI (FAIL) → [WFA / PKFold never reached]. Because bootstrap CI is the first hard gate after DSR, zero runs reached the WFA post-discovery analysis. No WFA log output on any run. This is the **intended** guardrail pipeline — just very aggressive for sub-100-trade 1m champions (zo4o already flagged this).
+
+Exercised cleanly (no errors):
+- Multi-window fitness (3 PKFold slices per eval — logged as `Multi-window fitness: 3 windows — 2025-09-01→2025-10-31 | ...`)
+- DSR Gumbel significance check
+- Bootstrap CI guardrail (doing its job — rejected all)
+- Timeframe-scaled overtrade penalty (silent)
+- Calc-audit fixes incl. WFA cap + PKFold clamp + `starting_balance` plumbing (silent)
+
+Not exercised:
+- Post-GA WFA rolling analysis
+- Post-GA PKFold explicit OOS fold reporting
+
+### Takeaway
+
+The new guardrail stack works end-to-end. The bottleneck is **bootstrap CI** rejecting 1m strategies with statistically-significant-but-sub-100-trade samples. Two ways forward for observing WFA/PKFold output:
+
+1. `--no-bootstrap-ci` (zo4o approach, exploratory only) — lets champions flow into WFA/PKFold post-analysis so we see their reports.
+2. Stretch to a 12+ month window so trade counts cross bootstrap's lower bound. Doubles runtime.
+
+CCI+RSI short at sl=4.1%/tp=4.6% (uid `85bfb2b29c55`, Sharpe 3.36) is the standout champion — worth logging even though it didn't promote. Comparable to the zo4o SOL champion (Sharpe 4.77) in quality but with much tighter SL.
+
+---
+
 ## 2026-04-17: Batch 32 — 1m adaptive-MA probe (runs 790/791/792)
 
 ### Goal
