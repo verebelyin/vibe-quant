@@ -387,7 +387,8 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
     wfa = WFARollingResult(
         oos_windows=oos,
         window_dates=[("2025-01-15", "2025-01-22"), ("2025-01-22", "2025-01-29")],
-        windows_profitable=1, total_windows=2, consistency=0.5, passed=False,
+        windows_profitable=1, windows_sharpe_positive=1, total_windows=2,
+        consistency=0.5, sharpe_consistency=0.5, passed=False,
     )
 
     def fake_run(self) -> DiscoveryResult:

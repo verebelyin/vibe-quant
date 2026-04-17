@@ -631,6 +631,52 @@ class TestWFARollingValidation:
             assert wfa.total_windows > 0
             assert len(wfa.oos_windows) == wfa.total_windows
 
+    def test_wfa_rolling_exposes_sharpe_consistency(self) -> None:
+        """Sharpe-based consistency counted separately from return-based.
+
+        Window 0: return +0.15 AND sharpe +1.5 → both count.
+        Window 1: return -0.01 BUT sharpe +1.1 → only sharpe+ counts.
+        Window 2: return -0.02 AND sharpe -0.5 → neither.
+        """
+        call_count = [0]
+        def _factory(start: str, end: str) -> Any:
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                i = call_count[0] % 3
+                call_count[0] += 1
+                profiles = [
+                    (1.5, 0.15),
+                    (1.1, -0.01),
+                    (-0.5, -0.02),
+                ]
+                sr, ret = profiles[i]
+                return {"sharpe_ratio": sr, "max_drawdown": 0.1,
+                        "profit_factor": 1.2, "total_trades": 80, "total_return": ret}
+            return bt
+
+        cfg = _make_config(
+            population_size=6, max_generations=2, top_k=1, elite_count=1,
+            train_test_split=0.5,
+            start_date="2024-01-01", end_date="2024-03-16",
+            holdout_start_date="2024-03-16", holdout_end_date="2024-06-15",
+            wfa_oos_step_days=30, wfa_min_consistency=0.5,
+        )
+        pipe = DiscoveryPipeline(
+            cfg, _mock_backtest,
+            holdout_backtest_fn=_mock_backtest,
+            backtest_fn_factory=_factory,
+        )
+        result = pipe.run()
+
+        assert len(result.wfa_results) == 1
+        wfa = result.wfa_results[0]
+        assert wfa.total_windows == 3
+        assert wfa.windows_profitable == 1
+        assert wfa.windows_sharpe_positive == 2
+        assert wfa.consistency == pytest.approx(1 / 3)
+        assert wfa.sharpe_consistency == pytest.approx(2 / 3)
+        # Gate still return-based: 1/3 < 0.5 → FAIL
+        assert wfa.passed is False
+
     def test_wfa_skip_warns_when_train_test_split_zero(
         self, caplog: pytest.LogCaptureFixture,
     ) -> None:

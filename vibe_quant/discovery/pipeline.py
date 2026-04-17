@@ -214,17 +214,21 @@ class WFARollingResult:
     Attributes:
         oos_windows: Per-window HoldoutResult for each rolling OOS window.
         window_dates: (start, end) for each OOS window.
-        windows_profitable: Number of profitable OOS windows.
+        windows_profitable: Number of OOS windows with total_return > 0.
+        windows_sharpe_positive: Number of OOS windows with sharpe > 0.
         total_windows: Total OOS windows.
-        consistency: Fraction of profitable windows.
-        passed: Whether consistency >= wfa_min_consistency.
+        consistency: Fraction of profitable (return-based) windows — the gate.
+        sharpe_consistency: Fraction of sharpe-positive windows — exposure only.
+        passed: Whether consistency >= wfa_min_consistency (return-based).
     """
 
     oos_windows: list[HoldoutResult]
     window_dates: list[tuple[str, str]]
     windows_profitable: int
+    windows_sharpe_positive: int
     total_windows: int
     consistency: float
+    sharpe_consistency: float
     passed: bool
 
 
@@ -1112,6 +1116,7 @@ class DiscoveryPipeline:
         for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
             oos_results: list[HoldoutResult] = []
             profitable = 0
+            sharpe_positive = 0
 
             for ws, we in windows:
                 try:
@@ -1145,16 +1150,21 @@ class DiscoveryPipeline:
                 oos_results.append(hr)
                 if hr.total_return > 0:
                     profitable += 1
+                if hr.sharpe_ratio > 0:
+                    sharpe_positive += 1
 
             consistency = profitable / len(windows) if windows else 0.0
+            sharpe_consistency = sharpe_positive / len(windows) if windows else 0.0
             passed = consistency >= min_consistency
 
             wfa = WFARollingResult(
                 oos_windows=oos_results,
                 window_dates=list(windows),
                 windows_profitable=profitable,
+                windows_sharpe_positive=sharpe_positive,
                 total_windows=len(windows),
                 consistency=consistency,
+                sharpe_consistency=sharpe_consistency,
                 passed=passed,
             )
             wfa_results.append(wfa)
@@ -1165,9 +1175,10 @@ class DiscoveryPipeline:
                 for i, hr in enumerate(oos_results)
             ]
             logger.info(
-                "  #%d %s: %s → %d/%d profitable (%.0f%%) %s",
+                "  #%d %s: %s → %d/%d profitable (%.0f%%) | %d/%d sharpe+ (%.0f%%) %s",
                 rank, chrom.uid, " | ".join(w_strs),
                 profitable, len(windows), consistency * 100,
+                sharpe_positive, len(windows), sharpe_consistency * 100,
                 "PASS" if passed else "FAIL",
             )
 

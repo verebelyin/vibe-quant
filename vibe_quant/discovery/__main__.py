@@ -835,8 +835,10 @@ def main() -> int:
                 wfa = result.wfa_results[idx]
                 entry["wfa"] = {
                     "windows_profitable": wfa.windows_profitable,
+                    "windows_sharpe_positive": wfa.windows_sharpe_positive,
                     "total_windows": wfa.total_windows,
                     "consistency": wfa.consistency,
+                    "sharpe_consistency": wfa.sharpe_consistency,
                     "passed": wfa.passed,
                     "windows": [
                         {
