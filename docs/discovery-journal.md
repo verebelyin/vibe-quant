@@ -33,6 +33,8 @@ And backtest_results.walk_forward_efficiency = NULL (expected when WFA doesn't r
 
 Runs 798 and 800 (12mo window) both collapsed to all-zero fitness. Run 799 (6mo window, 2025-09→2026-02) found a champion. Likely the 2025-03→2025-09 period has market characteristics CCI+RSI short genomes can't latch onto (low volatility? trending? unclear without a data probe). Not a pipeline bug — a strategy-space issue. Defer to a future diagnostic run.
 
+**Resolved 2026-04-17 (Batch 37b):** Regime mismatch. 2025-03→2025-09 was bull +28.4%; 2025-09→2026-02 was bear −39.2%. Short-only GA has no edge in a bull phase and collapses to 0 trades. Run 799 worked because its window was pure bear. Saved as `gotcha:direction-regime-mismatch` in bd memory. Rule: match `--direction` to the window's dominant regime before launching discovery.
+
 ### End-of-day stack coverage (final)
 
 | New machinery | Status |
