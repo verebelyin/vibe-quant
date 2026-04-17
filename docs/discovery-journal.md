@@ -4,6 +4,48 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batches 34–35 — bootstrap-off and train-split probes (runs 796, 797)
+
+### Goal
+
+Batch 33 confirmed bootstrap CI gates all 1m sub-100-trade candidates. Two follow-on single-runs to see further along the pipeline:
+
+- **Batch 34 (run 796)** — CCI+RSI short, same config as 793, `--no-bootstrap-ci`. Exercises DSR + overtrade + calc-audit fixes while letting champions actually promote.
+- **Batch 35 (run 797)** — same as 34 but with `--train-test-split 0.5` hoping to trigger the post-GA WFA rolling analyser.
+
+### Batch 34 results (no bootstrap CI)
+
+1 strategy passed guardrails: `uid=6f359b677521` CCI+RSI short (entry CCI crosses_below -91, exit CCI crosses_above -155 OR RSI>56; sl=1.6% tp=3.3%). Sharpe 2.03, PF 1.26, DD 7.8%, 192 trades, 5.3% return. DSR p=0.0000. 19min runtime.
+
+Confirms: with bootstrap CI off, DSR + min-trades let a reasonable-trade-count 1m strategy through. Looser SL/TP pair than Batch 33 champion (63 trades, Sharpe 3.36 @ 4.1/4.6%). Classic bias-variance tradeoff: 192 trades have lower Sharpe but much tighter statistical CI.
+
+### Batch 35 findings — WFA still silently skipped
+
+Discovery converged to 0 viable strategies. Train window compressed to 3 months by `train_test_split=0.5`; 1m CCI+RSI doesn't produce enough signal in 3mo, GA collapsed to all-zero fitness. WFA never ran — because it only kicks in for `top_strategies`, and there were none.
+
+Log only shows: `Train/test split: ratio=0.50 train=2025-09-01→2025-11-30 holdout=2025-11-30→2026-02-28` and nothing WFA-related.
+
+### Bug uncovered — WFA silent no-op
+
+`DiscoveryPipeline._evaluate_wfa_rolling` requires **both** `wfa_oos_step_days > 0` **AND** `train_test_split > 0` **AND** a holdout date pair **AND** a backtest factory. Passing just `--wfa-oos-step-days 30` (naïve approach, which is what Batch 33 did) silently no-ops WFA. Filed as a bead (P2) — options: error when incompatible, warn, or auto-default `train_test_split=0.3` when WFA is requested.
+
+### End-of-day stack coverage
+
+| New machinery | Exercised | Evidence |
+|---------------|-----------|----------|
+| Multi-window PKFold fitness (eval_windows=3) | ✅ | Log: "Multi-window fitness: 3 windows" (all batches) |
+| DSR guardrail | ✅ | Batch 33/34 logged p-values, all sig |
+| Bootstrap CI guardrail | ✅ | Batch 33 filtered 3/3; Batch 34 bypassed via flag |
+| Timeframe-scaled overtrade penalty | ✅ | Silent — logged as "overtrade=0.0000" in score breakdowns |
+| bd-vmc9 calc-audit fixes | ✅ | Silent — 0 errors across 6 runs |
+| Post-GA NT-backed WFA runner | ❌ | Needs a successful GA on split window |
+| Adaptive MA plugins (KAMA/VIDYA/FRAMA) in GA | ❌ | bd-9c1g — architectural gap |
+| bd-8gbv silent-drop filter | ✅ | Fixed + tested in same day |
+
+**Next step to close WFA:** 12-month window + `train_test_split=0.25` so train is ~9mo and WFA has a ~3mo holdout for 2-3 rolling windows. Or promote Batch 34's champion to screening and run a manual post-hoc WFA.
+
+---
+
 ## 2026-04-17: Batch 33 — 1m WFA-enabled proven-combos (runs 793/794/795)
 
 ### Goal
