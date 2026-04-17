@@ -4,6 +4,58 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batch 36 — post-GA WFA fired end-to-end (runs 798, 799)
+
+### Goal
+
+Close the remaining gap from Batch 35: exercise the post-GA NT-backed WFA rolling runner by giving it a GA that actually produces a top strategy on a split window.
+
+### Batch 36a — run 798 (failed via 3rd bd-pfsm path)
+
+12mo window 2025-03→2026-02, CCI+RSI short, `--train-test-split 0.25 --wfa-oos-step-days 30`. Following the "next step" from Batch 35 — but that advice assumed `train_test_split=0.25` meant 25% holdout. **It doesn't**: the flag means 25% *train*. So train was 3 months (2025-03→2025-05), holdout was 9 months. All 150 genomes produced 0 trades, GA collapsed to all-zero fitness, 0 strategies passed soft guardrails → WFA never ran.
+
+Uncovered a **3rd silent-skip path for bd-pfsm**: even when both `--train-test-split` and `--wfa-oos-step-days` are set correctly, WFA also silently skips when no top strategies survive guardrails. Log only shows `All top strategies failed soft guardrails, keeping unfiltered` then `DISCOVERY COMPLETE`.
+
+Two new gotchas saved to `bd remember`: `gotcha:train-test-split-semantics`, `gotcha:wfa-silent-skip-paths`. bd-pfsm updated with the 3rd path.
+
+### Batch 36b — run 799 (WFA fired, cleanly rejected overfit)
+
+Same config but flipped split: 6mo window 2025-09→2026-02, pop=20 gen=12, `--train-test-split 0.75 --wfa-oos-step-days 30`. 4.5mo train, 1.5mo holdout. 10min runtime.
+
+1 champion passed guardrails: `uid=bde1ee4b596c` CCI+RSI short. Train Sharpe 1.30, 151 trades, DD 2.6%, DSR p<0.0001.
+
+Full post-GA pipeline fired:
+- **Holdout eval**: train Sharpe 1.30 → holdout 0.12 (**90.8% degradation**, classic overfit signal)
+- **WFA rolling**: 1 OOS window (2026-01-14→2026-02-13), OOS Sharpe 1.04 (!), return -0.07%, 32 trades. Consistency 0/1 passed (returns-negative → fails profitability gate even with positive Sharpe)
+- **Final verdict**: `All strategies failed WFA — keeping originals` — system correctly rejected the overfit champion
+
+### Efficiency cap observation
+
+OOS Sharpe 1.04 / train Sharpe 1.30 = **0.80** (quite healthy). But the `consistency` metric uses return positivity, not Sharpe retention. A high-Sharpe-but-slightly-negative-return window counts as a fail. That's defensible (a real trading edge should make money, not just have good risk-adjusted variance) but worth noting for future WFA tuning.
+
+### Minor issue found
+
+`backtest_results.walk_forward_efficiency` column stayed NULL despite WFA running — WFA results live only in `notes.top_strategies[0].wfa` JSON. Filed as bd-2ur2 (P3).
+
+### End-of-day stack coverage (updated from Batch 35)
+
+| New machinery | Exercised | Evidence |
+|---------------|-----------|----------|
+| Post-GA NT-backed WFA runner | ✅ | Run 799 — 1 window fired, returned 32 trades on OOS |
+| Holdout evaluation pipeline | ✅ | Run 799 — 90.8% Sharpe degradation detected |
+| WFA consistency gate | ✅ | Run 799 — correctly rejected overfit (0/1 windows profitable) |
+| `walk_forward_efficiency` DB column | ❌ | bd-2ur2 — column stays NULL despite WFA running |
+| Adaptive MA plugins (KAMA/VIDYA/FRAMA) in GA | ❌ | bd-9c1g — unchanged |
+| bd-pfsm 3rd silent-skip path | 🆕 | Run 798 — documented & bead updated |
+
+### Next steps
+
+- Fix bd-pfsm with a single `logger.warning` covering all 3 paths
+- Decide on bd-9c1g: MACondition gene variant vs synthesized threshold
+- Bootstrap-CI 1m default — still a policy question, not addressed this session
+
+---
+
 ## 2026-04-17: Batches 34–35 — bootstrap-off and train-split probes (runs 796, 797)
 
 ### Goal
