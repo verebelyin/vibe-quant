@@ -11,9 +11,13 @@ import random
 from dataclasses import dataclass
 
 from vibe_quant.discovery.operators import (
+    _MA_CONDITION_TYPES,
+    MAX_MA_ENTRY_GENES,
+    MAX_MA_EXIT_GENES,
     THRESHOLD_RANGES,
     ConditionType,
     Direction,
+    PriceVsMAConditionGene,
     StrategyChromosome,
     StrategyGene,
     _ensure_pool,
@@ -373,6 +377,34 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
     if _normalize_direction(chrom.direction) is None:
         errors.append(f"invalid direction '{chrom.direction}'")
 
+    # MA genes (bd-9c1g Phase 1)
+    if len(chrom.ma_entry_genes) > MAX_MA_ENTRY_GENES:
+        errors.append(
+            f"ma_entry_genes count {len(chrom.ma_entry_genes)} exceeds cap {MAX_MA_ENTRY_GENES}"
+        )
+    if len(chrom.ma_exit_genes) > MAX_MA_EXIT_GENES:
+        errors.append(
+            f"ma_exit_genes count {len(chrom.ma_exit_genes)} exceeds cap {MAX_MA_EXIT_GENES}"
+        )
+    for label, genes in [("ma_entry", chrom.ma_entry_genes), ("ma_exit", chrom.ma_exit_genes)]:
+        for i, g in enumerate(genes):
+            prefix = f"{label}[{i}]"
+            if g.indicator_type not in MA_POOL:
+                errors.append(f"{prefix}: unknown MA '{g.indicator_type}'")
+                continue
+            if g.op not in _MA_CONDITION_TYPES:
+                errors.append(f"{prefix}: op '{g.op}' not valid for MA gene")
+            ma_def = MA_POOL[g.indicator_type]
+            for pname, (lo, hi) in ma_def.param_ranges.items():
+                val = g.parameters.get(pname)
+                if val is None:
+                    errors.append(f"{prefix}: missing param '{pname}'")
+                elif not (lo <= val <= hi):
+                    errors.append(f"{prefix}: param '{pname}'={val} out of range [{lo}, {hi}]")
+            for pname in g.parameters:
+                if pname not in ma_def.param_ranges:
+                    errors.append(f"{prefix}: unexpected param '{pname}'")
+
     return errors
 
 
@@ -409,6 +441,32 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
         cfg["period"] = int(gene.parameters.get("period", 14))
 
     return cfg
+
+
+def _ma_gene_to_indicator_config(gene: PriceVsMAConditionGene) -> dict[str, object]:
+    """Build DSL IndicatorConfig dict from an MA gene.
+
+    Schema-native ``period`` goes into the primary field; any
+    plugin-declared extras (e.g. FRAMA's ``fc``/``sc``) flow through as
+    additional keys and are picked up by the compiler's
+    ``_merge_effective_params`` via pydantic ``model_extra``.
+    """
+    cfg: dict[str, object] = {"type": gene.indicator_type}
+    period = gene.parameters.get("period")
+    if period is not None:
+        cfg["period"] = int(period)
+    for pname, pval in gene.parameters.items():
+        if pname == "period":
+            continue
+        # Preserve int-ness when the value is an integer-valued float
+        cfg[pname] = int(pval) if float(pval).is_integer() else float(pval)
+    return cfg
+
+
+def _ma_gene_to_condition_str(gene: PriceVsMAConditionGene, indicator_name: str) -> str:
+    """Emit ``close <op> <indicator_name>`` — no scalar threshold."""
+    op = _CONDITION_TO_DSL_OP[gene.op.value]
+    return f"close {op} {indicator_name}"
 
 
 def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
@@ -467,6 +525,26 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         ind_name = _gene_indicator_name(gene, i, "exit")
         indicators[ind_name] = _gene_to_indicator_config(gene)
         cond_str = _gene_to_condition_str(gene, ind_name)
+        if direction in (Direction.LONG, Direction.BOTH):
+            exit_long.append(cond_str)
+        if direction in (Direction.SHORT, Direction.BOTH):
+            exit_short.append(cond_str)
+
+    # Build indicators + conditions from MA entry genes
+    for i, ma_gene in enumerate(chrom.ma_entry_genes):
+        ma_name = f"{ma_gene.indicator_type.lower()}_ma_entry_{i}"
+        indicators[ma_name] = _ma_gene_to_indicator_config(ma_gene)
+        cond_str = _ma_gene_to_condition_str(ma_gene, ma_name)
+        if direction in (Direction.LONG, Direction.BOTH):
+            entry_long.append(cond_str)
+        if direction in (Direction.SHORT, Direction.BOTH):
+            entry_short.append(cond_str)
+
+    # Build indicators + conditions from MA exit genes
+    for i, ma_gene in enumerate(chrom.ma_exit_genes):
+        ma_name = f"{ma_gene.indicator_type.lower()}_ma_exit_{i}"
+        indicators[ma_name] = _ma_gene_to_indicator_config(ma_gene)
+        cond_str = _ma_gene_to_condition_str(ma_gene, ma_name)
         if direction in (Direction.LONG, Direction.BOTH):
             exit_long.append(cond_str)
         if direction in (Direction.SHORT, Direction.BOTH):
@@ -533,6 +611,13 @@ def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
             "sub_value": g.sub_value,
         }
 
+    def _ma_gene_dict(g: PriceVsMAConditionGene) -> dict[str, object]:
+        return {
+            "indicator_type": g.indicator_type,
+            "parameters": dict(g.parameters),
+            "op": g.op.value,
+        }
+
     d: dict[str, object] = {
         "entry_genes": [_gene_dict(g) for g in chrom.entry_genes],
         "exit_genes": [_gene_dict(g) for g in chrom.exit_genes],
@@ -540,6 +625,10 @@ def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
         "take_profit_pct": chrom.take_profit_pct,
         "direction": chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction),
     }
+    if chrom.ma_entry_genes:
+        d["ma_entry_genes"] = [_ma_gene_dict(g) for g in chrom.ma_entry_genes]
+    if chrom.ma_exit_genes:
+        d["ma_exit_genes"] = [_ma_gene_dict(g) for g in chrom.ma_exit_genes]
     if chrom.stop_loss_long_pct is not None:
         d["stop_loss_long_pct"] = chrom.stop_loss_long_pct
     if chrom.stop_loss_short_pct is not None:
@@ -572,10 +661,26 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
             sub_value=str(g["sub_value"]) if g.get("sub_value") else None,
         )
 
+    def _parse_ma_gene(g: dict[str, object]) -> PriceVsMAConditionGene:
+        params_raw = g.get("parameters", {})
+        params: dict[str, float] = {
+            str(k): float(v) for k, v in params_raw.items()  # type: ignore[union-attr]
+        }
+        return PriceVsMAConditionGene(
+            indicator_type=str(g["indicator_type"]),
+            parameters=params,
+            op=ConditionType(str(g["op"])),
+        )
+
     entry_genes_raw = d.get("entry_genes", [])
     exit_genes_raw = d.get("exit_genes", [])
     entry_genes = [_parse_gene(g) for g in entry_genes_raw]  # type: ignore[union-attr]
     exit_genes = [_parse_gene(g) for g in exit_genes_raw]  # type: ignore[union-attr]
+
+    ma_entry_raw = d.get("ma_entry_genes", [])
+    ma_exit_raw = d.get("ma_exit_genes", [])
+    ma_entry_genes = [_parse_ma_gene(g) for g in ma_entry_raw]  # type: ignore[union-attr]
+    ma_exit_genes = [_parse_ma_gene(g) for g in ma_exit_raw]  # type: ignore[union-attr]
 
     direction_raw = d.get("direction", "long")
     direction = Direction(str(direction_raw))
@@ -594,4 +699,6 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         take_profit_long_pct=float(d["take_profit_long_pct"]) if d.get("take_profit_long_pct") is not None else None,  # type: ignore[arg-type]
         take_profit_short_pct=float(d["take_profit_short_pct"]) if d.get("take_profit_short_pct") is not None else None,  # type: ignore[arg-type]
         time_filters=time_filters,
+        ma_entry_genes=ma_entry_genes,
+        ma_exit_genes=ma_exit_genes,
     )

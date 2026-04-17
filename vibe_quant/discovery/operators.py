@@ -85,6 +85,15 @@ _CONDITION_COMPLEMENTS: dict[ConditionType, ConditionType] = {
     ConditionType.CROSSES_BELOW: ConditionType.CROSSES_ABOVE,
 }
 
+# Valid ops for price-vs-MA genes — >=/<= add nothing over >/< for
+# continuous MA series and waste search budget.
+_MA_CONDITION_TYPES: list[ConditionType] = [
+    ConditionType.GT,
+    ConditionType.LT,
+    ConditionType.CROSSES_ABOVE,
+    ConditionType.CROSSES_BELOW,
+]
+
 
 class Direction(Enum):
     """Trade direction."""
@@ -122,11 +131,39 @@ class StrategyGene:
         )
 
 
+@dataclass(slots=True)
+class PriceVsMAConditionGene:
+    """Gene: close <op> MA. No scalar threshold — compares raw close
+    against an MA series (KAMA/VIDYA/FRAMA etc.). bd-9c1g Phase 1.
+
+    Attributes:
+        indicator_type: MA name from ``MA_POOL``.
+        parameters: MA parameter values.
+        op: Comparison op (GT/LT/CROSSES_ABOVE/CROSSES_BELOW).
+    """
+
+    indicator_type: str
+    parameters: dict[str, float]
+    op: ConditionType
+
+    def clone(self) -> PriceVsMAConditionGene:
+        """Deep-copy this gene."""
+        return PriceVsMAConditionGene(
+            indicator_type=self.indicator_type,
+            parameters=dict(self.parameters),
+            op=self.op,
+        )
+
+
 # Constraints
 MIN_ENTRY_GENES = 1
 MAX_ENTRY_GENES = 5
 MIN_EXIT_GENES = 1
 MAX_EXIT_GENES = 3
+# MA genes are optional (min=0) and capped at 1 each to avoid blowing up
+# the search space. Phase 2 may lift these caps for ribbon strategies.
+MAX_MA_ENTRY_GENES = 1
+MAX_MA_EXIT_GENES = 1
 SL_RANGE = (0.5, 10.0)  # stop-loss % range
 TP_RANGE = (0.5, 20.0)  # take-profit % range
 
@@ -153,6 +190,11 @@ class StrategyChromosome:
     take_profit_long_pct: float | None = field(default=None)
     take_profit_short_pct: float | None = field(default=None)
     time_filters: dict[str, object] = field(default_factory=dict)
+    # bd-9c1g Phase 1: price-vs-MA conditions (KAMA/VIDYA/FRAMA etc.).
+    # Kept separate from entry_genes/exit_genes so the scalar-threshold gene
+    # mutation/crossover paths stay untouched.
+    ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
+    ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def clone(self) -> StrategyChromosome:
@@ -168,6 +210,8 @@ class StrategyChromosome:
             take_profit_long_pct=self.take_profit_long_pct,
             take_profit_short_pct=self.take_profit_short_pct,
             time_filters=dict(self.time_filters),
+            ma_entry_genes=[g.clone() for g in self.ma_entry_genes],
+            ma_exit_genes=[g.clone() for g in self.ma_exit_genes],
             uid=self.uid,
         )
 
@@ -275,6 +319,32 @@ def _random_gene() -> StrategyGene:
     )
 
 
+def _random_ma_params(indicator_type: str) -> dict[str, float]:
+    """Sample random params for an MA from ``MA_POOL``."""
+    from vibe_quant.discovery.genome import MA_POOL
+
+    ranges = MA_POOL[indicator_type].param_ranges
+    params: dict[str, float] = {}
+    for name, (lo, hi) in ranges.items():
+        if lo == int(lo) and hi == int(hi) and lo >= 1:
+            params[name] = float(random.randint(int(lo), int(hi)))
+        else:
+            params[name] = round(random.uniform(lo, hi), 4)
+    return params
+
+
+def _random_ma_gene() -> PriceVsMAConditionGene:
+    """Generate a random price-vs-MA gene. Caller must ensure MA_POOL is non-empty."""
+    from vibe_quant.discovery.genome import MA_POOL
+
+    ind = random.choice(list(MA_POOL))
+    return PriceVsMAConditionGene(
+        indicator_type=ind,
+        parameters=_random_ma_params(ind),
+        op=random.choice(_MA_CONDITION_TYPES),
+    )
+
+
 def _perturb(
     value: float, frac: float = 0.2, lo: float | None = None, hi: float | None = None
 ) -> float:
@@ -346,6 +416,22 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
             tlo, thi = THRESHOLD_RANGES[gene.indicator_type]
             if not (tlo <= gene.threshold <= thi):
                 return False
+    # MA gene count + pool membership checks
+    if len(chrom.ma_entry_genes) > MAX_MA_ENTRY_GENES:
+        return False
+    if len(chrom.ma_exit_genes) > MAX_MA_EXIT_GENES:
+        return False
+    from vibe_quant.discovery.genome import MA_POOL
+    for ma_gene in chrom.ma_entry_genes + chrom.ma_exit_genes:
+        if ma_gene.indicator_type not in MA_POOL:
+            return False
+        if ma_gene.op not in _MA_CONDITION_TYPES:
+            return False
+        ranges = MA_POOL[ma_gene.indicator_type].param_ranges
+        for pname, (lo, hi) in ranges.items():
+            val = ma_gene.parameters.get(pname)
+            if val is None or not (lo <= val <= hi):
+                return False
     return True
 
 
@@ -375,6 +461,24 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
         val = getattr(chrom, attr)
         if val is not None:
             setattr(chrom, attr, max(valid_range[0], min(valid_range[1], val)))
+    # Repair MA genes: clamp params, drop unknown indicators, cap counts
+    from vibe_quant.discovery.genome import MA_POOL
+    for genes, cap in (
+        (chrom.ma_entry_genes, MAX_MA_ENTRY_GENES),
+        (chrom.ma_exit_genes, MAX_MA_EXIT_GENES),
+    ):
+        # Drop entries whose indicator_type no longer exists (e.g. plugin
+        # removed mid-run) — caller can regenerate if desired.
+        genes[:] = [g for g in genes if g.indicator_type in MA_POOL]
+        for g in genes:
+            ranges = MA_POOL[g.indicator_type].param_ranges
+            for pname, (lo, hi) in ranges.items():
+                val = g.parameters.get(pname, lo)
+                g.parameters[pname] = max(lo, min(hi, val))
+            if g.op not in _MA_CONDITION_TYPES:
+                g.op = random.choice(_MA_CONDITION_TYPES)
+        if len(genes) > cap:
+            del genes[cap:]
     return chrom
 
 
@@ -412,6 +516,19 @@ def crossover(
         parent_b.exit_genes, parent_a.exit_genes, MIN_EXIT_GENES, MAX_EXIT_GENES
     )
 
+    child_a_ma_entries = _crossover_ma_genes(
+        parent_a.ma_entry_genes, parent_b.ma_entry_genes, MAX_MA_ENTRY_GENES
+    )
+    child_b_ma_entries = _crossover_ma_genes(
+        parent_b.ma_entry_genes, parent_a.ma_entry_genes, MAX_MA_ENTRY_GENES
+    )
+    child_a_ma_exits = _crossover_ma_genes(
+        parent_a.ma_exit_genes, parent_b.ma_exit_genes, MAX_MA_EXIT_GENES
+    )
+    child_b_ma_exits = _crossover_ma_genes(
+        parent_b.ma_exit_genes, parent_a.ma_exit_genes, MAX_MA_EXIT_GENES
+    )
+
     # SL/TP: random pick per child
     sl_a = parent_a.stop_loss_pct if random.random() < 0.5 else parent_b.stop_loss_pct
     tp_a = parent_a.take_profit_pct if random.random() < 0.5 else parent_b.take_profit_pct
@@ -441,6 +558,8 @@ def crossover(
         stop_loss_short_pct=sl_short_a,
         take_profit_long_pct=tp_long_a,
         take_profit_short_pct=tp_short_a,
+        ma_entry_genes=child_a_ma_entries,
+        ma_exit_genes=child_a_ma_exits,
     )
     child_b = StrategyChromosome(
         entry_genes=child_b_entries,
@@ -452,6 +571,8 @@ def crossover(
         stop_loss_short_pct=sl_short_b,
         take_profit_long_pct=tp_long_b,
         take_profit_short_pct=tp_short_b,
+        ma_entry_genes=child_b_ma_entries,
+        ma_exit_genes=child_b_ma_exits,
     )
     return _repair_chromosome(child_a), _repair_chromosome(child_b)
 
@@ -488,6 +609,37 @@ def _crossover_genes(
                 continue
         result.append(chosen.clone())
     return _clamp_genes(result, min_count, max_count)
+
+
+def _crossover_ma_genes(
+    genes_a: list[PriceVsMAConditionGene],
+    genes_b: list[PriceVsMAConditionGene],
+    max_count: int,
+) -> list[PriceVsMAConditionGene]:
+    """Uniform crossover for MA genes (min=0, no _clamp_genes floor).
+
+    Same per-slot coin-flip as ``_crossover_genes`` but can legitimately
+    return an empty list — MA genes are optional.
+    """
+    max_len = max(len(genes_a), len(genes_b))
+    result: list[PriceVsMAConditionGene] = []
+    for i in range(max_len):
+        has_a = i < len(genes_a)
+        has_b = i < len(genes_b)
+        if has_a and has_b:
+            chosen = genes_a[i] if random.random() < 0.5 else genes_b[i]
+        elif has_a:
+            if random.random() < 0.5:
+                chosen = genes_a[i]
+            else:
+                continue
+        else:
+            if random.random() < 0.5:
+                chosen = genes_b[i]  # type: ignore[index]
+            else:
+                continue
+        result.append(chosen.clone())
+    return result[:max_count]
 
 
 def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> StrategyChromosome:
@@ -539,6 +691,14 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
         chrom.take_profit_long_pct = _perturb(chrom.take_profit_long_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
     if chrom.take_profit_short_pct is not None and random.random() < mutation_rate * 0.5:
         chrom.take_profit_short_pct = _perturb(chrom.take_profit_short_pct, 0.2, TP_RANGE[0], TP_RANGE[1])
+
+    # Mutate MA genes (no-op if empty pool)
+    chrom.ma_entry_genes = _mutate_ma_genes(
+        chrom.ma_entry_genes, mutation_rate, MAX_MA_ENTRY_GENES
+    )
+    chrom.ma_exit_genes = _mutate_ma_genes(
+        chrom.ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES
+    )
 
     return chrom
 
@@ -614,6 +774,49 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
             gene.threshold = _perturb(gene.threshold, 0.2, tlo, thi)
         else:
             gene.threshold = _perturb(gene.threshold, 0.2)
+
+
+def _mutate_ma_genes(
+    genes: list[PriceVsMAConditionGene],
+    rate: float,
+    max_count: int,
+) -> list[PriceVsMAConditionGene]:
+    """Mutate MA gene list. Structural add/remove can legitimately empty the list."""
+    from vibe_quant.discovery.genome import MA_POOL
+
+    for gene in genes:
+        if random.random() < rate:
+            _mutate_single_ma_gene(gene)
+
+    # Structural add/remove
+    if MA_POOL and random.random() < rate * 0.3:
+        if len(genes) < max_count and random.random() < 0.5:
+            genes.append(_random_ma_gene())
+        elif genes:
+            genes.pop(random.randrange(len(genes)))
+
+    return genes[:max_count]
+
+
+def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
+    """Mutate one MA gene in place — indicator swap / param perturb / op flip."""
+    from vibe_quant.discovery.genome import MA_POOL
+
+    if not MA_POOL:
+        return
+    mutation_type = random.randint(0, 2)
+    if mutation_type == 0:
+        new_ind = random.choice(list(MA_POOL))
+        gene.indicator_type = new_ind
+        gene.parameters = _random_ma_params(new_ind)
+    elif mutation_type == 1:
+        ranges = MA_POOL[gene.indicator_type].param_ranges
+        for pname, val in list(gene.parameters.items()):
+            if pname in ranges:
+                lo, hi = ranges[pname]
+                gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
+    else:
+        gene.op = _CONDITION_COMPLEMENTS.get(gene.op, random.choice(_MA_CONDITION_TYPES))
 
 
 def tournament_select(
@@ -739,12 +942,27 @@ def _random_chromosome(
     )[0]
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     direction = direction_constraint if direction_constraint is not None else random.choice(list(Direction))
+
+    # Optional MA gene seed. Rates stay modest so we don't drown the
+    # scalar-threshold search space while MA usefulness is still unproven.
+    from vibe_quant.discovery.genome import MA_POOL
+
+    ma_entries: list[PriceVsMAConditionGene] = []
+    ma_exits: list[PriceVsMAConditionGene] = []
+    if MA_POOL:
+        if random.random() < 0.25:
+            ma_entries.append(_random_ma_gene())
+        if random.random() < 0.15:
+            ma_exits.append(_random_ma_gene())
+
     chrom = StrategyChromosome(
         entry_genes=[_random_gene() for _ in range(n_entry)],
         exit_genes=[_random_gene() for _ in range(n_exit)],
         stop_loss_pct=round(random.uniform(*SL_RANGE), 4),
         take_profit_pct=round(random.uniform(*TP_RANGE), 4),
         direction=direction,
+        ma_entry_genes=ma_entries,
+        ma_exit_genes=ma_exits,
     )
     if chrom.direction == Direction.BOTH:
         chrom.stop_loss_long_pct = round(random.uniform(*SL_RANGE), 4)

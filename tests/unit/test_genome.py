@@ -793,3 +793,179 @@ class TestMAPool:
             indicator_registry._indicators.pop(  # type: ignore[attr-defined]
                 "TESTMA_EXCLUDED", None
             )
+
+
+# =============================================================================
+# MA gene chromosomes (bd-9c1g Phase 1)
+# =============================================================================
+
+
+class TestMAChromosome:
+    """MA genes — DSL emission, roundtrip serialization, validation, compile."""
+
+    @staticmethod
+    def _make_ma_chrom(ma_kind: str = "KAMA") -> StrategyChromosome:
+        from vibe_quant.discovery.operators import (
+            ConditionType,
+            Direction,
+            PriceVsMAConditionGene,
+        )
+        from vibe_quant.discovery.operators import (
+            StrategyChromosome as _Chrom,
+        )
+        from vibe_quant.discovery.operators import (
+            StrategyGene as _Gene,
+        )
+
+        return _Chrom(
+            entry_genes=[
+                _Gene(
+                    indicator_type="RSI",
+                    parameters={"period": 14},
+                    condition=ConditionType.LT,
+                    threshold=30.0,
+                )
+            ],
+            exit_genes=[
+                _Gene(
+                    indicator_type="RSI",
+                    parameters={"period": 14},
+                    condition=ConditionType.GT,
+                    threshold=70.0,
+                )
+            ],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+            direction=Direction.LONG,
+            ma_entry_genes=[
+                PriceVsMAConditionGene(
+                    indicator_type=ma_kind,
+                    parameters={"period": 20.0},
+                    op=ConditionType.GT,
+                )
+            ],
+        )
+
+    def test_chromosome_to_dsl_emits_ma_indicator_and_close_condition(self) -> None:
+        chrom = self._make_ma_chrom("KAMA")
+        dsl = chromosome_to_dsl(chrom)
+
+        ma_names = [k for k in dsl["indicators"] if k.startswith("kama_ma_entry_")]
+        assert len(ma_names) == 1
+        ma_name = ma_names[0]
+        assert dsl["indicators"][ma_name]["type"] == "KAMA"
+        assert dsl["indicators"][ma_name]["period"] == 20
+
+        # Condition uses `close` as the left operand, MA as the right
+        assert f"close > {ma_name}" in dsl["entry_conditions"]["long"]
+
+    def test_chromosome_to_dsl_parses_as_strategy(self) -> None:
+        """Emitted DSL dict must round-trip through StrategyDSL validation."""
+        chrom = self._make_ma_chrom("KAMA")
+        dsl = chromosome_to_dsl(chrom)
+        dsl["timeframe"] = "5m"
+        StrategyDSL(**dsl)  # raises on invalid
+
+    def test_ma_gene_roundtrip_serialization(self) -> None:
+        from vibe_quant.discovery.genome import (
+            chromosome_to_serializable,
+            serializable_to_chromosome,
+        )
+
+        original = self._make_ma_chrom("VIDYA")
+        d = chromosome_to_serializable(original)
+        assert "ma_entry_genes" in d
+        restored = serializable_to_chromosome(d)
+
+        assert len(restored.ma_entry_genes) == 1
+        g0, r0 = original.ma_entry_genes[0], restored.ma_entry_genes[0]
+        assert r0.indicator_type == g0.indicator_type
+        assert r0.op == g0.op
+        assert r0.parameters == g0.parameters
+
+    def test_validate_chromosome_accepts_ma_gene(self) -> None:
+        chrom = self._make_ma_chrom("KAMA")
+        assert validate_chromosome(chrom) == []
+        assert is_valid_chromosome(chrom)
+
+    def test_validate_chromosome_rejects_unknown_ma_indicator(self) -> None:
+        from vibe_quant.discovery.operators import ConditionType, PriceVsMAConditionGene
+
+        chrom = self._make_ma_chrom("KAMA")
+        chrom.ma_entry_genes[0] = PriceVsMAConditionGene(
+            indicator_type="DOES_NOT_EXIST",
+            parameters={"period": 20.0},
+            op=ConditionType.GT,
+        )
+        errors = validate_chromosome(chrom)
+        assert any("DOES_NOT_EXIST" in e for e in errors)
+
+    def test_ma_exit_gene_emits_close_condition_in_exit(self) -> None:
+        from vibe_quant.discovery.operators import (
+            ConditionType,
+            PriceVsMAConditionGene,
+        )
+
+        chrom = self._make_ma_chrom("FRAMA")
+        chrom.ma_entry_genes = []
+        chrom.ma_exit_genes = [
+            PriceVsMAConditionGene(
+                indicator_type="FRAMA",
+                parameters={"period": 16.0},
+                op=ConditionType.LT,
+            )
+        ]
+        dsl = chromosome_to_dsl(chrom)
+        assert any(
+            "close < frama_ma_exit_0" in c
+            for c in dsl["exit_conditions"]["long"]
+        )
+
+    def test_clone_preserves_ma_genes_independently(self) -> None:
+        original = self._make_ma_chrom("KAMA")
+        clone = original.clone()
+
+        assert len(clone.ma_entry_genes) == 1
+        # Mutating the clone must not touch the original
+        clone.ma_entry_genes[0].parameters["period"] = 99.0
+        assert original.ma_entry_genes[0].parameters["period"] == 20.0
+
+    def test_compile_ma_chromosome_to_module(self) -> None:
+        """End-to-end: MA-gene DSL must compile to a loadable strategy module."""
+        from vibe_quant.dsl.compiler import StrategyCompiler
+
+        chrom = self._make_ma_chrom("KAMA")
+        dsl_dict = chromosome_to_dsl(chrom)
+        dsl_dict["timeframe"] = "5m"
+        dsl = StrategyDSL(**dsl_dict)
+
+        compiler = StrategyCompiler()
+        module = compiler.compile_to_module(dsl)
+
+        # Strategy class must exist — kama compute_fn path means
+        # `_update_pta_indicators` should be wired in.
+        class_name = "".join(w.capitalize() for w in dsl.name.split("_"))
+        assert hasattr(module, f"{class_name}Strategy")
+        assert hasattr(module, f"{class_name}Config")
+
+    def test_mutate_preserves_ma_pool_membership(self) -> None:
+        """Hot mutation of an MA-bearing chromosome keeps indicator in MA_POOL."""
+        from vibe_quant.discovery.genome import MA_POOL
+
+        original = self._make_ma_chrom("KAMA")
+        random.seed(42)
+        for _ in range(50):
+            mutated = mutate(original, mutation_rate=1.0)
+            for g in mutated.ma_entry_genes + mutated.ma_exit_genes:
+                assert g.indicator_type in MA_POOL
+
+    def test_crossover_produces_valid_ma_counts(self) -> None:
+        """Crossover of two MA-bearing parents must stay within cap."""
+        from vibe_quant.discovery.operators import MAX_MA_ENTRY_GENES, crossover
+
+        parent_a = self._make_ma_chrom("KAMA")
+        parent_b = self._make_ma_chrom("VIDYA")
+        random.seed(7)
+        child_a, child_b = crossover(parent_a, parent_b)
+        assert len(child_a.ma_entry_genes) <= MAX_MA_ENTRY_GENES
+        assert len(child_b.ma_entry_genes) <= MAX_MA_ENTRY_GENES
