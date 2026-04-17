@@ -267,6 +267,57 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
     assert "reason" in notes
 
 
+def test_1m_strict_bootstrap_warns(tmp_path: Path, monkeypatch, caplog) -> None:
+    """1m + strict bootstrap CI should emit a warning recommending relaxed threshold."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2",
+            "--mutation-rate", "0.1", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "1m",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+    with caplog.at_level("WARNING", logger="vibe_quant.discovery.__main__"):
+        assert main() == 0
+
+    assert any(
+        "1m timeframe" in r.message and "bootstrap" in r.message.lower()
+        for r in caplog.records
+    ), f"expected 1m bootstrap warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_1m_relaxed_bootstrap_no_warning(tmp_path: Path, monkeypatch, caplog) -> None:
+    """1m with --bootstrap-min-sharpe 0.5 should not emit the policy warning."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2",
+            "--mutation-rate", "0.1", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "1m",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--bootstrap-min-sharpe", "0.5",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+    with caplog.at_level("WARNING", logger="vibe_quant.discovery.__main__"):
+        assert main() == 0
+
+    assert not any(
+        "1m timeframe" in r.message and "bootstrap" in r.message.lower()
+        for r in caplog.records
+    )
+
+
 def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch) -> None:
     """WFA results on the best strategy should populate the
     backtest_results.walk_forward_efficiency column (bd-2ur2).

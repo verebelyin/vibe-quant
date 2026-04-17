@@ -484,7 +484,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Bootstrap CI lower bound threshold. Candidates whose bootstrap "
         "CI lower bound falls below this Sharpe are rejected (default: 1.0). "
-        "Lower values (e.g. 0.5) relax the hard guardrail.",
+        "Lower values (e.g. 0.5) relax the hard guardrail. Recommended 0.5 "
+        "for 1m timeframe — higher noise widens CIs and rejects viable candidates.",
     )
     parser.add_argument(
         "--bootstrap-ci-level",
@@ -564,6 +565,22 @@ def main() -> int:
             logger.info(
                 "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
                 split_ratio, train_start, train_end, holdout_start, holdout_end,
+            )
+
+        # 1m bootstrap-CI policy warning: sub-100-trade 1m candidates
+        # consistently die at the default bootstrap_min_sharpe=1.0 because
+        # 1m noise widens Sharpe CIs. Warn operators to either pass
+        # --no-bootstrap-ci or lower --bootstrap-min-sharpe to ~0.5 for 1m.
+        if (
+            args.timeframe == "1m"
+            and args.require_bootstrap_ci
+            and args.bootstrap_min_sharpe >= 1.0
+        ):
+            logger.warning(
+                "1m timeframe with strict bootstrap CI (min_sharpe=%.1f): "
+                "most sub-100-trade 1m strategies will be rejected. Consider "
+                "--bootstrap-min-sharpe 0.5 or --no-bootstrap-ci.",
+                args.bootstrap_min_sharpe,
             )
 
         # Parse cross-window months
