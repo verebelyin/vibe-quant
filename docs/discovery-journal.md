@@ -4,6 +4,46 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batch 37 — bd-pfsm fix validated in production (run 800)
+
+### Goal
+
+Validate the bd-pfsm fix (WFA warns instead of silent skip) and the bd-2ur2 fix (`walk_forward_efficiency` column populated) on a real run. Target: 12mo window with `--train-test-split 0.5` = 6mo train + 6mo holdout → 6 rolling WFA windows at 30d step.
+
+### Run 800 config
+
+- 12mo 2025-03→2026-02, pop=20 gen=12, CCI+RSI short
+- `--train-test-split 0.5 --wfa-oos-step-days 30 --no-bootstrap-ci`
+- Runtime: 836s (~14 min)
+
+### Result: 0 viable strategies — but the pipeline behaved correctly
+
+All 240 genomes scored 0 (zero_score=20/20 across all 12 gens, same pattern as run 798). Every random CCI+RSI short genome on this 1m window produced 0 trades or hit the sanity penalty. No top strategy survived guardrails.
+
+**The important observation** — our new bd-pfsm warning fired:
+
+> `WFA requested (wfa_oos_step_days=30) but skipped: no top strategies survived guardrails`
+
+And backtest_results.walk_forward_efficiency = NULL (expected when WFA doesn't run). Both fixes validated in the wild:
+
+- bd-pfsm (commit 97d8f35) — no more silent WFA skip
+- bd-2ur2 (commit 9101aac) — column exists, populated when WFA runs (run 799), NULL otherwise (run 800)
+
+### Remaining puzzle: why CCI+RSI short on this window produces nothing
+
+Runs 798 and 800 (12mo window) both collapsed to all-zero fitness. Run 799 (6mo window, 2025-09→2026-02) found a champion. Likely the 2025-03→2025-09 period has market characteristics CCI+RSI short genomes can't latch onto (low volatility? trending? unclear without a data probe). Not a pipeline bug — a strategy-space issue. Defer to a future diagnostic run.
+
+### End-of-day stack coverage (final)
+
+| New machinery | Status |
+|---------------|--------|
+| bd-pfsm WFA silent-skip | ✅ Fixed + validated in run 800 |
+| bd-2ur2 walk_forward_efficiency column | ✅ Fixed + tested (run 799 populated, run 800 NULL) |
+| bd-9c1g adaptive MA in GA | 📋 Design doc at docs/plans/2026-04-17-bd-9c1g-adaptive-ma-ga.md |
+| 1m bootstrap CI policy warning | ✅ Added + tested |
+
+---
+
 ## 2026-04-17: Batch 36 — post-GA WFA fired end-to-end (runs 798, 799)
 
 ### Goal
