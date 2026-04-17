@@ -736,3 +736,60 @@ class TestDynamicIndicatorPool:
             indicator_registry._indicators.pop(  # type: ignore[attr-defined]
                 "TESTGA_EXCLUDED", None
             )
+
+
+# =============================================================================
+# MA pool (bd-9c1g Phase 1 foundation)
+# =============================================================================
+
+
+class TestMAPool:
+    """MA_POOL enrolls ma_kind=True plugins; INDICATOR_POOL still excludes them."""
+
+    def test_kama_vidya_frama_in_ma_pool(self) -> None:
+        from vibe_quant.discovery.genome import MA_POOL
+
+        assert "KAMA" in MA_POOL
+        assert "VIDYA" in MA_POOL
+        assert "FRAMA" in MA_POOL
+
+    def test_ma_pool_entries_have_param_ranges(self) -> None:
+        from vibe_quant.discovery.genome import MA_POOL
+
+        for name, defn in MA_POOL.items():
+            assert defn.name == name
+            assert defn.param_ranges, f"{name} has empty param_ranges"
+
+    def test_mas_not_in_indicator_pool(self) -> None:
+        """MAs must stay out of INDICATOR_POOL — scalar thresholds make no
+        sense against raw price levels."""
+        for name in ("KAMA", "VIDYA", "FRAMA"):
+            assert name not in INDICATOR_POOL, f"{name} leaked into INDICATOR_POOL"
+
+    def test_ma_kind_false_excludes_from_ma_pool(self) -> None:
+        """A plugin without ma_kind=True should not appear in MA_POOL."""
+        from vibe_quant.discovery.genome import build_ma_pool
+        from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+
+        def _noop_compute(df, params):  # noqa: ARG001
+            return df["close"]
+
+        spec = IndicatorSpec(
+            name="TESTMA_EXCLUDED",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 10},
+            param_schema={"period": int},
+            compute_fn=_noop_compute,
+            param_ranges={"period": (5.0, 30.0)},
+            threshold_range=None,
+            # ma_kind omitted → defaults to False
+        )
+        indicator_registry.register_spec(spec)
+        try:
+            pool = build_ma_pool()
+            assert "TESTMA_EXCLUDED" not in pool
+        finally:
+            indicator_registry._indicators.pop(  # type: ignore[attr-defined]
+                "TESTMA_EXCLUDED", None
+            )

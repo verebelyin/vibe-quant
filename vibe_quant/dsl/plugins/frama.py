@@ -115,5 +115,6 @@ indicator_registry.register_spec(
         chart_placement="overlay",
         param_ranges={"period": (6.0, 50.0)},
         threshold_range=None,
+        ma_kind=True,
     )
 )

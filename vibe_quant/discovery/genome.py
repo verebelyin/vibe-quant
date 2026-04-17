@@ -124,6 +124,47 @@ def build_indicator_pool() -> dict[str, IndicatorDef]:
 INDICATOR_POOL: dict[str, IndicatorDef] = build_indicator_pool()
 
 
+@dataclass(frozen=True, slots=True)
+class MAIndicatorDef:
+    """Moving-average-style indicator for price-vs-MA gene construction.
+
+    Unlike IndicatorDef, MAs have no scalar threshold — they're compared
+    directly against close (or another MA). bd-9c1g Phase 1 foundation.
+
+    Attributes:
+        name: Canonical indicator name (uppercase).
+        param_ranges: Mapping of param name -> (min, max) inclusive.
+        dsl_type: Indicator type string for the DSL schema.
+    """
+
+    name: str
+    param_ranges: dict[str, tuple[float, float]]
+    dsl_type: str
+
+
+def build_ma_pool() -> dict[str, MAIndicatorDef]:
+    """Assemble the MA pool from ``IndicatorSpec`` entries with ``ma_kind=True``.
+
+    Specs opt-in by setting ``ma_kind=True`` on the spec. Only those with a
+    non-empty ``param_ranges`` are enrolled.
+    """
+    from vibe_quant.dsl.indicators import indicator_registry
+
+    pool: dict[str, MAIndicatorDef] = {}
+    for spec in indicator_registry.all_specs():
+        if not getattr(spec, "ma_kind", False) or not spec.param_ranges:
+            continue
+        pool[spec.name] = MAIndicatorDef(
+            name=spec.name,
+            param_ranges=dict(spec.param_ranges),
+            dsl_type=spec.name,
+        )
+    return pool
+
+
+MA_POOL: dict[str, MAIndicatorDef] = build_ma_pool()
+
+
 def _normalize_condition(condition: ConditionType | str) -> ConditionType | None:
     """Normalize legacy string conditions to canonical enum values."""
     if isinstance(condition, ConditionType):

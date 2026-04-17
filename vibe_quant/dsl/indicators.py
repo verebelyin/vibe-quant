@@ -155,6 +155,13 @@ class IndicatorSpec:
     param_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     threshold_range: tuple[float, float] | None = None
 
+    # GA enrollment for moving-average-style indicators (bd-9c1g Phase 1).
+    # Set True on specs whose natural GA use is ``close vs <this>`` rather
+    # than ``<this> vs scalar threshold`` (KAMA, VIDYA, FRAMA, etc.). Such
+    # specs leave ``threshold_range=None`` but are enrolled in a parallel
+    # ``MA_POOL`` for future price-vs-MA gene variants.
+    ma_kind: bool = False
+
     def __post_init__(self) -> None:
         """Validate indicator spec.
 
