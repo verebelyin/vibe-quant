@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.__main__ import build_parser, main
 
@@ -263,6 +265,105 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
     assert notes["evaluated"] == 42
     assert notes["top_strategies"] == []
     assert "reason" in notes
+
+
+def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch) -> None:
+    """WFA results on the best strategy should populate the
+    backtest_results.walk_forward_efficiency column (bd-2ur2).
+    """
+    from vibe_quant.discovery.fitness import FitnessResult
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        Direction,
+        StrategyChromosome,
+        StrategyGene,
+    )
+    from vibe_quant.discovery.pipeline import (
+        DiscoveryPipeline,
+        DiscoveryResult,
+        HoldoutResult,
+        WFARollingResult,
+    )
+
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    chrom = StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)],
+        stop_loss_pct=2.0, take_profit_pct=4.0, direction=Direction.SHORT,
+    )
+    fit = FitnessResult(
+        sharpe_ratio=1.5, max_drawdown=0.05, profit_factor=1.8,
+        total_trades=100, total_return=0.10,
+        complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
+        raw_score=1.0, adjusted_score=1.0,
+        passed_filters=True, filter_results={},
+    )
+    # Two OOS windows: returns 0.02 + -0.01 = 0.01 → efficiency = 0.01 / 0.10 = 0.10
+    oos = [
+        HoldoutResult(sharpe_ratio=0.8, max_drawdown=0.03, profit_factor=1.2,
+                      total_trades=30, total_return=0.02),
+        HoldoutResult(sharpe_ratio=-0.2, max_drawdown=0.02, profit_factor=0.9,
+                      total_trades=25, total_return=-0.01),
+    ]
+    wfa = WFARollingResult(
+        oos_windows=oos,
+        window_dates=[("2025-01-15", "2025-01-22"), ("2025-01-22", "2025-01-29")],
+        windows_profitable=1, total_windows=2, consistency=0.5, passed=False,
+    )
+
+    def fake_run(self) -> DiscoveryResult:
+        return DiscoveryResult(
+            generations=[], top_strategies=[(chrom, fit)],
+            total_candidates_evaluated=10, converged=True, convergence_generation=1,
+            wfa_results=[wfa],
+        )
+
+    monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "1h",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+
+    assert main() == 0
+
+    state = StateManager(db_path)
+    result = state.get_backtest_result(run_id)
+    state.close()
+    assert result is not None
+    assert result["walk_forward_efficiency"] == pytest.approx(0.10, abs=1e-6)
+
+
+def test_walk_forward_efficiency_none_when_no_wfa(tmp_path: Path, monkeypatch) -> None:
+    """WFA column stays NULL when WFA did not run."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2",
+            "--mutation-rate", "0.1", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "1h",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+    assert main() == 0
+
+    state = StateManager(db_path)
+    result = state.get_backtest_result(run_id)
+    state.close()
+    assert result is not None
+    assert result["walk_forward_efficiency"] is None
 
 
 def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, monkeypatch) -> None:

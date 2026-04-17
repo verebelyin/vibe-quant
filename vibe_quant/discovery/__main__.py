@@ -841,6 +841,16 @@ def main() -> int:
                 }
             top_dsls.append(entry)
 
+        # Compute walk-forward efficiency for the best strategy per SPEC.md:
+        # ratio of summed OOS-window returns to IS total return. Undefined
+        # when IS return is ~0 or no WFA windows ran.
+        wfa_efficiency: float | None = None
+        if result.wfa_results and result.wfa_results[0].oos_windows:
+            is_return = best_fitness.total_return
+            if abs(is_return) > 1e-9:
+                oos_total = sum(w.total_return for w in result.wfa_results[0].oos_windows)
+                wfa_efficiency = oos_total / is_return
+
         state.save_backtest_result(
             args.run_id,
             {
@@ -852,6 +862,7 @@ def main() -> int:
                 "skewness": best_fitness.skewness,
                 "kurtosis": best_fitness.kurtosis,
                 "execution_time_seconds": execution_time,
+                "walk_forward_efficiency": wfa_efficiency,
                 "notes": json.dumps(
                     {
                         "type": "discovery",
