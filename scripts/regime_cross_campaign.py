@@ -32,6 +32,8 @@ from pathlib import Path
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.campaign import (
+    RUN_MODE_DISCOVERY,
+    RUN_MODE_OOS,
     CampaignPlan,
     RegimeCrossConfig,
     build_matrix_report,
@@ -53,8 +55,8 @@ def _load_plan_from_db(campaign_id: str, state: StateManager) -> CampaignPlan | 
 
     rows = state.conn.execute(
         "SELECT id, run_mode, parameters, symbols, timeframe, start_date, end_date "
-        "FROM backtest_runs WHERE run_mode IN "
-        "('regime_cross_discovery', 'regime_cross_oos') ORDER BY id"
+        "FROM backtest_runs WHERE run_mode IN (?, ?) ORDER BY id",
+        (RUN_MODE_DISCOVERY, RUN_MODE_OOS),
     ).fetchall()
 
     discovery_runs: dict[str, int] = {}
@@ -85,7 +87,7 @@ def _load_plan_from_db(campaign_id: str, state: StateManager) -> CampaignPlan | 
             pass
         timeframe = str(row[4] or timeframe)
 
-        if row[1] == "regime_cross_discovery":
+        if row[1] == RUN_MODE_DISCOVERY:
             label = str(params.get("window_label", ""))
             discovery_runs[label] = int(row[0])
             train_windows_map[label] = (
@@ -93,7 +95,7 @@ def _load_plan_from_db(campaign_id: str, state: StateManager) -> CampaignPlan | 
             )
             pop = int(params.get("population_size", pop))
             gens = int(params.get("max_generations", gens))
-        elif row[1] == "regime_cross_oos":
+        elif row[1] == RUN_MODE_OOS:
             key = (
                 str(params.get("source_window", "")),
                 int(params.get("champion_idx", 0)),

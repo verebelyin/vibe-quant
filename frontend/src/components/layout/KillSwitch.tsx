@@ -15,17 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-/**
- * Always-visible portfolio-wide kill switch.
- *
- * - When not engaged: red "KILL" button, opens dialog asking for reason
- *   before POST /api/system/kill.
- * - When engaged: shows "HALTED" badge with reason + an "Unlock" action
- *   that requires explicit acknowledge.
- *
- * The status query auto-refetches every 5s so the UI reflects backend
- * state even if another operator engaged the switch elsewhere.
- */
+// Status query polls every 5s so the UI catches kills engaged by other operators.
 export function KillSwitch() {
   const { data: status } = useSystemStatus();
   const kill = useKillSystem();

@@ -50,16 +50,19 @@ def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
 # Deferred initialization to break circular import
 INDICATOR_POOL: dict[str, dict[str, tuple[float, float]]] = {}
 _INDICATOR_NAMES: list[str] = []
+_MA_NAMES: list[str] = []
 
 
 def _ensure_pool() -> None:
-    """Populate INDICATOR_POOL and THRESHOLD_RANGES on first use (breaks circular import)."""
-    global _INDICATOR_NAMES  # noqa: PLW0603
+    """Populate INDICATOR_POOL + THRESHOLD_RANGES + MA name cache on first use."""
     if not INDICATOR_POOL:
         INDICATOR_POOL.update(_build_indicator_pool())
         _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
     if not THRESHOLD_RANGES:
         THRESHOLD_RANGES.update(_build_threshold_ranges())
+    if not _MA_NAMES:
+        from vibe_quant.discovery.genome import MA_POOL
+        _MA_NAMES.extend(MA_POOL.keys())
 
 
 class ConditionType(Enum):
@@ -134,7 +137,7 @@ class StrategyGene:
 @dataclass(slots=True)
 class PriceVsMAConditionGene:
     """Gene: close <op> MA. No scalar threshold — compares raw close
-    against an MA series (KAMA/VIDYA/FRAMA etc.). bd-9c1g Phase 1.
+    against an MA series (KAMA/VIDYA/FRAMA etc.).
 
     Attributes:
         indicator_type: MA name from ``MA_POOL``.
@@ -160,8 +163,8 @@ MIN_ENTRY_GENES = 1
 MAX_ENTRY_GENES = 5
 MIN_EXIT_GENES = 1
 MAX_EXIT_GENES = 3
-# MA genes are optional (min=0) and capped at 1 each to avoid blowing up
-# the search space. Phase 2 may lift these caps for ribbon strategies.
+# MA genes optional (min=0) and capped at 1 each so they don't combinatorially
+# narrow entries when paired with the scalar-threshold genes.
 MAX_MA_ENTRY_GENES = 1
 MAX_MA_EXIT_GENES = 1
 SL_RANGE = (0.5, 10.0)  # stop-loss % range
@@ -190,9 +193,8 @@ class StrategyChromosome:
     take_profit_long_pct: float | None = field(default=None)
     take_profit_short_pct: float | None = field(default=None)
     time_filters: dict[str, object] = field(default_factory=dict)
-    # bd-9c1g Phase 1: price-vs-MA conditions (KAMA/VIDYA/FRAMA etc.).
-    # Kept separate from entry_genes/exit_genes so the scalar-threshold gene
-    # mutation/crossover paths stay untouched.
+    # Price-vs-MA genes stored separately from entry_genes/exit_genes so the
+    # scalar-threshold mutation/crossover paths stay type-homogeneous.
     ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -335,9 +337,8 @@ def _random_ma_params(indicator_type: str) -> dict[str, float]:
 
 def _random_ma_gene() -> PriceVsMAConditionGene:
     """Generate a random price-vs-MA gene. Caller must ensure MA_POOL is non-empty."""
-    from vibe_quant.discovery.genome import MA_POOL
-
-    ind = random.choice(list(MA_POOL))
+    _ensure_pool()
+    ind = random.choice(_MA_NAMES)
     return PriceVsMAConditionGene(
         indicator_type=ind,
         parameters=_random_ma_params(ind),
@@ -782,14 +783,13 @@ def _mutate_ma_genes(
     max_count: int,
 ) -> list[PriceVsMAConditionGene]:
     """Mutate MA gene list. Structural add/remove can legitimately empty the list."""
-    from vibe_quant.discovery.genome import MA_POOL
+    _ensure_pool()
 
     for gene in genes:
         if random.random() < rate:
             _mutate_single_ma_gene(gene)
 
-    # Structural add/remove
-    if MA_POOL and random.random() < rate * 0.3:
+    if _MA_NAMES and random.random() < rate * 0.3:
         if len(genes) < max_count and random.random() < 0.5:
             genes.append(_random_ma_gene())
         elif genes:
@@ -802,11 +802,12 @@ def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
     """Mutate one MA gene in place — indicator swap / param perturb / op flip."""
     from vibe_quant.discovery.genome import MA_POOL
 
-    if not MA_POOL:
+    _ensure_pool()
+    if not _MA_NAMES:
         return
     mutation_type = random.randint(0, 2)
     if mutation_type == 0:
-        new_ind = random.choice(list(MA_POOL))
+        new_ind = random.choice(_MA_NAMES)
         gene.indicator_type = new_ind
         gene.parameters = _random_ma_params(new_ind)
     elif mutation_type == 1:
@@ -943,13 +944,12 @@ def _random_chromosome(
     n_exit = random.choices([1, 2, 3], weights=[60, 30, 10])[0]
     direction = direction_constraint if direction_constraint is not None else random.choice(list(Direction))
 
-    # Optional MA gene seed. Rates stay modest so we don't drown the
-    # scalar-threshold search space while MA usefulness is still unproven.
-    from vibe_quant.discovery.genome import MA_POOL
-
+    # Modest seeding rates so MA genes don't drown the scalar-threshold
+    # search space while MA usefulness is still unproven.
+    _ensure_pool()
     ma_entries: list[PriceVsMAConditionGene] = []
     ma_exits: list[PriceVsMAConditionGene] = []
-    if MA_POOL:
+    if _MA_NAMES:
         if random.random() < 0.25:
             ma_entries.append(_random_ma_gene())
         if random.random() < 0.15:

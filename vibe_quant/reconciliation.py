@@ -27,12 +27,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from vibe_quant.logging.query import _DEFAULT_BASE_PATH, _validate_run_id
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
-
-
-_PROJECT_ROOT = Path(__file__).parent.parent
-_DEFAULT_BASE_PATH = _PROJECT_ROOT / "logs" / "events"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,9 +111,7 @@ class ReconciliationReport:
         total = len(self.matches) + len(self.paper_only) + len(self.validation_only)
         if total == 0:
             return 1.0
-        # Each unmatched trade contributes to one side only; matched pairs
-        # count once.
-        return len(self.matches) / (len(self.matches) + len(self.paper_only) + len(self.validation_only))
+        return len(self.matches) / total
 
     def mean_pnl_delta(self) -> float:
         """Mean P&L delta across matched trades (paper − validation)."""
@@ -190,16 +186,20 @@ def load_trades(
     Raises:
         FileNotFoundError: If no log file exists for the run.
     """
+    _validate_run_id(run_id)
     resolved = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
     log_path = resolved / f"{run_id}.jsonl"
-    if not log_path.exists():
-        msg = f"Event log not found: {log_path}"
-        raise FileNotFoundError(msg)
 
     opens: dict[str, dict[str, object]] = {}  # position_id -> open event dict
     trades: list[Trade] = []
 
-    with log_path.open("r", encoding="utf-8") as fp:
+    try:
+        fp = log_path.open("r", encoding="utf-8")
+    except FileNotFoundError as exc:
+        msg = f"Event log not found: {log_path}"
+        raise FileNotFoundError(msg) from exc
+
+    with fp:
         for line in fp:
             line = line.strip()
             if not line:

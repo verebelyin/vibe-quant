@@ -1,10 +1,3 @@
-/**
- * Hand-rolled client for /api/system (kill switch).
- *
- * Written manually rather than via orval so the kill switch can ship
- * without waiting for OpenAPI regen. Next orval pass will produce the
- * equivalent hooks under generated/ — delete this file then.
- */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { customInstance } from "./client";

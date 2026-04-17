@@ -133,7 +133,7 @@ class MAIndicatorDef:
     """Moving-average-style indicator for price-vs-MA gene construction.
 
     Unlike IndicatorDef, MAs have no scalar threshold — they're compared
-    directly against close (or another MA). bd-9c1g Phase 1 foundation.
+    directly against close (or another MA).
 
     Attributes:
         name: Canonical indicator name (uppercase).
@@ -377,7 +377,6 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
     if _normalize_direction(chrom.direction) is None:
         errors.append(f"invalid direction '{chrom.direction}'")
 
-    # MA genes (bd-9c1g Phase 1)
     if len(chrom.ma_entry_genes) > MAX_MA_ENTRY_GENES:
         errors.append(
             f"ma_entry_genes count {len(chrom.ma_entry_genes)} exceeds cap {MAX_MA_ENTRY_GENES}"

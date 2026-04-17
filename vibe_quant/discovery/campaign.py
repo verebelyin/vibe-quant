@@ -48,8 +48,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Run-mode tags so the campaign's rows are distinguishable from ordinary
-# discovery/validation runs in reporting queries.
 RUN_MODE_DISCOVERY = "regime_cross_discovery"
 RUN_MODE_OOS = "regime_cross_oos"
 
@@ -152,11 +150,6 @@ class CampaignPlan:
     oos_runs: dict[tuple[str, int, str], int] = field(default_factory=dict)
 
 
-# ---------------------------------------------------------------------------
-# Phase 1 — plan
-# ---------------------------------------------------------------------------
-
-
 def plan_campaign(config: RegimeCrossConfig, state: StateManager) -> CampaignPlan:
     """Create ``backtest_runs`` rows for every training discovery.
 
@@ -194,9 +187,18 @@ def plan_campaign(config: RegimeCrossConfig, state: StateManager) -> CampaignPla
     return plan
 
 
-# ---------------------------------------------------------------------------
-# Phase 2 — run discoveries (subprocess per window, sequential)
-# ---------------------------------------------------------------------------
+def _run_subprocess(cmd: list[str], log_path: Path | None) -> int:
+    """Run ``cmd`` synchronously, optionally tee'ing output to ``log_path``."""
+    logger.info("launching: %s", " ".join(cmd))
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as log_fp:
+            proc = subprocess.run(
+                cmd, stdout=log_fp, stderr=subprocess.STDOUT, check=False
+            )
+    else:
+        proc = subprocess.run(cmd, check=False)
+    return proc.returncode
 
 
 def run_discovery_subprocess(
@@ -206,52 +208,25 @@ def run_discovery_subprocess(
     python_bin: str = sys.executable,
     log_dir: Path | str | None = None,
 ) -> int:
-    """Launch a single discovery as a subprocess. Returns exit code.
-
-    Stdout+stderr tee'd to ``{log_dir}/regime_cross_{run_id}.log`` when
-    ``log_dir`` is provided.
-    """
+    """Launch a single discovery as a subprocess. Returns exit code."""
     cmd = [
         python_bin,
         "-m",
         "vibe_quant.discovery",
-        "--run-id",
-        str(run_id),
-        "--symbols",
-        config.symbol,
-        "--timeframe",
-        config.timeframe,
-        "--start-date",
-        window.start,
-        "--end-date",
-        window.end,
-        "--direction",
-        window.direction,
-        "--population-size",
-        str(config.population_size),
-        "--max-generations",
-        str(config.max_generations),
+        "--run-id", str(run_id),
+        "--symbols", config.symbol,
+        "--timeframe", config.timeframe,
+        "--start-date", window.start,
+        "--end-date", window.end,
+        "--direction", window.direction,
+        "--population-size", str(config.population_size),
+        "--max-generations", str(config.max_generations),
         *config.extra_discovery_args,
     ]
-    logger.info("launching: %s", " ".join(cmd))
-
-    log_path: Path | None = None
-    if log_dir is not None:
-        log_path = Path(log_dir) / f"regime_cross_{run_id}.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", encoding="utf-8") as log_fp:
-            proc = subprocess.run(
-                cmd, stdout=log_fp, stderr=subprocess.STDOUT, check=False
-            )
-    else:
-        proc = subprocess.run(cmd, check=False)
-    logger.info("discovery run_id=%d exit=%d", run_id, proc.returncode)
-    return proc.returncode
-
-
-# ---------------------------------------------------------------------------
-# Phase 3 — extract champions + plan OOS
-# ---------------------------------------------------------------------------
+    log_path = Path(log_dir) / f"regime_cross_{run_id}.log" if log_dir else None
+    rc = _run_subprocess(cmd, log_path)
+    logger.info("discovery run_id=%d exit=%d", run_id, rc)
+    return rc
 
 
 def extract_top_chromosomes(
@@ -360,23 +335,10 @@ def run_oos_subprocess(
 ) -> int:
     """Launch a single validation (OOS) subprocess. Returns exit code."""
     cmd = [python_bin, "-m", "vibe_quant.validation", "--run-id", str(run_id)]
-    log_path: Path | None = None
-    if log_dir is not None:
-        log_path = Path(log_dir) / f"regime_cross_oos_{run_id}.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", encoding="utf-8") as log_fp:
-            proc = subprocess.run(
-                cmd, stdout=log_fp, stderr=subprocess.STDOUT, check=False
-            )
-    else:
-        proc = subprocess.run(cmd, check=False)
-    logger.info("oos run_id=%d exit=%d", run_id, proc.returncode)
-    return proc.returncode
-
-
-# ---------------------------------------------------------------------------
-# Phase 4 — orchestrate + report
-# ---------------------------------------------------------------------------
+    log_path = Path(log_dir) / f"regime_cross_oos_{run_id}.log" if log_dir else None
+    rc = _run_subprocess(cmd, log_path)
+    logger.info("oos run_id=%d exit=%d", run_id, rc)
+    return rc
 
 
 def run_campaign(
@@ -482,9 +444,10 @@ def build_matrix_report(campaign_id: str, state: StateManager) -> MatrixReport:
         FROM backtest_runs br
         LEFT JOIN backtest_results r ON r.run_id = br.id
         WHERE br.run_mode = ?
+          AND json_extract(br.parameters, '$.campaign_id') = ?
         ORDER BY br.id
         """,
-        (RUN_MODE_OOS,),
+        (RUN_MODE_OOS, campaign_id),
     ).fetchall()
 
     cells: list[MatrixCell] = []
@@ -493,8 +456,6 @@ def build_matrix_report(campaign_id: str, state: StateManager) -> MatrixReport:
         try:
             params = json.loads(row[1]) if row[1] else {}
         except json.JSONDecodeError:
-            continue
-        if params.get("campaign_id") != campaign_id:
             continue
         if not campaign_name:
             campaign_name = str(params.get("campaign_name", ""))
