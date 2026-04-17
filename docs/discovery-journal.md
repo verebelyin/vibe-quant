@@ -4,6 +4,56 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-17: Batch 32 — 1m adaptive-MA probe (runs 790/791/792)
+
+### Goal
+
+Probe newly-added adaptive MA plugins (KAMA / VIDYA / FRAMA from bd-fvbo) on 1m BTC, in parallel with the bd-vmc9 calc-audit fixes (WFA cap, PKFold clamp, timeframe-scaled overtrade penalty). Window 2025-12-28 → 2026-02-28 to reuse the zo4o baseline.
+
+### Config
+
+| Run | Requested pool | Effective pool | Pop | Gens | TF | Duration |
+|-----|----------------|-----------------|-----|------|----|----------|
+| 790 | FRAMA+CCI | **CCI only** | 10 | 6 | 1m | ~8m |
+| 791 | KAMA+ATR  | **ATR only** | 10 | 6 | 1m | ~1m |
+| 792 | VIDYA+STOCH | **STOCH only** | 10 | 6 | 1m | ~8m |
+
+### Finding — all three adaptive MAs silently dropped
+
+Plugins KAMA/VIDYA/FRAMA declare `threshold_range=None` (they're moving averages, not comparators). `build_indicator_pool()` in `discovery/genome.py` excludes any spec without a threshold range. `_apply_indicator_pool_filter()` intersects the requested pool with the genome pool → MAs vanish. The log emits `Indicator pool filtered to: [X]` without noting which requested indicators were dropped. End result: each run became a single-indicator discovery.
+
+Filed:
+- **bd-8gbv** (P2, bug) — filter should error/warn on dropped names, not silently shrink pool
+- **bd-9c1g** (P3, feature) — adaptive MAs need a new gene variant (price-vs-MA, or MA-slope threshold) to be exercisable in GA
+
+### Results (single-indicator, 1m)
+
+| Run | Pool | Best fitness | Best Sharpe | Trades | DSR p | Verdict |
+|-----|------|--------------|-------------|--------|-------|---------|
+| 790 | CCI | 0.5139 | 0.678 | — | 0.0000 sig | Failed **hard** guardrails (bootstrap CI / min trades) |
+| 791 | ATR | 0.0000 | — | 0 (many sanity warns) | — | Failed soft guardrails |
+| 792 | STOCH | 0.0000 | — | — | — | Failed soft guardrails |
+
+No strategies promoted. Screening / validation skipped.
+
+### Calc-audit fixes exercised silently
+
+These ran as a side-effect of the batch and produced no errors across 3 runs:
+- `_compute_max_drawdown(starting_balance=...)` plumbed through screening runner
+- WFA efficiency cap (5.0) and `|IS|<0.001 → 0` guard
+- PKFold default-purge clamp (≥50 bars)
+- Timeframe-scaled overtrade penalty (acc4348)
+
+Log audit: 0 errors, benign SANITY warnings on 0-trade individuals (expected for threshold-rejection).
+
+### Takeaways
+
+1. **Adaptive MA plugins can't be tested via discovery** until bd-9c1g ships. They work in hand-written DSL (`close > kama`) but not in the GA.
+2. CCI-only on 1m produces a DSR-significant but trades-light signal (best Sharpe 0.678, below the 1.0 bootstrap threshold). Consistent with prior journal notes that 1m CCI alone is weak.
+3. When you see a discovery run return 0 strategies and the pool log shows a shrunken list, check that ALL requested indicators made it into the effective pool.
+
+---
+
 ## 2026-04-16: bd-vmc9 — Calculation audit (5 surgical fixes)
 
 Comprehensive code review across fitness, metric extraction, overfitting stats, risk sizing, and execution paths. Five fixes shipped; one alarm cleared.
