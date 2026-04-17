@@ -1,0 +1,47 @@
+# Example regime-cross campaign config.
+#
+# Each train_window runs a full GA discovery. Top-K survivors per window
+# are then validated against every oos_window. The resulting matrix
+# tells you which champions actually held up across regimes.
+#
+# Run it with:
+#   .venv/bin/python scripts/regime_cross_campaign.py run-all \
+#       docs/plans/regime_cross_example.yaml
+#
+# Edit the windows to match your thesis. This example is illustrative —
+# pick windows that have clean regime labels (pure bull / pure bear).
+
+name: q2_2026_baseline
+symbol: BTCUSDT
+timeframe: 1h
+population_size: 100
+max_generations: 20
+top_k: 3
+
+train_windows:
+  - label: bear_2025_h2
+    start: 2025-09-01
+    end: 2026-02-01
+    direction: short
+  - label: bull_2025_h1
+    start: 2025-03-01
+    end: 2025-09-01
+    direction: long
+  - label: full_2025
+    start: 2025-01-01
+    end: 2026-01-01
+    direction: both
+
+oos_windows:
+  # Opposing-regime cross-validation. For a short champion trained on
+  # a bear window, the bull OOS is the hard test.
+  - label: bull_2024_h1
+    start: 2024-01-01
+    end: 2024-06-01
+  - label: mixed_2024_h2
+    start: 2024-06-01
+    end: 2024-12-01
+
+# Extra CLI args forwarded to `vibe_quant.discovery` (e.g. GA tuning).
+# Useful: --no-bootstrap-ci --no-dsr for quick dry-runs.
+extra_discovery_args: []
