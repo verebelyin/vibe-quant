@@ -267,8 +267,8 @@ def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> 
     assert "reason" in notes
 
 
-def test_1m_strict_bootstrap_warns(tmp_path: Path, monkeypatch, caplog) -> None:
-    """1m + strict bootstrap CI should emit a warning recommending relaxed threshold."""
+def test_1m_default_bootstrap_min_sharpe_is_0_5(tmp_path: Path, monkeypatch, caplog) -> None:
+    """1m timeframe should default bootstrap_min_sharpe to 0.5, logged at INFO."""
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
 
@@ -283,17 +283,42 @@ def test_1m_strict_bootstrap_warns(tmp_path: Path, monkeypatch, caplog) -> None:
             "--db", str(db_path), "--mock",
         ],
     )
-    with caplog.at_level("WARNING", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
         assert main() == 0
 
     assert any(
-        "1m timeframe" in r.message and "bootstrap" in r.message.lower()
+        "Bootstrap min Sharpe default: 0.5" in r.message and "timeframe=1m" in r.message
         for r in caplog.records
-    ), f"expected 1m bootstrap warning, got: {[r.message for r in caplog.records]}"
+    ), f"expected 1m default=0.5, got: {[r.message for r in caplog.records]}"
 
 
-def test_1m_relaxed_bootstrap_no_warning(tmp_path: Path, monkeypatch, caplog) -> None:
-    """1m with --bootstrap-min-sharpe 0.5 should not emit the policy warning."""
+def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch, caplog) -> None:
+    """Non-1m timeframe should default bootstrap_min_sharpe to 1.0."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2",
+            "--mutation-rate", "0.1", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "1h",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+        assert main() == 0
+
+    assert any(
+        "Bootstrap min Sharpe default: 1.0" in r.message and "timeframe=1h" in r.message
+        for r in caplog.records
+    )
+
+
+def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeypatch, caplog) -> None:
+    """Explicit --bootstrap-min-sharpe should override the timeframe-aware default."""
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
 
@@ -305,15 +330,16 @@ def test_1m_relaxed_bootstrap_no_warning(tmp_path: Path, monkeypatch, caplog) ->
             "--mutation-rate", "0.1", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "1m",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
-            "--bootstrap-min-sharpe", "0.5",
+            "--bootstrap-min-sharpe", "1.5",
             "--db", str(db_path), "--mock",
         ],
     )
-    with caplog.at_level("WARNING", logger="vibe_quant.discovery.__main__"):
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
         assert main() == 0
 
+    # Should NOT log the default-resolution line when user provided value.
     assert not any(
-        "1m timeframe" in r.message and "bootstrap" in r.message.lower()
+        "Bootstrap min Sharpe default:" in r.message
         for r in caplog.records
     )
 
@@ -480,7 +506,9 @@ def test_guardrail_flags_default_to_enabled() -> None:
     args = build_parser().parse_args(["--run-id", "1"])
     assert args.require_bootstrap_ci is True
     assert args.require_dsr is True
-    assert args.bootstrap_min_sharpe == 1.0
+    # bootstrap_min_sharpe defaults to None at parse time; resolved to
+    # 0.5 (1m) or 1.0 (else) in main() based on --timeframe.
+    assert args.bootstrap_min_sharpe is None
     assert args.bootstrap_ci_level == 0.95
 
 
