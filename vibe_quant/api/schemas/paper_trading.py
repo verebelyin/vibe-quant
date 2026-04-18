@@ -19,6 +19,10 @@ class PaperStartRequest(BaseModel):
     max_position_count: int | None = None
 
 
+class PaperRestoreRequest(BaseModel):
+    trader_id: str
+
+
 class PaperStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

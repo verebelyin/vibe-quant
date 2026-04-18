@@ -199,11 +199,12 @@ async def test_latency_presets(client: AsyncClient) -> None:
     r = await client.get("/api/settings/latency-presets")
     assert r.status_code == 200
     presets = r.json()
-    assert len(presets) == 5
+    assert len(presets) == 6
     names = {p["name"] for p in presets}
     assert "co_located" in names
     assert "near_exchange" in names
     assert "retail" in names
+    assert "cloud" in names
 
 
 async def test_system_info(client: AsyncClient) -> None:

@@ -112,6 +112,15 @@ def _job_info_to_discovery_response(
             resp.error_message = run.get("error_message")
             strategies = _load_discovery_strategies(state, info.run_id)
             resp.strategies_found = len(strategies) if strategies else None
+            if strategies:
+                top = strategies[0]
+                if isinstance(top, dict):
+                    sharpe = top.get("sharpe")
+                    ret_pct = top.get("return_pct")
+                    resp.best_sharpe = float(sharpe) if isinstance(sharpe, (int, float)) else None
+                    resp.best_return = (
+                        float(ret_pct) if isinstance(ret_pct, (int, float)) else None
+                    )
     return resp
 
 
@@ -136,6 +145,38 @@ def _load_discovery_payload(state: StateManager, run_id: int) -> dict[str, objec
         return {}
 
     return data if isinstance(data, dict) else {}
+
+
+def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
+    """Reject warm-start when the seed run's compiler hash != current."""
+    from vibe_quant.dsl.compiler import compiler_version_hash
+
+    run = state.get_backtest_run(seed_run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Seed run {seed_run_id} not found",
+        )
+    params = run.get("parameters") or {}
+    notes_data = _load_discovery_payload(state, seed_run_id)
+    seed_hash = params.get("compiler_version") or notes_data.get("compiler_version")
+    if not seed_hash:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Seed run {seed_run_id} has no recorded compiler_version — "
+                "cannot verify warm-start compatibility"
+            ),
+        )
+    current_hash = compiler_version_hash()
+    if seed_hash != current_hash:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Seed run {seed_run_id} compiler_version={seed_hash} does not "
+                f"match current {current_hash}; warm-start would be stale"
+            ),
+        )
 
 
 def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
@@ -177,6 +218,12 @@ async def launch_discovery(
                 f"or wait for them to complete."
             ),
         )
+
+    # Warm-start: validate that the seed run's compiler hash matches the
+    # current compiler. A mismatch means chromosomes would be evaluated by a
+    # compiler they weren't selected under, silently invalidating warm-start.
+    if body.seed_run_id is not None:
+        _validate_seed_run_compiler(state, body.seed_run_id)
 
     params: dict[str, object] = {
         "population": body.population,

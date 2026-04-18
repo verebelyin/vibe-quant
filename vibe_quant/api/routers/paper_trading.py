@@ -17,6 +17,7 @@ from vibe_quant.api.schemas.paper_trading import (
     CheckpointResponse,
     PaperOrderResponse,
     PaperPositionResponse,
+    PaperRestoreRequest,
     PaperStartRequest,
     PaperStatusResponse,
 )
@@ -156,6 +157,140 @@ async def start_paper(
         {"type": "paper_started", "run_id": run_id, "strategy_id": body.strategy_id},
     )
 
+    return PaperStatusResponse(state="running", pnl_metrics=None, trades_count=0)
+
+
+def _find_latest_config_for_trader(trader_id: str) -> tuple[Path, dict[str, object]] | None:
+    """Scan paper_configs/*.json newest-first for one matching trader_id."""
+    config_dir = Path("data/state/paper_configs")
+    if not config_dir.exists():
+        return None
+    candidates = sorted(
+        config_dir.glob("paper_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        try:
+            with path.open() as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("trader_id") == trader_id:
+            return path, data
+    return None
+
+
+@router.post("/restore", response_model=PaperStatusResponse, status_code=201)
+async def restore_paper(
+    body: PaperRestoreRequest,
+    state: StateMgr,
+    jobs: JobMgr,
+    ws: WsMgr,
+) -> PaperStatusResponse:
+    """Restore a paper session for an existing trader_id.
+
+    Reuses the most-recent saved config (strategy + risk/sizing params) for
+    trader_id. The paper CLI auto-loads the latest checkpoint on startup, so
+    the new session resumes from wherever the prior one stopped.
+    """
+    sys_state = state.get_system_state()
+    if sys_state.get("kill_switch"):
+        raise HTTPException(
+            status_code=423,
+            detail=f"System kill switch engaged: {sys_state.get('reason') or 'no reason'}",
+        )
+
+    # Refuse if any paper job is already running
+    for job in jobs.list_active_jobs():
+        if job.job_type == "paper":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Paper session already running (run_id={job.run_id}); stop it first",
+            )
+
+    found = _find_latest_config_for_trader(body.trader_id)
+    if found is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No prior paper config found for trader_id={body.trader_id!r}",
+        )
+    _prior_path, prior_config = found
+
+    strategy_id = prior_config.get("strategy_id")
+    if not isinstance(strategy_id, int):
+        raise HTTPException(
+            status_code=400,
+            detail="Prior config missing strategy_id — cannot restore",
+        )
+
+    params: dict[str, object] = {}
+    sizing = prior_config.get("sizing") if isinstance(prior_config.get("sizing"), dict) else {}
+    risk = prior_config.get("risk") if isinstance(prior_config.get("risk"), dict) else {}
+    if isinstance(sizing, dict):
+        for k in ("method", "max_leverage", "max_position_pct", "risk_per_trade"):
+            if k in sizing:
+                params[f"sizing_{k}" if k != "method" else "sizing_method"] = sizing[k]
+    if isinstance(risk, dict):
+        for k in (
+            "max_drawdown_pct",
+            "max_daily_loss_pct",
+            "max_consecutive_losses",
+            "max_position_count",
+        ):
+            if k in risk:
+                params[k] = risk[k]
+    params["restored_from_trader_id"] = body.trader_id
+
+    run_id = state.create_backtest_run(
+        strategy_id=strategy_id,
+        run_mode="paper",
+        symbols=[],
+        timeframe="1m",
+        start_date="",
+        end_date="",
+        parameters=params,
+    )
+
+    config_dir = Path("data/state/paper_configs")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / f"paper_{run_id}.json"
+    # Reuse prior config verbatim, just preserving trader_id so persistence keys match
+    new_config = dict(prior_config)
+    new_config["trader_id"] = body.trader_id
+    with config_path.open("w") as f:
+        json.dump(new_config, f, indent=2)
+
+    from datetime import UTC
+    from datetime import datetime as dt
+
+    _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
+    log_file = f"logs/paper_{run_id}_{_ts}.log"
+    command = [
+        sys.executable,
+        "-m",
+        "vibe_quant.paper.cli",
+        "start",
+        "--config",
+        str(config_path),
+        "--run-id",
+        str(run_id),
+    ]
+
+    try:
+        pid = jobs.start_job(run_id, "paper", command, log_file=log_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    state.update_backtest_run_status(run_id, "running", pid=pid)
+    logger.info(
+        "paper trading restored trader_id=%s run_id=%d pid=%d", body.trader_id, run_id, pid
+    )
+
+    await ws.broadcast(
+        "trading",
+        {"type": "paper_restored", "run_id": run_id, "trader_id": body.trader_id},
+    )
     return PaperStatusResponse(state="running", pnl_metrics=None, trades_count=0)
 
 

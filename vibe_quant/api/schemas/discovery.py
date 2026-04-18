@@ -51,6 +51,8 @@ class DiscoveryJobResponse(BaseModel):
     cross_window_months: list[int] | None = None
     eval_windows: int | None = None
     direction: str | None = None
+    best_sharpe: float | None = None
+    best_return: float | None = None
 
 
 class DiscoveryResultResponse(BaseModel):

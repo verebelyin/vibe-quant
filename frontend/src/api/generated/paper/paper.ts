@@ -33,6 +33,7 @@ import type {
   HaltPaperApiPaperHaltPost200,
   PaperOrderResponse,
   PaperPositionResponse,
+  PaperRestoreRequest,
   PaperStartRequest,
   PaperStatusResponse,
   ResumePaperApiPaperResumePost200,
@@ -134,6 +135,100 @@ export const useStartPaperApiPaperStartPost = <TError = HTTPValidationError,
         TContext
       > => {
       return useMutation(getStartPaperApiPaperStartPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Restore a paper session for an existing trader_id.
+
+Reuses the most-recent saved config (strategy + risk/sizing params) for
+trader_id. The paper CLI auto-loads the latest checkpoint on startup, so
+the new session resumes from wherever the prior one stopped.
+ * @summary Restore Paper
+ */
+export type restorePaperApiPaperRestorePostResponse201 = {
+  data: PaperStatusResponse
+  status: 201
+}
+
+export type restorePaperApiPaperRestorePostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type restorePaperApiPaperRestorePostResponseSuccess = (restorePaperApiPaperRestorePostResponse201) & {
+  headers: Headers;
+};
+export type restorePaperApiPaperRestorePostResponseError = (restorePaperApiPaperRestorePostResponse422) & {
+  headers: Headers;
+};
+
+export type restorePaperApiPaperRestorePostResponse = (restorePaperApiPaperRestorePostResponseSuccess | restorePaperApiPaperRestorePostResponseError)
+
+export const getRestorePaperApiPaperRestorePostUrl = () => {
+
+
+  
+
+  return `/api/paper/restore`
+}
+
+export const restorePaperApiPaperRestorePost = async (paperRestoreRequest: PaperRestoreRequest, options?: RequestInit): Promise<restorePaperApiPaperRestorePostResponse> => {
+  
+  return customInstance<restorePaperApiPaperRestorePostResponse>(getRestorePaperApiPaperRestorePostUrl(),
+  {      
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      paperRestoreRequest,)
+  }
+);}
+
+
+
+
+export const getRestorePaperApiPaperRestorePostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>, TError,{data: PaperRestoreRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>, TError,{data: PaperRestoreRequest}, TContext> => {
+
+const mutationKey = ['restorePaperApiPaperRestorePost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>, {data: PaperRestoreRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  restorePaperApiPaperRestorePost(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RestorePaperApiPaperRestorePostMutationResult = NonNullable<Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>>
+    export type RestorePaperApiPaperRestorePostMutationBody = PaperRestoreRequest
+    export type RestorePaperApiPaperRestorePostMutationError = HTTPValidationError
+
+    /**
+ * @summary Restore Paper
+ */
+export const useRestorePaperApiPaperRestorePost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>, TError,{data: PaperRestoreRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof restorePaperApiPaperRestorePost>>,
+        TError,
+        {data: PaperRestoreRequest},
+        TContext
+      > => {
+      return useMutation(getRestorePaperApiPaperRestorePostMutationOptions(options), queryClient);
     }
     /**
  * @summary Halt Paper

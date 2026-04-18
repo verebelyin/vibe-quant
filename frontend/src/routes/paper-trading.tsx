@@ -51,7 +51,10 @@ export function PaperTradingPage() {
               <PositionsTable traderId={traderId || undefined} />
             </div>
             <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-              <CheckpointsList traderId={traderId || undefined} />
+              <CheckpointsList
+                traderId={traderId || undefined}
+                sessionActive={isActive}
+              />
             </div>
           </div>
         </TabsContent>

@@ -80,6 +80,7 @@ export * from './ohlcErrorValues';
 export * from './pairedTrade';
 export * from './paperOrderResponse';
 export * from './paperPositionResponse';
+export * from './paperRestoreRequest';
 export * from './paperStartRequest';
 export * from './paperStatusResponse';
 export * from './paperStatusResponsePnlMetrics';

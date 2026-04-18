@@ -23,4 +23,6 @@ export interface DiscoveryJobResponse {
   cross_window_months?: number[] | null;
   eval_windows?: number | null;
   direction?: string | null;
+  best_sharpe?: number | null;
+  best_return?: number | null;
 }

@@ -5,6 +5,7 @@ import {
   getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
   useGetIndicatorPoolApiDiscoveryIndicatorPoolGet,
   useLaunchDiscoveryApiDiscoveryLaunchPost,
+  useListDiscoveryJobsApiDiscoveryJobsGet,
 } from "@/api/generated/discovery/discovery";
 import { queryClient } from "@/api/query-client";
 import { Badge } from "@/components/ui/badge";
@@ -79,6 +80,19 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
   const datasetRange = useDatasetDateRange();
+  const jobsQuery = useListDiscoveryJobsApiDiscoveryJobsGet();
+
+  const completedJobs = (() => {
+    const resp = jobsQuery.data;
+    if (!resp || resp.status !== 200) return [];
+    return resp.data
+      .filter((j) => j.status === "completed")
+      .sort((a, b) => (b.run_id ?? 0) - (a.run_id ?? 0));
+  })();
+
+  const selectedSeedJob = completedJobs.find(
+    (j) => String(j.run_id) === seedRunId,
+  );
 
   // Auto-populate dates: default to last 3 months of available data
   useEffect(() => {
@@ -635,20 +649,53 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Warm-Start
               </h4>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="seed-run-id">Seed from run ID</Label>
-                  <Input
-                    id="seed-run-id"
-                    type="number"
-                    placeholder="empty = cold start"
-                    value={seedRunId}
-                    onChange={(e) => setSeedRunId(e.target.value)}
-                  />
+              <div className="space-y-2">
+                <Label htmlFor="seed-run-id">Warm-start from run</Label>
+                <Select
+                  value={seedRunId === "" ? "__none__" : seedRunId}
+                  onValueChange={(v) => setSeedRunId(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger id="seed-run-id" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None (cold start)</SelectItem>
+                    {completedJobs.length === 0 && (
+                      <SelectItem value="__empty__" disabled>
+                        {jobsQuery.isLoading ? "Loading..." : "No completed runs"}
+                      </SelectItem>
+                    )}
+                    {completedJobs.map((j) => {
+                      const sym = j.symbols?.[0] ?? "?";
+                      const tf = j.timeframe ?? "?";
+                      return (
+                        <SelectItem key={j.run_id} value={String(j.run_id)}>
+                          #{j.run_id} — {sym} {tf}
+                          {typeof j.best_sharpe === "number"
+                            ? ` — Sharpe ${j.best_sharpe.toFixed(2)}`
+                            : ""}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {selectedSeedJob && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Source run #{selectedSeedJob.run_id}:{" "}
+                    {typeof selectedSeedJob.best_sharpe === "number"
+                      ? `Sharpe ${selectedSeedJob.best_sharpe.toFixed(2)}`
+                      : "Sharpe n/a"}
+                    {typeof selectedSeedJob.best_return === "number"
+                      ? ` · Return ${(selectedSeedJob.best_return * 100).toFixed(1)}%`
+                      : ""}
+                    . Backend rejects with 400 if compiler hash differs from current.
+                  </p>
+                )}
+                {!selectedSeedJob && (
                   <p className="text-[10px] text-muted-foreground">
                     Load top chromosomes from a prior completed discovery run.
                   </p>
-                </div>
+                )}
               </div>
             </div>
           </div>
