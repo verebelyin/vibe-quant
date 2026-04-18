@@ -1,6 +1,6 @@
 import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
-import { Badge } from "@/components/ui/badge";
+import { PassBadge } from "@/components/results/PassBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -69,13 +69,7 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
                   {r.trades ?? "--"}
                 </TableCell>
                 <TableCell>
-                  {r.passed == null ? (
-                    <Badge variant="secondary">N/A</Badge>
-                  ) : r.passed ? (
-                    <Badge>PASS</Badge>
-                  ) : (
-                    <Badge variant="destructive">FAIL</Badge>
-                  )}
+                  <PassBadge passed={r.passed} />
                 </TableCell>
               </TableRow>
             ))}

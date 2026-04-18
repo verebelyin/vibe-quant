@@ -240,10 +240,13 @@ function AddMaConditionDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="crosses_above">close crosses above MA</SelectItem>
-                <SelectItem value="crosses_below">close crosses below MA</SelectItem>
-                <SelectItem value=">">close &gt; MA</SelectItem>
-                <SelectItem value="<">close &lt; MA</SelectItem>
+                {OPERATORS.filter((o) =>
+                  ["crosses_above", "crosses_below", ">", "<"].includes(o.value),
+                ).map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    close {o.label} MA
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

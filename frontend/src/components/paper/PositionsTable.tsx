@@ -11,10 +11,15 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
-export function PositionsTable() {
-  const { data: posResp, isLoading } = useGetPositionsApiPaperPositionsGet(undefined, {
-    query: { refetchInterval: 5_000 },
-  });
+interface PositionsTableProps {
+  traderId?: string | undefined;
+}
+
+export function PositionsTable({ traderId }: PositionsTableProps = {}) {
+  const { data: posResp, isLoading } = useGetPositionsApiPaperPositionsGet(
+    traderId ? { trader_id: traderId } : undefined,
+    { query: { enabled: !!traderId, refetchInterval: traderId ? 5_000 : false } },
+  );
 
   const positions: PaperPositionResponse[] = useMemo(() => {
     if (!posResp) return [];

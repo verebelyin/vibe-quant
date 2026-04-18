@@ -80,6 +80,11 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
     return value >= 0.5 ? "pass" : "fail";
   }
 
+  function thresholdStatus(value: number | null | undefined, threshold: number): CheckStatus {
+    if (value == null) return "na";
+    return value >= threshold ? "pass" : "fail";
+  }
+
   // IS/OOS ratio: approximate from win_rate and trade count (proxy only until dedicated endpoint)
   const isOosRatio = data.win_rate != null && data.total_trades != null
     ? data.win_rate
@@ -117,31 +122,18 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
       status: data.calmar_ratio != null ? (data.calmar_ratio >= 0.5 ? "pass" : "fail") : "na",
       detail: data.calmar_ratio != null ? `calmar: ${data.calmar_ratio.toFixed(2)}` : undefined,
     },
-    (() => {
-      const lower = data.bootstrap_sharpe_lower;
-      const threshold = timeframe === "1m" ? 0.5 : 1.0;
-      return {
-        label: "Bootstrap CI (Sharpe lower)",
-        status:
-          lower == null
-            ? ("na" as CheckStatus)
-            : lower >= threshold
-              ? ("pass" as CheckStatus)
-              : ("fail" as CheckStatus),
-        detail:
-          lower != null
-            ? `≥${lower.toFixed(2)} @ ${(data.bootstrap_ci_level ?? 0.95) * 100}% (thr: ${threshold})`
-            : undefined,
-      };
-    })(),
+    {
+      label: "Bootstrap CI (Sharpe lower)",
+      // 1m uses a lenient 0.5 threshold per policy:bootstrap-ci-1m; higher tfs use 1.0.
+      status: thresholdStatus(data.bootstrap_sharpe_lower, timeframe === "1m" ? 0.5 : 1.0),
+      detail:
+        data.bootstrap_sharpe_lower != null
+          ? `≥${data.bootstrap_sharpe_lower.toFixed(2)} @ ${(data.bootstrap_ci_level ?? 0.95) * 100}% (thr: ${timeframe === "1m" ? 0.5 : 1.0})`
+          : undefined,
+    },
     {
       label: "WFA Sharpe Consistency",
-      status:
-        data.wfa_sharpe_consistency == null
-          ? "na"
-          : data.wfa_sharpe_consistency >= 0.75
-            ? "pass"
-            : "fail",
+      status: thresholdStatus(data.wfa_sharpe_consistency, 0.75),
       detail:
         data.wfa_sharpe_consistency != null
           ? `${(data.wfa_sharpe_consistency * 100).toFixed(0)}% (thr: 75%)`

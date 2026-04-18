@@ -1,6 +1,6 @@
 import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
-import { Badge } from "@/components/ui/badge";
+import { PassBadge } from "@/components/results/PassBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -62,13 +62,7 @@ export function RegimeValidationPanel({ runId }: RegimeValidationPanelProps) {
                     {dd != null ? `${(dd * 100).toFixed(2)}%` : "--"}
                   </TableCell>
                   <TableCell>
-                    {r.passed == null ? (
-                      <Badge variant="secondary">N/A</Badge>
-                    ) : r.passed ? (
-                      <Badge>PASS</Badge>
-                    ) : (
-                      <Badge variant="destructive">FAIL</Badge>
-                    )}
+                    <PassBadge passed={r.passed} />
                   </TableCell>
                 </TableRow>
               );

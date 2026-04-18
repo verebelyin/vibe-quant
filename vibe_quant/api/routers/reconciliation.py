@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -79,31 +80,26 @@ async def reconcile_paper_session(
                     "query param explicitly"
                 ),
             )
-        all_runs = state.list_backtest_runs(
+        candidates = state.list_runs_with_results(
             strategy_id=strategy_id,
+            run_mode="validation",
             status="completed",
         )
-        candidates = [r for r in all_runs if r.get("run_mode") == "validation"]
         if not candidates:
             raise HTTPException(
                 status_code=404,
                 detail=f"No completed validation run found for strategy {strategy_id}",
             )
-        validation_run_id = int(candidates[0]["id"])
+        validation_run_id = int(candidates[0]["run_id"])
 
     try:
-        paper_trades = load_trades(f"paper_{paper_session_id}")
+        paper_trades, validation_trades = await asyncio.gather(
+            asyncio.to_thread(load_trades, f"paper_{paper_session_id}"),
+            asyncio.to_thread(load_trades, str(validation_run_id)),
+        )
     except (FileNotFoundError, OSError) as exc:
         raise HTTPException(
-            status_code=404, detail=f"No paper event log for run {paper_session_id}: {exc}"
-        ) from exc
-
-    try:
-        validation_trades = load_trades(str(validation_run_id))
-    except (FileNotFoundError, OSError) as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No validation event log for run {validation_run_id}: {exc}",
+            status_code=404, detail=f"Event log not found: {exc}"
         ) from exc
 
     report = reconcile(

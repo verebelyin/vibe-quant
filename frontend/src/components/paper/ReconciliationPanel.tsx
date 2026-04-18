@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LoadingSpinner } from "@/components/ui";
+import { LoadingSpinner, MetricCard } from "@/components/ui";
 import {
   Table,
   TableBody,
@@ -16,17 +16,9 @@ import {
 import { useReconcilePaperSessionApiReconciliationPaperSessionIdGet } from "@/api/generated/reconciliation/reconciliation";
 import type { ReconciliationResponse } from "@/api/generated/models";
 
-interface ReconciliationPanelProps {
-  currentRunId?: number | null;
-}
-
-export function ReconciliationPanel({ currentRunId }: ReconciliationPanelProps) {
-  const [runIdInput, setRunIdInput] = useState<string>(
-    currentRunId != null ? String(currentRunId) : "",
-  );
-  const [submittedRunId, setSubmittedRunId] = useState<number | null>(
-    currentRunId ?? null,
-  );
+export function ReconciliationPanel() {
+  const [runIdInput, setRunIdInput] = useState<string>("");
+  const [submittedRunId, setSubmittedRunId] = useState<number | null>(null);
   const [validationRunId, setValidationRunId] = useState<string>("");
 
   const query = useReconcilePaperSessionApiReconciliationPaperSessionIdGet(
@@ -110,21 +102,29 @@ export function ReconciliationPanel({ currentRunId }: ReconciliationPanelProps) 
         {data && (
           <>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Metric label="Parity rate" value={`${(data.divergence_summary.parity_rate * 100).toFixed(1)}%`} />
-              <Metric label="Matched" value={String(data.divergence_summary.matched)} />
-              <Metric label="Paper only" value={String(data.divergence_summary.paper_only)} />
-              <Metric label="Validation only" value={String(data.divergence_summary.validation_only)} />
-              <Metric
+              <MetricCard
+                label="Parity rate"
+                value={`${(data.divergence_summary.parity_rate * 100).toFixed(1)}%`}
+              />
+              <MetricCard label="Matched" value={data.divergence_summary.matched} />
+              <MetricCard label="Paper only" value={data.divergence_summary.paper_only} />
+              <MetricCard
+                label="Validation only"
+                value={data.divergence_summary.validation_only}
+              />
+              <MetricCard
                 label="Mean PnL Δ"
                 value={data.divergence_summary.mean_pnl_delta.toFixed(4)}
+                trend={data.divergence_summary.mean_pnl_delta >= 0 ? "up" : "down"}
               />
-              <Metric
+              <MetricCard
                 label="Mean entry slippage"
                 value={data.divergence_summary.mean_entry_slippage.toFixed(6)}
               />
-              <Metric
+              <MetricCard
                 label="Side disagreements"
-                value={String(data.divergence_summary.side_disagreements)}
+                value={data.divergence_summary.side_disagreements}
+                trend={data.divergence_summary.side_disagreements === 0 ? "up" : "down"}
               />
             </div>
 
@@ -182,11 +182,3 @@ export function ReconciliationPanel({ currentRunId }: ReconciliationPanelProps) 
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border/60 bg-card/40 p-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-0.5 font-mono text-sm text-foreground">{value}</div>
-    </div>
-  );
-}

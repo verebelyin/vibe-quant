@@ -82,7 +82,11 @@ function EquityTooltip({
   );
 }
 
-export function LiveDashboard() {
+interface LiveDashboardProps {
+  traderId?: string | undefined;
+}
+
+export function LiveDashboard(props: LiveDashboardProps = {}) {
   const ws = useTradingWS();
   const [pnl, setPnl] = useState<number | null>(null);
   const prevPnlRef = useRef<number | null>(null);
@@ -92,16 +96,22 @@ export function LiveDashboard() {
   const [flashedSymbols, setFlashedSymbols] = useState<Set<string>>(new Set());
   const flashTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  // Positions from API (auto-refreshed by WS invalidation)
-  const { data: posResp } = useGetPositionsApiPaperPositionsGet(undefined, {
-    query: { refetchInterval: 5_000 },
-  });
+  const traderId = props.traderId;
+
+  const { data: posResp } = useGetPositionsApiPaperPositionsGet(
+    traderId ? { trader_id: traderId } : undefined,
+    {
+      query: { enabled: !!traderId, refetchInterval: traderId ? 5_000 : false },
+    },
+  );
   const positions: PaperPositionResponse[] = posResp?.status === 200 ? posResp.data : [];
 
-  // Orders from API
-  const { data: ordersResp } = useGetOrdersApiPaperOrdersGet(undefined, {
-    query: { refetchInterval: 10_000 },
-  });
+  const { data: ordersResp } = useGetOrdersApiPaperOrdersGet(
+    traderId ? { trader_id: traderId } : undefined,
+    {
+      query: { enabled: !!traderId, refetchInterval: traderId ? 10_000 : false },
+    },
+  );
   const rawOrders = ordersResp?.status === 200 ? ordersResp.data : [];
   const recentOrders: OrderRecord[] = rawOrders.slice(0, 10).map((o, idx) => ({
     id: String(o.order_id ?? idx),
