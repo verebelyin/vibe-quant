@@ -18,4 +18,9 @@ export interface DiscoveryJobResponse {
   population?: number | null;
   strategies_found?: number | null;
   error_message?: string | null;
+  num_seeds?: number | null;
+  wfa_oos_step_days?: number | null;
+  cross_window_months?: number[] | null;
+  eval_windows?: number | null;
+  direction?: string | null;
 }

@@ -52,6 +52,22 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // Indicator pool
   const [selectedIndicators, setSelectedIndicators] = useState<string[]>([]);
 
+  // Overfitting & robustness knobs (match DiscoveryLaunchRequest defaults)
+  const [robustnessOpen, setRobustnessOpen] = useState(false);
+  const [direction, setDirection] = useState<"long" | "short" | "both" | "random">("random");
+  const [evalWindows, setEvalWindows] = useState(3);
+  const [trainTestSplit, setTrainTestSplit] = useState(0);
+  const [numSeeds, setNumSeeds] = useState(1);
+  const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
+  const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
+  const [crossWindowMonths, setCrossWindowMonths] = useState("");
+  const [crossWindowMinSharpe, setCrossWindowMinSharpe] = useState(0.5);
+
+  const parsedCrossWindowMonths = crossWindowMonths
+    .split(",")
+    .map((s) => Number.parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
   const datasetRange = useDatasetDateRange();
@@ -121,6 +137,16 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           indicator_pool: selectedIndicators.length > 0 ? selectedIndicators : null,
           ...(startDate && { start_date: startDate }),
           ...(endDate && { end_date: endDate }),
+          ...(direction !== "random" && { direction }),
+          eval_windows: evalWindows,
+          train_test_split: trainTestSplit,
+          num_seeds: numSeeds,
+          wfa_oos_step_days: wfaOosStepDays,
+          wfa_min_consistency: wfaMinConsistency,
+          ...(parsedCrossWindowMonths.length > 0 && {
+            cross_window_months: parsedCrossWindowMonths,
+            cross_window_min_sharpe: crossWindowMinSharpe,
+          }),
         } as DiscoveryLaunchRequest,
       },
       {
@@ -374,9 +400,178 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         </div>
       </div>
 
+      {/* Overfitting & Robustness */}
+      <div className="rounded-lg border border-border bg-card">
+        <button
+          type="button"
+          onClick={() => setRobustnessOpen((v) => !v)}
+          className="flex w-full items-center justify-between p-4 text-left"
+          aria-expanded={robustnessOpen}
+        >
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+            Overfitting & Robustness
+          </h3>
+          <div className="flex items-center gap-2">
+            {(direction !== "random" ||
+              evalWindows !== 3 ||
+              trainTestSplit !== 0 ||
+              numSeeds !== 1 ||
+              wfaOosStepDays !== 0 ||
+              parsedCrossWindowMonths.length > 0) && (
+              <Badge variant="outline" className="text-[10px]">
+                modified
+              </Badge>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {robustnessOpen ? "▾" : "▸"}
+            </span>
+          </div>
+        </button>
+        {robustnessOpen && (
+          <div className="space-y-4 border-t border-border p-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="direction">Direction</Label>
+                <Select
+                  value={direction}
+                  onValueChange={(v) =>
+                    setDirection(v as "long" | "short" | "both" | "random")
+                  }
+                >
+                  <SelectTrigger id="direction" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="random">Random (GA picks)</SelectItem>
+                    <SelectItem value="long">Long only</SelectItem>
+                    <SelectItem value="short">Short only</SelectItem>
+                    <SelectItem value="both">Both</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="eval-windows">Eval Windows</Label>
+                <Input
+                  id="eval-windows"
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={evalWindows}
+                  onChange={(e) => setEvalWindows(Number(e.target.value))}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Worst-case fitness across N sub-windows (PKFOLD-biased).
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="num-seeds">Num Seeds</Label>
+                <Input
+                  id="num-seeds"
+                  type="number"
+                  min={1}
+                  max={7}
+                  value={numSeeds}
+                  onChange={(e) => setNumSeeds(Number(e.target.value))}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Multi-seed ensemble — median Sharpe across runs.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="train-test-split">Train/Test Split</Label>
+                <Input
+                  id="train-test-split"
+                  type="number"
+                  min={0}
+                  max={0.9}
+                  step={0.05}
+                  value={trainTestSplit}
+                  onChange={(e) => setTrainTestSplit(Number(e.target.value))}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Fraction used for <strong>training</strong> (not holdout). 0 = disabled.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Walk-Forward Analysis
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="wfa-step">OOS Step (days)</Label>
+                  <Select
+                    value={String(wfaOosStepDays)}
+                    onValueChange={(v) => setWfaOosStepDays(Number(v))}
+                  >
+                    <SelectTrigger id="wfa-step" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Off</SelectItem>
+                      <SelectItem value="7">7 (weekly)</SelectItem>
+                      <SelectItem value="14">14 (biweekly)</SelectItem>
+                      <SelectItem value="30">30 (monthly)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="wfa-consistency">Min Consistency</Label>
+                  <Input
+                    id="wfa-consistency"
+                    type="number"
+                    min={0.5}
+                    max={1}
+                    step={0.05}
+                    value={wfaMinConsistency}
+                    onChange={(e) => setWfaMinConsistency(Number(e.target.value))}
+                    disabled={wfaOosStepDays === 0}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Cross-Window Validation
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="cw-months">Month Offsets</Label>
+                  <Input
+                    id="cw-months"
+                    type="text"
+                    placeholder="e.g. 1,2,3"
+                    value={crossWindowMonths}
+                    onChange={(e) => setCrossWindowMonths(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Comma-separated shifted-window offsets. Empty = disabled.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cw-min-sharpe">Min Sharpe</Label>
+                  <Input
+                    id="cw-min-sharpe"
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={crossWindowMinSharpe}
+                    onChange={(e) => setCrossWindowMinSharpe(Number(e.target.value))}
+                    disabled={parsedCrossWindowMonths.length === 0}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ETA Estimate + Runtime Warning */}
       {(() => {
-        const totalEvals = population * generations;
+        const crossWindowMultiplier = Math.max(1, parsedCrossWindowMonths.length);
+        const totalEvals = population * generations * numSeeds * crossWindowMultiplier;
         const secPerEval = 15;
         const cores = 8;
         const parallelSec = Math.ceil(totalEvals / cores) * secPerEval;

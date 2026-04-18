@@ -42,6 +42,11 @@ class DiscoveryJobResponse(BaseModel):
     population: int | None = None
     strategies_found: int | None = None
     error_message: str | None = None
+    num_seeds: int | None = None
+    wfa_oos_step_days: int | None = None
+    cross_window_months: list[int] | None = None
+    eval_windows: int | None = None
+    direction: str | None = None
 
 
 class DiscoveryResultResponse(BaseModel):

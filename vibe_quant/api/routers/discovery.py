@@ -104,6 +104,11 @@ def _job_info_to_discovery_response(
             params = run.get("parameters", {})
             resp.generations = params.get("generations")
             resp.population = params.get("population")
+            resp.num_seeds = params.get("num_seeds")
+            resp.wfa_oos_step_days = params.get("wfa_oos_step_days")
+            resp.cross_window_months = params.get("cross_window_months")
+            resp.eval_windows = params.get("eval_windows")
+            resp.direction = params.get("direction")
             resp.error_message = run.get("error_message")
             strategies = _load_discovery_strategies(state, info.run_id)
             resp.strategies_found = len(strategies) if strategies else None

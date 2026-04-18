@@ -68,7 +68,7 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
 
   if (!data) return null;
 
-  const score = data.quality_score * 100;
+  const score = (data.quality_score ?? 0) * 100;
   const gaps = (data.gaps ?? []) as unknown as GapItem[];
   const gapCount = gaps.length;
   const missingBars = gaps.reduce((sum, g) => sum + (g.missing_bars ?? 0), 0);

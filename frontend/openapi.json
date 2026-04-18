@@ -1165,6 +1165,28 @@
         }
       }
     },
+    "/api/indicators/catalog": {
+      "get": {
+        "tags": [
+          "indicators"
+        ],
+        "summary": "Get Catalog",
+        "description": "Return every registered indicator spec as a catalog entry.\n\nOrdered alphabetically by ``type_name`` via\n``indicator_registry.all_specs()``. The UI is expected to re-group\nby ``category`` using the ``categories`` field on the response.",
+        "operationId": "get_catalog_api_indicators_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndicatorCatalogResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/backtest/jobs/{run_id}/heartbeat": {
       "post": {
         "tags": [
@@ -3120,6 +3142,111 @@
         }
       }
     },
+    "/api/system/status": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Get Status",
+        "operationId": "get_status_api_system_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system/kill": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Kill",
+        "description": "Engage the system-wide kill switch.\n\n- Persists kill state to the DB so restarts stay halted.\n- Sends SIGUSR1 to any active paper-trading PID (best-effort).\n- Broadcasts `system_killed` over the trading WebSocket.",
+        "operationId": "kill_api_system_kill_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system/unlock": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Unlock",
+        "description": "Clear the kill switch. Requires ``acknowledge=true``.",
+        "operationId": "unlock_api_system_unlock_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/backtest/jobs/{run_id}/progress": {
       "get": {
         "tags": [
@@ -4008,7 +4135,14 @@
             "title": "Gaps"
           },
           "quality_score": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Quality Score"
           },
           "ohlc_errors": {
@@ -4023,6 +4157,17 @@
             "type": "integer",
             "title": "Ohlc Error Count",
             "default": 0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
           }
         },
         "type": "object",
@@ -4202,6 +4347,64 @@
               }
             ],
             "title": "Error Message"
+          },
+          "num_seeds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Seeds"
+          },
+          "wfa_oos_step_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Oos Step Days"
+          },
+          "cross_window_months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Months"
+          },
+          "eval_windows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Windows"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
           }
         },
         "type": "object",
@@ -4315,6 +4518,50 @@
               }
             ],
             "title": "End Date"
+          },
+          "eval_windows": {
+            "type": "integer",
+            "title": "Eval Windows",
+            "default": 3
+          },
+          "train_test_split": {
+            "type": "number",
+            "title": "Train Test Split",
+            "default": 0.0
+          },
+          "cross_window_months": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Months"
+          },
+          "cross_window_min_sharpe": {
+            "type": "number",
+            "title": "Cross Window Min Sharpe",
+            "default": 0.5
+          },
+          "num_seeds": {
+            "type": "integer",
+            "title": "Num Seeds",
+            "default": 1
+          },
+          "wfa_oos_step_days": {
+            "type": "integer",
+            "title": "Wfa Oos Step Days",
+            "default": 0
+          },
+          "wfa_min_consistency": {
+            "type": "number",
+            "title": "Wfa Min Consistency",
+            "default": 0.75
           }
         },
         "type": "object",
@@ -4385,6 +4632,125 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IndicatorCatalogEntry": {
+        "properties": {
+          "type_name": {
+            "type": "string",
+            "title": "Type Name",
+            "description": "Canonical uppercase indicator name (RSI, MACD, ...)"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name",
+            "description": "Human-readable label for the UI (e.g. 'Relative Strength Index')",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "One-line description for tooltips",
+            "default": ""
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "UI category: Trend | Momentum | Volatility | Volume | Custom",
+            "default": "Custom"
+          },
+          "popular": {
+            "type": "boolean",
+            "title": "Popular",
+            "description": "Highlight in the UI as a commonly-used indicator",
+            "default": false
+          },
+          "chart_placement": {
+            "type": "string",
+            "title": "Chart Placement",
+            "description": "Rendering hint: 'overlay' (draws on price) or 'oscillator' (own pane)",
+            "default": "oscillator"
+          },
+          "default_params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Default Params",
+            "description": "Default parameter values"
+          },
+          "param_schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Param Schema",
+            "description": "Parameter name \u2192 Python type name (e.g. {'period': 'int'})"
+          },
+          "output_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Names",
+            "description": "Names of output series (multi-output indicators expose several)"
+          },
+          "requires_high_low": {
+            "type": "boolean",
+            "title": "Requires High Low",
+            "description": "Indicator needs high/low series (ATR, STOCH, ADX, \u2026)",
+            "default": false
+          },
+          "requires_volume": {
+            "type": "boolean",
+            "title": "Requires Volume",
+            "description": "Indicator needs the volume series (MFI, OBV, VWAP, VOLSMA)",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_name"
+        ],
+        "title": "IndicatorCatalogEntry",
+        "description": "One indicator row in the catalog response.\n\nEvery field maps to an ``IndicatorSpec`` attribute, with ``param_schema``\nrendered as ``{name: type_name}`` because types aren't JSON-native."
+      },
+      "IndicatorCatalogResponse": {
+        "properties": {
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorCatalogEntry"
+            },
+            "type": "array",
+            "title": "Indicators"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Categories",
+            "description": "Ordered category list for grouped rendering in the UI"
+          }
+        },
+        "type": "object",
+        "required": [
+          "indicators"
+        ],
+        "title": "IndicatorCatalogResponse",
+        "description": "Wrapper response returned by ``GET /api/indicators/catalog``."
       },
       "IndicatorSeries": {
         "properties": {
@@ -4523,6 +4889,11 @@
           "end_date": {
             "type": "string",
             "title": "End Date"
+          },
+          "interval": {
+            "type": "string",
+            "title": "Interval",
+            "default": "1m"
           }
         },
         "type": "object",
@@ -4608,6 +4979,34 @@
           "is_stale"
         ],
         "title": "JobStatusResponse"
+      },
+      "KillRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "killed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "KillRequest",
+        "description": "Request body for POST /api/system/kill."
       },
       "LatencyPreset": {
         "properties": {
@@ -5465,6 +5864,17 @@
       },
       "StrategyUpdate": {
         "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "dsl_config": {
             "anyOf": [
               {
@@ -5748,6 +6158,67 @@
         ],
         "title": "SystemInfoResponse"
       },
+      "SystemStatusResponse": {
+        "properties": {
+          "kill_switch": {
+            "type": "boolean",
+            "title": "Kill Switch"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "killed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed At"
+          },
+          "killed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed By"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kill_switch",
+          "reason",
+          "killed_at",
+          "killed_by",
+          "updated_at"
+        ],
+        "title": "SystemStatusResponse"
+      },
       "TradeResponse": {
         "properties": {
           "id": {
@@ -5939,6 +6410,33 @@
           "trades"
         ],
         "title": "TradesBatchRequest"
+      },
+      "UnlockRequest": {
+        "properties": {
+          "cleared_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared By"
+          },
+          "acknowledge": {
+            "type": "boolean",
+            "title": "Acknowledge",
+            "description": "Must be true to unlock"
+          }
+        },
+        "type": "object",
+        "required": [
+          "acknowledge"
+        ],
+        "title": "UnlockRequest",
+        "description": "Request body for POST /api/system/unlock \u2014 operator attestation."
       },
       "ValidationError": {
         "properties": {

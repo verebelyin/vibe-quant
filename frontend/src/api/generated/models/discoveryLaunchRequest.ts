@@ -19,4 +19,11 @@ export interface DiscoveryLaunchRequest {
   direction?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  eval_windows?: number;
+  train_test_split?: number;
+  cross_window_months?: number[] | null;
+  cross_window_min_sharpe?: number;
+  num_seeds?: number;
+  wfa_oos_step_days?: number;
+  wfa_min_consistency?: number;
 }

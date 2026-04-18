@@ -10,7 +10,8 @@ import type { OhlcError } from './ohlcError';
 export interface DataQualityResponse {
   symbol: string;
   gaps: DataQualityResponseGapsItem[];
-  quality_score: number;
+  quality_score: number | null;
   ohlc_errors?: OhlcError[];
   ohlc_error_count?: number;
+  error?: string | null;
 }

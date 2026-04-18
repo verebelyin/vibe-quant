@@ -139,12 +139,32 @@ export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobLis
               >
                 {/* Header row */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs text-muted-foreground">#{job.run_id}</span>
                     <Badge variant="outline" className={cn("border-transparent text-[10px]", badgeCls)}>
                       {job.status}
                     </Badge>
                     <span className="text-[10px] text-muted-foreground">{formatDate(job.started_at)}</span>
+                    {job.num_seeds != null && job.num_seeds > 1 && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {job.num_seeds}-seed
+                      </Badge>
+                    )}
+                    {job.wfa_oos_step_days != null && job.wfa_oos_step_days > 0 && (
+                      <Badge variant="outline" className="text-[10px]">
+                        WFA:{job.wfa_oos_step_days}d
+                      </Badge>
+                    )}
+                    {job.cross_window_months && job.cross_window_months.length > 0 && (
+                      <Badge variant="outline" className="text-[10px]">
+                        CW:{job.cross_window_months.join(",")}
+                      </Badge>
+                    )}
+                    {job.direction && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {job.direction}
+                      </Badge>
+                    )}
                   </div>
                   {(isRunning || normalized === "queued") && (
                     <Button
