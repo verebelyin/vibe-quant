@@ -1,5 +1,8 @@
 import type { BacktestResultResponse } from "@/api/generated/models";
-import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
+import {
+  useGetRunMetaApiResultsRunsRunIdMetaGet,
+  useGetRunSummaryApiResultsRunsRunIdGet,
+} from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,7 +53,10 @@ function CheckRow({ label, status, detail, threshold, description }: CheckInfo &
 
 export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
+  const metaQuery = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
   const data = query.data?.data as BacktestResultResponse | undefined;
+  const timeframe =
+    metaQuery.data?.status === 200 ? metaQuery.data.data.timeframe : undefined;
 
   if (query.isLoading) {
     return (
@@ -111,6 +117,51 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
       status: data.calmar_ratio != null ? (data.calmar_ratio >= 0.5 ? "pass" : "fail") : "na",
       detail: data.calmar_ratio != null ? `calmar: ${data.calmar_ratio.toFixed(2)}` : undefined,
     },
+    (() => {
+      const lower = data.bootstrap_sharpe_lower;
+      const threshold = timeframe === "1m" ? 0.5 : 1.0;
+      return {
+        label: "Bootstrap CI (Sharpe lower)",
+        status:
+          lower == null
+            ? ("na" as CheckStatus)
+            : lower >= threshold
+              ? ("pass" as CheckStatus)
+              : ("fail" as CheckStatus),
+        detail:
+          lower != null
+            ? `≥${lower.toFixed(2)} @ ${(data.bootstrap_ci_level ?? 0.95) * 100}% (thr: ${threshold})`
+            : undefined,
+      };
+    })(),
+    {
+      label: "WFA Sharpe Consistency",
+      status:
+        data.wfa_sharpe_consistency == null
+          ? "na"
+          : data.wfa_sharpe_consistency >= 0.75
+            ? "pass"
+            : "fail",
+      detail:
+        data.wfa_sharpe_consistency != null
+          ? `${(data.wfa_sharpe_consistency * 100).toFixed(0)}% (thr: 75%)`
+          : undefined,
+    },
+    (() => {
+      const rows = data.cross_regime_results as
+        | Array<{ passed?: boolean }>
+        | null
+        | undefined;
+      if (!rows || rows.length === 0) {
+        return { label: "Cross-Regime", status: "na" as CheckStatus };
+      }
+      const passedAll = rows.every((r) => r?.passed === true);
+      return {
+        label: "Cross-Regime",
+        status: passedAll ? ("pass" as CheckStatus) : ("fail" as CheckStatus),
+        detail: `${rows.filter((r) => r?.passed).length}/${rows.length} regimes`,
+      };
+    })(),
   ];
 
   const passCount = checks.filter((b) => b.status === "pass").length;

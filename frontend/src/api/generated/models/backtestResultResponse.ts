@@ -4,6 +4,8 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { BacktestResultResponseCrossRegimeResults } from './backtestResultResponseCrossRegimeResults';
+import type { BacktestResultResponseCrossWindowResults } from './backtestResultResponseCrossWindowResults';
 
 export interface BacktestResultResponse {
   id: number;
@@ -38,4 +40,13 @@ export interface BacktestResultResponse {
   starting_balance: number | null;
   notes: string | null;
   created_at: string | null;
+  skewness?: number | null;
+  kurtosis?: number | null;
+  bootstrap_sharpe_lower?: number | null;
+  bootstrap_sharpe_upper?: number | null;
+  bootstrap_ci_level?: number | null;
+  wfa_sharpe_consistency?: number | null;
+  cross_window_results?: BacktestResultResponseCrossWindowResults;
+  cross_regime_results?: BacktestResultResponseCrossRegimeResults;
+  random_short_baseline_pct?: number | null;
 }

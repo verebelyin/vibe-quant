@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -29,6 +30,94 @@ from vibe_quant.api.schemas.result import (
 from vibe_quant.db.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
+
+
+def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
+    """Parse `notes` JSON and merge overfitting/cross-window fields into row.
+
+    The discovery pipeline stores a structured JSON payload in
+    backtest_results.notes including top_strategies[0] with nested
+    `cross_window` and `wfa` sub-objects. Surface these as typed fields so
+    the UI can render them without re-parsing JSON.
+
+    Defensive: any parse error or missing key → field stays None.
+    """
+    enriched = dict(row)
+    notes = enriched.get("notes")
+    if not notes or not isinstance(notes, str):
+        return enriched
+    try:
+        payload = json.loads(notes)
+    except (json.JSONDecodeError, TypeError):
+        return enriched
+    if not isinstance(payload, dict):
+        return enriched
+
+    top = payload.get("top_strategies")
+    if not isinstance(top, list) or not top or not isinstance(top[0], dict):
+        return enriched
+    best = top[0]
+
+    cw = best.get("cross_window")
+    if isinstance(cw, dict):
+        windows = cw.get("windows")
+        offsets = payload.get("cross_window_months")
+        min_sharpe = payload.get("cross_window_min_sharpe", 0.5)
+        if isinstance(windows, list):
+            mapped: list[dict[str, Any]] = []
+            for i, w in enumerate(windows):
+                if not isinstance(w, dict):
+                    continue
+                sharpe = w.get("sharpe")
+                offset = (
+                    offsets[i]
+                    if isinstance(offsets, list) and i < len(offsets)
+                    else None
+                )
+                passed = (
+                    sharpe is not None
+                    and isinstance(min_sharpe, (int, float))
+                    and sharpe >= min_sharpe
+                )
+                mapped.append(
+                    {
+                        "offset": offset,
+                        "sharpe": sharpe,
+                        "return_pct": w.get("return_pct"),
+                        "max_dd": w.get("max_dd"),
+                        "trades": w.get("trades"),
+                        "passed": passed,
+                    }
+                )
+            enriched["cross_window_results"] = mapped
+
+    wfa = best.get("wfa")
+    if isinstance(wfa, dict):
+        sc = wfa.get("sharpe_consistency")
+        if isinstance(sc, (int, float)):
+            enriched["wfa_sharpe_consistency"] = float(sc)
+
+    bootstrap = payload.get("bootstrap_ci") or best.get("bootstrap_ci")
+    if isinstance(bootstrap, dict):
+        lo = bootstrap.get("lower")
+        hi = bootstrap.get("upper")
+        lvl = bootstrap.get("level")
+        if isinstance(lo, (int, float)):
+            enriched["bootstrap_sharpe_lower"] = float(lo)
+        if isinstance(hi, (int, float)):
+            enriched["bootstrap_sharpe_upper"] = float(hi)
+        if isinstance(lvl, (int, float)):
+            enriched["bootstrap_ci_level"] = float(lvl)
+
+    cross_regime = payload.get("cross_regime_results")
+    if isinstance(cross_regime, list):
+        enriched["cross_regime_results"] = cross_regime
+
+    rsb = payload.get("random_short_baseline_pct")
+    if isinstance(rsb, (int, float)):
+        enriched["random_short_baseline_pct"] = float(rsb)
+
+    return enriched
 
 router = APIRouter(prefix="/api/results", tags=["results"])
 
@@ -95,7 +184,7 @@ async def compare_runs(
     for rid in id_list:
         row = mgr.get_backtest_result(rid)
         if row is not None:
-            results.append(BacktestResultResponse(**row))
+            results.append(BacktestResultResponse(**_enrich_result_with_notes(row)))
     return ComparisonResponse(runs=results)
 
 
@@ -112,7 +201,7 @@ async def get_run_meta(run_id: int, mgr: StateMgr) -> BacktestRunResponse:
 async def get_run_summary(run_id: int, mgr: StateMgr) -> BacktestResultResponse:
     row = mgr.get_backtest_result(run_id)
     if row is not None:
-        return BacktestResultResponse(**row)
+        return BacktestResultResponse(**_enrich_result_with_notes(row))
 
     # Screening runs don't populate backtest_results — synthesize from best sweep
     sweeps = mgr.get_sweep_results(run_id, pareto_only=True)
@@ -278,7 +367,7 @@ async def update_notes(
     row = mgr.get_backtest_result(run_id)
     if row is None:  # pragma: no cover
         raise HTTPException(status_code=500, detail="Result disappeared after update")
-    return BacktestResultResponse(**row)
+    return BacktestResultResponse(**_enrich_result_with_notes(row))
 
 
 @router.get("/runs/{run_id}/export/csv")

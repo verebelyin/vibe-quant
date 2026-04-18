@@ -3780,6 +3780,113 @@
               }
             ],
             "title": "Created At"
+          },
+          "skewness": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skewness"
+          },
+          "kurtosis": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kurtosis"
+          },
+          "bootstrap_sharpe_lower": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Sharpe Lower"
+          },
+          "bootstrap_sharpe_upper": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Sharpe Upper"
+          },
+          "bootstrap_ci_level": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Ci Level"
+          },
+          "wfa_sharpe_consistency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Sharpe Consistency"
+          },
+          "cross_window_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Results"
+          },
+          "cross_regime_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Regime Results"
+          },
+          "random_short_baseline_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Random Short Baseline Pct"
           }
         },
         "type": "object",

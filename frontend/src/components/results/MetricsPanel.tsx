@@ -127,6 +127,40 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
           }
         />
       </div>
+
+      {(data.skewness != null || data.kurtosis != null) && (
+        <>
+          <h3 className="mt-6 mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Distribution Shape
+          </h3>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <MetricCard
+              label="Skewness"
+              value={fmt(data.skewness, 3)}
+              trend={
+                data.skewness == null
+                  ? "neutral"
+                  : data.skewness >= 0
+                    ? "up"
+                    : "down"
+              }
+              subtitle={data.skewness != null ? "negative = left tail" : undefined}
+            />
+            <MetricCard
+              label="Kurtosis"
+              value={fmt(data.kurtosis, 3)}
+              trend={
+                data.kurtosis == null
+                  ? "neutral"
+                  : data.kurtosis > 3
+                    ? "down"
+                    : "neutral"
+              }
+              subtitle={data.kurtosis != null ? ">3 = fat tails" : undefined}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

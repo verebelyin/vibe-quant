@@ -42,6 +42,15 @@ class BacktestResultResponse(BaseModel):
     starting_balance: float | None
     notes: str | None
     created_at: str | None
+    skewness: float | None = None
+    kurtosis: float | None = None
+    bootstrap_sharpe_lower: float | None = None
+    bootstrap_sharpe_upper: float | None = None
+    bootstrap_ci_level: float | None = None
+    wfa_sharpe_consistency: float | None = None
+    cross_window_results: list[dict[str, object]] | None = None
+    cross_regime_results: list[dict[str, object]] | None = None
+    random_short_baseline_pct: float | None = None
 
 
 class TradeResponse(BaseModel):

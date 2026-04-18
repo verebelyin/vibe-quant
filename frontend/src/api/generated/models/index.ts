@@ -9,6 +9,8 @@ export * from './backtestLaunchRequest';
 export * from './backtestLaunchRequestOverfittingFilters';
 export * from './backtestLaunchRequestParameters';
 export * from './backtestResultResponse';
+export * from './backtestResultResponseCrossRegimeResults';
+export * from './backtestResultResponseCrossWindowResults';
 export * from './backtestRunResponse';
 export * from './backtestRunResponseParameters';
 export * from './browseDataApiDataBrowseSymbolGetParams';

@@ -13,6 +13,7 @@ import {
 import { ArrowLeft } from "lucide-react";
 import { ChartsPanel } from "@/components/results/ChartsPanel";
 import { CostBreakdown } from "@/components/results/CostBreakdown";
+import { CrossWindowPanel } from "@/components/results/CrossWindowPanel";
 import { ExportPanel } from "@/components/results/ExportPanel";
 import { FuturesAnalytics } from "@/components/results/FuturesAnalytics";
 import { LiquidationSummary } from "@/components/results/LiquidationSummary";
@@ -21,6 +22,7 @@ import { MetricsPanel } from "@/components/results/MetricsPanel";
 import { NotesPanel } from "@/components/results/NotesPanel";
 import { OverfittingBadges } from "@/components/results/OverfittingBadges";
 import { RawStatsPanel } from "@/components/results/RawStatsPanel";
+import { RegimeValidationPanel } from "@/components/results/RegimeValidationPanel";
 import { RunDetailsExpander } from "@/components/results/RunDetailsExpander";
 import { SweepAnalysis } from "@/components/results/SweepAnalysis";
 import { TradeChart } from "@/components/results/TradeChart";
@@ -142,6 +144,9 @@ export function ResultsDetailPage({ runId }: ResultsDetailPageProps) {
         <CostBreakdown runId={runId} />
         <OverfittingBadges runId={runId} />
       </div>
+
+      <CrossWindowPanel runId={runId} />
+      <RegimeValidationPanel runId={runId} />
 
       <WinLossPanel runId={runId} />
 
