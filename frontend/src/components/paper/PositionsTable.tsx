@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 
 export function PositionsTable() {
-  const { data: posResp, isLoading } = useGetPositionsApiPaperPositionsGet({
+  const { data: posResp, isLoading } = useGetPositionsApiPaperPositionsGet(undefined, {
     query: { refetchInterval: 5_000 },
   });
 

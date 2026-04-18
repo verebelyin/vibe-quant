@@ -2,8 +2,10 @@ import { useGetStatusApiPaperStatusGet } from "@/api/generated/paper/paper";
 import { CheckpointsList } from "@/components/paper/CheckpointsList";
 import { LiveDashboard } from "@/components/paper/LiveDashboard";
 import { PositionsTable } from "@/components/paper/PositionsTable";
+import { ReconciliationPanel } from "@/components/paper/ReconciliationPanel";
 import { SessionControl } from "@/components/paper/SessionControl";
 import { TraderInfo } from "@/components/paper/TraderInfo";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function PaperTradingPage() {
   const statusQuery = useGetStatusApiPaperStatusGet({
@@ -37,14 +39,27 @@ export function PaperTradingPage() {
 
       {isActive && <LiveDashboard />}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-          <PositionsTable />
-        </div>
-        <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-          <CheckpointsList />
-        </div>
-      </div>
+      <Tabs defaultValue="session">
+        <TabsList>
+          <TabsTrigger value="session">Session</TabsTrigger>
+          <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="session" className="mt-4">
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
+              <PositionsTable />
+            </div>
+            <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
+              <CheckpointsList traderId={traderId || undefined} />
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="reconciliation" className="mt-4">
+          <ReconciliationPanel />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

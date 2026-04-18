@@ -15,6 +15,7 @@ from vibe_quant.api.routers.discovery import router as discovery_router
 from vibe_quant.api.routers.indicators import router as indicators_router
 from vibe_quant.api.routers.internal import router as internal_router
 from vibe_quant.api.routers.paper_trading import router as paper_trading_router
+from vibe_quant.api.routers.reconciliation import router as reconciliation_router
 from vibe_quant.api.routers.results import router as results_router
 from vibe_quant.api.routers.settings import router as settings_router
 from vibe_quant.api.routers.strategies import router as strategies_router
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(indicators_router)
     app.include_router(internal_router)
     app.include_router(paper_trading_router)
+    app.include_router(reconciliation_router)
     app.include_router(results_router)
     app.include_router(settings_router)
     app.include_router(strategies_router)

@@ -38,6 +38,15 @@ class PaperPositionResponse(BaseModel):
     leverage: float
 
 
+class PaperOrderResponse(BaseModel):
+    order_id: str
+    symbol: str
+    side: str | None = None
+    quantity: float | None = None
+    price: float | None = None
+    status: str | None = None
+
+
 class CheckpointResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -16,8 +16,15 @@ function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-export function CheckpointsList() {
-  const { data: cpResp, isLoading } = useGetCheckpointsApiPaperCheckpointsGet();
+interface CheckpointsListProps {
+  traderId?: string | undefined;
+}
+
+export function CheckpointsList({ traderId }: CheckpointsListProps = {}) {
+  const { data: cpResp, isLoading } = useGetCheckpointsApiPaperCheckpointsGet(
+    traderId ? { trader_id: traderId } : undefined,
+    { query: { enabled: !!traderId } },
+  );
 
   const checkpoints: CheckpointResponse[] = useMemo(() => {
     if (!cpResp) return [];
@@ -29,7 +36,9 @@ export function CheckpointsList() {
     <div className="space-y-3">
       <h2 className="text-sm font-semibold text-foreground">Checkpoints</h2>
 
-      {isLoading ? (
+      {!traderId ? (
+        <p className="text-xs text-muted-foreground">Active session required.</p>
+      ) : isLoading ? (
         <p className="text-xs text-muted-foreground">Loading checkpoints...</p>
       ) : checkpoints.length === 0 ? (
         <p className="text-xs text-muted-foreground">No checkpoints recorded.</p>

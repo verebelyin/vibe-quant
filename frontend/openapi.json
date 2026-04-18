@@ -1591,18 +1591,47 @@
           "paper"
         ],
         "summary": "Get Positions",
+        "description": "Return open positions from the latest checkpoint for trader_id.\n\nWebSocket /ws/trading streams real-time updates; this endpoint provides\na fallback snapshot when the UI first loads or the socket is down.",
         "operationId": "get_positions_api_paper_positions_get",
+        "parameters": [
+          {
+            "name": "trader_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trader Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/PaperPositionResponse"
                   },
-                  "type": "array",
                   "title": "Response Get Positions Api Paper Positions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1616,19 +1645,47 @@
           "paper"
         ],
         "summary": "Get Orders",
+        "description": "Return open orders from the latest checkpoint for trader_id.",
         "operationId": "get_orders_api_paper_orders_get",
+        "parameters": [
+          {
+            "name": "trader_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trader Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
                   "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PaperOrderResponse"
+                  },
                   "title": "Response Get Orders Api Paper Orders Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1642,18 +1699,57 @@
           "paper"
         ],
         "summary": "Get Checkpoints",
+        "description": "Return checkpoint history for a trader, newest first.",
         "operationId": "get_checkpoints_api_paper_checkpoints_get",
+        "parameters": [
+          {
+            "name": "trader_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trader Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/CheckpointResponse"
                   },
-                  "type": "array",
                   "title": "Response Get Checkpoints Api Paper Checkpoints Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1694,6 +1790,75 @@
                     }
                   ],
                   "title": "Response Get Session Api Paper Sessions  Trader Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reconciliation/{paper_session_id}": {
+      "get": {
+        "tags": [
+          "reconciliation"
+        ],
+        "summary": "Reconcile Paper Session",
+        "description": "Reconcile a stopped paper session against a validation run.\n\nV1: post-stop only. If the paper session is still running, returns 400.\n\nIf `validation_run_id` is omitted, we try to pick the most recent\nsuccessful validation run for the same strategy_id as the paper session.",
+        "operationId": "reconcile_paper_session_api_reconciliation__paper_session_id__get",
+        "parameters": [
+          {
+            "name": "paper_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Paper Session Id"
+            }
+          },
+          {
+            "name": "validation_run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Validation Run Id"
+            }
+          },
+          {
+            "name": "tolerance_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 120,
+              "title": "Tolerance Seconds"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResponse"
                 }
               }
             }
@@ -4691,6 +4856,49 @@
         ],
         "title": "DiscoveryResultResponse"
       },
+      "DivergenceSummary": {
+        "properties": {
+          "matched": {
+            "type": "integer",
+            "title": "Matched"
+          },
+          "paper_only": {
+            "type": "integer",
+            "title": "Paper Only"
+          },
+          "validation_only": {
+            "type": "integer",
+            "title": "Validation Only"
+          },
+          "parity_rate": {
+            "type": "number",
+            "title": "Parity Rate"
+          },
+          "side_disagreements": {
+            "type": "integer",
+            "title": "Side Disagreements"
+          },
+          "mean_entry_slippage": {
+            "type": "number",
+            "title": "Mean Entry Slippage"
+          },
+          "mean_pnl_delta": {
+            "type": "number",
+            "title": "Mean Pnl Delta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "matched",
+          "paper_only",
+          "validation_only",
+          "parity_rate",
+          "side_disagreements",
+          "mean_entry_slippage",
+          "mean_pnl_delta"
+        ],
+        "title": "DivergenceSummary"
+      },
       "DrawdownPoint": {
         "properties": {
           "timestamp": {
@@ -5198,6 +5406,99 @@
         ],
         "title": "OhlcError"
       },
+      "PairedTrade": {
+        "properties": {
+          "paper": {
+            "$ref": "#/components/schemas/ReconciliationTrade"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ReconciliationTrade"
+          },
+          "entry_slippage": {
+            "type": "number",
+            "title": "Entry Slippage"
+          },
+          "pnl_delta": {
+            "type": "number",
+            "title": "Pnl Delta"
+          },
+          "side_agrees": {
+            "type": "boolean",
+            "title": "Side Agrees"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper",
+          "validation",
+          "entry_slippage",
+          "pnl_delta",
+          "side_agrees"
+        ],
+        "title": "PairedTrade"
+      },
+      "PaperOrderResponse": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "side": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "symbol"
+        ],
+        "title": "PaperOrderResponse"
+      },
       "PaperPositionResponse": {
         "properties": {
           "symbol": {
@@ -5426,6 +5727,115 @@
           "mode"
         ],
         "title": "PromoteResponse"
+      },
+      "ReconciliationResponse": {
+        "properties": {
+          "paper_run": {
+            "type": "string",
+            "title": "Paper Run"
+          },
+          "validation_run": {
+            "type": "string",
+            "title": "Validation Run"
+          },
+          "tolerance_seconds": {
+            "type": "integer",
+            "title": "Tolerance Seconds"
+          },
+          "paired_trades": {
+            "items": {
+              "$ref": "#/components/schemas/PairedTrade"
+            },
+            "type": "array",
+            "title": "Paired Trades"
+          },
+          "unpaired_paper": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationTrade"
+            },
+            "type": "array",
+            "title": "Unpaired Paper"
+          },
+          "unpaired_validation": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationTrade"
+            },
+            "type": "array",
+            "title": "Unpaired Validation"
+          },
+          "divergence_summary": {
+            "$ref": "#/components/schemas/DivergenceSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_run",
+          "validation_run",
+          "tolerance_seconds",
+          "paired_trades",
+          "unpaired_paper",
+          "unpaired_validation",
+          "divergence_summary"
+        ],
+        "title": "ReconciliationResponse"
+      },
+      "ReconciliationTrade": {
+        "properties": {
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "side": {
+            "type": "string",
+            "title": "Side"
+          },
+          "entry_time": {
+            "type": "string",
+            "title": "Entry Time"
+          },
+          "exit_time": {
+            "type": "string",
+            "title": "Exit Time"
+          },
+          "entry_price": {
+            "type": "number",
+            "title": "Entry Price"
+          },
+          "exit_price": {
+            "type": "number",
+            "title": "Exit Price"
+          },
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "net_pnl": {
+            "type": "number",
+            "title": "Net Pnl"
+          },
+          "exit_reason": {
+            "type": "string",
+            "title": "Exit Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position_id",
+          "symbol",
+          "side",
+          "entry_time",
+          "exit_time",
+          "entry_price",
+          "exit_price",
+          "quantity",
+          "net_pnl",
+          "exit_reason"
+        ],
+        "title": "ReconciliationTrade"
       },
       "ReplayResponse": {
         "properties": {

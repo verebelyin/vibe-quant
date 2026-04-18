@@ -26,9 +26,12 @@ import type {
 import type {
   CheckpointResponse,
   CloseAllPositionsApiPaperCloseAllPositionsPost200,
-  GetOrdersApiPaperOrdersGet200Item,
+  GetCheckpointsApiPaperCheckpointsGetParams,
+  GetOrdersApiPaperOrdersGetParams,
+  GetPositionsApiPaperPositionsGetParams,
   HTTPValidationError,
   HaltPaperApiPaperHaltPost200,
+  PaperOrderResponse,
   PaperPositionResponse,
   PaperStartRequest,
   PaperStatusResponse,
@@ -568,6 +571,10 @@ export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof 
 
 
 /**
+ * Return open positions from the latest checkpoint for trader_id.
+
+WebSocket /ws/trading streams real-time updates; this endpoint provides
+a fallback snapshot when the UI first loads or the socket is down.
  * @summary Get Positions
  */
 export type getPositionsApiPaperPositionsGetResponse200 = {
@@ -575,24 +582,38 @@ export type getPositionsApiPaperPositionsGetResponse200 = {
   status: 200
 }
 
+export type getPositionsApiPaperPositionsGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
 export type getPositionsApiPaperPositionsGetResponseSuccess = (getPositionsApiPaperPositionsGetResponse200) & {
   headers: Headers;
 };
-;
+export type getPositionsApiPaperPositionsGetResponseError = (getPositionsApiPaperPositionsGetResponse422) & {
+  headers: Headers;
+};
 
-export type getPositionsApiPaperPositionsGetResponse = (getPositionsApiPaperPositionsGetResponseSuccess)
+export type getPositionsApiPaperPositionsGetResponse = (getPositionsApiPaperPositionsGetResponseSuccess | getPositionsApiPaperPositionsGetResponseError)
 
-export const getGetPositionsApiPaperPositionsGetUrl = () => {
+export const getGetPositionsApiPaperPositionsGetUrl = (params?: GetPositionsApiPaperPositionsGetParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
-  
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/paper/positions`
+  return stringifiedParams.length > 0 ? `/api/paper/positions?${stringifiedParams}` : `/api/paper/positions`
 }
 
-export const getPositionsApiPaperPositionsGet = async ( options?: RequestInit): Promise<getPositionsApiPaperPositionsGetResponse> => {
+export const getPositionsApiPaperPositionsGet = async (params?: GetPositionsApiPaperPositionsGetParams, options?: RequestInit): Promise<getPositionsApiPaperPositionsGetResponse> => {
   
-  return customInstance<getPositionsApiPaperPositionsGetResponse>(getGetPositionsApiPaperPositionsGetUrl(),
+  return customInstance<getPositionsApiPaperPositionsGetResponse>(getGetPositionsApiPaperPositionsGetUrl(params),
   {      
     ...options,
     method: 'GET'
@@ -605,23 +626,23 @@ export const getPositionsApiPaperPositionsGet = async ( options?: RequestInit): 
 
 
 
-export const getGetPositionsApiPaperPositionsGetQueryKey = () => {
+export const getGetPositionsApiPaperPositionsGetQueryKey = (params?: GetPositionsApiPaperPositionsGetParams,) => {
     return [
-    `/api/paper/positions`
+    `/api/paper/positions`, ...(params ? [params] : [])
     ] as const;
     }
 
     
-export const getGetPositionsApiPaperPositionsGetQueryOptions = <TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetPositionsApiPaperPositionsGetQueryOptions = <TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = HTTPValidationError>(params?: GetPositionsApiPaperPositionsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetPositionsApiPaperPositionsGetQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetPositionsApiPaperPositionsGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>> = ({ signal }) => getPositionsApiPaperPositionsGet({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>> = ({ signal }) => getPositionsApiPaperPositionsGet(params, { signal, ...requestOptions });
 
       
 
@@ -631,11 +652,11 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetPositionsApiPaperPositionsGetQueryResult = NonNullable<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>>
-export type GetPositionsApiPaperPositionsGetQueryError = unknown
+export type GetPositionsApiPaperPositionsGetQueryError = HTTPValidationError
 
 
-export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>> & Pick<
+export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = HTTPValidationError>(
+ params: undefined |  GetPositionsApiPaperPositionsGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>,
           TError,
@@ -644,8 +665,8 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>> & Pick<
+export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = HTTPValidationError>(
+ params?: GetPositionsApiPaperPositionsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>,
           TError,
@@ -654,20 +675,20 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = HTTPValidationError>(
+ params?: GetPositionsApiPaperPositionsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
  * @summary Get Positions
  */
 
-export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError = HTTPValidationError>(
+ params?: GetPositionsApiPaperPositionsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPositionsApiPaperPositionsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetPositionsApiPaperPositionsGetQueryOptions(options)
+  const queryOptions = getGetPositionsApiPaperPositionsGetQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -678,31 +699,46 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
 
 
 /**
+ * Return open orders from the latest checkpoint for trader_id.
  * @summary Get Orders
  */
 export type getOrdersApiPaperOrdersGetResponse200 = {
-  data: GetOrdersApiPaperOrdersGet200Item[]
+  data: PaperOrderResponse[]
   status: 200
+}
+
+export type getOrdersApiPaperOrdersGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
 }
 
 export type getOrdersApiPaperOrdersGetResponseSuccess = (getOrdersApiPaperOrdersGetResponse200) & {
   headers: Headers;
 };
-;
+export type getOrdersApiPaperOrdersGetResponseError = (getOrdersApiPaperOrdersGetResponse422) & {
+  headers: Headers;
+};
 
-export type getOrdersApiPaperOrdersGetResponse = (getOrdersApiPaperOrdersGetResponseSuccess)
+export type getOrdersApiPaperOrdersGetResponse = (getOrdersApiPaperOrdersGetResponseSuccess | getOrdersApiPaperOrdersGetResponseError)
 
-export const getGetOrdersApiPaperOrdersGetUrl = () => {
+export const getGetOrdersApiPaperOrdersGetUrl = (params?: GetOrdersApiPaperOrdersGetParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
-  
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/paper/orders`
+  return stringifiedParams.length > 0 ? `/api/paper/orders?${stringifiedParams}` : `/api/paper/orders`
 }
 
-export const getOrdersApiPaperOrdersGet = async ( options?: RequestInit): Promise<getOrdersApiPaperOrdersGetResponse> => {
+export const getOrdersApiPaperOrdersGet = async (params?: GetOrdersApiPaperOrdersGetParams, options?: RequestInit): Promise<getOrdersApiPaperOrdersGetResponse> => {
   
-  return customInstance<getOrdersApiPaperOrdersGetResponse>(getGetOrdersApiPaperOrdersGetUrl(),
+  return customInstance<getOrdersApiPaperOrdersGetResponse>(getGetOrdersApiPaperOrdersGetUrl(params),
   {      
     ...options,
     method: 'GET'
@@ -715,23 +751,23 @@ export const getOrdersApiPaperOrdersGet = async ( options?: RequestInit): Promis
 
 
 
-export const getGetOrdersApiPaperOrdersGetQueryKey = () => {
+export const getGetOrdersApiPaperOrdersGetQueryKey = (params?: GetOrdersApiPaperOrdersGetParams,) => {
     return [
-    `/api/paper/orders`
+    `/api/paper/orders`, ...(params ? [params] : [])
     ] as const;
     }
 
     
-export const getGetOrdersApiPaperOrdersGetQueryOptions = <TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetOrdersApiPaperOrdersGetQueryOptions = <TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = HTTPValidationError>(params?: GetOrdersApiPaperOrdersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetOrdersApiPaperOrdersGetQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetOrdersApiPaperOrdersGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>> = ({ signal }) => getOrdersApiPaperOrdersGet({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>> = ({ signal }) => getOrdersApiPaperOrdersGet(params, { signal, ...requestOptions });
 
       
 
@@ -741,11 +777,11 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetOrdersApiPaperOrdersGetQueryResult = NonNullable<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>>
-export type GetOrdersApiPaperOrdersGetQueryError = unknown
+export type GetOrdersApiPaperOrdersGetQueryError = HTTPValidationError
 
 
-export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>> & Pick<
+export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = HTTPValidationError>(
+ params: undefined |  GetOrdersApiPaperOrdersGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>,
           TError,
@@ -754,8 +790,8 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>> & Pick<
+export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = HTTPValidationError>(
+ params?: GetOrdersApiPaperOrdersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>,
           TError,
@@ -764,20 +800,20 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = HTTPValidationError>(
+ params?: GetOrdersApiPaperOrdersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
  * @summary Get Orders
  */
 
-export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError = HTTPValidationError>(
+ params?: GetOrdersApiPaperOrdersGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getOrdersApiPaperOrdersGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetOrdersApiPaperOrdersGetQueryOptions(options)
+  const queryOptions = getGetOrdersApiPaperOrdersGetQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -788,6 +824,7 @@ export function useGetOrdersApiPaperOrdersGet<TData = Awaited<ReturnType<typeof 
 
 
 /**
+ * Return checkpoint history for a trader, newest first.
  * @summary Get Checkpoints
  */
 export type getCheckpointsApiPaperCheckpointsGetResponse200 = {
@@ -795,24 +832,38 @@ export type getCheckpointsApiPaperCheckpointsGetResponse200 = {
   status: 200
 }
 
+export type getCheckpointsApiPaperCheckpointsGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
 export type getCheckpointsApiPaperCheckpointsGetResponseSuccess = (getCheckpointsApiPaperCheckpointsGetResponse200) & {
   headers: Headers;
 };
-;
+export type getCheckpointsApiPaperCheckpointsGetResponseError = (getCheckpointsApiPaperCheckpointsGetResponse422) & {
+  headers: Headers;
+};
 
-export type getCheckpointsApiPaperCheckpointsGetResponse = (getCheckpointsApiPaperCheckpointsGetResponseSuccess)
+export type getCheckpointsApiPaperCheckpointsGetResponse = (getCheckpointsApiPaperCheckpointsGetResponseSuccess | getCheckpointsApiPaperCheckpointsGetResponseError)
 
-export const getGetCheckpointsApiPaperCheckpointsGetUrl = () => {
+export const getGetCheckpointsApiPaperCheckpointsGetUrl = (params?: GetCheckpointsApiPaperCheckpointsGetParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
-  
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/paper/checkpoints`
+  return stringifiedParams.length > 0 ? `/api/paper/checkpoints?${stringifiedParams}` : `/api/paper/checkpoints`
 }
 
-export const getCheckpointsApiPaperCheckpointsGet = async ( options?: RequestInit): Promise<getCheckpointsApiPaperCheckpointsGetResponse> => {
+export const getCheckpointsApiPaperCheckpointsGet = async (params?: GetCheckpointsApiPaperCheckpointsGetParams, options?: RequestInit): Promise<getCheckpointsApiPaperCheckpointsGetResponse> => {
   
-  return customInstance<getCheckpointsApiPaperCheckpointsGetResponse>(getGetCheckpointsApiPaperCheckpointsGetUrl(),
+  return customInstance<getCheckpointsApiPaperCheckpointsGetResponse>(getGetCheckpointsApiPaperCheckpointsGetUrl(params),
   {      
     ...options,
     method: 'GET'
@@ -825,23 +876,23 @@ export const getCheckpointsApiPaperCheckpointsGet = async ( options?: RequestIni
 
 
 
-export const getGetCheckpointsApiPaperCheckpointsGetQueryKey = () => {
+export const getGetCheckpointsApiPaperCheckpointsGetQueryKey = (params?: GetCheckpointsApiPaperCheckpointsGetParams,) => {
     return [
-    `/api/paper/checkpoints`
+    `/api/paper/checkpoints`, ...(params ? [params] : [])
     ] as const;
     }
 
     
-export const getGetCheckpointsApiPaperCheckpointsGetQueryOptions = <TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetCheckpointsApiPaperCheckpointsGetQueryOptions = <TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = HTTPValidationError>(params?: GetCheckpointsApiPaperCheckpointsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetCheckpointsApiPaperCheckpointsGetQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetCheckpointsApiPaperCheckpointsGetQueryKey(params);
 
   
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>> = ({ signal }) => getCheckpointsApiPaperCheckpointsGet({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>> = ({ signal }) => getCheckpointsApiPaperCheckpointsGet(params, { signal, ...requestOptions });
 
       
 
@@ -851,11 +902,11 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetCheckpointsApiPaperCheckpointsGetQueryResult = NonNullable<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>>
-export type GetCheckpointsApiPaperCheckpointsGetQueryError = unknown
+export type GetCheckpointsApiPaperCheckpointsGetQueryError = HTTPValidationError
 
 
-export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>> & Pick<
+export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = HTTPValidationError>(
+ params: undefined |  GetCheckpointsApiPaperCheckpointsGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>,
           TError,
@@ -864,8 +915,8 @@ export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnTy
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>> & Pick<
+export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = HTTPValidationError>(
+ params?: GetCheckpointsApiPaperCheckpointsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>,
           TError,
@@ -874,20 +925,20 @@ export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnTy
       >, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
-export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = HTTPValidationError>(
+ params?: GetCheckpointsApiPaperCheckpointsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
  * @summary Get Checkpoints
  */
 
-export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = unknown>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export function useGetCheckpointsApiPaperCheckpointsGet<TData = Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError = HTTPValidationError>(
+ params?: GetCheckpointsApiPaperCheckpointsGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCheckpointsApiPaperCheckpointsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient 
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetCheckpointsApiPaperCheckpointsGetQueryOptions(options)
+  const queryOptions = getGetCheckpointsApiPaperCheckpointsGetQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
 from vibe_quant.api.schemas.paper_trading import (
     CheckpointResponse,
+    PaperOrderResponse,
     PaperPositionResponse,
     PaperStartRequest,
     PaperStatusResponse,
@@ -234,22 +235,102 @@ async def get_status(jobs: JobMgr) -> PaperStatusResponse:
     return PaperStatusResponse(state=state, pnl_metrics=None, trades_count=0)
 
 
+def _load_latest_for_trader(trader_id: str | None) -> object:
+    if not trader_id:
+        return None
+    try:
+        from vibe_quant.paper.persistence import StatePersistence
+
+        persistence = StatePersistence()
+        return persistence.load_latest_checkpoint(trader_id)
+    except ImportError:
+        logger.debug("paper persistence not available")
+        return None
+
+
 @router.get("/positions", response_model=list[PaperPositionResponse])
-async def get_positions() -> list[PaperPositionResponse]:
-    # Stub -- real data streamed via /ws/trading
-    return []
+async def get_positions(trader_id: str | None = None) -> list[PaperPositionResponse]:
+    """Return open positions from the latest checkpoint for trader_id.
+
+    WebSocket /ws/trading streams real-time updates; this endpoint provides
+    a fallback snapshot when the UI first loads or the socket is down.
+    """
+    checkpoint = _load_latest_for_trader(trader_id)
+    if checkpoint is None:
+        return []
+    positions = getattr(checkpoint, "positions", {}) or {}
+    result: list[PaperPositionResponse] = []
+    for pos in positions.values():
+        if not isinstance(pos, dict):
+            continue
+        try:
+            result.append(
+                PaperPositionResponse(
+                    symbol=str(pos.get("symbol", "")),
+                    direction=str(pos.get("direction") or pos.get("side") or ""),
+                    quantity=float(pos.get("quantity") or pos.get("qty") or 0.0),
+                    entry_price=float(pos.get("entry_price") or pos.get("avg_px") or 0.0),
+                    unrealized_pnl=float(pos.get("unrealized_pnl") or 0.0),
+                    leverage=float(pos.get("leverage") or 1.0),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
-@router.get("/orders")
-async def get_orders() -> list[dict[str, object]]:
-    # Stub -- real data streamed via /ws/trading
-    return []
+@router.get("/orders", response_model=list[PaperOrderResponse])
+async def get_orders(trader_id: str | None = None) -> list[PaperOrderResponse]:
+    """Return open orders from the latest checkpoint for trader_id."""
+    checkpoint = _load_latest_for_trader(trader_id)
+    if checkpoint is None:
+        return []
+    orders = getattr(checkpoint, "orders", {}) or {}
+    result: list[PaperOrderResponse] = []
+    for oid, order in orders.items():
+        if not isinstance(order, dict):
+            continue
+        qty = order.get("quantity") or order.get("qty")
+        px = order.get("price")
+        result.append(
+            PaperOrderResponse(
+                order_id=str(oid),
+                symbol=str(order.get("symbol", "")),
+                side=order.get("side"),
+                quantity=float(qty) if qty is not None else None,
+                price=float(px) if px is not None else None,
+                status=order.get("status"),
+            )
+        )
+    return result
 
 
 @router.get("/checkpoints", response_model=list[CheckpointResponse])
-async def get_checkpoints() -> list[CheckpointResponse]:
-    # Stub — requires active paper session with trader_id for meaningful data
-    return []
+async def get_checkpoints(
+    trader_id: str | None = None, limit: int = 50
+) -> list[CheckpointResponse]:
+    """Return checkpoint history for a trader, newest first."""
+    if not trader_id:
+        return []
+    try:
+        from vibe_quant.paper.persistence import StatePersistence
+
+        persistence = StatePersistence()
+        checkpoints = persistence.list_checkpoints(trader_id, limit=limit)
+    except ImportError:
+        return []
+    result: list[CheckpointResponse] = []
+    for cp in checkpoints:
+        node_status = cp.node_status or {}
+        result.append(
+            CheckpointResponse(
+                timestamp=str(cp.timestamp),
+                state=node_status.get("state", "unknown"),
+                halt_reason=node_status.get("halt_reason"),
+                error_message=node_status.get("error_message"),
+            )
+        )
+    return result
 
 
 @router.get("/sessions/{trader_id}", response_model=CheckpointResponse | None)

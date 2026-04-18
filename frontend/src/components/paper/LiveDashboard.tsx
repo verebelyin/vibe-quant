@@ -93,23 +93,23 @@ export function LiveDashboard() {
   const flashTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Positions from API (auto-refreshed by WS invalidation)
-  const { data: posResp } = useGetPositionsApiPaperPositionsGet({
+  const { data: posResp } = useGetPositionsApiPaperPositionsGet(undefined, {
     query: { refetchInterval: 5_000 },
   });
   const positions: PaperPositionResponse[] = posResp?.status === 200 ? posResp.data : [];
 
   // Orders from API
-  const { data: ordersResp } = useGetOrdersApiPaperOrdersGet({
+  const { data: ordersResp } = useGetOrdersApiPaperOrdersGet(undefined, {
     query: { refetchInterval: 10_000 },
   });
   const rawOrders = ordersResp?.status === 200 ? ordersResp.data : [];
   const recentOrders: OrderRecord[] = rawOrders.slice(0, 10).map((o, idx) => ({
-    id: String(o.id ?? o.order_id ?? idx),
+    id: String(o.order_id ?? idx),
     symbol: String(o.symbol ?? "--"),
-    side: String(o.side ?? o.direction ?? "--"),
-    quantity: Number(o.quantity ?? o.qty ?? 0),
+    side: String(o.side ?? "--"),
+    quantity: Number(o.quantity ?? 0),
     price: Number(o.price ?? 0),
-    timestamp: String(o.timestamp ?? o.created_at ?? ""),
+    timestamp: "",
     status: String(o.status ?? "filled"),
   }));
 
