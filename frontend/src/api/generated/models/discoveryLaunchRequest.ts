@@ -26,4 +26,8 @@ export interface DiscoveryLaunchRequest {
   num_seeds?: number;
   wfa_oos_step_days?: number;
   wfa_min_consistency?: number;
+  immigrant_fraction?: number;
+  entropy_threshold?: number;
+  crowding_enabled?: boolean;
+  seed_run_id?: number | null;
 }

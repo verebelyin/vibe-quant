@@ -41,6 +41,11 @@ _LATENCY_PRESETS: list[LatencyPreset] = [
     ),
     LatencyPreset(name="domestic", description="Domestic / same-region (20ms)", base_latency_ms=20),
     LatencyPreset(
+        name="cloud",
+        description="Cloud / VPS near exchange region (60ms, validation default)",
+        base_latency_ms=60,
+    ),
+    LatencyPreset(
         name="international",
         description="International / cross-region (100ms)",
         base_latency_ms=100,

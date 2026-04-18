@@ -203,6 +203,14 @@ async def launch_discovery(
     if body.wfa_oos_step_days > 0:
         params["wfa_oos_step_days"] = body.wfa_oos_step_days
         params["wfa_min_consistency"] = body.wfa_min_consistency
+    if body.immigrant_fraction != 0.15:
+        params["immigrant_fraction"] = body.immigrant_fraction
+    if body.entropy_threshold != 0.4:
+        params["entropy_threshold"] = body.entropy_threshold
+    if not body.crowding_enabled:
+        params["crowding_enabled"] = False
+    if body.seed_run_id is not None:
+        params["seed_run_id"] = body.seed_run_id
 
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
@@ -271,6 +279,14 @@ async def launch_discovery(
     if body.wfa_oos_step_days > 0:
         command.extend(["--wfa-oos-step-days", str(body.wfa_oos_step_days)])
         command.extend(["--wfa-min-consistency", str(body.wfa_min_consistency)])
+    if body.immigrant_fraction != 0.15:
+        command.extend(["--immigrant-fraction", str(body.immigrant_fraction)])
+    if body.entropy_threshold != 0.4:
+        command.extend(["--entropy-threshold", str(body.entropy_threshold)])
+    if not body.crowding_enabled:
+        command.append("--no-crowding")
+    if body.seed_run_id is not None:
+        command.extend(["--seed-from-run", str(body.seed_run_id)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)

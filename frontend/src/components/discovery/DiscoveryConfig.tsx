@@ -63,6 +63,14 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [crossWindowMonths, setCrossWindowMonths] = useState("");
   const [crossWindowMinSharpe, setCrossWindowMinSharpe] = useState(0.5);
 
+  // Diversity knobs (E4)
+  const [immigrantFraction, setImmigrantFraction] = useState(0.15);
+  const [entropyThreshold, setEntropyThreshold] = useState(0.4);
+  const [crowdingEnabled, setCrowdingEnabled] = useState(true);
+
+  // Warm-start (E5)
+  const [seedRunId, setSeedRunId] = useState<string>("");
+
   const parsedCrossWindowMonths = crossWindowMonths
     .split(",")
     .map((s) => Number.parseInt(s.trim(), 10))
@@ -147,6 +155,13 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             cross_window_months: parsedCrossWindowMonths,
             cross_window_min_sharpe: crossWindowMinSharpe,
           }),
+          immigrant_fraction: immigrantFraction,
+          entropy_threshold: entropyThreshold,
+          crowding_enabled: crowdingEnabled,
+          ...(seedRunId.trim() !== "" &&
+            Number.isFinite(Number(seedRunId)) && {
+              seed_run_id: Number(seedRunId),
+            }),
         } as DiscoveryLaunchRequest,
       },
       {
@@ -355,6 +370,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="1s">1 second (sub-bar data required)</SelectItem>
+                <SelectItem value="5s">5 seconds (sub-bar data required)</SelectItem>
                 <SelectItem value="1m">1 minute</SelectItem>
                 <SelectItem value="5m">5 minutes</SelectItem>
                 <SelectItem value="15m">15 minutes</SelectItem>
@@ -417,7 +434,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               trainTestSplit !== 0 ||
               numSeeds !== 1 ||
               wfaOosStepDays !== 0 ||
-              parsedCrossWindowMonths.length > 0) && (
+              parsedCrossWindowMonths.length > 0 ||
+              immigrantFraction !== 0.15 ||
+              entropyThreshold !== 0.4 ||
+              !crowdingEnabled ||
+              seedRunId.trim() !== "") && (
               <Badge variant="outline" className="text-[10px]">
                 modified
               </Badge>
@@ -561,6 +582,72 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                     onChange={(e) => setCrossWindowMinSharpe(Number(e.target.value))}
                     disabled={parsedCrossWindowMonths.length === 0}
                   />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Diversity (advanced)
+              </h4>
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+                <div className="space-y-2">
+                  <Label htmlFor="immigrant-fraction">Immigrant Fraction</Label>
+                  <Input
+                    id="immigrant-fraction"
+                    type="number"
+                    min={0}
+                    max={0.3}
+                    step={0.05}
+                    value={immigrantFraction}
+                    onChange={(e) => setImmigrantFraction(Number(e.target.value))}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Population fraction replaced when entropy is low. 0 disables.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="entropy-threshold">Entropy Threshold</Label>
+                  <Input
+                    id="entropy-threshold"
+                    type="number"
+                    min={0.1}
+                    max={0.9}
+                    step={0.05}
+                    value={entropyThreshold}
+                    onChange={(e) => setEntropyThreshold(Number(e.target.value))}
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-5">
+                  <Checkbox
+                    id="crowding-enabled"
+                    checked={crowdingEnabled}
+                    onCheckedChange={(v) => setCrowdingEnabled(v === true)}
+                  />
+                  <Label htmlFor="crowding-enabled" className="text-xs cursor-pointer">
+                    Deterministic crowding
+                  </Label>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Warm-Start
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="seed-run-id">Seed from run ID</Label>
+                  <Input
+                    id="seed-run-id"
+                    type="number"
+                    placeholder="empty = cold start"
+                    value={seedRunId}
+                    onChange={(e) => setSeedRunId(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Load top chromosomes from a prior completed discovery run.
+                  </p>
                 </div>
               </div>
             </div>

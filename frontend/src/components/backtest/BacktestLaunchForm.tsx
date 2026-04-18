@@ -363,6 +363,8 @@ export function BacktestLaunchForm() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="1s">1 second (sub-bar data required)</SelectItem>
+                <SelectItem value="5s">5 seconds (sub-bar data required)</SelectItem>
                 <SelectItem value="1m">1 minute</SelectItem>
                 <SelectItem value="5m">5 minutes</SelectItem>
                 <SelectItem value="15m">15 minutes</SelectItem>

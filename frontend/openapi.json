@@ -4834,6 +4834,32 @@
             "type": "number",
             "title": "Wfa Min Consistency",
             "default": 0.75
+          },
+          "immigrant_fraction": {
+            "type": "number",
+            "title": "Immigrant Fraction",
+            "default": 0.15
+          },
+          "entropy_threshold": {
+            "type": "number",
+            "title": "Entropy Threshold",
+            "default": 0.4
+          },
+          "crowding_enabled": {
+            "type": "boolean",
+            "title": "Crowding Enabled",
+            "default": true
+          },
+          "seed_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Run Id"
           }
         },
         "type": "object",

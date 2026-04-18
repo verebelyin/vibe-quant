@@ -506,6 +506,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Disable the Deflated Sharpe Ratio soft guardrail.",
     )
+    parser.add_argument(
+        "--immigrant-fraction",
+        type=float,
+        default=0.15,
+        help=(
+            "Fraction of population replaced when Shannon entropy drops below "
+            "--entropy-threshold. 0 disables random-immigrant injection."
+        ),
+    )
+    parser.add_argument(
+        "--entropy-threshold",
+        type=float,
+        default=0.4,
+        help="Population entropy below this triggers random-immigrant injection.",
+    )
+    parser.add_argument(
+        "--no-crowding",
+        dest="use_crowding",
+        action="store_false",
+        default=True,
+        help="Disable deterministic crowding selection (falls back to classic tournament).",
+    )
+    parser.add_argument(
+        "--seed-from-run",
+        type=int,
+        default=None,
+        help="Warm-start GA from top chromosomes of a prior discovery run ID.",
+    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
@@ -622,6 +650,9 @@ def main() -> int:
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             bootstrap_ci_level=args.bootstrap_ci_level,
             require_dsr=args.require_dsr,
+            use_crowding=args.use_crowding,
+            immigrant_fraction=args.immigrant_fraction,
+            entropy_threshold=args.entropy_threshold,
         )
 
         # Log environment details for debugging and journal entries

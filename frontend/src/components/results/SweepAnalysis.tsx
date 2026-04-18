@@ -124,16 +124,19 @@ function ValidateButton({
 }
 
 export function SweepAnalysis({ runId }: SweepAnalysisProps) {
-  const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId);
-  const sweeps = query.data?.data as SweepResultResponse[] | undefined;
-  const metaQuery = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
-  const run = metaQuery.data?.data as BacktestRunResponse | undefined;
-
-  // Filter state
+  // Filter state (Pareto filter is pushed to the server via query param so
+  // large sweep grids don't need to be fully transferred when filtered.)
   const [minSharpe, setMinSharpe] = useState("");
   const [maxDrawdown, setMaxDrawdown] = useState("");
   const [paretoOnly, setParetoOnly] = useState(false);
   const [show3D, setShow3D] = useState(false);
+
+  const query = useGetSweepsApiResultsRunsRunIdSweepsGet(runId, {
+    pareto_only: paretoOnly,
+  });
+  const sweeps = query.data?.data as SweepResultResponse[] | undefined;
+  const metaQuery = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
+  const run = metaQuery.data?.data as BacktestRunResponse | undefined;
 
   // Lifted validation mutation state (Bug 3: survives filter changes)
   const [pendingValidations, setPendingValidations] = useState<Set<number>>(new Set());
@@ -203,13 +206,14 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
 
   const filteredSweeps = useMemo(() => {
     if (!sweeps) return [];
+    // Pareto filtering is applied server-side via the pareto_only query
+    // param; only apply client-side filters that haven't been pushed down.
     return sweeps.filter((s) => {
-      if (paretoOnly && !s.is_pareto_optimal) return false;
       if (minSharpe !== "" && (s.sharpe_ratio ?? 0) < Number(minSharpe)) return false;
       if (maxDrawdown !== "" && (s.max_drawdown ?? 0) > Number(maxDrawdown) / 100) return false;
       return true;
     });
-  }, [sweeps, paretoOnly, minSharpe, maxDrawdown]);
+  }, [sweeps, minSharpe, maxDrawdown]);
 
   if (query.isLoading) return <SweepSkeleton />;
 

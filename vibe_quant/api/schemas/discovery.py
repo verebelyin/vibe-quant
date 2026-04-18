@@ -26,6 +26,10 @@ class DiscoveryLaunchRequest(BaseModel):
     num_seeds: int = 1  # >1 enables multi-seed ensemble
     wfa_oos_step_days: int = 0  # >0 enables WFA rolling validation (e.g. 30 = monthly)
     wfa_min_consistency: float = 0.75  # min profitable fraction for WFA
+    immigrant_fraction: float = 0.15  # fraction of pop replaced when entropy low; 0 disables
+    entropy_threshold: float = 0.4  # population entropy below this triggers immigrant injection
+    crowding_enabled: bool = True  # deterministic crowding selection (vs classic tournament)
+    seed_run_id: int | None = None  # warm-start GA from top chromosomes of prior run
 
 
 class DiscoveryJobResponse(BaseModel):
