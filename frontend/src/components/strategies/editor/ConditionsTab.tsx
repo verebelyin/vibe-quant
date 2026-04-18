@@ -1,7 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -11,7 +20,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { buildOperandOptions, type DslCondition, type DslConfig, OPERATORS } from "./types";
+import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
+import {
+  buildOperandOptions,
+  type DslCondition,
+  type DslConfig,
+  type DslIndicator,
+  OPERATORS,
+} from "./types";
 
 interface ConditionsTabProps {
   config: DslConfig;
@@ -139,21 +155,137 @@ function LogicToggle({
   );
 }
 
+function AddMaConditionDialog({
+  existingIndicators,
+  onApply,
+}: {
+  existingIndicators: DslIndicator[];
+  onApply: (indicator: DslIndicator | null, condition: DslCondition) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [maKind, setMaKind] = useState("EMA");
+  const [period, setPeriod] = useState(20);
+  const [operator, setOperator] = useState("crosses_above");
+  const catalogQuery = useIndicatorCatalog();
+
+  const maKinds = useMemo(() => {
+    if (catalogQuery.data?.status !== 200) return ["SMA", "EMA"];
+    return catalogQuery.data.data.indicators
+      .filter((i) => (i.category || "").toLowerCase().includes("moving_average"))
+      .map((i) => i.type_name);
+  }, [catalogQuery.data]);
+
+  const handleApply = () => {
+    const existing = existingIndicators.find(
+      (i) => i.type === maKind && i.params.period === period,
+    );
+    const indicator: DslIndicator | null = existing
+      ? null
+      : { type: maKind, params: { period } };
+    const maName = `${maKind}(${period})`;
+    onApply(indicator, {
+      left: "close",
+      operator,
+      right: maName,
+    });
+    setOpen(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          + Price vs MA
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Price-vs-MA Condition</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">MA Kind</Label>
+            <Select value={maKind} onValueChange={setMaKind}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {maKinds.length === 0 ? (
+                  <SelectItem value="EMA">EMA (catalog unavailable)</SelectItem>
+                ) : (
+                  maKinds.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Period</Label>
+            <Input
+              type="number"
+              min={2}
+              max={500}
+              value={period}
+              onChange={(e) => setPeriod(Number(e.target.value))}
+              className="h-8 text-xs"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Comparator</Label>
+            <Select value={operator} onValueChange={setOperator}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="crosses_above">close crosses above MA</SelectItem>
+                <SelectItem value="crosses_below">close crosses below MA</SelectItem>
+                <SelectItem value=">">close &gt; MA</SelectItem>
+                <SelectItem value="<">close &lt; MA</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleApply}>Add Condition</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ConditionSection({
   title,
   conditions,
   operandOptions,
+  existingIndicators,
   onChange,
+  onAddIndicator,
 }: {
   title: string;
   conditions: DslCondition[];
   operandOptions: string[];
+  existingIndicators: DslIndicator[];
   onChange: (conditions: DslCondition[]) => void;
+  onAddIndicator: (ind: DslIndicator) => void;
 }) {
   const add = () => {
     onChange([
       ...conditions,
       { left: "", operator: ">", right: "", logic: conditions.length > 0 ? "and" : undefined },
+    ]);
+  };
+
+  const addMa = (indicator: DslIndicator | null, condition: DslCondition) => {
+    if (indicator) onAddIndicator(indicator);
+    onChange([
+      ...conditions,
+      { ...condition, logic: conditions.length > 0 ? "and" : undefined },
     ]);
   };
 
@@ -184,9 +316,15 @@ function ConditionSection({
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm">{title}</CardTitle>
-          <Button variant="outline" size="sm" onClick={add}>
-            + Add
-          </Button>
+          <div className="flex gap-2">
+            <AddMaConditionDialog
+              existingIndicators={existingIndicators}
+              onApply={addMa}
+            />
+            <Button variant="outline" size="sm" onClick={add}>
+              + Add
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-1">
@@ -231,11 +369,25 @@ export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
     });
   };
 
+  const addIndicator = (indicator: DslIndicator) => {
+    onConfigChange({
+      ...config,
+      indicators: [...config.indicators, indicator],
+    });
+  };
+
+  const commonProps = {
+    existingIndicators: config.indicators,
+    onAddIndicator: addIndicator,
+    operandOptions,
+  };
+
   return (
     <div className="space-y-4">
       {config.indicators.length === 0 && (
         <div className="rounded-md border border-dashed bg-muted/50 p-3 text-center text-xs text-muted-foreground">
-          Add indicators first to populate operand dropdowns.
+          Add indicators first to populate operand dropdowns. Or use <strong>+ Price vs MA</strong>
+          below to auto-create one.
         </div>
       )}
 
@@ -252,25 +404,25 @@ export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
           <ConditionSection
             title="Long Entry"
             conditions={config.conditions.long_entry ?? []}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(long_entry) => updateConditions({ long_entry })}
           />
           <ConditionSection
             title="Long Exit"
             conditions={config.conditions.long_exit ?? []}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(long_exit) => updateConditions({ long_exit })}
           />
           <ConditionSection
             title="Short Entry"
             conditions={config.conditions.short_entry ?? []}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(short_entry) => updateConditions({ short_entry })}
           />
           <ConditionSection
             title="Short Exit"
             conditions={config.conditions.short_exit ?? []}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(short_exit) => updateConditions({ short_exit })}
           />
         </>
@@ -279,13 +431,13 @@ export function ConditionsTab({ config, onConfigChange }: ConditionsTabProps) {
           <ConditionSection
             title="Entry Conditions"
             conditions={config.conditions.entry}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(entry) => updateConditions({ entry })}
           />
           <ConditionSection
             title="Exit Conditions"
             conditions={config.conditions.exit}
-            operandOptions={operandOptions}
+            {...commonProps}
             onChange={(exit) => updateConditions({ exit })}
           />
         </>

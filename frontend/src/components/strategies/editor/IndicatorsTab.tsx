@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LoadingSpinner } from "@/components/ui";
 import {
   Select,
   SelectContent,
@@ -11,14 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  type DslConfig,
-  type DslIndicator,
-  getDefaultParams,
-  INDICATOR_CATALOG,
-  type IndicatorCategory,
-  TIMEFRAMES,
-} from "./types";
+import { type DslConfig, type DslIndicator, TIMEFRAMES } from "./types";
 import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
 
 interface IndicatorsTabProps {
@@ -26,100 +20,61 @@ interface IndicatorsTabProps {
   onConfigChange: (config: DslConfig) => void;
 }
 
-type ExtendedCategory = IndicatorCategory | "Custom";
-const CATEGORIES: ExtendedCategory[] = ["Trend", "Momentum", "Volatility", "Volume", "Custom"];
-const KNOWN_CATEGORIES = new Set<string>(CATEGORIES.filter((c) => c !== "Custom"));
-
-const CATEGORY_COLORS: Record<ExtendedCategory, string> = {
-  Trend: "bg-blue-500/10 text-blue-600 border-blue-200",
-  Momentum: "bg-orange-500/10 text-orange-600 border-orange-200",
-  Volatility: "bg-purple-500/10 text-purple-600 border-purple-200",
-  Volume: "bg-green-500/10 text-green-600 border-green-200",
-  Custom: "bg-gray-500/10 text-gray-600 border-gray-200",
-};
-
 interface CatalogDisplayEntry {
   type: string;
   name: string;
-  emoji: string;
   description: string;
-  category: ExtendedCategory;
+  category: string;
   defaultParams: Record<string, number>;
 }
 
-/** Merge hardcoded catalog with API entries, adding plugin indicators. */
-function useMergedCatalog(): CatalogDisplayEntry[] {
-  const catalogQuery = useIndicatorCatalog();
+const CATEGORY_COLORS: Record<string, string> = {
+  trend: "bg-blue-500/10 text-blue-600 border-blue-200",
+  momentum: "bg-orange-500/10 text-orange-600 border-orange-200",
+  volatility: "bg-purple-500/10 text-purple-600 border-purple-200",
+  volume: "bg-green-500/10 text-green-600 border-green-200",
+  moving_average: "bg-blue-500/10 text-blue-600 border-blue-200",
+};
 
-  return useMemo(() => {
-    const hardcodedByType = new Map(INDICATOR_CATALOG.map((e) => [e.type, e]));
-    const merged: CatalogDisplayEntry[] = INDICATOR_CATALOG.map((e) => ({
-      type: e.type,
-      name: e.name,
-      emoji: e.emoji,
-      description: e.description,
-      category: e.category,
-      defaultParams: getDefaultParams(e.type),
-    }));
-
-    const apiEntries =
-      catalogQuery.data?.status === 200 ? catalogQuery.data.data.indicators : [];
-
-    for (const api of apiEntries) {
-      if (!hardcodedByType.has(api.type_name)) {
-        merged.push({
-          type: api.type_name,
-          name: api.display_name || api.type_name,
-          emoji: "\u{1F9EA}",
-          description: api.description || "Custom indicator plugin",
-          category: (KNOWN_CATEGORIES.has(api.category)
-            ? api.category
-            : "Custom") as ExtendedCategory,
-          defaultParams: api.default_params,
-        });
-      }
-    }
-    return merged;
-  }, [catalogQuery.data]);
+function categoryClass(category: string): string {
+  return CATEGORY_COLORS[category.toLowerCase()] ?? "bg-gray-500/10 text-gray-600 border-gray-200";
 }
 
 function IndicatorCatalog({
   catalog,
+  categories,
   onAdd,
 }: {
   catalog: CatalogDisplayEntry[];
+  categories: string[];
   onAdd: (type: string, defaults: Record<string, number>) => void;
 }) {
-  const [filterCategory, setFilterCategory] = useState<ExtendedCategory | "all">("all");
+  const [filterCategory, setFilterCategory] = useState<string>("all");
 
   const filtered =
-    filterCategory === "all"
-      ? catalog
-      : catalog.filter((i) => i.category === filterCategory);
+    filterCategory === "all" ? catalog : catalog.filter((i) => i.category === filterCategory);
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-muted-foreground">Filter:</span>
-        <div className="flex gap-1">
+        <Badge
+          variant={filterCategory === "all" ? "default" : "outline"}
+          className="cursor-pointer text-xs hover:bg-accent"
+          onClick={() => setFilterCategory("all")}
+        >
+          All
+        </Badge>
+        {categories.map((cat) => (
           <Badge
-            variant={filterCategory === "all" ? "default" : "outline"}
-            className="cursor-pointer text-xs hover:bg-accent"
-            onClick={() => setFilterCategory("all")}
+            key={cat}
+            variant={filterCategory === cat ? "default" : "outline"}
+            className="cursor-pointer text-xs capitalize hover:bg-accent"
+            onClick={() => setFilterCategory(cat)}
           >
-            All
+            {cat}
           </Badge>
-          {CATEGORIES.map((cat) => (
-            <Badge
-              key={cat}
-              variant={filterCategory === cat ? "default" : "outline"}
-              className="cursor-pointer text-xs hover:bg-accent"
-              onClick={() => setFilterCategory(cat)}
-            >
-              {cat}
-            </Badge>
-          ))}
-        </div>
+        ))}
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {filtered.map((entry) => (
@@ -127,10 +82,10 @@ function IndicatorCatalog({
             key={entry.type}
             type="button"
             onClick={() => onAdd(entry.type, entry.defaultParams)}
-            className={`rounded-lg border p-3 text-left transition-colors hover:bg-accent ${CATEGORY_COLORS[entry.category]}`}
+            className={`rounded-lg border p-3 text-left transition-colors hover:bg-accent ${categoryClass(entry.category)}`}
           >
-            <div className="text-lg">{entry.emoji}</div>
-            <div className="mt-1 text-xs font-medium">{entry.name}</div>
+            <div className="text-xs font-semibold">{entry.type}</div>
+            <div className="mt-1 text-[11px] font-medium">{entry.name}</div>
             <div className="mt-0.5 text-[10px] opacity-70">{entry.description}</div>
           </button>
         ))}
@@ -170,7 +125,24 @@ function IndicatorParamFields({
 
 export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
   const [showCatalog, setShowCatalog] = useState(config.indicators.length === 0);
-  const catalog = useMergedCatalog();
+  const catalogQuery = useIndicatorCatalog();
+
+  const { catalog, categories } = useMemo<{
+    catalog: CatalogDisplayEntry[];
+    categories: string[];
+  }>(() => {
+    if (catalogQuery.data?.status !== 200) return { catalog: [], categories: [] };
+    const apiEntries = catalogQuery.data.data.indicators;
+    const items: CatalogDisplayEntry[] = apiEntries.map((api) => ({
+      type: api.type_name,
+      name: api.display_name || api.type_name,
+      description: api.description || "",
+      category: api.category || "other",
+      defaultParams: api.default_params,
+    }));
+    const cats = catalogQuery.data.data.categories ?? [];
+    return { catalog: items, categories: cats };
+  }, [catalogQuery.data]);
 
   const indicatorTypes = useMemo(() => catalog.map((c) => c.type), [catalog]);
 
@@ -189,7 +161,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
 
   const updateType = (idx: number, type: string) => {
     const entry = catalog.find((c) => c.type === type);
-    const defaults = entry?.defaultParams ?? getDefaultParams(type);
+    const defaults = entry?.defaultParams ?? {};
     const updated = [...config.indicators];
     updated[idx] = { type, params: defaults };
     updateIndicators(updated);
@@ -214,6 +186,31 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
     updateIndicators(updated);
   };
 
+  if (catalogQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <LoadingSpinner size="sm" />
+        <span className="ml-2 text-xs text-muted-foreground">Loading indicator catalog…</span>
+      </div>
+    );
+  }
+
+  if (catalogQuery.isError) {
+    return (
+      <div className="rounded-lg border border-destructive bg-destructive/10 p-4">
+        <p className="text-sm text-destructive">Failed to load indicator catalog.</p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={() => catalogQuery.refetch()}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -225,7 +222,9 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
         </Button>
       </div>
 
-      {showCatalog && <IndicatorCatalog catalog={catalog} onAdd={addIndicator} />}
+      {showCatalog && (
+        <IndicatorCatalog catalog={catalog} categories={categories} onAdd={addIndicator} />
+      )}
 
       {config.indicators.length === 0 && !showCatalog && (
         <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
@@ -240,9 +239,8 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
             <CardContent className="space-y-3 p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  {catalogEntry && <span className="text-lg">{catalogEntry.emoji}</span>}
                   <Select value={ind.type} onValueChange={(v) => updateType(idx, v)}>
-                    <SelectTrigger className="w-[140px]">
+                    <SelectTrigger className="w-[180px]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -256,7 +254,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
                   {catalogEntry && (
                     <Badge
                       variant="outline"
-                      className={`text-[10px] ${CATEGORY_COLORS[catalogEntry.category]}`}
+                      className={`text-[10px] capitalize ${categoryClass(catalogEntry.category)}`}
                     >
                       {catalogEntry.category}
                     </Badge>

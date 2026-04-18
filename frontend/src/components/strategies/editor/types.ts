@@ -6,75 +6,6 @@ export interface DslIndicator {
   timeframe_override?: string | undefined;
 }
 
-export type IndicatorCategory = "Trend" | "Momentum" | "Volatility" | "Volume";
-
-export interface IndicatorCatalogEntry {
-  type: string;
-  name: string;
-  emoji: string;
-  description: string;
-  category: IndicatorCategory;
-}
-
-export const INDICATOR_CATALOG: IndicatorCatalogEntry[] = [
-  {
-    type: "SMA",
-    name: "Simple Moving Average",
-    emoji: "\u{1F4C8}",
-    description: "Average price over N periods",
-    category: "Trend",
-  },
-  {
-    type: "EMA",
-    name: "Exponential Moving Average",
-    emoji: "\u{1F4C9}",
-    description: "Weighted average favoring recent prices",
-    category: "Trend",
-  },
-  {
-    type: "RSI",
-    name: "Relative Strength Index",
-    emoji: "\u{1F4CA}",
-    description: "Momentum oscillator (0-100)",
-    category: "Momentum",
-  },
-  {
-    type: "MACD",
-    name: "MACD",
-    emoji: "\u{1F500}",
-    description: "Trend-following momentum indicator",
-    category: "Momentum",
-  },
-  {
-    type: "BB",
-    name: "Bollinger Bands",
-    emoji: "\u{1F4CF}",
-    description: "Volatility bands around SMA",
-    category: "Volatility",
-  },
-  {
-    type: "ATR",
-    name: "Average True Range",
-    emoji: "\u{1F4D0}",
-    description: "Measures market volatility",
-    category: "Volatility",
-  },
-  {
-    type: "VWAP",
-    name: "Volume Weighted Avg Price",
-    emoji: "\u{1F4E6}",
-    description: "Average price weighted by volume",
-    category: "Volume",
-  },
-  {
-    type: "STOCH",
-    name: "Stochastic Oscillator",
-    emoji: "\u{26A1}",
-    description: "Compares closing price to range",
-    category: "Momentum",
-  },
-];
-
 export interface DslCondition {
   left: string;
   operator: string;
@@ -166,32 +97,9 @@ export const DAYS_OF_WEEK = [
 
 export const SESSIONS = ["Asian", "European", "US"] as const;
 
-/** Default indicator params per type */
-export function getDefaultParams(type: string): Record<string, number> {
-  switch (type) {
-    case "SMA":
-    case "EMA":
-      return { period: 20 };
-    case "RSI":
-      return { period: 14, overbought: 70, oversold: 30 };
-    case "MACD":
-      return { fast: 12, slow: 26, signal: 9 };
-    case "BB":
-      return { period: 20, std_dev: 2 };
-    case "ATR":
-      return { period: 14 };
-    case "VWAP":
-      return {};
-    case "STOCH":
-      return { k_period: 14, d_period: 3 };
-    default:
-      return {};
-  }
-}
-
 /** Build operand options from configured indicators */
 export function buildOperandOptions(indicators: DslIndicator[]): string[] {
-  const options: string[] = ["price", "volume"];
+  const options: string[] = ["price", "close", "open", "high", "low", "volume"];
   for (const ind of indicators) {
     const paramVals = Object.values(ind.params);
     const paramStr = paramVals.length > 0 ? `(${paramVals.join(",")})` : "";
