@@ -752,6 +752,14 @@ async def promote_discovered_strategy(
     # Create backtest run using discovery run's symbols/timeframe/dates
     symbols_raw = discovery_run.get("symbols", [])
     symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
+    # Tag screening runs with promote source so post-run drift check (bd-l6ml)
+    # can compare replay metrics vs the originating discovery genome.
+    run_parameters: dict[str, object] = {}
+    if mode == "screening":
+        run_parameters["promote_source"] = {
+            "discovery_run_id": run_id,
+            "strategy_index": strategy_index,
+        }
     backtest_run_id = state.create_backtest_run(
         strategy_id=strategy_id,
         run_mode=mode,
@@ -759,7 +767,7 @@ async def promote_discovered_strategy(
         timeframe=str(discovery_run.get("timeframe", "4h")),
         start_date=str(discovery_run.get("start_date", "")),
         end_date=str(discovery_run.get("end_date", "")),
-        parameters={},
+        parameters=run_parameters,
     )
 
     pid = _launch_backtest_job(state, jobs, backtest_run_id, mode)

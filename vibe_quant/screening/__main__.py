@@ -118,6 +118,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         _store_compiler_version(state, args.run_id, compiler_version_hash())
 
+        # Post-promote replay drift check (no-op when not a promote run)
+        from vibe_quant.screening.replay_drift import check_replay_drift
+
+        check_replay_drift(state, args.run_id)
+
         state.update_backtest_run_status(args.run_id, "completed")
         manager.mark_completed(args.run_id)
         print(
