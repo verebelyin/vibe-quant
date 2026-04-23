@@ -41,8 +41,8 @@ indicator_registry.register_spec(
 
 1. At startup, `load_builtin_plugins()` walks this directory with `pkgutil.iter_modules`.
 2. Files prefixed with `_` are skipped (useful for helpers).
-3. Each module is imported; a failing import is logged and swallowed (won't crash the app).
-4. The module calls `indicator_registry.register_spec(spec)` at module scope.
+3. Each module is imported; a failing import is logged, recorded on `plugin_loader.get_load_errors()`, and surfaced via `GET /api/indicators/catalog` (`plugin_errors[]`). Set `VQ_PLUGINS_STRICT=1` to re-raise instead — useful in CI.
+4. The module calls `indicator_registry.register_spec(spec)` at module scope. Registering a spec whose name collides with an existing one raises `KeyError` — pass `override=True` to opt in explicitly.
 5. The new spec is immediately available to the DSL parser, compiler, GA pool, and API catalog.
 
 ## IndicatorSpec field reference

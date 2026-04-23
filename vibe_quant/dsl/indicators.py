@@ -284,13 +284,35 @@ class IndicatorRegistry:
 
         return decorator
 
-    def register_spec(self, spec: IndicatorSpec) -> None:
+    def register_spec(self, spec: IndicatorSpec, *, override: bool = False) -> None:
         """Directly register an indicator spec.
 
         Args:
-            spec: Indicator specification to register
+            spec: Indicator specification to register.
+            override: If True, silently replace any existing spec with the
+                same name. If False (default), raise ``KeyError`` on
+                collision — this prevents a plugin from accidentally
+                shadowing a built-in (e.g. RSI) without the author
+                noticing. Plugins that intentionally replace a built-in
+                must opt in explicitly; an INFO log entry records the
+                override for auditability.
+
+        Raises:
+            KeyError: If a spec with the same name is already registered
+                and ``override`` is not set to True.
         """
-        self._indicators[spec.name.upper()] = spec
+        name = spec.name.upper()
+        if not override and name in self._indicators:
+            msg = (
+                f"Indicator '{name}' is already registered. Pass "
+                "override=True to register_spec() to replace it explicitly."
+            )
+            raise KeyError(msg)
+        if override and name in self._indicators:
+            _validation_logger.info(
+                "Indicator %r registration overriding existing spec", name
+            )
+        self._indicators[name] = spec
 
     def get(self, name: str) -> IndicatorSpec | None:
         """Get indicator spec by name.

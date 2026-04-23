@@ -12,10 +12,11 @@ runs; ``vibe_quant/dsl/indicators.py`` calls ``load_builtin_plugins``
 from the bottom of the file, after every ``@indicator_registry.register``
 has executed.
 
-Plugin name collisions with a built-in are logged as a warning. The
-behavior on collision is "last write wins" because ``register_spec``
-unconditionally overwrites the registry entry — documented here so
-future debuggers know where to look.
+Plugin name collisions with a built-in raise ``KeyError`` by default;
+plugins that intentionally shadow a built-in must call
+``indicator_registry.register_spec(spec, override=True)`` explicitly.
+Collisions that do go through (via ``override=True``) are still logged
+at INFO level so the override is visible in prod logs.
 
 Failed-load surfacing
 ---------------------
@@ -76,11 +77,9 @@ def load_builtin_plugins() -> list[str]:
     # monkey-patch the package ``__path__`` before the first load can do
     # so without a stale reference.
     from vibe_quant.dsl import plugins
-    from vibe_quant.dsl.indicators import indicator_registry
 
     _load_errors.clear()
     loaded: list[str] = []
-    pre_existing = set(indicator_registry.list_indicators())
     strict = _strict_mode()
 
     for module_info in pkgutil.iter_modules(plugins.__path__):
@@ -109,22 +108,5 @@ def load_builtin_plugins() -> list[str]:
             continue
         loaded.append(qualified)
         logger.info("Loaded indicator plugin: %s", qualified)
-
-    # Collision smoke check: any built-in whose compute_fn's module now
-    # lives inside a plugin we just loaded has been silently overwritten.
-    # We can't fully prove the overwrite (register_spec doesn't track
-    # history) but we can flag it when it happens via module path.
-    plugin_module_prefix = plugins.__name__ + "."
-    for ind_name in pre_existing:
-        spec = indicator_registry.get(ind_name)
-        if spec is None:  # shouldn't happen but be defensive
-            continue
-        fn = spec.compute_fn
-        if fn is not None and fn.__module__.startswith(plugin_module_prefix):
-            logger.warning(
-                "Plugin overwrote built-in indicator %r (now sourced from %s)",
-                ind_name,
-                fn.__module__,
-            )
 
     return loaded

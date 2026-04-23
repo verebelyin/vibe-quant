@@ -224,9 +224,9 @@ def test_strict_mode_reraises_plugin_load_failure(
 def test_plugin_cannot_overwrite_builtin_silently(
     tmp_path: Path, monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
 ) -> None:
-    """Shadowing a built-in by registering a spec with the same name
-    triggers a warning log (overwrite is still allowed — this is just
-    a loud audit trail so developers don't wonder why RSI acts funny)."""
+    """A plugin that calls ``register_spec(spec)`` with a colliding name
+    raises KeyError and is therefore logged as a load failure — not
+    silently shadowed. The error is surfaced via ``get_load_errors()``."""
     pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_shadow", monkeypatch)
     (pkg_dir / "shadow_rsi.py").write_text(
         "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
@@ -246,21 +246,64 @@ def test_plugin_cannot_overwrite_builtin_silently(
         ")\n"
     )
 
-    # Snapshot the real RSI spec so we can restore it afterwards.
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+    real_rsi = indicator_registry.get("RSI")
+    assert real_rsi is not None
+    with caplog.at_level(
+        logging.ERROR, logger="vibe_quant.dsl.plugin_loader"
+    ):
+        plugin_loader.load_builtin_plugins()
+
+    # The shadow plugin should have failed to load and be recorded as an
+    # error. RSI must remain the built-in.
+    errors = plugin_loader.get_load_errors()
+    assert any(
+        e.module.endswith("shadow_rsi") and e.error_type == "KeyError"
+        for e in errors
+    ), f"Expected KeyError on shadow_rsi, got: {errors}"
+    assert indicator_registry.get("RSI") is real_rsi
+
+
+def test_plugin_can_override_builtin_with_explicit_flag(
+    tmp_path: Path, monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
+) -> None:
+    """``override=True`` opts into shadowing a built-in; the registry
+    logs the override at INFO so it's auditable."""
+    pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_override", monkeypatch)
+    (pkg_dir / "override_rsi.py").write_text(
+        "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+        "\n"
+        "def _custom_compute(df, params):  # noqa: ARG001\n"
+        "    return df['close']\n"
+        "\n"
+        "indicator_registry.register_spec(\n"
+        "    IndicatorSpec(\n"
+        "        name='RSI',\n"
+        "        nt_class=None,\n"
+        "        pandas_ta_func=None,\n"
+        "        default_params={'period': 14},\n"
+        "        param_schema={'period': int},\n"
+        "        compute_fn=_custom_compute,\n"
+        "    ),\n"
+        "    override=True,\n"
+        ")\n"
+    )
+
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
     real_rsi = indicator_registry.get("RSI")
     assert real_rsi is not None
     try:
         with caplog.at_level(
-            logging.WARNING, logger="vibe_quant.dsl.plugin_loader"
+            logging.INFO, logger="vibe_quant.dsl.indicators"
         ):
             plugin_loader.load_builtin_plugins()
 
-        # Warning should reference RSI by name.
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("RSI" in m and "overwrote" in m for m in messages), (
-            f"Expected overwrite warning for RSI, got: {messages}"
-        )
+        shadowed = indicator_registry.get("RSI")
+        assert shadowed is not None
+        assert shadowed is not real_rsi, "RSI should have been overridden"
+        assert any(
+            "RSI" in r.getMessage() and "overriding" in r.getMessage()
+            for r in caplog.records
+        ), "Expected INFO log recording the override"
     finally:
-        # Restore the built-in RSI so the rest of the suite doesn't see
-        # a shadowed spec leaking across tests.
-        indicator_registry.register_spec(real_rsi)
+        indicator_registry.register_spec(real_rsi, override=True)
