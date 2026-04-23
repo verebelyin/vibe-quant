@@ -969,3 +969,162 @@ class TestMAChromosome:
         child_a, child_b = crossover(parent_a, parent_b)
         assert len(child_a.ma_entry_genes) <= MAX_MA_ENTRY_GENES
         assert len(child_b.ma_entry_genes) <= MAX_MA_ENTRY_GENES
+
+
+# =============================================================================
+# Phase 2 (bd-fuaj): ma_fast vs ma_slow cross/ribbon genes
+# =============================================================================
+
+
+class TestMACrossGene:
+    """Phase 2: PriceVsMAConditionGene with parameters_slow for ribbon/cross."""
+
+    @staticmethod
+    def _make_cross_chrom(
+        ma_kind: str = "KAMA",
+        period_fast: float = 10.0,
+        period_slow: float = 30.0,
+    ) -> StrategyChromosome:
+        from vibe_quant.discovery.operators import (
+            ConditionType,
+            Direction,
+            PriceVsMAConditionGene,
+        )
+        from vibe_quant.discovery.operators import (
+            StrategyChromosome as _Chrom,
+        )
+        from vibe_quant.discovery.operators import (
+            StrategyGene as _Gene,
+        )
+
+        return _Chrom(
+            entry_genes=[
+                _Gene(
+                    indicator_type="RSI",
+                    parameters={"period": 14},
+                    condition=ConditionType.LT,
+                    threshold=30.0,
+                )
+            ],
+            exit_genes=[
+                _Gene(
+                    indicator_type="RSI",
+                    parameters={"period": 14},
+                    condition=ConditionType.GT,
+                    threshold=70.0,
+                )
+            ],
+            stop_loss_pct=2.0,
+            take_profit_pct=4.0,
+            direction=Direction.LONG,
+            ma_entry_genes=[
+                PriceVsMAConditionGene(
+                    indicator_type=ma_kind,
+                    parameters={"period": period_fast},
+                    op=ConditionType.GT,
+                    parameters_slow={"period": period_slow},
+                )
+            ],
+        )
+
+    def test_chromosome_to_dsl_emits_two_indicators_and_ma_vs_ma_condition(self) -> None:
+        chrom = self._make_cross_chrom("KAMA", 10.0, 30.0)
+        dsl = chromosome_to_dsl(chrom)
+
+        fast_names = [k for k in dsl["indicators"] if k.endswith("_fast")]
+        slow_names = [k for k in dsl["indicators"] if k.endswith("_slow")]
+        assert len(fast_names) == 1
+        assert len(slow_names) == 1
+        fast_name, slow_name = fast_names[0], slow_names[0]
+        assert dsl["indicators"][fast_name]["type"] == "KAMA"
+        assert dsl["indicators"][fast_name]["period"] == 10
+        assert dsl["indicators"][slow_name]["period"] == 30
+
+        # Condition references the two MA names, not `close`
+        assert f"{fast_name} > {slow_name}" in dsl["entry_conditions"]["long"]
+
+    def test_ma_cross_chromosome_compiles(self) -> None:
+        """DSL with two MA indicators must pass schema validation."""
+        chrom = self._make_cross_chrom("KAMA", 10.0, 30.0)
+        dsl = chromosome_to_dsl(chrom)
+        dsl["timeframe"] = "5m"
+        StrategyDSL(**dsl)  # raises on invalid
+
+    def test_ma_cross_gene_roundtrip_serialization(self) -> None:
+        from vibe_quant.discovery.genome import (
+            chromosome_to_serializable,
+            serializable_to_chromosome,
+        )
+
+        original = self._make_cross_chrom("VIDYA", 8.0, 24.0)
+        d = chromosome_to_serializable(original)
+        ma_entry = d["ma_entry_genes"]
+        assert isinstance(ma_entry, list)
+        assert ma_entry[0].get("parameters_slow") == {"period": 24.0}
+
+        restored = serializable_to_chromosome(d)
+        r0 = restored.ma_entry_genes[0]
+        assert r0.parameters_slow == {"period": 24.0}
+        assert r0.parameters == {"period": 8.0}
+
+    def test_validate_chromosome_rejects_period_fast_ge_slow(self) -> None:
+        """period_fast >= period_slow violates the ribbon invariant."""
+        chrom = self._make_cross_chrom("KAMA", 30.0, 10.0)
+        assert not is_valid_chromosome(chrom)
+
+    def test_repair_chromosome_fixes_swapped_periods(self) -> None:
+        """Repair swaps fast/slow when period_fast > period_slow."""
+        from vibe_quant.discovery.operators import _repair_chromosome
+
+        chrom = self._make_cross_chrom("KAMA", 30.0, 10.0)
+        assert not is_valid_chromosome(chrom)
+        repaired = _repair_chromosome(chrom)
+        assert is_valid_chromosome(repaired)
+        g = repaired.ma_entry_genes[0]
+        assert g.parameters["period"] < g.parameters_slow["period"]  # type: ignore[index]
+
+    def test_repair_bumps_equal_periods_apart(self) -> None:
+        """period_fast == period_slow is degenerate; repair breaks the tie."""
+        from vibe_quant.discovery.operators import _repair_chromosome
+
+        chrom = self._make_cross_chrom("KAMA", 20.0, 20.0)
+        repaired = _repair_chromosome(chrom)
+        g = repaired.ma_entry_genes[0]
+        assert g.parameters["period"] < g.parameters_slow["period"]  # type: ignore[index]
+
+    def test_random_ma_gene_produces_cross_shape_sometimes(self) -> None:
+        """With _MA_CROSS_PROB=0.4, ≥ a few of 100 samples should be crosses."""
+        from vibe_quant.discovery.operators import _ensure_pool, _random_ma_gene
+
+        _ensure_pool()
+        random.seed(42)
+        samples = [_random_ma_gene() for _ in range(100)]
+        crosses = [g for g in samples if g.parameters_slow is not None]
+        assert len(crosses) >= 10, f"Only {len(crosses)}/100 are cross shape"
+        # Every cross must satisfy the invariant out of the gate
+        for g in crosses:
+            assert g.parameters["period"] < g.parameters_slow["period"]  # type: ignore[index]
+
+    def test_clone_preserves_parameters_slow_independently(self) -> None:
+        original = self._make_cross_chrom("KAMA", 10.0, 30.0)
+        clone = original.clone()
+        clone.ma_entry_genes[0].parameters_slow["period"] = 99.0  # type: ignore[index]
+        assert original.ma_entry_genes[0].parameters_slow == {"period": 30.0}
+
+    def test_mutate_preserves_cross_invariant(self) -> None:
+        """Repeated mutation must not emit period_fast >= period_slow."""
+        from vibe_quant.discovery.operators import mutate
+
+        original = self._make_cross_chrom("KAMA", 10.0, 30.0)
+        random.seed(7)
+        for _ in range(100):
+            mutated = mutate(original, mutation_rate=1.0)
+            for g in mutated.ma_entry_genes + mutated.ma_exit_genes:
+                if g.parameters_slow is None:
+                    continue
+                p_fast = g.parameters.get("period")
+                p_slow = g.parameters_slow.get("period")
+                if p_fast is not None and p_slow is not None:
+                    assert p_fast < p_slow, (
+                        f"invariant broken after mutate: fast={p_fast} slow={p_slow}"
+                    )

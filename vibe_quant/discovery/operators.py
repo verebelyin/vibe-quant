@@ -136,18 +136,35 @@ class StrategyGene:
 
 @dataclass(slots=True)
 class PriceVsMAConditionGene:
-    """Gene: close <op> MA. No scalar threshold — compares raw close
-    against an MA series (KAMA/VIDYA/FRAMA etc.).
+    """Gene: close-vs-MA or MA-fast-vs-MA-slow condition.
+
+    Two shapes based on ``parameters_slow``:
+
+    - **Phase 1** (``parameters_slow`` is None): ``close <op> MA(parameters)``.
+      Used for pullback / price-relative patterns.
+    - **Phase 2** (``parameters_slow`` is set): ``MA_fast(parameters) <op>
+      MA_slow(parameters_slow)`` — same ``indicator_type``, different
+      periods. Used for ribbon / golden-cross patterns. Invariant:
+      ``parameters["period"] < parameters_slow["period"]`` (enforced by
+      ``_repair_chromosome``).
 
     Attributes:
         indicator_type: MA name from ``MA_POOL``.
-        parameters: MA parameter values.
+        parameters: Fast-side (or sole) MA parameter values.
         op: Comparison op (GT/LT/CROSSES_ABOVE/CROSSES_BELOW).
+        parameters_slow: When set, promotes the gene to ma-vs-ma shape
+            with this slow-period leg. Same ``indicator_type``.
     """
 
     indicator_type: str
     parameters: dict[str, float]
     op: ConditionType
+    parameters_slow: dict[str, float] | None = None
+
+    @property
+    def is_ma_cross(self) -> bool:
+        """True when this gene compares two MAs of the same type."""
+        return self.parameters_slow is not None
 
     def clone(self) -> PriceVsMAConditionGene:
         """Deep-copy this gene."""
@@ -155,6 +172,7 @@ class PriceVsMAConditionGene:
             indicator_type=self.indicator_type,
             parameters=dict(self.parameters),
             op=self.op,
+            parameters_slow=dict(self.parameters_slow) if self.parameters_slow is not None else None,
         )
 
 
@@ -335,13 +353,72 @@ def _random_ma_params(indicator_type: str) -> dict[str, float]:
     return params
 
 
+# Probability that a freshly-sampled MA gene is an ma-fast-vs-ma-slow
+# cross rather than close-vs-ma. 0.4 gives the GA meaningful exposure to
+# ribbon/golden-cross patterns without starving the price-vs-ma shape
+# that Phase 1 shipped.
+_MA_CROSS_PROB = 0.4
+
+
+def _ma_gene_has_period(indicator_type: str) -> bool:
+    """Whether the given MA's param_ranges include a ``period`` key.
+
+    ma_fast-vs-ma_slow requires a period axis to order the two legs. Any
+    MA whose ``param_ranges`` lacks ``period`` cannot take the cross
+    shape — we degrade gracefully to Phase 1.
+    """
+    from vibe_quant.discovery.genome import MA_POOL
+
+    return "period" in MA_POOL[indicator_type].param_ranges
+
+
+def _enforce_ma_cross_invariant(gene: PriceVsMAConditionGene) -> None:
+    """Enforce ``parameters["period"] < parameters_slow["period"]`` in place.
+
+    Swaps the two sides when the ordering is wrong. Bumps slow by 1 when
+    periods collide so the legs are never identical (a same-period cross
+    is never meaningful). No-op for non-cross genes or genes without a
+    numeric period.
+    """
+    if gene.parameters_slow is None:
+        return
+    p_fast = gene.parameters.get("period")
+    p_slow = gene.parameters_slow.get("period")
+    if p_fast is None or p_slow is None:
+        return
+    if p_fast == p_slow:
+        # Bump slow to avoid a degenerate fast==slow cross
+        from vibe_quant.discovery.genome import MA_POOL
+
+        _, hi = MA_POOL[gene.indicator_type].param_ranges.get("period", (1.0, 200.0))
+        gene.parameters_slow["period"] = float(min(p_slow + 1, hi))
+    elif p_fast > p_slow:
+        gene.parameters, gene.parameters_slow = gene.parameters_slow, gene.parameters
+
+
 def _random_ma_gene() -> PriceVsMAConditionGene:
-    """Generate a random price-vs-MA gene. Caller must ensure MA_POOL is non-empty."""
+    """Generate a random price-vs-MA or ma-cross gene.
+
+    With probability ``_MA_CROSS_PROB`` returns an ma-fast-vs-ma-slow
+    gene (same indicator_type, two periods). Otherwise returns the
+    Phase 1 close-vs-ma shape. Caller must ensure ``MA_POOL`` is non-empty.
+    """
     _ensure_pool()
     ind = random.choice(_MA_NAMES)
+    base_params = _random_ma_params(ind)
+    if random.random() < _MA_CROSS_PROB and _ma_gene_has_period(ind):
+        slow_params = _random_ma_params(ind)
+        gene = PriceVsMAConditionGene(
+            indicator_type=ind,
+            parameters=base_params,
+            op=random.choice(_MA_CONDITION_TYPES),
+            parameters_slow=slow_params,
+        )
+        _enforce_ma_cross_invariant(gene)
+        return gene
     return PriceVsMAConditionGene(
         indicator_type=ind,
-        parameters=_random_ma_params(ind),
+        parameters=base_params,
         op=random.choice(_MA_CONDITION_TYPES),
     )
 
@@ -433,6 +510,17 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
             val = ma_gene.parameters.get(pname)
             if val is None or not (lo <= val <= hi):
                 return False
+        # ma-fast-vs-ma-slow cross: slow leg must obey the same pool ranges
+        # AND period_fast < period_slow.
+        if ma_gene.parameters_slow is not None:
+            for pname, (lo, hi) in ranges.items():
+                val = ma_gene.parameters_slow.get(pname)
+                if val is None or not (lo <= val <= hi):
+                    return False
+            p_fast = ma_gene.parameters.get("period")
+            p_slow = ma_gene.parameters_slow.get("period")
+            if p_fast is not None and p_slow is not None and p_fast >= p_slow:
+                return False
     return True
 
 
@@ -462,7 +550,8 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
         val = getattr(chrom, attr)
         if val is not None:
             setattr(chrom, attr, max(valid_range[0], min(valid_range[1], val)))
-    # Repair MA genes: clamp params, drop unknown indicators, cap counts
+    # Repair MA genes: clamp params, drop unknown indicators, cap counts,
+    # enforce the ma-fast-vs-ma-slow period ordering when in cross shape.
     from vibe_quant.discovery.genome import MA_POOL
     for genes, cap in (
         (chrom.ma_entry_genes, MAX_MA_ENTRY_GENES),
@@ -476,6 +565,11 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
             for pname, (lo, hi) in ranges.items():
                 val = g.parameters.get(pname, lo)
                 g.parameters[pname] = max(lo, min(hi, val))
+            if g.parameters_slow is not None:
+                for pname, (lo, hi) in ranges.items():
+                    val = g.parameters_slow.get(pname, lo)
+                    g.parameters_slow[pname] = max(lo, min(hi, val))
+                _enforce_ma_cross_invariant(g)
             if g.op not in _MA_CONDITION_TYPES:
                 g.op = random.choice(_MA_CONDITION_TYPES)
         if len(genes) > cap:
@@ -799,25 +893,67 @@ def _mutate_ma_genes(
 
 
 def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
-    """Mutate one MA gene in place — indicator swap / param perturb / op flip."""
+    """Mutate one MA gene in place.
+
+    Mutation types:
+      0 — swap indicator_type (resets both legs; drops slow leg if the new
+          indicator has no ``period`` to sort by).
+      1 — perturb fast-leg parameters.
+      2 — flip op via complement.
+      3 — toggle shape: add a slow leg if missing (→ ma-cross), or drop
+          it if present (→ price-vs-ma).
+      4 — perturb slow-leg parameters (only when in cross shape; falls
+          through to a fast-leg perturb otherwise).
+    """
     from vibe_quant.discovery.genome import MA_POOL
 
     _ensure_pool()
     if not _MA_NAMES:
         return
-    mutation_type = random.randint(0, 2)
+    mutation_type = random.randint(0, 4)
     if mutation_type == 0:
         new_ind = random.choice(_MA_NAMES)
         gene.indicator_type = new_ind
         gene.parameters = _random_ma_params(new_ind)
+        # Cross shape only survives an indicator swap when the new kind
+        # also has a period axis; otherwise demote to price-vs-ma.
+        if gene.parameters_slow is not None and _ma_gene_has_period(new_ind):
+            gene.parameters_slow = _random_ma_params(new_ind)
+            _enforce_ma_cross_invariant(gene)
+        else:
+            gene.parameters_slow = None
     elif mutation_type == 1:
         ranges = MA_POOL[gene.indicator_type].param_ranges
         for pname, val in list(gene.parameters.items()):
             if pname in ranges:
                 lo, hi = ranges[pname]
                 gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
-    else:
+        _enforce_ma_cross_invariant(gene)
+    elif mutation_type == 2:
         gene.op = _CONDITION_COMPLEMENTS.get(gene.op, random.choice(_MA_CONDITION_TYPES))
+    elif mutation_type == 3:
+        if gene.parameters_slow is None:
+            if _ma_gene_has_period(gene.indicator_type):
+                gene.parameters_slow = _random_ma_params(gene.indicator_type)
+                _enforce_ma_cross_invariant(gene)
+        else:
+            gene.parameters_slow = None
+    else:
+        if gene.parameters_slow is not None:
+            ranges = MA_POOL[gene.indicator_type].param_ranges
+            for pname, val in list(gene.parameters_slow.items()):
+                if pname in ranges:
+                    lo, hi = ranges[pname]
+                    gene.parameters_slow[pname] = _perturb(val, 0.2, lo, hi)
+            _enforce_ma_cross_invariant(gene)
+        else:
+            # No slow leg to perturb — fall through to a fast-leg perturb
+            # so the mutation step isn't wasted.
+            ranges = MA_POOL[gene.indicator_type].param_ranges
+            for pname, val in list(gene.parameters.items()):
+                if pname in ranges:
+                    lo, hi = ranges[pname]
+                    gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
 
 
 def tournament_select(

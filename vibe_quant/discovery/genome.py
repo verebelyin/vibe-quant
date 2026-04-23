@@ -442,19 +442,19 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
     return cfg
 
 
-def _ma_gene_to_indicator_config(gene: PriceVsMAConditionGene) -> dict[str, object]:
-    """Build DSL IndicatorConfig dict from an MA gene.
+def _ma_params_to_indicator_config(
+    indicator_type: str, parameters: dict[str, float]
+) -> dict[str, object]:
+    """Build a DSL IndicatorConfig dict from an (indicator_type, params) pair.
 
-    Schema-native ``period`` goes into the primary field; any
-    plugin-declared extras (e.g. FRAMA's ``fc``/``sc``) flow through as
-    additional keys and are picked up by the compiler's
-    ``_merge_effective_params`` via pydantic ``model_extra``.
+    Shared helper so both legs of an ma-fast-vs-ma-slow cross produce
+    identically-shaped configs.
     """
-    cfg: dict[str, object] = {"type": gene.indicator_type}
-    period = gene.parameters.get("period")
+    cfg: dict[str, object] = {"type": indicator_type}
+    period = parameters.get("period")
     if period is not None:
         cfg["period"] = int(period)
-    for pname, pval in gene.parameters.items():
+    for pname, pval in parameters.items():
         if pname == "period":
             continue
         # Preserve int-ness when the value is an integer-valued float
@@ -462,10 +462,33 @@ def _ma_gene_to_indicator_config(gene: PriceVsMAConditionGene) -> dict[str, obje
     return cfg
 
 
+def _ma_gene_to_indicator_config(gene: PriceVsMAConditionGene) -> dict[str, object]:
+    """Build DSL IndicatorConfig dict from an MA gene's fast-leg params.
+
+    Schema-native ``period`` goes into the primary field; any
+    plugin-declared extras (e.g. FRAMA's ``fc``/``sc``) flow through as
+    additional keys and are picked up by the compiler's
+    ``_merge_effective_params`` via pydantic ``model_extra``.
+    """
+    return _ma_params_to_indicator_config(gene.indicator_type, gene.parameters)
+
+
 def _ma_gene_to_condition_str(gene: PriceVsMAConditionGene, indicator_name: str) -> str:
-    """Emit ``close <op> <indicator_name>`` — no scalar threshold."""
+    """Emit ``close <op> <indicator_name>`` — no scalar threshold.
+
+    Only valid for the price-vs-ma (non-cross) shape. Callers rendering
+    a ma-cross gene must build the two-leg string themselves.
+    """
     op = _CONDITION_TO_DSL_OP[gene.op.value]
     return f"close {op} {indicator_name}"
+
+
+def _ma_cross_gene_to_condition_str(
+    gene: PriceVsMAConditionGene, fast_name: str, slow_name: str
+) -> str:
+    """Emit ``<fast_name> <op> <slow_name>`` for a ma-cross gene."""
+    op = _CONDITION_TO_DSL_OP[gene.op.value]
+    return f"{fast_name} {op} {slow_name}"
 
 
 def _gene_to_condition_str(gene: StrategyGene, indicator_name: str) -> str:
@@ -529,11 +552,27 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         if direction in (Direction.SHORT, Direction.BOTH):
             exit_short.append(cond_str)
 
+    def _emit_ma_gene(
+        ma_gene: PriceVsMAConditionGene, slot: str, idx: int
+    ) -> str:
+        """Register indicator(s) for an MA gene and return its DSL condition."""
+        base = f"{ma_gene.indicator_type.lower()}_ma_{slot}_{idx}"
+        if ma_gene.parameters_slow is None:
+            indicators[base] = _ma_gene_to_indicator_config(ma_gene)
+            return _ma_gene_to_condition_str(ma_gene, base)
+        fast_name = f"{base}_fast"
+        slow_name = f"{base}_slow"
+        indicators[fast_name] = _ma_params_to_indicator_config(
+            ma_gene.indicator_type, ma_gene.parameters
+        )
+        indicators[slow_name] = _ma_params_to_indicator_config(
+            ma_gene.indicator_type, ma_gene.parameters_slow
+        )
+        return _ma_cross_gene_to_condition_str(ma_gene, fast_name, slow_name)
+
     # Build indicators + conditions from MA entry genes
     for i, ma_gene in enumerate(chrom.ma_entry_genes):
-        ma_name = f"{ma_gene.indicator_type.lower()}_ma_entry_{i}"
-        indicators[ma_name] = _ma_gene_to_indicator_config(ma_gene)
-        cond_str = _ma_gene_to_condition_str(ma_gene, ma_name)
+        cond_str = _emit_ma_gene(ma_gene, "entry", i)
         if direction in (Direction.LONG, Direction.BOTH):
             entry_long.append(cond_str)
         if direction in (Direction.SHORT, Direction.BOTH):
@@ -541,9 +580,7 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
 
     # Build indicators + conditions from MA exit genes
     for i, ma_gene in enumerate(chrom.ma_exit_genes):
-        ma_name = f"{ma_gene.indicator_type.lower()}_ma_exit_{i}"
-        indicators[ma_name] = _ma_gene_to_indicator_config(ma_gene)
-        cond_str = _ma_gene_to_condition_str(ma_gene, ma_name)
+        cond_str = _emit_ma_gene(ma_gene, "exit", i)
         if direction in (Direction.LONG, Direction.BOTH):
             exit_long.append(cond_str)
         if direction in (Direction.SHORT, Direction.BOTH):
@@ -611,11 +648,14 @@ def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
         }
 
     def _ma_gene_dict(g: PriceVsMAConditionGene) -> dict[str, object]:
-        return {
+        d: dict[str, object] = {
             "indicator_type": g.indicator_type,
             "parameters": dict(g.parameters),
             "op": g.op.value,
         }
+        if g.parameters_slow is not None:
+            d["parameters_slow"] = dict(g.parameters_slow)
+        return d
 
     d: dict[str, object] = {
         "entry_genes": [_gene_dict(g) for g in chrom.entry_genes],
@@ -665,10 +705,17 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         params: dict[str, float] = {
             str(k): float(v) for k, v in params_raw.items()  # type: ignore[union-attr]
         }
+        slow_raw = g.get("parameters_slow")
+        parameters_slow: dict[str, float] | None = None
+        if slow_raw is not None:
+            parameters_slow = {
+                str(k): float(v) for k, v in slow_raw.items()  # type: ignore[union-attr]
+            }
         return PriceVsMAConditionGene(
             indicator_type=str(g["indicator_type"]),
             parameters=params,
             op=ConditionType(str(g["op"])),
+            parameters_slow=parameters_slow,
         )
 
     entry_genes_raw = d.get("entry_genes", [])
