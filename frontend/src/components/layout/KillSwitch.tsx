@@ -1,6 +1,12 @@
 import { useState } from "react";
 
-import { useKillSystem, useSystemStatus, useUnlockSystem } from "@/api/system";
+import {
+  getGetStatusApiSystemStatusGetQueryKey,
+  useGetStatusApiSystemStatusGet,
+  useKillApiSystemKillPost,
+  useUnlockApiSystemUnlockPost,
+} from "@/api/generated/system/system";
+import { queryClient } from "@/api/query-client";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,9 +23,20 @@ import { Label } from "@/components/ui/label";
 
 // Status query polls every 5s so the UI catches kills engaged by other operators.
 export function KillSwitch() {
-  const { data: status } = useSystemStatus();
-  const kill = useKillSystem();
-  const unlock = useUnlockSystem();
+  const statusQuery = useGetStatusApiSystemStatusGet({
+    query: { refetchInterval: 5000, refetchOnWindowFocus: true },
+  });
+  const status = statusQuery.data?.status === 200 ? statusQuery.data.data : undefined;
+  const invalidateStatus = () =>
+    queryClient.invalidateQueries({
+      queryKey: getGetStatusApiSystemStatusGetQueryKey(),
+    });
+  const kill = useKillApiSystemKillPost({
+    mutation: { onSuccess: invalidateStatus },
+  });
+  const unlock = useUnlockApiSystemUnlockPost({
+    mutation: { onSuccess: invalidateStatus },
+  });
 
   const [killOpen, setKillOpen] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
@@ -32,9 +49,7 @@ export function KillSwitch() {
       <>
         <div className="flex items-center gap-2 rounded-md border border-red-500/60 bg-red-500/10 px-3 py-1.5">
           <span className="inline-flex size-2 rounded-full bg-red-500 shadow-[0_0_6px_1px] shadow-red-500/60" />
-          <span className="text-xs font-semibold tracking-wide text-red-500">
-            HALTED
-          </span>
+          <span className="text-xs font-semibold tracking-wide text-red-500">HALTED</span>
           {status?.reason && (
             <span
               className="max-w-[200px] truncate text-[11px] text-red-300/80"
@@ -54,8 +69,8 @@ export function KillSwitch() {
             <DialogHeader>
               <DialogTitle>Unlock the kill switch?</DialogTitle>
               <DialogDescription>
-                This will re-enable starting paper and live trading sessions.
-                Confirm you have investigated the halt cause.
+                This will re-enable starting paper and live trading sessions. Confirm you have
+                investigated the halt cause.
               </DialogDescription>
             </DialogHeader>
             {status?.reason && (
@@ -72,7 +87,7 @@ export function KillSwitch() {
                 disabled={unlock.isPending}
                 onClick={() =>
                   unlock.mutate(
-                    { acknowledge: true, cleared_by: "ui" },
+                    { data: { acknowledge: true, cleared_by: "ui" } },
                     { onSuccess: () => setUnlockOpen(false) },
                   )
                 }
@@ -97,8 +112,8 @@ export function KillSwitch() {
         <DialogHeader>
           <DialogTitle>Engage portfolio kill switch?</DialogTitle>
           <DialogDescription>
-            This halts any active paper trading session and prevents starting
-            new sessions until explicitly unlocked.
+            This halts any active paper trading session and prevents starting new sessions until
+            explicitly unlocked.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
@@ -120,7 +135,7 @@ export function KillSwitch() {
             disabled={!reason.trim() || kill.isPending}
             onClick={() =>
               kill.mutate(
-                { reason: reason.trim(), killed_by: "ui" },
+                { data: { reason: reason.trim(), killed_by: "ui" } },
                 {
                   onSuccess: () => {
                     setKillOpen(false);
