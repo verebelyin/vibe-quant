@@ -2,6 +2,21 @@
 
 Drop a `.py` file in this directory to add a custom indicator. The file is auto-imported at startup via `vibe_quant.dsl.plugin_loader`. No compiler, schema, genome, or frontend edits required.
 
+## Scaffolding a new plugin
+
+```bash
+vibe-quant plugin new MY_IND --category Momentum
+```
+
+Writes two files: `vibe_quant/dsl/plugins/my_ind.py` (the plugin skeleton) and `tests/unit/test_plugins/test_my_ind.py` (a contract test stub wired to `invoke_compute_fn`). Flags:
+
+- `--category` — `Trend | Momentum | Volatility | Volume | Custom` (default `Custom`)
+- `--plugin-dir` / `--tests-dir` — override output locations
+- `--display-name` / `--description` — UI metadata
+- `--no-tests` — skip the test stub
+- `--run-tests` — run pytest against the generated test after scaffolding
+- `--force` — overwrite existing files
+
 Plugins can also live outside this directory:
 
 - **`$VQ_PLUGIN_PATH`** — colon-separated list (or `os.pathsep` on Windows) of directories scanned on startup. Every non-underscore `.py` file in each directory is loaded the same way built-in drop-ins are.

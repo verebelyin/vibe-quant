@@ -206,6 +206,13 @@ def cmd_overfitting(_args: argparse.Namespace, extra: list[str] | None = None) -
     return overfitting_main(extra or [])
 
 
+def cmd_plugin(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
+    """Forward to plugin scaffold CLI."""
+    from vibe_quant.dsl.plugin_scaffold import main as plugin_main
+
+    return plugin_main(extra or [])
+
+
 def cmd_discovery(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to discovery module CLI.
 
@@ -273,6 +280,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Genetic algorithm strategy discovery",
     )
     discovery_parser.set_defaults(func=cmd_discovery)
+
+    # Plugin scaffolding command - uses parse_known_args forwarding
+    plugin_parser = subparsers.add_parser(
+        "plugin",
+        help="Indicator plugin scaffolding helpers",
+    )
+    plugin_parser.set_defaults(func=cmd_plugin)
 
     # Validation command
     validation_parser = subparsers.add_parser(
@@ -398,7 +412,7 @@ def main() -> int:
 
     if hasattr(args, "func"):
         # Forward extra args to submodule commands (data, screening)
-        if args.command in ("data", "screening", "overfitting", "discovery"):
+        if args.command in ("data", "screening", "overfitting", "discovery", "plugin"):
             result: int = args.func(args, extra=extra)
         else:
             result = args.func(args)
