@@ -62,6 +62,84 @@ class TestIndicatorSpec:
                 param_schema={},
             )
 
+    def test_unknown_nt_output_attr_raises(self) -> None:
+        """nt_output_attrs keys must be declared outputs when nt_class is set."""
+        with pytest.raises(
+            ValueError, match="nt_output_attrs keys not in output_names"
+        ):
+            IndicatorSpec(
+                name="TEST",
+                nt_class=object,
+                pandas_ta_func=None,
+                default_params={"period": 14},
+                param_schema={"period": int},
+                output_names=("value",),
+                nt_output_attrs={"bogus_output": "value"},
+            )
+
+    def test_primary_output_not_in_output_names_raises(self) -> None:
+        """primary_output, when set, must be a declared output name."""
+        with pytest.raises(ValueError, match="primary_output"):
+            IndicatorSpec(
+                name="TEST",
+                nt_class=None,
+                pandas_ta_func="test",
+                default_params={},
+                param_schema={},
+                output_names=("upper", "middle", "lower"),
+                primary_output="missing",
+            )
+
+    def test_computed_outputs_unknown_helper_raises(self) -> None:
+        """computed_outputs values must resolve to a helper in derived.py."""
+        with pytest.raises(
+            ValueError, match="computed_outputs helpers not found"
+        ):
+            IndicatorSpec(
+                name="TEST",
+                nt_class=None,
+                pandas_ta_func="test",
+                default_params={},
+                param_schema={},
+                output_names=("upper", "middle", "lower", "fake_output"),
+                computed_outputs={"fake_output": "compute_nonexistent_helper"},
+            )
+
+    def test_param_ranges_typo_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A typo in param_ranges keys logs a warning (not a raise, to
+        preserve STOCH's intentional legacy ``k_period``/``d_period``
+        spellings for GA backward-compat)."""
+        import logging as _logging
+
+        with caplog.at_level(_logging.WARNING, logger="vibe_quant.dsl.indicators"):
+            IndicatorSpec(
+                name="TEST",
+                nt_class=None,
+                pandas_ta_func="test",
+                default_params={"period": 14},
+                param_schema={"period": int},
+                param_ranges={"perriod": (5.0, 50.0)},  # typo
+            )
+        assert any(
+            "perriod" in record.getMessage() for record in caplog.records
+        ), "Expected warning about param_ranges typo"
+
+    def test_valid_computed_output_helper_passes(self) -> None:
+        """Referencing an existing derived helper must not raise."""
+        # compute_percent_b lives in vibe_quant.dsl.derived — real builtin.
+        spec = IndicatorSpec(
+            name="TEST",
+            nt_class=None,
+            pandas_ta_func="test",
+            default_params={},
+            param_schema={},
+            output_names=("upper", "middle", "lower", "percent_b"),
+            computed_outputs={"percent_b": "compute_percent_b"},
+        )
+        assert spec.computed_outputs == {"percent_b": "compute_percent_b"}
+
     def test_default_output_names(self) -> None:
         """Default output_names is ('value',)."""
         spec = IndicatorSpec(
@@ -82,6 +160,9 @@ class TestIndicatorSpec:
             default_params={},
             param_schema={},
             output_names=("upper", "lower"),
+            # Must declare nt_output_attrs for each output when nt_class
+            # is set — the __post_init__ validator enforces this.
+            nt_output_attrs={"upper": "upper", "lower": "lower"},
         )
         assert spec.output_names == ("upper", "lower")
 

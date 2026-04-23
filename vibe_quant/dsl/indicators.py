@@ -30,8 +30,11 @@ Example usage:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+_validation_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -166,7 +169,11 @@ class IndicatorSpec:
         """Validate indicator spec.
 
         A spec must be runnable via at least one execution path: ``nt_class``,
-        ``compute_fn``, or ``pandas_ta_func``.
+        ``compute_fn``, or ``pandas_ta_func``. Additional cross-field checks
+        catch the silent-fail class of bugs — e.g. a typo in
+        ``param_ranges={"perriod": ...}`` that silently excludes the
+        indicator from GA enrollment, or an ``nt_output_attrs`` key that
+        doesn't match ``output_names``.
         """
         if (
             self.nt_class is None
@@ -178,6 +185,64 @@ class IndicatorSpec:
                 "or pandas_ta_func"
             )
             raise ValueError(msg)
+
+        # param_ranges keys should exist in param_schema (catches typos
+        # that silently exclude a param from GA mutation). Logged as a
+        # warning rather than raised because STOCH intentionally uses
+        # legacy ``k_period``/``d_period`` spellings for wire-compat
+        # with ``_gene_to_indicator_config`` (see the STOCH spec comment).
+        # The warning is still loud enough to surface plugin typos in CI.
+        unknown_range_keys = set(self.param_ranges) - set(self.param_schema)
+        if unknown_range_keys:
+            _validation_logger.warning(
+                "Indicator %r has param_ranges keys not in param_schema: %s — "
+                "this is a typo unless the spec is intentionally using legacy "
+                "GA key spellings.",
+                self.name,
+                sorted(unknown_range_keys),
+            )
+
+        # nt_output_attrs keys must be declared outputs. Only enforced
+        # when the spec actually has an NT execution path — specs with
+        # ``nt_class=None`` inherit the default ``{"value": "value"}``
+        # which is dead metadata and intentionally not cleaned up.
+        if self.nt_class is not None:
+            unknown_attr_keys = set(self.nt_output_attrs) - set(self.output_names)
+            if unknown_attr_keys:
+                msg = (
+                    f"Indicator '{self.name}' has nt_output_attrs keys not in "
+                    f"output_names: {sorted(unknown_attr_keys)}"
+                )
+                raise ValueError(msg)
+
+        # primary_output, when explicitly set, must be a declared output.
+        if self.primary_output and self.primary_output not in self.output_names:
+            msg = (
+                f"Indicator '{self.name}' has primary_output "
+                f"{self.primary_output!r} not in output_names "
+                f"{self.output_names!r}"
+            )
+            raise ValueError(msg)
+
+        # computed_outputs helpers must resolve in vibe_quant.dsl.derived.
+        # Lazy-imported to avoid a cycle during module initialization.
+        if self.computed_outputs:
+            from vibe_quant.dsl import derived as _derived
+
+            missing_helpers = [
+                (out, helper)
+                for out, helper in self.computed_outputs.items()
+                if not hasattr(_derived, helper)
+            ]
+            if missing_helpers:
+                missing_str = ", ".join(
+                    f"{out}→{helper}" for out, helper in missing_helpers
+                )
+                msg = (
+                    f"Indicator '{self.name}' has computed_outputs helpers "
+                    f"not found in vibe_quant.dsl.derived: {missing_str}"
+                )
+                raise ValueError(msg)
 
 
 class IndicatorRegistry:
