@@ -426,8 +426,14 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
         cfg["slow_period"] = int(gene.parameters.get("slow_period", 26))
         cfg["signal_period"] = int(gene.parameters.get("signal_period", 9))
     elif gene.indicator_type == "STOCH":
-        cfg["period"] = int(gene.parameters.get("k_period", 14))
-        cfg["d_period"] = int(gene.parameters.get("d_period", 3))
+        # Accept legacy k_period/d_period spellings to stay wire-compatible
+        # with warm-start seeds from pre-bd-p36r discovery runs.
+        cfg["period"] = int(
+            gene.parameters.get("period_k", gene.parameters.get("k_period", 14))
+        )
+        cfg["d_period"] = int(
+            gene.parameters.get("period_d", gene.parameters.get("d_period", 3))
+        )
     elif gene.indicator_type == "BBANDS":
         cfg["period"] = int(gene.parameters.get("period", 20))
         cfg["std_dev"] = float(gene.parameters.get("std_dev", 2.0))

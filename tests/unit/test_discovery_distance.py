@@ -18,7 +18,7 @@ def _gene(ind: str = "RSI", period: int = 14, condition: ConditionType = Conditi
     if ind == "MACD":
         params = {"fast_period": 12.0, "slow_period": 26.0, "signal_period": 9.0}
     elif ind == "STOCH":
-        params = {"k_period": float(period), "d_period": 3.0}
+        params = {"period_k": float(period), "period_d": 3.0}
     return StrategyGene(
         indicator_type=ind, parameters=params, condition=condition,
         threshold=threshold, sub_value=sub_value,

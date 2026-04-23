@@ -115,9 +115,7 @@ class TestIndicatorSpec:
     def test_param_ranges_typo_logs_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A typo in param_ranges keys logs a warning (not a raise, to
-        preserve STOCH's intentional legacy ``k_period``/``d_period``
-        spellings for GA backward-compat)."""
+        """A typo in param_ranges keys logs a warning (not a raise)."""
         import logging as _logging
 
         with caplog.at_level(_logging.WARNING, logger="vibe_quant.dsl.indicators"):

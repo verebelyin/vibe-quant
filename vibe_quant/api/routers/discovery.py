@@ -60,7 +60,7 @@ _DEFAULT_INDICATOR_POOL: list[dict[str, object]] = [
     {"name": "ATR", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
     {
         "name": "Stochastic",
-        "params": {"k_period": {"min": 5, "max": 21}, "d_period": {"min": 3, "max": 9}},
+        "params": {"period_k": {"min": 5, "max": 21}, "period_d": {"min": 3, "max": 9}},
     },
     {"name": "ADX", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
     {"name": "CCI", "params": {"period": {"min": 10, "max": 40, "step": 5}}},

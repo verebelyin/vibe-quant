@@ -186,18 +186,12 @@ class IndicatorSpec:
             )
             raise ValueError(msg)
 
-        # param_ranges keys should exist in param_schema (catches typos
-        # that silently exclude a param from GA mutation). Logged as a
-        # warning rather than raised because STOCH intentionally uses
-        # legacy ``k_period``/``d_period`` spellings for wire-compat
-        # with ``_gene_to_indicator_config`` (see the STOCH spec comment).
-        # The warning is still loud enough to surface plugin typos in CI.
+        # param_ranges keys must exist in param_schema (catches typos
+        # that silently exclude a param from GA mutation).
         unknown_range_keys = set(self.param_ranges) - set(self.param_schema)
         if unknown_range_keys:
             _validation_logger.warning(
-                "Indicator %r has param_ranges keys not in param_schema: %s — "
-                "this is a typo unless the spec is intentionally using legacy "
-                "GA key spellings.",
+                "Indicator %r has param_ranges keys not in param_schema: %s — typo?",
                 self.name,
                 sorted(unknown_range_keys),
             )
@@ -744,13 +738,7 @@ def _stoch_spec() -> IndicatorSpec:
             "Values 0-100 with 20/80 OB/OS levels."
         ),
         category="Momentum",
-        # GA param ranges use the legacy ``k_period`` / ``d_period`` spelling
-        # to stay wire-compatible with ``_gene_to_indicator_config`` (which
-        # reads ``gene.parameters.get("k_period"/"d_period")``). These are
-        # distinct from the NT constructor kwargs (``period_k``/``period_d``)
-        # and the DSL schema fields (``period``/``d_period``); the spec's
-        # ``default_params`` + ``nt_kwargs_fn`` handle the NT-side mapping.
-        param_ranges={"k_period": (5.0, 21.0), "d_period": (3.0, 9.0)},
+        param_ranges={"period_k": (5.0, 21.0), "period_d": (3.0, 9.0)},
         threshold_range=(20.0, 80.0),
     )
 
