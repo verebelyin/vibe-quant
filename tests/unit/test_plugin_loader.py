@@ -49,6 +49,19 @@ def _restore_plugin_registry_state():
     saved_registry = dict(indicator_registry._indicators)  # noqa: SLF001
     saved_names = set(plugin_loader._plugin_registered_names)  # noqa: SLF001
     saved_errors = list(plugin_loader._load_errors)  # noqa: SLF001
+    # Snapshot cached plugin modules too — reload_plugins() evicts them
+    # from sys.modules, which leaks across tests: a later test that
+    # imports e.g. ``vibe_quant.dsl.plugins.example_adaptive_rsi`` would
+    # re-execute its module body and collide on ADAPTIVE_RSI since we
+    # restore the registry entry below. Restore both or neither.
+    plugin_prefixes = (
+        "vibe_quant.dsl.plugins.",
+        "vibe_quant.dsl.plugins_ext.",
+    )
+    saved_modules = {
+        name: mod for name, mod in sys.modules.items()
+        if name.startswith(plugin_prefixes)
+    }
     try:
         yield
     finally:
@@ -58,6 +71,9 @@ def _restore_plugin_registry_state():
         plugin_loader._plugin_registered_names.update(saved_names)  # noqa: SLF001
         plugin_loader._load_errors.clear()  # noqa: SLF001
         plugin_loader._load_errors.extend(saved_errors)  # noqa: SLF001
+        for mod_name in [m for m in sys.modules if m.startswith(plugin_prefixes)]:
+            del sys.modules[mod_name]
+        sys.modules.update(saved_modules)
 
 
 # ---------------------------------------------------------------------------
