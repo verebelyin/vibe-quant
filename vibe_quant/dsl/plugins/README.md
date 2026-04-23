@@ -96,6 +96,27 @@ def compute_fn(df: pd.DataFrame, params: dict[str, object]) -> pd.Series | dict[
 
 NaN values are expected during the warmup period. The compiler handles NaN filtering.
 
+### Validating output with `invoke_compute_fn`
+
+`vibe_quant.dsl.invoke_compute_fn(spec, df, params)` wraps a plugin's
+`compute_fn` with normalization + validation. Use it in tests — it:
+
+- Returns the raw `Series` / `dict[str, Series]` on success.
+- Coerces `None` to an all-NaN Series (or `dict` of NaN Series for
+  multi-output specs). No more `close * 0` shims.
+- Raises `ValueError` on length mismatches, missing multi-output keys,
+  single-output spec returning a dict, and multi-output spec returning a
+  bare Series.
+
+```python
+from vibe_quant.dsl import invoke_compute_fn
+from vibe_quant.dsl.indicators import indicator_registry
+
+spec = indicator_registry.get("MY_INDICATOR")
+out = invoke_compute_fn(spec, df, {"period": 10})
+assert len(out) == len(df)
+```
+
 ## GA auto-enrollment
 
 Set both `param_ranges` and `threshold_range` to auto-enroll in the genetic discovery pool. Leave `threshold_range=None` to exclude price-relative indicators (where threshold comparisons don't make sense).

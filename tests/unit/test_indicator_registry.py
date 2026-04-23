@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from vibe_quant.dsl.indicators import IndicatorRegistry, IndicatorSpec, indicator_registry
+from vibe_quant.dsl.indicators import (
+    IndicatorRegistry,
+    IndicatorSpec,
+    indicator_registry,
+    invoke_compute_fn,
+)
 
 
 class TestIndicatorSpec:
@@ -718,3 +725,203 @@ class TestBuiltinSpecsBackwardCompat:
             "percent_b",
             "bandwidth",
         )
+
+
+def _ohlcv_frame(n: int) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h")
+    return pd.DataFrame(
+        {
+            "open": np.ones(n),
+            "high": np.ones(n),
+            "low": np.ones(n),
+            "close": np.ones(n),
+            "volume": np.ones(n),
+        },
+        index=idx,
+    )
+
+
+class TestInvokeComputeFn:
+    """Tests for the compute_fn output-contract adapter."""
+
+    def test_single_output_valid_series(self) -> None:
+        spec = IndicatorSpec(
+            name="TEST_SINGLE",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            compute_fn=lambda df, _p: df["close"] * 2,
+        )
+        df = _ohlcv_frame(5)
+        result = invoke_compute_fn(spec, df, {"period": 3})
+        assert isinstance(result, pd.Series)
+        assert len(result) == 5
+        assert (result == 2.0).all()
+
+    def test_single_output_none_normalized_to_nan_series(self) -> None:
+        spec = IndicatorSpec(
+            name="TEST_NONE",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            compute_fn=lambda _df, _p: None,
+        )
+        df = _ohlcv_frame(4)
+        result = invoke_compute_fn(spec, df, {})
+        assert isinstance(result, pd.Series)
+        assert len(result) == 4
+        assert result.isna().all()
+        assert result.index.equals(df.index)
+
+    def test_single_output_wrong_length_raises(self) -> None:
+        spec = IndicatorSpec(
+            name="TEST_SHORT",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            compute_fn=lambda _df, _p: pd.Series([1.0, 2.0]),
+        )
+        df = _ohlcv_frame(5)
+        with pytest.raises(ValueError, match="length 2, expected 5"):
+            invoke_compute_fn(spec, df, {})
+
+    def test_multi_output_valid_dict(self) -> None:
+        def fn(df: pd.DataFrame, _p: dict[str, object]) -> dict[str, pd.Series]:
+            return {"a": df["close"], "b": df["close"] * 2}
+
+        spec = IndicatorSpec(
+            name="TEST_MULTI",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=fn,
+        )
+        df = _ohlcv_frame(4)
+        result = invoke_compute_fn(spec, df, {})
+        assert isinstance(result, dict)
+        assert set(result) == {"a", "b"}
+        assert (result["a"] == 1.0).all()
+        assert (result["b"] == 2.0).all()
+
+    def test_multi_output_none_normalized_to_nan_dict(self) -> None:
+        spec = IndicatorSpec(
+            name="TEST_MULTI_NONE",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=lambda _df, _p: None,
+        )
+        df = _ohlcv_frame(3)
+        result = invoke_compute_fn(spec, df, {})
+        assert isinstance(result, dict)
+        assert set(result) == {"a", "b"}
+        for key in ("a", "b"):
+            assert result[key].isna().all()
+            assert len(result[key]) == 3
+
+    def test_multi_output_missing_key_raises(self) -> None:
+        def fn(df: pd.DataFrame, _p: dict[str, object]) -> dict[str, pd.Series]:
+            return {"a": df["close"]}
+
+        spec = IndicatorSpec(
+            name="TEST_MULTI_MISSING",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=fn,
+        )
+        df = _ohlcv_frame(3)
+        with pytest.raises(ValueError, match="missing declared output keys"):
+            invoke_compute_fn(spec, df, {})
+
+    def test_multi_output_nested_none_normalized(self) -> None:
+        """A dict whose value is None gets normalized to a NaN series."""
+
+        def fn(df: pd.DataFrame, _p: dict[str, object]) -> dict[str, object]:
+            return {"a": df["close"], "b": None}
+
+        spec = IndicatorSpec(
+            name="TEST_MULTI_PARTIAL_NONE",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=fn,
+        )
+        df = _ohlcv_frame(4)
+        result = invoke_compute_fn(spec, df, {})
+        assert isinstance(result, dict)
+        assert (result["a"] == 1.0).all()
+        assert result["b"].isna().all()
+
+    def test_multi_output_wrong_length_raises(self) -> None:
+        def fn(_df: pd.DataFrame, _p: dict[str, object]) -> dict[str, pd.Series]:
+            return {"a": pd.Series([1.0]), "b": pd.Series([1.0])}
+
+        spec = IndicatorSpec(
+            name="TEST_MULTI_SHORT",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=fn,
+        )
+        df = _ohlcv_frame(5)
+        with pytest.raises(ValueError, match="has length 1, expected 5"):
+            invoke_compute_fn(spec, df, {})
+
+    def test_single_output_dict_return_raises(self) -> None:
+        """Single-output spec whose compute_fn returns a dict is a bug."""
+
+        def fn(df: pd.DataFrame, _p: dict[str, object]) -> dict[str, pd.Series]:
+            return {"value": df["close"]}
+
+        spec = IndicatorSpec(
+            name="TEST_SINGLE_DICT",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            compute_fn=fn,
+        )
+        df = _ohlcv_frame(3)
+        with pytest.raises(ValueError, match="returned a dict"):
+            invoke_compute_fn(spec, df, {})
+
+    def test_multi_output_bare_series_raises(self) -> None:
+        """Multi-output spec whose compute_fn returns a bare Series is a bug."""
+        spec = IndicatorSpec(
+            name="TEST_MULTI_BARE",
+            nt_class=None,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+            output_names=("a", "b"),
+            compute_fn=lambda df, _p: df["close"],
+        )
+        df = _ohlcv_frame(3)
+        with pytest.raises(ValueError, match="returned a bare Series"):
+            invoke_compute_fn(spec, df, {})
+
+    def test_raises_on_spec_without_compute_fn(self) -> None:
+        spec = IndicatorSpec(
+            name="TEST_NO_FN",
+            nt_class=object,
+            pandas_ta_func=None,
+            default_params={"period": 3},
+            param_schema={"period": int},
+        )
+        df = _ohlcv_frame(3)
+        with pytest.raises(ValueError, match="has no compute_fn"):
+            invoke_compute_fn(spec, df, {})

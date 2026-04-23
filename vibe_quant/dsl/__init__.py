@@ -49,6 +49,7 @@ from vibe_quant.dsl.indicators import (
     IndicatorRegistry,
     IndicatorSpec,
     indicator_registry,
+    invoke_compute_fn,
 )
 from vibe_quant.dsl.parser import (
     DSLParseError,
@@ -99,6 +100,7 @@ __all__ = [
     "IndicatorSpec",
     "IndicatorRegistry",
     "indicator_registry",
+    "invoke_compute_fn",
     # Condition parsing
     "Condition",
     "Operand",

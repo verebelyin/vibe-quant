@@ -1065,6 +1065,98 @@ def _volsma_spec() -> IndicatorSpec:
 
 
 # -----------------------------------------------------------------------------
+# compute_fn contract adapter — normalizes and validates plugin output.
+# -----------------------------------------------------------------------------
+
+
+def invoke_compute_fn(
+    spec: IndicatorSpec,
+    df: pd.DataFrame,
+    params: dict[str, object],
+) -> pd.Series | dict[str, pd.Series]:
+    """Invoke a spec's ``compute_fn`` with a normalized output contract.
+
+    Plugins historically differ on how they handle insufficient data —
+    KAMA/VIDYA return ``close * 0``, FRAMA returns all-NaN, ADAPTIVE_RSI
+    NaN-pads a valid tail. This adapter coerces every result to a single
+    shape so downstream code (tests, future compiler runtime) can rely on:
+
+    * Single-output specs → a ``pd.Series`` with the same index as ``df``.
+    * Multi-output specs → a ``dict[str, pd.Series]`` keyed by every name
+      in ``spec.output_names``, each Series indexed like ``df``.
+    * ``None`` → all-NaN fill with the correct shape.
+
+    Raises ``ValueError`` if the plugin returns the wrong shape (Series
+    length mismatch, dict missing a declared output key, single-output
+    spec returning a dict, or multi-output spec returning a bare Series).
+
+    Designed for test harnesses and downstream runtime adoption. Does not
+    mutate the spec or the input frame.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if spec.compute_fn is None:
+        msg = f"Indicator {spec.name!r} has no compute_fn"
+        raise ValueError(msg)
+
+    n = len(df.index)
+    multi = len(spec.output_names) > 1
+    result = spec.compute_fn(df, params)
+
+    def _nan_series() -> pd.Series:
+        return pd.Series(np.full(n, np.nan, dtype=np.float64), index=df.index)
+
+    if result is None:
+        if multi:
+            return {name: _nan_series() for name in spec.output_names}
+        return _nan_series()
+
+    if isinstance(result, dict):
+        if not multi:
+            msg = (
+                f"Indicator {spec.name!r} compute_fn returned a dict but "
+                f"spec declares a single output {spec.output_names!r}"
+            )
+            raise ValueError(msg)
+        missing = [name for name in spec.output_names if name not in result]
+        if missing:
+            msg = (
+                f"Indicator {spec.name!r} compute_fn returned dict missing "
+                f"declared output keys: {missing}"
+            )
+            raise ValueError(msg)
+        normalized: dict[str, pd.Series] = {}
+        for key in spec.output_names:
+            series = result[key]
+            if series is None:
+                normalized[key] = _nan_series()
+                continue
+            if len(series) != n:
+                msg = (
+                    f"Indicator {spec.name!r} compute_fn output {key!r} "
+                    f"has length {len(series)}, expected {n}"
+                )
+                raise ValueError(msg)
+            normalized[key] = series
+        return normalized
+
+    if multi:
+        msg = (
+            f"Indicator {spec.name!r} declares multi-output "
+            f"{spec.output_names!r} but compute_fn returned a bare Series"
+        )
+        raise ValueError(msg)
+    if len(result) != n:
+        msg = (
+            f"Indicator {spec.name!r} compute_fn returned Series of "
+            f"length {len(result)}, expected {n}"
+        )
+        raise ValueError(msg)
+    return result
+
+
+# -----------------------------------------------------------------------------
 # Public name-suggestion helper (ported from indicator_metadata.py in P7).
 # Pure name logic — uses only the registry for the period lookup.
 # -----------------------------------------------------------------------------
