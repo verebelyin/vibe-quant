@@ -21,11 +21,13 @@ from vibe_quant.discovery.genome import (
     serializable_to_chromosome,
 )
 from vibe_quant.discovery.operators import (
+    _MA_CONDITION_TYPES,
     ConditionType,
     Direction,
     PriceVsMAConditionGene,
     StrategyGene,
     _repair_chromosome,
+    crossover,
     is_valid_chromosome,
     mutate,
 )
@@ -223,3 +225,135 @@ def test_mutation_fuzz_every_mutant_compiles() -> None:
         dsl = validate_strategy_dict(dsl_dict)
         source = compiler.compile(dsl)
         assert "class " in source
+
+
+# ---------------------------------------------------------------------------
+# Edge case 1 — cross genes in BOTH entry and exit slots of one chromosome
+# ---------------------------------------------------------------------------
+
+
+def test_entry_and_exit_cross_coexist() -> None:
+    """An entry-side cross and an exit-side cross must not collide on names."""
+    chrom = _make_cross_chrom("KAMA", 10.0, 30.0)
+    chrom.ma_exit_genes = [
+        PriceVsMAConditionGene(
+            indicator_type="VIDYA",
+            parameters={"period": 7.0},
+            op=ConditionType.LT,
+            parameters_slow={"period": 21.0},
+        )
+    ]
+    assert is_valid_chromosome(chrom)
+
+    dsl_dict = chromosome_to_dsl(chrom)
+    dsl_dict["timeframe"] = "5m"
+    dsl_dict["name"] = "e2e_entry_exit_cross"
+    dsl = validate_strategy_dict(dsl_dict)
+
+    indicator_names = list(dsl.indicators.keys())
+    # All 4 MA legs present, all uniquely named
+    assert "kama_ma_entry_0_fast" in indicator_names
+    assert "kama_ma_entry_0_slow" in indicator_names
+    assert "vidya_ma_exit_0_fast" in indicator_names
+    assert "vidya_ma_exit_0_slow" in indicator_names
+    assert len(indicator_names) == len(set(indicator_names))
+
+    StrategyCompiler().compile_to_module(dsl)
+
+
+# ---------------------------------------------------------------------------
+# Edge case 2 — boundary periods (pool min/max and tight adjacency)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("ma_kind", "p_fast", "p_slow"),
+    [
+        ("KAMA", 5.0, 50.0),     # pool min vs pool max
+        ("FRAMA", 6.0, 50.0),    # FRAMA's own min (6) vs max (50)
+        ("VIDYA", 5.0, 6.0),     # tight adjacency (min, min+1)
+        ("KAMA", 49.0, 50.0),    # tight adjacency at the top
+    ],
+)
+def test_boundary_periods_compile(ma_kind: str, p_fast: float, p_slow: float) -> None:
+    chrom = _make_cross_chrom(ma_kind, p_fast, p_slow)
+    assert is_valid_chromosome(chrom)
+
+    dsl_dict = chromosome_to_dsl(chrom)
+    dsl_dict["timeframe"] = "5m"
+    dsl_dict["name"] = f"e2e_boundary_{ma_kind.lower()}_{int(p_fast)}_{int(p_slow)}"
+    StrategyCompiler().compile_to_module(validate_strategy_dict(dsl_dict))
+
+
+# ---------------------------------------------------------------------------
+# Edge case 3 — direction=BOTH emits cross to both long and short entries
+# ---------------------------------------------------------------------------
+
+
+def test_direction_both_emits_cross_to_long_and_short() -> None:
+    chrom = _make_cross_chrom("KAMA", 10.0, 30.0)
+    chrom.direction = Direction.BOTH
+
+    dsl_dict = chromosome_to_dsl(chrom)
+    long_cond = dsl_dict["entry_conditions"]["long"]  # type: ignore[index]
+    short_cond = dsl_dict["entry_conditions"]["short"]  # type: ignore[index]
+
+    cross_expr = "kama_ma_entry_0_fast > kama_ma_entry_0_slow"
+    assert cross_expr in long_cond
+    assert cross_expr in short_cond
+
+    dsl_dict["timeframe"] = "5m"
+    dsl_dict["name"] = "e2e_direction_both"
+    StrategyCompiler().compile_to_module(validate_strategy_dict(dsl_dict))
+
+
+# ---------------------------------------------------------------------------
+# Edge case 4 — every valid cross op compiles
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("op", _MA_CONDITION_TYPES, ids=lambda c: c.value)
+def test_every_cross_op_compiles(op: ConditionType) -> None:
+    chrom = _make_cross_chrom("KAMA", 10.0, 30.0)
+    chrom.ma_entry_genes[0].op = op
+
+    dsl_dict = chromosome_to_dsl(chrom)
+    # Emitted condition must use the op's DSL spelling
+    entry_long = dsl_dict["entry_conditions"]["long"]  # type: ignore[index]
+    assert any("kama_ma_entry_0_fast" in c and "kama_ma_entry_0_slow" in c for c in entry_long)
+
+    dsl_dict["timeframe"] = "5m"
+    dsl_dict["name"] = f"e2e_op_{op.value.replace('>', 'gt').replace('<', 'lt')}"
+    StrategyCompiler().compile_to_module(validate_strategy_dict(dsl_dict))
+
+
+# ---------------------------------------------------------------------------
+# Edge case 5 — crossover of two cross parents preserves invariant + compiles
+# ---------------------------------------------------------------------------
+
+
+def test_crossover_of_two_cross_parents_compiles() -> None:
+    """50 random crossovers of two cross-shaped parents must each compile."""
+    random.seed(321)
+    parent_a = _make_cross_chrom("KAMA", 8.0, 28.0)
+    parent_b = _make_cross_chrom("VIDYA", 12.0, 40.0)
+    compiler = StrategyCompiler()
+
+    for i in range(50):
+        child_a, child_b = crossover(parent_a, parent_b)
+        for label, child in (("a", child_a), ("b", child_b)):
+            if not is_valid_chromosome(child):
+                child = _repair_chromosome(child)
+            for g in child.ma_entry_genes + child.ma_exit_genes:
+                if g.parameters_slow is not None:
+                    p_fast = g.parameters.get("period")
+                    p_slow = g.parameters_slow.get("period")
+                    if p_fast is not None and p_slow is not None:
+                        assert p_fast < p_slow, (
+                            f"iter {i} child {label}: invariant broken "
+                            f"fast={p_fast} slow={p_slow}"
+                        )
+            dsl_dict = chromosome_to_dsl(child)
+            dsl_dict["timeframe"] = "5m"
+            dsl_dict["name"] = f"e2e_xo_{i}_{label}"
+            compiler.compile(validate_strategy_dict(dsl_dict))
