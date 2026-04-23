@@ -30,6 +30,8 @@ class DiscoveryLaunchRequest(BaseModel):
     entropy_threshold: float = 0.4  # population entropy below this triggers immigrant injection
     crowding_enabled: bool = True  # deterministic crowding selection (vs classic tournament)
     seed_run_id: int | None = None  # warm-start GA from top chromosomes of prior run
+    no_bootstrap_ci: bool = False  # True disables bootstrap-CI hard gate (low-budget regimes)
+    bootstrap_min_sharpe: float | None = None  # override timeframe-aware default (0.5 for 1m, 1.0 otherwise)
 
 
 class DiscoveryJobResponse(BaseModel):

@@ -5,22 +5,27 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
   DataTag,
   DefinedInitialDataOptions,
   DefinedUseQueryResult,
+  MutationFunction,
   QueryClient,
   QueryFunction,
   QueryKey,
   UndefinedInitialDataOptions,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
 
 import type {
-  IndicatorCatalogResponse
+  IndicatorCatalogResponse,
+  ReloadPluginCatalogApiIndicatorsReloadPost200
 } from '.././models';
 
 import { customInstance } from '../../client';
@@ -145,3 +150,92 @@ export function useGetCatalogApiIndicatorsCatalogGet<TData = Awaited<ReturnType<
 
 
 
+/**
+ * Re-import every plugin module under ``vibe_quant/dsl/plugins/``.
+
+Dev-mode convenience: edit a plugin file, POST to this endpoint, and
+the registry picks up the new spec without a backend restart.
+Built-in indicators are left untouched; only plugin-registered specs
+are unregistered and reimported. The response echoes the loaded
+module list and any load errors for quick diagnosis.
+ * @summary Reload Plugin Catalog
+ */
+export type reloadPluginCatalogApiIndicatorsReloadPostResponse200 = {
+  data: ReloadPluginCatalogApiIndicatorsReloadPost200
+  status: 200
+}
+
+export type reloadPluginCatalogApiIndicatorsReloadPostResponseSuccess = (reloadPluginCatalogApiIndicatorsReloadPostResponse200) & {
+  headers: Headers;
+};
+;
+
+export type reloadPluginCatalogApiIndicatorsReloadPostResponse = (reloadPluginCatalogApiIndicatorsReloadPostResponseSuccess)
+
+export const getReloadPluginCatalogApiIndicatorsReloadPostUrl = () => {
+
+
+  
+
+  return `/api/indicators/reload`
+}
+
+export const reloadPluginCatalogApiIndicatorsReloadPost = async ( options?: RequestInit): Promise<reloadPluginCatalogApiIndicatorsReloadPostResponse> => {
+  
+  return customInstance<reloadPluginCatalogApiIndicatorsReloadPostResponse>(getReloadPluginCatalogApiIndicatorsReloadPostUrl(),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getReloadPluginCatalogApiIndicatorsReloadPostMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>, TError,void, TContext> => {
+
+const mutationKey = ['reloadPluginCatalogApiIndicatorsReloadPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>, void> = () => {
+          
+
+          return  reloadPluginCatalogApiIndicatorsReloadPost(requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReloadPluginCatalogApiIndicatorsReloadPostMutationResult = NonNullable<Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>>
+    
+    export type ReloadPluginCatalogApiIndicatorsReloadPostMutationError = unknown
+
+    /**
+ * @summary Reload Plugin Catalog
+ */
+export const useReloadPluginCatalogApiIndicatorsReloadPost = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof reloadPluginCatalogApiIndicatorsReloadPost>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReloadPluginCatalogApiIndicatorsReloadPostMutationOptions(options), queryClient);
+    }
+    

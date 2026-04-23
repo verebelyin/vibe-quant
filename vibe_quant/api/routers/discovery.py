@@ -258,6 +258,10 @@ async def launch_discovery(
         params["crowding_enabled"] = False
     if body.seed_run_id is not None:
         params["seed_run_id"] = body.seed_run_id
+    if body.no_bootstrap_ci:
+        params["no_bootstrap_ci"] = True
+    if body.bootstrap_min_sharpe is not None:
+        params["bootstrap_min_sharpe"] = body.bootstrap_min_sharpe
 
     symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
@@ -334,6 +338,10 @@ async def launch_discovery(
         command.append("--no-crowding")
     if body.seed_run_id is not None:
         command.extend(["--seed-from-run", str(body.seed_run_id)])
+    if body.no_bootstrap_ci:
+        command.append("--no-bootstrap-ci")
+    if body.bootstrap_min_sharpe is not None:
+        command.extend(["--bootstrap-min-sharpe", str(body.bootstrap_min_sharpe)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)

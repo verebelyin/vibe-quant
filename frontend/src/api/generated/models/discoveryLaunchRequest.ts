@@ -30,4 +30,6 @@ export interface DiscoveryLaunchRequest {
   entropy_threshold?: number;
   crowding_enabled?: boolean;
   seed_run_id?: number | null;
+  no_bootstrap_ci?: boolean;
+  bootstrap_min_sharpe?: number | null;
 }

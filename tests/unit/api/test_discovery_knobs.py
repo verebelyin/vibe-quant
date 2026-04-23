@@ -153,6 +153,57 @@ async def test_warm_start_400_when_compiler_mismatch(
     assert "compiler_version" in r.json()["detail"]
 
 
+async def test_bootstrap_ci_flags_pass_through_to_params_and_command(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """bd-l8ka: no_bootstrap_ci + bootstrap_min_sharpe land in run params AND CLI command."""
+    ac, state, job_mgr = client
+
+    body = {
+        **_BASE_BODY,
+        "no_bootstrap_ci": True,
+        "bootstrap_min_sharpe": 0.75,
+    }
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        r = await ac.post("/api/discovery/launch", json=body)
+
+    assert r.status_code == 201, r.text
+    run = state.get_backtest_run(r.json()["run_id"])
+    assert run is not None
+    params = run["parameters"]
+    assert params["no_bootstrap_ci"] is True
+    assert params["bootstrap_min_sharpe"] == 0.75
+
+    args = mock_popen.call_args.args[0]
+    assert "--no-bootstrap-ci" in args
+    assert "--bootstrap-min-sharpe" in args
+    assert args[args.index("--bootstrap-min-sharpe") + 1] == "0.75"
+
+
+async def test_bootstrap_ci_defaults_dont_add_cli_flags(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """Defaults (no_bootstrap_ci=False, bootstrap_min_sharpe=None) don't inject flags."""
+    ac, _state, job_mgr = client
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        r = await ac.post("/api/discovery/launch", json=_BASE_BODY)
+
+    assert r.status_code == 201, r.text
+    args = mock_popen.call_args.args[0]
+    assert "--no-bootstrap-ci" not in args
+    assert "--bootstrap-min-sharpe" not in args
+
+
 async def test_warm_start_passes_through_when_compiler_matches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:

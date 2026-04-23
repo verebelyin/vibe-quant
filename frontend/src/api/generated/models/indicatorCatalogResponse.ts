@@ -5,6 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { IndicatorCatalogEntry } from './indicatorCatalogEntry';
+import type { PluginLoadErrorEntry } from './pluginLoadErrorEntry';
 
 /**
  * Wrapper response returned by ``GET /api/indicators/catalog``.
@@ -13,4 +14,6 @@ export interface IndicatorCatalogResponse {
   indicators: IndicatorCatalogEntry[];
   /** Ordered category list for grouped rendering in the UI */
   categories?: string[];
+  /** Plugins that failed to import at startup; empty on healthy installs */
+  plugin_errors?: PluginLoadErrorEntry[];
 }

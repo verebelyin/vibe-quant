@@ -72,6 +72,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // Warm-start (E5)
   const [seedRunId, setSeedRunId] = useState<string>("");
 
+  // Bootstrap CI gate (bd-l8ka): low-budget regimes (4h/pop=12/gens=8) rarely
+  // reach the 100-trade threshold; operators bypass via these footgun flags.
+  const [noBootstrapCi, setNoBootstrapCi] = useState(false);
+  const [bootstrapMinSharpe, setBootstrapMinSharpe] = useState<string>("");
+
   const parsedCrossWindowMonths = crossWindowMonths
     .split(",")
     .map((s) => Number.parseInt(s.trim(), 10))
@@ -175,6 +180,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           ...(seedRunId.trim() !== "" &&
             Number.isFinite(Number(seedRunId)) && {
               seed_run_id: Number(seedRunId),
+            }),
+          ...(noBootstrapCi && { no_bootstrap_ci: true }),
+          ...(bootstrapMinSharpe.trim() !== "" &&
+            Number.isFinite(Number(bootstrapMinSharpe)) && {
+              bootstrap_min_sharpe: Number(bootstrapMinSharpe),
             }),
         } as DiscoveryLaunchRequest,
       },
@@ -697,6 +707,41 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   </p>
                 )}
               </div>
+            </div>
+
+            <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Bootstrap CI Gate (footguns)
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex items-center gap-2 pt-5">
+                  <Checkbox
+                    id="no-bootstrap-ci"
+                    checked={noBootstrapCi}
+                    onCheckedChange={(v) => setNoBootstrapCi(v === true)}
+                  />
+                  <Label htmlFor="no-bootstrap-ci" className="text-xs cursor-pointer">
+                    Disable bootstrap CI gate
+                  </Label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bootstrap-min-sharpe">Min Sharpe (CI lower bound)</Label>
+                  <Input
+                    id="bootstrap-min-sharpe"
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    placeholder="auto (0.5 for 1m, 1.0 otherwise)"
+                    value={bootstrapMinSharpe}
+                    onChange={(e) => setBootstrapMinSharpe(e.target.value)}
+                    disabled={noBootstrapCi}
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Low-budget runs (4h/pop=12/gens=8) rarely reach 100 trades and lose all
+                champions to the CI lower-bound gate. Disable only when you know what you're doing.
+              </p>
             </div>
           </div>
         )}
