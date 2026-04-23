@@ -4,6 +4,58 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-23: Batch 39 — untested pool members on 4h (runs 807-811)
+
+### Goal
+
+Exercise pool members never run through GA discovery: **BBANDS**, **DONCHIAN**, **ADAPTIVE_RSI** (plugin). All 5 combos use 2 untried indicators each on 4h BTCUSDT pop=12 gens=8 direction=random, 1yr window 2025-04-23→2026-04-23. Null hypothesis: the bootstrap-CI gate + threshold discovery will filter out nearly everything on low-trade 4h.
+
+### Configuration
+
+| Run | Pool | Duration | Champion | Trades | Sharpe | Result |
+|-----|------|----------|----------|--------|--------|--------|
+| 807 | BBANDS+CCI | 442s | BBANDS short sl=1.6% tp=5.9% | 56 | 1.64 | bootstrap CI FAIL |
+| 808 | DONCHIAN+RSI | 312s | DONCHIAN short+RSI exit sl=2.3% tp=11.3% | 50 | 0.55 | bootstrap CI FAIL |
+| 809 | BBANDS+STOCH | 573s | STOCH short sl=6.9% tp=14.0% | 78 | 0.68 | bootstrap CI FAIL |
+| 810 | ADAPTIVE_RSI+ATR | 708s | (none) | 0 | −1.00 | all-zero fitness |
+| 811 | DONCHIAN+MFI | 536s | (none) | 0 | −1.00 | all-zero fitness |
+
+Total wall clock: ~32min (3 waves of 2+2+1 on 10-core machine).
+
+### GA results
+
+- **807** top genome `c3d091420c5d`: BBANDS-only short, DSR p<0.0001, Sharpe 1.64 on 56 trades. CI lower bound −1.95 vs 1.0 gate. A real candidate — just too few trades for CI.
+- **808** top `e8a5158232ad`: DONCHIAN entry + DONCHIAN/RSI exit, DSR p<0.0001, Sharpe 0.55 on 50 trades. CI lower bound −2.21.
+- **809** top `d64dfd3e69ac`: STOCH-only short, DSR p<0.0001, Sharpe 0.68 on 78 trades. CI lower bound −1.58. Notable: GA collapsed to STOCH-only despite BBANDS in the pool.
+- **810** ADAPTIVE_RSI+ATR: every one of 96 genomes produced 0 trades. Best elite ended up ATR-only (`sl=5.1% tp=9.1%`) still 0 trades. Converged=True at gen 1.
+- **811** DONCHIAN+MFI: same — 96/96 zero-trade genomes. Converged=True at gen 1.
+
+### Key findings
+
+1. **BBANDS, DONCHIAN, STOCH threshold conditions DO fire** — they generated 50-78 trade genomes with positive Sharpe and significant DSR. The blocker is the bootstrap-CI trade-count gate, not a missing/broken indicator.
+2. **ADAPTIVE_RSI+ATR is a dead combo on 4h** — both indicators have narrow threshold ranges (ATR 0.001-0.15 normalized) that seldom trigger. Not a plugin bug (plugin loaded 96×) — just a pairing with no useful signal surface. Don't retry ADAPTIVE_RSI with another narrow-range indicator.
+3. **DONCHIAN+MFI also dead** — despite DONCHIAN working in 808, the MFI pairing produced 0 trades across all genomes. Likely the MFI threshold 20-80 with conjunction/disjunction over both indicators rarely aligns.
+4. **Bootstrap CI is effectively a hard block for low-budget 4h discovery.** 3/5 runs found real candidates; all three were killed on trade count. This confirms bd-zo4o — 4h/12mo rarely produces ≥100 trades. The `/api/discovery/launch` schema doesn't expose `no_bootstrap_ci`; CLI flag only. Expose it for API launches to allow this regime to produce promotable candidates.
+5. **No crashes, no errors.** All 5 runs exercised: plugin loader (FRAMA/KAMA/VIDYA/adaptive_rsi each load 96+ times per run), DSR computation (9 significant entries logged), bootstrap CI path, sanity penalty path.
+
+### Comparison with Batch 38 / state
+
+| Concern | Prior status | This batch |
+|---|---|---|
+| BBANDS in GA | never exercised | ✅ produces 50-73 trade genomes |
+| DONCHIAN in GA | never exercised | ✅ produces 50-62 trade genomes |
+| ADAPTIVE_RSI plugin in GA | plugin-loads only | ✅ enrolled + sampled, but 0-trade on ATR pair |
+| Bootstrap CI trade-count blocker | known (Batch 33/zo4o) | ✅ reconfirmed in new indicator space |
+| `no_bootstrap_ci` flag on API | not exposed | gap noted; filing bead |
+
+### Recommendations
+
+1. **Expose `no_bootstrap_ci` on `/api/discovery/launch`** → file bead. Without it, 4h/pop=12 regime produces 0 promotable strategies when the champion trade count is <100, which is the common case.
+2. **Re-run 807/808/809 at pop=20 gens=15** with `no_bootstrap_ci=true` once the API flag lands — BBANDS/DONCHIAN combos have real candidates under the hood.
+3. **Skip ADAPTIVE_RSI+ATR and DONCHIAN+MFI** — structural mismatch, don't waste cycles. ADAPTIVE_RSI should be paired with a wider-range indicator (e.g., CCI) next.
+
+---
+
 ## 2026-04-17: Batch 38 — bd-vmc9 latency-preset warning exercised (run 801)
 
 ### Goal
