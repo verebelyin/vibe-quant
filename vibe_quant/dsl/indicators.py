@@ -284,6 +284,17 @@ class IndicatorRegistry:
 
         return decorator
 
+    def unregister(self, name: str) -> bool:
+        """Remove an indicator spec from the registry.
+
+        Args:
+            name: Indicator name (case-insensitive).
+
+        Returns:
+            True if a spec was removed, False if the name was unknown.
+        """
+        return self._indicators.pop(name.upper(), None) is not None
+
     def register_spec(self, spec: IndicatorSpec, *, override: bool = False) -> None:
         """Directly register an indicator spec.
 

@@ -18,7 +18,7 @@ from vibe_quant.api.schemas.indicators import (
     PluginLoadErrorEntry,
 )
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
-from vibe_quant.dsl.plugin_loader import get_load_errors
+from vibe_quant.dsl.plugin_loader import get_load_errors, reload_plugins
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +71,25 @@ def get_catalog() -> IndicatorCatalogResponse:
     return IndicatorCatalogResponse(
         indicators=entries, plugin_errors=plugin_errors
     )
+
+
+@router.post("/reload")
+def reload_plugin_catalog() -> dict[str, object]:
+    """Re-import every plugin module under ``vibe_quant/dsl/plugins/``.
+
+    Dev-mode convenience: edit a plugin file, POST to this endpoint, and
+    the registry picks up the new spec without a backend restart.
+    Built-in indicators are left untouched; only plugin-registered specs
+    are unregistered and reimported. The response echoes the loaded
+    module list and any load errors for quick diagnosis.
+    """
+    loaded = reload_plugins()
+    errors = [
+        {
+            "module": err.module,
+            "error_type": err.error_type,
+            "message": err.message,
+        }
+        for err in get_load_errors()
+    ]
+    return {"loaded": loaded, "errors": errors}

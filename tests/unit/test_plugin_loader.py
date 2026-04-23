@@ -21,6 +21,8 @@ import sys
 import types
 from typing import TYPE_CHECKING
 
+import pytest
+
 from vibe_quant.dsl import plugin_loader
 from vibe_quant.dsl.indicators import indicator_registry
 
@@ -29,6 +31,32 @@ if TYPE_CHECKING:
 
     from _pytest.logging import LogCaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
+
+
+@pytest.fixture(autouse=True)
+def _restore_plugin_registry_state():
+    """Snapshot and restore the registry + plugin-tracking state.
+
+    ``reload_plugins()`` in particular will unregister whatever is in
+    ``_plugin_registered_names``, which at module import time got
+    populated from the REAL plugin dir. Tests in this file monkeypatch
+    the plugins package to a throwaway fake, so without this fixture a
+    ``reload_plugins()`` call would unregister real-world KAMA/VIDYA/
+    FRAMA/ADAPTIVE_RSI specs and never restore them — poisoning later
+    tests in the sweep.
+    """
+    saved_registry = dict(indicator_registry._indicators)  # noqa: SLF001
+    saved_names = set(plugin_loader._plugin_registered_names)  # noqa: SLF001
+    saved_errors = list(plugin_loader._load_errors)  # noqa: SLF001
+    try:
+        yield
+    finally:
+        indicator_registry._indicators.clear()  # noqa: SLF001
+        indicator_registry._indicators.update(saved_registry)  # noqa: SLF001
+        plugin_loader._plugin_registered_names.clear()  # noqa: SLF001
+        plugin_loader._plugin_registered_names.update(saved_names)  # noqa: SLF001
+        plugin_loader._load_errors.clear()  # noqa: SLF001
+        plugin_loader._load_errors.extend(saved_errors)  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +242,85 @@ def test_strict_mode_reraises_plugin_load_failure(
 
     with pytest.raises(RuntimeError, match="strict-mode failure"):
         plugin_loader.load_builtin_plugins()
+
+
+# ---------------------------------------------------------------------------
+# 7. reload_plugins picks up edits without polluting the registry
+# ---------------------------------------------------------------------------
+
+
+def test_reload_plugins_picks_up_edited_spec(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Edit a plugin file on disk, call ``reload_plugins()``, and the
+    updated spec must replace the previous one without re-raising a
+    collision error."""
+    pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_reload", monkeypatch)
+    (pkg_dir / "my_ind.py").write_text(
+        "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+        "def _c(df, params):  # noqa: ARG001\n"
+        "    return df['close']\n"
+        "indicator_registry.register_spec(\n"
+        "    IndicatorSpec(\n"
+        "        name='RELOAD_TEST',\n"
+        "        nt_class=None,\n"
+        "        pandas_ta_func=None,\n"
+        "        default_params={'period': 10},\n"
+        "        param_schema={'period': int},\n"
+        "        compute_fn=_c,\n"
+        "    )\n"
+        ")\n"
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+    first = indicator_registry.get("RELOAD_TEST")
+    assert first is not None
+    assert first.default_params == {"period": 10}
+
+    # Rewrite the plugin with a different default period. reload_plugins
+    # wipes the __pycache__ directory so stale .pyc bytecode can't be
+    # served even on filesystems whose mtime resolution is too coarse to
+    # distinguish two writes within the same millisecond.
+    plugin_path = pkg_dir / "my_ind.py"
+    plugin_path.write_text(
+        "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+        "def _c(df, params):  # noqa: ARG001\n"
+        "    return df['close']\n"
+        "indicator_registry.register_spec(\n"
+        "    IndicatorSpec(\n"
+        "        name='RELOAD_TEST',\n"
+        "        nt_class=None,\n"
+        "        pandas_ta_func=None,\n"
+        "        default_params={'period': 42},\n"
+        "        param_schema={'period': int},\n"
+        "        compute_fn=_c,\n"
+        "    )\n"
+        ")\n"
+    )
+
+    plugin_loader.reload_plugins()
+    second = indicator_registry.get("RELOAD_TEST")
+    assert second is not None
+    assert second.default_params == {"period": 42}
+    # Clean up so other tests don't see a leaked spec.
+    indicator_registry.unregister("RELOAD_TEST")
+
+
+def test_reload_plugins_does_not_touch_builtins(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Built-in specs must survive a plugin reload — only
+    plugin-registered names get unregistered."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_reload_builtins", monkeypatch)
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    real_rsi = indicator_registry.get("RSI")
+    assert real_rsi is not None
+
+    plugin_loader.reload_plugins()
+
+    assert indicator_registry.get("RSI") is real_rsi
 
 
 # ---------------------------------------------------------------------------

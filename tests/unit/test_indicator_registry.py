@@ -126,6 +126,34 @@ class TestIndicatorSpec:
             "perriod" in record.getMessage() for record in caplog.records
         ), "Expected warning about param_ranges typo"
 
+    def test_unregister_removes_spec(self) -> None:
+        """unregister() drops the spec and returns True; repeat returns False."""
+        registry = IndicatorRegistry()
+        spec = IndicatorSpec(
+            name="TEMP_UNREG",
+            nt_class=None,
+            pandas_ta_func="tmp",
+            default_params={},
+            param_schema={},
+        )
+        registry.register_spec(spec)
+        assert registry.get("TEMP_UNREG") is not None
+        assert registry.unregister("TEMP_UNREG") is True
+        assert registry.get("TEMP_UNREG") is None
+        assert registry.unregister("TEMP_UNREG") is False
+
+    def test_unregister_is_case_insensitive(self) -> None:
+        registry = IndicatorRegistry()
+        spec = IndicatorSpec(
+            name="TEMP_CASE",
+            nt_class=None,
+            pandas_ta_func="tmp",
+            default_params={},
+            param_schema={},
+        )
+        registry.register_spec(spec)
+        assert registry.unregister("temp_case") is True
+
     def test_valid_computed_output_helper_passes(self) -> None:
         """Referencing an existing derived helper must not raise."""
         # compute_percent_b lives in vibe_quant.dsl.derived — real builtin.
