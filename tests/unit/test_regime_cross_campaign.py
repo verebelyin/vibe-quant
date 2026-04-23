@@ -21,6 +21,38 @@ from vibe_quant.discovery.campaign import (
     plan_oos_validations,
     run_campaign,
 )
+from vibe_quant.jobs.manager import JobStatus
+
+
+class _FakeJobManager:
+    """Drop-in for BacktestJobManager in tests — records calls, never spawns."""
+
+    def __init__(self, db_path: Path | None = None) -> None:  # noqa: ARG002
+        self.calls: list[dict[str, object]] = []
+        self._pid_seq = 10000
+
+    def start_job(
+        self, run_id: int, job_type: str, command: list[str],
+        log_file: str | None = None, env: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> int:
+        self._pid_seq += 1
+        self.calls.append(
+            {"run_id": run_id, "job_type": job_type, "command": list(command),
+             "log_file": log_file}
+        )
+        return self._pid_seq
+
+    def is_process_alive(self, pid: int) -> bool:  # noqa: ARG002
+        return False
+
+    def sync_job_status(self, run_id: int) -> JobStatus | None:  # noqa: ARG002
+        return JobStatus.COMPLETED
+
+    def get_status(self, run_id: int) -> JobStatus | None:  # noqa: ARG002
+        return JobStatus.COMPLETED
+
+    def close(self) -> None:
+        return None
 
 
 @pytest.fixture()
@@ -276,14 +308,13 @@ def test_run_campaign_skips_completed_runs(
             state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}]
         )
 
-    with patch("vibe_quant.discovery.campaign.subprocess.run") as m_run:
-        m_run.return_value.returncode = 0
-        run_campaign(plan, state, skip_existing=True)
-        # Discoveries all skipped → only OOS subprocess calls (2 × 1)
-        assert m_run.call_count == 2
-        for call in m_run.call_args_list:
-            cmd = call.args[0]
-            assert "vibe_quant.validation" in cmd
+    fake = _FakeJobManager()
+    run_campaign(plan, state, skip_existing=True, job_manager=fake)
+    # Discoveries all skipped → only OOS subprocess calls (2 × 1)
+    assert len(fake.calls) == 2
+    for call in fake.calls:
+        assert "vibe_quant.validation" in call["command"]
+        assert call["job_type"] == "validation"
 
 
 def test_run_campaign_runs_discoveries_when_not_completed(
@@ -291,25 +322,64 @@ def test_run_campaign_runs_discoveries_when_not_completed(
 ) -> None:
     plan = plan_campaign(minimal_config, state)
 
-    def _fake_run(cmd, **_kwargs):
-        # First time through we're running discoveries. Mark run completed
-        # and seed results so the OOS phase can plan + run.
-        run_id = int(cmd[cmd.index("--run-id") + 1])
-        if "vibe_quant.discovery" in cmd:
-            state.update_backtest_run_status(run_id, "completed")
-            _seed_discovery_result(
-                state, run_id,
-                [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}],
-            )
-        from unittest.mock import MagicMock
-        res = MagicMock()
-        res.returncode = 0
-        return res
+    class _RecordingManager(_FakeJobManager):
+        def start_job(self, run_id, job_type, command, log_file=None, env=None):  # noqa: ARG002
+            pid = super().start_job(run_id, job_type, command, log_file=log_file)
+            # Simulate discovery finishing: mark completed + seed results so
+            # the OOS phase can plan + run.
+            if "vibe_quant.discovery" in command:
+                state.update_backtest_run_status(run_id, "completed")
+                _seed_discovery_result(
+                    state, run_id,
+                    [{"dsl": _valid_dsl(f"s_{run_id}"), "score": 0.9}],
+                )
+            return pid
 
-    with patch("vibe_quant.discovery.campaign.subprocess.run", side_effect=_fake_run) as m_run:
-        run_campaign(plan, state, skip_existing=True)
-        # 2 discoveries + 2 OOS validations
-        assert m_run.call_count == 4
+    fake = _RecordingManager()
+    run_campaign(plan, state, skip_existing=True, job_manager=fake)
+    # 2 discoveries + 2 OOS validations
+    assert len(fake.calls) == 4
+    job_types = [c["job_type"] for c in fake.calls]
+    assert job_types.count("discovery") == 2
+    assert job_types.count("validation") == 2
+
+
+def test_run_campaign_registers_jobs_in_background_jobs_table(
+    state: StateManager, minimal_config: RegimeCrossConfig, tmp_path: Path
+) -> None:
+    """bd-2qqt: campaign runs must be recorded in ``background_jobs`` so they
+    show up in the UI active-jobs panel and are reachable by the per-run
+    kill endpoints."""
+    from vibe_quant.jobs.manager import BacktestJobManager
+
+    plan = plan_campaign(minimal_config, state)
+    # Pre-complete discoveries so we can exercise the OOS path too
+    for label, run_id in plan.discovery_runs.items():
+        state.update_backtest_run_status(run_id, "completed")
+        _seed_discovery_result(
+            state, run_id, [{"dsl": _valid_dsl(f"{label}_s"), "score": 0.9}]
+        )
+
+    # Real manager but stub out the actual process spawn
+    manager = BacktestJobManager(db_path=tmp_path / "campaign_test.db")
+    with patch(
+        "vibe_quant.jobs.manager.subprocess.Popen"
+    ) as m_popen:
+        m_popen.return_value.pid = 77777
+        with patch.object(BacktestJobManager, "is_process_alive", return_value=False), \
+             patch.object(BacktestJobManager, "sync_job_status", return_value=JobStatus.COMPLETED), \
+             patch.object(BacktestJobManager, "get_status", return_value=JobStatus.COMPLETED):
+            run_campaign(plan, state, skip_existing=True, job_manager=manager)
+
+    # All OOS run_ids should now have rows in background_jobs
+    for run_id in plan.oos_runs.values():
+        row = manager.conn.execute(
+            "SELECT pid, job_type FROM background_jobs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        assert row is not None, f"run_id={run_id} missing from background_jobs"
+        assert row["pid"] == 77777
+        assert row["job_type"] == "validation"
+    manager.close()
 
 
 # ---------------------------------------------------------------------------

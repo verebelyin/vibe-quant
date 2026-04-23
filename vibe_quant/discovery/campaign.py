@@ -35,12 +35,14 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
@@ -187,28 +189,51 @@ def plan_campaign(config: RegimeCrossConfig, state: StateManager) -> CampaignPla
     return plan
 
 
-def _run_subprocess(cmd: list[str], log_path: Path | None) -> int:
-    """Run ``cmd`` synchronously, optionally tee'ing output to ``log_path``."""
+def _run_job_via_manager(
+    run_id: int,
+    job_type: str,
+    cmd: list[str],
+    job_manager: BacktestJobManager,
+    log_path: Path | None,
+    poll_interval: float = 1.0,
+) -> int:
+    """Launch ``cmd`` through ``job_manager`` and block until it exits.
+
+    Registers the run in ``background_jobs`` so it's visible in the UI
+    active-jobs panel and reachable by the per-run kill endpoints. Polls
+    ``is_process_alive`` on the returned PID and returns 0 on
+    ``COMPLETED`` status, 1 otherwise — preserving the ``subprocess.run``
+    contract the campaign runner was written against.
+    """
     logger.info("launching: %s", " ".join(cmd))
+    log_file: str | None = None
     if log_path is not None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", encoding="utf-8") as log_fp:
-            proc = subprocess.run(
-                cmd, stdout=log_fp, stderr=subprocess.STDOUT, check=False
-            )
-    else:
-        proc = subprocess.run(cmd, check=False)
-    return proc.returncode
+        log_file = str(log_path)
+
+    pid = job_manager.start_job(run_id, job_type, cmd, log_file=log_file)
+    logger.info("campaign job registered: run_id=%d pid=%d type=%s", run_id, pid, job_type)
+
+    while job_manager.is_process_alive(pid):
+        time.sleep(poll_interval)
+
+    # Flip status from RUNNING → FAILED if subprocess died without
+    # calling mark_completed. No-op if subprocess already recorded final
+    # status.
+    job_manager.sync_job_status(run_id)
+    status = job_manager.get_status(run_id)
+    return 0 if status == JobStatus.COMPLETED else 1
 
 
 def run_discovery_subprocess(
     run_id: int,
     config: RegimeCrossConfig,
     window: TrainWindow,
+    job_manager: BacktestJobManager,
     python_bin: str = sys.executable,
     log_dir: Path | str | None = None,
 ) -> int:
-    """Launch a single discovery as a subprocess. Returns exit code."""
+    """Launch a single discovery as a tracked subprocess. Returns exit code."""
     cmd = [
         python_bin,
         "-m",
@@ -224,7 +249,7 @@ def run_discovery_subprocess(
         *config.extra_discovery_args,
     ]
     log_path = Path(log_dir) / f"regime_cross_{run_id}.log" if log_dir else None
-    rc = _run_subprocess(cmd, log_path)
+    rc = _run_job_via_manager(run_id, "discovery", cmd, job_manager, log_path)
     logger.info("discovery run_id=%d exit=%d", run_id, rc)
     return rc
 
@@ -330,13 +355,14 @@ def plan_oos_validations(
 
 def run_oos_subprocess(
     run_id: int,
+    job_manager: BacktestJobManager,
     python_bin: str = sys.executable,
     log_dir: Path | str | None = None,
 ) -> int:
-    """Launch a single validation (OOS) subprocess. Returns exit code."""
+    """Launch a single validation (OOS) tracked subprocess. Returns exit code."""
     cmd = [python_bin, "-m", "vibe_quant.validation", "--run-id", str(run_id)]
     log_path = Path(log_dir) / f"regime_cross_oos_{run_id}.log" if log_dir else None
-    rc = _run_subprocess(cmd, log_path)
+    rc = _run_job_via_manager(run_id, "validation", cmd, job_manager, log_path)
     logger.info("oos run_id=%d exit=%d", run_id, rc)
     return rc
 
@@ -346,33 +372,47 @@ def run_campaign(
     state: StateManager,
     log_dir: Path | str | None = None,
     skip_existing: bool = True,
+    job_manager: BacktestJobManager | None = None,
 ) -> CampaignPlan:
     """Execute discoveries then OOS validations sequentially.
 
     When ``skip_existing`` is true, any run already marked ``completed``
     is skipped — this makes the runner resumable after crashes.
-    """
-    # Phase 2: discoveries
-    for tw in plan.config.train_windows:
-        run_id = plan.discovery_runs[tw.label]
-        if skip_existing and _run_completed(run_id, state):
-            logger.info("skipping completed discovery run_id=%d", run_id)
-            continue
-        rc = run_discovery_subprocess(run_id, plan.config, tw, log_dir=log_dir)
-        if rc != 0:
-            logger.warning(
-                "discovery run_id=%d returned non-zero (%d); continuing", run_id, rc
-            )
 
-    # Phase 3: plan OOS once discoveries are done, then run them
-    plan_oos_validations(plan, state)
-    for key, run_id in plan.oos_runs.items():
-        if skip_existing and _run_completed(run_id, state):
-            logger.info("skipping completed oos run_id=%d (%s)", run_id, key)
-            continue
-        rc = run_oos_subprocess(run_id, log_dir=log_dir)
-        if rc != 0:
-            logger.warning("oos run_id=%d returned non-zero (%d); continuing", run_id, rc)
+    All subprocesses are registered with ``job_manager`` so they appear
+    in ``background_jobs`` and are reachable by the per-run kill endpoints.
+    When ``job_manager`` is omitted a default one is constructed; callers
+    sharing a manager (e.g. FastAPI deps) should pass their own.
+    """
+    owns_manager = job_manager is None
+    manager = job_manager or BacktestJobManager()
+    try:
+        # Phase 2: discoveries
+        for tw in plan.config.train_windows:
+            run_id = plan.discovery_runs[tw.label]
+            if skip_existing and _run_completed(run_id, state):
+                logger.info("skipping completed discovery run_id=%d", run_id)
+                continue
+            rc = run_discovery_subprocess(
+                run_id, plan.config, tw, manager, log_dir=log_dir
+            )
+            if rc != 0:
+                logger.warning(
+                    "discovery run_id=%d returned non-zero (%d); continuing", run_id, rc
+                )
+
+        # Phase 3: plan OOS once discoveries are done, then run them
+        plan_oos_validations(plan, state)
+        for key, run_id in plan.oos_runs.items():
+            if skip_existing and _run_completed(run_id, state):
+                logger.info("skipping completed oos run_id=%d (%s)", run_id, key)
+                continue
+            rc = run_oos_subprocess(run_id, manager, log_dir=log_dir)
+            if rc != 0:
+                logger.warning("oos run_id=%d returned non-zero (%d); continuing", run_id, rc)
+    finally:
+        if owns_manager:
+            manager.close()
 
     return plan
 
