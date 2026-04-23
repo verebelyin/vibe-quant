@@ -2,6 +2,16 @@
 
 Drop a `.py` file in this directory to add a custom indicator. The file is auto-imported at startup via `vibe_quant.dsl.plugin_loader`. No compiler, schema, genome, or frontend edits required.
 
+Plugins can also live outside this directory:
+
+- **`$VQ_PLUGIN_PATH`** — colon-separated list (or `os.pathsep` on Windows) of directories scanned on startup. Every non-underscore `.py` file in each directory is loaded the same way built-in drop-ins are.
+- **Python `entry_points`** — a third-party pip package can publish:
+  ```toml
+  [project.entry-points."vibe_quant.indicators"]
+  my_ind = "my_pkg.my_ind"
+  ```
+  and the module (or callable) will be imported at startup, which must `register_spec(...)` for its side effect.
+
 ## Minimal template
 
 ```python

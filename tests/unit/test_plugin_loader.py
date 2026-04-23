@@ -17,6 +17,7 @@ stays untouched.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import types
 from typing import TYPE_CHECKING
@@ -321,6 +322,216 @@ def test_reload_plugins_does_not_touch_builtins(
     plugin_loader.reload_plugins()
 
     assert indicator_registry.get("RSI") is real_rsi
+
+
+# ---------------------------------------------------------------------------
+# 8. VQ_PLUGIN_PATH discovery
+# ---------------------------------------------------------------------------
+
+
+def test_vq_plugin_path_loads_external_directory(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """A ``.py`` file under a directory listed in VQ_PLUGIN_PATH is
+    loaded and registers its spec just like a built-in plugin."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_builtin", monkeypatch)
+
+    ext_dir = tmp_path / "ext_plugins"
+    ext_dir.mkdir()
+    (ext_dir / "external_ind.py").write_text(
+        "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+        "def _c(df, params):  # noqa: ARG001\n"
+        "    return df['close']\n"
+        "indicator_registry.register_spec(\n"
+        "    IndicatorSpec(\n"
+        "        name='EXT_IND',\n"
+        "        nt_class=None,\n"
+        "        pandas_ta_func=None,\n"
+        "        default_params={'period': 7},\n"
+        "        param_schema={'period': int},\n"
+        "        compute_fn=_c,\n"
+        "    )\n"
+        ")\n"
+    )
+    monkeypatch.setenv("VQ_PLUGIN_PATH", str(ext_dir))
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+
+    spec = indicator_registry.get("EXT_IND")
+    assert spec is not None
+    assert spec.default_params == {"period": 7}
+
+
+def test_vq_plugin_path_multiple_dirs_with_colon_separator(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Two directories separated by os.pathsep both get scanned."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_multi", monkeypatch)
+
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    for dir_path, name in [(dir_a, "EXT_A"), (dir_b, "EXT_B")]:
+        (dir_path / "mod.py").write_text(
+            "from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n"
+            "def _c(df, params):  # noqa: ARG001\n"
+            "    return df['close']\n"
+            "indicator_registry.register_spec(\n"
+            "    IndicatorSpec(\n"
+            f"        name='{name}',\n"
+            "        nt_class=None,\n"
+            "        pandas_ta_func=None,\n"
+            "        default_params={'period': 7},\n"
+            "        param_schema={'period': int},\n"
+            "        compute_fn=_c,\n"
+            "    )\n"
+            ")\n"
+        )
+    monkeypatch.setenv(
+        "VQ_PLUGIN_PATH", f"{dir_a}{os.pathsep}{dir_b}"
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+
+    assert indicator_registry.get("EXT_A") is not None
+    assert indicator_registry.get("EXT_B") is not None
+
+
+def test_vq_plugin_path_invalid_dir_logs_warning(
+    tmp_path: Path, monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
+) -> None:
+    """A non-existent VQ_PLUGIN_PATH entry logs a warning but doesn't
+    take down the rest of the load."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_bad", monkeypatch)
+
+    monkeypatch.setenv(
+        "VQ_PLUGIN_PATH", str(tmp_path / "does_not_exist")
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    with caplog.at_level(
+        logging.WARNING, logger="vibe_quant.dsl.plugin_loader"
+    ):
+        plugin_loader.load_builtin_plugins()
+
+    assert any(
+        "not a directory" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_vq_plugin_path_broken_file_records_load_error(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """A broken external plugin shows up in get_load_errors()."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_envpath_broken", monkeypatch)
+
+    ext_dir = tmp_path / "ext"
+    ext_dir.mkdir()
+    (ext_dir / "broken_ext.py").write_text(
+        "raise RuntimeError('external failure')\n"
+    )
+    monkeypatch.setenv("VQ_PLUGIN_PATH", str(ext_dir))
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+
+    errors = plugin_loader.get_load_errors()
+    assert any(
+        "broken_ext" in e.module and e.error_type == "RuntimeError"
+        for e in errors
+    ), f"Expected external plugin failure in load_errors, got: {errors}"
+
+
+# ---------------------------------------------------------------------------
+# 9. entry_points discovery
+# ---------------------------------------------------------------------------
+
+
+def test_entry_points_plugin_is_loaded(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """An entry-point registered under 'vibe_quant.indicators' is loaded
+    — simulated here by stubbing ``importlib.metadata.entry_points``."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_ep_builtin", monkeypatch)
+
+    registrations: list[str] = []
+
+    def _register_via_entry_point() -> None:
+        from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+
+        def _c(df, params):  # noqa: ARG001, ANN001
+            return df["close"]
+
+        indicator_registry.register_spec(
+            IndicatorSpec(
+                name="EP_IND",
+                nt_class=None,
+                pandas_ta_func=None,
+                default_params={"period": 3},
+                param_schema={"period": int},
+                compute_fn=_c,
+            )
+        )
+        registrations.append("EP_IND")
+
+    class _FakeEP:
+        name = "my_ep"
+        value = "stub:_register_via_entry_point"
+
+        def load(self):  # noqa: ANN202
+            return _register_via_entry_point
+
+    def _fake_entry_points(*, group: str):  # noqa: ANN202
+        if group == "vibe_quant.indicators":
+            return [_FakeEP()]
+        return []
+
+    monkeypatch.setattr(
+        "importlib.metadata.entry_points", _fake_entry_points
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+
+    assert registrations == ["EP_IND"]
+    assert indicator_registry.get("EP_IND") is not None
+
+
+def test_entry_points_load_failure_is_recorded(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """If an entry-point raises on load, the error is logged and
+    surfaced via get_load_errors() without taking down the rest."""
+    _install_fake_plugin_pkg(tmp_path, "_p6test_ep_fail", monkeypatch)
+
+    class _BrokenEP:
+        name = "broken_ep"
+        value = "stub:raises"
+
+        def load(self):  # noqa: ANN202
+            msg = "entry-point load boom"
+            raise RuntimeError(msg)
+
+    def _fake_entry_points(*, group: str):  # noqa: ANN202
+        if group == "vibe_quant.indicators":
+            return [_BrokenEP()]
+        return []
+
+    monkeypatch.setattr(
+        "importlib.metadata.entry_points", _fake_entry_points
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+
+    errors = plugin_loader.get_load_errors()
+    assert any(
+        "broken_ep" in e.module and e.error_type == "RuntimeError"
+        for e in errors
+    ), f"Expected broken entry-point in load_errors, got: {errors}"
 
 
 # ---------------------------------------------------------------------------
