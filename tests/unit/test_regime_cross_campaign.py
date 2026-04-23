@@ -347,7 +347,7 @@ def test_run_campaign_runs_discoveries_when_not_completed(
 def test_run_campaign_registers_jobs_in_background_jobs_table(
     state: StateManager, minimal_config: RegimeCrossConfig, tmp_path: Path
 ) -> None:
-    """bd-2qqt: campaign runs must be recorded in ``background_jobs`` so they
+    """Campaign runs must be recorded in ``background_jobs`` so they
     show up in the UI active-jobs panel and are reachable by the per-run
     kill endpoints."""
     from vibe_quant.jobs.manager import BacktestJobManager

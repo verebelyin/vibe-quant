@@ -396,6 +396,25 @@ def _enforce_ma_cross_invariant(gene: PriceVsMAConditionGene) -> None:
         gene.parameters, gene.parameters_slow = gene.parameters_slow, gene.parameters
 
 
+def _clamp_params_to_ranges(
+    params: dict[str, float], ranges: dict[str, tuple[float, float]]
+) -> None:
+    """Clamp each ``params[name]`` in place to ``ranges[name]``; fill missing with lo."""
+    for pname, (lo, hi) in ranges.items():
+        val = params.get(pname, lo)
+        params[pname] = max(lo, min(hi, val))
+
+
+def _perturb_params_in_ranges(
+    params: dict[str, float], ranges: dict[str, tuple[float, float]], sigma: float = 0.2
+) -> None:
+    """Gaussian-perturb each param that has a range entry, in place."""
+    for pname, val in list(params.items()):
+        if pname in ranges:
+            lo, hi = ranges[pname]
+            params[pname] = _perturb(val, sigma, lo, hi)
+
+
 def _random_ma_gene() -> PriceVsMAConditionGene:
     """Generate a random price-vs-MA or ma-cross gene.
 
@@ -562,13 +581,9 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
         genes[:] = [g for g in genes if g.indicator_type in MA_POOL]
         for g in genes:
             ranges = MA_POOL[g.indicator_type].param_ranges
-            for pname, (lo, hi) in ranges.items():
-                val = g.parameters.get(pname, lo)
-                g.parameters[pname] = max(lo, min(hi, val))
+            _clamp_params_to_ranges(g.parameters, ranges)
             if g.parameters_slow is not None:
-                for pname, (lo, hi) in ranges.items():
-                    val = g.parameters_slow.get(pname, lo)
-                    g.parameters_slow[pname] = max(lo, min(hi, val))
+                _clamp_params_to_ranges(g.parameters_slow, ranges)
                 _enforce_ma_cross_invariant(g)
             if g.op not in _MA_CONDITION_TYPES:
                 g.op = random.choice(_MA_CONDITION_TYPES)
@@ -924,10 +939,7 @@ def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
             gene.parameters_slow = None
     elif mutation_type == 1:
         ranges = MA_POOL[gene.indicator_type].param_ranges
-        for pname, val in list(gene.parameters.items()):
-            if pname in ranges:
-                lo, hi = ranges[pname]
-                gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
+        _perturb_params_in_ranges(gene.parameters, ranges)
         _enforce_ma_cross_invariant(gene)
     elif mutation_type == 2:
         gene.op = _CONDITION_COMPLEMENTS.get(gene.op, random.choice(_MA_CONDITION_TYPES))
@@ -939,21 +951,14 @@ def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
         else:
             gene.parameters_slow = None
     else:
+        ranges = MA_POOL[gene.indicator_type].param_ranges
         if gene.parameters_slow is not None:
-            ranges = MA_POOL[gene.indicator_type].param_ranges
-            for pname, val in list(gene.parameters_slow.items()):
-                if pname in ranges:
-                    lo, hi = ranges[pname]
-                    gene.parameters_slow[pname] = _perturb(val, 0.2, lo, hi)
+            _perturb_params_in_ranges(gene.parameters_slow, ranges)
             _enforce_ma_cross_invariant(gene)
         else:
             # No slow leg to perturb — fall through to a fast-leg perturb
             # so the mutation step isn't wasted.
-            ranges = MA_POOL[gene.indicator_type].param_ranges
-            for pname, val in list(gene.parameters.items()):
-                if pname in ranges:
-                    lo, hi = ranges[pname]
-                    gene.parameters[pname] = _perturb(val, 0.2, lo, hi)
+            _perturb_params_in_ranges(gene.parameters, ranges)
 
 
 def tournament_select(

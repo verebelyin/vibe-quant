@@ -972,12 +972,12 @@ class TestMAChromosome:
 
 
 # =============================================================================
-# Phase 2 (bd-fuaj): ma_fast vs ma_slow cross/ribbon genes
+# ma_fast vs ma_slow cross/ribbon genes
 # =============================================================================
 
 
 class TestMACrossGene:
-    """Phase 2: PriceVsMAConditionGene with parameters_slow for ribbon/cross."""
+    """PriceVsMAConditionGene with parameters_slow for ribbon/cross."""
 
     @staticmethod
     def _make_cross_chrom(

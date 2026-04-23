@@ -462,17 +462,6 @@ def _ma_params_to_indicator_config(
     return cfg
 
 
-def _ma_gene_to_indicator_config(gene: PriceVsMAConditionGene) -> dict[str, object]:
-    """Build DSL IndicatorConfig dict from an MA gene's fast-leg params.
-
-    Schema-native ``period`` goes into the primary field; any
-    plugin-declared extras (e.g. FRAMA's ``fc``/``sc``) flow through as
-    additional keys and are picked up by the compiler's
-    ``_merge_effective_params`` via pydantic ``model_extra``.
-    """
-    return _ma_params_to_indicator_config(gene.indicator_type, gene.parameters)
-
-
 def _ma_gene_to_condition_str(gene: PriceVsMAConditionGene, indicator_name: str) -> str:
     """Emit ``close <op> <indicator_name>`` — no scalar threshold.
 
@@ -558,7 +547,9 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         """Register indicator(s) for an MA gene and return its DSL condition."""
         base = f"{ma_gene.indicator_type.lower()}_ma_{slot}_{idx}"
         if ma_gene.parameters_slow is None:
-            indicators[base] = _ma_gene_to_indicator_config(ma_gene)
+            indicators[base] = _ma_params_to_indicator_config(
+                ma_gene.indicator_type, ma_gene.parameters
+            )
             return _ma_gene_to_condition_str(ma_gene, base)
         fast_name = f"{base}_fast"
         slow_name = f"{base}_slow"

@@ -220,8 +220,7 @@ def _run_job_via_manager(
     # Flip status from RUNNING → FAILED if subprocess died without
     # calling mark_completed. No-op if subprocess already recorded final
     # status.
-    job_manager.sync_job_status(run_id)
-    status = job_manager.get_status(run_id)
+    status = job_manager.sync_job_status(run_id)
     return 0 if status == JobStatus.COMPLETED else 1
 
 

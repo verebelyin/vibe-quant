@@ -71,6 +71,16 @@ class JobInfo:
         return (now - reference).total_seconds() > STALE_THRESHOLD_SECONDS
 
 
+# Regime-cross campaign runs share the discovery/validation entry points but
+# carry dedicated run_modes so the matrix report can separate them from
+# standalone runs.
+_JOB_TO_MODES: dict[str, set[str]] = {
+    "screening": {"screening"},
+    "validation": {"validation", "regime_cross_oos"},
+    "discovery": {"discovery", "regime_cross_discovery"},
+}
+
+
 class BacktestJobManager:
     """Manages background backtest jobs with subprocess tracking.
 
@@ -130,15 +140,6 @@ class BacktestJobManager:
         Raises:
             ValueError: If run already has an active job.
         """
-        # Map job_type to expected run_mode(s). Regime-cross campaign runs
-        # share the discovery/validation entry points but carry dedicated
-        # run_modes so the matrix report can separate them from standalone
-        # discovery runs.
-        _JOB_TO_MODES: dict[str, set[str]] = {
-            "screening": {"screening"},
-            "validation": {"validation", "regime_cross_oos"},
-            "discovery": {"discovery", "regime_cross_discovery"},
-        }
         expected_modes = _JOB_TO_MODES.get(job_type)
 
         with self._start_lock:
