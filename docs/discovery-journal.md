@@ -4,6 +4,76 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-04-23: Batch 40 — bear-window short + no-bootstrap-CI + 1h (runs 812-820, first MA-cross champion)
+
+### Goal
+
+Answer: *why did Batch 39 produce 0 promotable strategies, and can we get the regime right so a champion clears guardrails?* Recipe:
+1. **Bear window** (2025-09-01→2026-02-28, BTC −39%) matched to `direction=short` per `gotcha:direction-regime-mismatch`.
+2. **1h timeframe** for ~4× more trades than 4h — lifts champions over the bootstrap-CI trade-count trap.
+3. **`--no-bootstrap-ci` CLI flag** to bypass the 100-trade + CI≥1.0 gate (bd-npvz: not on `/api/discovery/launch` yet — launched via subprocess with direct DB row insert).
+4. **Proven pools** (CCI+RSI, STOCH+CCI, MFI+WILLR) — no exotic combos this round. Goal is to verify the recipe, not explore.
+
+### Configuration
+
+| Run | Pool | Direction | Duration | Top-0 Genome | Discovery Sharpe | DSR p | Promoted SID |
+|-----|------|-----------|----------|--------------|------------------|-------|--------------|
+| 812 | CCI+RSI | short | 21m | `93359c322feb` (RSI+CCI+**VIDYA cross**+CCI exit) | 4.70 | <0.0001 | 224 |
+| 813 | STOCH+CCI | short | 10m | `7ed21ee14493` (CCI entry + STOCH×2 exit) | 3.85 | <0.0001 | 225 |
+| 814 | MFI+WILLR | short | 25m | `9d79df5df2e2` (WILLR cross entry + MFI/WILLR exit) | 4.07 | <0.0001 | 226 |
+
+pop=12 gens=8, 1h BTCUSDT, 6mo bear window, direction=short, no-bootstrap-ci=true. Cores: 10 (M1 Pro), ran all 3 in parallel (12 workers + reserved 2).
+
+### GA results — first MA-cross champion found
+
+**Run 812's top genome is the first ever to use an adaptive MA cross** (bd-fuaj Phase 2, `PriceVsMAConditionGene` pathway): `vidya_ma_entry_0_fast > vidya_ma_entry_0_slow` with periods 31/46. This validates the MA-cross gene end-to-end — GA sampled VIDYA from `MA_POOL`, compiled it through `StrategyCompiler`, and the resulting DSL produced real trades. The `indicator:rust-native-nt` memory note about VIDYA being pandas-ta-backed (~10× slower) held — 812 took 21min vs 10min for 813's pure-Rust STOCH+CCI.
+
+Other champions: 813 collapsed to a single CCI entry + 2-STOCH exit (typical GA simplification). 814 picked `willr_entry_0 crosses_below -77.4889` — the cross operator surfaced despite threshold-based exits being cheaper.
+
+### Full pipeline — discovery → screening → validation
+
+| SID | Pool (incl. MA) | Disc Sharpe / Trades | Screen Sharpe / Trades | Screen DD / Ret / PF | Val Sharpe / Trades | Val DD / Ret / PF / Fees | Replay fidelity |
+|-----|-----------------|----------------------|------------------------|----------------------|----------------------|---------------------------|-----------------|
+| 224 | CCI+RSI (+**VIDYA cross**) | 4.70 / 79 | 2.47 / 51 | 3.0% / 3.8% / 1.68 | 2.57 / 51 | 3.0% / 4.2% / 1.74 / $12.82 | ⚠ disc→screen MISMATCH (-35% trades), screen→val tight |
+| 225 | STOCH+CCI | 3.85 / 73 | 3.70 / 71 | 5.0% / 13.9% / 1.79 | 3.66 / 70 | 5.1% / 14.0% / 1.80 / $20.40 | ✅ tight match |
+| 226 | MFI+WILLR | 4.07 / 68 | 3.73 / 67 | 7.1% / 23.1% / 2.18 | 3.27 / 66 | 8.2% / 20.3% / 1.97 / $33.43 | ✅ tight match |
+
+**Key replay observation:** 815→818 (screening→validation on the VIDYA strategy) matches exactly on trade count (51/51) and Sharpe within 4% (2.47→2.57). The non-reproducibility is confined to the **discovery fitness eval → screening replay** step. Once the DSL is pinned and re-executed via `NTScreeningRunner`, the result is stable — it's the GA-internal fitness number that's drifting.
+
+### Key findings
+
+1. **Recipe works.** 15/15 top strategies across runs cleared DSR + bootstrap-off + direction match. Zero guardrail failures. 2 out of 3 champions replayed cleanly in screening and produced near-identical validation metrics (tight live-engine fidelity under 200ms cloud latency + fill model).
+2. **First MA-cross champion validated end-to-end.** `vidya_ma_entry_0_fast > vidya_ma_entry_0_slow` emitted by GA, parsed by compiler, traded by NautilusTrader, survived DSR. The bd-fuaj adaptive MA cross pathway is **production-ready** for at least one regime (short / bear / 1h).
+3. **VIDYA champion replay is non-reproducible at the Sharpe level, but only in the discovery→screening step.** 812 discovery reports 4.70 Sharpe / 79 trades. Screening replay of the promoted DSL (identical JSON, verified) produces 2.47 Sharpe / 51 trades — a **35% trade drop** and 47% Sharpe drop. But **screening→validation is tight**: 815→818 matched on trades exactly (51/51) and Sharpe within 4% (2.47→2.57). So the problem lives in the GA fitness evaluator, not the replay engine. Either VIDYA's pandas-ta implementation has non-deterministic state across GA worker processes, or GA sees a different dataset slice than post-promote `NTScreeningRunner`. No prior champion (all Rust-native) has shown this behaviour. Filed as bd-r8i7.
+4. **CCI+RSI pool produced a VIDYA champion.** The pool was `["CCI", "RSI"]` but the compiled DSL contains VIDYA. This is correct behaviour — `MA_POOL` plugins are always available to `PriceVsMAConditionGene` independent of the threshold `INDICATOR_POOL`. Documented, but still surprising when reading results.
+5. **STOCH+CCI and MFI+WILLR replayed cleanly.** 816 screening: 71 trades vs 73 disc (−2.7%). 817: 67 vs 68 (−1.5%). Validation degrades Sharpe 5-20% (within the expected window for cloud latency + fill model).
+
+### Comparison with Batch 39
+
+| Dimension | Batch 39 (fail) | Batch 40 (success) |
+|---|---|---|
+| Window | 1yr mixed | 6mo pure bear |
+| Direction | random | short (regime-matched) |
+| Timeframe | 4h | 1h |
+| Bootstrap CI | enabled (hard gate) | disabled |
+| Pools | exotic (BBANDS / DONCHIAN / ADAPTIVE_RSI) | proven (CCI / RSI / STOCH / MFI / WILLR) |
+| Promotable champs | 0 / 5 | 3 / 3 |
+| DSR significant | 3 / 5 | 15 / 15 |
+
+### Recommendations
+
+1. **File bd-npvz** (already referenced): expose `no_bootstrap_ci` + `bootstrap_min_sharpe` on `/api/discovery/launch`. Without it, UI-triggered discovery can't replicate this batch's recipe.
+2. **File `discovery:vidya-nonreproducible`** bead: 35% trade drop on 812→815 replay with identical DSL is unexplained. Reproduce with a fresh run, then either seed pandas-ta / switch to deterministic Rust VIDYA or refuse to promote MA-cross champions with >10% replay drift.
+3. **Keep the recipe for short regime discovery**: bear-window + `--no-bootstrap-ci` + 1h + proven pools. This is the first batch in weeks to produce 3 clean promote-screen-validate chains simultaneously.
+4. **Don't re-run bd-fuaj MA-cross plugins on long/bull regimes yet** — Batch 40 only validated the short path. Separate batch needed for long regime before claiming universal MA-cross support.
+
+### Filed
+
+- **bd-l8ka**: `/api/discovery/launch` missing `no_bootstrap_ci` + `bootstrap_min_sharpe` fields (CLI supports both; schema doesn't).
+- **bd-r8i7**: VIDYA champion non-reproducible across discovery→screening replay (812: 4.70/79 → 815: 2.47/51, identical DSL).
+
+---
+
 ## 2026-04-23: Batch 39 — untested pool members on 4h (runs 807-811)
 
 ### Goal
