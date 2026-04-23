@@ -137,6 +137,7 @@ def test_plugin_exception_is_logged_and_swallowed(
     )
     (pkg_dir / "working.py").write_text("MARKER = 'ok'\n")
 
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
     with caplog.at_level(logging.ERROR, logger="vibe_quant.dsl.plugin_loader"):
         loaded = plugin_loader.load_builtin_plugins()
 
@@ -147,6 +148,72 @@ def test_plugin_exception_is_logged_and_swallowed(
     assert any(
         "broken" in record.getMessage() for record in caplog.records
     ), "Expected a log entry referencing the broken plugin"
+
+
+# ---------------------------------------------------------------------------
+# 5. Failed loads are surfaced via get_load_errors()
+# ---------------------------------------------------------------------------
+
+
+def test_failed_plugin_is_recorded_in_load_errors(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """A broken plugin must be queryable via ``get_load_errors()`` so the
+    catalog API can surface it to the frontend."""
+    pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_errors", monkeypatch)
+    (pkg_dir / "broken.py").write_text(
+        "raise ValueError('boom from test_failed_plugin_is_recorded')\n"
+    )
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+    errors = plugin_loader.get_load_errors()
+
+    assert len(errors) == 1
+    err = errors[0]
+    assert err.module == "vibe_quant.dsl.plugins.broken"
+    assert err.error_type == "ValueError"
+    assert "boom from test_failed_plugin_is_recorded" in err.message
+
+
+def test_load_errors_are_cleared_between_runs(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Two consecutive ``load_builtin_plugins()`` calls must not
+    accumulate errors — the second run snapshots the current state."""
+    pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_clear", monkeypatch)
+    (pkg_dir / "broken.py").write_text("raise RuntimeError('first')\n")
+    monkeypatch.delenv("VQ_PLUGINS_STRICT", raising=False)
+
+    plugin_loader.load_builtin_plugins()
+    assert len(plugin_loader.get_load_errors()) == 1
+
+    # Remove broken plugin and rerun — the list should be empty.
+    (pkg_dir / "broken.py").unlink()
+    plugin_loader.load_builtin_plugins()
+    assert plugin_loader.get_load_errors() == []
+
+
+# ---------------------------------------------------------------------------
+# 6. VQ_PLUGINS_STRICT re-raises on broken plugin
+# ---------------------------------------------------------------------------
+
+
+def test_strict_mode_reraises_plugin_load_failure(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """``VQ_PLUGINS_STRICT=1`` converts the log-and-swallow behavior into
+    a hard failure — CI-friendly."""
+    pkg_dir = _install_fake_plugin_pkg(tmp_path, "_p6test_strict", monkeypatch)
+    (pkg_dir / "broken.py").write_text(
+        "raise RuntimeError('strict-mode failure')\n"
+    )
+    monkeypatch.setenv("VQ_PLUGINS_STRICT", "1")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="strict-mode failure"):
+        plugin_loader.load_builtin_plugins()
 
 
 # ---------------------------------------------------------------------------

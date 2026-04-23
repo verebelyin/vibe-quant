@@ -15,8 +15,10 @@ from fastapi import APIRouter
 from vibe_quant.api.schemas.indicators import (
     IndicatorCatalogEntry,
     IndicatorCatalogResponse,
+    PluginLoadErrorEntry,
 )
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.plugin_loader import get_load_errors
 
 logger = logging.getLogger(__name__)
 
@@ -58,4 +60,14 @@ def get_catalog() -> IndicatorCatalogResponse:
     by ``category`` using the ``categories`` field on the response.
     """
     entries = [_spec_to_entry(spec) for spec in indicator_registry.all_specs()]
-    return IndicatorCatalogResponse(indicators=entries)
+    plugin_errors = [
+        PluginLoadErrorEntry(
+            module=err.module,
+            error_type=err.error_type,
+            message=err.message,
+        )
+        for err in get_load_errors()
+    ]
+    return IndicatorCatalogResponse(
+        indicators=entries, plugin_errors=plugin_errors
+    )

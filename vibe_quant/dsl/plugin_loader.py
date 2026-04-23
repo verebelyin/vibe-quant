@@ -16,15 +16,47 @@ Plugin name collisions with a built-in are logged as a warning. The
 behavior on collision is "last write wins" because ``register_spec``
 unconditionally overwrites the registry entry — documented here so
 future debuggers know where to look.
+
+Failed-load surfacing
+---------------------
+Plugin import errors are recorded on the module-level ``_load_errors``
+list (cleared at the start of each ``load_builtin_plugins`` call). Read
+via :func:`get_load_errors`; surfaced to the frontend through the
+``/api/indicators/catalog`` response. Set ``VQ_PLUGINS_STRICT=1`` in the
+environment to re-raise the first failure instead — useful in CI.
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pkgutil
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PluginLoadError:
+    """One plugin that failed to import, with the error message."""
+
+    module: str
+    error_type: str
+    message: str
+
+
+_load_errors: list[PluginLoadError] = []
+
+
+def _strict_mode() -> bool:
+    """Return True iff ``VQ_PLUGINS_STRICT`` is set to a truthy value."""
+    return os.environ.get("VQ_PLUGINS_STRICT", "").lower() in ("1", "true", "yes")
+
+
+def get_load_errors() -> list[PluginLoadError]:
+    """Return a copy of the most recent load-error list."""
+    return list(_load_errors)
 
 
 def load_builtin_plugins() -> list[str]:
@@ -35,6 +67,10 @@ def load_builtin_plugins() -> list[str]:
         imported. Callers don't usually need this; the side effect (spec
         registration) is the whole point. Tests consume the return value
         to assert which plugins loaded.
+
+    Raises:
+        Exception: If ``VQ_PLUGINS_STRICT=1`` and any plugin raises
+            during import, the first error is re-raised after logging.
     """
     # Import the package lazily so callers (e.g., tests) that want to
     # monkey-patch the package ``__path__`` before the first load can do
@@ -42,8 +78,10 @@ def load_builtin_plugins() -> list[str]:
     from vibe_quant.dsl import plugins
     from vibe_quant.dsl.indicators import indicator_registry
 
+    _load_errors.clear()
     loaded: list[str] = []
     pre_existing = set(indicator_registry.list_indicators())
+    strict = _strict_mode()
 
     for module_info in pkgutil.iter_modules(plugins.__path__):
         name = module_info.name
@@ -52,13 +90,22 @@ def load_builtin_plugins() -> list[str]:
         qualified = f"{plugins.__name__}.{name}"
         try:
             importlib.import_module(qualified)
-        except Exception as exc:  # pragma: no cover - defensive catch
+        except Exception as exc:
             # Plugins are third-party / experimental code; any import
-            # failure is logged and swallowed so the rest of the
-            # registry stays usable.
+            # failure is logged and recorded so the rest of the registry
+            # stays usable. VQ_PLUGINS_STRICT re-raises to fail CI.
             logger.error(
                 "Failed to load indicator plugin %s: %s", qualified, exc
             )
+            _load_errors.append(
+                PluginLoadError(
+                    module=qualified,
+                    error_type=type(exc).__name__,
+                    message=str(exc),
+                )
+            )
+            if strict:
+                raise
             continue
         loaded.append(qualified)
         logger.info("Loaded indicator plugin: %s", qualified)

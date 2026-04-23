@@ -50,6 +50,14 @@ class IndicatorCatalogEntry(BaseModel):
     )
 
 
+class PluginLoadErrorEntry(BaseModel):
+    """One plugin that failed to import at startup."""
+
+    module: str = Field(..., description="Fully-qualified module path (e.g. vibe_quant.dsl.plugins.foo)")
+    error_type: str = Field(..., description="Exception class name")
+    message: str = Field(..., description="Exception message")
+
+
 class IndicatorCatalogResponse(BaseModel):
     """Wrapper response returned by ``GET /api/indicators/catalog``."""
 
@@ -57,4 +65,8 @@ class IndicatorCatalogResponse(BaseModel):
     categories: list[str] = Field(
         default_factory=lambda: ["Trend", "Momentum", "Volatility", "Volume", "Custom"],
         description="Ordered category list for grouped rendering in the UI",
+    )
+    plugin_errors: list[PluginLoadErrorEntry] = Field(
+        default_factory=list,
+        description="Plugins that failed to import at startup; empty on healthy installs",
     )
