@@ -528,12 +528,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Disable deterministic crowding selection (falls back to classic tournament).",
     )
-    parser.add_argument(
-        "--seed-from-run",
-        type=int,
-        default=None,
-        help="Warm-start GA from top chromosomes of a prior discovery run ID.",
-    )
     parser.add_argument("--db", type=str, default=None, help="Database path")
     parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
     return parser
