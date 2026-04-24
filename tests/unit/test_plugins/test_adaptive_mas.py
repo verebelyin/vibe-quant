@@ -98,6 +98,45 @@ def test_vidya_golden_values(fixture_df: pd.DataFrame) -> None:
     assert abs(result.iloc[80] - 90.038) < 1.0, f"bar 80: {result.iloc[80]:.4f}"
 
 
+def test_vidya_deterministic_repeated_call(fixture_df: pd.DataFrame) -> None:
+    """bd-r8i7: rule out pandas-ta VIDYA as a non-determinism source.
+
+    If called twice on identical input, VIDYA must return bit-identical
+    output. A failure here would explain discovery→screening Sharpe
+    drift on VIDYA champions.
+    """
+    r1 = compute_vidya(fixture_df, {"period": 14})
+    r2 = compute_vidya(fixture_df, {"period": 14})
+    pd.testing.assert_series_equal(r1, r2, check_exact=True)
+
+
+def test_vidya_incremental_buffer_stability(fixture_df: pd.DataFrame) -> None:
+    """bd-r8i7: VIDYA[t] must not depend on buffer length past t.
+
+    The compiler's per-bar dispatcher re-invokes compute_vidya on the
+    entire growing close buffer each bar, reading only ``.iloc[-1]``.
+    So VIDYA(close[:t+1]).iloc[-1] must equal VIDYA(close[:t+k]).iloc[t]
+    for any k>=1. If not, the recursive ``vidya.iloc[i-1]`` accumulator
+    produces different values for the same bar depending on how many
+    future bars are in the series — which would make every VIDYA-based
+    champion non-reproducible.
+    """
+    for t in (30, 60, 90):
+        for k in (1, 5, 20):
+            if t + k >= len(fixture_df):
+                continue
+            short = compute_vidya(fixture_df.iloc[: t + 1], {"period": 14})
+            long = compute_vidya(fixture_df.iloc[: t + 1 + k], {"period": 14})
+            v_short = short.iloc[-1]
+            v_long = long.iloc[t]
+            if pd.isna(v_short) and pd.isna(v_long):
+                continue
+            assert v_short == v_long, (
+                f"buffer-length non-determinism: t={t} k={k} "
+                f"short={v_short!r} long={v_long!r}"
+            )
+
+
 # ---------------------------------------------------------------------------
 # FRAMA
 # ---------------------------------------------------------------------------
