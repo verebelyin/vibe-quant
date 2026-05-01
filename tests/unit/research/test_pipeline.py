@@ -144,6 +144,37 @@ def test_no_extract_leaves_items_pending(sm: StateManager) -> None:
     assert all(r["extraction_status"] == "pending" for r in rows)
 
 
+def test_extracted_false_recorded_as_skipped(sm: StateManager) -> None:
+    """status=skipped must NOT increment items_failed and should mark items as skipped."""
+    _register_fake_source([_item(i) for i in range(3)])
+
+    def skip_extract(item: RawItem, item_id: int) -> ExtractionResult:  # noqa: ARG001
+        return ExtractionResult(
+            status="skipped",
+            confidence=0.0,
+            rationale="not a strategy",
+            raw_response="{}",
+            dsl_yaml=None,
+            parsed_dsl_json=None,
+            parse_error=None,
+            llm_model="t",
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=skip_extract)
+    assert summary.items_new == 3
+    assert summary.items_skipped == 3
+    assert summary.items_failed == 0
+    assert summary.items_extracted == 0
+
+    rows = sm.list_research_items(source="fake")
+    assert all(r["extraction_status"] == "skipped" for r in rows)
+    # extraction rows still persisted for triage
+    for r in rows:
+        ex = sm.list_extractions_for_item(r["id"])
+        assert len(ex) == 1
+        assert ex[0]["status"] == "skipped"
+
+
 def test_unknown_source_raises_keyerror_with_no_run_row(sm: StateManager) -> None:
     with pytest.raises(KeyError, match="nonexistent"):
         run_scrape(sm=sm, source_name="nonexistent", limit=1)
