@@ -28,7 +28,7 @@ def _isolate_registry() -> None:
     _reset_for_tests()
 
 
-def _write_source_file(name: str, body: str) -> "Path":
+def _write_source_file(name: str, body: str) -> Path:
     """Drop a source file alongside the package and return its path."""
     pkg_dir = sources_pkg.__path__[0]
     p = __import__("pathlib").Path(pkg_dir) / f"{name}.py"
@@ -36,7 +36,7 @@ def _write_source_file(name: str, body: str) -> "Path":
     return p
 
 
-def test_load_then_list(tmp_path: "Path") -> None:
+def test_load_then_list(tmp_path: Path) -> None:
     p = _write_source_file(
         "_test_dummy_source",
         '''
@@ -55,7 +55,7 @@ def test_load_then_list(tmp_path: "Path") -> None:
     p.unlink()
 
 
-def test_drop_source_in_dir_is_discovered(tmp_path: "Path") -> None:
+def test_drop_source_in_dir_is_discovered(tmp_path: Path) -> None:
     p = _write_source_file(
         "fake_test_source_for_unit",
         '''
