@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -10,9 +11,12 @@ from vibe_quant.db.connection import get_connection
 from vibe_quant.db.schema import init_schema
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Sequence
     from pathlib import Path
+
+
+class DuplicateResearchItem(Exception):
+    """Raised when a research_item with (source, external_id) already exists."""
 
 # Type alias for JSON-like dict structures from database
 JsonDict = dict[str, Any]
@@ -955,3 +959,235 @@ class StateManager:
                 (run_id,),
             )
             self.conn.commit()
+
+    # --- Research pipeline ---
+
+    def create_research_item(
+        self,
+        *,
+        source: str,
+        external_id: str,
+        url: str,
+        title: str | None,
+        body: str | None,
+        author: str | None,
+        posted_at: str | None,
+        score: int | None,
+        extras: JsonDict | None = None,
+    ) -> int:
+        """Insert a research_item. Raises DuplicateResearchItem if (source, external_id) exists."""
+        with self._write_lock:
+            try:
+                cursor = self.conn.execute(
+                    """INSERT INTO research_items
+                       (source, external_id, url, title, body, author, posted_at, score, extras_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        source,
+                        external_id,
+                        url,
+                        title,
+                        body,
+                        author,
+                        posted_at,
+                        score,
+                        json.dumps(extras) if extras is not None else None,
+                    ),
+                )
+                self.conn.commit()
+                assert cursor.lastrowid is not None
+                return cursor.lastrowid
+            except sqlite3.IntegrityError as e:
+                raise DuplicateResearchItem(
+                    f"research_item already exists: source={source} external_id={external_id}"
+                ) from e
+
+    def get_research_item(self, item_id: int) -> JsonDict | None:
+        row = self.conn.execute(
+            "SELECT * FROM research_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        if d.get("extras_json") is not None:
+            d["extras"] = json.loads(d["extras_json"])
+        else:
+            d["extras"] = {}
+        return d
+
+    def list_research_items(
+        self,
+        *,
+        source: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[JsonDict]:
+        query = "SELECT * FROM research_items WHERE 1=1"
+        params: list[Any] = []
+        if source is not None:
+            query += " AND source = ?"
+            params.append(source)
+        if status is not None:
+            query += " AND extraction_status = ?"
+            params.append(status)
+        query += " ORDER BY posted_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_research_item_status(self, item_id: int, status: str) -> bool:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                "UPDATE research_items SET extraction_status = ? WHERE id = ?",
+                (status, item_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def create_extraction(
+        self,
+        *,
+        research_item_id: int,
+        status: str,
+        llm_model: str | None,
+        confidence: float | None,
+        rationale: str | None,
+        raw_response: str,
+        dsl_yaml: str | None,
+        parsed_dsl_json: str | None,
+        parse_error: str | None,
+    ) -> int:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO research_extractions
+                   (research_item_id, status, llm_model, confidence, rationale,
+                    raw_response, dsl_yaml, parsed_dsl_json, parse_error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    research_item_id,
+                    status,
+                    llm_model,
+                    confidence,
+                    rationale,
+                    raw_response,
+                    dsl_yaml,
+                    parsed_dsl_json,
+                    parse_error,
+                ),
+            )
+            self.conn.commit()
+            assert cursor.lastrowid is not None
+            return cursor.lastrowid
+
+    def list_extractions_for_item(self, item_id: int) -> list[JsonDict]:
+        rows = self.conn.execute(
+            """SELECT * FROM research_extractions
+               WHERE research_item_id = ?
+               ORDER BY extracted_at DESC, id DESC""",
+            (item_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_extraction(self, extraction_id: int) -> JsonDict | None:
+        row = self.conn.execute(
+            "SELECT * FROM research_extractions WHERE id = ?", (extraction_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_extraction_status(
+        self,
+        extraction_id: int,
+        status: str,
+        strategy_id: int | None = None,
+    ) -> bool:
+        with self._write_lock:
+            if strategy_id is not None:
+                cursor = self.conn.execute(
+                    "UPDATE research_extractions SET status = ?, strategy_id = ? WHERE id = ?",
+                    (status, strategy_id, extraction_id),
+                )
+            else:
+                cursor = self.conn.execute(
+                    "UPDATE research_extractions SET status = ? WHERE id = ?",
+                    (status, extraction_id),
+                )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def create_scrape_run(
+        self,
+        *,
+        source: str,
+        pid: int | None,
+        config: JsonDict | None = None,
+    ) -> int:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO research_scrape_runs (source, pid, config_json, heartbeat_at)
+                   VALUES (?, ?, ?, datetime('now'))""",
+                (source, pid, json.dumps(config) if config else None),
+            )
+            self.conn.commit()
+            assert cursor.lastrowid is not None
+            return cursor.lastrowid
+
+    def get_scrape_run(self, run_id: int) -> JsonDict | None:
+        row = self.conn.execute(
+            "SELECT * FROM research_scrape_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def latest_scrape_run(self, source: str) -> JsonDict | None:
+        row = self.conn.execute(
+            "SELECT * FROM research_scrape_runs WHERE source = ? ORDER BY id DESC LIMIT 1",
+            (source,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_scrape_run_heartbeat(self, run_id: int) -> bool:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                "UPDATE research_scrape_runs SET heartbeat_at = datetime('now') WHERE id = ?",
+                (run_id,),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def increment_scrape_run_counters(
+        self,
+        run_id: int,
+        *,
+        fetched: int = 0,
+        new: int = 0,
+        extracted: int = 0,
+        failed: int = 0,
+    ) -> None:
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE research_scrape_runs SET
+                       items_fetched = items_fetched + ?,
+                       items_new = items_new + ?,
+                       items_extracted = items_extracted + ?,
+                       items_failed = items_failed + ?
+                   WHERE id = ?""",
+                (fetched, new, extracted, failed, run_id),
+            )
+            self.conn.commit()
+
+    def complete_scrape_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        error_message: str | None = None,
+    ) -> bool:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_scrape_runs
+                   SET status = ?, completed_at = datetime('now'), error_message = ?
+                   WHERE id = ?""",
+                (status, error_message, run_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0

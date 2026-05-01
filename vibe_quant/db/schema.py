@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 4
+SCHEMA_VERSION: int = 5
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -193,6 +193,54 @@ CREATE TABLE IF NOT EXISTS system_state (
 );
 INSERT OR IGNORE INTO system_state (id, kill_switch) VALUES (1, 0);
 
+-- External research pipeline (Reddit, arxiv, ...). Source-agnostic items + LLM extractions.
+CREATE TABLE IF NOT EXISTS research_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    body TEXT,
+    author TEXT,
+    posted_at TEXT,
+    score INTEGER,
+    extras_json TEXT,
+    fetched_at TEXT DEFAULT (datetime('now')),
+    extraction_status TEXT DEFAULT 'pending',
+    UNIQUE(source, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS research_extractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    research_item_id INTEGER NOT NULL REFERENCES research_items(id),
+    extracted_at TEXT DEFAULT (datetime('now')),
+    llm_model TEXT,
+    confidence REAL,
+    rationale TEXT,
+    raw_response TEXT,
+    dsl_yaml TEXT,
+    parsed_dsl_json TEXT,
+    parse_error TEXT,
+    strategy_id INTEGER REFERENCES strategies(id),
+    status TEXT DEFAULT 'parsed'
+);
+
+CREATE TABLE IF NOT EXISTS research_scrape_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    started_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT,
+    items_fetched INTEGER DEFAULT 0,
+    items_new INTEGER DEFAULT 0,
+    items_extracted INTEGER DEFAULT 0,
+    items_failed INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'running',
+    error_message TEXT,
+    pid INTEGER,
+    heartbeat_at TEXT,
+    config_json TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_strategy ON backtest_runs(strategy_id);
 CREATE INDEX IF NOT EXISTS idx_backtest_runs_status ON backtest_runs(status);
@@ -201,6 +249,11 @@ CREATE INDEX IF NOT EXISTS idx_trades_run ON trades(run_id);
 CREATE INDEX IF NOT EXISTS idx_sweep_results_run ON sweep_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_sweep_results_pareto ON sweep_results(is_pareto_optimal);
 CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_research_items_source_status ON research_items(source, extraction_status);
+CREATE INDEX IF NOT EXISTS idx_research_items_posted ON research_items(posted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_extractions_item ON research_extractions(research_item_id);
+CREATE INDEX IF NOT EXISTS idx_research_extractions_status ON research_extractions(status);
+CREATE INDEX IF NOT EXISTS idx_research_scrape_runs_status ON research_scrape_runs(status);
 """
 
 
