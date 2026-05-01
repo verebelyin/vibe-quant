@@ -1145,6 +1145,57 @@ class StateManager:
         ).fetchone()
         return dict(row) if row else None
 
+    def adopt_scrape_run(self, run_id: int, pid: int) -> bool:
+        """Set pid + heartbeat on an existing pending scrape_run row.
+
+        Used when the API pre-creates the row and a subprocess takes it
+        over. Status remains 'running' (the schema default).
+        """
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_scrape_runs
+                   SET pid = ?, status = 'running',
+                       started_at = COALESCE(started_at, datetime('now')),
+                       heartbeat_at = datetime('now')
+                   WHERE id = ?""",
+                (pid, run_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def list_active_scrape_runs(self, source: str | None = None) -> list[JsonDict]:
+        """Return scrape_run rows currently in status='running'.
+
+        Pass `source` to filter to a single source.
+        """
+        if source is None:
+            rows = self.conn.execute(
+                "SELECT * FROM research_scrape_runs WHERE status = 'running' ORDER BY id DESC"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM research_scrape_runs WHERE status = 'running' AND source = ? ORDER BY id DESC",
+                (source,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_research_items(
+        self,
+        *,
+        source: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        query = "SELECT COUNT(*) AS c FROM research_items WHERE 1=1"
+        params: list[Any] = []
+        if source is not None:
+            query += " AND source = ?"
+            params.append(source)
+        if status is not None:
+            query += " AND extraction_status = ?"
+            params.append(status)
+        row = self.conn.execute(query, params).fetchone()
+        return int(row["c"]) if row else 0
+
     def update_scrape_run_heartbeat(self, run_id: int) -> bool:
         with self._write_lock:
             cursor = self.conn.execute(

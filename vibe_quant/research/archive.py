@@ -6,14 +6,15 @@ on `(source, external_id)` so duplicates are silently skipped.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.state_manager import DuplicateResearchItem, StateManager
+from vibe_quant.research.schema import RawItem
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from vibe_quant.research.schema import RawItem
 
 
 def archive_item(
@@ -47,3 +48,30 @@ def archive_item(
 def open_state_manager(db_path: Path | None = None) -> StateManager:
     """Convenience constructor for non-test callers."""
     return StateManager(db_path)
+
+
+def _row_to_raw_item(row: dict[str, Any]) -> RawItem:
+    """Reconstruct a `RawItem` from a `research_items` DB row.
+
+    Used by re-extraction: the API loads the persisted row and feeds it back
+    to the extractor without re-fetching from the source.
+    """
+    extras_str = row.get("extras_json")
+    extras = json.loads(extras_str) if isinstance(extras_str, str) and extras_str else {}
+    posted_at_str = row.get("posted_at")
+    posted_at = (
+        datetime.fromisoformat(posted_at_str)
+        if isinstance(posted_at_str, str) and posted_at_str
+        else None
+    )
+    return RawItem(
+        source=str(row["source"]),
+        external_id=str(row["external_id"]),
+        url=str(row["url"]),
+        title=str(row.get("title") or ""),
+        body=str(row.get("body") or ""),
+        author=row.get("author"),
+        posted_at=posted_at,
+        score=row.get("score"),
+        extras=extras if isinstance(extras, dict) else {},
+    )

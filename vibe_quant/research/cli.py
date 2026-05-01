@@ -28,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip the LLM extraction step (items left at extraction_status=pending)",
     )
     scrape.add_argument("--db-path", type=Path, default=None, help="Override SQLite path")
+    scrape.add_argument(
+        "--scrape-run-id",
+        type=int,
+        default=None,
+        help="Adopt an existing scrape_run row (used by API-spawned subprocesses)",
+    )
     scrape.add_argument("--log-level", default="INFO")
 
     sub.add_parser("sources", help="List registered sources")
@@ -78,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_name=args.source,
                     limit=args.limit,
                     extract_fn=extract_fn,
+                    scrape_run_id=args.scrape_run_id,
                 )
             except ConfigurationError as e:
                 print(f"error: {e}", file=sys.stderr)

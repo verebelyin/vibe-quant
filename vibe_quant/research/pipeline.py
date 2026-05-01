@@ -56,13 +56,15 @@ def run_scrape(
     source_name: str,
     limit: int,
     extract_fn: ExtractFn | None = None,
+    scrape_run_id: int | None = None,
     db_path: Path | None = None,  # noqa: ARG001  (kept for symmetry with workers)
 ) -> ScrapeSummary:
     """Run one scrape pass and return a summary.
 
-    Creates the `research_scrape_runs` row, drives the source, archives every
-    `RawItem`, optionally invokes `extract_fn` per archived item, and finalizes
-    the run row.
+    Creates the `research_scrape_runs` row (or adopts an existing one when
+    `scrape_run_id` is provided — used by the API to pre-create rows before
+    spawning subprocesses), drives the source, archives every `RawItem`,
+    optionally invokes `extract_fn` per archived item, and finalizes the run row.
 
     Args:
         sm: A `StateManager` already pointed at the right DB.
@@ -70,17 +72,22 @@ def run_scrape(
         limit: Per-source cap on items to scrape.
         extract_fn: Optional callable `(item: RawItem, item_id: int) -> ExtractionResult`.
             If `None`, items land at `extraction_status='pending'`.
+        scrape_run_id: When set, adopt this existing row instead of creating
+            a new one. The caller is responsible for the row's existence.
     """
     # Build the source up-front so unknown name / missing creds / config
     # errors don't leave an orphan scrape_run row in the DB.
     source = _build_source(source_name)
 
     pid = os.getpid()
-    scrape_run_id = sm.create_scrape_run(
-        source=source_name,
-        pid=pid,
-        config={"source": source_name, "limit": limit, "extract": extract_fn is not None},
-    )
+    if scrape_run_id is None:
+        scrape_run_id = sm.create_scrape_run(
+            source=source_name,
+            pid=pid,
+            config={"source": source_name, "limit": limit, "extract": extract_fn is not None},
+        )
+    else:
+        sm.adopt_scrape_run(scrape_run_id, pid)
 
     stop_event = threading.Event()
 
