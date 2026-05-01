@@ -118,6 +118,34 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    title: "Research",
+    items: [
+      {
+        label: "Reddit & sources",
+        path: "/research",
+        icon: (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="size-4"
+          >
+            <title>Research</title>
+            <path d="M10.065 12.493l-6.18 1.318a.934.934 0 0 1-1.108-.702l-.537-2.15a1.07 1.07 0 0 1 .691-1.265l13.504-4.44" />
+            <path d="M13.56 11.747l4.332-.924" />
+            <path d="M16 21l-3.105-6.21" />
+            <path d="M16.485 5.94l2.4-.527a1.8 1.8 0 0 1 2.13 1.4l1.31 5.951a1.8 1.8 0 0 1-1.4 2.13l-2.4.526" />
+            <path d="M5 18.5c1.708-.86 3.812-.86 5.52 0" />
+            <circle cx="18" cy="13" r="3" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
     title: "Trading",
     items: [
       {
@@ -272,9 +300,7 @@ export function Sidebar() {
             <div className="absolute inset-[-4px] rounded-full bg-primary/15 blur-lg" />
           </div>
           <div className="flex flex-col group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-bold tracking-tight text-foreground">
-              vibe-quant
-            </span>
+            <span className="text-sm font-bold tracking-tight text-foreground">vibe-quant</span>
             <span className="text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground/50">
               Trading Engine
             </span>

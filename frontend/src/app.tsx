@@ -37,11 +37,15 @@ const PaperTradingPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("./routes/settings").then((m) => ({ default: m.SettingsPage })),
 );
-const GuidePage = lazy(() =>
-  import("./routes/guide").then((m) => ({ default: m.GuidePage })),
-);
+const GuidePage = lazy(() => import("./routes/guide").then((m) => ({ default: m.GuidePage })));
 const BrowserPage = lazy(() =>
   import("./routes/browser").then((m) => ({ default: m.BrowserPage })),
+);
+const ResearchPage = lazy(() =>
+  import("./routes/research").then((m) => ({ default: m.ResearchPage })),
+);
+const ResearchItemPage = lazy(() =>
+  import("./routes/research.$itemId").then((m) => ({ default: m.ResearchItemPage })),
 );
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
@@ -202,6 +206,31 @@ const guideRoute = createRoute({
   },
 });
 
+const researchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/research",
+  component: function ResearchRouteComponent() {
+    return (
+      <SuspensePage>
+        <ResearchPage />
+      </SuspensePage>
+    );
+  },
+});
+
+const researchItemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/research/$itemId",
+  component: function ResearchItemRouteComponent() {
+    const { itemId } = researchItemRoute.useParams();
+    return (
+      <SuspensePage>
+        <ResearchItemPage itemId={Number(itemId)} />
+      </SuspensePage>
+    );
+  },
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   strategiesRoute,
@@ -216,6 +245,8 @@ const routeTree = rootRoute.addChildren([
   dataRoute,
   settingsRoute,
   guideRoute,
+  researchRoute,
+  researchItemRoute,
 ]);
 
 const router = createRouter({

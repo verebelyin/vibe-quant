@@ -1020,18 +1020,32 @@ class StateManager:
         *,
         source: str | None = None,
         status: str | None = None,
+        sort: str = "newest_scraped",
         limit: int = 50,
         offset: int = 0,
     ) -> list[JsonDict]:
-        query = "SELECT * FROM research_items WHERE 1=1"
+        order_clauses = {
+            "newest_scraped": "i.fetched_at DESC, i.id DESC",
+            "newest_posted": "i.posted_at DESC, i.id DESC",
+            "highest_score": "i.score IS NULL, i.score DESC, i.id DESC",
+            "highest_confidence": "latest_confidence IS NULL, latest_confidence DESC, i.id DESC",
+        }
+        order_by = order_clauses.get(sort, order_clauses["newest_scraped"])
+        query = (
+            "SELECT i.*, ("
+            " SELECT confidence FROM research_extractions e"
+            " WHERE e.research_item_id = i.id"
+            " ORDER BY e.extracted_at DESC, e.id DESC LIMIT 1"
+            ") AS latest_confidence FROM research_items i WHERE 1=1"
+        )
         params: list[Any] = []
         if source is not None:
-            query += " AND source = ?"
+            query += " AND i.source = ?"
             params.append(source)
         if status is not None:
-            query += " AND extraction_status = ?"
+            query += " AND i.extraction_status = ?"
             params.append(status)
-        query += " ORDER BY posted_at DESC, id DESC LIMIT ? OFFSET ?"
+        query += f" ORDER BY {order_by} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self.conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]

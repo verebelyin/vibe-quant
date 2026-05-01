@@ -52,7 +52,13 @@ def _run_to_response(row: dict[str, Any]) -> ScrapeRunResponse:
 
 def _item_to_response(row: dict[str, Any]) -> ResearchItemResponse:
     extras_str = row.get("extras_json")
-    extras = json.loads(extras_str) if isinstance(extras_str, str) else None
+    extras: dict[str, Any] | None = (
+        json.loads(extras_str) if isinstance(extras_str, str) else None
+    )
+    if "latest_confidence" in row and row["latest_confidence"] is not None:
+        if extras is None:
+            extras = {}
+        extras["latest_confidence"] = row["latest_confidence"]
     return ResearchItemResponse(
         id=int(row["id"]),
         source=str(row["source"]),
@@ -189,15 +195,23 @@ def kill_scrape(run_id: int, sm: StateMgr) -> ScrapeRunResponse:
     return _run_to_response(after)
 
 
+_VALID_SORTS = {"newest_scraped", "newest_posted", "highest_score", "highest_confidence"}
+
+
 @router.get("/items", response_model=ResearchItemListResponse)
 def list_items(
     sm: StateMgr,
     source: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = None,
+    sort: Annotated[str, Query()] = "newest_scraped",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ResearchItemListResponse:
-    rows = sm.list_research_items(source=source, status=status, limit=limit, offset=offset)
+    if sort not in _VALID_SORTS:
+        raise HTTPException(status_code=422, detail=f"invalid sort: {sort}")
+    rows = sm.list_research_items(
+        source=source, status=status, sort=sort, limit=limit, offset=offset
+    )
     total = sm.count_research_items(source=source, status=status)
     return ResearchItemListResponse(
         items=[_item_to_response(r) for r in rows],

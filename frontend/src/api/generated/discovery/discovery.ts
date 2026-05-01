@@ -32,8 +32,8 @@ import type {
   GetIndicatorPoolApiDiscoveryIndicatorPoolGet200Item,
   HTTPValidationError,
   PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams,
-  PromoteResponse,
-  ReplayResponse
+  ReplayResponse,
+  VibeQuantApiSchemasDiscoveryPromoteResponse
 } from '.././models';
 
 import { customInstance } from '../../client';
@@ -771,7 +771,7 @@ export const useExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIn
  * @summary Promote Discovered Strategy
  */
 export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse201 = {
-  data: PromoteResponse
+  data: VibeQuantApiSchemasDiscoveryPromoteResponse
   status: 201
 }
 
