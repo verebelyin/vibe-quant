@@ -24,7 +24,9 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CredentialsStatusResponse,
   ExtractionResponse,
+  GetCredentialsStatusApiResearchCredentialsStatusGetParams,
   GetLatestScrapeApiResearchScrapeLatestGetParams,
   HTTPValidationError,
   ListItemsApiResearchItemsGetParams,
@@ -144,6 +146,131 @@ export function useGetSourcesApiResearchSourcesGet<TData = Awaited<ReturnType<ty
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetSourcesApiResearchSourcesGetQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Report whether required env-var credentials are set. Never returns values.
+ * @summary Get Credentials Status
+ */
+export type getCredentialsStatusApiResearchCredentialsStatusGetResponse200 = {
+  data: CredentialsStatusResponse
+  status: 200
+}
+
+export type getCredentialsStatusApiResearchCredentialsStatusGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type getCredentialsStatusApiResearchCredentialsStatusGetResponseSuccess = (getCredentialsStatusApiResearchCredentialsStatusGetResponse200) & {
+  headers: Headers;
+};
+export type getCredentialsStatusApiResearchCredentialsStatusGetResponseError = (getCredentialsStatusApiResearchCredentialsStatusGetResponse422) & {
+  headers: Headers;
+};
+
+export type getCredentialsStatusApiResearchCredentialsStatusGetResponse = (getCredentialsStatusApiResearchCredentialsStatusGetResponseSuccess | getCredentialsStatusApiResearchCredentialsStatusGetResponseError)
+
+export const getGetCredentialsStatusApiResearchCredentialsStatusGetUrl = (params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/research/credentials/status?${stringifiedParams}` : `/api/research/credentials/status`
+}
+
+export const getCredentialsStatusApiResearchCredentialsStatusGet = async (params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams, options?: RequestInit): Promise<getCredentialsStatusApiResearchCredentialsStatusGetResponse> => {
+  
+  return customInstance<getCredentialsStatusApiResearchCredentialsStatusGetResponse>(getGetCredentialsStatusApiResearchCredentialsStatusGetUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetCredentialsStatusApiResearchCredentialsStatusGetQueryKey = (params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams,) => {
+    return [
+    `/api/research/credentials/status`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+    
+export const getGetCredentialsStatusApiResearchCredentialsStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError = HTTPValidationError>(params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCredentialsStatusApiResearchCredentialsStatusGetQueryKey(params);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>> = ({ signal }) => getCredentialsStatusApiResearchCredentialsStatusGet(params, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetCredentialsStatusApiResearchCredentialsStatusGetQueryResult = NonNullable<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>>
+export type GetCredentialsStatusApiResearchCredentialsStatusGetQueryError = HTTPValidationError
+
+
+export function useGetCredentialsStatusApiResearchCredentialsStatusGet<TData = Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError = HTTPValidationError>(
+ params: undefined |  GetCredentialsStatusApiResearchCredentialsStatusGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>,
+          TError,
+          Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCredentialsStatusApiResearchCredentialsStatusGet<TData = Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError = HTTPValidationError>(
+ params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>,
+          TError,
+          Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetCredentialsStatusApiResearchCredentialsStatusGet<TData = Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError = HTTPValidationError>(
+ params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Credentials Status
+ */
+
+export function useGetCredentialsStatusApiResearchCredentialsStatusGet<TData = Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError = HTTPValidationError>(
+ params?: GetCredentialsStatusApiResearchCredentialsStatusGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getCredentialsStatusApiResearchCredentialsStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetCredentialsStatusApiResearchCredentialsStatusGetQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

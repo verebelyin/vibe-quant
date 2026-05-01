@@ -77,3 +77,12 @@ class PromoteResponse(BaseModel):
 
 class SourceListResponse(BaseModel):
     sources: list[str]
+
+
+class CredentialsStatusResponse(BaseModel):
+    """Reports presence of Reddit env-var credentials. Never includes raw values."""
+
+    source: str
+    configured: bool
+    missing: list[str]
+    set_vars: list[str]

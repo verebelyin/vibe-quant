@@ -101,6 +101,57 @@ def test_get_sources_lists_registered(client: TestClient) -> None:
     assert "reddit" in resp.json()["sources"]
 
 
+# ---------- /credentials/status ----------
+
+
+def test_credentials_status_all_set(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "x")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "y")
+    monkeypatch.setenv("REDDIT_USER_AGENT", "z")
+    resp = client.get("/api/research/credentials/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "source": "reddit",
+        "configured": True,
+        "missing": [],
+        "set_vars": ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT"],
+    }
+
+
+def test_credentials_status_none_set(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("REDDIT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("REDDIT_USER_AGENT", raising=False)
+    resp = client.get("/api/research/credentials/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["configured"] is False
+    assert body["set_vars"] == []
+    assert set(body["missing"]) == {
+        "REDDIT_CLIENT_ID",
+        "REDDIT_CLIENT_SECRET",
+        "REDDIT_USER_AGENT",
+    }
+
+
+def test_credentials_status_partial(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "x")
+    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("REDDIT_USER_AGENT", raising=False)
+    resp = client.get("/api/research/credentials/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["configured"] is False
+    assert body["set_vars"] == ["REDDIT_CLIENT_ID"]
+    assert set(body["missing"]) == {"REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT"}
+
+
+def test_credentials_status_unknown_source_422(client: TestClient) -> None:
+    resp = client.get("/api/research/credentials/status", params={"source": "twitter"})
+    assert resp.status_code == 422
+
+
 # ---------- /scrape (POST) ----------
 
 
