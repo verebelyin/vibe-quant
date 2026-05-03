@@ -6,11 +6,15 @@
  */
 
 /**
- * Reports presence of Reddit env-var credentials. Never includes raw values.
+ * Reports the User-Agent that the Reddit source will use.
+
+The Reddit `.json` endpoint needs no auth; only `REDDIT_USER_AGENT` matters.
+`user_agent_value` always returns the actual UA the source will send so
+the UI can show what's really on the wire.
  */
 export interface CredentialsStatusResponse {
   source: string;
-  configured: boolean;
-  missing: string[];
-  set_vars: string[];
+  user_agent_set: boolean;
+  user_agent_value: string;
+  using_default: boolean;
 }

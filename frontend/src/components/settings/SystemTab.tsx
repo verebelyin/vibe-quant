@@ -28,22 +28,19 @@ function RedditCredentialsCard() {
   const status = query.data?.status === 200 ? query.data.data : null;
 
   let badge: { variant: "default" | "secondary" | "outline"; text: string };
-  let detail: string;
+  let userAgent: string;
   if (query.isLoading) {
     badge = { variant: "outline", text: "Loading…" };
-    detail = "Checking environment…";
+    userAgent = "Checking environment…";
   } else if (!status) {
     badge = { variant: "outline", text: "Unknown" };
-    detail = "Failed to read credential status.";
-  } else if (status.configured) {
-    badge = { variant: "default", text: "Configured" };
-    detail = "All required environment variables are set.";
-  } else if (status.set_vars.length === 0) {
-    badge = { variant: "secondary", text: "Not configured" };
-    detail = `Set ${status.missing.join(", ")} to enable Reddit scraping.`;
+    userAgent = "Failed to read User-Agent status.";
+  } else if (status.using_default) {
+    badge = { variant: "secondary", text: "Default" };
+    userAgent = status.user_agent_value;
   } else {
-    badge = { variant: "outline", text: "Partially configured" };
-    detail = `Missing: ${status.missing.join(", ")}.`;
+    badge = { variant: "default", text: "Custom" };
+    userAgent = status.user_agent_value;
   }
 
   return (
@@ -54,16 +51,19 @@ function RedditCredentialsCard() {
         </p>
         <div className="flex items-center justify-between py-2">
           <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-foreground">Reddit</span>
-            <span className="text-[10px] text-muted-foreground">{detail}</span>
+            <span className="text-xs font-medium text-foreground">Reddit User-Agent</span>
+            <code className="font-mono text-[10px] text-muted-foreground">{userAgent}</code>
           </div>
           <Badge variant={badge.variant}>{badge.text}</Badge>
         </div>
         <p className="mt-2 text-[10px] text-muted-foreground">
-          Read-only. Set <code className="font-mono">REDDIT_CLIENT_ID</code>,{" "}
-          <code className="font-mono">REDDIT_CLIENT_SECRET</code>,{" "}
-          <code className="font-mono">REDDIT_USER_AGENT</code> in the environment, then restart the
-          backend.
+          Reddit scraping uses the public <code className="font-mono">.json</code> endpoint — no
+          auth required, only a User-Agent. Recommended format:{" "}
+          <code className="font-mono">
+            &lt;platform&gt;:&lt;app-id&gt;:&lt;version&gt; (by /u/&lt;username&gt;)
+          </code>
+          . Set <code className="font-mono">REDDIT_USER_AGENT</code> in the environment and restart
+          the backend to override the default.
         </p>
       </CardContent>
     </Card>

@@ -80,9 +80,14 @@ class SourceListResponse(BaseModel):
 
 
 class CredentialsStatusResponse(BaseModel):
-    """Reports presence of Reddit env-var credentials. Never includes raw values."""
+    """Reports the User-Agent that the Reddit source will use.
+
+    The Reddit `.json` endpoint needs no auth; only `REDDIT_USER_AGENT` matters.
+    `user_agent_value` always returns the actual UA the source will send so
+    the UI can show what's really on the wire.
+    """
 
     source: str
-    configured: bool
-    missing: list[str]
-    set_vars: list[str]
+    user_agent_set: bool
+    user_agent_value: str
+    using_default: bool

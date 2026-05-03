@@ -156,7 +156,7 @@ export function useGetSourcesApiResearchSourcesGet<TData = Awaited<ReturnType<ty
 
 
 /**
- * Report whether required env-var credentials are set. Never returns values.
+ * Report the User-Agent the Reddit source will send (never raw secrets).
  * @summary Get Credentials Status
  */
 export type getCredentialsStatusApiResearchCredentialsStatusGetResponse200 = {

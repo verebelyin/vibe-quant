@@ -25,11 +25,7 @@ from vibe_quant.api.schemas.research import (
     SourceListResponse,
 )
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research.config import (
-    ENV_REDDIT_CLIENT_ID,
-    ENV_REDDIT_CLIENT_SECRET,
-    ENV_REDDIT_USER_AGENT,
-)
+from vibe_quant.research.config import DEFAULT_USER_AGENT, ENV_REDDIT_USER_AGENT
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -104,21 +100,17 @@ def get_sources() -> SourceListResponse:
     return SourceListResponse(sources=list_sources())
 
 
-_REDDIT_ENV_VARS = (ENV_REDDIT_CLIENT_ID, ENV_REDDIT_CLIENT_SECRET, ENV_REDDIT_USER_AGENT)
-
-
 @router.get("/credentials/status", response_model=CredentialsStatusResponse)
 def get_credentials_status(source: str = "reddit") -> CredentialsStatusResponse:
-    """Report whether required env-var credentials are set. Never returns values."""
+    """Report the User-Agent the Reddit source will send (never raw secrets)."""
     if source != "reddit":
         raise HTTPException(status_code=422, detail=f"unknown source '{source}'")
-    set_vars = [v for v in _REDDIT_ENV_VARS if os.getenv(v)]
-    missing = [v for v in _REDDIT_ENV_VARS if not os.getenv(v)]
+    custom_ua = os.getenv(ENV_REDDIT_USER_AGENT)
     return CredentialsStatusResponse(
         source=source,
-        configured=not missing,
-        missing=missing,
-        set_vars=set_vars,
+        user_agent_set=bool(custom_ua),
+        user_agent_value=custom_ua or DEFAULT_USER_AGENT,
+        using_default=not custom_ua,
     )
 
 
