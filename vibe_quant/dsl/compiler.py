@@ -1090,9 +1090,15 @@ class StrategyCompiler:
             # NT path
             primary = self._effective_primary(spec)
             primary_attr = spec.nt_output_attrs.get(primary, "value")
+            primary_scale = spec.nt_output_scale.get(primary, 1.0)
             lines.append(f'    if name == "{info.name}":')
             lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
-            lines.append("        return float(_v) if _v is not None else 0.0")
+            if primary_scale != 1.0:
+                lines.append(
+                    f"        return float(_v) * {primary_scale} if _v is not None else 0.0"
+                )
+            else:
+                lines.append("        return float(_v) if _v is not None else 0.0")
 
             if spec.output_names != ("value",):
                 for output_name in spec.output_names:
@@ -1105,9 +1111,15 @@ class StrategyCompiler:
                         )
                     elif output_name in spec.nt_output_attrs:
                         attr = spec.nt_output_attrs[output_name]
+                        scale = spec.nt_output_scale.get(output_name, 1.0)
                         lines.append(f'    if name == "{key}":')
                         lines.append(f"        _v = {info.indicator_var}.{attr}")
-                        lines.append("        return float(_v) if _v is not None else 0.0")
+                        if scale != 1.0:
+                            lines.append(
+                                f"        return float(_v) * {scale} if _v is not None else 0.0"
+                            )
+                        else:
+                            lines.append("        return float(_v) if _v is not None else 0.0")
                     # else: sub-value is not covered by NT and no derived
                     # helper — the compile-time sub-value fallback would
                     # have already forced this indicator to the compute_fn
@@ -1135,8 +1147,11 @@ class StrategyCompiler:
                 has_any = True
                 primary = self._effective_primary(spec)
                 primary_attr = spec.nt_output_attrs.get(primary, "value")
+                primary_scale = spec.nt_output_scale.get(primary, 1.0)
+                _scale_suffix = f" * {primary_scale}" if primary_scale != 1.0 else ""
                 lines.append(
-                    f'    self._prev_values["{info.name}"] = float({info.indicator_var}.{primary_attr})'
+                    f'    self._prev_values["{info.name}"] = '
+                    f"float({info.indicator_var}.{primary_attr}){_scale_suffix}"
                 )
                 if spec.output_names != ("value",):
                     for output_name in spec.output_names:
@@ -1149,8 +1164,11 @@ class StrategyCompiler:
                             )
                         elif output_name in spec.nt_output_attrs:
                             attr = spec.nt_output_attrs[output_name]
+                            scale = spec.nt_output_scale.get(output_name, 1.0)
+                            _suf = f" * {scale}" if scale != 1.0 else ""
                             lines.append(
-                                f'    self._prev_values["{key}"] = float({info.indicator_var}.{attr})'
+                                f'    self._prev_values["{key}"] = '
+                                f"float({info.indicator_var}.{attr}){_suf}"
                             )
             elif spec.compute_fn is not None:
                 has_any = True

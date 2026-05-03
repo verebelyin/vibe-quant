@@ -120,6 +120,13 @@ class IndicatorSpec:
     nt_output_attrs: dict[str, str] = field(
         default_factory=lambda: {"value": "value"}
     )
+    # Per-output scale factor applied at NT-path read time. NT exposes some
+    # oscillators as fractions (RSI in [0,1], ROC as ln-ish ratio) while the
+    # DSL/UI/GA assume the canonical pandas-ta percentage scale. Multiplying
+    # at read time aligns NT-path values with documented threshold_range and
+    # keeps compute_fn (pandas-ta) values untouched. Per-output entries
+    # default to 1.0 when missing.
+    nt_output_scale: dict[str, float] = field(default_factory=dict)
     computed_outputs: dict[str, str] = field(default_factory=dict)
     pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
 
@@ -581,6 +588,7 @@ def _rsi_spec() -> IndicatorSpec:
         popular=True,
         param_ranges={"period": (5.0, 50.0)},
         threshold_range=(25.0, 75.0),
+        nt_output_scale={"value": 100.0},
     )
 
 
@@ -801,6 +809,7 @@ def _roc_spec() -> IndicatorSpec:
         category="Momentum",
         param_ranges={"period": (5.0, 30.0)},
         threshold_range=(-5.0, 5.0),
+        nt_output_scale={"value": 100.0},
     )
 
 

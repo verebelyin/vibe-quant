@@ -232,7 +232,7 @@ class BollingerSqueezeStrategy(Strategy):
             return float(_v) if _v is not None else 0.0
         if name == "rsi":
             _v = self.ind_rsi.value
-            return float(_v) if _v is not None else 0.0
+            return float(_v) * 100.0 if _v is not None else 0.0
         if name == "ema":
             _v = self.ind_ema.value
             return float(_v) if _v is not None else 0.0
@@ -247,7 +247,7 @@ class BollingerSqueezeStrategy(Strategy):
         self._prev_values["bbands_percent_b"] = self._get_indicator_value("bbands_percent_b")
         self._prev_values["bbands_bandwidth"] = self._get_indicator_value("bbands_bandwidth")
         self._prev_values["atr"] = float(self.ind_atr.value)
-        self._prev_values["rsi"] = float(self.ind_rsi.value)
+        self._prev_values["rsi"] = float(self.ind_rsi.value) * 100.0
         self._prev_values["ema"] = float(self.ind_ema.value)
 
     def _check_time_filters(self, ts_ns: int) -> bool:

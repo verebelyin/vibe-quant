@@ -216,7 +216,7 @@ class RsiMeanReversionStrategy(Strategy):
         """Get current value of an indicator by name."""
         if name == "rsi":
             _v = self.ind_rsi.value
-            return float(_v) if _v is not None else 0.0
+            return float(_v) * 100.0 if _v is not None else 0.0
         if name == "ema_trend":
             _v = self.ind_ema_trend.value
             return float(_v) if _v is not None else 0.0
@@ -230,7 +230,7 @@ class RsiMeanReversionStrategy(Strategy):
 
     def _update_prev_values(self) -> None:
         """Store current indicator values for crossover detection."""
-        self._prev_values["rsi"] = float(self.ind_rsi.value)
+        self._prev_values["rsi"] = float(self.ind_rsi.value) * 100.0
         self._prev_values["ema_trend"] = float(self.ind_ema_trend.value)
         self._prev_values["ema_htf"] = float(self.ind_ema_htf.value)
         self._prev_values["atr"] = float(self.ind_atr.value)
