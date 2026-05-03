@@ -2408,7 +2408,7 @@
           "research"
         ],
         "summary": "Extract Item",
-        "description": "Re-run extraction for a single item (preserves history \u2014 adds new row).",
+        "description": "Schedule extraction in the background. Poll GET /items/{id} until\nextraction_status leaves 'running'.",
         "operationId": "extract_item_api_research_items__item_id__extract_post",
         "parameters": [
           {
@@ -2422,12 +2422,12 @@
           }
         ],
         "responses": {
-          "201": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExtractionResponse"
+                  "$ref": "#/components/schemas/ResearchItemResponse"
                 }
               }
             }
@@ -7352,20 +7352,6 @@
             "type": "boolean",
             "title": "Extract",
             "default": true
-          },
-          "subreddits": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Subreddits"
           }
         },
         "type": "object",

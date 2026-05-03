@@ -10,9 +10,10 @@ import {
 } from "@/api/generated/research/research";
 import { ExtractionCard } from "@/components/research/ExtractionCard";
 import { PostContent } from "@/components/research/PostContent";
-import { StatusBadge } from "@/components/research/StatusBadge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatRelative } from "@/lib/time";
 
 interface Props {
   itemId: number;
@@ -39,24 +40,18 @@ function getComments(extras: { [k: string]: unknown } | null | undefined): Comme
   });
 }
 
-function formatRelative(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  const diff = Date.now() - t;
-  const min = Math.floor(diff / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
-}
-
 export function ResearchItemPage({ itemId }: Props) {
   const queryClient = useQueryClient();
   const itemKey = getGetItemApiResearchItemsItemIdGetQueryKey(itemId);
-  const { data, isLoading, isError } = useGetItemApiResearchItemsItemIdGet(itemId);
+  const { data, isLoading, isError } = useGetItemApiResearchItemsItemIdGet(itemId, {
+    query: {
+      refetchInterval: (q) => {
+        const r = q.state.data;
+        if (r?.status !== 200) return false;
+        return r.data.extraction_status === "running" ? 2_000 : false;
+      },
+    },
+  });
   const reExtractMut = useExtractItemApiResearchItemsItemIdExtractPost();
   const [running, setRunning] = useState(false);
 
@@ -89,7 +84,7 @@ export function ResearchItemPage({ itemId }: Props) {
       { itemId },
       {
         onSuccess: (resp) => {
-          if (resp.status === 201) {
+          if (resp.status === 202) {
             toast.success("Extraction queued");
             queryClient.invalidateQueries({ queryKey: itemKey });
           } else {

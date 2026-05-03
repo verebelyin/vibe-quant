@@ -2,23 +2,10 @@ import { Link } from "@tanstack/react-router";
 import { memo } from "react";
 import type { ResearchItemResponse } from "@/api/generated/models";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
-import { StatusBadge } from "@/components/research/StatusBadge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
-
-function formatRelative(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  const diff = Date.now() - t;
-  const min = Math.floor(diff / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
-}
+import { formatRelative } from "@/lib/time";
 
 function getConfidence(extras: { [k: string]: unknown } | null | undefined): number | null {
   if (!extras) return null;

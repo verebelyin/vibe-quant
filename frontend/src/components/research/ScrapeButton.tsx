@@ -12,16 +12,11 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   source: string;
-  initialRunningId?: number | null;
 }
 
-export function ScrapeButton({ source, initialRunningId }: Props) {
+export function ScrapeButton({ source }: Props) {
   const queryClient = useQueryClient();
-  const [activeRunId, setActiveRunId] = useState<number | null>(initialRunningId ?? null);
-
-  useEffect(() => {
-    if (initialRunningId != null) setActiveRunId(initialRunningId);
-  }, [initialRunningId]);
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
 
   const startMutation = useStartScrapeApiResearchScrapePost({
     mutation: {

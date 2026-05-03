@@ -32,6 +32,7 @@ import type {
   ListItemsApiResearchItemsGetParams,
   ResearchItemDetailResponse,
   ResearchItemListResponse,
+  ResearchItemResponse,
   ScrapeRequest,
   ScrapeRunResponse,
   SourceListResponse,
@@ -1225,12 +1226,13 @@ export function useGetItemApiResearchItemsItemIdGet<TData = Awaited<ReturnType<t
 
 
 /**
- * Re-run extraction for a single item (preserves history — adds new row).
+ * Schedule extraction in the background. Poll GET /items/{id} until
+extraction_status leaves 'running'.
  * @summary Extract Item
  */
-export type extractItemApiResearchItemsItemIdExtractPostResponse201 = {
-  data: ExtractionResponse
-  status: 201
+export type extractItemApiResearchItemsItemIdExtractPostResponse202 = {
+  data: ResearchItemResponse
+  status: 202
 }
 
 export type extractItemApiResearchItemsItemIdExtractPostResponse422 = {
@@ -1238,7 +1240,7 @@ export type extractItemApiResearchItemsItemIdExtractPostResponse422 = {
   status: 422
 }
 
-export type extractItemApiResearchItemsItemIdExtractPostResponseSuccess = (extractItemApiResearchItemsItemIdExtractPostResponse201) & {
+export type extractItemApiResearchItemsItemIdExtractPostResponseSuccess = (extractItemApiResearchItemsItemIdExtractPostResponse202) & {
   headers: Headers;
 };
 export type extractItemApiResearchItemsItemIdExtractPostResponseError = (extractItemApiResearchItemsItemIdExtractPostResponse422) & {

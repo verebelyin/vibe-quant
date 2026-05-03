@@ -1,21 +1,9 @@
 import type { ScrapeRunResponse } from "@/api/generated/models";
 import { useGetLatestScrapeApiResearchScrapeLatestGet } from "@/api/generated/research/research";
-
-function relTime(iso: string | null | undefined): string {
-  if (!iso) return "never";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "never";
-  const min = Math.floor((Date.now() - t) / 60_000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
-}
+import { formatRelative } from "@/lib/time";
 
 interface Props {
   source: string;
-  onActiveRunDetected?: (id: number) => void;
 }
 
 export function ScrapeRunBanner({ source }: Props) {
@@ -41,7 +29,7 @@ export function ScrapeRunBanner({ source }: Props) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
       <span>
-        Last scrape: <span className="text-foreground/80">{relTime(ts)}</span>
+        Last scrape: <span className="text-foreground/80">{formatRelative(ts, "never")}</span>
       </span>
       <span className="text-muted-foreground/30">·</span>
       <span className="font-mono tabular-nums">

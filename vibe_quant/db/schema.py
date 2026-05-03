@@ -206,7 +206,8 @@ CREATE TABLE IF NOT EXISTS research_items (
     score INTEGER,
     extras_json TEXT,
     fetched_at TEXT DEFAULT (datetime('now')),
-    extraction_status TEXT DEFAULT 'pending',
+    extraction_status TEXT DEFAULT 'pending'
+        CHECK (extraction_status IN ('pending', 'running', 'extracted', 'failed', 'skipped')),
     UNIQUE(source, external_id)
 );
 
@@ -224,6 +225,7 @@ CREATE TABLE IF NOT EXISTS research_extractions (
     proposed_indicators_json TEXT,
     strategy_id INTEGER REFERENCES strategies(id),
     status TEXT DEFAULT 'parsed'
+        CHECK (status IN ('parsed', 'failed', 'skipped', 'promoted', 'rejected'))
 );
 
 -- Research per-source settings (one row per source). Currently stores the
@@ -244,7 +246,8 @@ CREATE TABLE IF NOT EXISTS research_scrape_runs (
     items_new INTEGER DEFAULT 0,
     items_extracted INTEGER DEFAULT 0,
     items_failed INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'running',
+    status TEXT DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'failed', 'killed')),
     error_message TEXT,
     pid INTEGER,
     heartbeat_at TEXT,

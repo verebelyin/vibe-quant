@@ -20,7 +20,6 @@ from vibe_quant.research.sources import get_source, load_builtin_sources
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.research.schema import ExtractionResult, RawItem
@@ -61,7 +60,6 @@ def run_scrape(
     limit: int,
     extract_fn: ExtractFn | None = None,
     scrape_run_id: int | None = None,
-    db_path: Path | None = None,  # noqa: ARG001  (kept for symmetry with workers)
 ) -> ScrapeSummary:
     """Run one scrape pass and return a summary.
 
@@ -147,7 +145,7 @@ def run_scrape(
                         sm.update_research_item_status(item_id, "failed")
                         sm.increment_scrape_run_counters(scrape_run_id, failed=1)
                         continue
-                    _persist_extraction(sm, item_id, result)
+                    persist_extraction(sm, item_id, result)
                     if result.status == "parsed":
                         extracted += 1
                         sm.increment_scrape_run_counters(scrape_run_id, extracted=1)
@@ -189,7 +187,7 @@ def run_scrape(
     )
 
 
-def _persist_extraction(sm: StateManager, item_id: int, result: ExtractionResult) -> None:
+def persist_extraction(sm: StateManager, item_id: int, result: ExtractionResult) -> None:
     """Write an extraction row + mirror status onto the research_item."""
     sm.create_extraction(
         research_item_id=item_id,

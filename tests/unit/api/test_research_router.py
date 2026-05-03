@@ -371,9 +371,16 @@ def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateMa
     with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_FakeExt()):
         resp = client.post(f"/api/research/items/{iid}/extract")
 
-    assert resp.status_code == 201
+    assert resp.status_code == 202
+    body = resp.json()
+    # 202 returns the item (not the extraction); status is 'running' until BG task completes
+    assert body["id"] == iid
+    # TestClient runs background tasks before returning, so the row should be persisted
     rows = sm.list_extractions_for_item(iid)
     assert len(rows) == 2  # history preserved
+    after = sm.get_research_item(iid)
+    assert after is not None
+    assert after["extraction_status"] == "skipped"  # matches fake_result.status mapping
 
 
 def test_extract_item_404(client: TestClient) -> None:

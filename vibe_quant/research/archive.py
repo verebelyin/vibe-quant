@@ -50,7 +50,7 @@ def open_state_manager(db_path: Path | None = None) -> StateManager:
     return StateManager(db_path)
 
 
-def _row_to_raw_item(row: dict[str, Any]) -> RawItem:
+def row_to_raw_item(row: dict[str, Any]) -> RawItem:
     """Reconstruct a `RawItem` from a `research_items` DB row.
 
     Used by re-extraction: the API loads the persisted row and feeds it back

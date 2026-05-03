@@ -18,9 +18,9 @@ import {
 } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui";
 import {
   Select,
@@ -42,13 +42,6 @@ import { cn } from "@/lib/utils";
 import { DiscoveryResults } from "./DiscoveryResults";
 
 const ALL = "__all__";
-
-const STATUS_STYLES: Record<string, string> = {
-  running: "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300",
-  completed: "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300",
-  cancelled: "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300",
-};
 
 function formatDuration(start: string | null | undefined, end: string | null | undefined, status: string): string {
   if (!start) return "-";
@@ -124,21 +117,7 @@ const columns: ColumnDef<DiscoveryJobResponse>[] = [
   {
     accessorKey: "status",
     header: "Status",
-    cell: ({ row }) => {
-      const s = row.original.status.toLowerCase();
-      return (
-        <Badge
-          variant="outline"
-          className={cn(
-            "border-transparent text-[10px] capitalize",
-            STATUS_STYLES[s] ?? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-            s === "running" && "animate-pulse",
-          )}
-        >
-          {row.original.status}
-        </Badge>
-      );
-    },
+    cell: ({ row }) => <StatusBadge status={row.original.status} />,
   },
   {
     accessorKey: "symbols",

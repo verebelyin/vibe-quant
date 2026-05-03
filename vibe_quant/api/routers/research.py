@@ -10,7 +10,7 @@ import subprocess
 import sys
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.api.schemas.research import (
@@ -27,7 +27,9 @@ from vibe_quant.api.schemas.research import (
     SubredditsUpdateRequest,
 )
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.research.archive import row_to_raw_item
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
+from vibe_quant.research.pipeline import persist_extraction
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,10 @@ def _item_to_response(row: dict[str, Any]) -> ResearchItemResponse:
     extras: dict[str, Any] | None = (
         json.loads(extras_str) if isinstance(extras_str, str) else None
     )
+    if "num_comments" in row and row["num_comments"] is not None:
+        if extras is None:
+            extras = {}
+        extras.setdefault("num_comments", row["num_comments"])
     if "latest_confidence" in row and row["latest_confidence"] is not None:
         if extras is None:
             extras = {}
@@ -286,45 +292,47 @@ def get_item(item_id: int, sm: StateMgr) -> ResearchItemDetailResponse:
     )
 
 
-@router.post("/items/{item_id}/extract", response_model=ExtractionResponse, status_code=201)
-def extract_item(item_id: int, sm: StateMgr) -> ExtractionResponse:
-    """Re-run extraction for a single item (preserves history — adds new row)."""
+def _run_extraction_background(sm: StateManager, item_id: int) -> None:
+    """Worker invoked by BackgroundTasks. Owns its own error handling so a
+    crash here can never bubble back to the request handler."""
+    item_row = sm.get_research_item(item_id)
+    if not item_row:
+        return
+    try:
+        from vibe_quant.research.extractor import get_default_extractor
+
+        extractor = get_default_extractor()
+    except (ImportError, FileNotFoundError):
+        logger.exception("extractor unavailable for background extraction of item %d", item_id)
+        sm.update_research_item_status(item_id, "failed")
+        return
+    try:
+        result = extractor.extract(row_to_raw_item(item_row))
+        persist_extraction(sm, item_id, result)
+    except Exception:
+        logger.exception("background extraction failed for item %d", item_id)
+        sm.update_research_item_status(item_id, "failed")
+
+
+@router.post("/items/{item_id}/extract", response_model=ResearchItemResponse, status_code=202)
+def extract_item(
+    item_id: int, sm: StateMgr, background: BackgroundTasks
+) -> ResearchItemResponse:
+    """Schedule extraction in the background. Poll GET /items/{id} until
+    extraction_status leaves 'running'."""
     item_row = sm.get_research_item(item_id)
     if not item_row:
         raise HTTPException(status_code=404, detail=f"research_item {item_id} not found")
+    if item_row.get("extraction_status") == "running":
+        raise HTTPException(
+            status_code=409, detail=f"extraction already in progress for item {item_id}"
+        )
 
-    try:
-        from vibe_quant.research.extractor import get_default_extractor
-    except ImportError as e:
-        raise HTTPException(status_code=503, detail=f"extractor module unavailable: {e}") from e
-
-    try:
-        extractor = get_default_extractor()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-
-    from vibe_quant.research.archive import _row_to_raw_item
-
-    raw = _row_to_raw_item(item_row)
-    result = extractor.extract(raw)
-
-    extraction_id = sm.create_extraction(
-        research_item_id=item_id,
-        status=result.status,
-        llm_model=result.llm_model,
-        confidence=result.confidence,
-        rationale=result.rationale,
-        raw_response=result.raw_response,
-        dsl_yaml=result.dsl_yaml,
-        parsed_dsl_json=result.parsed_dsl_json,
-        parse_error=result.parse_error,
-    )
-    item_status_map = {"parsed": "extracted", "failed": "failed", "skipped": "skipped"}
-    sm.update_research_item_status(item_id, item_status_map.get(result.status, "failed"))
-
-    row = sm.get_extraction(extraction_id)
-    assert row is not None
-    return _extraction_to_response(row)
+    sm.update_research_item_status(item_id, "running")
+    background.add_task(_run_extraction_background, sm, item_id)
+    after = sm.get_research_item(item_id)
+    assert after is not None
+    return _item_to_response(after)
 
 
 @router.post("/extractions/{extraction_id}/promote", response_model=PromoteResponse)

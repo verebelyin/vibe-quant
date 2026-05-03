@@ -9,16 +9,8 @@ import type { DiscoveryJobResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/utils";
-
-const STATUS_BADGE: Record<string, string> = {
-  running: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 animate-pulse",
-  completed: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-  queued: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  cancelled: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
-};
-const FALLBACK_BADGE = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
 
 function formatDate(iso: string | null): string {
   if (!iso) return "--";
@@ -122,7 +114,6 @@ export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobLis
         <div className="space-y-2">
           {jobs.map((job) => {
             const normalized = job.status.toLowerCase();
-            const badgeCls = STATUS_BADGE[normalized] ?? FALLBACK_BADGE;
             const info = progressInfo(job);
             const isSelected = selectedRunId === job.run_id;
             const isClickable = normalized === "completed";
@@ -141,9 +132,7 @@ export function DiscoveryJobList({ selectedRunId, onSelectRun }: DiscoveryJobLis
                 <div className="flex items-center justify-between">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs text-muted-foreground">#{job.run_id}</span>
-                    <Badge variant="outline" className={cn("border-transparent text-[10px]", badgeCls)}>
-                      {job.status}
-                    </Badge>
+                    <StatusBadge status={job.status} />
                     <span className="text-[10px] text-muted-foreground">{formatDate(job.started_at)}</span>
                     {job.num_seeds != null && job.num_seeds > 1 && (
                       <Badge variant="outline" className="text-[10px]">

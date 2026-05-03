@@ -1067,8 +1067,12 @@ class StateManager:
             "highest_confidence": "latest_confidence IS NULL, latest_confidence DESC, i.id DESC",
         }
         order_by = order_clauses.get(sort, order_clauses["newest_scraped"])
+        # Project only list-view columns. body and extras_json (which holds
+        # the comments array) can be MBs per row — fetch them in get_research_item only.
         query = (
-            "SELECT i.*, ("
+            "SELECT i.id, i.source, i.external_id, i.url, i.title, i.author,"
+            " i.posted_at, i.score, i.fetched_at, i.extraction_status,"
+            " json_extract(i.extras_json, '$.num_comments') AS num_comments, ("
             " SELECT confidence FROM research_extractions e"
             " WHERE e.research_item_id = i.id"
             " ORDER BY e.extracted_at DESC, e.id DESC LIMIT 1"

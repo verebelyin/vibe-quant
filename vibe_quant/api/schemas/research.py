@@ -11,7 +11,6 @@ class ScrapeRequest(BaseModel):
     source: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
     limit: Annotated[int, Field(ge=1, le=500)] = 50
     extract: bool = True
-    subreddits: list[str] | None = None
 
 
 class ScrapeRunResponse(BaseModel):

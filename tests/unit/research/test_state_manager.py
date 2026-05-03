@@ -143,9 +143,9 @@ def test_list_research_items_filters_by_source_and_status(sm: StateManager) -> N
     assert len(arxiv_items) == 1
 
     # filter by status
-    sm.update_research_item_status(reddit_items[0]["id"], "parsed")
-    parsed = sm.list_research_items(source="reddit", status="parsed")
-    assert len(parsed) == 1
+    sm.update_research_item_status(reddit_items[0]["id"], "extracted")
+    extracted = sm.list_research_items(source="reddit", status="extracted")
+    assert len(extracted) == 1
 
 
 def test_extraction_round_trip(sm: StateManager) -> None:

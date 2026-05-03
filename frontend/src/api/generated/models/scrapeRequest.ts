@@ -18,5 +18,4 @@ export interface ScrapeRequest {
    */
   limit?: number;
   extract?: boolean;
-  subreddits?: string[] | null;
 }

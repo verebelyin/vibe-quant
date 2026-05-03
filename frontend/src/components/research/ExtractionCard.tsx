@@ -11,7 +11,7 @@ import {
 } from "@/api/generated/research/research";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
 import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
-import { StatusBadge } from "@/components/research/StatusBadge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { YamlViewer } from "@/components/research/YamlViewer";
 import { Button } from "@/components/ui/button";
 
@@ -101,7 +101,7 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
       { itemId },
       {
         onSuccess: (resp) => {
-          if (resp.status === 201) {
+          if (resp.status === 202) {
             toast.success("Extraction queued");
             queryClient.invalidateQueries({ queryKey: itemKey });
           } else {

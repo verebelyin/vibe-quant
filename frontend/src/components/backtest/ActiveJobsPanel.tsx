@@ -9,6 +9,7 @@ import type { JobStatusResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import {
   Table,
   TableBody,
@@ -28,18 +29,6 @@ const WS_INDICATOR: Record<WsStatus, { className: string; label: string }> = {
   connecting: { className: "bg-yellow-500", label: "Connecting" },
   disconnected: { className: "bg-red-500", label: "Disconnected" },
 };
-
-const STATUS_BADGE_VARIANTS: Record<string, { className: string }> = {
-  queued: { className: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
-  running: {
-    className: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 animate-pulse",
-  },
-  completed: { className: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" },
-  failed: { className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300" },
-  cancelled: { className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" },
-};
-
-const FALLBACK_BADGE = "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300";
 
 function formatElapsed(startedAt: string | null): string {
   if (!startedAt) return "--";
@@ -152,17 +141,13 @@ export function ActiveJobsPanel() {
           <TableBody>
             {jobs.map((job) => {
               const stale = isStaleJob(job);
-              const normalized = job.status.toLowerCase();
-              const badgeCls = STATUS_BADGE_VARIANTS[normalized]?.className ?? FALLBACK_BADGE;
               return (
                 <TableRow key={job.run_id}>
                   <TableCell className="font-mono text-xs text-foreground">{job.run_id}</TableCell>
                   <TableCell className="text-xs text-foreground">{job.job_type}</TableCell>
                   <TableCell className="text-xs">
                     <div className="flex items-center gap-1.5">
-                      <Badge variant="outline" className={cn("border-transparent", badgeCls)}>
-                        {job.status}
-                      </Badge>
+                      <StatusBadge status={job.status} />
                       {stale && (
                         <Badge
                           variant="outline"
