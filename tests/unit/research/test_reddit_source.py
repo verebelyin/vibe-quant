@@ -32,14 +32,12 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _reset_warning_state() -> Generator[None]:
-    """Clear deprecation/default-UA warning dedup so each test starts fresh."""
+    """Clear default-UA warning dedup so each test starts fresh."""
     from vibe_quant.research import config as cfg
 
-    cfg._warned_deprecated.clear()
-    cfg._warned_default_ua = False
+    cfg._warn_default_ua_once.cache_clear()
     yield
-    cfg._warned_deprecated.clear()
-    cfg._warned_default_ua = False
+    cfg._warn_default_ua_once.cache_clear()
 
 
 @pytest.fixture
@@ -56,7 +54,7 @@ def _post(
     created_utc: float = 1735689600.0,
     author: str | None = "u/x",
     flair: str | None = None,
-    num_comments: int = 0,
+    num_comments: int = 1,
 ) -> dict[str, Any]:
     return {
         "kind": "t3",
@@ -389,6 +387,29 @@ def test_subreddit_404_logged_and_others_continue(
     assert any("broken" in rec.message for rec in caplog.records)
 
 
+def test_zero_comment_post_skips_comment_fetch(ua_env: None) -> None:
+    """Posts with `num_comments=0` must not trigger a comments request."""
+    seen_paths: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen_paths.append(req.url.path)
+        if req.url.path.endswith("/new.json"):
+            return httpx.Response(200, json=_listing([_post(sid="zc", num_comments=0)]))
+        return httpx.Response(200, json=_comment_thread([]))
+
+    with patch("time.sleep", _no_sleep):
+        src = RedditSource(
+            config=RedditConfig.from_env(),
+            subreddits=["algotrading"],
+            client=_make_client(handler),
+        )
+        items = list(src.fetch(since=None, limit=1))
+
+    assert len(items) == 1
+    assert items[0].extras["comments"] == []
+    assert all("/comments/" not in p for p in seen_paths)
+
+
 def test_empty_subreddit_returns_no_items(ua_env: None) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path.endswith("/new.json"):
@@ -456,32 +477,6 @@ def test_default_user_agent_used_when_env_unset(
     assert cfg.user_agent == DEFAULT_USER_AGENT
     assert cfg.using_default is True
     assert any(ENV_REDDIT_USER_AGENT in rec.message for rec in caplog.records)
-
-
-def test_deprecated_creds_emit_warning_each_var(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "stale")
-    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "stale")
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "vibe-quant-test:0.1 (by /u/tester)")
-    with caplog.at_level(logging.WARNING):
-        RedditConfig.from_env()
-        # Second call should not re-warn (dedup)
-        RedditConfig.from_env()
-    msgs = [rec.message for rec in caplog.records]
-    assert sum("REDDIT_CLIENT_ID detected" in m for m in msgs) == 1
-    assert sum("REDDIT_CLIENT_SECRET detected" in m for m in msgs) == 1
-
-
-def test_no_deprecation_warning_when_creds_absent(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.delenv("REDDIT_CLIENT_ID", raising=False)
-    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "vibe-quant-test:0.1 (by /u/tester)")
-    with caplog.at_level(logging.WARNING):
-        RedditConfig.from_env()
-    assert not any("detected" in rec.message for rec in caplog.records)
 
 
 def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:

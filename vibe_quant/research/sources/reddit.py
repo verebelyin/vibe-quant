@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.reddit.com"
 MIN_REQUEST_INTERVAL_S = 6.0
-MAX_RETRIES = 3
 RETRY_BACKOFF_S = (6.0, 12.0, 24.0)
+MAX_RETRIES = len(RETRY_BACKOFF_S)
 RETRY_AFTER_BUFFER_S = 0.5
 HTTP_TIMEOUT_S = 15.0
 TOP_COMMENT_COUNT = 10
@@ -62,6 +62,9 @@ class RedditSource:
             },
         )
         self._last_request_at: float = 0.0
+
+    def close(self) -> None:
+        self._client.close()
 
     def fetch(self, since: datetime | None, limit: int) -> Iterable[RawItem]:
         """Yield RawItems from each configured subreddit's `/new` listing.
@@ -116,8 +119,7 @@ class RedditSource:
         """Return up to `TOP_COMMENT_COUNT` top-level comments by score.
 
         Reddit's `<permalink>.json` returns `[post_listing, comment_listing]`.
-        We keep top-level only — nested replies (`data.replies`) are ignored
-        to match the prior praw behavior.
+        Top-level only — nested replies (`data.replies`) are ignored.
         """
         url = f"{BASE_URL}{permalink.rstrip('/')}.json"
         params = {"limit": str(TOP_COMMENT_COUNT), "sort": "top", "raw_json": "1"}
@@ -143,7 +145,8 @@ class RedditSource:
 
     def _to_raw_item(self, data: dict[str, Any], subreddit: str) -> RawItem:
         permalink = str(data.get("permalink") or "")
-        comments = self._fetch_comments(permalink) if permalink else []
+        num_comments = int(data.get("num_comments") or 0)
+        comments = self._fetch_comments(permalink) if permalink and num_comments > 0 else []
         return RawItem(
             source="reddit",
             external_id=str(data.get("id") or ""),
@@ -156,7 +159,7 @@ class RedditSource:
             extras={
                 "subreddit": subreddit,
                 "flair": data.get("link_flair_text"),
-                "num_comments": int(data.get("num_comments") or 0),
+                "num_comments": num_comments,
                 "comments": comments,
             },
         )

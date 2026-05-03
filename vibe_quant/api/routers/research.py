@@ -25,7 +25,7 @@ from vibe_quant.api.schemas.research import (
     SourceListResponse,
 )
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research.config import DEFAULT_USER_AGENT, ENV_REDDIT_USER_AGENT
+from vibe_quant.research.config import RedditConfig
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -105,12 +105,12 @@ def get_credentials_status(source: str = "reddit") -> CredentialsStatusResponse:
     """Report the User-Agent the Reddit source will send (never raw secrets)."""
     if source != "reddit":
         raise HTTPException(status_code=422, detail=f"unknown source '{source}'")
-    custom_ua = os.getenv(ENV_REDDIT_USER_AGENT)
+    cfg = RedditConfig.from_env()
     return CredentialsStatusResponse(
         source=source,
-        user_agent_set=bool(custom_ua),
-        user_agent_value=custom_ua or DEFAULT_USER_AGENT,
-        using_default=not custom_ua,
+        user_agent_set=not cfg.using_default,
+        user_agent_value=cfg.user_agent,
+        using_default=cfg.using_default,
     )
 
 
