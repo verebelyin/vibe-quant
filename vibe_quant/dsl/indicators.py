@@ -815,14 +815,17 @@ def _roc_spec() -> IndicatorSpec:
 
 @indicator_registry.register("ADX")
 def _adx_spec() -> IndicatorSpec:
+    # NT's DirectionalMovement only exposes DI+/DI- (as fractions via .pos/.neg);
+    # its .value is always 0. There is no true ADX (smoothed DX) in NT 1.222.0.
+    # Force the compute_fn path so we get pandas-ta's actual ADX in 0-100 scale,
+    # matching threshold_range and the canonical pandas-ta convention used
+    # everywhere else in the DSL.
     return IndicatorSpec(
         name="ADX",
-        nt_class=_get_nt_class("nautilus_trader.indicators", "DirectionalMovement"),
+        nt_class=None,
         pandas_ta_func="adx",
         default_params={"period": 14},
         param_schema={"period": int},
-        nt_kwargs_fn=_period_kwargs,
-        nt_codegen_kwargs=(("period", "period"),),
         compute_fn=compute_adx,
         requires_high_low=True,
         display_name="Average Directional Index",
