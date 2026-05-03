@@ -10,6 +10,7 @@ import {
   useRejectExtractionApiResearchExtractionsExtractionIdRejectPost,
 } from "@/api/generated/research/research";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
+import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
 import { StatusBadge } from "@/components/research/StatusBadge";
 import { YamlViewer } from "@/components/research/YamlViewer";
 import { Button } from "@/components/ui/button";
@@ -151,6 +152,8 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
       )}
 
       {isParsed && extraction.dsl_yaml && <YamlViewer yaml={extraction.dsl_yaml} />}
+
+      <ProposedIndicatorsList json={extraction.proposed_indicators_json} />
 
       {isPromoted && extraction.strategy_id != null && (
         <div className="text-xs">

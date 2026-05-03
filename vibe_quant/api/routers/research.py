@@ -91,6 +91,7 @@ def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
         dsl_yaml=row.get("dsl_yaml"),
         parsed_dsl_json=row.get("parsed_dsl_json"),
         parse_error=row.get("parse_error"),
+        proposed_indicators_json=row.get("proposed_indicators_json"),
         strategy_id=row.get("strategy_id"),
         status=str(row.get("status") or "parsed"),
     )

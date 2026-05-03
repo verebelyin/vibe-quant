@@ -243,6 +243,91 @@ def test_response_with_non_string_result_in_envelope_fails_clean() -> None:
     assert result.parse_error is not None
 
 
+def test_proposed_indicators_threaded_into_result_when_skipped() -> None:
+    """When the model returns extracted=false but proposes a novel indicator,
+
+    the proposal must surface on ExtractionResult.proposed_indicators_json
+    so the downstream UI / dev can act on it (skipping wouldn't strand the
+    surfaced signal in raw_response only).
+    """
+    proposal = {
+        "name": "adaptive_chop_index",
+        "display_name": "Adaptive Chop Index",
+        "description": "Adjusts chop period by realized volatility.",
+        "formula": "100 * log10(sum(TR, n) / (max(high,n) - min(low,n))) / log10(n) where n = clamp(round(c/atr), 7, 28)",
+        "parameters": {"c": {"default": 14.0}},
+        "output_range": "0..100",
+        "source_quote": "uses an adaptive period that shrinks in fast markets",
+    }
+    raw = _claude_envelope({
+        "extracted": False,
+        "confidence": 0.4,
+        "rationale": "Strategy depends on a custom indicator we don't have.",
+        "dsl": None,
+        "proposed_indicators": [proposal],
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.status == "skipped"
+    assert result.proposed_indicators_json is not None
+    parsed = json.loads(result.proposed_indicators_json)
+    assert isinstance(parsed, list) and len(parsed) == 1
+    assert parsed[0]["name"] == "adaptive_chop_index"
+    assert parsed[0]["formula"].startswith("100 * log10")
+
+
+def test_proposed_indicators_drops_invalid_entries() -> None:
+    """Entries without a string `name` are dropped; if none remain, the
+
+    field stays None rather than emitting an empty array. Defensive against
+    a malformed model response, not a hard validator.
+    """
+    raw = _claude_envelope({
+        "extracted": False,
+        "confidence": 0.0,
+        "rationale": "garbage proposals",
+        "dsl": None,
+        "proposed_indicators": [
+            {"description": "no name"},
+            "string instead of dict",
+            {"name": ""},
+            {"name": "   "},
+        ],
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.proposed_indicators_json is None
+
+
+def test_proposed_indicators_threaded_when_parsed_too() -> None:
+    """A successful parse is also allowed to surface proposed_indicators
+
+    (e.g. when the model substituted a registered indicator and noted the
+    missing one as a proposal). Both channels should be populated.
+    """
+    raw = _claude_envelope({
+        "extracted": True,
+        "confidence": 0.7,
+        "rationale": "Substituted ROC for the post's bespoke 'velocity' indicator.",
+        "dsl": _good_dsl(),
+        "proposed_indicators": [
+            {"name": "velocity_index", "description": "Smoothed second derivative of price."},
+        ],
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.status == "parsed"
+    assert result.proposed_indicators_json is not None
+    parsed = json.loads(result.proposed_indicators_json)
+    assert parsed[0]["name"] == "velocity_index"
+
+
 def test_prompt_invites_proposed_indicators_for_novel_signals() -> None:
     """The prompt must offer a `proposed_indicators` channel so the model
 

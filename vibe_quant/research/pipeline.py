@@ -201,6 +201,7 @@ def _persist_extraction(sm: StateManager, item_id: int, result: ExtractionResult
         dsl_yaml=result.dsl_yaml,
         parsed_dsl_json=result.parsed_dsl_json,
         parse_error=result.parse_error,
+        proposed_indicators_json=result.proposed_indicators_json,
     )
     item_status_map = {
         "parsed": "extracted",

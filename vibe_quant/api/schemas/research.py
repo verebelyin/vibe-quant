@@ -40,6 +40,7 @@ class ExtractionResponse(BaseModel):
     dsl_yaml: str | None
     parsed_dsl_json: str | None
     parse_error: str | None
+    proposed_indicators_json: str | None = None
     strategy_id: int | None
     status: str
 

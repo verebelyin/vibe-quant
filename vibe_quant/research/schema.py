@@ -41,3 +41,4 @@ class ExtractionResult:
     parsed_dsl_json: str | None
     parse_error: str | None
     llm_model: str | None
+    proposed_indicators_json: str | None = None

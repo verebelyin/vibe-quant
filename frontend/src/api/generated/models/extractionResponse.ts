@@ -16,6 +16,7 @@ export interface ExtractionResponse {
   dsl_yaml: string | null;
   parsed_dsl_json: string | null;
   parse_error: string | null;
+  proposed_indicators_json?: string | null;
   strategy_id: number | null;
   status: string;
 }

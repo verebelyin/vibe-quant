@@ -144,6 +144,32 @@ def _build_prompt(item: RawItem) -> str:
     )
 
 
+def _extract_proposed_indicators(response: dict[str, Any]) -> str | None:
+    """Pull `proposed_indicators` off a parsed model response.
+
+    Returns a JSON-serialized array of objects, or None when the model
+    didn't emit any (or emitted something the wrong shape — we don't try
+    to repair, we just drop it). Each entry is required to be an object
+    with at least a string `name`; other fields are surfaced verbatim so
+    the UI can render whatever the model gave us without re-validating
+    the loose schema.
+    """
+    raw = response.get("proposed_indicators")
+    if not isinstance(raw, list) or not raw:
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        cleaned.append(entry)
+    if not cleaned:
+        return None
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
 def _is_empty_input(item: RawItem) -> bool:
     if item.body and item.body.strip():
         return False
@@ -225,6 +251,7 @@ class ClaudePExtractor:
         rationale = response.get("rationale")
         confidence_f = float(confidence) if isinstance(confidence, (int, float)) else None
         rationale_s = str(rationale) if rationale is not None else None
+        proposed_json = _extract_proposed_indicators(response)
 
         if not response.get("extracted"):
             return ExtractionResult(
@@ -236,6 +263,7 @@ class ClaudePExtractor:
                 parsed_dsl_json=None,
                 parse_error=None,
                 llm_model=LLM_MODEL_LABEL,
+                proposed_indicators_json=proposed_json,
             )
 
         dsl = response.get("dsl")
@@ -249,6 +277,7 @@ class ClaudePExtractor:
                 parsed_dsl_json=None,
                 parse_error="extracted=true but dsl is missing or not an object",
                 llm_model=LLM_MODEL_LABEL,
+                proposed_indicators_json=proposed_json,
             )
 
         dsl_yaml = yaml.safe_dump(dsl, sort_keys=False, default_flow_style=False)
@@ -264,6 +293,7 @@ class ClaudePExtractor:
                 parsed_dsl_json=None,
                 parse_error=str(e),
                 llm_model=LLM_MODEL_LABEL,
+                proposed_indicators_json=proposed_json,
             )
 
         return ExtractionResult(
@@ -275,6 +305,7 @@ class ClaudePExtractor:
             parsed_dsl_json=strategy.model_dump_json(exclude_none=True),
             parse_error=None,
             llm_model=LLM_MODEL_LABEL,
+            proposed_indicators_json=proposed_json,
         )
 
     def _run_claude(self, prompt: str) -> str:
