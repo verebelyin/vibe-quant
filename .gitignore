@@ -67,7 +67,10 @@ frontend/data/
 
 # Runtime data
 data/vibe_quant.db
+data/state.db
 logs/
+paper_*.json
+.claude/scheduled_tasks.lock
 
 # Build/cache
 .vite/
