@@ -145,6 +145,77 @@ def test_credentials_status_response_omits_deprecated_fields(
         assert legacy not in body
 
 
+# ---------- /settings/subreddits ----------
+
+
+def test_get_subreddits_unset_returns_env_default(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
+    body = client.get("/api/research/settings/subreddits").json()
+    assert body["source"] == "reddit"
+    assert body["using_default"] is True
+    assert body["subreddits"] == ["algotrading"]
+
+
+def test_get_subreddits_reads_env_when_unset(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REDDIT_SUBREDDITS", "algotrading,quant")
+    body = client.get("/api/research/settings/subreddits").json()
+    assert body["using_default"] is True
+    assert body["subreddits"] == ["algotrading", "quant"]
+
+
+def test_put_subreddits_persists_and_round_trips(client: TestClient) -> None:
+    resp = client.put(
+        "/api/research/settings/subreddits",
+        json={"subreddits": ["algotrading", "quant", "wallstreetbets"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["using_default"] is False
+    assert body["subreddits"] == ["algotrading", "quant", "wallstreetbets"]
+
+    got = client.get("/api/research/settings/subreddits").json()
+    assert got["using_default"] is False
+    assert got["subreddits"] == ["algotrading", "quant", "wallstreetbets"]
+
+
+def test_put_subreddits_dedupes_preserving_order(client: TestClient) -> None:
+    body = client.put(
+        "/api/research/settings/subreddits",
+        json={"subreddits": ["algotrading", "quant", "algotrading"]},
+    ).json()
+    assert body["subreddits"] == ["algotrading", "quant"]
+
+
+def test_put_subreddits_rejects_empty_list(client: TestClient) -> None:
+    resp = client.put("/api/research/settings/subreddits", json={"subreddits": []})
+    assert resp.status_code == 422
+
+
+def test_put_subreddits_rejects_invalid_names(client: TestClient) -> None:
+    for bad in ("r/foo", "Foo", "foo bar", "ab", "x" * 22, ""):
+        resp = client.put(
+            "/api/research/settings/subreddits", json={"subreddits": [bad]}
+        )
+        assert resp.status_code == 422, f"expected 422 for {bad!r}"
+
+
+def test_delete_subreddits_resets_to_default(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("REDDIT_SUBREDDITS", raising=False)
+    client.put(
+        "/api/research/settings/subreddits", json={"subreddits": ["custom"]}
+    )
+    resp = client.delete("/api/research/settings/subreddits")
+    assert resp.status_code == 200
+    assert resp.json()["using_default"] is True
+    assert resp.json()["subreddits"] == ["algotrading"]
+
+
 # ---------- /scrape (POST) ----------
 
 

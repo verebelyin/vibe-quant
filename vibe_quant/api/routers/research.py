@@ -23,9 +23,11 @@ from vibe_quant.api.schemas.research import (
     ScrapeRequest,
     ScrapeRunResponse,
     SourceListResponse,
+    SubredditsResponse,
+    SubredditsUpdateRequest,
 )
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research.config import RedditConfig
+from vibe_quant.research.config import RedditConfig, subreddits_from_env
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,40 @@ def get_credentials_status(source: str = "reddit") -> CredentialsStatusResponse:
         source=source,
         user_agent_value=cfg.user_agent,
         using_default=cfg.using_default,
+    )
+
+
+@router.get("/settings/subreddits", response_model=SubredditsResponse)
+def get_subreddits(sm: StateMgr) -> SubredditsResponse:
+    """Return the configured subreddit list for the reddit source."""
+    saved = sm.get_research_subreddits("reddit")
+    if saved:
+        return SubredditsResponse(source="reddit", subreddits=saved, using_default=False)
+    return SubredditsResponse(
+        source="reddit", subreddits=subreddits_from_env(), using_default=True
+    )
+
+
+@router.put("/settings/subreddits", response_model=SubredditsResponse)
+def set_subreddits(body: SubredditsUpdateRequest, sm: StateMgr) -> SubredditsResponse:
+    """Persist the subreddit list. Validation enforced by the request schema."""
+    # Dedupe while preserving order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for s in body.subreddits:
+        if s not in seen:
+            seen.add(s)
+            deduped.append(s)
+    sm.set_research_subreddits("reddit", deduped)
+    return SubredditsResponse(source="reddit", subreddits=deduped, using_default=False)
+
+
+@router.delete("/settings/subreddits", response_model=SubredditsResponse)
+def reset_subreddits(sm: StateMgr) -> SubredditsResponse:
+    """Drop the saved row so the source falls back to env defaults."""
+    sm.clear_research_subreddits("reddit")
+    return SubredditsResponse(
+        source="reddit", subreddits=subreddits_from_env(), using_default=True
     )
 
 

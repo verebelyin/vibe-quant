@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 5
+SCHEMA_VERSION: int = 6
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -223,6 +223,15 @@ CREATE TABLE IF NOT EXISTS research_extractions (
     parse_error TEXT,
     strategy_id INTEGER REFERENCES strategies(id),
     status TEXT DEFAULT 'parsed'
+);
+
+-- Research per-source settings (one row per source). Currently stores the
+-- subreddit list for the reddit source so users can edit it from the UI
+-- without restarting the backend. Falls back to env vars when no row exists.
+CREATE TABLE IF NOT EXISTS research_settings (
+    source TEXT PRIMARY KEY,
+    subreddits_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS research_scrape_runs (

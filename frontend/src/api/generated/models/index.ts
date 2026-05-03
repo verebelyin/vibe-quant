@@ -138,6 +138,8 @@ export * from './strategyResponse';
 export * from './strategyResponseDslConfig';
 export * from './strategyUpdate';
 export * from './strategyUpdateDslConfig';
+export * from './subredditsResponse';
+export * from './subredditsUpdateRequest';
 export * from './sweepResultResponse';
 export * from './sweepResultResponseParameters';
 export * from './sweepResultsBatchRequest';

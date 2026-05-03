@@ -35,6 +35,8 @@ import type {
   ScrapeRequest,
   ScrapeRunResponse,
   SourceListResponse,
+  SubredditsResponse,
+  SubredditsUpdateRequest,
   VibeQuantApiSchemasResearchPromoteResponse
 } from '.././models';
 
@@ -281,6 +283,289 @@ export function useGetCredentialsStatusApiResearchCredentialsStatusGet<TData = A
 
 
 /**
+ * Return the configured subreddit list for the reddit source.
+ * @summary Get Subreddits
+ */
+export type getSubredditsApiResearchSettingsSubredditsGetResponse200 = {
+  data: SubredditsResponse
+  status: 200
+}
+
+export type getSubredditsApiResearchSettingsSubredditsGetResponseSuccess = (getSubredditsApiResearchSettingsSubredditsGetResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getSubredditsApiResearchSettingsSubredditsGetResponse = (getSubredditsApiResearchSettingsSubredditsGetResponseSuccess)
+
+export const getGetSubredditsApiResearchSettingsSubredditsGetUrl = () => {
+
+
+  
+
+  return `/api/research/settings/subreddits`
+}
+
+export const getSubredditsApiResearchSettingsSubredditsGet = async ( options?: RequestInit): Promise<getSubredditsApiResearchSettingsSubredditsGetResponse> => {
+  
+  return customInstance<getSubredditsApiResearchSettingsSubredditsGetResponse>(getGetSubredditsApiResearchSettingsSubredditsGetUrl(),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getGetSubredditsApiResearchSettingsSubredditsGetQueryKey = () => {
+    return [
+    `/api/research/settings/subreddits`
+    ] as const;
+    }
+
+    
+export const getGetSubredditsApiResearchSettingsSubredditsGetQueryOptions = <TData = Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSubredditsApiResearchSettingsSubredditsGetQueryKey();
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>> = ({ signal }) => getSubredditsApiResearchSettingsSubredditsGet({ signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetSubredditsApiResearchSettingsSubredditsGetQueryResult = NonNullable<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>>
+export type GetSubredditsApiResearchSettingsSubredditsGetQueryError = unknown
+
+
+export function useGetSubredditsApiResearchSettingsSubredditsGet<TData = Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError = unknown>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>,
+          TError,
+          Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSubredditsApiResearchSettingsSubredditsGet<TData = Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>,
+          TError,
+          Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSubredditsApiResearchSettingsSubredditsGet<TData = Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Subreddits
+ */
+
+export function useGetSubredditsApiResearchSettingsSubredditsGet<TData = Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSubredditsApiResearchSettingsSubredditsGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetSubredditsApiResearchSettingsSubredditsGetQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Persist the subreddit list. Validation enforced by the request schema.
+ * @summary Set Subreddits
+ */
+export type setSubredditsApiResearchSettingsSubredditsPutResponse200 = {
+  data: SubredditsResponse
+  status: 200
+}
+
+export type setSubredditsApiResearchSettingsSubredditsPutResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type setSubredditsApiResearchSettingsSubredditsPutResponseSuccess = (setSubredditsApiResearchSettingsSubredditsPutResponse200) & {
+  headers: Headers;
+};
+export type setSubredditsApiResearchSettingsSubredditsPutResponseError = (setSubredditsApiResearchSettingsSubredditsPutResponse422) & {
+  headers: Headers;
+};
+
+export type setSubredditsApiResearchSettingsSubredditsPutResponse = (setSubredditsApiResearchSettingsSubredditsPutResponseSuccess | setSubredditsApiResearchSettingsSubredditsPutResponseError)
+
+export const getSetSubredditsApiResearchSettingsSubredditsPutUrl = () => {
+
+
+  
+
+  return `/api/research/settings/subreddits`
+}
+
+export const setSubredditsApiResearchSettingsSubredditsPut = async (subredditsUpdateRequest: SubredditsUpdateRequest, options?: RequestInit): Promise<setSubredditsApiResearchSettingsSubredditsPutResponse> => {
+  
+  return customInstance<setSubredditsApiResearchSettingsSubredditsPutResponse>(getSetSubredditsApiResearchSettingsSubredditsPutUrl(),
+  {      
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      subredditsUpdateRequest,)
+  }
+);}
+
+
+
+
+export const getSetSubredditsApiResearchSettingsSubredditsPutMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>, TError,{data: SubredditsUpdateRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>, TError,{data: SubredditsUpdateRequest}, TContext> => {
+
+const mutationKey = ['setSubredditsApiResearchSettingsSubredditsPut'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>, {data: SubredditsUpdateRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  setSubredditsApiResearchSettingsSubredditsPut(data,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SetSubredditsApiResearchSettingsSubredditsPutMutationResult = NonNullable<Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>>
+    export type SetSubredditsApiResearchSettingsSubredditsPutMutationBody = SubredditsUpdateRequest
+    export type SetSubredditsApiResearchSettingsSubredditsPutMutationError = HTTPValidationError
+
+    /**
+ * @summary Set Subreddits
+ */
+export const useSetSubredditsApiResearchSettingsSubredditsPut = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>, TError,{data: SubredditsUpdateRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof setSubredditsApiResearchSettingsSubredditsPut>>,
+        TError,
+        {data: SubredditsUpdateRequest},
+        TContext
+      > => {
+      return useMutation(getSetSubredditsApiResearchSettingsSubredditsPutMutationOptions(options), queryClient);
+    }
+    /**
+ * Drop the saved row so the source falls back to env defaults.
+ * @summary Reset Subreddits
+ */
+export type resetSubredditsApiResearchSettingsSubredditsDeleteResponse200 = {
+  data: SubredditsResponse
+  status: 200
+}
+
+export type resetSubredditsApiResearchSettingsSubredditsDeleteResponseSuccess = (resetSubredditsApiResearchSettingsSubredditsDeleteResponse200) & {
+  headers: Headers;
+};
+;
+
+export type resetSubredditsApiResearchSettingsSubredditsDeleteResponse = (resetSubredditsApiResearchSettingsSubredditsDeleteResponseSuccess)
+
+export const getResetSubredditsApiResearchSettingsSubredditsDeleteUrl = () => {
+
+
+  
+
+  return `/api/research/settings/subreddits`
+}
+
+export const resetSubredditsApiResearchSettingsSubredditsDelete = async ( options?: RequestInit): Promise<resetSubredditsApiResearchSettingsSubredditsDeleteResponse> => {
+  
+  return customInstance<resetSubredditsApiResearchSettingsSubredditsDeleteResponse>(getResetSubredditsApiResearchSettingsSubredditsDeleteUrl(),
+  {      
+    ...options,
+    method: 'DELETE'
+    
+    
+  }
+);}
+
+
+
+
+export const getResetSubredditsApiResearchSettingsSubredditsDeleteMutationOptions = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>, TError,void, TContext> => {
+
+const mutationKey = ['resetSubredditsApiResearchSettingsSubredditsDelete'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>, void> = () => {
+          
+
+          return  resetSubredditsApiResearchSettingsSubredditsDelete(requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResetSubredditsApiResearchSettingsSubredditsDeleteMutationResult = NonNullable<Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>>
+    
+    export type ResetSubredditsApiResearchSettingsSubredditsDeleteMutationError = unknown
+
+    /**
+ * @summary Reset Subreddits
+ */
+export const useResetSubredditsApiResearchSettingsSubredditsDelete = <TError = unknown,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof resetSubredditsApiResearchSettingsSubredditsDelete>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getResetSubredditsApiResearchSettingsSubredditsDeleteMutationOptions(options), queryClient);
+    }
+    /**
  * @summary Start Scrape
  */
 export type startScrapeApiResearchScrapePostResponse201 = {

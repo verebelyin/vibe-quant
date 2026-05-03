@@ -3,6 +3,7 @@ import { useGetSystemInfoApiSettingsSystemInfoGet } from "@/api/generated/settin
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { SubredditEditor } from "@/components/settings/SubredditEditor";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -110,6 +111,8 @@ export function SystemTab() {
       </Card>
 
       <RedditCredentialsCard />
+
+      <SubredditEditor />
 
       {/* Storage */}
       <Card className="py-4">

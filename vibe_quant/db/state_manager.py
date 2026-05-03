@@ -446,6 +446,42 @@ class StateManager:
             )
             self.conn.commit()
 
+    # --- Research per-source settings ---
+
+    def get_research_subreddits(self, source: str) -> list[str] | None:
+        """Return the saved subreddit list for ``source``, or None if unset."""
+        row = self.conn.execute(
+            "SELECT subreddits_json FROM research_settings WHERE source = ?",
+            (source,),
+        ).fetchone()
+        if row is None:
+            return None
+        parsed = json.loads(row[0])
+        if not isinstance(parsed, list):
+            return None
+        return [str(s) for s in parsed]
+
+    def set_research_subreddits(self, source: str, subreddits: list[str]) -> None:
+        """Upsert the subreddit list for ``source``."""
+        with self._write_lock:
+            self.conn.execute(
+                "INSERT INTO research_settings (source, subreddits_json, updated_at) "
+                "VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(source) DO UPDATE SET "
+                "subreddits_json = excluded.subreddits_json, "
+                "updated_at = datetime('now')",
+                (source, json.dumps(subreddits)),
+            )
+            self.conn.commit()
+
+    def clear_research_subreddits(self, source: str) -> None:
+        """Drop the saved row for ``source`` so callers fall back to env defaults."""
+        with self._write_lock:
+            self.conn.execute(
+                "DELETE FROM research_settings WHERE source = ?", (source,)
+            )
+            self.conn.commit()
+
     # --- Backtest Run CRUD ---
 
     def create_backtest_run(

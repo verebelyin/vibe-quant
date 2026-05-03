@@ -20,12 +20,17 @@ def sm(tmp_path: Path) -> Generator[StateManager]:
     mgr.close()
 
 
-def test_schema_creates_all_three_tables(sm: StateManager) -> None:
+def test_schema_creates_all_research_tables(sm: StateManager) -> None:
     rows = sm.conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'research_%'"
     ).fetchall()
     names = {r["name"] for r in rows}
-    assert names == {"research_items", "research_extractions", "research_scrape_runs"}
+    assert names == {
+        "research_items",
+        "research_extractions",
+        "research_scrape_runs",
+        "research_settings",
+    }
 
 
 def test_init_schema_idempotent(tmp_path: Path) -> None:
@@ -251,3 +256,24 @@ def test_scrape_run_lifecycle(sm: StateManager) -> None:
 
 def test_complete_nonexistent_scrape_run_returns_false(sm: StateManager) -> None:
     assert sm.complete_scrape_run(99999, status="failed", error_message="x") is False
+
+
+def test_research_subreddits_unset_returns_none(sm: StateManager) -> None:
+    assert sm.get_research_subreddits("reddit") is None
+
+
+def test_research_subreddits_set_then_get(sm: StateManager) -> None:
+    sm.set_research_subreddits("reddit", ["algotrading", "quant"])
+    assert sm.get_research_subreddits("reddit") == ["algotrading", "quant"]
+
+
+def test_research_subreddits_upsert_replaces(sm: StateManager) -> None:
+    sm.set_research_subreddits("reddit", ["a"])
+    sm.set_research_subreddits("reddit", ["b", "c"])
+    assert sm.get_research_subreddits("reddit") == ["b", "c"]
+
+
+def test_research_subreddits_clear(sm: StateManager) -> None:
+    sm.set_research_subreddits("reddit", ["a"])
+    sm.clear_research_subreddits("reddit")
+    assert sm.get_research_subreddits("reddit") is None

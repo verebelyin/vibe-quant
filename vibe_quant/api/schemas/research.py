@@ -79,6 +79,33 @@ class SourceListResponse(BaseModel):
     sources: list[str]
 
 
+SUBREDDIT_NAME_PATTERN = r"^[a-z0-9_]{3,21}$"
+
+
+class SubredditsResponse(BaseModel):
+    """Configured subreddit list for the reddit source.
+
+    `using_default` is True when no custom row exists in the DB and the list
+    is the env-derived fallback (REDDIT_SUBREDDITS or hard-coded default).
+    """
+
+    source: str
+    subreddits: list[str]
+    using_default: bool
+
+
+class SubredditsUpdateRequest(BaseModel):
+    subreddits: Annotated[
+        list[
+            Annotated[
+                str,
+                Field(min_length=3, max_length=21, pattern=SUBREDDIT_NAME_PATTERN),
+            ]
+        ],
+        Field(min_length=1, max_length=50),
+    ]
+
+
 class CredentialsStatusResponse(BaseModel):
     """Reports the User-Agent that the Reddit source will use.
 

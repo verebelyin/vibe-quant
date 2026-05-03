@@ -44,9 +44,13 @@ class ScrapeSummary:
     error_message: str | None
 
 
-def _build_source(source_name: str) -> object:
+def _build_source(source_name: str, sm: StateManager) -> object:
     load_builtin_sources()
     cls = get_source(source_name)
+    if source_name == "reddit":
+        saved = sm.get_research_subreddits("reddit")
+        if saved:
+            return cls(subreddits=saved)
     return cls()  # each source supplies its own env-driven defaults
 
 
@@ -77,7 +81,7 @@ def run_scrape(
     """
     # Build the source up-front so unknown name / missing creds / config
     # errors don't leave an orphan scrape_run row in the DB.
-    source = _build_source(source_name)
+    source = _build_source(source_name, sm)
 
     pid = os.getpid()
     if scrape_run_id is None:
