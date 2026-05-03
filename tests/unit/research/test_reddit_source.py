@@ -31,12 +31,14 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def _reset_warning_state() -> Generator[None]:
-    """Clear default-UA warning dedup so each test starts fresh."""
+    """Clear warning dedup state so each test starts fresh."""
     from vibe_quant.research import config as cfg
 
     cfg._default_ua_warned = False
+    cfg._deprecated_creds_warned.clear()
     yield
     cfg._default_ua_warned = False
+    cfg._deprecated_creds_warned.clear()
 
 
 @pytest.fixture
@@ -476,6 +478,51 @@ def test_default_user_agent_used_when_env_unset(
     assert cfg.user_agent == DEFAULT_USER_AGENT
     assert cfg.using_default is True
     assert any(ENV_REDDIT_USER_AGENT in rec.message for rec in caplog.records)
+
+
+def test_deprecated_creds_warning_emitted_once_per_var(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "stale-id")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "stale-secret")
+    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
+    with caplog.at_level(logging.WARNING):
+        RedditConfig.from_env()
+        RedditConfig.from_env()  # second call: must not re-emit
+
+    msgs = [rec.getMessage() for rec in caplog.records]
+    id_warnings = [m for m in msgs if "REDDIT_CLIENT_ID" in m]
+    secret_warnings = [m for m in msgs if "REDDIT_CLIENT_SECRET" in m]
+    assert len(id_warnings) == 1
+    assert len(secret_warnings) == 1
+    for m in (*id_warnings, *secret_warnings):
+        assert "no longer used" in m
+        assert "Safe to remove" in m
+
+
+def test_deprecated_creds_no_warning_when_unset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("REDDIT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
+    with caplog.at_level(logging.WARNING):
+        RedditConfig.from_env()
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert not any("REDDIT_CLIENT_ID" in m or "REDDIT_CLIENT_SECRET" in m for m in msgs)
+
+
+def test_deprecated_creds_warning_only_one_var_set(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "stale-id")
+    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
+    with caplog.at_level(logging.WARNING):
+        RedditConfig.from_env()
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert sum(1 for m in msgs if "REDDIT_CLIENT_ID" in m) == 1
+    assert not any("REDDIT_CLIENT_SECRET" in m for m in msgs)
 
 
 def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:

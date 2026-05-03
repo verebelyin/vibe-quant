@@ -12,6 +12,10 @@ ENV_REDDIT_SUBREDDITS = "REDDIT_SUBREDDITS"
 DEFAULT_SUBREDDITS = ("algotrading",)
 DEFAULT_USER_AGENT = "vibe-quant-research:0.1 (by anonymous)"
 
+# Vars from the praw era. We no longer use them (.json endpoint is unauthenticated)
+# but warn so users can scrub stale .env files.
+DEPRECATED_REDDIT_VARS = ("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET")
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,6 +28,7 @@ class RedditConfig:
 
     @classmethod
     def from_env(cls) -> RedditConfig:
+        _warn_deprecated_creds_once()
         ua = os.getenv(ENV_REDDIT_USER_AGENT)
         if ua:
             return cls(user_agent=ua, using_default=False)
@@ -32,6 +37,7 @@ class RedditConfig:
 
 
 _default_ua_warned: bool = False
+_deprecated_creds_warned: set[str] = set()
 
 
 def _warn_default_ua_once() -> None:
@@ -46,6 +52,19 @@ def _warn_default_ua_once() -> None:
         DEFAULT_USER_AGENT,
         ENV_REDDIT_USER_AGENT,
     )
+
+
+def _warn_deprecated_creds_once() -> None:
+    for var in DEPRECATED_REDDIT_VARS:
+        if var in _deprecated_creds_warned:
+            continue
+        if os.getenv(var):
+            _deprecated_creds_warned.add(var)
+            logger.warning(
+                "%s detected — no longer used since the praw→.json swap. "
+                "Safe to remove from env.",
+                var,
+            )
 
 
 def subreddits_from_env() -> list[str]:
