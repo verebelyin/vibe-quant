@@ -165,10 +165,8 @@ def run_scrape(
         for sig, prev in prev_handlers.items():
             with contextlib.suppress(ValueError, TypeError):
                 signal.signal(sig, prev)  # type: ignore[arg-type]
-        close = getattr(source, "close", None)
-        if callable(close):
-            with contextlib.suppress(Exception):
-                close()
+        with contextlib.suppress(Exception):
+            source.close()
         sm.complete_scrape_run(
             scrape_run_id,
             status=final_status,

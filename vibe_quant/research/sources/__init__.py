@@ -38,6 +38,8 @@ class ResearchSource(Protocol):
 
     def fetch(self, since: datetime | None, limit: int) -> Iterable[RawItem]: ...
 
+    def close(self) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class SourceLoadError:

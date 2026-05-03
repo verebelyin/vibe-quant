@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -32,8 +31,14 @@ class RedditConfig:
         return cls(user_agent=DEFAULT_USER_AGENT, using_default=True)
 
 
-@functools.lru_cache(maxsize=1)
+_default_ua_warned: bool = False
+
+
 def _warn_default_ua_once() -> None:
+    global _default_ua_warned
+    if _default_ua_warned:
+        return
+    _default_ua_warned = True
     logger.warning(
         "%s not set — using default %r. Reddit may throttle generic UAs; "
         "set %s to '<platform>:<app-id>:<version> (by /u/<your-username>)'.",

@@ -93,18 +93,9 @@ class RedditSource:
             if child.get("kind") != KIND_POST:
                 continue
             data = child.get("data") or {}
-            try:
-                if since_ts is not None and float(data.get("created_utc", 0.0)) < since_ts:
-                    return  # /new is reverse-chronological — stop early
-                yield self._to_raw_item(data, subreddit)
-            except httpx.HTTPError as e:
-                logger.warning(
-                    "submission %s in r/%s skipped: %s",
-                    data.get("id", "?"),
-                    subreddit,
-                    e,
-                )
-                continue
+            if since_ts is not None and float(data.get("created_utc", 0.0)) < since_ts:
+                return  # /new is reverse-chronological — stop early
+            yield self._to_raw_item(data, subreddit)
 
     def _fetch_listing(self, subreddit: str, limit: int) -> list[dict[str, Any]] | None:
         url = f"{BASE_URL}/r/{subreddit}/new.json"
@@ -116,11 +107,9 @@ class RedditSource:
         return list(children)
 
     def _fetch_comments(self, permalink: str) -> list[dict[str, Any]]:
-        """Return up to `TOP_COMMENT_COUNT` top-level comments by score.
-
-        Reddit's `<permalink>.json` returns `[post_listing, comment_listing]`.
-        Top-level only — nested replies (`data.replies`) are ignored.
-        """
+        # Top-level only — nested replies (`data.replies`) are ignored.
+        # The URL passes `sort=top&limit=N`; the local sort+slice are a defensive
+        # fallback for API drift and exercised by tests.
         url = f"{BASE_URL}{permalink.rstrip('/')}.json"
         params = {"limit": str(TOP_COMMENT_COUNT), "sort": "top", "raw_json": "1"}
         body = self._request(url, params)
@@ -165,15 +154,10 @@ class RedditSource:
         )
 
     def _request(self, url: str, params: dict[str, str]) -> Any:
-        """GET with rate-limit floor + 429/Retry-After + bounded retries.
-
-        Returns the parsed JSON body on success, or None when all retries are
-        exhausted (caller treats None as "skip this fetch and continue").
-        """
+        # Returns parsed JSON, or None on retry exhaustion (caller skips).
         for attempt in range(MAX_RETRIES):
             self._respect_rate_limit()
             response = self._client.get(url, params=params)
-            self._last_request_at = time.monotonic()
             if response.status_code == 429:
                 sleep_s = _parse_retry_after(response) or RETRY_BACKOFF_S[attempt]
                 logger.warning(
@@ -183,9 +167,11 @@ class RedditSource:
                     MAX_RETRIES,
                     sleep_s,
                 )
+                # Don't stamp _last_request_at — the Retry-After sleep covers the gap.
                 time.sleep(sleep_s + RETRY_AFTER_BUFFER_S)
                 continue
             response.raise_for_status()
+            self._last_request_at = time.monotonic()
             return response.json()
         logger.warning("exhausted %d retries on %s — skipping", MAX_RETRIES, url)
         return None

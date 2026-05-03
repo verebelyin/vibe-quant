@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -35,9 +34,9 @@ def _reset_warning_state() -> Generator[None]:
     """Clear default-UA warning dedup so each test starts fresh."""
     from vibe_quant.research import config as cfg
 
-    cfg._warn_default_ua_once.cache_clear()
+    cfg._default_ua_warned = False
     yield
-    cfg._warn_default_ua_once.cache_clear()
+    cfg._default_ua_warned = False
 
 
 @pytest.fixture
@@ -559,17 +558,10 @@ def test_429_without_retry_after_exhausts_retries_and_skips(
 
 def test_no_praw_imports_remain() -> None:
     """Regression guard: praw must not creep back into the module."""
-    src_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "..",
-        "vibe_quant",
-        "research",
-        "sources",
-        "reddit.py",
-    )
-    with open(src_path) as f:
-        contents = f.read()
+    import inspect
+
+    from vibe_quant.research.sources import reddit as _mod
+
+    contents = inspect.getsource(_mod)
     assert "import praw" not in contents
     assert "import prawcore" not in contents
