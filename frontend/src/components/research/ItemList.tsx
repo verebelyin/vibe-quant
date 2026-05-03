@@ -66,6 +66,7 @@ export function ItemList() {
               <TableHead>Title</TableHead>
               <TableHead className="w-24">Source</TableHead>
               <TableHead className="w-16 text-right">Score</TableHead>
+              <TableHead className="w-20 text-right">Comments</TableHead>
               <TableHead className="w-24">Status</TableHead>
               <TableHead className="w-32">Confidence</TableHead>
             </TableRow>

@@ -26,12 +26,19 @@ function getConfidence(extras: { [k: string]: unknown } | null | undefined): num
   return typeof c === "number" ? c : null;
 }
 
+function getNumComments(extras: { [k: string]: unknown } | null | undefined): number | null {
+  if (!extras) return null;
+  const n = extras.num_comments;
+  return typeof n === "number" ? n : null;
+}
+
 interface Props {
   item: ResearchItemResponse;
 }
 
 function ItemRowImpl({ item }: Props) {
   const confidence = getConfidence(item.extras);
+  const numComments = getNumComments(item.extras);
   const showConfidence =
     item.extraction_status === "extracted" || item.extraction_status === "parsed";
 
@@ -57,6 +64,9 @@ function ItemRowImpl({ item }: Props) {
       </TableCell>
       <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
         {item.score ?? "—"}
+      </TableCell>
+      <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+        {numComments ?? "—"}
       </TableCell>
       <TableCell>
         <StatusBadge status={item.extraction_status} />

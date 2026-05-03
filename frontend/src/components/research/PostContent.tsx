@@ -1,6 +1,6 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { CommentsAccordion } from "@/components/research/CommentsAccordion";
+import { CommentsList } from "@/components/research/CommentsList";
 
 interface Comment {
   author?: string | null;
@@ -26,7 +26,7 @@ export function PostContent({ body, comments }: Props) {
           <p className="text-xs text-muted-foreground italic">(no body)</p>
         )}
       </div>
-      <CommentsAccordion comments={comments} />
+      <CommentsList comments={comments} />
     </div>
   );
 }
