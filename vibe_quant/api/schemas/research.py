@@ -88,6 +88,5 @@ class CredentialsStatusResponse(BaseModel):
     """
 
     source: str
-    user_agent_set: bool
     user_agent_value: str
     using_default: bool

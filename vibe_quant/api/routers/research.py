@@ -108,7 +108,6 @@ def get_credentials_status(source: str = "reddit") -> CredentialsStatusResponse:
     cfg = RedditConfig.from_env()
     return CredentialsStatusResponse(
         source=source,
-        user_agent_set=not cfg.using_default,
         user_agent_value=cfg.user_agent,
         using_default=cfg.using_default,
     )

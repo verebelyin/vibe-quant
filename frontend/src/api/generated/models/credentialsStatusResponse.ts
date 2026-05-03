@@ -14,7 +14,6 @@ the UI can show what's really on the wire.
  */
 export interface CredentialsStatusResponse {
   source: string;
-  user_agent_set: boolean;
   user_agent_value: string;
   using_default: boolean;
 }

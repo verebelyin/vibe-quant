@@ -112,7 +112,6 @@ def test_credentials_status_user_agent_set(
     assert resp.status_code == 200
     assert resp.json() == {
         "source": "reddit",
-        "user_agent_set": True,
         "user_agent_value": "vibe-quant-research:0.1 (by /u/me)",
         "using_default": False,
     }
@@ -126,10 +125,10 @@ def test_credentials_status_user_agent_unset_returns_default(
     assert resp.status_code == 200
     body = resp.json()
     assert body["source"] == "reddit"
-    assert body["user_agent_set"] is False
     assert body["using_default"] is True
     assert body["user_agent_value"]  # always non-null
     assert "vibe-quant-research" in body["user_agent_value"]
+    assert "user_agent_set" not in body
 
 
 def test_credentials_status_unknown_source_422(client: TestClient) -> None:
