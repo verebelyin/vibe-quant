@@ -13,6 +13,7 @@ from vibe_quant.research.extractor import (
     LLM_MODEL_LABEL,
     ClaudePExtractor,
     ExtractorUnavailable,
+    _build_system_prompt,
     get_default_extractor,
 )
 from vibe_quant.research.schema import RawItem
@@ -240,6 +241,25 @@ def test_response_with_non_string_result_in_envelope_fails_clean() -> None:
         result = ext.extract(_item())
     assert result.status == "failed"
     assert result.parse_error is not None
+
+
+def test_prompt_invites_proposed_indicators_for_novel_signals() -> None:
+    """The prompt must offer a `proposed_indicators` channel so the model
+
+    can surface novel indicators described in the post that aren't yet in
+    the registry — without having to invent fake values for the dsl field.
+    """
+    prompt = _build_system_prompt()
+    assert "proposed_indicators" in prompt
+    # Channel must be distinct from dsl (the unrunnable proposals don't
+    # belong inside the strategy spec).
+    assert "separate channel" in prompt or "separate" in prompt
+    # Must instruct the model NOT to hallucinate proposals.
+    assert "do NOT invent" in prompt or "not invent" in prompt
+    # Proposal schema fields must be advertised so the model knows what to
+    # return.
+    for field in ("formula", "parameters", "source_quote"):
+        assert field in prompt
 
 
 def test_subprocess_nonzero_exit_treated_as_failure() -> None:
