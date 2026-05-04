@@ -365,6 +365,9 @@ def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateMa
     )
 
     class _FakeExt:
+        def extract_all(self, _item: Any) -> list[ExtractionResult]:
+            return [fake_result]
+
         def extract(self, _item: Any) -> ExtractionResult:
             return fake_result
 

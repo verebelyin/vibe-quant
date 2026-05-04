@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CLAUDE_BIN = "claude"
-CLAUDE_TIMEOUT_SECONDS = 90
+CLAUDE_TIMEOUT_SECONDS = 180
 LLM_MODEL_LABEL = "claude-p"
 TOP_COMMENT_PREVIEW = 10
 # Bound prompt size so a single 50KB Reddit post can't blow the 90s claude
@@ -60,35 +60,68 @@ class ExtractorUnavailable(Exception):
 @functools.lru_cache(maxsize=1)
 def _build_system_prompt() -> str:
     indicators = ", ".join(indicator_registry.list_indicators())
-    operators = "<, <=, >, >=, ==, !=, and, or, crosses_above, crosses_below"
+    operators = "<, <=, >, >=, ==, !=, between, crosses_above, crosses_below"
     return (
         "You extract algorithmic-trading strategies from social-media posts "
-        "and return a single JSON object. Do not return prose, markdown, or "
-        "code fences — only the JSON object.\n\n"
-        "RESPONSE SCHEMA (always return all fields):\n"
-        "{\n"
-        '  "extracted": <true|false>,\n'
-        '  "confidence": <float 0..1>,\n'
-        '  "rationale": <string, 1-3 sentences>,\n'
-        '  "dsl": <object|null>,\n'
-        '  "proposed_indicators": <array, may be empty>\n'
-        "}\n\n"
-        "Set extracted=false when the post is a question, off-topic, "
-        "lacks concrete entry/exit rules, or you can't be confident. "
+        "and return a JSON ARRAY of finding objects. Do not return prose, "
+        "markdown, or code fences — only the JSON array.\n\n"
+        "MULTIPLE STRATEGIES PER ITEM: inspect the post AND every comment. "
+        "Each distinct, concrete strategy you find becomes ONE finding object. "
+        "If the post is a question (e.g. 'what's your strategy?') and "
+        "commenters describe concrete strategies, emit one finding per "
+        "commenter strategy. Do NOT duplicate the same strategy across "
+        "findings (e.g. don't emit one for the post and one for a commenter "
+        "who restated it). When neither the post nor any comment contains a "
+        "strategy, return an array with ONE finding object that has "
+        "extracted=false explaining why.\n\n"
+        "RESPONSE SCHEMA — top-level is an array:\n"
+        "[\n"
+        "  {\n"
+        '    "source": "post" | "comment:u/<author>",\n'
+        '    "extracted": <true|false>,\n'
+        '    "confidence": <float 0..1>,\n'
+        '    "rationale": <string, 1-3 sentences>,\n'
+        '    "dsl": <object|null>,\n'
+        '    "proposed_indicators": <array, may be empty>\n'
+        "  },\n"
+        "  ...\n"
+        "]\n\n"
+        "Set extracted=false on a finding when the corresponding source "
+        "(post or comment) is a question, off-topic, lacks concrete "
+        "entry/exit rules, or you can't be confident. "
         "When extracted=true, dsl MUST follow this shape:\n"
         "  name: snake_case identifier (1-100 chars, [a-z][a-z0-9_]*)\n"
         '  timeframe: one of "1m" "5m" "15m" "1h" "4h"\n'
         "  indicators: dict of name -> {type, period?, source?, ...}\n"
         "  entry_conditions: {long: [str, ...], short: [str, ...]}\n"
         "  exit_conditions: {long: [str, ...], short: [str, ...]}\n"
-        '  stop_loss: {type: "fixed_pct"|"atr_fixed"|"atr_trailing", percent?, atr_multiplier?}\n'
-        '  take_profit: {type: "fixed_pct"|"atr_fixed"|"risk_reward", percent?, atr_multiplier?, risk_reward_ratio?}\n\n'
-        "When the post does not specify SL/TP, default to "
+        '  stop_loss: {type: "fixed_pct"|"atr_fixed"|"atr_trailing", percent?, atr_multiplier?, indicator?}\n'
+        '  take_profit: {type: "fixed_pct"|"atr_fixed"|"risk_reward", percent?, atr_multiplier?, risk_reward_ratio?, indicator?}\n\n'
+        "STOP-LOSS / TAKE-PROFIT CONSTRAINTS:\n"
+        '  - type="fixed_pct" requires `percent` (no other fields).\n'
+        '  - type="atr_fixed" or "atr_trailing" requires BOTH `atr_multiplier` '
+        "AND `indicator` (the dict key of an ATR indicator that MUST exist in "
+        "the indicators block — typically {atr: {type: ATR, period: 14}}).\n"
+        '  - type="risk_reward" requires `risk_reward_ratio`.\n'
+        "  - Never mix fields across types (e.g. don't set `percent` on "
+        "atr_fixed). Validators reject extra fields.\n\n"
+        "When the source does not specify SL/TP, default to "
         '{type:"fixed_pct", percent:2.0} for stop_loss and '
         '{type:"fixed_pct", percent:5.0} for take_profit.\n\n'
         f"REGISTERED INDICATOR TYPES (the dsl field may use ONLY these): {indicators}.\n"
         f"ALLOWED OPERATORS in conditions: {operators}.\n"
-        "Conditions reference indicators by their dict key, e.g. 'rsi < 30'.\n\n"
+        "Conditions reference indicators by their dict key, e.g. 'rsi < 30'.\n"
+        "CONDITION GRAMMAR (each list entry is ONE comparison; the engine "
+        "implicitly ANDs all entries in a list):\n"
+        "  - '<indicator> <op> <value-or-indicator>'   (op: <, <=, >, >=, ==, !=)\n"
+        "  - '<indicator> between <low> <high>'         (two-sided range)\n"
+        "  - '<indicator> crosses_above <value-or-indicator>'\n"
+        "  - '<indicator> crosses_below <value-or-indicator>'\n"
+        "DO NOT join clauses with the words 'and' / 'or' inside a single "
+        "string. To express 'rsi >= 55 AND rsi <= 68 AND roc5 >= -3', emit "
+        "three list entries: ['rsi between 55 68', 'roc5 >= -3']. To express "
+        "OR semantics, the DSL has no native OR — pick the dominant clause or "
+        "set extracted=false with a rationale.\n\n"
         "PROPOSED INDICATORS — surfacing novel signals for later implementation:\n"
         "If the post describes an indicator that is NOT in the registered list "
         "above, but is a real, computable indicator with a clear definition "
@@ -193,12 +226,103 @@ def _is_empty_input(item: RawItem) -> bool:
     return not (isinstance(comments, list) and comments)
 
 
+_STATUS_PRIORITY = {"parsed": 0, "failed": 1, "skipped": 2}
+
+
+def _coerce_findings(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [f for f in value if isinstance(f, dict)]
+    if isinstance(value, dict):
+        return [value]
+    raise ValueError("model output is neither an array of findings nor a finding object")
+
+
+def _prefix_rationale(source: Any, rationale: str | None) -> str | None:
+    if not isinstance(source, str) or not source.strip():
+        return rationale
+    tag = f"[{source.strip()}]"
+    if rationale is None:
+        return tag
+    return f"{tag} {rationale}"
+
+
+def _finding_to_result(finding: dict[str, Any], raw_response: str) -> ExtractionResult:
+    confidence = finding.get("confidence")
+    rationale = finding.get("rationale")
+    confidence_f = float(confidence) if isinstance(confidence, (int, float)) else None
+    rationale_s = _prefix_rationale(
+        finding.get("source"),
+        str(rationale) if rationale is not None else None,
+    )
+    proposed_json = _extract_proposed_indicators(finding)
+
+    if not finding.get("extracted"):
+        return ExtractionResult(
+            status="skipped",
+            confidence=confidence_f,
+            rationale=rationale_s,
+            raw_response=raw_response,
+            dsl_yaml=None,
+            parsed_dsl_json=None,
+            parse_error=None,
+            llm_model=LLM_MODEL_LABEL,
+            proposed_indicators_json=proposed_json,
+        )
+
+    dsl = finding.get("dsl")
+    if not isinstance(dsl, dict):
+        return ExtractionResult(
+            status="failed",
+            confidence=confidence_f,
+            rationale=rationale_s,
+            raw_response=raw_response,
+            dsl_yaml=None,
+            parsed_dsl_json=None,
+            parse_error="extracted=true but dsl is missing or not an object",
+            llm_model=LLM_MODEL_LABEL,
+            proposed_indicators_json=proposed_json,
+        )
+
+    dsl_yaml = yaml.safe_dump(dsl, sort_keys=False, default_flow_style=False)
+    try:
+        strategy = parse_strategy_string(dsl_yaml)
+    except DSLParseError as e:
+        return ExtractionResult(
+            status="failed",
+            confidence=confidence_f,
+            rationale=rationale_s,
+            raw_response=raw_response,
+            dsl_yaml=dsl_yaml,
+            parsed_dsl_json=None,
+            parse_error=str(e),
+            llm_model=LLM_MODEL_LABEL,
+            proposed_indicators_json=proposed_json,
+        )
+
+    return ExtractionResult(
+        status="parsed",
+        confidence=confidence_f,
+        rationale=rationale_s,
+        raw_response=raw_response,
+        dsl_yaml=dsl_yaml,
+        parsed_dsl_json=strategy.model_dump_json(exclude_none=True),
+        parse_error=None,
+        llm_model=LLM_MODEL_LABEL,
+        proposed_indicators_json=proposed_json,
+    )
+
+
+def _best_result(results: list[ExtractionResult]) -> ExtractionResult:
+    return min(results, key=lambda r: _STATUS_PRIORITY.get(r.status, 99))
+
+
 class ClaudePExtractor:
     """Calls ``claude -p --output-format json`` per item.
 
-    Returns an :class:`ExtractionResult` for every input — failures land as
-    ``status="failed"`` with ``parse_error`` populated, so the pipeline can
-    archive them for triage rather than silently dropping data.
+    Returns one or more :class:`ExtractionResult` rows per item — one per
+    finding (post or comment). Failures land as ``status="failed"`` with
+    ``parse_error`` populated, so the pipeline can archive them for triage
+    rather than silently dropping data.
     """
 
     def __init__(
@@ -213,123 +337,94 @@ class ClaudePExtractor:
         # until first use (kept for tests that patch _run_claude).
         self._claude_path = claude_path
 
-    def __call__(self, item: RawItem, item_id: int) -> ExtractionResult:  # noqa: ARG002
-        return self.extract(item)
+    def __call__(self, item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG002
+        return self.extract_all(item)
 
     def extract(self, item: RawItem) -> ExtractionResult:
+        """Back-compat single-result entry point.
+
+        Returns the highest-priority finding (parsed > failed > skipped).
+        Prefer ``extract_all`` for new callers — multiple findings per item
+        are now possible when comments describe distinct strategies.
+        """
+        return _best_result(self.extract_all(item))
+
+    def extract_all(self, item: RawItem) -> list[ExtractionResult]:
         if _is_empty_input(item):
-            return ExtractionResult(
-                status="skipped",
-                confidence=0.0,
-                rationale="empty input (no title/body/comments)",
-                raw_response="",
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=None,
-                llm_model=LLM_MODEL_LABEL,
-            )
+            return [
+                ExtractionResult(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale="empty input (no title/body/comments)",
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model=LLM_MODEL_LABEL,
+                )
+            ]
 
         prompt = _build_prompt(item)
         try:
             raw_response = self._run_claude(prompt)
         except subprocess.TimeoutExpired:
-            return ExtractionResult(
-                status="failed",
-                confidence=None,
-                rationale=None,
-                raw_response="",
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=f"timeout after {self.timeout_seconds}s",
-                llm_model=LLM_MODEL_LABEL,
-            )
+            return [
+                ExtractionResult(
+                    status="failed",
+                    confidence=None,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=f"timeout after {self.timeout_seconds}s",
+                    llm_model=LLM_MODEL_LABEL,
+                )
+            ]
         except ValueError as e:
-            # subprocess returned non-zero or other clean failure
-            return ExtractionResult(
-                status="failed",
-                confidence=None,
-                rationale=None,
-                raw_response="",
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=str(e),
-                llm_model=LLM_MODEL_LABEL,
-            )
+            return [
+                ExtractionResult(
+                    status="failed",
+                    confidence=None,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=str(e),
+                    llm_model=LLM_MODEL_LABEL,
+                )
+            ]
 
         try:
-            response = self._parse_response(raw_response)
+            findings = self._parse_response(raw_response)
         except ValueError as e:
-            return ExtractionResult(
-                status="failed",
-                confidence=None,
-                rationale=None,
-                raw_response=raw_response,
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=str(e),
-                llm_model=LLM_MODEL_LABEL,
-            )
+            return [
+                ExtractionResult(
+                    status="failed",
+                    confidence=None,
+                    rationale=None,
+                    raw_response=raw_response,
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=str(e),
+                    llm_model=LLM_MODEL_LABEL,
+                )
+            ]
 
-        confidence = response.get("confidence")
-        rationale = response.get("rationale")
-        confidence_f = float(confidence) if isinstance(confidence, (int, float)) else None
-        rationale_s = str(rationale) if rationale is not None else None
-        proposed_json = _extract_proposed_indicators(response)
+        if not findings:
+            return [
+                ExtractionResult(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale="model returned no findings",
+                    raw_response=raw_response,
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model=LLM_MODEL_LABEL,
+                )
+            ]
 
-        if not response.get("extracted"):
-            return ExtractionResult(
-                status="skipped",
-                confidence=confidence_f,
-                rationale=rationale_s,
-                raw_response=raw_response,
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=None,
-                llm_model=LLM_MODEL_LABEL,
-                proposed_indicators_json=proposed_json,
-            )
-
-        dsl = response.get("dsl")
-        if not isinstance(dsl, dict):
-            return ExtractionResult(
-                status="failed",
-                confidence=confidence_f,
-                rationale=rationale_s,
-                raw_response=raw_response,
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error="extracted=true but dsl is missing or not an object",
-                llm_model=LLM_MODEL_LABEL,
-                proposed_indicators_json=proposed_json,
-            )
-
-        dsl_yaml = yaml.safe_dump(dsl, sort_keys=False, default_flow_style=False)
-        try:
-            strategy = parse_strategy_string(dsl_yaml)
-        except DSLParseError as e:
-            return ExtractionResult(
-                status="failed",
-                confidence=confidence_f,
-                rationale=rationale_s,
-                raw_response=raw_response,
-                dsl_yaml=dsl_yaml,
-                parsed_dsl_json=None,
-                parse_error=str(e),
-                llm_model=LLM_MODEL_LABEL,
-                proposed_indicators_json=proposed_json,
-            )
-
-        return ExtractionResult(
-            status="parsed",
-            confidence=confidence_f,
-            rationale=rationale_s,
-            raw_response=raw_response,
-            dsl_yaml=dsl_yaml,
-            parsed_dsl_json=strategy.model_dump_json(exclude_none=True),
-            parse_error=None,
-            llm_model=LLM_MODEL_LABEL,
-            proposed_indicators_json=proposed_json,
-        )
+        return [_finding_to_result(f, raw_response) for f in findings]
 
     def _run_claude(self, prompt: str) -> str:
         if self._claude_path is None:
@@ -350,13 +445,14 @@ class ClaudePExtractor:
             raise ValueError(f"claude exited {proc.returncode}: {stderr[:500]}")
         return proc.stdout
 
-    def _parse_response(self, raw: str) -> dict[str, Any]:
-        """Parse Claude's stdout into the response object.
+    def _parse_response(self, raw: str) -> list[dict[str, Any]]:
+        """Parse Claude's stdout into a list of finding objects.
 
         ``claude -p --output-format json`` returns an envelope around the
         model's text output; the model's actual content lives under
-        ``result``. We accept either the envelope (preferred) or a bare
-        JSON object (back-compat / mocks).
+        ``result``. The model is expected to emit a JSON array of findings
+        but a single bare object is accepted and wrapped (back-compat /
+        mocks).
         """
         if not raw or not raw.strip():
             raise ValueError("empty response from claude")
@@ -365,24 +461,18 @@ class ClaudePExtractor:
         except json.JSONDecodeError as e:
             raise ValueError(f"non-JSON response from claude: {e}") from e
 
-        if not isinstance(outer, dict):
-            raise ValueError("response is not a JSON object")
-
-        # Preferred shape: claude -p envelope with `result` containing the
-        # model's text. Unwrap and parse the inner JSON.
-        if "extracted" not in outer and "result" in outer:
-            inner = outer.get("result")
-            if not isinstance(inner, str):
+        # claude -p envelope: {"result": "<json string>", ...}. Unwrap.
+        if isinstance(outer, dict) and "extracted" not in outer and "result" in outer:
+            inner_raw = outer.get("result")
+            if not isinstance(inner_raw, str):
                 raise ValueError("claude envelope has non-string result")
             try:
-                inner_obj = json.loads(inner)
+                inner = json.loads(inner_raw)
             except json.JSONDecodeError as e:
                 raise ValueError(f"model output is not valid JSON: {e}") from e
-            if not isinstance(inner_obj, dict):
-                raise ValueError("model output is not a JSON object")
-            return inner_obj
+            return _coerce_findings(inner)
 
-        return outer
+        return _coerce_findings(outer)
 
 
 def get_default_extractor() -> ClaudePExtractor:

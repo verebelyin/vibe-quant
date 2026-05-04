@@ -82,18 +82,20 @@ def test_scrape_extract_fn_invoked_per_new_item(sm: StateManager) -> None:
 
     calls: list[int] = []
 
-    def fake_extract(item: RawItem, item_id: int) -> ExtractionResult:
+    def fake_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
         calls.append(item_id)
-        return ExtractionResult(
-            status="parsed",
-            confidence=0.8,
-            rationale="ok",
-            raw_response="{}",
-            dsl_yaml="name: x\n",
-            parsed_dsl_json='{"name": "x"}',
-            parse_error=None,
-            llm_model="test",
-        )
+        return [
+            ExtractionResult(
+                status="parsed",
+                confidence=0.8,
+                rationale="ok",
+                raw_response="{}",
+                dsl_yaml="name: x\n",
+                parsed_dsl_json='{"name": "x"}',
+                parse_error=None,
+                llm_model="test",
+            )
+        ]
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.items_extracted == 3
@@ -110,19 +112,21 @@ def test_scrape_extract_fn_invoked_per_new_item(sm: StateManager) -> None:
 def test_extractor_failure_does_not_abort_run(sm: StateManager) -> None:
     _register_fake_source([_item(i) for i in range(5)])
 
-    def flaky_extract(item: RawItem, item_id: int) -> ExtractionResult:  # noqa: ARG001
+    def flaky_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
         if "e2" in item.external_id:
             raise RuntimeError("boom")
-        return ExtractionResult(
-            status="parsed",
-            confidence=0.5,
-            rationale=None,
-            raw_response="",
-            dsl_yaml=None,
-            parsed_dsl_json=None,
-            parse_error=None,
-            llm_model="t",
-        )
+        return [
+            ExtractionResult(
+                status="parsed",
+                confidence=0.5,
+                rationale=None,
+                raw_response="",
+                dsl_yaml=None,
+                parsed_dsl_json=None,
+                parse_error=None,
+                llm_model="t",
+            )
+        ]
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=flaky_extract)
     assert summary.status == "completed"
@@ -148,17 +152,19 @@ def test_extracted_false_recorded_as_skipped(sm: StateManager) -> None:
     """status=skipped must NOT increment items_failed and should mark items as skipped."""
     _register_fake_source([_item(i) for i in range(3)])
 
-    def skip_extract(item: RawItem, item_id: int) -> ExtractionResult:  # noqa: ARG001
-        return ExtractionResult(
-            status="skipped",
-            confidence=0.0,
-            rationale="not a strategy",
-            raw_response="{}",
-            dsl_yaml=None,
-            parsed_dsl_json=None,
-            parse_error=None,
-            llm_model="t",
-        )
+    def skip_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
+        return [
+            ExtractionResult(
+                status="skipped",
+                confidence=0.0,
+                rationale="not a strategy",
+                raw_response="{}",
+                dsl_yaml=None,
+                parsed_dsl_json=None,
+                parse_error=None,
+                llm_model="t",
+            )
+        ]
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=skip_extract)
     assert summary.items_new == 3

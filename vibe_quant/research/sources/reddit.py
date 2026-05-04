@@ -37,6 +37,9 @@ DELETED_AUTHOR_PLACEHOLDERS = frozenset({"[deleted]", "[removed]"})
 KIND_POST = "t3"
 KIND_COMMENT = "t1"
 
+VALID_LISTINGS = frozenset({"new", "top", "hot", "rising"})
+VALID_TIME_FILTERS = frozenset({"hour", "day", "week", "month", "year", "all"})
+
 
 @register_source("reddit")
 class RedditSource:
@@ -49,7 +52,19 @@ class RedditSource:
         config: RedditConfig | None = None,
         subreddits: list[str] | None = None,
         client: httpx.Client | None = None,
+        listing: str = "new",
+        time_filter: str | None = None,
     ) -> None:
+        if listing not in VALID_LISTINGS:
+            raise ValueError(f"listing must be one of {sorted(VALID_LISTINGS)}, got {listing!r}")
+        if time_filter is not None and time_filter not in VALID_TIME_FILTERS:
+            raise ValueError(
+                f"time_filter must be one of {sorted(VALID_TIME_FILTERS)} or None, got {time_filter!r}"
+            )
+        if time_filter is not None and listing != "top":
+            raise ValueError(f"time_filter only applies to listing='top' (got listing={listing!r})")
+        self._listing = listing
+        self._time_filter = time_filter
         self._config = config or RedditConfig.from_env()
         self._subreddits = subreddits if subreddits is not None else subreddits_from_env()
         self._client = client or httpx.Client(
@@ -93,13 +108,24 @@ class RedditSource:
             if child.get("kind") != KIND_POST:
                 continue
             data = child.get("data") or {}
+            # /new is reverse-chronological — once we see anything older than
+            # since_ts we can stop. /top is score-ordered so the early-exit
+            # would skip valid newer items: keep going.
+            if (
+                since_ts is not None
+                and self._listing == "new"
+                and float(data.get("created_utc", 0.0)) < since_ts
+            ):
+                return
             if since_ts is not None and float(data.get("created_utc", 0.0)) < since_ts:
-                return  # /new is reverse-chronological — stop early
+                continue
             yield self._to_raw_item(data, subreddit)
 
     def _fetch_listing(self, subreddit: str, limit: int) -> list[dict[str, Any]] | None:
-        url = f"{BASE_URL}/r/{subreddit}/new.json"
+        url = f"{BASE_URL}/r/{subreddit}/{self._listing}.json"
         params = {"limit": str(limit), "raw_json": "1"}
+        if self._listing == "top" and self._time_filter is not None:
+            params["t"] = self._time_filter
         body = self._request(url, params)
         if body is None:
             return None

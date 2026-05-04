@@ -204,7 +204,8 @@ def test_claude_not_on_path_during_run_raises_extractor_unavailable() -> None:
 def test_response_envelope_with_inner_json_works() -> None:
     """The default `claude -p --output-format json` returns an envelope with
 
-    `result` as a string of JSON. Verify we unwrap it correctly."""
+    `result` as a string of JSON. Verify we unwrap it correctly. Bare-object
+    inner content is wrapped to a single-finding list."""
     raw = _claude_envelope({
         "extracted": True,
         "confidence": 0.9,
@@ -212,26 +213,88 @@ def test_response_envelope_with_inner_json_works() -> None:
         "dsl": _good_dsl(),
     })
     ext = ClaudePExtractor()
-    parsed = ext._parse_response(raw)
-    assert parsed["extracted"] is True
-    assert parsed["dsl"]["name"] == "rsi_mean_rev"
+    findings = ext._parse_response(raw)
+    assert isinstance(findings, list) and len(findings) == 1
+    assert findings[0]["extracted"] is True
+    assert findings[0]["dsl"]["name"] == "rsi_mean_rev"
 
 
 def test_response_bare_json_object_also_works() -> None:
     """Mocks/tests sometimes pass the inner object directly — accept both."""
     raw = json.dumps({"extracted": False, "confidence": 0.1, "rationale": "n/a", "dsl": None})
     ext = ClaudePExtractor()
-    parsed = ext._parse_response(raw)
-    assert parsed["extracted"] is False
+    findings = ext._parse_response(raw)
+    assert isinstance(findings, list) and len(findings) == 1
+    assert findings[0]["extracted"] is False
+
+
+def test_response_array_of_findings_parsed() -> None:
+    """The new prompt returns an array of findings; parser preserves order."""
+    raw = json.dumps([
+        {"extracted": True, "confidence": 0.8, "rationale": "post", "dsl": _good_dsl(), "source": "post"},
+        {"extracted": False, "confidence": 0.2, "rationale": "comment is a question", "dsl": None, "source": "comment:u/x"},
+    ])
+    ext = ClaudePExtractor()
+    findings = ext._parse_response(raw)
+    assert len(findings) == 2
+    assert findings[0]["extracted"] is True
+    assert findings[1]["source"] == "comment:u/x"
 
 
 def test_callable_signature_matches_pipeline_extract_fn() -> None:
-    """ClaudePExtractor must be callable as (item, item_id) -> ExtractionResult."""
+    """ClaudePExtractor must be callable as (item, item_id) -> list[ExtractionResult]."""
     raw = _claude_envelope({"extracted": False, "confidence": 0.0, "rationale": "x", "dsl": None})
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
-        result = ext(_item(), 99)
-    assert result.status == "skipped"
+        results = ext(_item(), 99)
+    assert isinstance(results, list) and len(results) == 1
+    assert results[0].status == "skipped"
+
+
+def test_extract_all_returns_one_result_per_finding() -> None:
+    """Top-level array of findings yields one ExtractionResult per entry."""
+    raw = _claude_envelope([
+        {"extracted": True, "confidence": 0.8, "rationale": "post body strategy", "dsl": _good_dsl(), "source": "post"},
+        {"extracted": True, "confidence": 0.7, "rationale": "commenter strategy", "dsl": _good_dsl(), "source": "comment:u/quant"},
+        {"extracted": False, "confidence": 0.2, "rationale": "second comment is just a question", "dsl": None, "source": "comment:u/asker"},
+    ])
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        results = ext.extract_all(_item())
+
+    assert len(results) == 3
+    assert [r.status for r in results] == ["parsed", "parsed", "skipped"]
+    # source tag must be visible in rationale for triage
+    assert results[0].rationale and results[0].rationale.startswith("[post]")
+    assert results[1].rationale and results[1].rationale.startswith("[comment:u/quant]")
+
+
+def test_extract_all_empty_array_yields_one_skipped_sentinel() -> None:
+    """Empty findings list maps to a single skipped result so callers don't
+    have to special-case the no-findings path."""
+    raw = json.dumps([])
+    # Wrap in claude-p envelope shape too — must work either way.
+    envelope = json.dumps({"result": raw, "session_id": "x"})
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=envelope):
+        results = ext.extract_all(_item())
+    assert len(results) == 1
+    assert results[0].status == "skipped"
+    assert results[0].rationale == "model returned no findings"
+
+
+def test_extract_back_compat_returns_best_finding() -> None:
+    """Single-result entry point returns the highest-priority finding (parsed wins)."""
+    raw = _claude_envelope([
+        {"extracted": False, "confidence": 0.0, "rationale": "skip 1", "dsl": None, "source": "post"},
+        {"extracted": True, "confidence": 0.7, "rationale": "the strategy", "dsl": _good_dsl(), "source": "comment:u/winner"},
+        {"extracted": False, "confidence": 0.0, "rationale": "skip 2", "dsl": None, "source": "comment:u/x"},
+    ])
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+    assert result.status == "parsed"
+    assert result.rationale and "[comment:u/winner]" in result.rationale
 
 
 def test_response_with_non_string_result_in_envelope_fails_clean() -> None:

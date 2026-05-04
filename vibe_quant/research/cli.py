@@ -34,6 +34,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Adopt an existing scrape_run row (used by API-spawned subprocesses)",
     )
+    scrape.add_argument(
+        "--reddit-listing",
+        choices=["new", "top", "hot", "rising"],
+        default=None,
+        help="Reddit-only: which listing to pull from (default: new)",
+    )
+    scrape.add_argument(
+        "--reddit-time-filter",
+        choices=["hour", "day", "week", "month", "year", "all"],
+        default=None,
+        help="Reddit-only: time window when --reddit-listing=top (e.g. week, month)",
+    )
     scrape.add_argument("--log-level", default="INFO")
 
     sub.add_parser("sources", help="List registered sources")
@@ -78,6 +90,12 @@ def main(argv: list[str] | None = None) -> int:
                 except FileNotFoundError as e:
                     logger.warning("extractor unavailable: %s; items will land at extraction_status=pending", e)
                     extract_fn = None
+            source_kwargs: dict[str, object] = {}
+            if args.source == "reddit":
+                if args.reddit_listing is not None:
+                    source_kwargs["listing"] = args.reddit_listing
+                if args.reddit_time_filter is not None:
+                    source_kwargs["time_filter"] = args.reddit_time_filter
             try:
                 summary = run_scrape(
                     sm=sm,
@@ -85,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                     extract_fn=extract_fn,
                     scrape_run_id=args.scrape_run_id,
+                    source_kwargs=source_kwargs or None,
                 )
             except ConfigurationError as e:
                 print(f"error: {e}", file=sys.stderr)

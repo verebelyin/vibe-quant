@@ -29,7 +29,7 @@ from vibe_quant.api.schemas.research import (
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research.archive import row_to_raw_item
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
-from vibe_quant.research.pipeline import persist_extraction
+from vibe_quant.research.pipeline import persist_extractions
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -307,8 +307,8 @@ def _run_extraction_background(sm: StateManager, item_id: int) -> None:
         sm.update_research_item_status(item_id, "failed")
         return
     try:
-        result = extractor.extract(row_to_raw_item(item_row))
-        persist_extraction(sm, item_id, result)
+        results = extractor.extract_all(row_to_raw_item(item_row))
+        persist_extractions(sm, item_id, results)
     except Exception:
         logger.exception("background extraction failed for item %d", item_id)
         sm.update_research_item_status(item_id, "failed")
