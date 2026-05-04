@@ -11,6 +11,7 @@ from vibe_quant.alerts.telegram import ConfigurationError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research.pipeline import run_scrape
 from vibe_quant.research.sources import get_source, list_sources, load_builtin_sources
+from vibe_quant.research.sources.reddit import VALID_LISTINGS, VALID_TIME_FILTERS
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     scrape.add_argument(
         "--reddit-listing",
-        choices=["new", "top", "hot", "rising"],
+        choices=sorted(VALID_LISTINGS),
         default=None,
         help="Reddit-only: which listing to pull from (default: new)",
     )
     scrape.add_argument(
         "--reddit-time-filter",
-        choices=["hour", "day", "week", "month", "year", "all"],
+        choices=sorted(VALID_TIME_FILTERS),
         default=None,
         help="Reddit-only: time window when --reddit-listing=top (e.g. week, month)",
     )

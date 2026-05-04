@@ -108,17 +108,14 @@ class RedditSource:
             if child.get("kind") != KIND_POST:
                 continue
             data = child.get("data") or {}
-            # /new is reverse-chronological — once we see anything older than
-            # since_ts we can stop. /top is score-ordered so the early-exit
-            # would skip valid newer items: keep going.
-            if (
-                since_ts is not None
-                and self._listing == "new"
-                and float(data.get("created_utc", 0.0)) < since_ts
-            ):
-                return
-            if since_ts is not None and float(data.get("created_utc", 0.0)) < since_ts:
-                continue
+            if since_ts is not None:
+                created_utc = float(data.get("created_utc", 0.0))
+                if created_utc < since_ts:
+                    # /new is reverse-chronological → stop. /top is score-ordered
+                    # so a stale post doesn't imply the rest are stale → skip one.
+                    if self._listing == "new":
+                        return
+                    continue
             yield self._to_raw_item(data, subreddit)
 
     def _fetch_listing(self, subreddit: str, limit: int) -> list[dict[str, Any]] | None:

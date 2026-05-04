@@ -229,6 +229,26 @@ def _is_empty_input(item: RawItem) -> bool:
 _STATUS_PRIORITY = {"parsed": 0, "failed": 1, "skipped": 2}
 
 
+def _single(
+    *,
+    status: str,
+    parse_error: str | None = None,
+    rationale: str | None = None,
+    raw_response: str = "",
+    confidence: float | None = None,
+) -> ExtractionResult:
+    return ExtractionResult(
+        status=status,
+        confidence=confidence,
+        rationale=rationale,
+        raw_response=raw_response,
+        dsl_yaml=None,
+        parsed_dsl_json=None,
+        parse_error=parse_error,
+        llm_model=LLM_MODEL_LABEL,
+    )
+
+
 def _coerce_findings(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [f for f in value if isinstance(f, dict)]
@@ -351,78 +371,32 @@ class ClaudePExtractor:
 
     def extract_all(self, item: RawItem) -> list[ExtractionResult]:
         if _is_empty_input(item):
-            return [
-                ExtractionResult(
-                    status="skipped",
-                    confidence=0.0,
-                    rationale="empty input (no title/body/comments)",
-                    raw_response="",
-                    dsl_yaml=None,
-                    parsed_dsl_json=None,
-                    parse_error=None,
-                    llm_model=LLM_MODEL_LABEL,
-                )
-            ]
+            return [_single(
+                status="skipped",
+                confidence=0.0,
+                rationale="empty input (no title/body/comments)",
+            )]
 
         prompt = _build_prompt(item)
         try:
             raw_response = self._run_claude(prompt)
         except subprocess.TimeoutExpired:
-            return [
-                ExtractionResult(
-                    status="failed",
-                    confidence=None,
-                    rationale=None,
-                    raw_response="",
-                    dsl_yaml=None,
-                    parsed_dsl_json=None,
-                    parse_error=f"timeout after {self.timeout_seconds}s",
-                    llm_model=LLM_MODEL_LABEL,
-                )
-            ]
+            return [_single(status="failed", parse_error=f"timeout after {self.timeout_seconds}s")]
         except ValueError as e:
-            return [
-                ExtractionResult(
-                    status="failed",
-                    confidence=None,
-                    rationale=None,
-                    raw_response="",
-                    dsl_yaml=None,
-                    parsed_dsl_json=None,
-                    parse_error=str(e),
-                    llm_model=LLM_MODEL_LABEL,
-                )
-            ]
+            return [_single(status="failed", parse_error=str(e))]
 
         try:
             findings = self._parse_response(raw_response)
         except ValueError as e:
-            return [
-                ExtractionResult(
-                    status="failed",
-                    confidence=None,
-                    rationale=None,
-                    raw_response=raw_response,
-                    dsl_yaml=None,
-                    parsed_dsl_json=None,
-                    parse_error=str(e),
-                    llm_model=LLM_MODEL_LABEL,
-                )
-            ]
+            return [_single(status="failed", parse_error=str(e), raw_response=raw_response)]
 
         if not findings:
-            return [
-                ExtractionResult(
-                    status="skipped",
-                    confidence=0.0,
-                    rationale="model returned no findings",
-                    raw_response=raw_response,
-                    dsl_yaml=None,
-                    parsed_dsl_json=None,
-                    parse_error=None,
-                    llm_model=LLM_MODEL_LABEL,
-                )
-            ]
+            return [_single(
+                status="skipped",
+                confidence=0.0,
+                rationale="model returned no findings",
+                raw_response=raw_response,
+            )]
 
         return [_finding_to_result(f, raw_response) for f in findings]
 

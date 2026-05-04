@@ -8,6 +8,7 @@ never leaves a half-written log.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -92,15 +93,7 @@ def write_extraction_log(
         os.replace(tmp, target)
     except OSError:
         logger.exception("could not write extraction log %s", target)
-        with _suppress_oserror():
+        with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         return None
     return target
-
-
-class _suppress_oserror:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, exc_type: object, *_: object) -> bool:
-        return isinstance(exc_type, type) and issubclass(exc_type, OSError)
