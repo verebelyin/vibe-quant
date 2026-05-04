@@ -42,3 +42,16 @@ class ExtractionResult:
     parse_error: str | None
     llm_model: str | None
     proposed_indicators_json: str | None = None
+
+
+@dataclass(frozen=True)
+class ExtractionBatch:
+    """Bundle of one LLM call's IO + the per-finding results it produced.
+
+    Returned by ``ClaudePExtractor.extract_all`` so callers can persist the
+    full prompt + raw response to a log file alongside the parsed findings.
+    """
+
+    prompt: str
+    raw_response: str
+    results: list[ExtractionResult] = field(default_factory=list)
