@@ -14,9 +14,10 @@ from vibe_quant.research.extractor import (
     ClaudePExtractor,
     ExtractorUnavailable,
     _build_system_prompt,
+    extractor_version,
     get_default_extractor,
 )
-from vibe_quant.research.schema import RawItem
+from vibe_quant.research.schema import ExtractionBatch, RawItem
 
 
 def _item(*, body: str = "Try RSI<30 long entry, RSI>70 exit on BTC 1h", title: str = "RSI mean reversion", comments: list[dict] | None = None) -> RawItem:
@@ -242,13 +243,16 @@ def test_response_array_of_findings_parsed() -> None:
 
 
 def test_callable_signature_matches_pipeline_extract_fn() -> None:
-    """ClaudePExtractor must be callable as (item, item_id) -> list[ExtractionResult]."""
+    """ClaudePExtractor must be callable as (item, item_id) -> ExtractionBatch."""
     raw = _claude_envelope({"extracted": False, "confidence": 0.0, "rationale": "x", "dsl": None})
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
-        results = ext(_item(), 99)
-    assert isinstance(results, list) and len(results) == 1
-    assert results[0].status == "skipped"
+        batch = ext(_item(), 99)
+    assert isinstance(batch, ExtractionBatch)
+    assert batch.raw_response == raw
+    assert batch.prompt  # non-empty prompt was sent
+    assert len(batch.results) == 1
+    assert batch.results[0].status == "skipped"
 
 
 def test_extract_all_returns_one_result_per_finding() -> None:
@@ -260,13 +264,17 @@ def test_extract_all_returns_one_result_per_finding() -> None:
     ])
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=raw):
-        results = ext.extract_all(_item())
+        batch = ext.extract_all(_item())
 
+    results = batch.results
     assert len(results) == 3
     assert [r.status for r in results] == ["parsed", "parsed", "skipped"]
     # source tag must be visible in rationale for triage
     assert results[0].rationale and results[0].rationale.startswith("[post]")
     assert results[1].rationale and results[1].rationale.startswith("[comment:u/quant]")
+    # batch surfaces the prompt + raw response for the on-disk log
+    assert batch.prompt and "<<<USER_CONTENT>>>" in batch.prompt
+    assert batch.raw_response == raw
 
 
 def test_extract_all_empty_array_yields_one_skipped_sentinel() -> None:
@@ -277,10 +285,18 @@ def test_extract_all_empty_array_yields_one_skipped_sentinel() -> None:
     envelope = json.dumps({"result": raw, "session_id": "x"})
     ext = ClaudePExtractor()
     with patch.object(ext, "_run_claude", return_value=envelope):
-        results = ext.extract_all(_item())
-    assert len(results) == 1
-    assert results[0].status == "skipped"
-    assert results[0].rationale == "model returned no findings"
+        batch = ext.extract_all(_item())
+    assert len(batch.results) == 1
+    assert batch.results[0].status == "skipped"
+    assert batch.results[0].rationale == "model returned no findings"
+    assert batch.raw_response == envelope
+
+
+def test_extractor_version_includes_model_label_and_prompt_hash() -> None:
+    v = extractor_version()
+    assert v.startswith(f"{LLM_MODEL_LABEL}:")
+    # 12-char hex digest
+    assert len(v.split(":", 1)[1]) == 12
 
 
 def test_extract_back_compat_returns_best_finding() -> None:

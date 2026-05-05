@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.research import extraction_log
 from vibe_quant.research.pipeline import run_scrape
-from vibe_quant.research.schema import ExtractionResult, RawItem
+from vibe_quant.research.schema import ExtractionBatch, ExtractionResult, RawItem
 from vibe_quant.research.sources import _reset_for_tests, register_source
 
 if TYPE_CHECKING:
@@ -22,6 +23,17 @@ def _isolate_registry() -> Generator[None]:
     _reset_for_tests()
     yield
     _reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_log_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[Path]:
+    """Redirect on-disk extraction logs into tmp so tests don't leak into
+    the repo's data/ tree."""
+    log_root = tmp_path / "research-logs"
+    monkeypatch.setattr(extraction_log, "DEFAULT_LOG_ROOT", log_root)
+    yield log_root
 
 
 @pytest.fixture
@@ -82,20 +94,24 @@ def test_scrape_extract_fn_invoked_per_new_item(sm: StateManager) -> None:
 
     calls: list[int] = []
 
-    def fake_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
         calls.append(item_id)
-        return [
-            ExtractionResult(
-                status="parsed",
-                confidence=0.8,
-                rationale="ok",
-                raw_response="{}",
-                dsl_yaml="name: x\n",
-                parsed_dsl_json='{"name": "x"}',
-                parse_error=None,
-                llm_model="test",
-            )
-        ]
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.8,
+                    rationale="ok",
+                    raw_response="{}",
+                    dsl_yaml="name: x\n",
+                    parsed_dsl_json='{"name": "x"}',
+                    parse_error=None,
+                    llm_model="test",
+                )
+            ],
+        )
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
     assert summary.items_extracted == 3
@@ -109,24 +125,72 @@ def test_scrape_extract_fn_invoked_per_new_item(sm: StateManager) -> None:
         assert it["extraction_status"] == "extracted"
 
 
+def test_scrape_writes_extraction_log_per_item(
+    sm: StateManager, _isolate_log_root: Path
+) -> None:
+    """Per-extraction prompt + raw response must land under
+    data/research/logs/<scrape_run_id>/<item_id>.json so future
+    prompt-engineering analysis can replay verbatim."""
+    import json
+
+    _register_fake_source([_item(i) for i in range(2)])
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt=f"PROMPT for {item_id}",
+            raw_response=f'{{"out": {item_id}}}',
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale="r",
+                    raw_response="",
+                    dsl_yaml="name: x\n",
+                    parsed_dsl_json='{"name":"x"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.items_extracted == 2
+
+    run_dir = _isolate_log_root / str(summary.scrape_run_id)
+    files = sorted(run_dir.glob("*.json"))
+    assert len(files) == 2
+    payloads = [json.loads(f.read_text()) for f in files]
+    prompts = {p["prompt"] for p in payloads}
+    assert prompts == {f"PROMPT for {p['item_id']}" for p in payloads}
+    for p in payloads:
+        assert p["scrape_run_id"] == summary.scrape_run_id
+        assert p["raw_response"] == f'{{"out": {p["item_id"]}}}'
+        assert p["extractor_version"].startswith("claude-p:")
+        assert len(p["findings"]) == 1
+
+
 def test_extractor_failure_does_not_abort_run(sm: StateManager) -> None:
     _register_fake_source([_item(i) for i in range(5)])
 
-    def flaky_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
+    def flaky_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
         if "e2" in item.external_id:
             raise RuntimeError("boom")
-        return [
-            ExtractionResult(
-                status="parsed",
-                confidence=0.5,
-                rationale=None,
-                raw_response="",
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=None,
-                llm_model="t",
-            )
-        ]
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.5,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=flaky_extract)
     assert summary.status == "completed"
@@ -152,19 +216,23 @@ def test_extracted_false_recorded_as_skipped(sm: StateManager) -> None:
     """status=skipped must NOT increment items_failed and should mark items as skipped."""
     _register_fake_source([_item(i) for i in range(3)])
 
-    def skip_extract(item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG001
-        return [
-            ExtractionResult(
-                status="skipped",
-                confidence=0.0,
-                rationale="not a strategy",
-                raw_response="{}",
-                dsl_yaml=None,
-                parsed_dsl_json=None,
-                parse_error=None,
-                llm_model="t",
-            )
-        ]
+    def skip_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale="not a strategy",
+                    raw_response="{}",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
 
     summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=skip_extract)
     assert summary.items_new == 3

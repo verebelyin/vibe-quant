@@ -54,6 +54,7 @@ data/catalog/
 data/archive/
 data/state/
 data/logs/
+data/research/
 frontend/data/
 
 # Keep data directory structure

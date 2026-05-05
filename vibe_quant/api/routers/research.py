@@ -29,6 +29,7 @@ from vibe_quant.api.schemas.research import (
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research.archive import row_to_raw_item
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
+from vibe_quant.research.extraction_log import log_dir_for_manual, write_extraction_log
 from vibe_quant.research.pipeline import persist_extractions
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
@@ -299,7 +300,7 @@ def _run_extraction_background(sm: StateManager, item_id: int) -> None:
     if not item_row:
         return
     try:
-        from vibe_quant.research.extractor import get_default_extractor
+        from vibe_quant.research.extractor import extractor_version, get_default_extractor
 
         extractor = get_default_extractor()
     except (ImportError, FileNotFoundError):
@@ -307,8 +308,15 @@ def _run_extraction_background(sm: StateManager, item_id: int) -> None:
         sm.update_research_item_status(item_id, "failed")
         return
     try:
-        results = extractor.extract_all(row_to_raw_item(item_row))
-        persist_extractions(sm, item_id, results)
+        batch = extractor.extract_all(row_to_raw_item(item_row))
+        write_extraction_log(
+            log_dir=log_dir_for_manual(),
+            item_id=item_id,
+            batch=batch,
+            extractor_version=extractor_version(),
+            scrape_run_id=None,
+        )
+        persist_extractions(sm, item_id, batch.results)
     except Exception:
         logger.exception("background extraction failed for item %d", item_id)
         sm.update_research_item_status(item_id, "failed")

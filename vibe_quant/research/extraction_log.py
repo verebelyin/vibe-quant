@@ -25,12 +25,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOG_ROOT = Path("data/research/logs")
 
 
-def log_dir_for_scrape(run_id: int, root: Path = DEFAULT_LOG_ROOT) -> Path:
-    return root / str(run_id)
+def _resolve_root(root: Path | None) -> Path:
+    # Resolved per-call so tests (and any future config) can monkeypatch
+    # ``DEFAULT_LOG_ROOT`` without re-importing this module.
+    return root if root is not None else DEFAULT_LOG_ROOT
 
 
-def log_dir_for_manual(root: Path = DEFAULT_LOG_ROOT) -> Path:
-    return root / "manual"
+def log_dir_for_scrape(run_id: int, root: Path | None = None) -> Path:
+    return _resolve_root(root) / str(run_id)
+
+
+def log_dir_for_manual(root: Path | None = None) -> Path:
+    return _resolve_root(root) / "manual"
 
 
 def write_extraction_log(

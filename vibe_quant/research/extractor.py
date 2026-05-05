@@ -18,6 +18,7 @@ Prompt-injection defenses:
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import logging
 import shutil
@@ -28,7 +29,7 @@ import yaml
 
 from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.dsl.parser import DSLParseError, parse_strategy_string
-from vibe_quant.research.schema import ExtractionResult
+from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
 
 if TYPE_CHECKING:
     from vibe_quant.research.schema import RawItem
@@ -55,6 +56,17 @@ def _truncate(text: str, limit: int) -> str:
 
 class ExtractorUnavailable(Exception):
     """Raised when the underlying LLM tool isn't available on this host."""
+
+
+@functools.lru_cache(maxsize=1)
+def extractor_version() -> str:
+    """Stable identifier of (model, prompt) pair.
+
+    Embeds a short prompt hash so prompt changes invalidate prior logs for
+    side-by-side analysis. Cached because the prompt is immutable per-process.
+    """
+    digest = hashlib.sha256(_build_system_prompt().encode("utf-8")).hexdigest()[:12]
+    return f"{LLM_MODEL_LABEL}:{digest}"
 
 
 @functools.lru_cache(maxsize=1)
@@ -357,7 +369,7 @@ class ClaudePExtractor:
         # until first use (kept for tests that patch _run_claude).
         self._claude_path = claude_path
 
-    def __call__(self, item: RawItem, item_id: int) -> list[ExtractionResult]:  # noqa: ARG002
+    def __call__(self, item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG002
         return self.extract_all(item)
 
     def extract(self, item: RawItem) -> ExtractionResult:
@@ -367,38 +379,62 @@ class ClaudePExtractor:
         Prefer ``extract_all`` for new callers — multiple findings per item
         are now possible when comments describe distinct strategies.
         """
-        return _best_result(self.extract_all(item))
+        return _best_result(self.extract_all(item).results)
 
-    def extract_all(self, item: RawItem) -> list[ExtractionResult]:
+    def extract_all(self, item: RawItem) -> ExtractionBatch:
         if _is_empty_input(item):
-            return [_single(
-                status="skipped",
-                confidence=0.0,
-                rationale="empty input (no title/body/comments)",
-            )]
+            return ExtractionBatch(
+                prompt="",
+                raw_response="",
+                results=[_single(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale="empty input (no title/body/comments)",
+                )],
+            )
 
         prompt = _build_prompt(item)
         try:
             raw_response = self._run_claude(prompt)
         except subprocess.TimeoutExpired:
-            return [_single(status="failed", parse_error=f"timeout after {self.timeout_seconds}s")]
+            return ExtractionBatch(
+                prompt=prompt,
+                raw_response="",
+                results=[_single(status="failed", parse_error=f"timeout after {self.timeout_seconds}s")],
+            )
         except ValueError as e:
-            return [_single(status="failed", parse_error=str(e))]
+            return ExtractionBatch(
+                prompt=prompt,
+                raw_response="",
+                results=[_single(status="failed", parse_error=str(e))],
+            )
 
         try:
             findings = self._parse_response(raw_response)
         except ValueError as e:
-            return [_single(status="failed", parse_error=str(e), raw_response=raw_response)]
+            return ExtractionBatch(
+                prompt=prompt,
+                raw_response=raw_response,
+                results=[_single(status="failed", parse_error=str(e), raw_response=raw_response)],
+            )
 
         if not findings:
-            return [_single(
-                status="skipped",
-                confidence=0.0,
-                rationale="model returned no findings",
+            return ExtractionBatch(
+                prompt=prompt,
                 raw_response=raw_response,
-            )]
+                results=[_single(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale="model returned no findings",
+                    raw_response=raw_response,
+                )],
+            )
 
-        return [_finding_to_result(f, raw_response) for f in findings]
+        return ExtractionBatch(
+            prompt=prompt,
+            raw_response=raw_response,
+            results=[_finding_to_result(f, raw_response) for f in findings],
+        )
 
     def _run_claude(self, prompt: str) -> str:
         if self._claude_path is None:

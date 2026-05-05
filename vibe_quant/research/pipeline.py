@@ -16,15 +16,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vibe_quant.research.archive import archive_item
+from vibe_quant.research.extraction_log import log_dir_for_scrape, write_extraction_log
+from vibe_quant.research.extractor import extractor_version
 from vibe_quant.research.sources import get_source, load_builtin_sources
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from vibe_quant.db.state_manager import StateManager
-    from vibe_quant.research.schema import ExtractionResult, RawItem
+    from vibe_quant.research.schema import ExtractionBatch, ExtractionResult, RawItem
 
-    ExtractFn = Callable[[RawItem, int], list[ExtractionResult]]
+    ExtractFn = Callable[[RawItem, int], ExtractionBatch]
 
 logger = logging.getLogger(__name__)
 
@@ -151,13 +153,21 @@ def run_scrape(
                 new += 1
                 if extract_fn is not None and item_id is not None:
                     try:
-                        results: list[ExtractionResult] = extract_fn(item, item_id)
+                        batch: ExtractionBatch = extract_fn(item, item_id)
                     except Exception:  # noqa: BLE001
                         logger.exception("extractor failed for item_id=%s", item_id)
                         failed += 1
                         sm.update_research_item_status(item_id, "failed")
                         sm.increment_scrape_run_counters(scrape_run_id, failed=1)
                         continue
+                    write_extraction_log(
+                        log_dir=log_dir_for_scrape(scrape_run_id),
+                        item_id=item_id,
+                        batch=batch,
+                        extractor_version=extractor_version(),
+                        scrape_run_id=scrape_run_id,
+                    )
+                    results = batch.results
                     persist_extractions(sm, item_id, results)
                     item_parsed = sum(1 for r in results if r.status == "parsed")
                     item_failed = sum(1 for r in results if r.status == "failed")

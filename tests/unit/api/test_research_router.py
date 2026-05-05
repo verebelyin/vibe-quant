@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from vibe_quant.api.app import create_app
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.research import extraction_log
 from vibe_quant.research.sources import _reset_for_tests, register_source
 
 if TYPE_CHECKING:
@@ -24,6 +25,17 @@ def sm(tmp_path: Path) -> Generator[StateManager]:
     s = StateManager(tmp_path / "research.db")
     yield s
     s.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_log_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[Path]:
+    """Redirect on-disk extraction logs into tmp so router tests don't leak
+    writes into the repo's data/research/logs/ tree."""
+    root = tmp_path / "research-logs"
+    monkeypatch.setattr(extraction_log, "DEFAULT_LOG_ROOT", root)
+    yield root
 
 
 @pytest.fixture(autouse=True)
@@ -351,7 +363,7 @@ def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateMa
     iid = _seed_item(sm)
     _seed_extraction(sm, iid)  # existing one — must not be overwritten
 
-    from vibe_quant.research.schema import ExtractionResult
+    from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
 
     fake_result = ExtractionResult(
         status="skipped",
@@ -363,10 +375,11 @@ def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateMa
         parse_error=None,
         llm_model="t",
     )
+    fake_batch = ExtractionBatch(prompt="P", raw_response="{}", results=[fake_result])
 
     class _FakeExt:
-        def extract_all(self, _item: Any) -> list[ExtractionResult]:
-            return [fake_result]
+        def extract_all(self, _item: Any) -> ExtractionBatch:
+            return fake_batch
 
         def extract(self, _item: Any) -> ExtractionResult:
             return fake_result
