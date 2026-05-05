@@ -261,6 +261,25 @@ def _single(
     )
 
 
+def _strip_code_fence(text: str) -> str:
+    """Drop a leading/trailing ```json``` fence if the model wrapped its output.
+
+    Why: Haiku 4.5 ignores the system prompt's "no code fences" rule and emits
+    ```json\\n[...]\\n```. The pipeline already had this rule baked in for Opus,
+    but a tolerant parser keeps logs salvageable across models.
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    first_nl = s.find("\n")
+    if first_nl == -1:
+        return text
+    body = s[first_nl + 1 :]
+    if body.endswith("```"):
+        body = body[: -3]
+    return body.strip()
+
+
 def _coerce_findings(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [f for f in value if isinstance(f, dict)]
@@ -362,12 +381,17 @@ class ClaudePExtractor:
         *,
         timeout_seconds: int = CLAUDE_TIMEOUT_SECONDS,
         claude_path: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         # Resolve the binary path once at construction; per-item shutil.which
         # calls are pure overhead on the hot path. None defers resolution
         # until first use (kept for tests that patch _run_claude).
         self._claude_path = claude_path
+        # When None, ``claude -p`` uses whatever model the CLI is configured
+        # for. Setting this passes ``--model <id>`` so different models can
+        # be A/B-tested on the same prompt corpus.
+        self.model = model
 
     def __call__(self, item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG002
         return self.extract_all(item)
@@ -443,8 +467,12 @@ class ClaudePExtractor:
             raise ExtractorUnavailable(
                 f"'{CLAUDE_BIN}' CLI not on PATH. Install Claude Code or run with --no-extract."
             )
+        argv = [self._claude_path, "-p", "--output-format", "json"]
+        if self.model is not None:
+            argv += ["--model", self.model]
+        argv.append(prompt)
         proc = subprocess.run(  # noqa: S603
-            [self._claude_path, "-p", "--output-format", "json", prompt],
+            argv,
             check=False,
             capture_output=True,
             text=True,
@@ -476,6 +504,7 @@ class ClaudePExtractor:
             inner_raw = outer.get("result")
             if not isinstance(inner_raw, str):
                 raise ValueError("claude envelope has non-string result")
+            inner_raw = _strip_code_fence(inner_raw)
             try:
                 inner = json.loads(inner_raw)
             except json.JSONDecodeError as e:

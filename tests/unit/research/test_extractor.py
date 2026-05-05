@@ -220,6 +220,36 @@ def test_response_envelope_with_inner_json_works() -> None:
     assert findings[0]["dsl"]["name"] == "rsi_mean_rev"
 
 
+def test_response_envelope_strips_markdown_code_fence() -> None:
+    """Haiku 4.5 ignores 'no code fences' and wraps JSON in ```json ... ```.
+
+    The envelope's `result` string then starts with backticks, not `[`, and
+    json.loads fails. Parser must strip the fence so logs stay parseable
+    across models.
+    """
+    inner = json.dumps([
+        {"extracted": True, "confidence": 0.9, "rationale": "x", "dsl": _good_dsl(), "source": "post"},
+    ])
+    fenced = f"```json\n{inner}\n```"
+    raw = json.dumps({"result": fenced, "session_id": "x"})
+    ext = ClaudePExtractor()
+    findings = ext._parse_response(raw)
+    assert len(findings) == 1
+    assert findings[0]["extracted"] is True
+    assert findings[0]["dsl"]["name"] == "rsi_mean_rev"
+
+
+def test_response_envelope_strips_bare_triple_backtick_fence() -> None:
+    """Some models drop the language hint — fence is just ``` with no `json`."""
+    inner = json.dumps([{"extracted": False, "confidence": 0, "rationale": "x", "dsl": None}])
+    fenced = f"```\n{inner}\n```"
+    raw = json.dumps({"result": fenced, "session_id": "x"})
+    ext = ClaudePExtractor()
+    findings = ext._parse_response(raw)
+    assert len(findings) == 1
+    assert findings[0]["extracted"] is False
+
+
 def test_response_bare_json_object_also_works() -> None:
     """Mocks/tests sometimes pass the inner object directly — accept both."""
     raw = json.dumps({"extracted": False, "confidence": 0.1, "rationale": "n/a", "dsl": None})
