@@ -359,11 +359,14 @@ def test_get_item_returns_item_plus_extractions(client: TestClient, sm: StateMan
     assert body["extractions"][0]["id"] == eid
 
 
-def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateManager) -> None:
+def test_extract_item_enqueues_job_and_worker_processes_it(
+    client: TestClient, sm: StateManager
+) -> None:
     iid = _seed_item(sm)
     _seed_extraction(sm, iid)  # existing one — must not be overwritten
 
     from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
+    from vibe_quant.research.worker import process_one_job
 
     fake_result = ExtractionResult(
         status="skipped",
@@ -384,19 +387,42 @@ def test_extract_item_creates_new_extraction_row(client: TestClient, sm: StateMa
         def extract(self, _item: Any) -> ExtractionResult:
             return fake_result
 
-    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_FakeExt()):
-        resp = client.post(f"/api/research/items/{iid}/extract")
-
+    resp = client.post(f"/api/research/items/{iid}/extract")
     assert resp.status_code == 202
     body = resp.json()
-    # 202 returns the item (not the extraction); status is 'running' until BG task completes
-    assert body["id"] == iid
-    # TestClient runs background tasks before returning, so the row should be persisted
+    assert body["item_id"] == iid
+    assert body["status"] == "queued"
+    job_id = body["job_id"]
+    assert isinstance(job_id, int)
+
+    # Item is now queued; no extraction has run yet.
+    queued = sm.get_research_item(iid)
+    assert queued is not None
+    assert queued["extraction_status"] == "queued"
+    assert len(sm.list_extractions_for_item(iid)) == 1
+
+    # Worker drains the job.
+    with patch("vibe_quant.research.extractor.get_default_extractor", return_value=_FakeExt()):
+        result = process_one_job(sm)
+    assert result is not None
+    assert result["id"] == job_id
+
     rows = sm.list_extractions_for_item(iid)
     assert len(rows) == 2  # history preserved
     after = sm.get_research_item(iid)
     assert after is not None
-    assert after["extraction_status"] == "skipped"  # matches fake_result.status mapping
+    assert after["extraction_status"] == "skipped"
+    job = sm.get_extraction_job(job_id)
+    assert job is not None
+    assert job["status"] == "done"
+
+
+def test_extract_item_409_when_already_queued(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_item(sm)
+    first = client.post(f"/api/research/items/{iid}/extract")
+    assert first.status_code == 202
+    second = client.post(f"/api/research/items/{iid}/extract")
+    assert second.status_code == 409
 
 
 def test_extract_item_404(client: TestClient) -> None:

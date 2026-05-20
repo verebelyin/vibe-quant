@@ -213,6 +213,15 @@ def cmd_plugin(_args: argparse.Namespace, extra: list[str] | None = None) -> int
     return plugin_main(extra or [])
 
 
+def cmd_extraction_worker(
+    _args: argparse.Namespace, extra: list[str] | None = None
+) -> int:
+    """Forward to the research extraction-worker CLI."""
+    from vibe_quant.research.worker import cli_main
+
+    return cli_main(extra or [])
+
+
 def cmd_discovery(_args: argparse.Namespace, extra: list[str] | None = None) -> int:
     """Forward to discovery module CLI.
 
@@ -287,6 +296,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Indicator plugin scaffolding helpers",
     )
     plugin_parser.set_defaults(func=cmd_plugin)
+
+    # Extraction queue worker - uses parse_known_args forwarding
+    worker_parser = subparsers.add_parser(
+        "extraction-worker",
+        help="Drain the research extraction queue (foreground worker)",
+    )
+    worker_parser.set_defaults(func=cmd_extraction_worker)
 
     # Validation command
     validation_parser = subparsers.add_parser(
@@ -412,7 +428,14 @@ def main() -> int:
 
     if hasattr(args, "func"):
         # Forward extra args to submodule commands (data, screening)
-        if args.command in ("data", "screening", "overfitting", "discovery", "plugin"):
+        if args.command in (
+            "data",
+            "screening",
+            "overfitting",
+            "discovery",
+            "plugin",
+            "extraction-worker",
+        ):
             result: int = args.func(args, extra=extra)
         else:
             result = args.func(args)

@@ -25,6 +25,7 @@ import type {
 
 import type {
   CredentialsStatusResponse,
+  ExtractEnqueueResponse,
   ExtractionResponse,
   GetCredentialsStatusApiResearchCredentialsStatusGetParams,
   GetLatestScrapeApiResearchScrapeLatestGetParams,
@@ -32,7 +33,6 @@ import type {
   ListItemsApiResearchItemsGetParams,
   ResearchItemDetailResponse,
   ResearchItemListResponse,
-  ResearchItemResponse,
   ScrapeRequest,
   ScrapeRunResponse,
   SourceListResponse,
@@ -1226,12 +1226,15 @@ export function useGetItemApiResearchItemsItemIdGet<TData = Awaited<ReturnType<t
 
 
 /**
- * Schedule extraction in the background. Poll GET /items/{id} until
-extraction_status leaves 'running'.
+ * Enqueue extraction onto the persistent queue. The
+`vibe-quant extraction-worker` process drains the queue.
+
+Returns immediately with the new job id; clients poll
+GET /items/{id} or GET /extraction-jobs/{id} for progress.
  * @summary Extract Item
  */
 export type extractItemApiResearchItemsItemIdExtractPostResponse202 = {
-  data: ResearchItemResponse
+  data: ExtractEnqueueResponse
   status: 202
 }
 

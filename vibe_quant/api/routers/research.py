@@ -10,11 +10,12 @@ import subprocess
 import sys
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.api.schemas.research import (
     CredentialsStatusResponse,
+    ExtractEnqueueResponse,
     ExtractionResponse,
     PromoteResponse,
     ResearchItemDetailResponse,
@@ -27,10 +28,7 @@ from vibe_quant.api.schemas.research import (
     SubredditsUpdateRequest,
 )
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research.archive import row_to_raw_item
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
-from vibe_quant.research.extraction_log import log_dir_for_manual, write_extraction_log
-from vibe_quant.research.pipeline import persist_extractions
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -316,54 +314,30 @@ def get_item(item_id: int, sm: StateMgr) -> ResearchItemDetailResponse:
     )
 
 
-def _run_extraction_background(sm: StateManager, item_id: int) -> None:
-    """Worker invoked by BackgroundTasks. Owns its own error handling so a
-    crash here can never bubble back to the request handler."""
-    item_row = sm.get_research_item(item_id)
-    if not item_row:
-        return
-    try:
-        from vibe_quant.research.extractor import extractor_version, get_default_extractor
+@router.post(
+    "/items/{item_id}/extract",
+    response_model=ExtractEnqueueResponse,
+    status_code=202,
+)
+def extract_item(item_id: int, sm: StateMgr) -> ExtractEnqueueResponse:
+    """Enqueue extraction onto the persistent queue. The
+    `vibe-quant extraction-worker` process drains the queue.
 
-        extractor = get_default_extractor()
-    except (ImportError, FileNotFoundError):
-        logger.exception("extractor unavailable for background extraction of item %d", item_id)
-        sm.update_research_item_status(item_id, "failed")
-        return
-    try:
-        batch = extractor.extract_all(row_to_raw_item(item_row))
-        write_extraction_log(
-            log_dir=log_dir_for_manual(),
-            item_id=item_id,
-            batch=batch,
-            extractor_version=extractor_version(),
-            scrape_run_id=None,
-        )
-        persist_extractions(sm, item_id, batch.results)
-    except Exception:
-        logger.exception("background extraction failed for item %d", item_id)
-        sm.update_research_item_status(item_id, "failed")
-
-
-@router.post("/items/{item_id}/extract", response_model=ResearchItemResponse, status_code=202)
-def extract_item(
-    item_id: int, sm: StateMgr, background: BackgroundTasks
-) -> ResearchItemResponse:
-    """Schedule extraction in the background. Poll GET /items/{id} until
-    extraction_status leaves 'running'."""
+    Returns immediately with the new job id; clients poll
+    GET /items/{id} or GET /extraction-jobs/{id} for progress.
+    """
     item_row = sm.get_research_item(item_id)
     if not item_row:
         raise HTTPException(status_code=404, detail=f"research_item {item_id} not found")
-    if item_row.get("extraction_status") == "running":
+    current = item_row.get("extraction_status")
+    if current in ("queued", "running"):
         raise HTTPException(
-            status_code=409, detail=f"extraction already in progress for item {item_id}"
+            status_code=409,
+            detail=f"extraction already {current} for item {item_id}",
         )
 
-    sm.update_research_item_status(item_id, "running")
-    background.add_task(_run_extraction_background, sm, item_id)
-    after = sm.get_research_item(item_id)
-    assert after is not None
-    return _item_to_response(after)
+    job_id = sm.enqueue_extraction_job(item_id)
+    return ExtractEnqueueResponse(job_id=job_id, item_id=item_id, status="queued")
 
 
 @router.post("/extractions/{extraction_id}/promote", response_model=PromoteResponse)

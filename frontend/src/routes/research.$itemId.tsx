@@ -48,7 +48,8 @@ export function ResearchItemPage({ itemId }: Props) {
       refetchInterval: (q) => {
         const r = q.state.data;
         if (r?.status !== 200) return false;
-        return r.data.extraction_status === "running" ? 2_000 : false;
+        const st = r.data.extraction_status;
+        return st === "running" || st === "queued" ? 2_000 : false;
       },
     },
   });

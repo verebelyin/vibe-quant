@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 9
+SCHEMA_VERSION: int = 10
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS research_items (
     extras_json TEXT,
     fetched_at TEXT DEFAULT (datetime('now')),
     extraction_status TEXT DEFAULT 'pending'
-        CHECK (extraction_status IN ('pending', 'running', 'extracted', 'failed', 'skipped')),
+        CHECK (extraction_status IN ('pending', 'queued', 'running', 'extracted', 'failed', 'skipped')),
     UNIQUE(source, external_id)
 );
 
@@ -246,6 +246,21 @@ CREATE TABLE IF NOT EXISTS research_settings (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Persistent extraction queue. One row per enqueued extraction job; the
+-- worker process atomically claims jobs in id order. Replaces FastAPI
+-- BackgroundTasks (which dies with the process and leaves no audit trail).
+CREATE TABLE IF NOT EXISTS research_extraction_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    research_item_id INTEGER NOT NULL REFERENCES research_items(id),
+    background_job_id INTEGER REFERENCES background_jobs(id),
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'done', 'failed', 'cancelled')),
+    queued_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    error_message TEXT
+);
+
 CREATE TABLE IF NOT EXISTS research_scrape_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -276,6 +291,10 @@ CREATE INDEX IF NOT EXISTS idx_research_items_posted ON research_items(posted_at
 CREATE INDEX IF NOT EXISTS idx_research_extractions_item ON research_extractions(research_item_id);
 CREATE INDEX IF NOT EXISTS idx_research_extractions_status ON research_extractions(status);
 CREATE INDEX IF NOT EXISTS idx_research_scrape_runs_status ON research_scrape_runs(status);
+CREATE INDEX IF NOT EXISTS idx_research_extraction_jobs_status_id
+    ON research_extraction_jobs(status, id);
+CREATE INDEX IF NOT EXISTS idx_research_extraction_jobs_item
+    ON research_extraction_jobs(research_item_id);
 """
 
 
@@ -317,6 +336,56 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         logger.info("Applied %d schema migration(s) (current version: %d)", applied, SCHEMA_VERSION)
 
 
+def _migrate_research_items_allow_queued(conn: sqlite3.Connection) -> None:
+    """Rebuild research_items so its extraction_status CHECK includes 'queued'.
+
+    SQLite cannot alter a CHECK constraint in place, so for existing DBs
+    that predate the queue (schema v9 and earlier) we copy the table.
+    No-op on fresh DBs where CREATE TABLE already encodes the new CHECK.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='research_items'"
+    ).fetchone()
+    if not row:
+        return
+    table_sql = row[0] or ""
+    if "'queued'" in table_sql:
+        return  # Already migrated.
+
+    logger.info("Rebuilding research_items to allow extraction_status='queued'")
+    conn.executescript(
+        """
+        BEGIN;
+        CREATE TABLE research_items_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT,
+            body TEXT,
+            author TEXT,
+            posted_at TEXT,
+            score INTEGER,
+            extras_json TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            extraction_status TEXT DEFAULT 'pending'
+                CHECK (extraction_status IN
+                    ('pending', 'queued', 'running', 'extracted', 'failed', 'skipped')),
+            UNIQUE(source, external_id)
+        );
+        INSERT INTO research_items_new
+            (id, source, external_id, url, title, body, author, posted_at,
+             score, extras_json, fetched_at, extraction_status)
+        SELECT id, source, external_id, url, title, body, author, posted_at,
+               score, extras_json, fetched_at, extraction_status
+        FROM research_items;
+        DROP TABLE research_items;
+        ALTER TABLE research_items_new RENAME TO research_items;
+        COMMIT;
+        """
+    )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     """Initialize database schema.
 
@@ -325,4 +394,5 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(SCHEMA_SQL)
     _migrate_add_columns(conn)
+    _migrate_research_items_allow_queued(conn)
     conn.commit()

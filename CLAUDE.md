@@ -17,6 +17,7 @@ The rule of this file is to describe common mistakes and confusion points that a
 - **Backend:** `.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000`
 - **Frontend:** `cd frontend && pnpm dev` (Vite on port 5173)
 - **Frontend build:** `cd frontend && pnpm build`
+- **Extraction worker:** `.venv/bin/vibe-quant extraction-worker` (drains `/api/research/items/{id}/extract` queue; run alongside backend so manual re-extractions actually progress)
 
 ## UI Testing (agent-browser)
 

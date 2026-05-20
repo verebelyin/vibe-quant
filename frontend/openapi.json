@@ -2418,7 +2418,7 @@
           "research"
         ],
         "summary": "Extract Item",
-        "description": "Schedule extraction in the background. Poll GET /items/{id} until\nextraction_status leaves 'running'.",
+        "description": "Enqueue extraction onto the persistent queue. The\n`vibe-quant extraction-worker` process drains the queue.\n\nReturns immediately with the new job id; clients poll\nGET /items/{id} or GET /extraction-jobs/{id} for progress.",
         "operationId": "extract_item_api_research_items__item_id__extract_post",
         "parameters": [
           {
@@ -2437,7 +2437,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResearchItemResponse"
+                  "$ref": "#/components/schemas/ExtractEnqueueResponse"
                 }
               }
             }
@@ -5728,6 +5728,30 @@
           "equity"
         ],
         "title": "EquityCurvePoint"
+      },
+      "ExtractEnqueueResponse": {
+        "properties": {
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "item_id": {
+            "type": "integer",
+            "title": "Item Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "item_id",
+          "status"
+        ],
+        "title": "ExtractEnqueueResponse",
+        "description": "Returned by POST /items/{id}/extract once the job is on the queue."
       },
       "ExtractionResponse": {
         "properties": {

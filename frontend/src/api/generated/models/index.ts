@@ -44,6 +44,7 @@ export * from './downloadHistoryApiDataHistoryGetParams';
 export * from './drawdownPoint';
 export * from './equityCurvePoint';
 export * from './exportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIndexPost201';
+export * from './extractEnqueueResponse';
 export * from './extractionResponse';
 export * from './getCheckpointsApiPaperCheckpointsGetParams';
 export * from './getCredentialsStatusApiResearchCredentialsStatusGetParams';

@@ -1362,3 +1362,92 @@ class StateManager:
             )
             self.conn.commit()
             return cursor.rowcount > 0
+
+    # ---------- extraction queue ----------
+
+    def enqueue_extraction_job(self, research_item_id: int) -> int:
+        """Insert a queued extraction job and mark the item as queued.
+
+        Returns the new job id. Caller should ensure the item exists and
+        is not already running (the router checks this).
+        """
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """INSERT INTO research_extraction_jobs
+                       (research_item_id, status, queued_at)
+                   VALUES (?, 'queued', datetime('now'))""",
+                (research_item_id,),
+            )
+            self.conn.execute(
+                "UPDATE research_items SET extraction_status = 'queued' WHERE id = ?",
+                (research_item_id,),
+            )
+            self.conn.commit()
+            assert cursor.lastrowid is not None
+            return cursor.lastrowid
+
+    def claim_next_extraction_job(self) -> JsonDict | None:
+        """Atomically claim the oldest queued job.
+
+        Uses UPDATE … RETURNING in a single statement so two workers cannot
+        both grab the same row. Returns None when the queue is empty.
+        """
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_extraction_jobs
+                   SET status = 'running', started_at = datetime('now')
+                   WHERE id = (
+                       SELECT id FROM research_extraction_jobs
+                       WHERE status = 'queued'
+                       ORDER BY id ASC
+                       LIMIT 1
+                   )
+                   RETURNING *"""
+            )
+            row = cursor.fetchone()
+            self.conn.commit()
+            return dict(row) if row else None
+
+    def complete_extraction_job(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        error_message: str | None = None,
+    ) -> bool:
+        """Mark a job done/failed/cancelled. `status` must be one of those three."""
+        if status not in ("done", "failed", "cancelled"):
+            raise ValueError(f"invalid terminal job status: {status}")
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_extraction_jobs
+                   SET status = ?, completed_at = datetime('now'), error_message = ?
+                   WHERE id = ?""",
+                (status, error_message, job_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def get_extraction_job(self, job_id: int) -> JsonDict | None:
+        row = self.conn.execute(
+            "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_extraction_jobs(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[JsonDict]:
+        if status is None:
+            rows = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE status = ? ORDER BY id DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]

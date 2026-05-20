@@ -84,6 +84,14 @@ class PromoteResponse(BaseModel):
     extraction_id: int
 
 
+class ExtractEnqueueResponse(BaseModel):
+    """Returned by POST /items/{id}/extract once the job is on the queue."""
+
+    job_id: int
+    item_id: int
+    status: str
+
+
 class SourceListResponse(BaseModel):
     sources: list[str]
 
