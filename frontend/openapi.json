@@ -5753,6 +5753,112 @@
         "title": "ExtractEnqueueResponse",
         "description": "Returned by POST /items/{id}/extract once the job is on the queue."
       },
+      "ExtractionJobResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "research_item_id": {
+            "type": "integer",
+            "title": "Research Item Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "queued_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queued At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "title": "Max Attempts"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "research_item_id",
+          "status",
+          "queued_at",
+          "started_at",
+          "completed_at",
+          "attempts",
+          "max_attempts",
+          "last_error",
+          "error_message",
+          "heartbeat_at"
+        ],
+        "title": "ExtractionJobResponse",
+        "description": "A row from `research_extraction_jobs` \u2014 surfaced for failure diagnostics."
+      },
       "ExtractionResponse": {
         "properties": {
           "id": {
@@ -7040,6 +7146,16 @@
             },
             "type": "array",
             "title": "Extractions"
+          },
+          "latest_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractionJobResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

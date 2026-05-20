@@ -78,6 +78,8 @@ export function ResearchItemPage({ itemId }: Props) {
     const tb = b.extracted_at ? Date.parse(b.extracted_at) : 0;
     return tb - ta;
   });
+  const failedJob =
+    item.latest_job && item.latest_job.status === "failed" ? item.latest_job : null;
 
   const handleRunExtraction = () => {
     setRunning(true);
@@ -130,6 +132,20 @@ export function ResearchItemPage({ itemId }: Props) {
           </a>
         </div>
       </div>
+
+      {failedJob && (
+        <div className="rounded-md border border-red-900/40 bg-red-950/30 p-3 text-xs text-red-200">
+          <div className="font-mono text-[10px] uppercase tracking-wide text-red-300/80">
+            Extraction failed
+            {failedJob.attempts > 1 ? ` after ${failedJob.attempts} attempts` : ""}
+          </div>
+          {failedJob.last_error && (
+            <pre className="mt-1 whitespace-pre-wrap break-all text-[11px] text-red-100/90">
+              {failedJob.last_error}
+            </pre>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="flex flex-col gap-3">

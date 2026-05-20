@@ -23,6 +23,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,47 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_S: float = 2.0
 DEFAULT_GRACE_PERIOD_S: float = 5.0
 DEFAULT_LOG_ROOT: Path = Path("data/logs")
+DEFAULT_HEARTBEAT_INTERVAL_S: float = 30.0
+DEFAULT_SWEEP_INTERVAL_S: float = 60.0
+
+
+def _stuck_threshold_seconds() -> int:
+    """Read the stuck-job threshold from env (default 240s = 4×heartbeat)."""
+    raw = os.environ.get("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS")
+    if not raw:
+        return 240
+    try:
+        v = int(raw)
+        return v if v > 0 else 240
+    except ValueError:
+        return 240
+
+
+class _HeartbeatThread(threading.Thread):
+    """Background daemon that bumps `heartbeat_at` for the current job."""
+
+    def __init__(
+        self,
+        sm: StateManager,
+        job_id: int,
+        *,
+        interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+    ) -> None:
+        super().__init__(daemon=True, name=f"extract-heartbeat-{job_id}")
+        self._sm = sm
+        self._job_id = job_id
+        self._interval = interval
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self._sm.heartbeat_extraction_job(self._job_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("heartbeat failed for job %s", self._job_id)
 
 
 def _iso_now() -> str:
@@ -66,7 +108,8 @@ def process_one_job(sm: StateManager) -> dict[str, Any] | None:
     """Claim and process exactly one queued job.
 
     Returns the (post-update) job row, or None if the queue was empty.
-    Exceptions inside extraction are caught and recorded as `failed`.
+    Exceptions inside extraction are routed through `fail_extraction_job`
+    which decides retry vs final failure based on attempts/max_attempts.
     """
     job = sm.claim_next_extraction_job()
     if job is None:
@@ -74,14 +117,16 @@ def process_one_job(sm: StateManager) -> dict[str, Any] | None:
 
     job_id = int(job["id"])
     item_id = int(job["research_item_id"])
+    heartbeat = _HeartbeatThread(sm, job_id)
+    heartbeat.start()
     try:
         _run_extraction(sm, item_id)
     except Exception as e:  # noqa: BLE001
         msg = f"{type(e).__name__}: {e}"
         logger.exception("extraction-worker: job %s failed", job_id)
-        sm.complete_extraction_job(job_id, status="failed", error_message=msg)
-        sm.update_research_item_status(item_id, "failed")
-        return {**job, "status": "failed", "error_message": msg}
+        return sm.fail_extraction_job(job_id, msg)
+    finally:
+        heartbeat.stop()
 
     sm.complete_extraction_job(job_id, status="done")
     return {**job, "status": "done"}
@@ -135,9 +180,30 @@ def run_forever(
     sink.emit("worker_started", pid=os.getpid(), poll_interval=poll_interval)
     logger.info("extraction-worker started (pid=%d, poll=%.1fs)", os.getpid(), poll_interval)
 
+    stuck_threshold = _stuck_threshold_seconds()
+    last_sweep = 0.0
+
     current_job_id: int | None = None
     try:
         while not stop.is_set():
+            now = time.monotonic()
+            if now - last_sweep >= DEFAULT_SWEEP_INTERVAL_S:
+                try:
+                    swept = sm.sweep_stuck_extraction_jobs(
+                        stuck_threshold, exclude_job_id=current_job_id
+                    )
+                    for j in swept:
+                        sink.emit(
+                            "job_swept",
+                            job_id=int(j["id"]),
+                            item_id=int(j["research_item_id"]),
+                            attempts=int(j["attempts"]),
+                            final_status=j["status"],
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.exception("extraction-worker: sweep failed")
+                last_sweep = now
+
             try:
                 job = sm.claim_next_extraction_job()
             except Exception:  # noqa: BLE001
@@ -152,21 +218,27 @@ def run_forever(
             current_job_id = int(job["id"])
             item_id = int(job["research_item_id"])
             sink.emit("job_claimed", job_id=current_job_id, item_id=item_id)
+            heartbeat = _HeartbeatThread(sm, current_job_id)
+            heartbeat.start()
             try:
                 _run_extraction(sm, item_id)
             except Exception as e:  # noqa: BLE001
                 msg = f"{type(e).__name__}: {e}"
                 logger.exception("extraction-worker: job %s failed", current_job_id)
-                sm.complete_extraction_job(
-                    current_job_id, status="failed", error_message=msg
-                )
-                sm.update_research_item_status(item_id, "failed")
+                outcome = sm.fail_extraction_job(current_job_id, msg)
                 sink.emit(
-                    "job_failed", job_id=current_job_id, item_id=item_id, error=msg
+                    "job_failed",
+                    job_id=current_job_id,
+                    item_id=item_id,
+                    error=msg,
+                    attempts=int(outcome["attempts"]),
+                    final_status=outcome["status"],
                 )
             else:
                 sm.complete_extraction_job(current_job_id, status="done")
                 sink.emit("job_done", job_id=current_job_id, item_id=item_id)
+            finally:
+                heartbeat.stop()
             current_job_id = None
     finally:
         if current_job_id is not None:

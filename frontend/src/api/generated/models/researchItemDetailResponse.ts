@@ -4,6 +4,7 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { ExtractionJobResponse } from './extractionJobResponse';
 import type { ExtractionResponse } from './extractionResponse';
 import type { ResearchItemDetailResponseExtras } from './researchItemDetailResponseExtras';
 
@@ -21,4 +22,5 @@ export interface ResearchItemDetailResponse {
   fetched_at: string | null;
   extraction_status: string;
   extractions: ExtractionResponse[];
+  latest_job?: ExtractionJobResponse | null;
 }

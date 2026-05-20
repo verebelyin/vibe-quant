@@ -16,6 +16,7 @@ from vibe_quant.api.deps import get_state_manager
 from vibe_quant.api.schemas.research import (
     CredentialsStatusResponse,
     ExtractEnqueueResponse,
+    ExtractionJobResponse,
     ExtractionResponse,
     PromoteResponse,
     ResearchItemDetailResponse,
@@ -308,9 +309,37 @@ def get_item(item_id: int, sm: StateMgr) -> ResearchItemDetailResponse:
         raise HTTPException(status_code=404, detail=f"research_item {item_id} not found")
     extractions = sm.list_extractions_for_item(item_id)
     base = _item_to_response(row)
+    latest = _latest_job_for_item(sm, item_id)
     return ResearchItemDetailResponse(
         **base.model_dump(),
         extractions=[_extraction_to_response(e) for e in extractions],
+        latest_job=latest,
+    )
+
+
+def _latest_job_for_item(sm: StateMgr, item_id: int) -> ExtractionJobResponse | None:
+    """Pull the most recent extraction job row for an item, if any."""
+    rows = sm.conn.execute(
+        """SELECT * FROM research_extraction_jobs
+           WHERE research_item_id = ?
+           ORDER BY id DESC LIMIT 1""",
+        (item_id,),
+    ).fetchone()
+    if not rows:
+        return None
+    r = dict(rows)
+    return ExtractionJobResponse(
+        id=int(r["id"]),
+        research_item_id=int(r["research_item_id"]),
+        status=str(r["status"]),
+        queued_at=r.get("queued_at"),
+        started_at=r.get("started_at"),
+        completed_at=r.get("completed_at"),
+        attempts=int(r.get("attempts") or 0),
+        max_attempts=int(r.get("max_attempts") or 3),
+        last_error=r.get("last_error"),
+        error_message=r.get("error_message"),
+        heartbeat_at=r.get("heartbeat_at"),
     )
 
 

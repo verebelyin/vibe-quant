@@ -1365,18 +1365,25 @@ class StateManager:
 
     # ---------- extraction queue ----------
 
-    def enqueue_extraction_job(self, research_item_id: int) -> int:
+    def enqueue_extraction_job(
+        self,
+        research_item_id: int,
+        *,
+        max_attempts: int = 3,
+    ) -> int:
         """Insert a queued extraction job and mark the item as queued.
 
         Returns the new job id. Caller should ensure the item exists and
         is not already running (the router checks this).
         """
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
         with self._write_lock:
             cursor = self.conn.execute(
                 """INSERT INTO research_extraction_jobs
-                       (research_item_id, status, queued_at)
-                   VALUES (?, 'queued', datetime('now'))""",
-                (research_item_id,),
+                       (research_item_id, status, queued_at, max_attempts)
+                   VALUES (?, 'queued', datetime('now'), ?)""",
+                (research_item_id, max_attempts),
             )
             self.conn.execute(
                 "UPDATE research_items SET extraction_status = 'queued' WHERE id = ?",
@@ -1391,11 +1398,14 @@ class StateManager:
 
         Uses UPDATE … RETURNING in a single statement so two workers cannot
         both grab the same row. Returns None when the queue is empty.
+        Sets started_at on first claim and bumps heartbeat_at on every claim.
         """
         with self._write_lock:
             cursor = self.conn.execute(
                 """UPDATE research_extraction_jobs
-                   SET status = 'running', started_at = datetime('now')
+                   SET status = 'running',
+                       started_at = COALESCE(started_at, datetime('now')),
+                       heartbeat_at = datetime('now')
                    WHERE id = (
                        SELECT id FROM research_extraction_jobs
                        WHERE status = 'queued'
@@ -1407,6 +1417,114 @@ class StateManager:
             row = cursor.fetchone()
             self.conn.commit()
             return dict(row) if row else None
+
+    def heartbeat_extraction_job(self, job_id: int) -> bool:
+        """Bump heartbeat_at for a running job. Returns False if not running."""
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_extraction_jobs
+                   SET heartbeat_at = datetime('now')
+                   WHERE id = ? AND status = 'running'""",
+                (job_id,),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def fail_extraction_job(
+        self,
+        job_id: int,
+        error_message: str,
+    ) -> JsonDict:
+        """Record a failure: increment attempts, set last_error.
+
+        If attempts < max_attempts → re-queue (status='queued', clear
+        started_at so the next claim resets it; item status back to 'queued').
+        Otherwise mark status='failed' and the item 'failed'.
+
+        Returns the post-update row dict. Raises if the job does not exist.
+        """
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE research_extraction_jobs
+                   SET attempts = attempts + 1,
+                       last_error = ?,
+                       error_message = ?
+                   WHERE id = ?""",
+                (error_message, error_message, job_id),
+            )
+            row = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                self.conn.commit()
+                raise ValueError(f"extraction job {job_id} not found")
+            job = dict(row)
+            item_id = int(job["research_item_id"])
+            if int(job["attempts"]) < int(job["max_attempts"]):
+                self.conn.execute(
+                    """UPDATE research_extraction_jobs
+                       SET status = 'queued', started_at = NULL,
+                           heartbeat_at = NULL, completed_at = NULL
+                       WHERE id = ?""",
+                    (job_id,),
+                )
+                self.conn.execute(
+                    "UPDATE research_items SET extraction_status = 'queued' WHERE id = ?",
+                    (item_id,),
+                )
+                final_status = "queued"
+            else:
+                self.conn.execute(
+                    """UPDATE research_extraction_jobs
+                       SET status = 'failed', completed_at = datetime('now')
+                       WHERE id = ?""",
+                    (job_id,),
+                )
+                self.conn.execute(
+                    "UPDATE research_items SET extraction_status = 'failed' WHERE id = ?",
+                    (item_id,),
+                )
+                final_status = "failed"
+            self.conn.commit()
+            job["status"] = final_status
+            return job
+
+    def sweep_stuck_extraction_jobs(
+        self,
+        threshold_seconds: int,
+        *,
+        exclude_job_id: int | None = None,
+    ) -> list[JsonDict]:
+        """Find running jobs whose heartbeat has gone stale and reset them.
+
+        Each stuck job is treated as a failure (`attempts++`, last_error set);
+        retried if attempts<max_attempts, otherwise final-failed. Returns the
+        list of affected job rows (post-update).
+
+        `exclude_job_id` lets a worker skip its own in-flight job so it never
+        sweeps itself just because the heartbeat thread hasn't fired yet.
+        """
+        threshold = int(threshold_seconds)
+        params: tuple[object, ...] = (threshold,)
+        sql = (
+            "SELECT id FROM research_extraction_jobs "
+            "WHERE status = 'running' "
+            "AND (heartbeat_at IS NULL "
+            "     OR (julianday('now') - julianday(heartbeat_at)) * 86400 > ?)"
+        )
+        if exclude_job_id is not None:
+            sql += " AND id != ?"
+            params = (threshold, exclude_job_id)
+        rows = self.conn.execute(sql, params).fetchall()
+        out: list[JsonDict] = []
+        for r in rows:
+            out.append(
+                self.fail_extraction_job(
+                    int(r["id"]),
+                    f"stuck: no heartbeat for >{threshold}s",
+                )
+            )
+        return out
 
     def complete_extraction_job(
         self,

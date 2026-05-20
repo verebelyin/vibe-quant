@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 10
+SCHEMA_VERSION: int = 11
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -258,7 +258,11 @@ CREATE TABLE IF NOT EXISTS research_extraction_jobs (
     queued_at TEXT NOT NULL DEFAULT (datetime('now')),
     started_at TEXT,
     completed_at TEXT,
-    error_message TEXT
+    error_message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    heartbeat_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS research_scrape_runs (
@@ -323,6 +327,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("research_extractions", "screen_trades", "INTEGER"),
         ("research_extractions", "screen_error", "TEXT"),
         ("research_extractions", "screen_completed_at", "TEXT"),
+        ("research_extraction_jobs", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("research_extraction_jobs", "max_attempts", "INTEGER NOT NULL DEFAULT 3"),
+        ("research_extraction_jobs", "last_error", "TEXT"),
+        ("research_extraction_jobs", "heartbeat_at", "TEXT"),
     ]
     applied = 0
     for table, column, col_type in migrations:

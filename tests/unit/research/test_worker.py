@@ -149,7 +149,8 @@ def test_process_one_job_happy_path(sm: StateManager) -> None:
 
 def test_process_one_job_extractor_failure_marks_job_failed(sm: StateManager) -> None:
     iid = _seed_item(sm)
-    job_id = sm.enqueue_extraction_job(iid)
+    # max_attempts=1 so a single failure terminates without retry.
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=1)
 
     class _BoomExt:
         def extract_all(self, _item: Any) -> ExtractionBatch:
@@ -165,7 +166,8 @@ def test_process_one_job_extractor_failure_marks_job_failed(sm: StateManager) ->
     after = sm.get_extraction_job(job_id)
     assert after is not None
     assert after["status"] == "failed"
-    assert "boom" in (after["error_message"] or "")
+    assert "boom" in (after["last_error"] or "")
+    assert after["attempts"] == 1
     item = sm.get_research_item(iid)
     assert item is not None
     assert item["extraction_status"] == "failed"
@@ -219,7 +221,151 @@ def test_run_forever_finalizes_inflight_job_as_cancelled_on_stop(
 
     after = sm.get_extraction_job(job_id)
     assert after is not None
-    # Either cancelled (if finally fired) or failed (if KeyboardInterrupt
-    # was caught as a regular exception). Both are acceptable terminal states
-    # — the AC is that the job never stays 'running' after SIGTERM-equivalent.
-    assert after["status"] in ("cancelled", "failed")
+    # Either cancelled (if finally fired) or failed/queued (if KeyboardInterrupt
+    # was caught as a regular exception and routed through fail_extraction_job
+    # which retries by default). The AC is that the job never stays 'running'
+    # after SIGTERM-equivalent.
+    assert after["status"] in ("cancelled", "failed", "queued")
+
+
+# ---------- bd-j68g.2: retry + last_error + stuck detection ----------
+
+
+def test_extractor_failure_under_max_attempts_requeues(sm: StateManager) -> None:
+    """First failure with attempts<max_attempts must re-queue, not finalize."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=3)
+
+    class _BoomExt:
+        def extract_all(self, _item: Any) -> ExtractionBatch:
+            raise RuntimeError("transient")
+
+    with patch(
+        "vibe_quant.research.extractor.get_default_extractor", return_value=_BoomExt()
+    ):
+        worker_mod.process_one_job(sm)
+
+    after = sm.get_extraction_job(job_id)
+    assert after is not None
+    assert after["status"] == "queued"
+    assert after["attempts"] == 1
+    assert "transient" in (after["last_error"] or "")
+    # started_at cleared so the next claim resets it.
+    assert after["started_at"] is None
+    item = sm.get_research_item(iid)
+    assert item is not None
+    assert item["extraction_status"] == "queued"
+
+
+def test_extractor_failure_three_times_marks_failed_and_keeps_last_error(
+    sm: StateManager,
+) -> None:
+    """Three consecutive failures → final 'failed' with most-recent error."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=3)
+    errors = iter(["first", "second", "third"])
+
+    class _RotatingBoom:
+        def extract_all(self, _item: Any) -> ExtractionBatch:
+            raise RuntimeError(next(errors))
+
+    with patch(
+        "vibe_quant.research.extractor.get_default_extractor",
+        return_value=_RotatingBoom(),
+    ):
+        for _ in range(3):
+            worker_mod.process_one_job(sm)
+
+    after = sm.get_extraction_job(job_id)
+    assert after is not None
+    assert after["status"] == "failed"
+    assert after["attempts"] == 3
+    # last_error is the most recent only — not concatenated.
+    assert "third" in (after["last_error"] or "")
+    assert "first" not in (after["last_error"] or "")
+    item = sm.get_research_item(iid)
+    assert item is not None
+    assert item["extraction_status"] == "failed"
+
+
+def test_sweep_stuck_job_with_attempts_remaining_requeues(sm: StateManager) -> None:
+    """A 'running' row with no heartbeat past the threshold must be re-queued."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=2)
+    sm.claim_next_extraction_job()
+    # Simulate the worker dying right after claim — push heartbeat far enough
+    # into the past that any positive threshold catches it.
+    sm.conn.execute(
+        "UPDATE research_extraction_jobs SET heartbeat_at = datetime('now', '-1 hour') "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    sm.conn.commit()
+
+    swept = sm.sweep_stuck_extraction_jobs(60)
+    assert len(swept) == 1
+    assert swept[0]["id"] == job_id
+    assert swept[0]["status"] == "queued"  # attempts=1 < max_attempts=2
+
+    after = sm.get_extraction_job(job_id)
+    assert after is not None
+    assert after["status"] == "queued"
+    assert after["attempts"] == 1
+    assert "stuck" in (after["last_error"] or "")
+
+
+def test_sweep_stuck_job_at_max_attempts_marks_failed(sm: StateManager) -> None:
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=1)
+    sm.claim_next_extraction_job()
+    sm.conn.execute(
+        "UPDATE research_extraction_jobs SET heartbeat_at = datetime('now', '-1 hour') "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    sm.conn.commit()
+
+    swept = sm.sweep_stuck_extraction_jobs(60)
+    assert len(swept) == 1
+    assert swept[0]["status"] == "failed"
+
+
+def test_sweep_excludes_current_job_id(sm: StateManager) -> None:
+    """Worker must not sweep its own in-flight job even if heartbeat is stale."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    sm.conn.execute(
+        "UPDATE research_extraction_jobs SET heartbeat_at = datetime('now', '-1 hour') "
+        "WHERE id = ?",
+        (job_id,),
+    )
+    sm.conn.commit()
+
+    swept = sm.sweep_stuck_extraction_jobs(60, exclude_job_id=job_id)
+    assert swept == []
+
+    still = sm.get_extraction_job(job_id)
+    assert still is not None
+    assert still["status"] == "running"
+
+
+def test_heartbeat_extraction_job_updates_running_only(sm: StateManager) -> None:
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid)
+    # Not yet running → heartbeat is a no-op.
+    assert sm.heartbeat_extraction_job(job_id) is False
+    sm.claim_next_extraction_job()
+    assert sm.heartbeat_extraction_job(job_id) is True
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["heartbeat_at"] is not None
+
+
+def test_stuck_threshold_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS", "120")
+    assert worker_mod._stuck_threshold_seconds() == 120
+    monkeypatch.setenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS", "garbage")
+    assert worker_mod._stuck_threshold_seconds() == 240
+    monkeypatch.delenv("VQ_EXTRACTION_STUCK_THRESHOLD_SECONDS")
+    assert worker_mod._stuck_threshold_seconds() == 240

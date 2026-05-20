@@ -430,6 +430,39 @@ def test_extract_item_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_get_item_includes_latest_job_with_last_error(
+    client: TestClient, sm: StateManager
+) -> None:
+    """bd-j68g.2: item detail surfaces last_error + attempts when the most
+    recent job has failed."""
+    iid = _seed_item(sm)
+    job_id = sm.enqueue_extraction_job(iid, max_attempts=2)
+    sm.claim_next_extraction_job()
+    sm.fail_extraction_job(job_id, "RuntimeError: kaboom")  # retry → queued
+    sm.claim_next_extraction_job()
+    sm.fail_extraction_job(job_id, "RuntimeError: kaboom-final")  # final fail
+
+    resp = client.get(f"/api/research/items/{iid}")
+    assert resp.status_code == 200
+    body = resp.json()
+    lj = body["latest_job"]
+    assert lj is not None
+    assert lj["id"] == job_id
+    assert lj["status"] == "failed"
+    assert lj["attempts"] == 2
+    assert lj["max_attempts"] == 2
+    assert "kaboom-final" in (lj["last_error"] or "")
+
+
+def test_get_item_latest_job_none_when_no_jobs(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_item(sm)
+    resp = client.get(f"/api/research/items/{iid}")
+    assert resp.status_code == 200
+    assert resp.json()["latest_job"] is None
+
+
 # ---------- /extractions/{id}/promote ----------
 
 

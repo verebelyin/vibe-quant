@@ -68,8 +68,25 @@ class ResearchItemResponse(BaseModel):
     extraction_status: str
 
 
+class ExtractionJobResponse(BaseModel):
+    """A row from `research_extraction_jobs` — surfaced for failure diagnostics."""
+
+    id: int
+    research_item_id: int
+    status: str
+    queued_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    attempts: int
+    max_attempts: int
+    last_error: str | None
+    error_message: str | None
+    heartbeat_at: str | None
+
+
 class ResearchItemDetailResponse(ResearchItemResponse):
     extractions: list[ExtractionResponse]
+    latest_job: ExtractionJobResponse | None = None
 
 
 class ResearchItemListResponse(BaseModel):
