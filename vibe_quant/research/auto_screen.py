@@ -1,19 +1,24 @@
-"""Auto-screen each parsed extraction with a single Sharpe.
+"""Auto-screen each parsed extraction with the screening metric set.
 
 Runs synchronously inside the scrape subprocess (no separate worker, no
-queue). Failures are swallowed and recorded as `screen_status='failed'` on
-the extraction row so the scrape loop never aborts mid-run.
+queue). Failures and timeouts are swallowed and recorded on the extraction
+row so the scrape loop never aborts mid-run.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import signal
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.screening.types import BacktestMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +26,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYMBOLS: list[str] = ["BTCUSDT-PERP.BINANCE"]
 DEFAULT_LOOKBACK_DAYS: int = 180
 DEFAULT_TIMEFRAME: str = "1h"
+DEFAULT_TIMEOUT_SECONDS: int = 300
+
+
+class _ScreenTimeout(Exception):
+    """Raised when a single screening run exceeds DEFAULT_TIMEOUT_SECONDS."""
 
 
 def _default_window() -> tuple[str, str]:
     today = datetime.now(tz=UTC).date()
     start = today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
     return start.isoformat(), today.isoformat()
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat(timespec="seconds")
 
 
 def auto_screen_extraction(
@@ -37,22 +51,25 @@ def auto_screen_extraction(
     """Run one screening backtest for a freshly parsed extraction.
 
     Creates a `backtest_runs` row tagged with
-    `parameters.auto_screen_source.extraction_id = <id>` and writes Sharpe +
-    status back onto the extraction row. Any exception is logged and
-    recorded as `screen_status='failed'` — never propagates.
+    `parameters.auto_screen_source.extraction_id = <id>` and writes the
+    full metric set (Sharpe, PF, Max DD, Return, Trades) + completion
+    timestamp back onto the extraction row. Any exception is logged and
+    recorded as `screen_status='failed'` with an error string — never
+    propagates.
     """
     start_date, end_date = _default_window()
     try:
         dsl_dict = _normalize_dsl(parsed_dsl_json)
     except Exception as e:  # noqa: BLE001
-        logger.warning(
-            "auto_screen: DSL invalid for extraction %s: %s", extraction_id, e
-        )
+        msg = f"DSL invalid: {type(e).__name__}: {e}"
+        logger.warning("auto_screen: %s (extraction %s)", msg, extraction_id)
         sm.update_extraction_screen_results(
             extraction_id,
             screen_sharpe=None,
             screen_status="failed",
             screen_run_id=None,
+            screen_error=msg,
+            screen_completed_at=_now_iso(),
         )
         return
 
@@ -69,27 +86,48 @@ def auto_screen_extraction(
     )
 
     try:
-        sharpe = _run_single_sharpe(dsl_dict, start_date, end_date)
-    except Exception as e:  # noqa: BLE001
+        metrics = _run_single_metrics(dsl_dict, start_date, end_date)
+    except _ScreenTimeout:
         logger.warning(
-            "auto_screen: runner failed for extraction %s (run %d): %s",
-            extraction_id,
-            run_id,
-            e,
+            "auto_screen: timeout for extraction %s (run %d)", extraction_id, run_id
         )
         sm.update_extraction_screen_results(
             extraction_id,
             screen_sharpe=None,
             screen_status="failed",
             screen_run_id=run_id,
+            screen_error="timeout",
+            screen_completed_at=_now_iso(),
+        )
+        return
+    except Exception as e:  # noqa: BLE001
+        msg = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "auto_screen: runner failed for extraction %s (run %d): %s",
+            extraction_id,
+            run_id,
+            msg,
+        )
+        sm.update_extraction_screen_results(
+            extraction_id,
+            screen_sharpe=None,
+            screen_status="failed",
+            screen_run_id=run_id,
+            screen_error=msg,
+            screen_completed_at=_now_iso(),
         )
         return
 
     sm.update_extraction_screen_results(
         extraction_id,
-        screen_sharpe=sharpe,
+        screen_sharpe=_finite_or_none(metrics.sharpe_ratio),
         screen_status="done",
         screen_run_id=run_id,
+        screen_pf=_finite_or_none(metrics.profit_factor),
+        screen_max_dd=_finite_or_none(metrics.max_drawdown),
+        screen_return=_finite_or_none(metrics.total_return),
+        screen_trades=int(metrics.total_trades) if metrics.total_trades is not None else None,
+        screen_completed_at=_now_iso(),
     )
 
 
@@ -109,10 +147,14 @@ def _normalize_dsl(parsed_dsl_json: str) -> dict[str, object]:
     return dsl.model_dump()
 
 
-def _run_single_sharpe(
+def _run_single_metrics(
     dsl_dict: dict[str, object], start_date: str, end_date: str
-) -> float | None:
-    """Instantiate NTScreeningRunner and run one backtest with default params."""
+) -> BacktestMetrics:
+    """Instantiate NTScreeningRunner and run one backtest with default params.
+
+    Wall-clock-bounded via SIGALRM; if it doesn't return within
+    DEFAULT_TIMEOUT_SECONDS, raises :class:`_ScreenTimeout`.
+    """
     from vibe_quant.screening.nt_runner import NTScreeningRunner
 
     runner = NTScreeningRunner(
@@ -121,15 +163,43 @@ def _run_single_sharpe(
         start_date=start_date,
         end_date=end_date,
     )
-    metrics = runner({})
-    sharpe = metrics.sharpe_ratio
-    if sharpe is None:
-        return None
-    # NTScreeningRunner uses -inf as a sentinel for runner errors; surface
-    # that as None rather than persisting a non-finite float.
+
+    with _alarm(DEFAULT_TIMEOUT_SECONDS):
+        return runner({})
+
+
+@contextlib.contextmanager
+def _alarm(seconds: int) -> Iterator[None]:
+    """SIGALRM-based wall-clock guard. Only effective in the main thread."""
+
+    def _handler(_signum: int, _frame: object) -> None:
+        raise _ScreenTimeout(f"screening exceeded {seconds}s")
+
     try:
-        if not (sharpe == sharpe and sharpe not in (float("inf"), float("-inf"))):
-            return None
-    except TypeError:
+        prev = signal.signal(signal.SIGALRM, _handler)
+    except (ValueError, AttributeError):
+        # Not on a unix main thread — fall through without protection.
+        yield
+        return
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        with contextlib.suppress(ValueError, TypeError):
+            signal.signal(signal.SIGALRM, prev)
+
+
+def _finite_or_none(value: float | int | None) -> float | None:
+    """NTScreeningRunner uses ±inf as sentinels for runner errors; surface as None."""
+    if value is None:
         return None
-    return float(sharpe)
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    if v in (float("inf"), float("-inf")):
+        return None
+    return v

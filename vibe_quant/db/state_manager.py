@@ -1179,13 +1179,32 @@ class StateManager:
         screen_sharpe: float | None,
         screen_status: str,
         screen_run_id: int | None,
+        screen_pf: float | None = None,
+        screen_max_dd: float | None = None,
+        screen_return: float | None = None,
+        screen_trades: int | None = None,
+        screen_error: str | None = None,
+        screen_completed_at: str | None = None,
     ) -> bool:
         with self._write_lock:
             cursor = self.conn.execute(
                 """UPDATE research_extractions
-                   SET screen_sharpe = ?, screen_status = ?, screen_run_id = ?
+                   SET screen_sharpe = ?, screen_status = ?, screen_run_id = ?,
+                       screen_pf = ?, screen_max_dd = ?, screen_return = ?,
+                       screen_trades = ?, screen_error = ?, screen_completed_at = ?
                    WHERE id = ?""",
-                (screen_sharpe, screen_status, screen_run_id, extraction_id),
+                (
+                    screen_sharpe,
+                    screen_status,
+                    screen_run_id,
+                    screen_pf,
+                    screen_max_dd,
+                    screen_return,
+                    screen_trades,
+                    screen_error,
+                    screen_completed_at,
+                    extraction_id,
+                ),
             )
             self.conn.commit()
             return cursor.rowcount > 0

@@ -104,6 +104,12 @@ def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
         screen_sharpe=row.get("screen_sharpe"),
         screen_status=row.get("screen_status"),
         screen_run_id=row.get("screen_run_id"),
+        screen_pf=row.get("screen_pf"),
+        screen_max_dd=row.get("screen_max_dd"),
+        screen_return=row.get("screen_return"),
+        screen_trades=row.get("screen_trades"),
+        screen_error=row.get("screen_error"),
+        screen_completed_at=row.get("screen_completed_at"),
     )
 
 

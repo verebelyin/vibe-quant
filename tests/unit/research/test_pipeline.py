@@ -446,7 +446,7 @@ def test_auto_screen_runner_failure_recorded_as_failed(
         raise RuntimeError("nt fail")
 
     monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
-    monkeypatch.setattr(auto_screen, "_run_single_sharpe", _blow_up)
+    monkeypatch.setattr(auto_screen, "_run_single_metrics", _blow_up)
     # Restore the real auto_screen function (the autouse stub replaced it).
     monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
 
@@ -523,8 +523,21 @@ def test_auto_screen_backtest_run_carries_traceability(
     """The created backtest_runs row must point back at the extraction."""
     _register_fake_source([_item(0)])
 
+    from vibe_quant.screening.types import BacktestMetrics
+
     monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
-    monkeypatch.setattr(auto_screen, "_run_single_sharpe", lambda *a, **k: 2.5)
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=2.5,
+            profit_factor=1.8,
+            max_drawdown=0.05,
+            total_return=0.42,
+            total_trades=128,
+        ),
+    )
     monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
 
     def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
@@ -551,6 +564,12 @@ def test_auto_screen_backtest_run_carries_traceability(
     exs = sm.list_extractions_for_item(items[0]["id"])
     assert exs[0]["screen_status"] == "done"
     assert exs[0]["screen_sharpe"] == pytest.approx(2.5)
+    assert exs[0]["screen_pf"] == pytest.approx(1.8)
+    assert exs[0]["screen_max_dd"] == pytest.approx(0.05)
+    assert exs[0]["screen_return"] == pytest.approx(0.42)
+    assert exs[0]["screen_trades"] == 128
+    assert exs[0]["screen_error"] is None
+    assert exs[0]["screen_completed_at"] is not None
     run_id = exs[0]["screen_run_id"]
     assert run_id is not None
 
@@ -560,3 +579,207 @@ def test_auto_screen_backtest_run_carries_traceability(
     assert run["strategy_id"] is None
     src = (run["parameters"] or {}).get("auto_screen_source")
     assert src == {"extraction_id": exs[0]["id"]}
+
+
+def test_auto_screen_records_compile_error(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DSL compile failure populates screen_error + screen_completed_at and
+    leaves screen_run_id None (caught before backtest_runs row created)."""
+    _register_fake_source([_item(0)])
+
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='not-valid-json',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    exs = sm.list_extractions_for_item(
+        sm.list_research_items(source="fake")[0]["id"]
+    )
+    assert exs[0]["screen_status"] == "failed"
+    assert exs[0]["screen_run_id"] is None
+    assert exs[0]["screen_error"] is not None
+    assert "DSL invalid" in exs[0]["screen_error"]
+    assert exs[0]["screen_completed_at"] is not None
+
+
+def test_auto_screen_low_trades_still_done(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trades<50 must still be screen_status='done' (not 'failed') — UI
+    handles the not-a-winner styling."""
+    _register_fake_source([_item(0)])
+
+    from vibe_quant.screening.types import BacktestMetrics
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=2.0,
+            total_trades=12,
+        ),
+    )
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='{"name":"low"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    exs = sm.list_extractions_for_item(
+        sm.list_research_items(source="fake")[0]["id"]
+    )
+    assert exs[0]["screen_status"] == "done"
+    assert exs[0]["screen_trades"] == 12
+    assert exs[0]["screen_sharpe"] == pytest.approx(2.0)
+
+
+def test_auto_screen_timeout_marks_failed_with_timeout_error(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A screening run that doesn't return within the wall-clock budget must
+    be killed and recorded as 'timeout'."""
+    _register_fake_source([_item(0)])
+
+    from vibe_quant.research.auto_screen import _ScreenTimeout
+
+    def _hang(*_a: object, **_k: object) -> None:
+        raise _ScreenTimeout("screening exceeded 300s")
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(auto_screen, "_run_single_metrics", _hang)
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='{"name":"slow"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    exs = sm.list_extractions_for_item(
+        sm.list_research_items(source="fake")[0]["id"]
+    )
+    assert exs[0]["screen_status"] == "failed"
+    assert exs[0]["screen_error"] == "timeout"
+    # backtest_run row was created before the timeout — useful for triage
+    assert exs[0]["screen_run_id"] is not None
+    assert exs[0]["screen_completed_at"] is not None
+
+
+def test_auto_screen_failure_in_one_extraction_does_not_block_others(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DSL-compile failure on finding #1 must NOT prevent finding #2 from
+    being screened — both rows persist with correct statuses."""
+    _register_fake_source([_item(0)])
+
+    from vibe_quant.screening.types import BacktestMetrics
+
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={}, sharpe_ratio=1.5, total_trades=80
+        ),
+    )
+    # _normalize_dsl: raise for the bad payload, pass-through for the good one
+    real_normalize = auto_screen._normalize_dsl
+
+    def _selective_normalize(payload: str) -> dict[str, object]:
+        if "good" in payload:
+            return {"timeframe": "1h"}
+        return real_normalize(payload)
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", _selective_normalize)
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.9,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='garbage-not-json',
+                    parse_error=None,
+                    llm_model="t",
+                ),
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.9,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="y",
+                    parsed_dsl_json='{"name":"good"}',
+                    parse_error=None,
+                    llm_model="t",
+                ),
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    exs = sm.list_extractions_for_item(
+        sm.list_research_items(source="fake")[0]["id"]
+    )
+    # Two extraction rows, one done, one failed
+    statuses = sorted(e["screen_status"] for e in exs)
+    assert statuses == ["done", "failed"]
+    done = next(e for e in exs if e["screen_status"] == "done")
+    failed = next(e for e in exs if e["screen_status"] == "failed")
+    assert done["screen_sharpe"] == pytest.approx(1.5)
+    assert failed["screen_run_id"] is None
+    assert failed["screen_error"] is not None

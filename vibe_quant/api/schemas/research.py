@@ -45,6 +45,12 @@ class ExtractionResponse(BaseModel):
     screen_sharpe: float | None = None
     screen_status: str | None = None
     screen_run_id: int | None = None
+    screen_pf: float | None = None
+    screen_max_dd: float | None = None
+    screen_return: float | None = None
+    screen_trades: int | None = None
+    screen_error: str | None = None
+    screen_completed_at: str | None = None
 
 
 class ResearchItemResponse(BaseModel):

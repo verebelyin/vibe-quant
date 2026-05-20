@@ -11,6 +11,7 @@ import {
 } from "@/api/generated/research/research";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
 import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
+import { ScreenBadge, type ScreenSummary } from "@/components/research/ScreenBadge";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { YamlViewer } from "@/components/research/YamlViewer";
 import { Button } from "@/components/ui/button";
@@ -21,22 +22,11 @@ interface Props {
   index: number;
 }
 
-type ScreenFields = {
-  screen_sharpe?: number | null;
-  screen_status?: string | null;
-  screen_run_id?: number | null;
-};
-
 function formatTimestamp(iso: string | null): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
   return new Date(t).toLocaleString();
-}
-
-function formatSharpe(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return value.toFixed(2);
 }
 
 export function ExtractionCard({ extraction, itemId, index }: Props) {
@@ -139,9 +129,7 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
             · {formatTimestamp(extraction.extracted_at)}
           </span>
         </div>
-        <div className="text-xs text-muted-foreground font-mono">
-          Sharpe: {formatSharpe((extraction as unknown as ScreenFields).screen_sharpe)}
-        </div>
+        <ScreenBadge summary={extraction as unknown as ScreenSummary} />
       </div>
 
       {typeof extraction.confidence === "number" && (
