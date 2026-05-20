@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 7
+SCHEMA_VERSION: int = 8
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -225,7 +225,10 @@ CREATE TABLE IF NOT EXISTS research_extractions (
     proposed_indicators_json TEXT,
     strategy_id INTEGER REFERENCES strategies(id),
     status TEXT DEFAULT 'parsed'
-        CHECK (status IN ('parsed', 'failed', 'skipped', 'promoted', 'rejected'))
+        CHECK (status IN ('parsed', 'failed', 'skipped', 'promoted', 'rejected')),
+    screen_sharpe REAL,
+    screen_status TEXT,
+    screen_run_id INTEGER REFERENCES backtest_runs(id)
 );
 
 -- Research per-source settings (one row per source). Currently stores the
@@ -286,6 +289,9 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("backtest_results", "skewness", "REAL"),
         ("backtest_results", "kurtosis", "REAL"),
         ("research_extractions", "proposed_indicators_json", "TEXT"),
+        ("research_extractions", "screen_sharpe", "REAL"),
+        ("research_extractions", "screen_status", "TEXT"),
+        ("research_extractions", "screen_run_id", "INTEGER"),
     ]
     applied = 0
     for table, column, col_type in migrations:

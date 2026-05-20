@@ -101,6 +101,9 @@ def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
         proposed_indicators_json=row.get("proposed_indicators_json"),
         strategy_id=row.get("strategy_id"),
         status=str(row.get("status") or "parsed"),
+        screen_sharpe=row.get("screen_sharpe"),
+        screen_status=row.get("screen_status"),
+        screen_run_id=row.get("screen_run_id"),
     )
 
 

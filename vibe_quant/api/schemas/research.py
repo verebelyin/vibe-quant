@@ -42,6 +42,9 @@ class ExtractionResponse(BaseModel):
     proposed_indicators_json: str | None = None
     strategy_id: int | None
     status: str
+    screen_sharpe: float | None = None
+    screen_status: str | None = None
+    screen_run_id: int | None = None
 
 
 class ResearchItemResponse(BaseModel):

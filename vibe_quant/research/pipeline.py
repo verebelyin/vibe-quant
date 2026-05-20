@@ -228,8 +228,10 @@ def persist_extractions(
     if not results:
         sm.update_research_item_status(item_id, "failed")
         return
+    from vibe_quant.research import auto_screen as _auto_screen
+
     for result in results:
-        sm.create_extraction(
+        extraction_id = sm.create_extraction(
             research_item_id=item_id,
             status=result.status,
             llm_model=result.llm_model,
@@ -241,6 +243,10 @@ def persist_extractions(
             parse_error=result.parse_error,
             proposed_indicators_json=result.proposed_indicators_json,
         )
+        if result.status == "parsed" and result.parsed_dsl_json:
+            _auto_screen.auto_screen_extraction(
+                sm, extraction_id, result.parsed_dsl_json
+            )
     item_statuses = [_ITEM_STATUS_MAP.get(r.status, "failed") for r in results]
     rolled = min(item_statuses, key=lambda s: _ITEM_STATUS_PRIORITY.get(s, 99))
     sm.update_research_item_status(item_id, rolled)

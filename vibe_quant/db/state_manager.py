@@ -1172,6 +1172,24 @@ class StateManager:
             self.conn.commit()
             return cursor.rowcount > 0
 
+    def update_extraction_screen_results(
+        self,
+        extraction_id: int,
+        *,
+        screen_sharpe: float | None,
+        screen_status: str,
+        screen_run_id: int | None,
+    ) -> bool:
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_extractions
+                   SET screen_sharpe = ?, screen_status = ?, screen_run_id = ?
+                   WHERE id = ?""",
+                (screen_sharpe, screen_status, screen_run_id, extraction_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
     def create_scrape_run(
         self,
         *,

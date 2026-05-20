@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research import extraction_log
+from vibe_quant.research import auto_screen, extraction_log
 from vibe_quant.research.pipeline import run_scrape
 from vibe_quant.research.schema import ExtractionBatch, ExtractionResult, RawItem
 from vibe_quant.research.sources import _reset_for_tests, register_source
@@ -34,6 +34,19 @@ def _isolate_log_root(
     log_root = tmp_path / "research-logs"
     monkeypatch.setattr(extraction_log, "DEFAULT_LOG_ROOT", log_root)
     yield log_root
+
+
+_REAL_AUTO_SCREEN = auto_screen.auto_screen_extraction
+
+
+@pytest.fixture(autouse=True)
+def _stub_auto_screen(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Skip real NT screening in unit tests — pipeline hook would otherwise
+    try to compile and backtest a DSL against the on-disk catalog."""
+    monkeypatch.setattr(
+        auto_screen, "auto_screen_extraction", lambda sm, eid, dsl: None
+    )
+    yield
 
 
 @pytest.fixture
@@ -331,3 +344,219 @@ def test_sigterm_during_iteration_finalizes_as_killed(sm: StateManager) -> None:
     assert row["completed_at"] is not None
     # At least one item was archived before the kill
     assert summary.items_fetched >= 1
+
+
+def test_auto_screen_runs_once_per_parsed_extraction(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each parsed extraction with non-empty parsed_dsl_json must trigger
+    auto_screen exactly once; skipped/failed/null-DSL must not."""
+    _register_fake_source([_item(i) for i in range(3)])
+
+    calls: list[tuple[int, str]] = []
+
+    def fake_screen(sm_arg, extraction_id: int, parsed_dsl_json: str) -> None:  # noqa: ANN001
+        calls.append((extraction_id, parsed_dsl_json))
+        run_id = sm_arg.create_backtest_run(
+            strategy_id=None,
+            run_mode="screening",
+            symbols=["BTCUSDT-PERP.BINANCE"],
+            timeframe="1h",
+            start_date="2026-01-01",
+            end_date="2026-02-01",
+            parameters={"auto_screen_source": {"extraction_id": extraction_id}},
+        )
+        sm_arg.update_extraction_screen_results(
+            extraction_id,
+            screen_sharpe=1.23,
+            screen_status="done",
+            screen_run_id=run_id,
+        )
+
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", fake_screen)
+
+    def mixed_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        # 3 findings per item: parsed-with-dsl, parsed-without-dsl, skipped
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.9,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="name: s\n",
+                    parsed_dsl_json='{"name":"s"}',
+                    parse_error=None,
+                    llm_model="t",
+                ),
+                ExtractionResult(
+                    status="parsed",
+                    confidence=0.5,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model="t",
+                ),
+                ExtractionResult(
+                    status="skipped",
+                    confidence=0.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml=None,
+                    parsed_dsl_json=None,
+                    parse_error=None,
+                    llm_model="t",
+                ),
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=mixed_extract)
+    assert summary.items_new == 3
+    # one parsed-with-DSL invocation per item
+    assert len(calls) == 3
+    for _eid, payload in calls:
+        assert payload == '{"name":"s"}'
+
+    # screen columns surfaced on the parsed-with-DSL rows
+    for it in sm.list_research_items(source="fake"):
+        exs = sm.list_extractions_for_item(it["id"])
+        with_dsl = [e for e in exs if e["parsed_dsl_json"]]
+        without_dsl = [e for e in exs if not e["parsed_dsl_json"]]
+        assert len(with_dsl) == 1
+        assert with_dsl[0]["screen_status"] == "done"
+        assert with_dsl[0]["screen_sharpe"] == pytest.approx(1.23)
+        assert with_dsl[0]["screen_run_id"] is not None
+        for e in without_dsl:
+            assert e["screen_status"] is None
+            assert e["screen_sharpe"] is None
+
+
+def test_auto_screen_runner_failure_recorded_as_failed(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NTScreeningRunner exceptions must be swallowed by auto_screen and
+    recorded as screen_status='failed' — scrape itself completes cleanly."""
+    _register_fake_source([_item(i) for i in range(2)])
+
+    def _blow_up(*_a: object, **_k: object) -> None:
+        raise RuntimeError("nt fail")
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(auto_screen, "_run_single_sharpe", _blow_up)
+    # Restore the real auto_screen function (the autouse stub replaced it).
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='{"name":"x"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    # extraction rows persisted with screen_status='failed'
+    for it in sm.list_research_items(source="fake"):
+        exs = sm.list_extractions_for_item(it["id"])
+        assert len(exs) == 1
+        assert exs[0]["screen_status"] == "failed"
+        assert exs[0]["screen_sharpe"] is None
+        # a backtest_run row was created for traceability before the failure
+        assert exs[0]["screen_run_id"] is not None
+
+
+def test_auto_screen_invalid_dsl_records_failed_without_run(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Garbage parsed_dsl_json must be recorded as failed with no run row."""
+    _register_fake_source([_item(0)])
+
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='{"this": "is not a valid dsl"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    items = sm.list_research_items(source="fake")
+    exs = sm.list_extractions_for_item(items[0]["id"])
+    assert len(exs) == 1
+    assert exs[0]["screen_status"] == "failed"
+    assert exs[0]["screen_sharpe"] is None
+    # Invalid DSL caught before we ever create a backtest_runs row
+    assert exs[0]["screen_run_id"] is None
+
+
+def test_auto_screen_backtest_run_carries_traceability(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The created backtest_runs row must point back at the extraction."""
+    _register_fake_source([_item(0)])
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(auto_screen, "_run_single_sharpe", lambda *a, **k: 2.5)
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="P",
+            raw_response="{}",
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale=None,
+                    raw_response="",
+                    dsl_yaml="x",
+                    parsed_dsl_json='{"name":"trace_test"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    summary = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert summary.status == "completed"
+    items = sm.list_research_items(source="fake")
+    exs = sm.list_extractions_for_item(items[0]["id"])
+    assert exs[0]["screen_status"] == "done"
+    assert exs[0]["screen_sharpe"] == pytest.approx(2.5)
+    run_id = exs[0]["screen_run_id"]
+    assert run_id is not None
+
+    run = sm.get_backtest_run(int(run_id))
+    assert run is not None
+    assert run["run_mode"] == "screening"
+    assert run["strategy_id"] is None
+    src = (run["parameters"] or {}).get("auto_screen_source")
+    assert src == {"extraction_id": exs[0]["id"]}

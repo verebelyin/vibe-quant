@@ -21,11 +21,22 @@ interface Props {
   index: number;
 }
 
+type ScreenFields = {
+  screen_sharpe?: number | null;
+  screen_status?: string | null;
+  screen_run_id?: number | null;
+};
+
 function formatTimestamp(iso: string | null): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
   return new Date(t).toLocaleString();
+}
+
+function formatSharpe(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return value.toFixed(2);
 }
 
 export function ExtractionCard({ extraction, itemId, index }: Props) {
@@ -127,6 +138,9 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
           <span className="text-muted-foreground">
             · {formatTimestamp(extraction.extracted_at)}
           </span>
+        </div>
+        <div className="text-xs text-muted-foreground font-mono">
+          Sharpe: {formatSharpe((extraction as unknown as ScreenFields).screen_sharpe)}
         </div>
       </div>
 
