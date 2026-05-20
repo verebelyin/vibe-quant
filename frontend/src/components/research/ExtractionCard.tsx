@@ -8,6 +8,7 @@ import {
   useExtractItemApiResearchItemsItemIdExtractPost,
   usePromoteExtractionApiResearchExtractionsExtractionIdPromotePost,
   useRejectExtractionApiResearchExtractionsExtractionIdRejectPost,
+  useRescreenExtractionApiResearchExtractionsExtractionIdRescreenPost,
 } from "@/api/generated/research/research";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
 import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
@@ -37,10 +38,12 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
   const promoteMut = usePromoteExtractionApiResearchExtractionsExtractionIdPromotePost();
   const rejectMut = useRejectExtractionApiResearchExtractionsExtractionIdRejectPost();
   const reExtractMut = useExtractItemApiResearchItemsItemIdExtractPost();
+  const rescreenMut = useRescreenExtractionApiResearchExtractionsExtractionIdRescreenPost();
 
   const [promoting, setPromoting] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reExtracting, setReExtracting] = useState(false);
+  const [rescreening, setRescreening] = useState(false);
 
   const status = extraction.status;
   const isParsed = status === "parsed";
@@ -50,6 +53,7 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
   const canPromote = isParsed;
   const canReject = isParsed || isFailed;
   const canReExtract = !isPromoted && !isRejected;
+  const canRescreen = isParsed && !!extraction.parsed_dsl_json;
 
   const handlePromote = () => {
     setPromoting(true);
@@ -112,6 +116,26 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
         },
         onError: () => toast.error("Re-extract failed"),
         onSettled: () => setReExtracting(false),
+      },
+    );
+  };
+
+  const handleRescreen = () => {
+    setRescreening(true);
+    rescreenMut.mutate(
+      { extractionId: extraction.id },
+      {
+        onSuccess: (resp) => {
+          if (resp.status === 200) {
+            toast.success("Re-screen complete");
+            queryClient.invalidateQueries({ queryKey: itemKey });
+          } else {
+            const detail = (resp.data as { detail?: unknown })?.detail;
+            toast.error(typeof detail === "string" ? detail : "Re-screen failed");
+          }
+        },
+        onError: () => toast.error("Re-screen failed"),
+        onSettled: () => setRescreening(false),
       },
     );
   };
@@ -198,6 +222,19 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
           onClick={handleReExtract}
         >
           {reExtracting ? "Re-extracting…" : "Re-extract"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canRescreen || rescreening}
+          onClick={handleRescreen}
+          title={
+            canRescreen
+              ? "Re-run the screening backtest for this extraction"
+              : "Only parsed extractions with a valid DSL can be re-screened"
+          }
+        >
+          {rescreening ? "Re-screening…" : "Re-screen"}
         </Button>
       </div>
 

@@ -479,6 +479,137 @@ def test_reject_already_promoted_400(client: TestClient, sm: StateManager) -> No
     assert resp.status_code == 400
 
 
+# ---------- /extractions/{id}/rescreen ----------
+
+
+def test_rescreen_overwrites_columns_and_creates_new_run(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibe_quant.research import auto_screen
+    from vibe_quant.screening.types import BacktestMetrics
+
+    iid = _seed_item(sm)
+    eid = _seed_extraction(sm, iid)
+
+    # First screen: low Sharpe.
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=0.5,
+            profit_factor=1.1,
+            max_drawdown=0.2,
+            total_return=0.05,
+            total_trades=60,
+        ),
+    )
+    auto_screen.auto_screen_extraction(sm, eid, "{}")
+    first = sm.get_extraction(eid)
+    assert first is not None
+    first_run_id = first["screen_run_id"]
+    assert first["screen_sharpe"] == 0.5
+    assert isinstance(first_run_id, int)
+
+    # Second screen via the endpoint: higher Sharpe.
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=2.7,
+            profit_factor=1.9,
+            max_drawdown=0.04,
+            total_return=0.48,
+            total_trades=150,
+        ),
+    )
+    resp = client.post(f"/api/research/extractions/{eid}/rescreen")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["screen_sharpe"] == 2.7
+    assert body["screen_trades"] == 150
+    assert body["screen_run_id"] != first_run_id  # new row created
+
+    # Original backtest_runs row still exists.
+    prior = sm.get_backtest_run(first_run_id)
+    assert prior is not None
+
+
+def test_rescreen_404_for_unknown_extraction(client: TestClient) -> None:
+    resp = client.post("/api/research/extractions/99999/rescreen")
+    assert resp.status_code == 404
+
+
+def test_rescreen_400_when_no_parsed_dsl_json(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_item(sm)
+    eid = _seed_extraction(sm, iid, status="failed", parsed_dsl_json=None)
+    resp = client.post(f"/api/research/extractions/{eid}/rescreen")
+    assert resp.status_code == 400
+
+
+# ---------- /items with hide_low_trade / sort=screen_sharpe ----------
+
+
+def test_list_items_hide_low_trade_query_param(
+    client: TestClient, sm: StateManager
+) -> None:
+    low = _seed_item(sm, external_id="low")
+    low_ex = _seed_extraction(sm, low)
+    sm.update_extraction_screen_results(
+        low_ex,
+        screen_sharpe=2.0,
+        screen_status="done",
+        screen_run_id=None,
+        screen_trades=10,
+        screen_completed_at="2026-05-20T00:00:00+00:00",
+    )
+    high = _seed_item(sm, external_id="high")
+    high_ex = _seed_extraction(sm, high)
+    sm.update_extraction_screen_results(
+        high_ex,
+        screen_sharpe=1.5,
+        screen_status="done",
+        screen_run_id=None,
+        screen_trades=200,
+        screen_completed_at="2026-05-20T00:00:00+00:00",
+    )
+
+    resp = client.get("/api/research/items", params={"hide_low_trade": "true"})
+    assert resp.status_code == 200
+    ids = {it["id"] for it in resp.json()["items"]}
+    assert high in ids
+    assert low not in ids
+
+
+def test_list_items_sort_screen_sharpe(client: TestClient, sm: StateManager) -> None:
+    for ext, sharpe in [("a", 0.3), ("b", 2.1), ("c", 1.0)]:
+        iid = _seed_item(sm, external_id=ext)
+        eid = _seed_extraction(sm, iid)
+        sm.update_extraction_screen_results(
+            eid,
+            screen_sharpe=sharpe,
+            screen_status="done",
+            screen_run_id=None,
+            screen_trades=100,
+            screen_completed_at="2026-05-20T00:00:00+00:00",
+        )
+
+    resp = client.get("/api/research/items", params={"sort": "screen_sharpe"})
+    assert resp.status_code == 200
+    titles = [it["external_id"] for it in resp.json()["items"]]
+    # Highest Sharpe first.
+    assert titles[:3] == ["b", "c", "a"]
+
+
+def test_list_items_invalid_sort_422(client: TestClient) -> None:
+    resp = client.get("/api/research/items", params={"sort": "bogus"})
+    assert resp.status_code == 422
+
+
 # ---------- /docs ----------
 
 

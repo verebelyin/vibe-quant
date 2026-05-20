@@ -263,7 +263,13 @@ def kill_scrape(run_id: int, sm: StateMgr) -> ScrapeRunResponse:
     return _run_to_response(after)
 
 
-_VALID_SORTS = {"newest_scraped", "newest_posted", "highest_score", "highest_confidence"}
+_VALID_SORTS = {
+    "newest_scraped",
+    "newest_posted",
+    "highest_score",
+    "highest_confidence",
+    "screen_sharpe",
+}
 
 
 @router.get("/items", response_model=ResearchItemListResponse)
@@ -274,13 +280,21 @@ def list_items(
     sort: Annotated[str, Query()] = "newest_scraped",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    hide_low_trade: Annotated[bool, Query()] = False,
 ) -> ResearchItemListResponse:
     if sort not in _VALID_SORTS:
         raise HTTPException(status_code=422, detail=f"invalid sort: {sort}")
     rows = sm.list_research_items(
-        source=source, status=status, sort=sort, limit=limit, offset=offset
+        source=source,
+        status=status,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+        hide_low_trade=hide_low_trade,
     )
-    total = sm.count_research_items(source=source, status=status)
+    total = sm.count_research_items(
+        source=source, status=status, hide_low_trade=hide_low_trade
+    )
     return ResearchItemListResponse(
         items=[_item_to_response(r) for r in rows],
         total=total,
@@ -409,6 +423,31 @@ def reject_extraction(extraction_id: int, sm: StateMgr) -> ExtractionResponse:
             detail=f"cannot reject already-promoted extraction (strategy_id={ex.get('strategy_id')})",
         )
     sm.update_extraction_status(extraction_id, status="rejected")
+    after = sm.get_extraction(extraction_id)
+    assert after is not None
+    return _extraction_to_response(after)
+
+
+@router.post("/extractions/{extraction_id}/rescreen", response_model=ExtractionResponse)
+def rescreen_extraction(extraction_id: int, sm: StateMgr) -> ExtractionResponse:
+    """Re-run the auto-screen for an extraction synchronously.
+
+    Creates a new `backtest_runs` row (the prior one is preserved) and
+    overwrites the `screen_*` columns on the extraction. Only valid for
+    extractions whose DSL parsed successfully.
+    """
+    ex = sm.get_extraction(extraction_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail=f"extraction {extraction_id} not found")
+    parsed_json = ex.get("parsed_dsl_json")
+    if not isinstance(parsed_json, str) or not parsed_json:
+        raise HTTPException(
+            status_code=400, detail="extraction has no parsed_dsl_json; cannot re-screen"
+        )
+
+    from vibe_quant.research.auto_screen import auto_screen_extraction
+
+    auto_screen_extraction(sm, extraction_id, parsed_json)
     after = sm.get_extraction(extraction_id)
     assert after is not None
     return _extraction_to_response(after)

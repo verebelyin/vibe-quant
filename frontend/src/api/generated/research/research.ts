@@ -1491,4 +1491,97 @@ export const useRejectExtractionApiResearchExtractionsExtractionIdRejectPost = <
       > => {
       return useMutation(getRejectExtractionApiResearchExtractionsExtractionIdRejectPostMutationOptions(options), queryClient);
     }
+    /**
+ * Re-run the auto-screen for an extraction synchronously.
+
+Creates a new `backtest_runs` row (the prior one is preserved) and
+overwrites the `screen_*` columns on the extraction. Only valid for
+extractions whose DSL parsed successfully.
+ * @summary Rescreen Extraction
+ */
+export type rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse200 = {
+  data: ExtractionResponse
+  status: 200
+}
+
+export type rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponseSuccess = (rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse200) & {
+  headers: Headers;
+};
+export type rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponseError = (rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse422) & {
+  headers: Headers;
+};
+
+export type rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse = (rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponseSuccess | rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponseError)
+
+export const getRescreenExtractionApiResearchExtractionsExtractionIdRescreenPostUrl = (extractionId: number,) => {
+
+
+  
+
+  return `/api/research/extractions/${extractionId}/rescreen`
+}
+
+export const rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost = async (extractionId: number, options?: RequestInit): Promise<rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse> => {
+  
+  return customInstance<rescreenExtractionApiResearchExtractionsExtractionIdRescreenPostResponse>(getRescreenExtractionApiResearchExtractionsExtractionIdRescreenPostUrl(extractionId),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getRescreenExtractionApiResearchExtractionsExtractionIdRescreenPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>, TError,{extractionId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>, TError,{extractionId: number}, TContext> => {
+
+const mutationKey = ['rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>, {extractionId: number}> = (props) => {
+          const {extractionId} = props ?? {};
+
+          return  rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost(extractionId,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RescreenExtractionApiResearchExtractionsExtractionIdRescreenPostMutationResult = NonNullable<Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>>
+    
+    export type RescreenExtractionApiResearchExtractionsExtractionIdRescreenPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Rescreen Extraction
+ */
+export const useRescreenExtractionApiResearchExtractionsExtractionIdRescreenPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>, TError,{extractionId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof rescreenExtractionApiResearchExtractionsExtractionIdRescreenPost>>,
+        TError,
+        {extractionId: number},
+        TContext
+      > => {
+      return useMutation(getRescreenExtractionApiResearchExtractionsExtractionIdRescreenPostMutationOptions(options), queryClient);
+    }
     

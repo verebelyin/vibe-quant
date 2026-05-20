@@ -1059,12 +1059,14 @@ class StateManager:
         sort: str = "newest_scraped",
         limit: int = 50,
         offset: int = 0,
+        hide_low_trade: bool = False,
     ) -> list[JsonDict]:
         order_clauses = {
             "newest_scraped": "i.fetched_at DESC, i.id DESC",
             "newest_posted": "i.posted_at DESC, i.id DESC",
             "highest_score": "i.score IS NULL, i.score DESC, i.id DESC",
             "highest_confidence": "latest_confidence IS NULL, latest_confidence DESC, i.id DESC",
+            "screen_sharpe": "max_screen_sharpe IS NULL, max_screen_sharpe DESC, i.id DESC",
         }
         order_by = order_clauses.get(sort, order_clauses["newest_scraped"])
         # Project only list-view columns. body and extras_json (which holds
@@ -1076,7 +1078,10 @@ class StateManager:
             " SELECT confidence FROM research_extractions e"
             " WHERE e.research_item_id = i.id"
             " ORDER BY e.extracted_at DESC, e.id DESC LIMIT 1"
-            ") AS latest_confidence FROM research_items i WHERE 1=1"
+            ") AS latest_confidence, ("
+            " SELECT MAX(screen_sharpe) FROM research_extractions e"
+            " WHERE e.research_item_id = i.id"
+            ") AS max_screen_sharpe FROM research_items i WHERE 1=1"
         )
         params: list[Any] = []
         if source is not None:
@@ -1085,6 +1090,17 @@ class StateManager:
         if status is not None:
             query += " AND i.extraction_status = ?"
             params.append(status)
+        if hide_low_trade:
+            # Hide items where ≥1 extraction has trade-count data AND no extraction reached MIN_TRADES.
+            # Items with no extractions, or no extraction with screen_trades populated, are NOT hidden.
+            query += (
+                " AND NOT ("
+                "  EXISTS (SELECT 1 FROM research_extractions e"
+                "    WHERE e.research_item_id = i.id AND e.screen_trades IS NOT NULL)"
+                "  AND NOT EXISTS (SELECT 1 FROM research_extractions e"
+                "    WHERE e.research_item_id = i.id AND e.screen_trades >= 50)"
+                " )"
+            )
         query += f" ORDER BY {order_by} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self.conn.execute(query, params).fetchall()
@@ -1278,15 +1294,25 @@ class StateManager:
         *,
         source: str | None = None,
         status: str | None = None,
+        hide_low_trade: bool = False,
     ) -> int:
-        query = "SELECT COUNT(*) AS c FROM research_items WHERE 1=1"
+        query = "SELECT COUNT(*) AS c FROM research_items i WHERE 1=1"
         params: list[Any] = []
         if source is not None:
-            query += " AND source = ?"
+            query += " AND i.source = ?"
             params.append(source)
         if status is not None:
-            query += " AND extraction_status = ?"
+            query += " AND i.extraction_status = ?"
             params.append(status)
+        if hide_low_trade:
+            query += (
+                " AND NOT ("
+                "  EXISTS (SELECT 1 FROM research_extractions e"
+                "    WHERE e.research_item_id = i.id AND e.screen_trades IS NOT NULL)"
+                "  AND NOT EXISTS (SELECT 1 FROM research_extractions e"
+                "    WHERE e.research_item_id = i.id AND e.screen_trades >= 50)"
+                " )"
+            )
         row = self.conn.execute(query, params).fetchone()
         return int(row["c"]) if row else 0
 

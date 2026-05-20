@@ -277,3 +277,119 @@ def test_research_subreddits_clear(sm: StateManager) -> None:
     sm.set_research_subreddits("reddit", ["a"])
     sm.clear_research_subreddits("reddit")
     assert sm.get_research_subreddits("reddit") is None
+
+
+def _make_item_with_screen(
+    sm: StateManager,
+    *,
+    external_id: str,
+    sharpe: float | None,
+    trades: int | None,
+) -> int:
+    """Helper: create item + one extraction stamped with screen metrics."""
+    item_id = sm.create_research_item(
+        source="reddit",
+        external_id=external_id,
+        url="u",
+        title=external_id,
+        body=None,
+        author=None,
+        posted_at=None,
+        score=None,
+    )
+    ex_id = sm.create_extraction(
+        research_item_id=item_id,
+        status="parsed",
+        llm_model=None,
+        confidence=None,
+        rationale=None,
+        raw_response="",
+        dsl_yaml=None,
+        parsed_dsl_json='{"name":"x"}',
+        parse_error=None,
+    )
+    sm.update_extraction_screen_results(
+        ex_id,
+        screen_sharpe=sharpe,
+        screen_status="done" if sharpe is not None else "failed",
+        screen_run_id=None,
+        screen_trades=trades,
+        screen_completed_at="2026-05-20T00:00:00+00:00",
+    )
+    return item_id
+
+
+def test_list_research_items_sort_by_screen_sharpe(sm: StateManager) -> None:
+    low = _make_item_with_screen(sm, external_id="low", sharpe=0.5, trades=80)
+    high = _make_item_with_screen(sm, external_id="high", sharpe=2.5, trades=80)
+    mid = _make_item_with_screen(sm, external_id="mid", sharpe=1.2, trades=80)
+    none = _make_item_with_screen(sm, external_id="none", sharpe=None, trades=None)
+
+    items = sm.list_research_items(sort="screen_sharpe")
+    ordered_ids = [r["id"] for r in items]
+    # high, mid, low ranked by sharpe; none (NULL) sorts last.
+    assert ordered_ids[0] == high
+    assert ordered_ids[1] == mid
+    assert ordered_ids[2] == low
+    assert ordered_ids[3] == none
+
+
+def test_list_research_items_hide_low_trade_excludes_only_all_low(
+    sm: StateManager,
+) -> None:
+    # Item with single low-trade extraction → hidden.
+    hidden = _make_item_with_screen(sm, external_id="hidden", sharpe=3.0, trades=10)
+    # Item with single high-trade extraction → shown.
+    shown_high = _make_item_with_screen(sm, external_id="shown_h", sharpe=1.0, trades=100)
+    # Item with no extractions → shown (no trade-count data).
+    shown_no_ex = sm.create_research_item(
+        source="reddit",
+        external_id="shown_noex",
+        url="u",
+        title="t",
+        body=None,
+        author=None,
+        posted_at=None,
+        score=None,
+    )
+    # Item where one extraction is low, another is high → shown (mixed).
+    mixed = sm.create_research_item(
+        source="reddit",
+        external_id="mixed",
+        url="u",
+        title="t",
+        body=None,
+        author=None,
+        posted_at=None,
+        score=None,
+    )
+    for s, t in [(0.2, 5), (1.8, 200)]:
+        ex_id = sm.create_extraction(
+            research_item_id=mixed,
+            status="parsed",
+            llm_model=None,
+            confidence=None,
+            rationale=None,
+            raw_response="",
+            dsl_yaml=None,
+            parsed_dsl_json='{"name":"x"}',
+            parse_error=None,
+        )
+        sm.update_extraction_screen_results(
+            ex_id,
+            screen_sharpe=s,
+            screen_status="done",
+            screen_run_id=None,
+            screen_trades=t,
+            screen_completed_at="2026-05-20T00:00:00+00:00",
+        )
+
+    items = sm.list_research_items(hide_low_trade=True)
+    visible_ids = {r["id"] for r in items}
+    assert hidden not in visible_ids
+    assert shown_high in visible_ids
+    assert shown_no_ex in visible_ids
+    assert mixed in visible_ids
+
+    # count_research_items must match the filtered list length.
+    assert sm.count_research_items(hide_low_trade=True) == len(visible_ids)

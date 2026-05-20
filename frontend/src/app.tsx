@@ -206,9 +206,23 @@ const guideRoute = createRoute({
   },
 });
 
+type ResearchSearch = {
+  sort?: string;
+  hide_low_trade?: boolean;
+};
+
 const researchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/research",
+  validateSearch: (search: Record<string, unknown>): ResearchSearch => ({
+    sort: typeof search.sort === "string" ? search.sort : undefined,
+    hide_low_trade:
+      search.hide_low_trade === true ||
+      search.hide_low_trade === "1" ||
+      search.hide_low_trade === "true"
+        ? true
+        : undefined,
+  }),
   component: function ResearchRouteComponent() {
     return (
       <SuspensePage>

@@ -1,3 +1,5 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 import { useGetSourcesApiResearchSourcesGet } from "@/api/generated/research/research";
 import { ItemList } from "@/components/research/ItemList";
 import { ScrapeButton } from "@/components/research/ScrapeButton";
@@ -15,6 +17,14 @@ import {
   useResearchStore,
 } from "@/stores/researchStore";
 
+const VALID_SORTS: ResearchSort[] = [
+  "newest_scraped",
+  "newest_posted",
+  "highest_score",
+  "highest_confidence",
+  "screen_sharpe",
+];
+
 const STATUS_OPTIONS: { value: ResearchStatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
@@ -30,15 +40,50 @@ const SORT_OPTIONS: { value: ResearchSort; label: string }[] = [
   { value: "newest_posted", label: "Newest posted" },
   { value: "highest_score", label: "Highest score" },
   { value: "highest_confidence", label: "Highest confidence" },
+  { value: "screen_sharpe", label: "Highest screen Sharpe" },
 ];
 
 export function ResearchPage() {
   const source = useResearchStore((s) => s.source);
   const status = useResearchStore((s) => s.status);
   const sort = useResearchStore((s) => s.sort);
+  const hideLowTrade = useResearchStore((s) => s.hideLowTrade);
   const setSource = useResearchStore((s) => s.setSource);
   const setStatus = useResearchStore((s) => s.setStatus);
   const setSort = useResearchStore((s) => s.setSort);
+  const setHideLowTrade = useResearchStore((s) => s.setHideLowTrade);
+
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as {
+    sort?: string;
+    hide_low_trade?: boolean;
+  };
+
+  // On mount, hydrate store from URL (URL wins for shareable links).
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    if (search.sort && (VALID_SORTS as string[]).includes(search.sort)) {
+      setSort(search.sort as ResearchSort);
+    }
+    if (search.hide_low_trade === true) {
+      setHideLowTrade(true);
+    }
+  }, [search.sort, search.hide_low_trade, setSort, setHideLowTrade]);
+
+  // After hydration, mirror store back to URL.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    navigate({
+      search: (prev: Record<string, unknown>) => ({
+        ...prev,
+        sort: sort === "newest_scraped" ? undefined : sort,
+        hide_low_trade: hideLowTrade ? true : undefined,
+      }),
+      replace: true,
+    });
+  }, [sort, hideLowTrade, navigate]);
 
   const { data: sourcesData } = useGetSourcesApiResearchSourcesGet();
   const sources = sourcesData && sourcesData.status === 200 ? sourcesData.data.sources : ["reddit"];
@@ -81,7 +126,7 @@ export function ResearchPage() {
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-muted-foreground">Sort</span>
           <Select value={sort} onValueChange={(v) => setSort(v as ResearchSort)}>
-            <SelectTrigger size="sm" className="h-8 text-xs w-44">
+            <SelectTrigger size="sm" className="h-8 text-xs w-48">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -93,6 +138,16 @@ export function ResearchPage() {
             </SelectContent>
           </Select>
         </div>
+
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={hideLowTrade}
+            onChange={(e) => setHideLowTrade(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-border/60 accent-primary cursor-pointer"
+          />
+          Hide &lt;50 trades
+        </label>
 
         <div className="ml-auto">
           <ScrapeButton source={source} />

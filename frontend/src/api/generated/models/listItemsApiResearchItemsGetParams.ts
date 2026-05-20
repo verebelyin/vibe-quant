@@ -18,4 +18,5 @@ limit?: number;
  * @minimum 0
  */
 offset?: number;
+hide_low_trade?: boolean;
 };

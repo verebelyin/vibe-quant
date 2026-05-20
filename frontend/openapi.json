@@ -2334,6 +2334,16 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "hide_low_trade",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Hide Low Trade"
+            }
           }
         ],
         "responses": {
@@ -2494,6 +2504,49 @@
         ],
         "summary": "Reject Extraction",
         "operationId": "reject_extraction_api_research_extractions__extraction_id__reject_post",
+        "parameters": [
+          {
+            "name": "extraction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Extraction Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/research/extractions/{extraction_id}/rescreen": {
+      "post": {
+        "tags": [
+          "research"
+        ],
+        "summary": "Rescreen Extraction",
+        "description": "Re-run the auto-screen for an extraction synchronously.\n\nCreates a new `backtest_runs` row (the prior one is preserved) and\noverwrites the `screen_*` columns on the extraction. Only valid for\nextractions whose DSL parsed successfully.",
+        "operationId": "rescreen_extraction_api_research_extractions__extraction_id__rescreen_post",
         "parameters": [
           {
             "name": "extraction_id",
@@ -5799,6 +5852,105 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "screen_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Sharpe"
+          },
+          "screen_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Status"
+          },
+          "screen_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Run Id"
+          },
+          "screen_pf": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Pf"
+          },
+          "screen_max_dd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Max Dd"
+          },
+          "screen_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Return"
+          },
+          "screen_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Trades"
+          },
+          "screen_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Error"
+          },
+          "screen_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Completed At"
           }
         },
         "type": "object",

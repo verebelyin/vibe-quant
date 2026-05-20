@@ -19,4 +19,13 @@ export interface ExtractionResponse {
   proposed_indicators_json?: string | null;
   strategy_id: number | null;
   status: string;
+  screen_sharpe?: number | null;
+  screen_status?: string | null;
+  screen_run_id?: number | null;
+  screen_pf?: number | null;
+  screen_max_dd?: number | null;
+  screen_return?: number | null;
+  screen_trades?: number | null;
+  screen_error?: string | null;
+  screen_completed_at?: string | null;
 }

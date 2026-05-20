@@ -11,6 +11,7 @@ export function ItemList() {
   const status = useResearchStore((s) => s.status);
   const sort = useResearchStore((s) => s.sort);
   const page = useResearchStore((s) => s.page);
+  const hideLowTrade = useResearchStore((s) => s.hideLowTrade);
   const setPage = useResearchStore((s) => s.setPage);
   const reset = useResearchStore((s) => s.reset);
 
@@ -20,6 +21,7 @@ export function ItemList() {
     sort,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
+    ...(hideLowTrade ? { hide_low_trade: true } : {}),
   };
 
   const { data, isLoading, isError } = useListItemsApiResearchItemsGet(params);
