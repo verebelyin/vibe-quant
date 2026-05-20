@@ -42,6 +42,7 @@ DEFAULT_GRACE_PERIOD_S: float = 5.0
 DEFAULT_LOG_ROOT: Path = Path("data/logs")
 DEFAULT_HEARTBEAT_INTERVAL_S: float = 30.0
 DEFAULT_SWEEP_INTERVAL_S: float = 60.0
+MAX_CONCURRENCY: int = 4
 
 
 def _stuck_threshold_seconds() -> int:
@@ -163,51 +164,26 @@ def _run_extraction(sm: StateManager, item_id: int) -> None:
     persist_extractions(sm, item_id, batch.results)
 
 
-def run_forever(
+def _drain_loop(
     sm: StateManager,
     *,
-    poll_interval: float = DEFAULT_POLL_INTERVAL_S,
-    stop_event: Event | None = None,
-    sink: _JsonlSink | None = None,
+    stop: Event,
+    sink: _JsonlSink,
+    poll_interval: float,
+    in_flight: set[int],
+    in_flight_lock: threading.Lock,
+    worker_idx: int,
 ) -> None:
-    """Drain the queue forever, sleeping `poll_interval` seconds between empty polls.
-
-    Returns when `stop_event` is set. If a job is in flight when stop is
-    requested, that job is marked `cancelled` and the function returns.
-    """
-    stop = stop_event or Event()
-    sink = sink or _JsonlSink(DEFAULT_LOG_ROOT / f"extraction-worker-{os.getpid()}.log")
-    sink.emit("worker_started", pid=os.getpid(), poll_interval=poll_interval)
-    logger.info("extraction-worker started (pid=%d, poll=%.1fs)", os.getpid(), poll_interval)
-
-    stuck_threshold = _stuck_threshold_seconds()
-    last_sweep = 0.0
-
+    """One worker thread's drain loop. Claims one job at a time, marks
+    in_flight, processes, then loops. Tracks its own current job so it can
+    finalize as 'cancelled' if stop is set mid-extraction."""
     current_job_id: int | None = None
     try:
         while not stop.is_set():
-            now = time.monotonic()
-            if now - last_sweep >= DEFAULT_SWEEP_INTERVAL_S:
-                try:
-                    swept = sm.sweep_stuck_extraction_jobs(
-                        stuck_threshold, exclude_job_id=current_job_id
-                    )
-                    for j in swept:
-                        sink.emit(
-                            "job_swept",
-                            job_id=int(j["id"]),
-                            item_id=int(j["research_item_id"]),
-                            attempts=int(j["attempts"]),
-                            final_status=j["status"],
-                        )
-                except Exception:  # noqa: BLE001
-                    logger.exception("extraction-worker: sweep failed")
-                last_sweep = now
-
             try:
                 job = sm.claim_next_extraction_job()
             except Exception:  # noqa: BLE001
-                logger.exception("extraction-worker: claim failed; sleeping")
+                logger.exception("extraction-worker[%d]: claim failed; sleeping", worker_idx)
                 stop.wait(poll_interval)
                 continue
 
@@ -217,7 +193,14 @@ def run_forever(
 
             current_job_id = int(job["id"])
             item_id = int(job["research_item_id"])
-            sink.emit("job_claimed", job_id=current_job_id, item_id=item_id)
+            with in_flight_lock:
+                in_flight.add(current_job_id)
+            sink.emit(
+                "job_claimed",
+                job_id=current_job_id,
+                item_id=item_id,
+                worker_idx=worker_idx,
+            )
             heartbeat = _HeartbeatThread(sm, current_job_id)
             heartbeat.start()
             try:
@@ -239,7 +222,9 @@ def run_forever(
                 sink.emit("job_done", job_id=current_job_id, item_id=item_id)
             finally:
                 heartbeat.stop()
-            current_job_id = None
+                with in_flight_lock:
+                    in_flight.discard(current_job_id)
+                current_job_id = None
     finally:
         if current_job_id is not None:
             # Stop requested while a job was in flight — finalize it.
@@ -248,7 +233,100 @@ def run_forever(
                 status="cancelled",
                 error_message="worker received SIGTERM",
             )
+            with in_flight_lock:
+                in_flight.discard(current_job_id)
             sink.emit("job_cancelled", job_id=current_job_id)
+
+
+def run_forever(
+    sm: StateManager,
+    *,
+    poll_interval: float = DEFAULT_POLL_INTERVAL_S,
+    stop_event: Event | None = None,
+    sink: _JsonlSink | None = None,
+    concurrency: int = 1,
+) -> None:
+    """Drain the queue forever, sleeping `poll_interval` seconds between empty polls.
+
+    Spawns `concurrency` drain threads (max MAX_CONCURRENCY). The main thread
+    runs the stuck-job sweeper. Returns when `stop_event` is set; any jobs in
+    flight at that moment are finalized as `cancelled`.
+    """
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1 (got {concurrency})")
+    if concurrency > MAX_CONCURRENCY:
+        raise ValueError(
+            f"concurrency must be <= {MAX_CONCURRENCY} (got {concurrency})"
+        )
+
+    stop = stop_event or Event()
+    sink = sink or _JsonlSink(DEFAULT_LOG_ROOT / f"extraction-worker-{os.getpid()}.log")
+    sink.emit(
+        "worker_started",
+        pid=os.getpid(),
+        poll_interval=poll_interval,
+        concurrency=concurrency,
+    )
+    logger.info(
+        "extraction-worker started (pid=%d, poll=%.1fs, concurrency=%d)",
+        os.getpid(),
+        poll_interval,
+        concurrency,
+    )
+
+    stuck_threshold = _stuck_threshold_seconds()
+
+    in_flight: set[int] = set()
+    in_flight_lock = threading.Lock()
+
+    drain_threads = [
+        threading.Thread(
+            target=_drain_loop,
+            kwargs={
+                "sm": sm,
+                "stop": stop,
+                "sink": sink,
+                "poll_interval": poll_interval,
+                "in_flight": in_flight,
+                "in_flight_lock": in_flight_lock,
+                "worker_idx": i,
+            },
+            name=f"extract-drain-{i}",
+            daemon=False,
+        )
+        for i in range(concurrency)
+    ]
+    for t in drain_threads:
+        t.start()
+
+    try:
+        last_sweep = time.monotonic()
+        while not stop.is_set():
+            stop.wait(min(DEFAULT_SWEEP_INTERVAL_S, poll_interval))
+            now = time.monotonic()
+            if now - last_sweep < DEFAULT_SWEEP_INTERVAL_S:
+                continue
+            try:
+                with in_flight_lock:
+                    excluded = set(in_flight)
+                swept = sm.sweep_stuck_extraction_jobs(
+                    stuck_threshold, exclude_job_ids=excluded
+                )
+                for j in swept:
+                    sink.emit(
+                        "job_swept",
+                        job_id=int(j["id"]),
+                        item_id=int(j["research_item_id"]),
+                        attempts=int(j["attempts"]),
+                        final_status=j["status"],
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception("extraction-worker: sweep failed")
+            last_sweep = now
+    finally:
+        stop.set()
+        for t in drain_threads:
+            t.join()
         sink.emit("worker_shutdown")
         sink.close()
         logger.info("extraction-worker shutdown")
@@ -274,7 +352,22 @@ def cli_main(argv: list[str] | None = None) -> int:
         default=None,
         help="Path to the SQLite state DB (default: project default)",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            f"Number of in-flight extractions per worker process "
+            f"(default: 1, max: {MAX_CONCURRENCY})"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.concurrency < 1 or args.concurrency > MAX_CONCURRENCY:
+        parser.error(
+            f"--concurrency must be between 1 and {MAX_CONCURRENCY} "
+            f"(got {args.concurrency})"
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -284,6 +377,13 @@ def cli_main(argv: list[str] | None = None) -> int:
 
     db_path = Path(args.db) if args.db else DEFAULT_DB_PATH
     sm = StateManager(db_path)
+
+    # One-time legacy orphan migration: items left at 'running' from the old
+    # BackgroundTasks path (no row in research_extraction_jobs) get reset to
+    # 'pending' so they can be re-enqueued via the UI.
+    n_reset = sm.reset_orphan_running_items()
+    if n_reset:
+        logger.info("reset %d orphan items from old BackgroundTasks path", n_reset)
 
     stop_event = Event()
 
@@ -299,7 +399,12 @@ def cli_main(argv: list[str] | None = None) -> int:
     # heuristic here is best-effort and matches the bead AC.
     start = time.monotonic()
     try:
-        run_forever(sm, poll_interval=args.poll_interval, stop_event=stop_event)
+        run_forever(
+            sm,
+            poll_interval=args.poll_interval,
+            stop_event=stop_event,
+            concurrency=args.concurrency,
+        )
     finally:
         sm.close()
         elapsed = time.monotonic() - start

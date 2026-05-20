@@ -11,7 +11,7 @@ from vibe_quant.db.connection import get_connection
 from vibe_quant.db.schema import init_schema
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
 
@@ -1494,6 +1494,7 @@ class StateManager:
         threshold_seconds: int,
         *,
         exclude_job_id: int | None = None,
+        exclude_job_ids: Iterable[int] | None = None,
     ) -> list[JsonDict]:
         """Find running jobs whose heartbeat has gone stale and reset them.
 
@@ -1501,21 +1502,28 @@ class StateManager:
         retried if attempts<max_attempts, otherwise final-failed. Returns the
         list of affected job rows (post-update).
 
-        `exclude_job_id` lets a worker skip its own in-flight job so it never
-        sweeps itself just because the heartbeat thread hasn't fired yet.
+        `exclude_job_id` and `exclude_job_ids` let a worker skip its own
+        in-flight jobs so it never sweeps itself just because the heartbeat
+        thread hasn't fired yet. Both can be combined.
         """
         threshold = int(threshold_seconds)
-        params: tuple[object, ...] = (threshold,)
+        excluded: set[int] = set()
+        if exclude_job_id is not None:
+            excluded.add(exclude_job_id)
+        if exclude_job_ids is not None:
+            excluded.update(int(j) for j in exclude_job_ids)
         sql = (
             "SELECT id FROM research_extraction_jobs "
             "WHERE status = 'running' "
             "AND (heartbeat_at IS NULL "
             "     OR (julianday('now') - julianday(heartbeat_at)) * 86400 > ?)"
         )
-        if exclude_job_id is not None:
-            sql += " AND id != ?"
-            params = (threshold, exclude_job_id)
-        rows = self.conn.execute(sql, params).fetchall()
+        params: list[object] = [threshold]
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            sql += f" AND id NOT IN ({placeholders})"
+            params.extend(excluded)
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
         out: list[JsonDict] = []
         for r in rows:
             out.append(
@@ -1525,6 +1533,25 @@ class StateManager:
                 )
             )
         return out
+
+    def reset_orphan_running_items(self) -> int:
+        """Reset items left at extraction_status='running' from the old
+        BackgroundTasks path (no row in research_extraction_jobs).
+
+        Returns the number of items reset to 'pending'. Idempotent — items
+        that already have a queue row are NOT touched.
+        """
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """UPDATE research_items
+                   SET extraction_status = 'pending'
+                   WHERE extraction_status = 'running'
+                     AND id NOT IN (
+                         SELECT research_item_id FROM research_extraction_jobs
+                     )"""
+            )
+            self.conn.commit()
+            return cursor.rowcount
 
     def complete_extraction_job(
         self,
