@@ -146,20 +146,24 @@ function ProposalRow({
           if (body.status === "ok") {
             toast.success(`Scaffolded ${body.name ?? "indicator"}`);
             queryClient.invalidateQueries({ queryKey: itemKey });
+            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
           } else if (body.status === "name_collision") {
             setSuggestedName(body.suggested_name ?? null);
             toast.error(`Name collision: try ${body.suggested_name ?? "another name"}`);
           } else if (body.status === "already_scaffolded") {
             toast.info("Already scaffolded — no work to do");
             queryClient.invalidateQueries({ queryKey: itemKey });
+            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
           } else if (body.status === "invalid_input") {
             toast.error(body.error ?? "Invalid proposal");
             queryClient.invalidateQueries({ queryKey: itemKey });
+            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
           } else {
             // codegen_failed | test_failed — surface error inline via pill +
             // refetch so the cached row drives state on next reload.
             toast.error(`Scaffold failed: ${body.error ?? body.status}`);
             queryClient.invalidateQueries({ queryKey: itemKey });
+            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
           }
         },
         onError: () => toast.error("Scaffold request failed"),

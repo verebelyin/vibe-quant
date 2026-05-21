@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { ExtractionResponse } from "@/api/generated/models";
 import {
@@ -11,11 +11,13 @@ import {
   useRescreenExtractionApiResearchExtractionsExtractionIdRescreenPost,
 } from "@/api/generated/research/research";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
+import { MissingIndicatorsBanner } from "@/components/research/MissingIndicatorsBanner";
 import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
 import { ScreenBadge, type ScreenSummary } from "@/components/research/ScreenBadge";
 import { YamlViewer } from "@/components/research/YamlViewer";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
 
 interface Props {
   extraction: ExtractionResponse;
@@ -28,6 +30,26 @@ function formatTimestamp(iso: string | null): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;
   return new Date(t).toLocaleString();
+}
+
+function dslIndicatorTypes(parsedDslJson: string | null | undefined): string[] {
+  if (!parsedDslJson) return [];
+  try {
+    const dsl: unknown = JSON.parse(parsedDslJson);
+    if (typeof dsl !== "object" || dsl === null) return [];
+    const indicators = (dsl as { indicators?: unknown }).indicators;
+    if (typeof indicators !== "object" || indicators === null) return [];
+    const types = new Set<string>();
+    for (const value of Object.values(indicators)) {
+      if (typeof value === "object" && value !== null) {
+        const t = (value as { type?: unknown }).type;
+        if (typeof t === "string" && t.length > 0) types.add(t.toUpperCase());
+      }
+    }
+    return [...types];
+  } catch {
+    return [];
+  }
 }
 
 export function ExtractionCard({ extraction, itemId, index }: Props) {
@@ -44,6 +66,14 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
   const [rejecting, setRejecting] = useState(false);
   const [reExtracting, setReExtracting] = useState(false);
   const [rescreening, setRescreening] = useState(false);
+  const [wantsPromote, setWantsPromote] = useState(false);
+
+  const catalogQuery = useIndicatorCatalog();
+  const registeredTypes = new Set(
+    catalogQuery.data?.data?.indicators?.map((i) => i.type_name.toUpperCase()) ?? [],
+  );
+  const dslTypes = dslIndicatorTypes(extraction.parsed_dsl_json);
+  const missingTypes = dslTypes.filter((t) => !registeredTypes.has(t));
 
   const status = extraction.status;
   const isParsed = status === "parsed";
@@ -55,7 +85,7 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
   const canReExtract = !isPromoted && !isRejected;
   const canRescreen = isParsed && !!extraction.parsed_dsl_json;
 
-  const handlePromote = () => {
+  const firePromote = () => {
     setPromoting(true);
     promoteMut.mutate(
       { extractionId: extraction.id },
@@ -79,6 +109,28 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
       },
     );
   };
+
+  const handlePromote = () => {
+    if (catalogQuery.isLoading) {
+      toast.info("Loading indicator catalog…");
+      return;
+    }
+    if (missingTypes.length > 0) {
+      setWantsPromote(true);
+      return;
+    }
+    firePromote();
+  };
+
+  // After scaffolds register and the catalog refetches, retry the
+  // queued promote automatically — AC: "no second click required".
+  // biome-ignore lint/correctness/useExhaustiveDependencies: firePromote/promoting intentionally excluded — wantsPromote guard prevents re-fire after settle
+  useEffect(() => {
+    if (wantsPromote && missingTypes.length === 0 && !promoting) {
+      setWantsPromote(false);
+      firePromote();
+    }
+  }, [wantsPromote, missingTypes.length]);
 
   const handleReject = () => {
     setRejecting(true);
@@ -178,6 +230,17 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
       )}
 
       {isParsed && extraction.dsl_yaml && <YamlViewer yaml={extraction.dsl_yaml} />}
+
+      {wantsPromote && missingTypes.length > 0 && (
+        <MissingIndicatorsBanner
+          missingTypes={missingTypes}
+          proposalsJson={extraction.proposed_indicators_json}
+          scaffolds={extraction.scaffolds ?? []}
+          extractionId={extraction.id}
+          itemId={itemId}
+          onCancel={() => setWantsPromote(false)}
+        />
+      )}
 
       <ProposedIndicatorsList
         json={extraction.proposed_indicators_json}
