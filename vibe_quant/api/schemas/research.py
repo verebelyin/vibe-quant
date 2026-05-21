@@ -28,6 +28,23 @@ class ScrapeRunResponse(BaseModel):
     heartbeat_at: str | None
 
 
+class IndicatorScaffoldRow(BaseModel):
+    """One ``research_indicator_scaffolds`` row, keyed by ``(extraction_id, idx)``.
+
+    Surfaced inside ``ExtractionResponse.scaffolds`` so the UI has the
+    full per-proposal status on first paint — no extra round-trip.
+    """
+
+    idx: int
+    status: str
+    plugin_path: str | None = None
+    test_path: str | None = None
+    commit_sha: str | None = None
+    error: str | None = None
+    test_output: str | None = None
+    updated_at: str | None = None
+
+
 class ExtractionResponse(BaseModel):
     id: int
     research_item_id: int
@@ -52,6 +69,7 @@ class ExtractionResponse(BaseModel):
     screen_trades: int | None = None
     screen_error: str | None = None
     screen_completed_at: str | None = None
+    scaffolds: list[IndicatorScaffoldRow] = Field(default_factory=list)
 
 
 class ResearchItemResponse(BaseModel):

@@ -33,10 +33,12 @@ import type {
   GetCredentialsStatusApiResearchCredentialsStatusGetParams,
   GetLatestScrapeApiResearchScrapeLatestGetParams,
   HTTPValidationError,
+  IndicatorScaffoldResponse,
   ListExtractionQueueApiResearchExtractionQueueGetParams,
   ListItemsApiResearchItemsGetParams,
   ResearchItemDetailResponse,
   ResearchItemListResponse,
+  ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams,
   ScrapeRequest,
   ScrapeRunResponse,
   SourceListResponse,
@@ -1920,5 +1922,111 @@ export const useRescreenExtractionApiResearchExtractionsExtractionIdRescreenPost
         TContext
       > => {
       return useMutation(getRescreenExtractionApiResearchExtractionsExtractionIdRescreenPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Scaffold a proposed indicator from an extraction into a plugin file.
+
+Slice 1 of bd-3p1k.1 — only the validation/cache layer is wired up.
+The success path returns ``not_implemented`` until slices 2 + 3 land
+LLM codegen, AST safety, and auto-commit. The frontend can already
+surface ``invalid_input``, ``name_collision``, and
+``already_scaffolded`` against this endpoint.
+ * @summary Scaffold Proposed Indicator
+ */
+export type scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse200 = {
+  data: IndicatorScaffoldResponse
+  status: 200
+}
+
+export type scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponseSuccess = (scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse200) & {
+  headers: Headers;
+};
+export type scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponseError = (scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse422) & {
+  headers: Headers;
+};
+
+export type scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse = (scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponseSuccess | scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponseError)
+
+export const getScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostUrl = (extractionId: number,
+    idx: number,
+    params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/research/extractions/${extractionId}/indicators/${idx}/scaffold?${stringifiedParams}` : `/api/research/extractions/${extractionId}/indicators/${idx}/scaffold`
+}
+
+export const scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost = async (extractionId: number,
+    idx: number,
+    params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams, options?: RequestInit): Promise<scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse> => {
+  
+  return customInstance<scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostResponse>(getScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostUrl(extractionId,idx,params),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>, TError,{extractionId: number;idx: number;params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>, TError,{extractionId: number;idx: number;params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams}, TContext> => {
+
+const mutationKey = ['scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>, {extractionId: number;idx: number;params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams}> = (props) => {
+          const {extractionId,idx,params} = props ?? {};
+
+          return  scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost(extractionId,idx,params,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostMutationResult = NonNullable<Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>>
+    
+    export type ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Scaffold Proposed Indicator
+ */
+export const useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>, TError,{extractionId: number;idx: number;params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof scaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost>>,
+        TError,
+        {extractionId: number;idx: number;params?: ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams},
+        TContext
+      > => {
+      return useMutation(getScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostMutationOptions(options), queryClient);
     }
     

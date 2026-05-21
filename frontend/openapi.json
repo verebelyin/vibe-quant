@@ -2726,6 +2726,68 @@
         }
       }
     },
+    "/api/research/extractions/{extraction_id}/indicators/{idx}/scaffold": {
+      "post": {
+        "tags": [
+          "research"
+        ],
+        "summary": "Scaffold Proposed Indicator",
+        "description": "Scaffold a proposed indicator from an extraction into a plugin file.\n\nSlice 1 of bd-3p1k.1 \u2014 only the validation/cache layer is wired up.\nThe success path returns ``not_implemented`` until slices 2 + 3 land\nLLM codegen, AST safety, and auto-commit. The frontend can already\nsurface ``invalid_input``, ``name_collision``, and\n``already_scaffolded`` against this endpoint.",
+        "operationId": "scaffold_proposed_indicator_api_research_extractions__extraction_id__indicators__idx__scaffold_post",
+        "parameters": [
+          {
+            "name": "extraction_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Extraction Id"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idx"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndicatorScaffoldResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/results/runs/summary": {
       "get": {
         "tags": [
@@ -6409,6 +6471,13 @@
               }
             ],
             "title": "Screen Completed At"
+          },
+          "scaffolds": {
+            "items": {
+              "$ref": "#/components/schemas/IndicatorScaffoldRow"
+            },
+            "type": "array",
+            "title": "Scaffolds"
           }
         },
         "type": "object",
@@ -6567,6 +6636,192 @@
         ],
         "title": "IndicatorCatalogResponse",
         "description": "Wrapper response returned by ``GET /api/indicators/catalog``."
+      },
+      "IndicatorScaffoldResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "extraction_id": {
+            "type": "integer",
+            "title": "Extraction Id"
+          },
+          "idx": {
+            "type": "integer",
+            "title": "Idx"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "suggested_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Name"
+          },
+          "plugin_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Path"
+          },
+          "test_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Path"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "test_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Output"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "extraction_id",
+          "idx"
+        ],
+        "title": "IndicatorScaffoldResponse",
+        "description": "Response from POST /api/research/extractions/{id}/indicators/{idx}/scaffold.\n\n``status`` follows the bead spec:\n``ok | invalid_input | name_collision | already_scaffolded |\ncodegen_failed | test_failed``. Test- AND commit-stage failures\nboth map to ``test_failed``; the actual reason lives in\n``test_output`` (pytest stdout or git stderr)."
+      },
+      "IndicatorScaffoldRow": {
+        "properties": {
+          "idx": {
+            "type": "integer",
+            "title": "Idx"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "plugin_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Path"
+          },
+          "test_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Path"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "test_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Output"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "idx",
+          "status"
+        ],
+        "title": "IndicatorScaffoldRow",
+        "description": "One ``research_indicator_scaffolds`` row, keyed by ``(extraction_id, idx)``.\n\nSurfaced inside ``ExtractionResponse.scaffolds`` so the UI has the\nfull per-proposal status on first paint \u2014 no extra round-trip."
       },
       "IndicatorSeries": {
         "properties": {

@@ -13,9 +13,9 @@ import {
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
 import { ProposedIndicatorsList } from "@/components/research/ProposedIndicatorsList";
 import { ScreenBadge, type ScreenSummary } from "@/components/research/ScreenBadge";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { YamlViewer } from "@/components/research/YamlViewer";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 interface Props {
   extraction: ExtractionResponse;
@@ -179,7 +179,12 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
 
       {isParsed && extraction.dsl_yaml && <YamlViewer yaml={extraction.dsl_yaml} />}
 
-      <ProposedIndicatorsList json={extraction.proposed_indicators_json} />
+      <ProposedIndicatorsList
+        json={extraction.proposed_indicators_json}
+        extractionId={extraction.id}
+        itemId={itemId}
+        scaffolds={extraction.scaffolds ?? []}
+      />
 
       {isPromoted && extraction.strategy_id != null && (
         <div className="text-xs">

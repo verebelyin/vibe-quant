@@ -23,6 +23,7 @@ from vibe_quant.api.schemas.research import (
     ExtractionQueueStatusResponse,
     ExtractionResponse,
     IndicatorScaffoldResponse,
+    IndicatorScaffoldRow,
     PromoteResponse,
     ResearchItemDetailResponse,
     ResearchItemListResponse,
@@ -99,7 +100,9 @@ def _item_to_response(row: dict[str, Any]) -> ResearchItemResponse:
     )
 
 
-def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
+def _extraction_to_response(
+    row: dict[str, Any], scaffolds: list[dict[str, Any]] | None = None
+) -> ExtractionResponse:
     return ExtractionResponse(
         id=int(row["id"]),
         research_item_id=int(row["research_item_id"]),
@@ -124,6 +127,19 @@ def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
         screen_trades=row.get("screen_trades"),
         screen_error=row.get("screen_error"),
         screen_completed_at=row.get("screen_completed_at"),
+        scaffolds=[
+            IndicatorScaffoldRow(
+                idx=int(s["idx"]),
+                status=str(s["status"]),
+                plugin_path=s.get("plugin_path"),
+                test_path=s.get("test_path"),
+                commit_sha=s.get("commit_sha"),
+                error=s.get("error"),
+                test_output=s.get("test_output"),
+                updated_at=s.get("updated_at"),
+            )
+            for s in (scaffolds or [])
+        ],
     )
 
 
@@ -335,7 +351,10 @@ def get_item(item_id: int, sm: StateMgr) -> ResearchItemDetailResponse:
     latest = _latest_job_for_item(sm, item_id)
     return ResearchItemDetailResponse(
         **base.model_dump(),
-        extractions=[_extraction_to_response(e) for e in extractions],
+        extractions=[
+            _extraction_to_response(e, sm.list_indicator_scaffolds(int(e["id"])))
+            for e in extractions
+        ],
         latest_job=latest,
     )
 

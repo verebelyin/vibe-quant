@@ -4,6 +4,7 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { IndicatorScaffoldRow } from './indicatorScaffoldRow';
 
 export interface ExtractionResponse {
   id: number;
@@ -29,4 +30,5 @@ export interface ExtractionResponse {
   screen_trades?: number | null;
   screen_error?: string | null;
   screen_completed_at?: string | null;
+  scaffolds?: IndicatorScaffoldRow[];
 }
