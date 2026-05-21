@@ -358,40 +358,57 @@ def _migrate_research_items_allow_queued(conn: sqlite3.Connection) -> None:
         return
     table_sql = row[0] or ""
     if "'queued'" in table_sql:
-        return  # Already migrated.
+        # Live table already has CHECK; drop any orphan rebuild table from a
+        # previously interrupted run so we leave the DB tidy.
+        conn.execute("DROP TABLE IF EXISTS research_items_new")
+        conn.commit()
+        return
 
     logger.info("Rebuilding research_items to allow extraction_status='queued'")
-    conn.executescript(
-        """
-        BEGIN;
-        CREATE TABLE research_items_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,
-            external_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            title TEXT,
-            body TEXT,
-            author TEXT,
-            posted_at TEXT,
-            score INTEGER,
-            extras_json TEXT,
-            fetched_at TEXT DEFAULT (datetime('now')),
-            extraction_status TEXT DEFAULT 'pending'
-                CHECK (extraction_status IN
-                    ('pending', 'queued', 'running', 'extracted', 'failed', 'skipped')),
-            UNIQUE(source, external_id)
-        );
-        INSERT INTO research_items_new
-            (id, source, external_id, url, title, body, author, posted_at,
-             score, extras_json, fetched_at, extraction_status)
-        SELECT id, source, external_id, url, title, body, author, posted_at,
-               score, extras_json, fetched_at, extraction_status
-        FROM research_items;
-        DROP TABLE research_items;
-        ALTER TABLE research_items_new RENAME TO research_items;
-        COMMIT;
-        """
-    )
+    # FK enforcement must be disabled across DROP TABLE research_items, since
+    # research_extractions and research_extraction_jobs hold FKs to it. Per
+    # SQLite docs, PRAGMA foreign_keys is a no-op inside a transaction, so set
+    # it before any BEGIN. Also clear any leftover rebuild table from a prior
+    # failed run.
+    conn.commit()  # ensure no implicit txn is open
+    prev_fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("DROP TABLE IF EXISTS research_items_new")
+        conn.commit()
+        conn.executescript(
+            """
+            BEGIN;
+            CREATE TABLE research_items_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT,
+                body TEXT,
+                author TEXT,
+                posted_at TEXT,
+                score INTEGER,
+                extras_json TEXT,
+                fetched_at TEXT DEFAULT (datetime('now')),
+                extraction_status TEXT DEFAULT 'pending'
+                    CHECK (extraction_status IN
+                        ('pending', 'queued', 'running', 'extracted', 'failed', 'skipped')),
+                UNIQUE(source, external_id)
+            );
+            INSERT INTO research_items_new
+                (id, source, external_id, url, title, body, author, posted_at,
+                 score, extras_json, fetched_at, extraction_status)
+            SELECT id, source, external_id, url, title, body, author, posted_at,
+                   score, extras_json, fetched_at, extraction_status
+            FROM research_items;
+            DROP TABLE research_items;
+            ALTER TABLE research_items_new RENAME TO research_items;
+            COMMIT;
+            """
+        )
+    finally:
+        conn.execute(f"PRAGMA foreign_keys = {'ON' if prev_fk else 'OFF'}")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

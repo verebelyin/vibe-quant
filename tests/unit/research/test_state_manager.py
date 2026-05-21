@@ -394,3 +394,181 @@ def test_list_research_items_hide_low_trade_excludes_only_all_low(
 
     # count_research_items must match the filtered list length.
     assert sm.count_research_items(hide_low_trade=True) == len(visible_ids)
+
+
+# --- _migrate_research_items_allow_queued regression tests (bd-mrpl) ---
+
+
+def _downgrade_research_items_to_pre_queued(db_path: Path) -> None:
+    """Take a fully-migrated DB and rewrite research_items to the pre-queued
+    shape (no CHECK constraint on extraction_status). Done with FK off so we
+    can DROP TABLE without the test itself hitting the bug under repair."""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.executescript(
+        """
+        BEGIN;
+        CREATE TABLE research_items_legacy (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT,
+            body TEXT,
+            author TEXT,
+            posted_at TEXT,
+            score INTEGER,
+            extras_json TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            extraction_status TEXT DEFAULT 'pending',
+            UNIQUE(source, external_id)
+        );
+        INSERT INTO research_items_legacy SELECT * FROM research_items;
+        DROP TABLE research_items;
+        ALTER TABLE research_items_legacy RENAME TO research_items;
+        COMMIT;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_legacy_research_items_db(db_path: Path) -> None:
+    """Build a DB pinned to the pre-queued shape, with one FK-bearing
+    research_extractions row to reproduce the original bug condition."""
+    # Bootstrap the modern schema first so all tables (and FKs) exist.
+    sm = StateManager(db_path)
+    sm.create_research_item(
+        source="reddit",
+        external_id="abc",
+        url="https://x/abc",
+        title=None,
+        body=None,
+        author=None,
+        posted_at=None,
+        score=None,
+    )
+    sm.create_research_item(
+        source="reddit",
+        external_id="def",
+        url="https://x/def",
+        title=None,
+        body=None,
+        author=None,
+        posted_at=None,
+        score=None,
+    )
+    sm.conn.execute(
+        "INSERT INTO research_extractions (research_item_id) VALUES (1)"
+    )
+    sm.conn.commit()
+    sm.close()
+    # Then rewrite research_items into the pre-queued (no-CHECK) shape.
+    _downgrade_research_items_to_pre_queued(db_path)
+
+
+def test_migrate_allow_queued_succeeds_with_fk_referencing_items(tmp_path: Path) -> None:
+    """Migration must rebuild research_items even when other tables hold
+    foreign keys to it (regression for FOREIGN KEY constraint failed bug)."""
+    db_path = tmp_path / "legacy.db"
+    _seed_legacy_research_items_db(db_path)
+
+    sm = StateManager(db_path)
+    _ = sm.conn  # triggers init_schema → migration
+
+    # CHECK constraint with 'queued' should now be present.
+    sql = sm.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='research_items'"
+    ).fetchone()[0]
+    assert "'queued'" in sql
+
+    # No orphan rebuild table left behind.
+    orphan = sm.conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='research_items_new'"
+    ).fetchone()
+    assert orphan is None
+
+    # Data preserved.
+    rows = sm.conn.execute("SELECT id, source FROM research_items ORDER BY id").fetchall()
+    assert [(r["id"], r["source"]) for r in rows] == [(1, "reddit"), (2, "reddit")]
+
+    # FK enforcement is restored.
+    fk = sm.conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    assert fk == 1
+    sm.close()
+
+
+def test_migrate_allow_queued_cleans_up_orphan_rebuild_table(tmp_path: Path) -> None:
+    """A prior crashed migration may have left research_items_new in place.
+    The migration must drop it and complete cleanly."""
+    import sqlite3
+
+    db_path = tmp_path / "orphan.db"
+    _seed_legacy_research_items_db(db_path)
+    # Simulate a half-finished prior migration: rebuild table already exists.
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE research_items_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT,
+            body TEXT,
+            author TEXT,
+            posted_at TEXT,
+            score INTEGER,
+            extras_json TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            extraction_status TEXT DEFAULT 'pending'
+                CHECK (extraction_status IN
+                    ('pending', 'queued', 'running', 'extracted', 'failed', 'skipped')),
+            UNIQUE(source, external_id)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    sm = StateManager(db_path)
+    _ = sm.conn
+
+    # Orphan must be gone, live table must have CHECK.
+    orphan = sm.conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='research_items_new'"
+    ).fetchone()
+    assert orphan is None
+    sql = sm.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='research_items'"
+    ).fetchone()[0]
+    assert "'queued'" in sql
+    sm.close()
+
+
+def test_migrate_allow_queued_drops_orphan_on_already_migrated_db(tmp_path: Path) -> None:
+    """When research_items already has the CHECK (no rebuild needed), the
+    migration should still clean up any stale research_items_new."""
+    import sqlite3
+
+    # First, build a fully-migrated DB.
+    db_path = tmp_path / "fresh.db"
+    sm = StateManager(db_path)
+    _ = sm.conn
+    sm.close()
+
+    # Now plant an orphan rebuild table.
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE research_items_new (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    sm2 = StateManager(db_path)
+    _ = sm2.conn  # init_schema runs again
+    orphan = sm2.conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='research_items_new'"
+    ).fetchone()
+    assert orphan is None
+    sm2.close()
