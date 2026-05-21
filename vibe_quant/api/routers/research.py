@@ -21,6 +21,7 @@ from vibe_quant.api.schemas.research import (
     ExtractionQueueResponse,
     ExtractionQueueStatusResponse,
     ExtractionResponse,
+    IndicatorScaffoldResponse,
     PromoteResponse,
     ResearchItemDetailResponse,
     ResearchItemListResponse,
@@ -32,7 +33,13 @@ from vibe_quant.api.schemas.research import (
     SubredditsUpdateRequest,
 )
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
+from vibe_quant.research.indicator_scaffold import (
+    InvalidProposalError,
+    proposed_to_spec_args,
+    suggest_alt_name,
+)
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
 logger = logging.getLogger(__name__)
@@ -555,3 +562,118 @@ def rescreen_extraction(extraction_id: int, sm: StateMgr) -> ExtractionResponse:
     after = sm.get_extraction(extraction_id)
     assert after is not None
     return _extraction_to_response(after)
+
+
+def _load_proposed_indicator(
+    sm: StateManager, extraction_id: int, idx: int
+) -> dict[str, Any]:
+    """Resolve a single proposal from an extraction or raise 404.
+
+    Returns the raw dict so callers can hand it straight to the mapper.
+    Raises HTTPException(404) when the extraction is missing, the
+    extraction has no proposed_indicators_json, or idx is out of range.
+    """
+    ex = sm.get_extraction(extraction_id)
+    if not ex:
+        raise HTTPException(status_code=404, detail=f"extraction {extraction_id} not found")
+    raw = ex.get("proposed_indicators_json")
+    if not isinstance(raw, str) or not raw:
+        raise HTTPException(
+            status_code=404,
+            detail=f"extraction {extraction_id} has no proposed_indicators",
+        )
+    try:
+        proposals = json.loads(raw)
+    except json.JSONDecodeError as e:
+        # Corrupt JSON on disk is a server bug, not a client error.
+        raise HTTPException(
+            status_code=500,
+            detail=f"corrupt proposed_indicators_json on extraction {extraction_id}: {e}",
+        ) from e
+    if not isinstance(proposals, list) or idx < 0 or idx >= len(proposals):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"proposal idx {idx} out of range for extraction {extraction_id} "
+                f"(have {len(proposals) if isinstance(proposals, list) else 0})"
+            ),
+        )
+    entry = proposals[idx]
+    if not isinstance(entry, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=f"proposal idx {idx} is not an object",
+        )
+    return entry
+
+
+@router.post(
+    "/extractions/{extraction_id}/indicators/{idx}/scaffold",
+    response_model=IndicatorScaffoldResponse,
+)
+def scaffold_proposed_indicator(
+    extraction_id: int,
+    idx: int,
+    sm: StateMgr,
+    force: Annotated[bool, Query()] = False,
+) -> IndicatorScaffoldResponse:
+    """Scaffold a proposed indicator from an extraction into a plugin file.
+
+    Slice 1 of bd-3p1k.1 — only the validation/cache layer is wired up.
+    The success path returns ``not_implemented`` until slices 2 + 3 land
+    LLM codegen, AST safety, and auto-commit. The frontend can already
+    surface ``invalid_input``, ``name_collision``, and
+    ``already_scaffolded`` against this endpoint.
+    """
+    proposal = _load_proposed_indicator(sm, extraction_id, idx)
+
+    try:
+        spec_args = proposed_to_spec_args(proposal)
+    except InvalidProposalError as e:
+        return IndicatorScaffoldResponse(
+            status="invalid_input",
+            extraction_id=extraction_id,
+            idx=idx,
+            error=str(e),
+        )
+
+    registered = set(indicator_registry.list_indicators())
+    if spec_args.name in registered:
+        return IndicatorScaffoldResponse(
+            status="name_collision",
+            extraction_id=extraction_id,
+            idx=idx,
+            name=spec_args.name,
+            suggested_name=suggest_alt_name(spec_args.name, registered),
+            error=f"indicator name {spec_args.name!r} is already registered",
+        )
+
+    cached = sm.get_indicator_scaffold(extraction_id, idx)
+    if cached is not None and not force and cached.get("status") == "ok":
+        return IndicatorScaffoldResponse(
+            status="already_scaffolded",
+            extraction_id=extraction_id,
+            idx=idx,
+            name=spec_args.name,
+            plugin_path=cached.get("plugin_path"),
+            test_path=cached.get("test_path"),
+            commit_sha=cached.get("commit_sha"),
+        )
+
+    if force and cached is not None:
+        sm.delete_indicator_scaffold(extraction_id, idx)
+
+    # Slice 1 stops here. Slices 2 + 3 will:
+    #   1. synthesize compute_fn body via claude-p (with AST safety)
+    #   2. render + write vibe_quant/dsl/plugins/proposed_<name>.py
+    #   3. generate + run contract test
+    #   4. on green: git add + git commit
+    # and then upsert the scaffold row with status=ok or codegen_failed
+    # or test_failed.
+    return IndicatorScaffoldResponse(
+        status="not_implemented",
+        extraction_id=extraction_id,
+        idx=idx,
+        name=spec_args.name,
+        error="codegen pipeline not yet wired (bd-3p1k.1.2 / bd-3p1k.1.3)",
+    )

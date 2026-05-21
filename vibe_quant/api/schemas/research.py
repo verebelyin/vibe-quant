@@ -162,6 +162,28 @@ class SubredditsUpdateRequest(BaseModel):
     ]
 
 
+class IndicatorScaffoldResponse(BaseModel):
+    """Response from POST /api/research/extractions/{id}/indicators/{idx}/scaffold.
+
+    ``status`` follows the bead spec:
+    ``ok | invalid_input | name_collision | already_scaffolded |
+    codegen_failed | test_failed | not_implemented``. Slice 1 only emits
+    the first four plus ``not_implemented`` (the codegen/test states
+    light up as slices 2 + 3 land).
+    """
+
+    status: str
+    extraction_id: int
+    idx: int
+    name: str | None = None
+    suggested_name: str | None = None
+    plugin_path: str | None = None
+    test_path: str | None = None
+    commit_sha: str | None = None
+    error: str | None = None
+    test_output: str | None = None
+
+
 class CredentialsStatusResponse(BaseModel):
     """Reports the User-Agent that the Reddit source will use.
 

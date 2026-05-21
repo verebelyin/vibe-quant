@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 12
+SCHEMA_VERSION: int = 13
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -266,6 +266,25 @@ CREATE TABLE IF NOT EXISTS research_extraction_jobs (
     heartbeat_at TEXT
 );
 
+-- One row per (extraction, idx) into proposed_indicators_json once the
+-- user clicks "Scaffold plugin". Caches the codegen outcome so re-clicks
+-- don't re-burn LLM tokens (force=1 bypasses). Slice 1 only writes/reads;
+-- slices 2-3 populate plugin_path/test_path/commit_sha on success.
+CREATE TABLE IF NOT EXISTS research_indicator_scaffolds (
+    extraction_id INTEGER NOT NULL REFERENCES research_extractions(id),
+    idx INTEGER NOT NULL,
+    status TEXT NOT NULL
+        CHECK (status IN ('ok', 'codegen_failed', 'test_failed', 'failed')),
+    plugin_path TEXT,
+    test_path TEXT,
+    commit_sha TEXT,
+    error TEXT,
+    test_output TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (extraction_id, idx)
+);
+
 CREATE TABLE IF NOT EXISTS research_scrape_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -300,6 +319,8 @@ CREATE INDEX IF NOT EXISTS idx_research_extraction_jobs_status_id
     ON research_extraction_jobs(status, id);
 CREATE INDEX IF NOT EXISTS idx_research_extraction_jobs_item
     ON research_extraction_jobs(research_item_id);
+CREATE INDEX IF NOT EXISTS idx_research_indicator_scaffolds_extraction
+    ON research_indicator_scaffolds(extraction_id);
 """
 
 

@@ -29,6 +29,7 @@ def test_schema_creates_all_research_tables(sm: StateManager) -> None:
         "research_items",
         "research_extractions",
         "research_extraction_jobs",
+        "research_indicator_scaffolds",
         "research_scrape_runs",
         "research_settings",
     }

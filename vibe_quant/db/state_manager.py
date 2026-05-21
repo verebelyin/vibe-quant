@@ -1231,6 +1231,81 @@ class StateManager:
             self.conn.commit()
             return cursor.rowcount > 0
 
+    def get_indicator_scaffold(
+        self, extraction_id: int, idx: int
+    ) -> JsonDict | None:
+        """Return the cached scaffold outcome for (extraction_id, idx) or None."""
+        row = self.conn.execute(
+            """SELECT * FROM research_indicator_scaffolds
+               WHERE extraction_id = ? AND idx = ?""",
+            (extraction_id, idx),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_indicator_scaffolds(self, extraction_id: int) -> list[JsonDict]:
+        """All scaffold rows for an extraction, indexed by idx ascending."""
+        rows = self.conn.execute(
+            """SELECT * FROM research_indicator_scaffolds
+               WHERE extraction_id = ?
+               ORDER BY idx""",
+            (extraction_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_indicator_scaffold(
+        self,
+        *,
+        extraction_id: int,
+        idx: int,
+        status: str,
+        plugin_path: str | None = None,
+        test_path: str | None = None,
+        commit_sha: str | None = None,
+        error: str | None = None,
+        test_output: str | None = None,
+    ) -> JsonDict:
+        """Insert or replace the scaffold row for (extraction_id, idx)."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT INTO research_indicator_scaffolds
+                       (extraction_id, idx, status, plugin_path, test_path,
+                        commit_sha, error, test_output, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(extraction_id, idx) DO UPDATE SET
+                       status = excluded.status,
+                       plugin_path = excluded.plugin_path,
+                       test_path = excluded.test_path,
+                       commit_sha = excluded.commit_sha,
+                       error = excluded.error,
+                       test_output = excluded.test_output,
+                       updated_at = datetime('now')""",
+                (
+                    extraction_id,
+                    idx,
+                    status,
+                    plugin_path,
+                    test_path,
+                    commit_sha,
+                    error,
+                    test_output,
+                ),
+            )
+            self.conn.commit()
+        row = self.get_indicator_scaffold(extraction_id, idx)
+        assert row is not None
+        return row
+
+    def delete_indicator_scaffold(self, extraction_id: int, idx: int) -> bool:
+        """Drop the cached scaffold row. Returns True if a row was deleted."""
+        with self._write_lock:
+            cursor = self.conn.execute(
+                """DELETE FROM research_indicator_scaffolds
+                   WHERE extraction_id = ? AND idx = ?""",
+                (extraction_id, idx),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
     def create_scrape_run(
         self,
         *,
