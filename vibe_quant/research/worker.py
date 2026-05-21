@@ -161,7 +161,7 @@ def _run_extraction(sm: StateManager, item_id: int) -> None:
         extractor_version=extractor_version(),
         scrape_run_id=None,
     )
-    persist_extractions(sm, item_id, batch.results)
+    persist_extractions(sm, item_id, batch.results, prompt=batch.prompt)
 
 
 def _drain_loop(

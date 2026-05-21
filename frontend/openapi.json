@@ -5924,6 +5924,17 @@
             ],
             "title": "Raw Response"
           },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
           "dsl_yaml": {
             "anyOf": [
               {

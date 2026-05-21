@@ -36,6 +36,7 @@ class ExtractionResponse(BaseModel):
     confidence: float | None
     rationale: str | None
     raw_response: str | None
+    prompt: str | None = None
     dsl_yaml: str | None
     parsed_dsl_json: str | None
     parse_error: str | None

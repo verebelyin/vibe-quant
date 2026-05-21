@@ -94,6 +94,7 @@ def _extraction_to_response(row: dict[str, Any]) -> ExtractionResponse:
         confidence=row.get("confidence"),
         rationale=row.get("rationale"),
         raw_response=row.get("raw_response"),
+        prompt=row.get("prompt"),
         dsl_yaml=row.get("dsl_yaml"),
         parsed_dsl_json=row.get("parsed_dsl_json"),
         parse_error=row.get("parse_error"),

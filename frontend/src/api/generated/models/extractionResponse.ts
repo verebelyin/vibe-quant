@@ -13,6 +13,7 @@ export interface ExtractionResponse {
   confidence: number | null;
   rationale: string | null;
   raw_response: string | null;
+  prompt?: string | null;
   dsl_yaml: string | null;
   parsed_dsl_json: string | null;
   parse_error: string | null;

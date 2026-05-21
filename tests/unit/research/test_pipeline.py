@@ -182,6 +182,37 @@ def test_scrape_writes_extraction_log_per_item(
         assert len(p["findings"]) == 1
 
 
+def test_persist_extractions_stores_prompt_on_db_row(sm: StateManager) -> None:
+    """Per-extraction prompt must round-trip through research_extractions
+    so the UI can show what was actually sent to the LLM (bd-gf7w)."""
+    _register_fake_source([_item(0)])
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(
+            prompt="PROMPT-UNDER-TEST",
+            raw_response='{"out": 0}',
+            results=[
+                ExtractionResult(
+                    status="parsed",
+                    confidence=1.0,
+                    rationale="r",
+                    raw_response="",
+                    dsl_yaml="name: x\n",
+                    parsed_dsl_json='{"name":"x"}',
+                    parse_error=None,
+                    llm_model="t",
+                )
+            ],
+        )
+
+    run_scrape(sm=sm, source_name="fake", limit=1, extract_fn=fake_extract)
+    rows = sm.conn.execute(
+        "SELECT prompt FROM research_extractions ORDER BY id"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["prompt"] == "PROMPT-UNDER-TEST"
+
+
 def test_extractor_failure_does_not_abort_run(sm: StateManager) -> None:
     _register_fake_source([_item(i) for i in range(5)])
 

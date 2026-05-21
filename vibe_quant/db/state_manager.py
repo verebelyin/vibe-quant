@@ -1128,14 +1128,15 @@ class StateManager:
         parsed_dsl_json: str | None,
         parse_error: str | None,
         proposed_indicators_json: str | None = None,
+        prompt: str | None = None,
     ) -> int:
         with self._write_lock:
             cursor = self.conn.execute(
                 """INSERT INTO research_extractions
                    (research_item_id, status, llm_model, confidence, rationale,
                     raw_response, dsl_yaml, parsed_dsl_json, parse_error,
-                    proposed_indicators_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    proposed_indicators_json, prompt)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     research_item_id,
                     status,
@@ -1147,6 +1148,7 @@ class StateManager:
                     parsed_dsl_json,
                     parse_error,
                     proposed_indicators_json,
+                    prompt,
                 ),
             )
             self.conn.commit()

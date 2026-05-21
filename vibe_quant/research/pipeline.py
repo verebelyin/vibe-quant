@@ -168,7 +168,7 @@ def run_scrape(
                         scrape_run_id=scrape_run_id,
                     )
                     results = batch.results
-                    persist_extractions(sm, item_id, results)
+                    persist_extractions(sm, item_id, results, prompt=batch.prompt)
                     item_parsed = sum(1 for r in results if r.status == "parsed")
                     item_failed = sum(1 for r in results if r.status == "failed")
                     item_skipped = sum(1 for r in results if r.status == "skipped")
@@ -217,7 +217,11 @@ _ITEM_STATUS_PRIORITY = {"extracted": 0, "failed": 1, "skipped": 2}
 
 
 def persist_extractions(
-    sm: StateManager, item_id: int, results: list[ExtractionResult]
+    sm: StateManager,
+    item_id: int,
+    results: list[ExtractionResult],
+    *,
+    prompt: str | None = None,
 ) -> None:
     """Write one extraction row per result + roll up to a single item status.
 
@@ -242,6 +246,7 @@ def persist_extractions(
             parsed_dsl_json=result.parsed_dsl_json,
             parse_error=result.parse_error,
             proposed_indicators_json=result.proposed_indicators_json,
+            prompt=prompt,
         )
         if result.status == "parsed" and result.parsed_dsl_json:
             _auto_screen.auto_screen_extraction(

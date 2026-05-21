@@ -238,12 +238,23 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
         </Button>
       </div>
 
+      {extraction.prompt && (
+        <details className="group">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground select-none">
+            Prompt
+          </summary>
+          <pre className="mt-2 max-h-96 overflow-auto rounded-md border border-border/40 bg-muted/30 p-3 font-mono text-[10px] leading-relaxed text-foreground/80 whitespace-pre-wrap break-words">
+            {extraction.prompt}
+          </pre>
+        </details>
+      )}
+
       {extraction.raw_response && (
         <details className="group">
           <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground select-none">
             Raw LLM response
           </summary>
-          <pre className="mt-2 overflow-auto rounded-md border border-border/40 bg-muted/30 p-3 font-mono text-[10px] leading-relaxed text-foreground/80 whitespace-pre">
+          <pre className="mt-2 max-h-96 overflow-auto rounded-md border border-border/40 bg-muted/30 p-3 font-mono text-[10px] leading-relaxed text-foreground/80 whitespace-pre">
             {extraction.raw_response}
           </pre>
         </details>

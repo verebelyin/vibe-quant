@@ -161,6 +161,24 @@ def test_process_one_job_happy_path(sm: StateManager) -> None:
     assert after_item["extraction_status"] == "skipped"
 
 
+def test_process_one_job_persists_prompt_on_extraction_row(sm: StateManager) -> None:
+    """Worker path must also persist the extraction batch's prompt so the
+    UI can replay what was sent to the LLM (bd-gf7w)."""
+    iid = _seed_item(sm)
+    sm.enqueue_extraction_job(iid)
+
+    with patch(
+        "vibe_quant.research.extractor.get_default_extractor", return_value=_ok_extractor()
+    ):
+        worker_mod.process_one_job(sm)
+
+    rows = sm.conn.execute(
+        "SELECT prompt FROM research_extractions WHERE research_item_id = ?", (iid,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["prompt"] == "P"
+
+
 def test_process_one_job_extractor_failure_marks_job_failed(sm: StateManager) -> None:
     iid = _seed_item(sm)
     # max_attempts=1 so a single failure terminates without retry.
