@@ -48,15 +48,18 @@ export function ResearchPage() {
   const status = useResearchStore((s) => s.status);
   const sort = useResearchStore((s) => s.sort);
   const hideLowTrade = useResearchStore((s) => s.hideLowTrade);
+  const q = useResearchStore((s) => s.q);
   const setSource = useResearchStore((s) => s.setSource);
   const setStatus = useResearchStore((s) => s.setStatus);
   const setSort = useResearchStore((s) => s.setSort);
   const setHideLowTrade = useResearchStore((s) => s.setHideLowTrade);
+  const setQ = useResearchStore((s) => s.setQ);
 
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as {
     sort?: string;
     hide_low_trade?: boolean;
+    q?: string;
   };
 
   // On mount, hydrate store from URL (URL wins for shareable links).
@@ -70,7 +73,10 @@ export function ResearchPage() {
     if (search.hide_low_trade === true) {
       setHideLowTrade(true);
     }
-  }, [search.sort, search.hide_low_trade, setSort, setHideLowTrade]);
+    if (typeof search.q === "string" && search.q.length > 0) {
+      setQ(search.q);
+    }
+  }, [search.sort, search.hide_low_trade, search.q, setSort, setHideLowTrade, setQ]);
 
   // After hydration, mirror store back to URL.
   useEffect(() => {
@@ -80,10 +86,11 @@ export function ResearchPage() {
         ...prev,
         sort: sort === "newest_scraped" ? undefined : sort,
         hide_low_trade: hideLowTrade ? true : undefined,
+        q: q ? q : undefined,
       }),
       replace: true,
     });
-  }, [sort, hideLowTrade, navigate]);
+  }, [sort, hideLowTrade, q, navigate]);
 
   const { data: sourcesData } = useGetSourcesApiResearchSourcesGet();
   const sources = sourcesData && sourcesData.status === 200 ? sourcesData.data.sources : ["reddit"];
@@ -148,6 +155,17 @@ export function ResearchPage() {
           />
           Hide &lt;50 trades
         </label>
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Search</span>
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="title contains…"
+            className="h-8 w-56 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/60"
+          />
+        </div>
 
         <div className="ml-auto">
           <ScrapeButton source={source} />

@@ -4,6 +4,7 @@ import { ItemRow } from "@/components/research/ItemRow";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { PAGE_SIZE, useResearchStore } from "@/stores/researchStore";
 
 export function ItemList() {
@@ -12,8 +13,11 @@ export function ItemList() {
   const sort = useResearchStore((s) => s.sort);
   const page = useResearchStore((s) => s.page);
   const hideLowTrade = useResearchStore((s) => s.hideLowTrade);
+  const q = useResearchStore((s) => s.q);
   const setPage = useResearchStore((s) => s.setPage);
   const reset = useResearchStore((s) => s.reset);
+
+  const debouncedQ = useDebouncedValue(q, 200);
 
   const params = {
     source,
@@ -22,6 +26,7 @@ export function ItemList() {
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     ...(hideLowTrade ? { hide_low_trade: true } : {}),
+    ...(debouncedQ ? { q: debouncedQ } : {}),
   };
 
   const { data, isLoading, isError } = useListItemsApiResearchItemsGet(params);
@@ -40,12 +45,12 @@ export function ItemList() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   if (items.length === 0) {
-    const filteredOut = status !== "all";
+    const filteredOut = status !== "all" || !!debouncedQ || hideLowTrade;
     if (filteredOut) {
       return (
         <EmptyState
           title="No items match these filters"
-          description="Try clearing the status filter."
+          description={debouncedQ ? `No titles match "${debouncedQ}".` : "Try clearing the filters."}
           action={{ label: "Clear filters", onClick: reset }}
         />
       );

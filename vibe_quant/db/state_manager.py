@@ -1060,6 +1060,7 @@ class StateManager:
         limit: int = 50,
         offset: int = 0,
         hide_low_trade: bool = False,
+        q: str | None = None,
     ) -> list[JsonDict]:
         order_clauses = {
             "newest_scraped": "i.fetched_at DESC, i.id DESC",
@@ -1101,6 +1102,9 @@ class StateManager:
                 "    WHERE e.research_item_id = i.id AND e.screen_trades >= 50)"
                 " )"
             )
+        if q:
+            query += " AND LOWER(i.title) LIKE ?"
+            params.append(f"%{q.lower()}%")
         query += f" ORDER BY {order_by} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self.conn.execute(query, params).fetchall()
@@ -1297,6 +1301,7 @@ class StateManager:
         source: str | None = None,
         status: str | None = None,
         hide_low_trade: bool = False,
+        q: str | None = None,
     ) -> int:
         query = "SELECT COUNT(*) AS c FROM research_items i WHERE 1=1"
         params: list[Any] = []
@@ -1315,6 +1320,9 @@ class StateManager:
                 "    WHERE e.research_item_id = i.id AND e.screen_trades >= 50)"
                 " )"
             )
+        if q:
+            query += " AND LOWER(i.title) LIKE ?"
+            params.append(f"%{q.lower()}%")
         row = self.conn.execute(query, params).fetchone()
         return int(row["c"]) if row else 0
 

@@ -281,9 +281,13 @@ def list_items(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     hide_low_trade: Annotated[bool, Query()] = False,
+    q: Annotated[str | None, Query(max_length=200)] = None,
 ) -> ResearchItemListResponse:
     if sort not in _VALID_SORTS:
         raise HTTPException(status_code=422, detail=f"invalid sort: {sort}")
+    q_normalized = q.strip() if q else None
+    if q_normalized == "":
+        q_normalized = None
     rows = sm.list_research_items(
         source=source,
         status=status,
@@ -291,9 +295,13 @@ def list_items(
         limit=limit,
         offset=offset,
         hide_low_trade=hide_low_trade,
+        q=q_normalized,
     )
     total = sm.count_research_items(
-        source=source, status=status, hide_low_trade=hide_low_trade
+        source=source,
+        status=status,
+        hide_low_trade=hide_low_trade,
+        q=q_normalized,
     )
     return ResearchItemListResponse(
         items=[_item_to_response(r) for r in rows],

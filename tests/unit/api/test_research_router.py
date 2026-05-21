@@ -343,6 +343,58 @@ def test_list_items_with_filters_and_pagination(client: TestClient, sm: StateMan
     assert body["offset"] == 1
 
 
+def _seed_titled(sm: StateManager, external_id: str, title: str) -> int:
+    return sm.create_research_item(
+        source="reddit",
+        external_id=external_id,
+        url=f"https://reddit.com/{external_id}",
+        title=title,
+        body="b",
+        author="u/x",
+        posted_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        score=1,
+        extras={"comments": []},
+    )
+
+
+def test_list_items_q_substring_match_case_insensitive(
+    client: TestClient, sm: StateManager
+) -> None:
+    """?q=<word> filters items by case-insensitive title substring (bd-dwtx)."""
+    _seed_titled(sm, "a", "RSI mean reversion on BTC")
+    _seed_titled(sm, "b", "Momentum breakout strategy")
+    _seed_titled(sm, "c", "MACD + rsi combo")  # also has 'rsi'
+
+    resp = client.get("/api/research/items", params={"q": "rsi"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    titles = {it["title"] for it in body["items"]}
+    assert titles == {"RSI mean reversion on BTC", "MACD + rsi combo"}
+
+
+def test_list_items_q_empty_string_returns_all(
+    client: TestClient, sm: StateManager
+) -> None:
+    _seed_titled(sm, "a", "alpha")
+    _seed_titled(sm, "b", "beta")
+    # whitespace-only → treated as no filter
+    resp = client.get("/api/research/items", params={"q": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+
+
+def test_list_items_q_no_match_returns_empty(
+    client: TestClient, sm: StateManager
+) -> None:
+    _seed_titled(sm, "a", "alpha")
+    resp = client.get("/api/research/items", params={"q": "XYZNOMATCH"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
 def test_get_item_404(client: TestClient) -> None:
     resp = client.get("/api/research/items/9999999")
     assert resp.status_code == 404
