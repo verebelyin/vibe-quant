@@ -331,3 +331,34 @@ def test_run_claude_codegen_maps_timeout_to_codegen_error(
     with pytest.raises(CodegenError) as e:
         _run_claude_codegen("prompt")
     assert e.value.code == "timeout"
+
+
+def test_run_mypy_and_ruff_invoke_via_sys_executable_dash_m(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Toolchain must use `sys.executable -m mypy/ruff` so it works
+    regardless of PATH — bd-ez68 (backend started via .venv/bin/uvicorn
+    has no .venv/bin on PATH for children)."""
+    import subprocess
+    import sys
+
+    from vibe_quant.research.indicator_scaffold import run_mypy, run_ruff
+
+    captured: list[list[str]] = []
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv: list[str], **_kwargs: object) -> _Proc:
+        captured.append(argv)
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    target = tmp_path / "p.py"
+    target.write_text("x = 1\n")
+    run_mypy(target)
+    run_ruff(target)
+    assert captured[0][:3] == [sys.executable, "-m", "mypy"]
+    assert captured[1][:3] == [sys.executable, "-m", "ruff"]

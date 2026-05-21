@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -629,12 +630,12 @@ def _run_tool(argv: list[str]) -> tuple[bool, str]:
 
 def run_mypy(path: Path) -> tuple[bool, str]:
     """Type-check a single plugin file with the project's mypy config."""
-    return _run_tool(["mypy", "--no-color-output", str(path)])
+    return _run_tool([sys.executable, "-m", "mypy", "--no-color-output", str(path)])
 
 
 def run_ruff(path: Path) -> tuple[bool, str]:
     """Lint a single plugin file with the project's ruff config."""
-    return _run_tool(["ruff", "check", "--no-fix", str(path)])
+    return _run_tool([sys.executable, "-m", "ruff", "check", "--no-fix", str(path)])
 
 
 def plugin_path_for(name: str) -> Path:
