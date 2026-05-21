@@ -395,6 +395,92 @@ def test_list_items_q_no_match_returns_empty(
     assert body["items"] == []
 
 
+# ---------- /extraction-queue + /extraction-jobs/{id}/cancel ----------
+
+
+def test_extraction_queue_lists_active_jobs_with_item_info(
+    client: TestClient, sm: StateManager
+) -> None:
+    """GET /extraction-queue returns queued + running jobs with item
+    title/url joined for the UI (bd-j68g.3)."""
+    iid_a = _seed_titled(sm, "a", "alpha post")
+    iid_b = _seed_titled(sm, "b", "beta post")
+    job_a = sm.enqueue_extraction_job(iid_a)
+    job_b = sm.enqueue_extraction_job(iid_b)
+    # Claim one so the other stays queued — verifies both statuses surface.
+    sm.claim_next_extraction_job()
+
+    resp = client.get("/api/research/extraction-queue")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["active_count"] == 2
+    ids = [j["id"] for j in body["jobs"]]
+    assert set(ids) == {job_a, job_b}
+    statuses = {j["status"] for j in body["jobs"]}
+    assert statuses == {"queued", "running"}
+    titles = {j["item_title"] for j in body["jobs"]}
+    assert titles == {"alpha post", "beta post"}
+
+
+def test_extraction_queue_status_returns_counts(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    sm.enqueue_extraction_job(iid)
+    resp = client.get("/api/research/extraction-queue/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["queued_count"] == 1
+    assert body["running_count"] == 0
+    assert body["active_count"] == 1
+
+
+def test_cancel_queued_job_marks_cancelled_and_restores_item(
+    client: TestClient, sm: StateManager
+) -> None:
+    """Cancelling a queued job sets status=cancelled and pops the item out
+    of the 'queued' state so it can be re-extracted later (bd-j68g.3)."""
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    assert sm.get_research_item(iid)["extraction_status"] == "queued"
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    after = sm.get_research_item(iid)
+    assert after is not None
+    assert after["extraction_status"] == "pending"
+
+
+def test_cancel_queued_job_idempotent(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    first = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert first.status_code == 200
+    second = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert second.status_code == 200
+    assert second.json()["status"] == "cancelled"
+
+
+def test_cancel_running_job_returns_409(
+    client: TestClient, sm: StateManager
+) -> None:
+    """Cancelling a running job isn't supported yet (deferred to bd-ma1j) —
+    must surface as 409 not a silent success."""
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 409
+
+
+def test_cancel_unknown_job_returns_404(client: TestClient) -> None:
+    resp = client.post("/api/research/extraction-jobs/9999999/cancel")
+    assert resp.status_code == 404
+
+
 def test_get_item_404(client: TestClient) -> None:
     resp = client.get("/api/research/items/9999999")
     assert resp.status_code == 404

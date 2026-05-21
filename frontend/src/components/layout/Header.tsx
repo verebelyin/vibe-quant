@@ -1,5 +1,6 @@
 import { useRouterState } from "@tanstack/react-router";
 
+import { ExtractionQueueBadge } from "./ExtractionQueueBadge";
 import { KillSwitch } from "./KillSwitch";
 
 const routeTitles: Record<string, string> = {
@@ -12,6 +13,8 @@ const routeTitles: Record<string, string> = {
   "/data": "Data Management",
   "/settings": "Settings",
   "/guide": "Guide",
+  "/research": "Research",
+  "/research/queue": "Extraction Queue",
 };
 
 export function Header() {
@@ -36,6 +39,7 @@ export function Header() {
           </span>
         </div>
 
+        <ExtractionQueueBadge />
         <KillSwitch />
       </div>
     </header>

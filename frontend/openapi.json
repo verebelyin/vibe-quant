@@ -2472,6 +2472,133 @@
         }
       }
     },
+    "/api/research/extraction-queue": {
+      "get": {
+        "tags": [
+          "research"
+        ],
+        "summary": "List Extraction Queue",
+        "description": "List active (and optionally completed) extraction jobs joined with\nparent item title + url for display on the queue page.\n\n`status` is a comma-separated list (e.g. ``queued,running``). Defaults\nto active jobs only (``queued,running``).",
+        "operationId": "list_extraction_queue_api_research_extraction_queue_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/research/extraction-queue/status": {
+      "get": {
+        "tags": [
+          "research"
+        ],
+        "summary": "Extraction Queue Status",
+        "description": "Compact counts for the header badge \u2014 kept cheap so the UI can poll it.",
+        "operationId": "extraction_queue_status_api_research_extraction_queue_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionQueueStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/research/extraction-jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "research"
+        ],
+        "summary": "Cancel Extraction Job",
+        "description": "Cancel a *queued* extraction job. Cancelling a running job is not\nsupported yet (bd-ma1j) \u2014 those return 409 until that bead ships.",
+        "operationId": "cancel_extraction_job_api_research_extraction_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/research/extractions/{extraction_id}/promote": {
       "post": {
         "tags": [
@@ -5875,6 +6002,179 @@
         ],
         "title": "ExtractionJobResponse",
         "description": "A row from `research_extraction_jobs` \u2014 surfaced for failure diagnostics."
+      },
+      "ExtractionQueueJobResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "research_item_id": {
+            "type": "integer",
+            "title": "Research Item Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "queued_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queued At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "title": "Max Attempts"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "item_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Title"
+          },
+          "item_url": {
+            "type": "string",
+            "title": "Item Url"
+          },
+          "item_source": {
+            "type": "string",
+            "title": "Item Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "research_item_id",
+          "status",
+          "queued_at",
+          "started_at",
+          "completed_at",
+          "attempts",
+          "max_attempts",
+          "last_error",
+          "error_message",
+          "heartbeat_at",
+          "item_title",
+          "item_url",
+          "item_source"
+        ],
+        "title": "ExtractionQueueJobResponse",
+        "description": "Queue-page view: includes parent item title + url for display."
+      },
+      "ExtractionQueueResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/ExtractionQueueJobResponse"
+            },
+            "type": "array",
+            "title": "Jobs"
+          },
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs",
+          "active_count"
+        ],
+        "title": "ExtractionQueueResponse"
+      },
+      "ExtractionQueueStatusResponse": {
+        "properties": {
+          "active_count": {
+            "type": "integer",
+            "title": "Active Count"
+          },
+          "queued_count": {
+            "type": "integer",
+            "title": "Queued Count"
+          },
+          "running_count": {
+            "type": "integer",
+            "title": "Running Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "active_count",
+          "queued_count",
+          "running_count"
+        ],
+        "title": "ExtractionQueueStatusResponse",
+        "description": "Compact response for the header badge: just the live counts."
       },
       "ExtractionResponse": {
         "properties": {

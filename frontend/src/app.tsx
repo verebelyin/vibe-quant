@@ -47,6 +47,9 @@ const ResearchPage = lazy(() =>
 const ResearchItemPage = lazy(() =>
   import("./routes/research.$itemId").then((m) => ({ default: m.ResearchItemPage })),
 );
+const ResearchQueuePage = lazy(() =>
+  import("./routes/research.queue").then((m) => ({ default: m.ResearchQueuePage })),
+);
 
 function SuspensePage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<LoadingSpinner />}>{children}</Suspense>;
@@ -209,6 +212,7 @@ const guideRoute = createRoute({
 type ResearchSearch = {
   sort?: string;
   hide_low_trade?: boolean;
+  q?: string;
 };
 
 const researchRoute = createRoute({
@@ -222,11 +226,24 @@ const researchRoute = createRoute({
       search.hide_low_trade === "true"
         ? true
         : undefined,
+    q: typeof search.q === "string" && search.q.length > 0 ? search.q : undefined,
   }),
   component: function ResearchRouteComponent() {
     return (
       <SuspensePage>
         <ResearchPage />
+      </SuspensePage>
+    );
+  },
+});
+
+const researchQueueRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/research/queue",
+  component: function ResearchQueueRouteComponent() {
+    return (
+      <SuspensePage>
+        <ResearchQueuePage />
       </SuspensePage>
     );
   },
@@ -260,6 +277,7 @@ const routeTree = rootRoute.addChildren([
   settingsRoute,
   guideRoute,
   researchRoute,
+  researchQueueRoute,
   researchItemRoute,
 ]);
 

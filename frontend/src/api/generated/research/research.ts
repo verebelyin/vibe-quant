@@ -26,10 +26,14 @@ import type {
 import type {
   CredentialsStatusResponse,
   ExtractEnqueueResponse,
+  ExtractionJobResponse,
+  ExtractionQueueResponse,
+  ExtractionQueueStatusResponse,
   ExtractionResponse,
   GetCredentialsStatusApiResearchCredentialsStatusGetParams,
   GetLatestScrapeApiResearchScrapeLatestGetParams,
   HTTPValidationError,
+  ListExtractionQueueApiResearchExtractionQueueGetParams,
   ListItemsApiResearchItemsGetParams,
   ResearchItemDetailResponse,
   ResearchItemListResponse,
@@ -1317,6 +1321,336 @@ export const useExtractItemApiResearchItemsItemIdExtractPost = <TError = HTTPVal
         TContext
       > => {
       return useMutation(getExtractItemApiResearchItemsItemIdExtractPostMutationOptions(options), queryClient);
+    }
+    /**
+ * List active (and optionally completed) extraction jobs joined with
+parent item title + url for display on the queue page.
+
+`status` is a comma-separated list (e.g. ``queued,running``). Defaults
+to active jobs only (``queued,running``).
+ * @summary List Extraction Queue
+ */
+export type listExtractionQueueApiResearchExtractionQueueGetResponse200 = {
+  data: ExtractionQueueResponse
+  status: 200
+}
+
+export type listExtractionQueueApiResearchExtractionQueueGetResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type listExtractionQueueApiResearchExtractionQueueGetResponseSuccess = (listExtractionQueueApiResearchExtractionQueueGetResponse200) & {
+  headers: Headers;
+};
+export type listExtractionQueueApiResearchExtractionQueueGetResponseError = (listExtractionQueueApiResearchExtractionQueueGetResponse422) & {
+  headers: Headers;
+};
+
+export type listExtractionQueueApiResearchExtractionQueueGetResponse = (listExtractionQueueApiResearchExtractionQueueGetResponseSuccess | listExtractionQueueApiResearchExtractionQueueGetResponseError)
+
+export const getListExtractionQueueApiResearchExtractionQueueGetUrl = (params?: ListExtractionQueueApiResearchExtractionQueueGetParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/research/extraction-queue?${stringifiedParams}` : `/api/research/extraction-queue`
+}
+
+export const listExtractionQueueApiResearchExtractionQueueGet = async (params?: ListExtractionQueueApiResearchExtractionQueueGetParams, options?: RequestInit): Promise<listExtractionQueueApiResearchExtractionQueueGetResponse> => {
+  
+  return customInstance<listExtractionQueueApiResearchExtractionQueueGetResponse>(getListExtractionQueueApiResearchExtractionQueueGetUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getListExtractionQueueApiResearchExtractionQueueGetQueryKey = (params?: ListExtractionQueueApiResearchExtractionQueueGetParams,) => {
+    return [
+    `/api/research/extraction-queue`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+    
+export const getListExtractionQueueApiResearchExtractionQueueGetQueryOptions = <TData = Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError = HTTPValidationError>(params?: ListExtractionQueueApiResearchExtractionQueueGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListExtractionQueueApiResearchExtractionQueueGetQueryKey(params);
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>> = ({ signal }) => listExtractionQueueApiResearchExtractionQueueGet(params, { signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListExtractionQueueApiResearchExtractionQueueGetQueryResult = NonNullable<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>>
+export type ListExtractionQueueApiResearchExtractionQueueGetQueryError = HTTPValidationError
+
+
+export function useListExtractionQueueApiResearchExtractionQueueGet<TData = Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError = HTTPValidationError>(
+ params: undefined |  ListExtractionQueueApiResearchExtractionQueueGetParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>,
+          TError,
+          Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListExtractionQueueApiResearchExtractionQueueGet<TData = Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError = HTTPValidationError>(
+ params?: ListExtractionQueueApiResearchExtractionQueueGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>,
+          TError,
+          Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListExtractionQueueApiResearchExtractionQueueGet<TData = Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError = HTTPValidationError>(
+ params?: ListExtractionQueueApiResearchExtractionQueueGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List Extraction Queue
+ */
+
+export function useListExtractionQueueApiResearchExtractionQueueGet<TData = Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError = HTTPValidationError>(
+ params?: ListExtractionQueueApiResearchExtractionQueueGetParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listExtractionQueueApiResearchExtractionQueueGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListExtractionQueueApiResearchExtractionQueueGetQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Compact counts for the header badge — kept cheap so the UI can poll it.
+ * @summary Extraction Queue Status
+ */
+export type extractionQueueStatusApiResearchExtractionQueueStatusGetResponse200 = {
+  data: ExtractionQueueStatusResponse
+  status: 200
+}
+
+export type extractionQueueStatusApiResearchExtractionQueueStatusGetResponseSuccess = (extractionQueueStatusApiResearchExtractionQueueStatusGetResponse200) & {
+  headers: Headers;
+};
+;
+
+export type extractionQueueStatusApiResearchExtractionQueueStatusGetResponse = (extractionQueueStatusApiResearchExtractionQueueStatusGetResponseSuccess)
+
+export const getExtractionQueueStatusApiResearchExtractionQueueStatusGetUrl = () => {
+
+
+  
+
+  return `/api/research/extraction-queue/status`
+}
+
+export const extractionQueueStatusApiResearchExtractionQueueStatusGet = async ( options?: RequestInit): Promise<extractionQueueStatusApiResearchExtractionQueueStatusGetResponse> => {
+  
+  return customInstance<extractionQueueStatusApiResearchExtractionQueueStatusGetResponse>(getExtractionQueueStatusApiResearchExtractionQueueStatusGetUrl(),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryKey = () => {
+    return [
+    `/api/research/extraction-queue/status`
+    ] as const;
+    }
+
+    
+export const getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryOptions = <TData = Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryKey();
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>> = ({ signal }) => extractionQueueStatusApiResearchExtractionQueueStatusGet({ signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryResult = NonNullable<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>>
+export type ExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryError = unknown
+
+
+export function useExtractionQueueStatusApiResearchExtractionQueueStatusGet<TData = Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError = unknown>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>,
+          TError,
+          Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useExtractionQueueStatusApiResearchExtractionQueueStatusGet<TData = Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>,
+          TError,
+          Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useExtractionQueueStatusApiResearchExtractionQueueStatusGet<TData = Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Extraction Queue Status
+ */
+
+export function useExtractionQueueStatusApiResearchExtractionQueueStatusGet<TData = Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof extractionQueueStatusApiResearchExtractionQueueStatusGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
+ * Cancel a *queued* extraction job. Cancelling a running job is not
+supported yet (bd-ma1j) — those return 409 until that bead ships.
+ * @summary Cancel Extraction Job
+ */
+export type cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse200 = {
+  data: ExtractionJobResponse
+  status: 200
+}
+
+export type cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponseSuccess = (cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse200) & {
+  headers: Headers;
+};
+export type cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponseError = (cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse422) & {
+  headers: Headers;
+};
+
+export type cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse = (cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponseSuccess | cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponseError)
+
+export const getCancelExtractionJobApiResearchExtractionJobsJobIdCancelPostUrl = (jobId: number,) => {
+
+
+  
+
+  return `/api/research/extraction-jobs/${jobId}/cancel`
+}
+
+export const cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost = async (jobId: number, options?: RequestInit): Promise<cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse> => {
+  
+  return customInstance<cancelExtractionJobApiResearchExtractionJobsJobIdCancelPostResponse>(getCancelExtractionJobApiResearchExtractionJobsJobIdCancelPostUrl(jobId),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getCancelExtractionJobApiResearchExtractionJobsJobIdCancelPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>, TError,{jobId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>, TError,{jobId: number}, TContext> => {
+
+const mutationKey = ['cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>, {jobId: number}> = (props) => {
+          const {jobId} = props ?? {};
+
+          return  cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost(jobId,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelExtractionJobApiResearchExtractionJobsJobIdCancelPostMutationResult = NonNullable<Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>>
+    
+    export type CancelExtractionJobApiResearchExtractionJobsJobIdCancelPostMutationError = HTTPValidationError
+
+    /**
+ * @summary Cancel Extraction Job
+ */
+export const useCancelExtractionJobApiResearchExtractionJobsJobIdCancelPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>, TError,{jobId: number}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof cancelExtractionJobApiResearchExtractionJobsJobIdCancelPost>>,
+        TError,
+        {jobId: number},
+        TContext
+      > => {
+      return useMutation(getCancelExtractionJobApiResearchExtractionJobsJobIdCancelPostMutationOptions(options), queryClient);
     }
     /**
  * @summary Promote Extraction

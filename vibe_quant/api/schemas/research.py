@@ -85,6 +85,27 @@ class ExtractionJobResponse(BaseModel):
     heartbeat_at: str | None
 
 
+class ExtractionQueueJobResponse(ExtractionJobResponse):
+    """Queue-page view: includes parent item title + url for display."""
+
+    item_title: str | None
+    item_url: str
+    item_source: str
+
+
+class ExtractionQueueResponse(BaseModel):
+    jobs: list[ExtractionQueueJobResponse]
+    active_count: int
+
+
+class ExtractionQueueStatusResponse(BaseModel):
+    """Compact response for the header badge: just the live counts."""
+
+    active_count: int
+    queued_count: int
+    running_count: int
+
+
 class ResearchItemDetailResponse(ResearchItemResponse):
     extractions: list[ExtractionResponse]
     latest_job: ExtractionJobResponse | None = None

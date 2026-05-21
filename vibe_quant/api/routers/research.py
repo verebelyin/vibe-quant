@@ -17,6 +17,9 @@ from vibe_quant.api.schemas.research import (
     CredentialsStatusResponse,
     ExtractEnqueueResponse,
     ExtractionJobResponse,
+    ExtractionQueueJobResponse,
+    ExtractionQueueResponse,
+    ExtractionQueueStatusResponse,
     ExtractionResponse,
     PromoteResponse,
     ResearchItemDetailResponse,
@@ -376,6 +379,95 @@ def extract_item(item_id: int, sm: StateMgr) -> ExtractEnqueueResponse:
 
     job_id = sm.enqueue_extraction_job(item_id)
     return ExtractEnqueueResponse(job_id=job_id, item_id=item_id, status="queued")
+
+
+_QUEUE_STATUSES = {"queued", "running", "done", "failed", "cancelled"}
+
+
+def _queue_job_to_response(row: dict[str, Any]) -> ExtractionQueueJobResponse:
+    return ExtractionQueueJobResponse(
+        id=int(row["id"]),
+        research_item_id=int(row["research_item_id"]),
+        status=str(row["status"]),
+        queued_at=row.get("queued_at"),
+        started_at=row.get("started_at"),
+        completed_at=row.get("completed_at"),
+        attempts=int(row.get("attempts") or 0),
+        max_attempts=int(row.get("max_attempts") or 0),
+        last_error=row.get("last_error"),
+        error_message=row.get("error_message"),
+        heartbeat_at=row.get("heartbeat_at"),
+        item_title=row.get("item_title"),
+        item_url=str(row.get("item_url") or ""),
+        item_source=str(row.get("item_source") or ""),
+    )
+
+
+@router.get("/extraction-queue", response_model=ExtractionQueueResponse)
+def list_extraction_queue(
+    sm: StateMgr,
+    status: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> ExtractionQueueResponse:
+    """List active (and optionally completed) extraction jobs joined with
+    parent item title + url for display on the queue page.
+
+    `status` is a comma-separated list (e.g. ``queued,running``). Defaults
+    to active jobs only (``queued,running``).
+    """
+    if status:
+        parts = [s.strip() for s in status.split(",") if s.strip()]
+        bad = [s for s in parts if s not in _QUEUE_STATUSES]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"invalid status: {bad}")
+        statuses = tuple(parts)
+    else:
+        statuses = ("queued", "running")
+    rows = sm.list_extraction_queue(statuses=statuses, limit=limit)
+    return ExtractionQueueResponse(
+        jobs=[_queue_job_to_response(r) for r in rows],
+        active_count=sm.count_active_extraction_jobs(),
+    )
+
+
+@router.get("/extraction-queue/status", response_model=ExtractionQueueStatusResponse)
+def extraction_queue_status(sm: StateMgr) -> ExtractionQueueStatusResponse:
+    """Compact counts for the header badge — kept cheap so the UI can poll it."""
+    queued = sm.list_extraction_queue(statuses=("queued",), limit=10_000)
+    running = sm.list_extraction_queue(statuses=("running",), limit=10_000)
+    return ExtractionQueueStatusResponse(
+        queued_count=len(queued),
+        running_count=len(running),
+        active_count=len(queued) + len(running),
+    )
+
+
+@router.post(
+    "/extraction-jobs/{job_id}/cancel",
+    response_model=ExtractionJobResponse,
+)
+def cancel_extraction_job(job_id: int, sm: StateMgr) -> ExtractionJobResponse:
+    """Cancel a *queued* extraction job. Cancelling a running job is not
+    supported yet (bd-ma1j) — those return 409 until that bead ships."""
+    try:
+        job = sm.cancel_queued_extraction_job(job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"extraction job {job_id} not found")
+    return ExtractionJobResponse(
+        id=int(job["id"]),
+        research_item_id=int(job["research_item_id"]),
+        status=str(job["status"]),
+        queued_at=job.get("queued_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        attempts=int(job.get("attempts") or 0),
+        max_attempts=int(job.get("max_attempts") or 0),
+        last_error=job.get("last_error"),
+        error_message=job.get("error_message"),
+        heartbeat_at=job.get("heartbeat_at"),
+    )
 
 
 @router.post("/extractions/{extraction_id}/promote", response_model=PromoteResponse)

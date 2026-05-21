@@ -1506,6 +1506,108 @@ class StateManager:
             job["status"] = final_status
             return job
 
+    def cancel_queued_extraction_job(
+        self,
+        job_id: int,
+    ) -> JsonDict | None:
+        """Cancel a queued extraction job and restore the parent item's status.
+
+        Only acts on jobs in status='queued'. Returns the updated job row on
+        success, None if the job doesn't exist, or raises ValueError if the
+        job is in a state that cannot be cancelled (running/done/failed).
+
+        Item status is reset to the latest non-running snapshot we can
+        compute: if a previous extraction exists, mirror its rolled-up
+        status; otherwise 'pending'.
+        """
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            job = dict(row)
+            status = str(job["status"])
+            if status == "cancelled":
+                return job  # idempotent
+            if status != "queued":
+                raise ValueError(
+                    f"job {job_id} cannot be cancelled from status={status!r}"
+                )
+            self.conn.execute(
+                """UPDATE research_extraction_jobs
+                   SET status = 'cancelled',
+                       completed_at = datetime('now'),
+                       error_message = COALESCE(error_message, 'cancelled by user')
+                   WHERE id = ?""",
+                (job_id,),
+            )
+            item_id = int(job["research_item_id"])
+            # Restore item to a sensible non-running state. If there are
+            # prior extractions, derive item status from the latest one;
+            # otherwise default to 'pending'.
+            latest_ext = self.conn.execute(
+                """SELECT status FROM research_extractions
+                   WHERE research_item_id = ?
+                   ORDER BY extracted_at DESC, id DESC LIMIT 1""",
+                (item_id,),
+            ).fetchone()
+            if latest_ext is None:
+                new_item_status = "pending"
+            else:
+                ext_status = str(latest_ext["status"])
+                new_item_status = {
+                    "parsed": "extracted",
+                    "promoted": "extracted",
+                    "rejected": "extracted",
+                    "failed": "failed",
+                    "skipped": "skipped",
+                }.get(ext_status, "pending")
+            self.conn.execute(
+                "UPDATE research_items SET extraction_status = ? WHERE id = ?",
+                (new_item_status, item_id),
+            )
+            self.conn.commit()
+            job["status"] = "cancelled"
+            return job
+
+    def list_extraction_queue(
+        self,
+        *,
+        statuses: Iterable[str] = ("queued", "running"),
+        limit: int = 200,
+    ) -> list[JsonDict]:
+        """List extraction-job rows joined with item title + url for display.
+
+        Default returns active (queued + running) jobs ordered by queued_at.
+        """
+        status_list = list(statuses)
+        if not status_list:
+            return []
+        placeholders = ",".join("?" for _ in status_list)
+        rows = self.conn.execute(
+            f"""SELECT j.id, j.research_item_id, j.status, j.queued_at,
+                       j.started_at, j.completed_at, j.attempts, j.max_attempts,
+                       j.last_error, j.error_message, j.heartbeat_at,
+                       i.title AS item_title, i.url AS item_url,
+                       i.source AS item_source
+                FROM research_extraction_jobs j
+                JOIN research_items i ON j.research_item_id = i.id
+                WHERE j.status IN ({placeholders})
+                ORDER BY j.queued_at ASC, j.id ASC
+                LIMIT ?""",
+            (*status_list, int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_active_extraction_jobs(self) -> int:
+        """Number of jobs currently in status IN ('queued', 'running')."""
+        row = self.conn.execute(
+            """SELECT COUNT(*) AS c FROM research_extraction_jobs
+               WHERE status IN ('queued', 'running')"""
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
     def sweep_stuck_extraction_jobs(
         self,
         threshold_seconds: int,
