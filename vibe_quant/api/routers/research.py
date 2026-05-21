@@ -36,9 +36,11 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.research.config import RedditConfig, subreddits_from_env
 from vibe_quant.research.indicator_scaffold import (
+    CodegenError,
     InvalidProposalError,
     proposed_to_spec_args,
     suggest_alt_name,
+    synthesize_and_write,
 )
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
@@ -663,17 +665,52 @@ def scaffold_proposed_indicator(
     if force and cached is not None:
         sm.delete_indicator_scaffold(extraction_id, idx)
 
-    # Slice 1 stops here. Slices 2 + 3 will:
-    #   1. synthesize compute_fn body via claude-p (with AST safety)
-    #   2. render + write vibe_quant/dsl/plugins/proposed_<name>.py
-    #   3. generate + run contract test
-    #   4. on green: git add + git commit
-    # and then upsert the scaffold row with status=ok or codegen_failed
-    # or test_failed.
+    formula = str(proposal.get("formula") or "").strip()
+    source_quote = proposal.get("source_quote")
+    if not isinstance(source_quote, str):
+        source_quote = None
+
+    try:
+        path = synthesize_and_write(
+            spec_args,
+            formula=formula,
+            extraction_id=extraction_id,
+            source_quote=source_quote,
+        )
+    except CodegenError as e:
+        sm.upsert_indicator_scaffold(
+            extraction_id=extraction_id,
+            idx=idx,
+            status="codegen_failed",
+            error=f"{e.code}:{e.detail}" if e.detail else e.code,
+            test_output=None,
+        )
+        return IndicatorScaffoldResponse(
+            status="codegen_failed",
+            extraction_id=extraction_id,
+            idx=idx,
+            name=spec_args.name,
+            error=f"{e.code}:{e.detail}" if e.detail else e.code,
+        )
+
+    # Refresh the plugin loader so the freshly-written file is picked up
+    # without a process restart. Done after mypy+ruff pass so a broken
+    # plugin can never enter the registry.
+    from vibe_quant.dsl.plugin_loader import reload_plugins
+
+    reload_plugins()
+
+    rel_path = str(path.relative_to(path.parents[3])) if len(path.parents) >= 4 else str(path)
+    row = sm.upsert_indicator_scaffold(
+        extraction_id=extraction_id,
+        idx=idx,
+        status="ok",
+        plugin_path=rel_path,
+    )
     return IndicatorScaffoldResponse(
-        status="not_implemented",
+        status="ok",
         extraction_id=extraction_id,
         idx=idx,
         name=spec_args.name,
-        error="codegen pipeline not yet wired (bd-3p1k.1.2 / bd-3p1k.1.3)",
+        plugin_path=row.get("plugin_path"),
     )

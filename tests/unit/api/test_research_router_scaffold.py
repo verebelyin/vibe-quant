@@ -1,13 +1,16 @@
 """Endpoint tests for POST /api/research/extractions/{id}/indicators/{idx}/scaffold.
 
-Slice 1 of bd-3p1k.1: only the validation/cache layer is wired up. The
-success-path test asserts the endpoint stops at ``not_implemented``
-until slices 2 + 3 add LLM codegen / auto-commit.
+Slice 2 of bd-3p1k.1: the LLM codegen step is wired up — tests mock
+``_run_claude_codegen`` and the mypy/ruff gates so the suite never
+shells out for real. The slice-1 validation paths (404 / invalid_input /
+name_collision / already_scaffolded / force / failed-cache-no-short-
+circuit) still apply and are kept intact.
 """
 
 from __future__ import annotations
 
 import json
+import re as _re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -17,7 +20,7 @@ from fastapi.testclient import TestClient
 from vibe_quant.api.app import create_app
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.research import extraction_log
+from vibe_quant.research import extraction_log, indicator_scaffold
 from vibe_quant.research.sources import _reset_for_tests, register_source
 
 if TYPE_CHECKING:
@@ -54,6 +57,47 @@ def _isolate_registry() -> Generator[None]:
 
     yield
     _reset_for_tests()
+
+
+def _safe_body_for(prompt: str) -> str:
+    """Generate a hermetic SAFE compute_fn body that matches the prompt's name.
+
+    The prompt always contains the locked signature line; we grep the
+    function name out so a single stub serves every test regardless of
+    the proposal's name.
+    """
+    m = _re.search(r"def (compute_[a-z0-9_]+)\(", prompt)
+    fn_name = m.group(1) if m else "compute_x"
+    return (
+        f"def {fn_name}(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
+        f'    import pandas as pd\n'
+        f'    period = int(params.get("period", 14) or 14)\n'
+        f'    return df["close"].rolling(period).mean()\n'
+    )
+
+
+@pytest.fixture
+def _stub_codegen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[Path]:
+    """Pin claude-p + mypy + ruff + plugins dir for fast, hermetic tests.
+
+    The endpoint flow is: synthesize_and_write → reload_plugins → upsert
+    row. With these stubs the LLM never runs, the toolchain never runs,
+    and writes land in tmp_path so we don't pollute the real plugins dir.
+    """
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    monkeypatch.setattr(indicator_scaffold, "PLUGINS_DIR", plugins)
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", _safe_body_for)
+    monkeypatch.setattr(indicator_scaffold, "run_mypy", lambda _p: (True, ""))
+    monkeypatch.setattr(indicator_scaffold, "run_ruff", lambda _p: (True, ""))
+    # reload_plugins() walks the real plugin dir — make it a no-op so
+    # the tmp_path scaffolds aren't expected to be importable.
+    monkeypatch.setattr(
+        "vibe_quant.dsl.plugin_loader.reload_plugins", lambda: []
+    )
+    yield plugins
 
 
 @pytest.fixture
@@ -159,11 +203,11 @@ def test_scaffold_name_collision_returns_suggested(
     assert out["body"]["suggested_name"] == "RSI_V2"
 
 
-# ---------- status=not_implemented (happy-path stub) ----------
+# ---------- status=ok (happy path, slice 2) ----------
 
 
-def test_scaffold_happy_path_returns_not_implemented(
-    client: TestClient, sm: StateManager
+def test_scaffold_happy_path_writes_plugin_and_caches_ok(
+    client: TestClient, sm: StateManager, _stub_codegen: Path
 ) -> None:
     ext_id = _seed_extraction_with_proposals(
         sm,
@@ -178,8 +222,83 @@ def test_scaffold_happy_path_returns_not_implemented(
     )
     out = _scaffold(client, ext_id, 0)
     assert out["status_code"] == 200
-    assert out["body"]["status"] == "not_implemented"
+    assert out["body"]["status"] == "ok"
     assert out["body"]["name"] == "MY_NOVEL"
+    assert (_stub_codegen / "proposed_my_novel.py").exists()
+
+    cached = sm.get_indicator_scaffold(ext_id, 0)
+    assert cached is not None
+    assert cached["status"] == "ok"
+    assert cached["plugin_path"] and cached["plugin_path"].endswith(
+        "proposed_my_novel.py"
+    )
+
+
+# ---------- status=codegen_failed (slice 2) ----------
+
+
+def test_scaffold_banned_import_returns_codegen_failed(
+    client: TestClient,
+    sm: StateManager,
+    _stub_codegen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_body = (
+        "def compute_bad_a(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
+        "    import os\n"
+        "    return df['close']\n"
+    )
+    monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", lambda _p: bad_body)
+
+    ext_id = _seed_extraction_with_proposals(
+        sm,
+        proposals=[{"name": "bad_a", "formula": "ema(close, period)"}],
+    )
+    out = _scaffold(client, ext_id, 0)
+    assert out["body"]["status"] == "codegen_failed"
+    assert "banned_import" in (out["body"]["error"] or "")
+    assert not (_stub_codegen / "proposed_bad_a.py").exists()
+
+    # Cache row records the failure so the UI can show the reason.
+    cached = sm.get_indicator_scaffold(ext_id, 0)
+    assert cached is not None
+    assert cached["status"] == "codegen_failed"
+    assert "banned_import" in (cached["error"] or "")
+
+
+def test_scaffold_mypy_failure_returns_codegen_failed(
+    client: TestClient,
+    sm: StateManager,
+    _stub_codegen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        indicator_scaffold, "run_mypy", lambda _p: (False, "incompatible types")
+    )
+    ext_id = _seed_extraction_with_proposals(
+        sm, proposals=[{"name": "bad_b", "formula": "ema(close, period)"}]
+    )
+    out = _scaffold(client, ext_id, 0)
+    assert out["body"]["status"] == "codegen_failed"
+    assert out["body"]["error"].startswith("mypy_fail")
+    assert not (_stub_codegen / "proposed_bad_b.py").exists()
+
+
+def test_scaffold_syntax_error_returns_codegen_failed(
+    client: TestClient,
+    sm: StateManager,
+    _stub_codegen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        indicator_scaffold, "_run_claude_codegen", lambda _p: "def x(:\n"
+    )
+    ext_id = _seed_extraction_with_proposals(
+        sm, proposals=[{"name": "bad_c", "formula": "f"}]
+    )
+    out = _scaffold(client, ext_id, 0)
+    assert out["body"]["status"] == "codegen_failed"
+    assert out["body"]["error"].startswith("syntax_error")
 
 
 # ---------- status=already_scaffolded + force ----------
@@ -207,8 +326,8 @@ def test_scaffold_already_scaffolded_returns_cached_row(
     assert out["body"]["commit_sha"] == "abc123"
 
 
-def test_scaffold_force_clears_cache_and_falls_through(
-    client: TestClient, sm: StateManager
+def test_scaffold_force_clears_cache_and_reruns_codegen(
+    client: TestClient, sm: StateManager, _stub_codegen: Path
 ) -> None:
     ext_id = _seed_extraction_with_proposals(
         sm,
@@ -221,17 +340,23 @@ def test_scaffold_force_clears_cache_and_falls_through(
         plugin_path="vibe_quant/dsl/plugins/proposed_novel_b.py",
         commit_sha="def456",
     )
+    # Re-stub the body so the rendered file matches the new name.
     out = _scaffold(client, ext_id, 0, force=True)
-    # Force=1 nukes the cache and the slice-1 stub returns not_implemented.
-    assert out["body"]["status"] == "not_implemented"
-    assert sm.get_indicator_scaffold(ext_id, 0) is None
+    # Force re-runs codegen; cache row now reflects the FRESH ok upsert.
+    assert out["body"]["status"] == "ok"
+    cached = sm.get_indicator_scaffold(ext_id, 0)
+    assert cached is not None
+    assert cached["status"] == "ok"
+    # The old commit_sha is cleared since the upsert replaces the whole row.
+    assert cached.get("commit_sha") is None
 
 
 def test_scaffold_failed_cache_does_not_short_circuit(
-    client: TestClient, sm: StateManager
+    client: TestClient, sm: StateManager, _stub_codegen: Path
 ) -> None:
     # A prior codegen_failed row should NOT count as "already scaffolded";
-    # the user clicking again is a retry intent.
+    # the user clicking again is a retry intent. With slice 2 wired up,
+    # the retry now actually runs codegen and lands as ok.
     ext_id = _seed_extraction_with_proposals(
         sm,
         proposals=[{"name": "novel_c", "formula": "f"}],
@@ -243,7 +368,7 @@ def test_scaffold_failed_cache_does_not_short_circuit(
         error="banned_import:os",
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "not_implemented"
+    assert out["body"]["status"] == "ok"
 
 
 # ---------- state manager round-trip ----------

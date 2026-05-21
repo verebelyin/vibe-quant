@@ -15,9 +15,18 @@ record it in the AUTO-GENERATED header.
 
 from __future__ import annotations
 
+import ast
+import json
+import logging
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Names must survive being used as a YAML ``type:`` value AND as a Python
 # module filename — same rule as ``plugin_scaffold._NAME_RE``.
@@ -272,3 +281,416 @@ def proposed_to_spec_args(proposed: dict[str, Any]) -> IndicatorSpecArgs:
         ),
         range_provenance=provenance,
     )
+
+
+# ---------------------------------------------------------------------------
+# Slice 2: LLM codegen + AST safety + file write
+# ---------------------------------------------------------------------------
+
+
+CLAUDE_BIN = "claude"
+CODEGEN_TIMEOUT_SECONDS = 60
+
+# Where ``proposed_<name>.py`` files land. A module-level value (not a
+# constant evaluated at function call time) so tests can monkeypatch
+# ``indicator_scaffold.PLUGINS_DIR`` to a tmp_path without touching the
+# real plugins directory.
+PLUGINS_DIR: Path = (
+    Path(__file__).resolve().parent.parent / "dsl" / "plugins"
+)
+
+# Banned top-level identifiers / call names. ``ast.walk`` over the body
+# catches them no matter where they're hidden (inside a string-only
+# regex-grep would false-positive on docstrings + comments).
+_BANNED_IMPORTS = frozenset({"os", "subprocess", "socket", "sys", "pathlib"})
+_BANNED_CALLS = frozenset({"exec", "eval", "__import__", "compile", "open"})
+
+
+class CodegenError(Exception):
+    """LLM codegen produced something we can't safely write to disk.
+
+    The ``code`` attribute matches the bead spec's ``error`` field
+    vocabulary (``timeout``, ``banned_import:<which>``, ``mypy_fail``,
+    ``ruff_fail``, ``syntax_error``, ``non_function``,
+    ``missing_signature``) so the endpoint can pass it through
+    unchanged.
+    """
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+        self.detail = detail
+
+
+def _build_codegen_prompt(
+    spec: IndicatorSpecArgs, formula: str, source_quote: str | None
+) -> str:
+    """Build the locked-down prompt for claude-p compute_fn synthesis.
+
+    The prompt has three jobs: pin the function signature, ban imports
+    outside the function body, and inject the LLM's own formula so the
+    response is grounded. We do NOT show the LLM any of our existing
+    plugin source — we want behavior, not pattern-matching.
+    """
+    fn_name = f"compute_{spec.name.lower()}"
+    param_keys = ", ".join(sorted(spec.default_params.keys())) or "(none)"
+    quote_line = (
+        f"Source quote: {source_quote.strip()[:600]!r}\n"
+        if isinstance(source_quote, str) and source_quote.strip()
+        else ""
+    )
+    return (
+        "You write a single pure-Python function that computes a "
+        "technical indicator from an OHLCV DataFrame. The function will "
+        "be checked by `ruff check` and `mypy --strict` and rejected on "
+        "any error, so write defensively.\n\n"
+        "OUTPUT RULES — output ONLY the raw Python source of the "
+        "function. No prose, no markdown fences, no module-level "
+        "imports outside the function body, no extra definitions.\n\n"
+        "REQUIRED SIGNATURE (verbatim, including type annotations):\n"
+        f"    def {fn_name}(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n\n"
+        "INSIDE THE FUNCTION BODY:\n"
+        "  - You MAY `import pandas as pd` or `import numpy as np` — but "
+        "ONLY if you actually reference `pd.` or `np.` in the body. "
+        "Ruff F401 will reject unused imports.\n"
+        "  - You MAY NOT import os, subprocess, socket, sys, pathlib, "
+        "and you MAY NOT call exec / eval / __import__ / compile / open.\n\n"
+        "INPUTS\n"
+        "  - df has columns: open, high, low, close, volume (lowercase). "
+        "Use `df['close']` etc. directly — they are `pd.Series`.\n"
+        f"  - params keys: {param_keys}\n"
+        "  - To coerce a param: `period = int(cast(int, params.get('period', 14)))` "
+        "after `from typing import cast`. But `from typing import cast` "
+        "is NOT allowed (no module-level imports outside the function). "
+        "Instead, write it inline: e.g. `period_raw = params.get('period', 14); "
+        "period = int(period_raw) if isinstance(period_raw, (int, float)) else 14`. "
+        "Always handle the `object` static type with a runtime isinstance check.\n\n"
+        "OUTPUT\n"
+        "  - Return a pd.Series indexed exactly like df.index, same length as df.\n"
+        "  - Use np.nan (after `import numpy as np`) for warmup bars where "
+        "the indicator is undefined.\n\n"
+        f"FORMULA TO IMPLEMENT (verbatim from a research extraction):\n{formula.strip()}\n\n"
+        f"{quote_line}"
+        "Now output ONLY the function definition. Begin with `def`."
+    )
+
+
+def _run_claude_codegen(
+    prompt: str, *, timeout_seconds: int = CODEGEN_TIMEOUT_SECONDS
+) -> str:
+    """Shell out to ``claude -p --output-format json`` for a compute_fn body.
+
+    Returns the unwrapped ``result`` text. Raises ``CodegenError`` for
+    timeouts / non-zero exit / missing binary so the endpoint can map to
+    ``codegen_failed`` with a precise error code. Intentionally narrow
+    in scope vs ``extractor.ClaudePExtractor._run_claude`` — that one
+    deals with extraction envelopes and per-finding parsing; here we
+    just need one string back.
+    """
+    claude_path = shutil.which(CLAUDE_BIN)
+    if claude_path is None:
+        raise CodegenError("codegen_unavailable", f"{CLAUDE_BIN!r} CLI not on PATH")
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [claude_path, "-p", "--output-format", "json", prompt],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise CodegenError("timeout", f"{timeout_seconds}s") from e
+    if proc.returncode != 0:
+        raise CodegenError(
+            "claude_exit", f"rc={proc.returncode} stderr={proc.stderr[:200]}"
+        )
+    raw = proc.stdout
+    try:
+        outer = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise CodegenError("non_json_envelope", str(e)) from e
+    if not isinstance(outer, dict) or "result" not in outer:
+        raise CodegenError("non_json_envelope", "missing 'result'")
+    result = outer.get("result")
+    if not isinstance(result, str):
+        raise CodegenError("non_json_envelope", "result not a string")
+    return _strip_code_fence(result).strip()
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove a leading ```python``` fence if the model emitted one anyway."""
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    first_nl = s.find("\n")
+    if first_nl == -1:
+        return text
+    body = s[first_nl + 1 :]
+    if body.endswith("```"):
+        body = body[: -3]
+    return body.strip()
+
+
+def _ast_safety_check(body: str, expected_fn_name: str) -> None:
+    """Parse ``body`` and raise ``CodegenError`` if it's unsafe or wrong shape.
+
+    Catches: syntax errors, missing top-level function, wrong function
+    name, missing/incorrect signature annotations, banned imports
+    anywhere in the tree, banned bare calls anywhere in the tree. We
+    walk the entire AST (not just the first statement) so a hidden
+    ``exec()`` inside a nested helper still gets caught.
+    """
+    try:
+        tree = ast.parse(body)
+    except SyntaxError as e:
+        raise CodegenError("syntax_error", str(e)) from e
+
+    if not tree.body:
+        raise CodegenError("non_function", "empty body")
+
+    top = tree.body[0]
+    if not isinstance(top, ast.FunctionDef):
+        raise CodegenError(
+            "non_function", f"top-level is {type(top).__name__}, expected FunctionDef"
+        )
+    if top.name != expected_fn_name:
+        raise CodegenError(
+            "missing_signature",
+            f"function is {top.name!r}, expected {expected_fn_name!r}",
+        )
+    if len(tree.body) > 1:
+        raise CodegenError(
+            "non_function",
+            f"expected one top-level def, got {len(tree.body)} statements",
+        )
+
+    args = top.args.args
+    if len(args) != 2 or [a.arg for a in args] != ["df", "params"]:
+        raise CodegenError(
+            "missing_signature", f"args must be (df, params), got {[a.arg for a in args]}"
+        )
+    if any(a.annotation is None for a in args) or top.returns is None:
+        raise CodegenError("missing_signature", "missing type annotations")
+
+    for node in ast.walk(top):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in _BANNED_IMPORTS:
+                    raise CodegenError("banned_import", root)
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root in _BANNED_IMPORTS:
+                raise CodegenError("banned_import", root)
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name) and fn.id in _BANNED_CALLS:
+                raise CodegenError("banned_call", fn.id)
+
+
+def _indent(body: str, spaces: int = 0) -> str:
+    if spaces == 0:
+        return body
+    pad = " " * spaces
+    return "\n".join(pad + line if line else line for line in body.splitlines())
+
+
+def _format_literal(value: Any) -> str:
+    """Format a default-param value for inclusion in generated source."""
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return repr(value)
+
+
+def _format_type(t: type) -> str:
+    return {bool: "bool", int: "int", float: "float", str: "str"}.get(t, "object")
+
+
+def render_plugin_file(
+    spec: IndicatorSpecArgs,
+    body: str,
+    *,
+    extraction_id: int,
+    source_quote: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Render the full ``proposed_<name>.py`` plugin source from inputs.
+
+    The output is mypy-strict / ruff clean by construction; the only
+    variable surface area is the body — which is gated by
+    ``_ast_safety_check`` before this is called.
+    """
+    ts = (now or datetime.now(UTC)).isoformat(timespec="seconds")
+    ranges_line = (
+        ", ".join(
+            f"{k}={spec.range_provenance.get(k, 'unknown')}"
+            for k in sorted(spec.param_ranges)
+        )
+        or "(no GA ranges)"
+    )
+
+    defaults_src = (
+        "{"
+        + ", ".join(
+            f"{k!r}: {_format_literal(v)}" for k, v in spec.default_params.items()
+        )
+        + "}"
+    )
+    schema_src = (
+        "{"
+        + ", ".join(
+            f"{k!r}: {_format_type(t)}" for k, t in spec.param_schema.items()
+        )
+        + "}"
+    )
+    ranges_src = (
+        "{"
+        + ", ".join(
+            f"{k!r}: ({lo!r}, {hi!r})" for k, (lo, hi) in spec.param_ranges.items()
+        )
+        + "}"
+    )
+    threshold_src = (
+        f"({spec.threshold_range[0]!r}, {spec.threshold_range[1]!r})"
+        if spec.threshold_range is not None
+        else "None"
+    )
+    quote_block = ""
+    if isinstance(source_quote, str) and source_quote.strip():
+        # Indent each line so the quote reads as a block inside the
+        # docstring; strip triple-quotes that would terminate the
+        # enclosing docstring early.
+        cleaned = source_quote.strip().replace('"""', '"​""')[:400]
+        indented = "\n".join("    " + line for line in cleaned.splitlines())
+        quote_block = f"\nSource quote:\n{indented}\n"
+
+    fn_name = f"compute_{spec.name.lower()}"
+
+    return (
+        f'"""AUTO-GENERATED FROM EXTRACTION {extraction_id} ON {ts} '
+        f'— review before promoting.\n'
+        f'\n'
+        f'RANGES: {ranges_line}\n'
+        f'Display: {spec.display_name}\n'
+        f'Description: {spec.description}\n'
+        f'{quote_block}'
+        f'"""\n'
+        f'\n'
+        f'from __future__ import annotations\n'
+        f'\n'
+        f'from typing import TYPE_CHECKING\n'
+        f'\n'
+        f'from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n'
+        f'\n'
+        f'if TYPE_CHECKING:\n'
+        f'    import pandas as pd\n'
+        f'\n'
+        f'\n'
+        f'{body.rstrip()}\n'
+        f'\n'
+        f'\n'
+        f'indicator_registry.register_spec(\n'
+        f'    IndicatorSpec(\n'
+        f'        name={spec.name!r},\n'
+        f'        nt_class=None,\n'
+        f'        pandas_ta_func=None,\n'
+        f'        default_params={defaults_src},\n'
+        f'        param_schema={schema_src},\n'
+        f'        compute_fn={fn_name},\n'
+        f'        display_name={spec.display_name!r},\n'
+        f'        description={spec.description!r},\n'
+        f'        category={spec.category!r},\n'
+        f'        param_ranges={ranges_src},\n'
+        f'        threshold_range={threshold_src},\n'
+        f'    )\n'
+        f')\n'
+    )
+
+
+def _run_tool(argv: list[str]) -> tuple[bool, str]:
+    """Run a subprocess and return (passed, combined output, truncated)."""
+    try:
+        proc = subprocess.run(  # noqa: S603
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except FileNotFoundError as e:
+        return False, f"tool not found: {e}"
+    except subprocess.TimeoutExpired:
+        return False, "tool timed out after 60s"
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode == 0, combined[:500]
+
+
+def run_mypy(path: Path) -> tuple[bool, str]:
+    """Type-check a single plugin file with the project's mypy config."""
+    return _run_tool(["mypy", "--no-color-output", str(path)])
+
+
+def run_ruff(path: Path) -> tuple[bool, str]:
+    """Lint a single plugin file with the project's ruff config."""
+    return _run_tool(["ruff", "check", "--no-fix", str(path)])
+
+
+def plugin_path_for(name: str) -> Path:
+    """Resolve where ``proposed_<name>.py`` lives. Tests monkeypatch PLUGINS_DIR."""
+    return PLUGINS_DIR / f"proposed_{name.lower()}.py"
+
+
+def write_plugin_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def synthesize_and_write(
+    spec: IndicatorSpecArgs,
+    *,
+    formula: str,
+    extraction_id: int,
+    source_quote: str | None,
+    runner: Any = None,
+) -> Path:
+    """End-to-end: prompt → claude-p → AST gate → render → write → mypy + ruff.
+
+    Returns the written path on success. Raises ``CodegenError`` with a
+    machine-readable ``code`` on any failure; the caller (the endpoint)
+    surfaces that as ``status=codegen_failed``. On a post-write failure
+    (mypy/ruff) the file IS deleted so a half-broken plugin can't
+    poison the next ``load_builtin_plugins`` call.
+
+    ``runner`` is injected so tests can swap in a callable that returns
+    a canned body without spawning a real claude subprocess.
+    """
+    fn_name = f"compute_{spec.name.lower()}"
+    prompt = _build_codegen_prompt(spec, formula, source_quote)
+    call = runner if runner is not None else _run_claude_codegen
+    body = call(prompt)
+    if not isinstance(body, str) or not body.strip():
+        raise CodegenError("empty_body", "runner returned empty string")
+
+    _ast_safety_check(body, fn_name)
+
+    rendered = render_plugin_file(
+        spec, body, extraction_id=extraction_id, source_quote=source_quote
+    )
+    path = plugin_path_for(spec.name)
+    write_plugin_file(path, rendered)
+
+    try:
+        ok, output = run_mypy(path)
+        if not ok:
+            raise CodegenError("mypy_fail", output)
+        ok, output = run_ruff(path)
+        if not ok:
+            raise CodegenError("ruff_fail", output)
+    except CodegenError:
+        # Don't leave a broken plugin on disk — the next process restart
+        # would import it and the registry would surface a load error.
+        path.unlink(missing_ok=True)
+        raise
+    return path
