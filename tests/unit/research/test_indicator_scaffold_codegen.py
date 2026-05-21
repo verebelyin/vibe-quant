@@ -167,6 +167,38 @@ def test_render_plugin_file_includes_register_spec_call() -> None:
     assert "compute_fn=compute_my_ind" in rendered
 
 
+def test_render_plugin_file_strips_inner_imports_and_lifts_pd_to_module(
+) -> None:
+    """bd-0gr9: imports inside the function body trip ruff I001. The
+    scaffolder strips them and emits a single sorted module-level
+    import block instead."""
+    body = (
+        "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
+        '    import pandas as pd\n'
+        '    import numpy as np\n'
+        '    return df["close"].rolling(14).mean().fillna(np.nan)\n'
+    )
+    rendered = render_plugin_file(_spec(), body, extraction_id=1)
+    assert "import pandas as pd" in rendered
+    assert "import numpy as np" in rendered
+    # Inner imports lifted out of the def body.
+    fn_start = rendered.index("def compute_my_ind")
+    fn_end = rendered.index("indicator_registry.register_spec")
+    fn_block = rendered[fn_start:fn_end]
+    assert "import pandas" not in fn_block
+    assert "import numpy" not in fn_block
+
+
+def test_render_plugin_file_omits_numpy_when_body_doesnt_use_it() -> None:
+    body = (
+        "def compute_my_ind(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n"
+        '    return df["close"].rolling(14).mean()\n'
+    )
+    rendered = render_plugin_file(_spec(), body, extraction_id=1)
+    assert "import pandas as pd" in rendered
+    assert "import numpy as np" not in rendered  # F401 prevention
+
+
 def test_render_plugin_file_threshold_range_from_output_hint() -> None:
     rendered = render_plugin_file(_spec(), _good_body(), extraction_id=1)
     # output_range "0..100" → threshold_range (20.0, 80.0)

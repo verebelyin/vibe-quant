@@ -346,16 +346,17 @@ def _build_codegen_prompt(
         "be checked by `ruff check` and `mypy --strict` and rejected on "
         "any error, so write defensively.\n\n"
         "OUTPUT RULES — output ONLY the raw Python source of the "
-        "function. No prose, no markdown fences, no module-level "
-        "imports outside the function body, no extra definitions.\n\n"
+        "function. No prose, no markdown fences, no import statements "
+        "ANYWHERE (the scaffolder injects `pd` and `np` at module "
+        "level for you), no extra definitions.\n\n"
         "REQUIRED SIGNATURE (verbatim, including type annotations):\n"
         f"    def {fn_name}(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:\n\n"
         "INSIDE THE FUNCTION BODY:\n"
-        "  - You MAY `import pandas as pd` or `import numpy as np` — but "
-        "ONLY if you actually reference `pd.` or `np.` in the body. "
-        "Ruff F401 will reject unused imports.\n"
-        "  - You MAY NOT import os, subprocess, socket, sys, pathlib, "
-        "and you MAY NOT call exec / eval / __import__ / compile / open.\n\n"
+        "  - `pd` (pandas) and `np` (numpy) are in scope — DO NOT "
+        "`import` them. The scaffolder will detect uses and emit the "
+        "right module-level imports for you.\n"
+        "  - You MAY NOT import anything else, and you MAY NOT call "
+        "exec / eval / __import__ / compile / open.\n\n"
         "INPUTS\n"
         "  - df has columns: open, high, low, close, volume (lowercase). "
         "Use `df['close']` etc. directly — they are `pd.Series`.\n"
@@ -489,6 +490,34 @@ def _ast_safety_check(body: str, expected_fn_name: str) -> None:
                 raise CodegenError("banned_call", fn.id)
 
 
+def _strip_inner_imports_and_detect_np(body: str) -> tuple[str, bool]:
+    """Strip ``import`` statements from inside the function body and
+    detect whether the body references ``np``.
+
+    Inner imports in the LLM-generated body trip ruff I001 (unsorted
+    import block) because they live inside a ``def``. Pulling them up
+    to module level — which we render ourselves — fixes the style.
+
+    ``pd`` is always emitted at module level (the signature uses
+    ``pd.DataFrame`` / ``pd.Series`` annotations, and a TC002 noqa
+    silences the type-checking-only complaint). ``np`` is conditional:
+    emitting it unconditionally would trip F401 when unused.
+    """
+    tree = ast.parse(body)
+    func = tree.body[0]
+    if not isinstance(func, ast.FunctionDef):
+        return body, False
+    func.body = [
+        s for s in func.body if not isinstance(s, (ast.Import, ast.ImportFrom))
+    ] or [ast.Pass()]
+    uses_np = any(
+        isinstance(node, ast.Name) and node.id == "np"
+        for stmt in func.body
+        for node in ast.walk(stmt)
+    )
+    return ast.unparse(tree), uses_np
+
+
 def _indent(body: str, spaces: int = 0) -> str:
     if spaces == 0:
         return body
@@ -569,6 +598,13 @@ def render_plugin_file(
 
     fn_name = f"compute_{spec.name.lower()}"
 
+    cleaned_body, uses_np = _strip_inner_imports_and_detect_np(body)
+    # Order matters for ruff isort: stdlib → third-party → first-party.
+    # pandas is always a runtime import — most LLM bodies use pd at
+    # runtime (pd.Series, pd.concat, etc.). TC002 noqa silences the
+    # annotation-only-import complaint for the bodies that don't.
+    np_line = "import numpy as np\n" if uses_np else ""
+
     return (
         f'"""AUTO-GENERATED FROM EXTRACTION {extraction_id} ON {ts} '
         f'— review before promoting.\n'
@@ -581,15 +617,13 @@ def render_plugin_file(
         f'\n'
         f'from __future__ import annotations\n'
         f'\n'
-        f'from typing import TYPE_CHECKING\n'
+        f'{np_line}'
+        f'import pandas as pd  # noqa: TC002\n'
         f'\n'
         f'from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry\n'
         f'\n'
-        f'if TYPE_CHECKING:\n'
-        f'    import pandas as pd\n'
         f'\n'
-        f'\n'
-        f'{body.rstrip()}\n'
+        f'{cleaned_body.rstrip()}\n'
         f'\n'
         f'\n'
         f'indicator_registry.register_spec(\n'
