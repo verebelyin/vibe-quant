@@ -102,6 +102,19 @@ def test_claim_returns_oldest_queued_job_then_none(sm: StateManager) -> None:
     assert empty is None
 
 
+def test_claim_propagates_running_to_research_item(sm: StateManager) -> None:
+    """Claiming a job must also move the parent research_item to 'running'
+    so the UI badge can transition queued → running (bd-gif4)."""
+    iid = _seed_item(sm)
+    sm.enqueue_extraction_job(iid)
+    assert sm.get_research_item(iid)["extraction_status"] == "queued"
+
+    sm.claim_next_extraction_job()
+
+    item = sm.get_research_item(iid)
+    assert item["extraction_status"] == "running"
+
+
 def test_claim_is_exclusive_between_concurrent_callers(sm: StateManager) -> None:
     """Two threads racing on the same single queued row must claim distinct ids."""
     iid1 = _seed_item(sm, "a")

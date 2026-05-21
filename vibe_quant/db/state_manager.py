@@ -1399,6 +1399,8 @@ class StateManager:
         Uses UPDATE … RETURNING in a single statement so two workers cannot
         both grab the same row. Returns None when the queue is empty.
         Sets started_at on first claim and bumps heartbeat_at on every claim.
+        Also propagates the running status to the parent research_items row so
+        the UI badge transitions queued → running.
         """
         with self._write_lock:
             cursor = self.conn.execute(
@@ -1415,6 +1417,11 @@ class StateManager:
                    RETURNING *"""
             )
             row = cursor.fetchone()
+            if row is not None:
+                self.conn.execute(
+                    "UPDATE research_items SET extraction_status = 'running' WHERE id = ?",
+                    (int(row["research_item_id"]),),
+                )
             self.conn.commit()
             return dict(row) if row else None
 
