@@ -694,3 +694,324 @@ def synthesize_and_write(
         path.unlink(missing_ok=True)
         raise
     return path
+
+
+# ---------------------------------------------------------------------------
+# Slice 3: contract test gen + pytest run + auto-commit
+# ---------------------------------------------------------------------------
+
+
+TESTS_DIR: Path = (
+    Path(__file__).resolve().parent.parent.parent
+    / "tests"
+    / "unit"
+    / "test_plugins"
+)
+
+PYTEST_TIMEOUT_SECONDS = 30
+COMMIT_MESSAGE_TEMPLATE = "chore: scaffold proposed indicator {name} (bd-3p1k)"
+CO_AUTHOR_TRAILER = "Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+
+
+class ScaffoldError(Exception):
+    """Test- or commit-stage failure. The endpoint maps these to ``test_failed``.
+
+    Carries a ``code`` (``test_failed`` | ``commit_failed``) and an
+    ``output`` blob (first 2KB of pytest / git output) that the caller
+    surfaces to the user verbatim — they're the only signal of what
+    actually broke when a hand-written commit hook or a model-generated
+    body misbehaves.
+    """
+
+    OUTPUT_LIMIT = 2048
+
+    def __init__(self, code: str, output: str = "") -> None:
+        super().__init__(f"{code}: {output[:200]}" if output else code)
+        self.code = code
+        self.output = output[: self.OUTPUT_LIMIT]
+
+
+def test_path_for(name: str) -> Path:
+    """Resolve where ``test_proposed_<name>.py`` lives. Monkeypatched in tests."""
+    return TESTS_DIR / f"test_proposed_{name.lower()}.py"
+
+
+_CONTRACT_TEST_SINGLE = '''"""Auto-generated contract test for proposed indicator {name_upper}.
+
+Generated as part of the scaffold pipeline (bd-3p1k.1.3) — verifies the
+synthesized compute_fn produces an output of the right shape and
+isn't all-NaN past warmup. Re-run after editing the plugin.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from vibe_quant.dsl.indicators import indicator_registry, invoke_compute_fn
+
+
+def _sample_ohlcv(n: int = 100) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h")
+    rng = np.random.default_rng(42)
+    close = 100.0 + rng.standard_normal(n).cumsum()
+    return pd.DataFrame(
+        {{
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": rng.uniform(1000.0, 10000.0, n),
+        }},
+        index=idx,
+    )
+
+
+def test_{name_lower}_registered() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None, "{name_upper} plugin did not register"
+    assert spec.compute_fn is not None
+
+
+def test_{name_lower}_contract_length_and_index() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None
+    df = _sample_ohlcv()
+    out = invoke_compute_fn(spec, df, spec.default_params)
+    assert isinstance(out, pd.Series)
+    assert len(out) == len(df)
+    assert out.index.equals(df.index)
+
+
+def test_{name_lower}_not_all_nan_past_warmup() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None
+    df = _sample_ohlcv()
+    out = invoke_compute_fn(spec, df, spec.default_params)
+    assert isinstance(out, pd.Series)
+    # Past the second half of the series we expect at least one finite
+    # value; a fully-NaN tail means the body computes nothing.
+    tail = out.iloc[len(out) // 2 :]
+    assert tail.notna().any(), "{name_upper} produced all-NaN past warmup"
+'''
+
+
+_CONTRACT_TEST_MULTI = '''"""Auto-generated contract test for proposed multi-output indicator {name_upper}.
+
+Generated as part of the scaffold pipeline (bd-3p1k.1.3) — verifies the
+compute_fn returns a dict keyed by every declared output_name, each
+Series index-aligned to the input frame.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from vibe_quant.dsl.indicators import indicator_registry, invoke_compute_fn
+
+
+_OUTPUTS = {outputs_tuple}
+
+
+def _sample_ohlcv(n: int = 100) -> pd.DataFrame:
+    idx = pd.date_range("2024-01-01", periods=n, freq="1h")
+    rng = np.random.default_rng(42)
+    close = 100.0 + rng.standard_normal(n).cumsum()
+    return pd.DataFrame(
+        {{
+            "open": close,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": rng.uniform(1000.0, 10000.0, n),
+        }},
+        index=idx,
+    )
+
+
+def test_{name_lower}_registered() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None
+    assert spec.compute_fn is not None
+    assert tuple(spec.output_names) == _OUTPUTS
+
+
+def test_{name_lower}_contract_dict_and_alignment() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None
+    df = _sample_ohlcv()
+    out = invoke_compute_fn(spec, df, spec.default_params)
+    assert isinstance(out, dict)
+    for key in _OUTPUTS:
+        assert key in out, f"missing declared output {{key!r}}"
+        series = out[key]
+        assert len(series) == len(df)
+        assert series.index.equals(df.index)
+
+
+def test_{name_lower}_not_all_nan_past_warmup() -> None:
+    spec = indicator_registry.get("{name_upper}")
+    assert spec is not None
+    df = _sample_ohlcv()
+    out = invoke_compute_fn(spec, df, spec.default_params)
+    assert isinstance(out, dict)
+    for key, series in out.items():
+        tail = series.iloc[len(series) // 2 :]
+        assert tail.notna().any(), (
+            f"{name_upper} output {{key!r}} all-NaN past warmup"
+        )
+'''
+
+
+def render_contract_test(spec: IndicatorSpecArgs) -> str:
+    """Render the auto-generated contract test for a scaffolded indicator.
+
+    Picks the single-output or multi-output template based on
+    ``spec.output_names``. The output is a Python source string the
+    caller can write to ``test_path_for(spec.name)``.
+    """
+    name_lower = spec.name.lower()
+    if len(spec.output_names) > 1:
+        outputs_tuple = repr(tuple(spec.output_names))
+        return _CONTRACT_TEST_MULTI.format(
+            name_upper=spec.name,
+            name_lower=name_lower,
+            outputs_tuple=outputs_tuple,
+        )
+    return _CONTRACT_TEST_SINGLE.format(
+        name_upper=spec.name, name_lower=name_lower
+    )
+
+
+def run_contract_test(
+    test_path: Path, *, timeout_seconds: int = PYTEST_TIMEOUT_SECONDS
+) -> tuple[bool, str]:
+    """Run ``pytest -x`` on a single contract test file.
+
+    Returns ``(passed, output_first_2kb)``. ``PYTHONDONTWRITEBYTECODE=1``
+    keeps the plugin dir free of ``__pycache__`` clutter so the auto-
+    commit step doesn't include stray byproducts in ``git status``.
+    """
+    import os
+    import sys
+
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [sys.executable, "-m", "pytest", "-x", "-q", str(test_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as e:
+        return False, f"pytest timed out after {timeout_seconds}s: {e}"
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode == 0, combined[: ScaffoldError.OUTPUT_LIMIT]
+
+
+def _git(*args: str, cwd: Path | None = None) -> tuple[int, str, str]:
+    proc = subprocess.run(  # noqa: S603, S607
+        ["git", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=str(cwd) if cwd is not None else None,
+    )
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def git_commit_scaffold(
+    plugin_path: Path,
+    test_path: Path,
+    *,
+    name: str,
+    repo_root: Path | None = None,
+) -> str:
+    """Stage + commit the plugin and test files. Returns the commit SHA.
+
+    Raises ``ScaffoldError("commit_failed", output)`` if any git step
+    fails — the caller treats this identically to a test failure
+    (delete both files, surface the output). NEVER pushes; the user
+    decides when to publish.
+    """
+    rc, _, err = _git("add", str(plugin_path), str(test_path), cwd=repo_root)
+    if rc != 0:
+        raise ScaffoldError("commit_failed", f"git add failed: {err}")
+
+    message = COMMIT_MESSAGE_TEMPLATE.format(name=name)
+    full_message = f"{message}\n\n{CO_AUTHOR_TRAILER}\n"
+    rc, _, err = _git("commit", "-m", full_message, cwd=repo_root)
+    if rc != 0:
+        # Pre-commit hook (or anything else) rejected the commit.
+        # Unstage so the working tree is clean again for the caller's
+        # cleanup pass.
+        _git("restore", "--staged", str(plugin_path), str(test_path), cwd=repo_root)
+        raise ScaffoldError("commit_failed", err or "git commit failed")
+
+    rc, out, err = _git("rev-parse", "HEAD", cwd=repo_root)
+    if rc != 0:
+        raise ScaffoldError("commit_failed", f"rev-parse failed: {err}")
+    return out.strip()
+
+
+@dataclass
+class ScaffoldResult:
+    """Successful end-to-end scaffold outcome (plugin + test + commit)."""
+
+    plugin_path: Path
+    test_path: Path
+    commit_sha: str
+
+
+def scaffold_full(
+    spec: IndicatorSpecArgs,
+    *,
+    formula: str,
+    extraction_id: int,
+    source_quote: str | None,
+    runner: Any = None,
+    repo_root: Path | None = None,
+) -> ScaffoldResult:
+    """End-to-end scaffold: codegen → file → contract test → pytest → commit.
+
+    Returns ``ScaffoldResult`` on success. Raises ``CodegenError`` if
+    codegen / AST / mypy / ruff fails (file is already cleaned up by
+    ``synthesize_and_write``). Raises ``ScaffoldError`` if the contract
+    test fails or the git commit fails — in that case BOTH the plugin
+    file AND the test file are deleted so a broken pair never lingers
+    on disk.
+
+    ``runner`` and ``repo_root`` are injection points for tests; in
+    production both are ``None`` and the module defaults apply.
+    """
+    plugin_path = synthesize_and_write(
+        spec,
+        formula=formula,
+        extraction_id=extraction_id,
+        source_quote=source_quote,
+        runner=runner,
+    )
+
+    test_path = test_path_for(spec.name)
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.write_text(render_contract_test(spec), encoding="utf-8")
+
+    try:
+        ok, output = run_contract_test(test_path)
+        if not ok:
+            raise ScaffoldError("test_failed", output)
+        sha = git_commit_scaffold(
+            plugin_path, test_path, name=spec.name, repo_root=repo_root
+        )
+    except ScaffoldError:
+        plugin_path.unlink(missing_ok=True)
+        test_path.unlink(missing_ok=True)
+        raise
+
+    return ScaffoldResult(
+        plugin_path=plugin_path, test_path=test_path, commit_sha=sha
+    )

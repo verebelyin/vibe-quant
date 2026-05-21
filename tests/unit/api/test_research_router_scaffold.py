@@ -80,18 +80,35 @@ def _safe_body_for(prompt: str) -> str:
 def _stub_codegen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Generator[Path]:
-    """Pin claude-p + mypy + ruff + plugins dir for fast, hermetic tests.
+    """Pin claude-p + mypy + ruff + pytest + git + dirs for hermetic tests.
 
-    The endpoint flow is: synthesize_and_write → reload_plugins → upsert
-    row. With these stubs the LLM never runs, the toolchain never runs,
-    and writes land in tmp_path so we don't pollute the real plugins dir.
+    The slice-3 endpoint flow is:
+        synthesize_and_write → write contract test → pytest → git commit
+        → reload_plugins → upsert row.
+
+    With these stubs the LLM never runs, the toolchain never runs,
+    pytest never runs, git never runs, and writes land in tmp_path
+    so we don't pollute the real plugins dir or commit log.
     """
     plugins = tmp_path / "plugins"
     plugins.mkdir()
+    tests_out = tmp_path / "tests_out"
+    tests_out.mkdir()
     monkeypatch.setattr(indicator_scaffold, "PLUGINS_DIR", plugins)
+    monkeypatch.setattr(indicator_scaffold, "TESTS_DIR", tests_out)
     monkeypatch.setattr(indicator_scaffold, "_run_claude_codegen", _safe_body_for)
     monkeypatch.setattr(indicator_scaffold, "run_mypy", lambda _p: (True, ""))
     monkeypatch.setattr(indicator_scaffold, "run_ruff", lambda _p: (True, ""))
+    monkeypatch.setattr(
+        indicator_scaffold,
+        "run_contract_test",
+        lambda _p, **_kw: (True, "1 passed"),
+    )
+    monkeypatch.setattr(
+        indicator_scaffold,
+        "git_commit_scaffold",
+        lambda _pp, _tp, *, name, repo_root=None: "a" * 40,
+    )
     # reload_plugins() walks the real plugin dir — make it a no-op so
     # the tmp_path scaffolds aren't expected to be importable.
     monkeypatch.setattr(
@@ -224,6 +241,10 @@ def test_scaffold_happy_path_writes_plugin_and_caches_ok(
     assert out["status_code"] == 200
     assert out["body"]["status"] == "ok"
     assert out["body"]["name"] == "MY_NOVEL"
+    assert out["body"]["commit_sha"] == "a" * 40
+    assert out["body"]["test_path"] and out["body"]["test_path"].endswith(
+        "test_proposed_my_novel.py"
+    )
     assert (_stub_codegen / "proposed_my_novel.py").exists()
 
     cached = sm.get_indicator_scaffold(ext_id, 0)
@@ -232,6 +253,64 @@ def test_scaffold_happy_path_writes_plugin_and_caches_ok(
     assert cached["plugin_path"] and cached["plugin_path"].endswith(
         "proposed_my_novel.py"
     )
+    assert cached["test_path"] and cached["test_path"].endswith(
+        "test_proposed_my_novel.py"
+    )
+    assert cached["commit_sha"] == "a" * 40
+
+
+def test_scaffold_test_failure_returns_test_failed_and_cleans_up(
+    client: TestClient,
+    sm: StateManager,
+    _stub_codegen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        indicator_scaffold,
+        "run_contract_test",
+        lambda _p, **_kw: (False, "FAILED test_my_thing_not_all_nan"),
+    )
+    tests_out = _stub_codegen.parent / "tests_out"
+    ext_id = _seed_extraction_with_proposals(
+        sm,
+        proposals=[{"name": "my_thing", "formula": "ema(close, period)"}],
+    )
+    out = _scaffold(client, ext_id, 0)
+    assert out["body"]["status"] == "test_failed"
+    assert "FAILED" in (out["body"]["test_output"] or "")
+    # Both files cleaned up.
+    assert not (_stub_codegen / "proposed_my_thing.py").exists()
+    assert not (tests_out / "test_proposed_my_thing.py").exists()
+    # Cache row records the failure with test_output for the UI.
+    cached = sm.get_indicator_scaffold(ext_id, 0)
+    assert cached is not None
+    assert cached["status"] == "test_failed"
+    assert "FAILED" in (cached["test_output"] or "")
+
+
+def test_scaffold_commit_failure_surfaces_as_test_failed(
+    client: TestClient,
+    sm: StateManager,
+    _stub_codegen: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-commit hook reject → status=test_failed with the hook output."""
+    from vibe_quant.research.indicator_scaffold import ScaffoldError
+
+    def fail_commit(*_a, **_kw):
+        raise ScaffoldError("commit_failed", "pre-commit hook rejected")
+
+    monkeypatch.setattr(indicator_scaffold, "git_commit_scaffold", fail_commit)
+    tests_out = _stub_codegen.parent / "tests_out"
+    ext_id = _seed_extraction_with_proposals(
+        sm,
+        proposals=[{"name": "my_hooked", "formula": "ema(close, period)"}],
+    )
+    out = _scaffold(client, ext_id, 0)
+    assert out["body"]["status"] == "test_failed"
+    assert "pre-commit" in (out["body"]["test_output"] or "")
+    assert not (_stub_codegen / "proposed_my_hooked.py").exists()
+    assert not (tests_out / "test_proposed_my_hooked.py").exists()
 
 
 # ---------- status=codegen_failed (slice 2) ----------
@@ -342,13 +421,14 @@ def test_scaffold_force_clears_cache_and_reruns_codegen(
     )
     # Re-stub the body so the rendered file matches the new name.
     out = _scaffold(client, ext_id, 0, force=True)
-    # Force re-runs codegen; cache row now reflects the FRESH ok upsert.
+    # Force re-runs codegen + commit; cache row reflects the NEW SHA, not
+    # the seeded one — slice 3 always re-stamps on force.
     assert out["body"]["status"] == "ok"
     cached = sm.get_indicator_scaffold(ext_id, 0)
     assert cached is not None
     assert cached["status"] == "ok"
-    # The old commit_sha is cleared since the upsert replaces the whole row.
-    assert cached.get("commit_sha") is None
+    assert cached["commit_sha"] == "a" * 40  # from _stub_codegen
+    assert cached["commit_sha"] != "def456"
 
 
 def test_scaffold_failed_cache_does_not_short_circuit(

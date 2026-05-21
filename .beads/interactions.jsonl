@@ -94,3 +94,4 @@
 {"id":"int-ca88ad43","kind":"field_change","created_at":"2026-05-21T18:37:12.841317Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-j68g.3","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-73a6481a","kind":"field_change","created_at":"2026-05-21T18:37:28.045111Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-j68g","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-6f98dded","kind":"field_change","created_at":"2026-05-21T21:40:39.521349Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-3p1k.1.1","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-279238aa","kind":"field_change","created_at":"2026-05-21T21:58:47.328693Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-3p1k.1.2","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}

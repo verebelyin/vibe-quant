@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -38,9 +39,10 @@ from vibe_quant.research.config import RedditConfig, subreddits_from_env
 from vibe_quant.research.indicator_scaffold import (
     CodegenError,
     InvalidProposalError,
+    ScaffoldError,
     proposed_to_spec_args,
+    scaffold_full,
     suggest_alt_name,
-    synthesize_and_write,
 )
 from vibe_quant.research.sources import list_sources, load_builtin_sources
 
@@ -671,7 +673,7 @@ def scaffold_proposed_indicator(
         source_quote = None
 
     try:
-        path = synthesize_and_write(
+        result = scaffold_full(
             spec_args,
             formula=formula,
             extraction_id=extraction_id,
@@ -692,20 +694,48 @@ def scaffold_proposed_indicator(
             name=spec_args.name,
             error=f"{e.code}:{e.detail}" if e.detail else e.code,
         )
+    except ScaffoldError as e:
+        # Test failure and commit failure both surface as ``test_failed``
+        # so the UI only has one bucket to render; the actual reason
+        # lives in test_output (pytest stdout or git stderr).
+        sm.upsert_indicator_scaffold(
+            extraction_id=extraction_id,
+            idx=idx,
+            status="test_failed",
+            error=e.code,
+            test_output=e.output,
+        )
+        return IndicatorScaffoldResponse(
+            status="test_failed",
+            extraction_id=extraction_id,
+            idx=idx,
+            name=spec_args.name,
+            error=e.code,
+            test_output=e.output,
+        )
 
     # Refresh the plugin loader so the freshly-written file is picked up
-    # without a process restart. Done after mypy+ruff pass so a broken
+    # without a process restart. Done after the commit lands so a broken
     # plugin can never enter the registry.
     from vibe_quant.dsl.plugin_loader import reload_plugins
 
     reload_plugins()
 
-    rel_path = str(path.relative_to(path.parents[3])) if len(path.parents) >= 4 else str(path)
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(Path.cwd()))
+        except ValueError:
+            return str(p)
+
+    rel_plugin = _rel(result.plugin_path)
+    rel_test = _rel(result.test_path)
     row = sm.upsert_indicator_scaffold(
         extraction_id=extraction_id,
         idx=idx,
         status="ok",
-        plugin_path=rel_path,
+        plugin_path=rel_plugin,
+        test_path=rel_test,
+        commit_sha=result.commit_sha,
     )
     return IndicatorScaffoldResponse(
         status="ok",
@@ -713,4 +743,6 @@ def scaffold_proposed_indicator(
         idx=idx,
         name=spec_args.name,
         plugin_path=row.get("plugin_path"),
+        test_path=row.get("test_path"),
+        commit_sha=row.get("commit_sha"),
     )

@@ -167,9 +167,9 @@ class IndicatorScaffoldResponse(BaseModel):
 
     ``status`` follows the bead spec:
     ``ok | invalid_input | name_collision | already_scaffolded |
-    codegen_failed | test_failed | not_implemented``. Slice 1 only emits
-    the first four plus ``not_implemented`` (the codegen/test states
-    light up as slices 2 + 3 land).
+    codegen_failed | test_failed``. Test- AND commit-stage failures
+    both map to ``test_failed``; the actual reason lives in
+    ``test_output`` (pytest stdout or git stderr).
     """
 
     status: str
