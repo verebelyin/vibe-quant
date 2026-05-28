@@ -48,6 +48,22 @@ class IndicatorCatalogEntry(BaseModel):
     requires_volume: bool = Field(
         False, description="Indicator needs the volume series (MFI, OBV, VWAP, VOLSMA)"
     )
+    source_file: str | None = Field(
+        None,
+        description=(
+            "Repo-relative path to the plugin file this spec was registered "
+            "from, or null for built-ins. Used by the UI to surface promote "
+            "actions on proposed_* plugins."
+        ),
+    )
+    is_proposed: bool = Field(
+        False,
+        description=(
+            "True iff the spec was registered from a "
+            "``vibe_quant/dsl/plugins/proposed_*.py`` file — i.e. an "
+            "LLM-scaffolded indicator pending human promotion."
+        ),
+    )
 
 
 class PluginLoadErrorEntry(BaseModel):

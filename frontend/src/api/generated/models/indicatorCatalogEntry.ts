@@ -36,4 +36,8 @@ export interface IndicatorCatalogEntry {
   requires_high_low?: boolean;
   /** Indicator needs the volume series (MFI, OBV, VWAP, VOLSMA) */
   requires_volume?: boolean;
+  /** Repo-relative path to the plugin file this spec was registered from, or null for built-ins. Used by the UI to surface promote actions on proposed_* plugins. */
+  source_file?: string | null;
+  /** True iff the spec was registered from a ``vibe_quant/dsl/plugins/proposed_*.py`` file — i.e. an LLM-scaffolded indicator pending human promotion. */
+  is_proposed?: boolean;
 }

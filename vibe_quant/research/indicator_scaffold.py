@@ -1002,6 +1002,220 @@ class ScaffoldResult:
     commit_sha: str
 
 
+# ---------------------------------------------------------------------------
+# bd-3p1k.3: promote indicator (rename to drop ``proposed_`` prefix)
+# ---------------------------------------------------------------------------
+
+
+PROMOTE_COMMIT_TEMPLATE = "chore: promote indicator {name} (bd-3p1k)"
+
+
+class PromoteError(Exception):
+    """Promotion failed. ``code`` is the machine vocabulary the endpoint surfaces.
+
+    Codes: ``invalid_name``, ``not_found``, ``collision``, ``write_failed``,
+    ``commit_failed``, ``bd_failed``.
+    """
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+        self.detail = detail
+
+
+def proposed_path_for(name: str) -> Path:
+    """Resolve where the ``proposed_<name>.py`` plugin lives on disk."""
+    return PLUGINS_DIR / f"proposed_{name.lower()}.py"
+
+
+def promoted_path_for(name: str) -> Path:
+    """Resolve where the promoted ``<name>.py`` plugin would live."""
+    return PLUGINS_DIR / f"{name.lower()}.py"
+
+
+def strip_auto_generated_header(source: str) -> str:
+    """Remove the leading ``AUTO-GENERATED ...`` module docstring.
+
+    The scaffolder always emits the file with the docstring as the very
+    first triple-quoted block (``\"\"\"AUTO-GENERATED FROM EXTRACTION ...``).
+    We find the opening ``\"\"\"`` and the next closing ``\"\"\"`` after it,
+    and slice that span out. If the file doesn't start with such a header,
+    return the source unchanged — a hand-edited plugin should round-trip.
+    """
+    s = source.lstrip("\n")
+    if not s.startswith('"""'):
+        return source
+    end = s.find('"""', 3)
+    if end < 0:
+        return source
+    body = s[end + 3 :].lstrip("\n")
+    return body
+
+
+def write_promoted_plugin(
+    *, name: str, force: bool = False
+) -> tuple[Path, Path]:
+    """Atomically rename the proposed plugin file, stripping the header.
+
+    Sequence:
+    1. Read ``proposed_<name>.py`` (or raise ``not_found``).
+    2. Refuse if ``<name>.py`` already exists (``collision``) unless
+       ``force=True`` — keeps the user from clobbering a hand-promoted file.
+    3. Write the cleaned source to ``<name>.py`` first.
+    4. Only then delete ``proposed_<name>.py``.
+
+    Returns ``(old_path, new_path)`` so the caller can hand both to git.
+    Raises ``PromoteError`` with a precise ``code`` on any failure.
+    """
+    if not _NAME_RE.match(name):
+        raise PromoteError("invalid_name", f"{name!r} not a valid uppercase identifier")
+    old = proposed_path_for(name)
+    new = promoted_path_for(name)
+    if not old.exists():
+        raise PromoteError("not_found", f"{old.name} does not exist")
+    if new.exists() and not force:
+        raise PromoteError("collision", f"{new.name} already exists")
+
+    source = old.read_text(encoding="utf-8")
+    stripped = strip_auto_generated_header(source)
+
+    # Atomic write: write to a temp file in the same directory, then rename
+    # over the target. Same-dir rename is atomic on POSIX. We only unlink
+    # the old file after the new file is fully on disk.
+    tmp = new.with_suffix(new.suffix + ".tmp")
+    try:
+        tmp.write_text(stripped, encoding="utf-8")
+        tmp.replace(new)
+    except OSError as e:
+        tmp.unlink(missing_ok=True)
+        raise PromoteError("write_failed", str(e)) from e
+    old.unlink()
+    return old, new
+
+
+def bd_remember_indicator(
+    *,
+    name: str,
+    extraction_id: int | None,
+    source_url: str | None,
+    bd_bin: str = "bd",
+    timeout_seconds: int = 10,
+) -> tuple[bool, str]:
+    """Record indicator provenance in beads memory. Returns (ok, stderr/output).
+
+    Best-effort: failures (bd not installed, command error) are reported
+    to the caller but do NOT abort the promotion. The plugin file move
+    has already happened; this is just metadata.
+    """
+    parts = [f"indicator:{name.lower()}"]
+    if extraction_id is not None:
+        parts.append(f"from extraction {extraction_id}")
+    if source_url:
+        parts.append(f"source {source_url}")
+    fact = " — ".join(parts)
+    key = f"indicator:{name.lower()}"
+    bd_path = shutil.which(bd_bin)
+    if bd_path is None:
+        return False, f"{bd_bin!r} CLI not on PATH"
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [bd_path, "remember", fact, "--key", key],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as e:
+        return False, f"bd remember timed out: {e}"
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "bd remember failed")[:500]
+    return True, (proc.stdout or "")[:500]
+
+
+def git_commit_promotion(
+    old_path: Path,
+    new_path: Path,
+    *,
+    name: str,
+    repo_root: Path | None = None,
+) -> str:
+    """Stage the (deleted, added) pair and commit. Returns the new commit SHA.
+
+    ``git add -A`` on both paths captures both the deletion of the proposed
+    file and the addition of the promoted one in a single index update.
+    """
+    rc, _, err = _git("add", "-A", str(old_path), str(new_path), cwd=repo_root)
+    if rc != 0:
+        raise PromoteError("commit_failed", f"git add failed: {err}")
+
+    message = PROMOTE_COMMIT_TEMPLATE.format(name=name)
+    full_message = f"{message}\n\n{CO_AUTHOR_TRAILER}\n"
+    rc, _, err = _git("commit", "-m", full_message, cwd=repo_root)
+    if rc != 0:
+        # Best-effort unstage so the index is clean for the caller's recovery.
+        _git("restore", "--staged", str(old_path), str(new_path), cwd=repo_root)
+        raise PromoteError("commit_failed", err or "git commit failed")
+
+    rc, out, err = _git("rev-parse", "HEAD", cwd=repo_root)
+    if rc != 0:
+        raise PromoteError("commit_failed", f"rev-parse failed: {err}")
+    return out.strip()
+
+
+@dataclass
+class PromoteResult:
+    """Successful outcome of ``promote_indicator``."""
+
+    old_path: Path
+    new_path: Path
+    commit_sha: str
+    bd_remember_ok: bool
+    bd_remember_output: str
+
+
+def promote_indicator(
+    name: str,
+    *,
+    extraction_id: int | None,
+    source_url: str | None,
+    repo_root: Path | None = None,
+    force: bool = False,
+) -> PromoteResult:
+    """End-to-end: rename + strip header + git commit + bd remember.
+
+    Order matters:
+    1. Rename first (so a git_commit failure leaves the user with a clean
+       file system — the new plugin works, just isn't committed yet).
+    2. Commit the rename.
+    3. ``bd remember`` last — provenance is informational, never blocks.
+
+    Raises ``PromoteError`` on stages 1-2. Stage 3 (bd) failures are
+    surfaced in the returned ``bd_remember_ok`` flag instead.
+    """
+    old, new = write_promoted_plugin(name=name, force=force)
+    try:
+        sha = git_commit_promotion(old, new, name=name, repo_root=repo_root)
+    except PromoteError:
+        # Roll back the rename so the user is in a consistent state and
+        # can retry. Best-effort — if the unlink itself fails, the
+        # commit_failed surface area is still what they care about.
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            new.unlink(missing_ok=True)
+        raise
+    bd_ok, bd_out = bd_remember_indicator(
+        name=name, extraction_id=extraction_id, source_url=source_url
+    )
+    return PromoteResult(
+        old_path=old,
+        new_path=new,
+        commit_sha=sha,
+        bd_remember_ok=bd_ok,
+        bd_remember_output=bd_out,
+    )
+
+
 def scaffold_full(
     spec: IndicatorSpecArgs,
     *,

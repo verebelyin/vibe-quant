@@ -56,6 +56,8 @@ def test_catalog_response_schema_matches_pydantic_model(client: TestClient) -> N
         "output_names",
         "requires_high_low",
         "requires_volume",
+        "source_file",
+        "is_proposed",
     }
     for entry in body["indicators"]:
         missing = required_keys - set(entry)
@@ -150,3 +152,49 @@ def test_multi_output_indicators_list_output_names_correctly(
 
     stoch = entries["STOCH"]
     assert set(stoch["output_names"]) == {"k", "d"}
+
+
+# ---------------------------------------------------------------------------
+# 6. source_file + is_proposed surface for plugin specs
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_indicators_carry_source_file_and_is_proposed_flag(
+    client: TestClient,
+) -> None:
+    """Plugins under ``vibe_quant/dsl/plugins/`` surface their file path
+    so the UI can offer promote actions on ``proposed_*`` entries."""
+    resp = client.get("/api/indicators/catalog")
+    entries = {e["type_name"]: e for e in resp.json()["indicators"]}
+
+    # The example_adaptive_rsi plugin ships in the repo.
+    arsi = entries.get("ADAPTIVE_RSI")
+    if arsi is not None:
+        assert arsi["source_file"] is not None
+        assert arsi["source_file"].endswith("example_adaptive_rsi.py")
+        assert arsi["is_proposed"] is False
+
+    # Any indicator whose plugin file basename starts with ``proposed_``
+    # must surface is_proposed=True. We can't depend on a specific
+    # proposed_* indicator existing at test time, so the assertion is
+    # conditional on whether one is registered.
+    proposed = [
+        e
+        for e in entries.values()
+        if e.get("source_file") and "proposed_" in e["source_file"].rsplit("/", 1)[-1]
+    ]
+    for entry in proposed:
+        assert entry["is_proposed"] is True
+
+
+def test_builtin_indicators_have_null_source_file(client: TestClient) -> None:
+    """Built-in (NT-native / pandas-ta) indicators have no plugin file —
+    they should report ``source_file=None`` so the UI doesn't try to
+    promote them."""
+    resp = client.get("/api/indicators/catalog")
+    entries = {e["type_name"]: e for e in resp.json()["indicators"]}
+    # RSI is a built-in spec (registered by core, not by a plugin file).
+    rsi = entries.get("RSI")
+    assert rsi is not None
+    assert rsi["source_file"] is None
+    assert rsi["is_proposed"] is False

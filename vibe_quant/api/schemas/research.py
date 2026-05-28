@@ -82,7 +82,7 @@ class ResearchItemResponse(BaseModel):
     author: str | None
     posted_at: str | None
     score: int | None
-    extras: dict | None = None
+    extras: dict[str, object] | None = None
     fetched_at: str | None
     extraction_status: str
 
@@ -200,6 +200,25 @@ class IndicatorScaffoldResponse(BaseModel):
     commit_sha: str | None = None
     error: str | None = None
     test_output: str | None = None
+
+
+class PromoteIndicatorResponse(BaseModel):
+    """Response from POST /api/research/indicators/{name}/promote.
+
+    ``status`` vocabulary:
+    ``ok | invalid_name | not_found | collision | write_failed |
+    commit_failed``. Git failures map to ``commit_failed``; ``bd
+    remember`` failures are non-fatal — surfaced only in
+    ``bd_remember_ok``.
+    """
+
+    status: str
+    name: str
+    plugin_path: str | None = None
+    commit_sha: str | None = None
+    bd_remember_ok: bool = False
+    bd_remember_output: str | None = None
+    error: str | None = None
 
 
 class CredentialsStatusResponse(BaseModel):

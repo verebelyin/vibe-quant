@@ -100,6 +100,7 @@ export * from './paperStatusResponsePnlMetrics';
 export * from './paretoMarkRequest';
 export * from './pluginLoadErrorEntry';
 export * from './promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams';
+export * from './promoteIndicatorResponse';
 export * from './promoteResponse';
 export * from './rebuildCatalogApiDataRebuildPost202';
 export * from './reconcilePaperSessionApiReconciliationPaperSessionIdGetParams';

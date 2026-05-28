@@ -13,6 +13,8 @@ export interface ApiIndicatorEntry {
   output_names: string[];
   requires_high_low: boolean;
   requires_volume: boolean;
+  source_file: string | null;
+  is_proposed: boolean;
 }
 
 interface CatalogResponse {

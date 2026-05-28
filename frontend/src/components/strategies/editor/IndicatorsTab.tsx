@@ -1,4 +1,7 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { usePromoteProposedIndicatorApiResearchIndicatorsNamePromotePost } from "@/api/generated/research/research";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,6 +29,8 @@ interface CatalogDisplayEntry {
   description: string;
   category: string;
   defaultParams: Record<string, number>;
+  isProposed: boolean;
+  sourceFile: string | null;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -44,10 +49,16 @@ function IndicatorCatalog({
   catalog,
   categories,
   onAdd,
+  onPromote,
+  promotingName,
+  promotedNames,
 }: {
   catalog: CatalogDisplayEntry[];
   categories: string[];
   onAdd: (type: string, defaults: Record<string, number>) => void;
+  onPromote: (type: string) => void;
+  promotingName: string | null;
+  promotedNames: ReadonlySet<string>;
 }) {
   const [filterCategory, setFilterCategory] = useState<string>("all");
 
@@ -77,18 +88,61 @@ function IndicatorCatalog({
         ))}
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {filtered.map((entry) => (
-          <button
-            key={entry.type}
-            type="button"
-            onClick={() => onAdd(entry.type, entry.defaultParams)}
-            className={`rounded-lg border p-3 text-left transition-colors hover:bg-accent ${categoryClass(entry.category)}`}
-          >
-            <div className="text-xs font-semibold">{entry.type}</div>
-            <div className="mt-1 text-[11px] font-medium">{entry.name}</div>
-            <div className="mt-0.5 text-[10px] opacity-70">{entry.description}</div>
-          </button>
-        ))}
+        {filtered.map((entry) => {
+          const justPromoted = promotedNames.has(entry.type);
+          return (
+            <div
+              key={entry.type}
+              className={`overflow-hidden rounded-lg border ${categoryClass(entry.category)}`}
+            >
+              {/* Add-to-strategy affordance. Kept a separate button from the
+                  promote control below so we never nest interactive elements. */}
+              <button
+                type="button"
+                onClick={() => onAdd(entry.type, entry.defaultParams)}
+                className="block w-full p-3 text-left transition-colors hover:bg-accent"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold">{entry.type}</span>
+                  {entry.isProposed && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] border-amber-500/40 text-amber-300"
+                    >
+                      proposed
+                    </Badge>
+                  )}
+                  {!entry.isProposed && justPromoted && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] border-emerald-500/40 text-emerald-300"
+                    >
+                      promoted
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] font-medium">{entry.name}</div>
+                <div className="mt-0.5 text-[10px] opacity-70">{entry.description}</div>
+              </button>
+              {entry.isProposed && (
+                <div className="flex items-center justify-between border-t border-amber-500/20 bg-amber-500/5 px-3 py-1.5">
+                  <span className="text-[10px] text-amber-300/80">LLM-scaffolded</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[10px]"
+                    disabled={promotingName !== null}
+                    onClick={() => onPromote(entry.type)}
+                    title="Drop the proposed_ prefix, strip the AUTO-GENERATED header, and commit the plugin"
+                  >
+                    {promotingName === entry.type ? "Promoting…" : "Promote"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -126,6 +180,43 @@ function IndicatorParamFields({
 export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
   const [showCatalog, setShowCatalog] = useState(config.indicators.length === 0);
   const catalogQuery = useIndicatorCatalog();
+  const queryClient = useQueryClient();
+  const promoteMut = usePromoteProposedIndicatorApiResearchIndicatorsNamePromotePost();
+
+  // Names promoted in this session — drives the transient "promoted" badge.
+  // The catalog itself refreshes via invalidateQueries, dropping is_proposed.
+  const [promotedNames, setPromotedNames] = useState<ReadonlySet<string>>(() => new Set());
+
+  const handlePromote = (type: string) => {
+    promoteMut.mutate(
+      { name: type },
+      {
+        onSuccess: (resp) => {
+          // Non-2xx throws in customInstance → onError; only the 200
+          // PromoteIndicatorResponse reaches here. Status lives in the body,
+          // not the HTTP code (collision/not_found are 200 + status field).
+          if (resp.status !== 200) return;
+          const body = resp.data;
+          if (body.status === "ok") {
+            const sha = body.commit_sha ? ` (${body.commit_sha.slice(0, 7)})` : "";
+            toast.success(`Promoted ${body.name}${sha}`);
+            if (body.bd_remember_ok === false) {
+              toast.warning("Promoted, but provenance note (bd remember) failed");
+            }
+            setPromotedNames((prev) => new Set(prev).add(type));
+            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
+          } else if (body.status === "collision") {
+            toast.error(`Cannot promote ${type}: ${type.toLowerCase()}.py already exists`);
+          } else {
+            toast.error(`Promote failed: ${body.error ?? body.status}`);
+          }
+        },
+        onError: () => toast.error(`Promote ${type} request failed`),
+      },
+    );
+  };
+
+  const promotingName = promoteMut.isPending ? (promoteMut.variables?.name ?? null) : null;
 
   const { catalog, categories } = useMemo<{
     catalog: CatalogDisplayEntry[];
@@ -139,6 +230,8 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
       description: api.description || "",
       category: api.category || "other",
       defaultParams: api.default_params,
+      isProposed: api.is_proposed,
+      sourceFile: api.source_file,
     }));
     const cats = catalogQuery.data.data.categories ?? [];
     return { catalog: items, categories: cats };
@@ -223,7 +316,14 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
       </div>
 
       {showCatalog && (
-        <IndicatorCatalog catalog={catalog} categories={categories} onAdd={addIndicator} />
+        <IndicatorCatalog
+          catalog={catalog}
+          categories={categories}
+          onAdd={addIndicator}
+          onPromote={handlePromote}
+          promotingName={promotingName}
+          promotedNames={promotedNames}
+        />
       )}
 
       {config.indicators.length === 0 && !showCatalog && (

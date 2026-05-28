@@ -1295,6 +1295,35 @@ class StateManager:
         assert row is not None
         return row
 
+    def find_scaffold_provenance_by_plugin_path(
+        self, plugin_path_suffix: str
+    ) -> JsonDict | None:
+        """Return provenance (extraction_id, item_id, item_url) for a plugin file.
+
+        Used by the promote-indicator endpoint to attach the originating
+        research-item URL to the ``bd remember`` fact. Matches on
+        ``plugin_path LIKE '%<suffix>'`` so both repo-relative and
+        absolute storage of the path resolve to the same row.
+
+        Returns ``None`` when no scaffold row matches — promote still
+        runs (the file exists), just without source-URL provenance.
+        """
+        row = self.conn.execute(
+            """SELECT
+                   s.extraction_id    AS extraction_id,
+                   e.research_item_id AS research_item_id,
+                   i.url              AS item_url
+               FROM research_indicator_scaffolds s
+               JOIN research_extractions e ON e.id = s.extraction_id
+               JOIN research_items       i ON i.id = e.research_item_id
+               WHERE s.status = 'ok'
+                 AND s.plugin_path LIKE ?
+               ORDER BY s.updated_at DESC
+               LIMIT 1""",
+            (f"%{plugin_path_suffix}",),
+        ).fetchone()
+        return dict(row) if row else None
+
     def delete_indicator_scaffold(self, extraction_id: int, idx: int) -> bool:
         """Drop the cached scaffold row. Returns True if a row was deleted."""
         with self._write_lock:

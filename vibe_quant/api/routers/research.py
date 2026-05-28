@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from vibe_quant.api.schemas.research import (
     ExtractionResponse,
     IndicatorScaffoldResponse,
     IndicatorScaffoldRow,
+    PromoteIndicatorResponse,
     PromoteResponse,
     ResearchItemDetailResponse,
     ResearchItemListResponse,
@@ -40,7 +42,9 @@ from vibe_quant.research.config import RedditConfig, subreddits_from_env
 from vibe_quant.research.indicator_scaffold import (
     CodegenError,
     InvalidProposalError,
+    PromoteError,
     ScaffoldError,
+    promote_indicator,
     proposed_to_spec_args,
     scaffold_full,
     suggest_alt_name,
@@ -764,4 +768,82 @@ def scaffold_proposed_indicator(
         plugin_path=row.get("plugin_path"),
         test_path=row.get("test_path"),
         commit_sha=row.get("commit_sha"),
+    )
+
+
+_PROMOTE_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+@router.post(
+    "/indicators/{name}/promote",
+    response_model=PromoteIndicatorResponse,
+)
+def promote_proposed_indicator(name: str, sm: StateMgr) -> PromoteIndicatorResponse:
+    """Promote a scaffolded ``proposed_<name>.py`` plugin to a permanent ``<name>.py``.
+
+    Strips the AUTO-GENERATED header, atomically renames the file, makes
+    a local git commit, and records provenance via ``bd remember``. The
+    promotion is rejected with 409-style ``collision`` status if a file
+    at the unprefixed path already exists — the user must rename or
+    delete it manually.
+
+    Provenance for ``bd remember`` is looked up from
+    ``research_indicator_scaffolds`` joined to ``research_items``. If
+    no scaffold row matches the plugin file, the promotion still
+    proceeds — only the source-URL annotation is omitted.
+    """
+    if not _PROMOTE_NAME_RE.match(name):
+        return PromoteIndicatorResponse(
+            status="invalid_name",
+            name=name,
+            error=f"{name!r} is not a valid uppercase identifier",
+        )
+
+    # Best-effort provenance: look up the scaffold row by the canonical
+    # repo-relative plugin path the scaffolder writes.
+    suffix = f"proposed_{name.lower()}.py"
+    provenance = sm.find_scaffold_provenance_by_plugin_path(suffix)
+    extraction_id = (
+        int(provenance["extraction_id"]) if provenance is not None else None
+    )
+    source_url = (
+        str(provenance["item_url"])
+        if provenance is not None and provenance.get("item_url")
+        else None
+    )
+
+    try:
+        result = promote_indicator(
+            name,
+            extraction_id=extraction_id,
+            source_url=source_url,
+        )
+    except PromoteError as e:
+        # Map specific PromoteError codes to HTTP-friendly response
+        # statuses. The frontend keys off ``status`` for what to render.
+        return PromoteIndicatorResponse(
+            status=e.code,
+            name=name,
+            error=e.detail or e.code,
+        )
+
+    # Pick up the new plugin module without a process restart so the
+    # catalog endpoint reflects the rename on the very next poll.
+    from vibe_quant.dsl.plugin_loader import reload_plugins
+
+    reload_plugins()
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(Path.cwd()))
+        except ValueError:
+            return str(p)
+
+    return PromoteIndicatorResponse(
+        status="ok",
+        name=name,
+        plugin_path=_rel(result.new_path),
+        commit_sha=result.commit_sha,
+        bd_remember_ok=result.bd_remember_ok,
+        bd_remember_output=result.bd_remember_output or None,
     )

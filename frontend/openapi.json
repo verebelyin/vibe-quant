@@ -2788,6 +2788,49 @@
         }
       }
     },
+    "/api/research/indicators/{name}/promote": {
+      "post": {
+        "tags": [
+          "research"
+        ],
+        "summary": "Promote Proposed Indicator",
+        "description": "Promote a scaffolded ``proposed_<name>.py`` plugin to a permanent ``<name>.py``.\n\nStrips the AUTO-GENERATED header, atomically renames the file, makes\na local git commit, and records provenance via ``bd remember``. The\npromotion is rejected with 409-style ``collision`` status if a file\nat the unprefixed path already exists \u2014 the user must rename or\ndelete it manually.\n\nProvenance for ``bd remember`` is looked up from\n``research_indicator_scaffolds`` joined to ``research_items``. If\nno scaffold row matches the plugin file, the promotion still\nproceeds \u2014 only the source-URL annotation is omitted.",
+        "operationId": "promote_proposed_indicator_api_research_indicators__name__promote_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteIndicatorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/results/runs/summary": {
       "get": {
         "tags": [
@@ -6595,6 +6638,24 @@
             "title": "Requires Volume",
             "description": "Indicator needs the volume series (MFI, OBV, VWAP, VOLSMA)",
             "default": false
+          },
+          "source_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source File",
+            "description": "Repo-relative path to the plugin file this spec was registered from, or null for built-ins. Used by the UI to surface promote actions on proposed_* plugins."
+          },
+          "is_proposed": {
+            "type": "boolean",
+            "title": "Is Proposed",
+            "description": "True iff the spec was registered from a ``vibe_quant/dsl/plugins/proposed_*.py`` file \u2014 i.e. an LLM-scaffolded indicator pending human promotion.",
+            "default": false
           }
         },
         "type": "object",
@@ -7495,6 +7556,74 @@
         ],
         "title": "PluginLoadErrorEntry",
         "description": "One plugin that failed to import at startup."
+      },
+      "PromoteIndicatorResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "plugin_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Path"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "bd_remember_ok": {
+            "type": "boolean",
+            "title": "Bd Remember Ok",
+            "default": false
+          },
+          "bd_remember_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bd Remember Output"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "name"
+        ],
+        "title": "PromoteIndicatorResponse",
+        "description": "Response from POST /api/research/indicators/{name}/promote.\n\n``status`` vocabulary:\n``ok | invalid_name | not_found | collision | write_failed |\ncommit_failed``. Git failures map to ``commit_failed``; ``bd\nremember`` failures are non-fatal \u2014 surfaced only in\n``bd_remember_ok``."
       },
       "ReconciliationResponse": {
         "properties": {

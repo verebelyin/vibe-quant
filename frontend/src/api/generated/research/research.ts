@@ -36,6 +36,7 @@ import type {
   IndicatorScaffoldResponse,
   ListExtractionQueueApiResearchExtractionQueueGetParams,
   ListItemsApiResearchItemsGetParams,
+  PromoteIndicatorResponse,
   ResearchItemDetailResponse,
   ResearchItemListResponse,
   ScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostParams,
@@ -2028,5 +2029,105 @@ export const useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndic
         TContext
       > => {
       return useMutation(getScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPostMutationOptions(options), queryClient);
+    }
+    /**
+ * Promote a scaffolded ``proposed_<name>.py`` plugin to a permanent ``<name>.py``.
+
+Strips the AUTO-GENERATED header, atomically renames the file, makes
+a local git commit, and records provenance via ``bd remember``. The
+promotion is rejected with 409-style ``collision`` status if a file
+at the unprefixed path already exists — the user must rename or
+delete it manually.
+
+Provenance for ``bd remember`` is looked up from
+``research_indicator_scaffolds`` joined to ``research_items``. If
+no scaffold row matches the plugin file, the promotion still
+proceeds — only the source-URL annotation is omitted.
+ * @summary Promote Proposed Indicator
+ */
+export type promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse200 = {
+  data: PromoteIndicatorResponse
+  status: 200
+}
+
+export type promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponseSuccess = (promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse200) & {
+  headers: Headers;
+};
+export type promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponseError = (promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse422) & {
+  headers: Headers;
+};
+
+export type promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse = (promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponseSuccess | promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponseError)
+
+export const getPromoteProposedIndicatorApiResearchIndicatorsNamePromotePostUrl = (name: string,) => {
+
+
+  
+
+  return `/api/research/indicators/${name}/promote`
+}
+
+export const promoteProposedIndicatorApiResearchIndicatorsNamePromotePost = async (name: string, options?: RequestInit): Promise<promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse> => {
+  
+  return customInstance<promoteProposedIndicatorApiResearchIndicatorsNamePromotePostResponse>(getPromoteProposedIndicatorApiResearchIndicatorsNamePromotePostUrl(name),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+
+export const getPromoteProposedIndicatorApiResearchIndicatorsNamePromotePostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>, TError,{name: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>, TError,{name: string}, TContext> => {
+
+const mutationKey = ['promoteProposedIndicatorApiResearchIndicatorsNamePromotePost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>, {name: string}> = (props) => {
+          const {name} = props ?? {};
+
+          return  promoteProposedIndicatorApiResearchIndicatorsNamePromotePost(name,requestOptions)
+        }
+
+
+
+        
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PromoteProposedIndicatorApiResearchIndicatorsNamePromotePostMutationResult = NonNullable<Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>>
+    
+    export type PromoteProposedIndicatorApiResearchIndicatorsNamePromotePostMutationError = HTTPValidationError
+
+    /**
+ * @summary Promote Proposed Indicator
+ */
+export const usePromoteProposedIndicatorApiResearchIndicatorsNamePromotePost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>, TError,{name: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof promoteProposedIndicatorApiResearchIndicatorsNamePromotePost>>,
+        TError,
+        {name: string},
+        TContext
+      > => {
+      return useMutation(getPromoteProposedIndicatorApiResearchIndicatorsNamePromotePostMutationOptions(options), queryClient);
     }
     
