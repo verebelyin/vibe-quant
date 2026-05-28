@@ -456,7 +456,8 @@ class StrategyCompiler:
             "    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)"
         )
         lines.append(
-            "    execution_delay_probability: float = 0.0  # Validation-only one-bar delay"
+            "    execution_delay_probability: float = 0.0  "
+            "# One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3"
         )
         lines.append("")
 

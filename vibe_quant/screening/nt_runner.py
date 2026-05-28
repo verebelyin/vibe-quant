@@ -167,6 +167,12 @@ class NTScreeningRunner:
             for k, v in params.items():
                 config_key = k.replace(".", "_")
                 config_dict[config_key] = v
+            # Always defer entries/exits one bar. NT (bar_execution, no latency)
+            # fills a market order from on_bar(t) at close[t] -- the signal bar's
+            # own close -- which is same-bar look-ahead. Deferring makes the fill
+            # land at close[t+1], matching the validation tier. This governs the
+            # screening, discovery, WFA and purged-k-fold paths (all share this runner).
+            config_dict["execution_delay_probability"] = 1.0
             strategy_configs.append(
                 ImportableStrategyConfig(
                     strategy_path=f"{module_path}:{strategy_cls_name}",

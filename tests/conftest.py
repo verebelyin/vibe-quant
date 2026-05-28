@@ -22,6 +22,7 @@ _NT_EAGER_IMPORT_TEST_MODULES = frozenset(
         "test_data_catalog.py",
         "test_ethereal_instruments.py",
         "test_ethereal_venue.py",
+        "test_fill_timing.py",
         "test_validation_venue.py",
     }
 )

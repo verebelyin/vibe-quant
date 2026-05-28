@@ -1,7 +1,7 @@
 """Auto-generated NautilusTrader Strategy from DSL.
 
 Strategy: macd_crossover
-Generated: <timestamp-stripped>
+Generated: 2026-05-28T18:26:26.275243
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class MacdCrossoverConfig(StrategyConfig):
     # Position sizing (override via ImportableStrategyConfig.config)
     risk_per_trade: float = 0.02  # 2% risk per trade
     max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)
-    execution_delay_probability: float = 0.0  # Validation-only one-bar delay
+    execution_delay_probability: float = 0.0  # One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3
 
     # Indicator parameters
     macd_fast_period: int = 12
@@ -644,13 +644,16 @@ class MacdCrossoverStrategy(Strategy):
         self._position_side = None
 
     def _maybe_delay_validation_action(self, action: str) -> bool:
-        """Delay an action by one bar when validation asks for sub-bar degradation."""
+        """Defer an entry/exit by one bar so it fills at the next bar close, not the
+        signal bar's close. Screening/discovery set execution_delay_probability=1.0
+        (always defer -> no same-bar look-ahead); sub-5m validation sets 0.3 for
+        partial degradation. prob >= 1.0 skips the RNG to stay deterministic."""
         delay_prob = getattr(self.config, 'execution_delay_probability', 0.0)
         if delay_prob <= 0.0:
             return False
         if self._pending_validation_action is not None:
             return False
-        if random.random() >= delay_prob:
+        if delay_prob < 1.0 and random.random() >= delay_prob:
             return False
         self._pending_validation_action = action
         return True
