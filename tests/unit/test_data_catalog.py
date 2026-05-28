@@ -166,6 +166,156 @@ class TestAggregateBars:
         assert float(result[0].open) == 100.0
 
 
+class TestAggregateBarsAlignment:
+    """No-leakage guards: aggregation must never pull a value across a window
+    edge. Locks the alignment contract behind the Reddit-audit resample class
+    (resample/merge_asof pulling a value from the wrong side of its timestamp).
+    """
+
+    @staticmethod
+    def _minute_bar(bar_type: BarType, minute: int, o: float, h: float, low: float, c: float, v: float) -> Bar:
+        """1m bar at an absolute minute offset (ts_event=open edge, ts_init=close edge)."""
+        ts = minute * 60_000
+        return make_bar(bar_type, o, h, low, c, v, ts, ts + 59_999)
+
+    @staticmethod
+    def _expect(window: list[Bar]) -> tuple[float, float, float, float, float, int, int]:
+        """Expected (open, high, low, close, volume, ts_event, ts_init) for exactly
+        these bars -- nothing from neighbouring windows."""
+        return (
+            float(window[0].open),
+            max(float(b.high) for b in window),
+            min(float(b.low) for b in window),
+            float(window[-1].close),
+            sum(float(b.volume) for b in window),
+            window[0].ts_event,
+            window[-1].ts_init,
+        )
+
+    def test_window_reductions_have_no_cross_edge_contamination(
+        self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
+    ) -> None:
+        """3 full 5m windows. Window 1 carries an extreme high+low spike; window
+        0's high/low must exclude them (no backward leak), window 2 stays clean
+        (no forward leak). Each window's OHLCV/timestamps come only from its own
+        1m bars."""
+        bars_1m = []
+        for m in range(15):
+            high = 9999.0 if m == 5 else 100.0 + m + 1
+            low = -9999.0 if m == 6 else 100.0 + m - 1
+            bars_1m.append(self._minute_bar(btc_bar_type_1m, m, 100.0 + m, high, low, 100.0 + m + 0.5, m + 1.0))
+
+        result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
+        assert len(result) == 3
+
+        for w, agg in enumerate(result):
+            exp_o, exp_h, exp_l, exp_c, exp_v, exp_te, exp_ti = self._expect(bars_1m[w * 5 : w * 5 + 5])
+            assert float(agg.open) == exp_o
+            assert float(agg.high) == exp_h
+            assert float(agg.low) == exp_l
+            assert float(agg.close) == exp_c
+            assert float(agg.volume) == pytest.approx(exp_v)
+            assert agg.ts_event == exp_te  # open edge = first bar
+            assert agg.ts_init == exp_ti  # close edge = last bar
+
+        # The spikes live only in window 1, never bleed into neighbours.
+        assert float(result[0].high) < 9999.0
+        assert float(result[0].low) > -9999.0
+        assert float(result[1].high) == 9999.0
+        assert float(result[1].low) == -9999.0
+        assert float(result[2].high) < 9999.0
+        assert float(result[2].low) > -9999.0
+
+    def test_binning_is_absolute_not_positional(
+        self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
+    ) -> None:
+        """Bars start at minute 2 (mid-window). Windows are epoch-aligned
+        (floor(minute/5)), NOT chunked every-5-from-the-first-bar. So minutes
+        2-4 form a short first window and minute 5 opens the next -- proving a
+        minute-5 value can't be pulled into the [0,5) window."""
+        bars_1m = [
+            self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
+            for m in range(2, 9)  # minutes 2..8
+        ]
+
+        result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
+        assert len(result) == 2
+
+        # Window [0,5): only minutes 2,3,4 present.
+        assert result[0].ts_event == 2 * 60_000 * 1_000_000
+        assert result[0].ts_init == (4 * 60_000 + 59_999) * 1_000_000
+        assert float(result[0].open) == 102.0  # minute 2 open
+        assert float(result[0].close) == 106.0  # minute 4 close
+        # Window [5,10): minutes 5..8 — minute 5 did NOT leak into window 0.
+        assert result[1].ts_event == 5 * 60_000 * 1_000_000
+        assert float(result[1].open) == 105.0  # minute 5 open
+
+    def test_intra_window_gap_stays_in_its_window(
+        self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
+    ) -> None:
+        """A missing minute inside a window must not shift later bars across the
+        edge: minutes 0,1,3,4 still all land in window [0,5); minute 5 opens the
+        next window regardless of the gap."""
+        minutes = [0, 1, 3, 4, 5, 6]
+        bars_1m = [
+            self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
+            for m in minutes
+        ]
+
+        result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
+        assert len(result) == 2
+        assert result[0].ts_init == (4 * 60_000 + 59_999) * 1_000_000  # last bar in [0,5)
+        assert float(result[0].close) == 106.0  # minute 4, not minute 5
+        assert result[1].ts_event == 5 * 60_000 * 1_000_000
+
+    def test_partial_trailing_window_is_bounded_not_extrapolated(
+        self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
+    ) -> None:
+        """5 + 2 bars -> one full window then a 2-bar trailing window. The
+        partial window is bounded to its present bars (ts_init = its last 1m
+        bar's close edge), never mislabeled as a full-window close edge."""
+        bars_1m = [
+            self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
+            for m in range(7)
+        ]
+
+        result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
+        assert len(result) == 2
+
+        tail = result[1]
+        exp_o, exp_h, exp_l, exp_c, exp_v, exp_te, exp_ti = self._expect(bars_1m[5:7])
+        assert float(tail.open) == exp_o
+        assert float(tail.high) == exp_h
+        assert float(tail.low) == exp_l
+        assert float(tail.close) == exp_c
+        assert float(tail.volume) == pytest.approx(exp_v)
+        assert tail.ts_event == 5 * 60_000 * 1_000_000
+        # Bounded to minute 6, NOT extrapolated to the full-window edge (minute 9).
+        assert tail.ts_init == (6 * 60_000 + 59_999) * 1_000_000
+
+    def test_15m_window_timestamps_use_open_and_close_edges(
+        self, btc_bar_type_1m: BarType
+    ) -> None:
+        """Second target_minutes (15m): ts_event = first 1m open edge, ts_init =
+        last 1m close edge; OHLCV reduced over exactly the 15 constituent bars."""
+        bar_type_15m = get_bar_type("BTCUSDT", "15m")
+        bars_1m = [
+            self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 2.0)
+            for m in range(15)
+        ]
+
+        result = aggregate_bars(bars_1m, bar_type_15m, 15)
+        assert len(result) == 1
+        agg = result[0]
+        assert agg.ts_event == 0
+        assert agg.ts_init == (14 * 60_000 + 59_999) * 1_000_000
+        assert float(agg.open) == 100.0
+        assert float(agg.high) == 119.0  # 105 + 14
+        assert float(agg.low) == 95.0
+        assert float(agg.close) == 116.0  # 102 + 14
+        assert float(agg.volume) == pytest.approx(30.0)
+
+
 class TestKlinesToBars:
     """Tests for klines_to_bars function."""
 

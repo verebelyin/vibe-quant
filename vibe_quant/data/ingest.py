@@ -83,6 +83,20 @@ def _interval_to_seconds(interval: str) -> int:
         raise ValueError(msg)
 
 
+def _drop_unclosed_klines(
+    klines: list[tuple[Any, ...]], now_ms: int
+) -> list[tuple[Any, ...]]:
+    """Drop the currently-forming candle from a REST kline batch.
+
+    Binance returns the in-progress candle regardless of ``endTime`` — its
+    ``close_time`` (tuple index 6) lies in the future (``close_time >= now_ms``)
+    and its OHLC is partial. Archiving it would freeze that partial OHLC
+    permanently: the next incremental fetch starts at ``last_open_time +
+    interval`` and never re-pulls the now-completed bar. Keep only closed bars.
+    """
+    return [k for k in klines if int(k[6]) < now_ms]
+
+
 def get_download_preview(
     symbols: list[str],
     start_date: datetime,
@@ -192,6 +206,7 @@ def update_symbol(
 
     # Download new klines via REST API
     new_klines = download_recent_klines(symbol, "1m", start_time, now_ms)
+    new_klines = _drop_unclosed_klines(new_klines, now_ms)
     if new_klines:
         archive.insert_klines(symbol, "1m", new_klines, "binance_api")
         counts["new_klines"] = len(new_klines)
@@ -399,6 +414,7 @@ def ingest_symbol(
                     f"{effective_end.strftime('%Y-%m-%d')} via REST API..."
                 )
             recent = download_recent_klines(symbol, "1m", rest_start_ms, rest_end_ms)
+            recent = _drop_unclosed_klines(recent, int(datetime.now(UTC).timestamp() * 1000))
             if recent:
                 inserted = archive.insert_klines(symbol, "1m", recent, "binance_api")
                 counts["klines_fetched"] += len(recent)
@@ -558,6 +574,7 @@ def ingest_detail_data(
 
     # Download via REST API (paginated)
     klines = download_recent_klines(symbol, interval, start_ms, end_ms)
+    klines = _drop_unclosed_klines(klines, int(datetime.now(UTC).timestamp() * 1000))
     if not klines:
         if verbose:
             print(f"  No {interval} data available")
