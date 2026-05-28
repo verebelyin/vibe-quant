@@ -8,6 +8,7 @@ import {
 } from "@/api/generated/research/research";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { scaffoldErrorDetail } from "@/components/research/scaffoldError";
 
 interface ProposedIndicator {
   name?: unknown;
@@ -142,34 +143,37 @@ function ProposalRow({
       { extractionId, idx },
       {
         onSuccess: (resp) => {
-          // Non-2xx throws in customInstance → onError; only the 200
-          // IndicatorScaffoldResponse reaches here. Guard narrows the union.
+          // Only success bodies are 200 now (ok / already_scaffolded); every
+          // failure returns a real 4xx → customInstance throws → onError.
           if (resp.status !== 200) return;
           const body = resp.data;
-          if (body.status === "ok") {
-            toast.success(`Scaffolded ${body.name ?? "indicator"}`);
-            queryClient.invalidateQueries({ queryKey: itemKey });
-            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
-          } else if (body.status === "name_collision") {
-            setSuggestedName(body.suggested_name ?? null);
-            toast.error(`Name collision: try ${body.suggested_name ?? "another name"}`);
-          } else if (body.status === "already_scaffolded") {
+          if (body.status === "already_scaffolded") {
             toast.info("Already scaffolded — no work to do");
-            queryClient.invalidateQueries({ queryKey: itemKey });
-            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
-          } else if (body.status === "invalid_input") {
-            toast.error(body.error ?? "Invalid proposal");
-            queryClient.invalidateQueries({ queryKey: itemKey });
-            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
           } else {
-            // codegen_failed | test_failed — surface error inline via pill +
-            // refetch so the cached row drives state on next reload.
-            toast.error(`Scaffold failed: ${body.error ?? body.status}`);
-            queryClient.invalidateQueries({ queryKey: itemKey });
-            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
+            toast.success(`Scaffolded ${body.name ?? "indicator"}`);
           }
+          queryClient.invalidateQueries({ queryKey: itemKey });
+          queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
         },
-        onError: () => toast.error("Scaffold request failed"),
+        onError: (error) => {
+          // Failure detail (suggested_name on 409, error on 4xx) rides along
+          // on the thrown error. Collision persists no row, so its suggestion
+          // must come from the body; codegen/test failures DO persist a row,
+          // so refetch lets the cached row drive the pill + <details>.
+          const { status, detail } = scaffoldErrorDetail(error);
+          if (status === 409) {
+            setSuggestedName(detail.suggested_name ?? null);
+            toast.error(`Name collision: try ${detail.suggested_name ?? "another name"}`);
+            return;
+          }
+          if (status === 400) {
+            toast.error(detail.error ?? "Invalid proposal");
+          } else {
+            toast.error(`Scaffold failed: ${detail.error ?? "see details"}`);
+          }
+          queryClient.invalidateQueries({ queryKey: itemKey });
+          queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
+        },
       },
     );
   };

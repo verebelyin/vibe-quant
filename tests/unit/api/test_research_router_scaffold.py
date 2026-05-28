@@ -198,9 +198,10 @@ def test_scaffold_missing_formula_invalid_input(
         sm, proposals=[{"name": "x"}]  # no formula
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["status_code"] == 200
-    assert out["body"]["status"] == "invalid_input"
-    assert "formula" in (out["body"].get("error") or "").lower()
+    assert out["status_code"] == 400
+    detail = out["body"]["detail"]
+    assert detail["status"] == "invalid_input"
+    assert "formula" in (detail.get("error") or "").lower()
 
 
 # ---------- status=name_collision ----------
@@ -214,10 +215,13 @@ def test_scaffold_name_collision_returns_suggested(
         sm, proposals=[{"name": "rsi", "formula": "100 - 100/(1+RS)"}]
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["status_code"] == 200
-    assert out["body"]["status"] == "name_collision"
-    assert out["body"]["name"] == "RSI"
-    assert out["body"]["suggested_name"] == "RSI_V2"
+    assert out["status_code"] == 409
+    detail = out["body"]["detail"]
+    assert detail["status"] == "name_collision"
+    assert detail["name"] == "RSI"
+    # suggested_name survives in the error body — the collision path persists
+    # no scaffold row, so this is the ONLY place the UI can read it.
+    assert detail["suggested_name"] == "RSI_V2"
 
 
 # ---------- status=ok (happy path, slice 2) ----------
@@ -276,8 +280,10 @@ def test_scaffold_test_failure_returns_test_failed_and_cleans_up(
         proposals=[{"name": "my_thing", "formula": "ema(close, period)"}],
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "test_failed"
-    assert "FAILED" in (out["body"]["test_output"] or "")
+    assert out["status_code"] == 422
+    detail = out["body"]["detail"]
+    assert detail["status"] == "test_failed"
+    assert "FAILED" in (detail["test_output"] or "")
     # Both files cleaned up.
     assert not (_stub_codegen / "proposed_my_thing.py").exists()
     assert not (tests_out / "test_proposed_my_thing.py").exists()
@@ -307,8 +313,10 @@ def test_scaffold_commit_failure_surfaces_as_test_failed(
         proposals=[{"name": "my_hooked", "formula": "ema(close, period)"}],
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "test_failed"
-    assert "pre-commit" in (out["body"]["test_output"] or "")
+    assert out["status_code"] == 422
+    detail = out["body"]["detail"]
+    assert detail["status"] == "test_failed"
+    assert "pre-commit" in (detail["test_output"] or "")
     assert not (_stub_codegen / "proposed_my_hooked.py").exists()
     assert not (tests_out / "test_proposed_my_hooked.py").exists()
 
@@ -334,8 +342,10 @@ def test_scaffold_banned_import_returns_codegen_failed(
         proposals=[{"name": "bad_a", "formula": "ema(close, period)"}],
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "codegen_failed"
-    assert "banned_import" in (out["body"]["error"] or "")
+    assert out["status_code"] == 422
+    detail = out["body"]["detail"]
+    assert detail["status"] == "codegen_failed"
+    assert "banned_import" in (detail["error"] or "")
     assert not (_stub_codegen / "proposed_bad_a.py").exists()
 
     # Cache row records the failure so the UI can show the reason.
@@ -358,8 +368,10 @@ def test_scaffold_mypy_failure_returns_codegen_failed(
         sm, proposals=[{"name": "bad_b", "formula": "ema(close, period)"}]
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "codegen_failed"
-    assert out["body"]["error"].startswith("mypy_fail")
+    assert out["status_code"] == 422
+    detail = out["body"]["detail"]
+    assert detail["status"] == "codegen_failed"
+    assert detail["error"].startswith("mypy_fail")
     assert not (_stub_codegen / "proposed_bad_b.py").exists()
 
 
@@ -376,8 +388,10 @@ def test_scaffold_syntax_error_returns_codegen_failed(
         sm, proposals=[{"name": "bad_c", "formula": "f"}]
     )
     out = _scaffold(client, ext_id, 0)
-    assert out["body"]["status"] == "codegen_failed"
-    assert out["body"]["error"].startswith("syntax_error")
+    assert out["status_code"] == 422
+    detail = out["body"]["detail"]
+    assert detail["status"] == "codegen_failed"
+    assert detail["error"].startswith("syntax_error")
 
 
 # ---------- status=already_scaffolded + force ----------
@@ -400,6 +414,8 @@ def test_scaffold_already_scaffolded_returns_cached_row(
         commit_sha="abc123",
     )
     out = _scaffold(client, ext_id, 0)
+    # Idempotent re-scaffold without force stays a 200 success.
+    assert out["status_code"] == 200
     assert out["body"]["status"] == "already_scaffolded"
     assert out["body"]["plugin_path"] == "vibe_quant/dsl/plugins/proposed_novel_a.py"
     assert out["body"]["commit_sha"] == "abc123"

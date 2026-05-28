@@ -634,6 +634,18 @@ def _load_proposed_indicator(
     return entry
 
 
+# scaffold status → HTTP code (mirrors the promote + cancel endpoints). The
+# detail body carries the full IndicatorScaffoldResponse-shaped payload —
+# suggested_name on collision, error + test_output on failures — so the orval
+# customInstance can attach it to the thrown Error and the UI loses nothing.
+_SCAFFOLD_ERROR_STATUS: dict[str, int] = {
+    "invalid_input": 400,
+    "name_collision": 409,
+    "codegen_failed": 422,
+    "test_failed": 422,
+}
+
+
 @router.post(
     "/extractions/{extraction_id}/indicators/{idx}/scaffold",
     response_model=IndicatorScaffoldResponse,
@@ -657,22 +669,28 @@ def scaffold_proposed_indicator(
     try:
         spec_args = proposed_to_spec_args(proposal)
     except InvalidProposalError as e:
-        return IndicatorScaffoldResponse(
-            status="invalid_input",
-            extraction_id=extraction_id,
-            idx=idx,
-            error=str(e),
-        )
+        raise HTTPException(
+            status_code=_SCAFFOLD_ERROR_STATUS["invalid_input"],
+            detail={
+                "status": "invalid_input",
+                "extraction_id": extraction_id,
+                "idx": idx,
+                "error": str(e),
+            },
+        ) from e
 
     registered = set(indicator_registry.list_indicators())
     if spec_args.name in registered:
-        return IndicatorScaffoldResponse(
-            status="name_collision",
-            extraction_id=extraction_id,
-            idx=idx,
-            name=spec_args.name,
-            suggested_name=suggest_alt_name(spec_args.name, registered),
-            error=f"indicator name {spec_args.name!r} is already registered",
+        raise HTTPException(
+            status_code=_SCAFFOLD_ERROR_STATUS["name_collision"],
+            detail={
+                "status": "name_collision",
+                "extraction_id": extraction_id,
+                "idx": idx,
+                "name": spec_args.name,
+                "suggested_name": suggest_alt_name(spec_args.name, registered),
+                "error": f"indicator name {spec_args.name!r} is already registered",
+            },
         )
 
     cached = sm.get_indicator_scaffold(extraction_id, idx)
@@ -703,20 +721,24 @@ def scaffold_proposed_indicator(
             source_quote=source_quote,
         )
     except CodegenError as e:
+        code_detail = f"{e.code}:{e.detail}" if e.detail else e.code
         sm.upsert_indicator_scaffold(
             extraction_id=extraction_id,
             idx=idx,
             status="codegen_failed",
-            error=f"{e.code}:{e.detail}" if e.detail else e.code,
+            error=code_detail,
             test_output=None,
         )
-        return IndicatorScaffoldResponse(
-            status="codegen_failed",
-            extraction_id=extraction_id,
-            idx=idx,
-            name=spec_args.name,
-            error=f"{e.code}:{e.detail}" if e.detail else e.code,
-        )
+        raise HTTPException(
+            status_code=_SCAFFOLD_ERROR_STATUS["codegen_failed"],
+            detail={
+                "status": "codegen_failed",
+                "extraction_id": extraction_id,
+                "idx": idx,
+                "name": spec_args.name,
+                "error": code_detail,
+            },
+        ) from e
     except ScaffoldError as e:
         # Test failure and commit failure both surface as ``test_failed``
         # so the UI only has one bucket to render; the actual reason
@@ -728,14 +750,17 @@ def scaffold_proposed_indicator(
             error=e.code,
             test_output=e.output,
         )
-        return IndicatorScaffoldResponse(
-            status="test_failed",
-            extraction_id=extraction_id,
-            idx=idx,
-            name=spec_args.name,
-            error=e.code,
-            test_output=e.output,
-        )
+        raise HTTPException(
+            status_code=_SCAFFOLD_ERROR_STATUS["test_failed"],
+            detail={
+                "status": "test_failed",
+                "extraction_id": extraction_id,
+                "idx": idx,
+                "name": spec_args.name,
+                "error": e.code,
+                "test_output": e.output,
+            },
+        ) from e
 
     # Refresh the plugin loader so the freshly-written file is picked up
     # without a process restart. Done after the commit lands so a broken

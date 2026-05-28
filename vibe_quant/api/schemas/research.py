@@ -183,11 +183,14 @@ class SubredditsUpdateRequest(BaseModel):
 class IndicatorScaffoldResponse(BaseModel):
     """Response from POST /api/research/extractions/{id}/indicators/{idx}/scaffold.
 
-    ``status`` follows the bead spec:
-    ``ok | invalid_input | name_collision | already_scaffolded |
-    codegen_failed | test_failed``. Test- AND commit-stage failures
-    both map to ``test_failed``; the actual reason lives in
-    ``test_output`` (pytest stdout or git stderr).
+    Success bodies only: ``status`` is ``ok`` or ``already_scaffolded``
+    (idempotent re-scaffold), both HTTP 200. Failures map to real codes
+    — invalid_input → 400, name_collision → 409, codegen_failed /
+    test_failed → 422 — and carry the same fields (``suggested_name``,
+    ``error``, ``test_output``) inside the standard ``{"detail": {...}}``
+    error body so the UI loses nothing. Test- AND commit-stage failures
+    both surface as ``test_failed``; the reason lives in ``test_output``
+    (pytest stdout or git stderr).
     """
 
     status: str

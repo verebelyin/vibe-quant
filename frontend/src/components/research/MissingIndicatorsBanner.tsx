@@ -6,6 +6,7 @@ import {
   useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost,
 } from "@/api/generated/research/research";
 import { Button } from "@/components/ui/button";
+import { scaffoldErrorDetail } from "@/components/research/scaffoldError";
 
 interface Proposal {
   name?: unknown;
@@ -81,21 +82,28 @@ export function MissingIndicatorsBanner({
       { extractionId, idx },
       {
         onSuccess: (resp) => {
-          // Non-2xx throws in customInstance → onError; only the 200
-          // IndicatorScaffoldResponse reaches here. Guard narrows the union.
+          // Only ok / already_scaffolded are 200 now; failures throw → onError.
           if (resp.status !== 200) return;
           const body = resp.data;
-          if (body.status === "ok") {
-            toast.success(`Scaffolded ${type}`);
-          } else if (body.status === "already_scaffolded") {
+          if (body.status === "already_scaffolded") {
             toast.info(`${type} already scaffolded`);
           } else {
-            toast.error(`Scaffold ${type} failed: ${body.error ?? body.status}`);
+            toast.success(`Scaffolded ${type}`);
           }
           queryClient.invalidateQueries({ queryKey: itemKey });
           queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
         },
-        onError: () => toast.error(`Scaffold ${type} request failed`),
+        onError: (error) => {
+          const { status, detail } = scaffoldErrorDetail(error);
+          if (status === 409) {
+            toast.error(`Scaffold ${type}: collision, try ${detail.suggested_name ?? "another name"}`);
+          } else {
+            toast.error(`Scaffold ${type} failed: ${detail.error ?? "see details"}`);
+          }
+          // codegen/test failures persist a row — refetch so the list updates.
+          queryClient.invalidateQueries({ queryKey: itemKey });
+          queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
+        },
       },
     );
   };
