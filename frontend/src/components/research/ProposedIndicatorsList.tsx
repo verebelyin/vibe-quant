@@ -142,6 +142,9 @@ function ProposalRow({
       { extractionId, idx },
       {
         onSuccess: (resp) => {
+          // Non-2xx throws in customInstance → onError; only the 200
+          // IndicatorScaffoldResponse reaches here. Guard narrows the union.
+          if (resp.status !== 200) return;
           const body = resp.data;
           if (body.status === "ok") {
             toast.success(`Scaffolded ${body.name ?? "indicator"}`);

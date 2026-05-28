@@ -209,10 +209,12 @@ const guideRoute = createRoute({
   },
 });
 
+// `| undefined` (not just `?`) so validateSearch / the URL-sync reducer can
+// assign explicit undefined under exactOptionalPropertyTypes.
 type ResearchSearch = {
-  sort?: string;
-  hide_low_trade?: boolean;
-  q?: string;
+  sort?: string | undefined;
+  hide_low_trade?: boolean | undefined;
+  q?: string | undefined;
 };
 
 const researchRoute = createRoute({

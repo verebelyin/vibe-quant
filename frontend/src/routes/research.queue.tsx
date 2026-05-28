@@ -21,12 +21,10 @@ export function ResearchQueuePage() {
   const cancelMutation = useCancelExtractionJobApiResearchExtractionJobsJobIdCancelPost({
     mutation: {
       onSuccess: (resp) => {
+        // customInstance throws on non-2xx, so 409 (already running/finished)
+        // and 404 (job gone) land in onError, not here — only 200 reaches us.
         if (resp.status === 200) {
           toast.success(`Job ${resp.data.id} cancelled`);
-        } else if (resp.status === 409) {
-          toast.error("Job already running or finished — cannot cancel");
-        } else if (resp.status === 404) {
-          toast.error("Job not found");
         }
         queryClient.invalidateQueries({
           queryKey: getListExtractionQueueApiResearchExtractionQueueGetQueryKey(),
@@ -35,8 +33,20 @@ export function ResearchQueuePage() {
           queryKey: getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryKey(),
         });
       },
-      onError: () => {
-        toast.error("Cancel request failed");
+      onError: (error) => {
+        // The thrown Error message embeds the HTTP status ("API error: 409 …").
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("409")) {
+          toast.error("Job already running or finished — cannot cancel");
+        } else if (msg.includes("404")) {
+          toast.error("Job not found");
+        } else {
+          toast.error("Cancel request failed");
+        }
+        // A 409/404 means our view is stale — refetch so the row updates.
+        queryClient.invalidateQueries({
+          queryKey: getListExtractionQueueApiResearchExtractionQueueGetQueryKey(),
+        });
       },
     },
   });

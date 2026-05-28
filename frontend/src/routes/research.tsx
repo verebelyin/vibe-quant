@@ -82,7 +82,8 @@ export function ResearchPage() {
   useEffect(() => {
     if (!hydratedRef.current) return;
     navigate({
-      search: (prev: Record<string, unknown>) => ({
+      to: "/research",
+      search: (prev) => ({
         ...prev,
         sort: sort === "newest_scraped" ? undefined : sort,
         hide_low_trade: hideLowTrade ? true : undefined,
