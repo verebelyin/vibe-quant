@@ -134,12 +134,12 @@ def _promote(client: TestClient, name: str) -> dict:
 # ---------- invalid_name ----------
 
 
-def test_promote_invalid_name_returns_status_invalid_name(
+def test_promote_invalid_name_returns_400(
     client: TestClient,
 ) -> None:
     out = _promote(client, "lowercase")
-    assert out["status_code"] == 200
-    assert out["body"]["status"] == "invalid_name"
+    assert out["status_code"] == 400
+    assert "lowercase" in out["body"]["detail"]
 
 
 # ---------- not_found ----------
@@ -149,7 +149,7 @@ def test_promote_not_found_when_no_proposed_file(
     client: TestClient, _stub_external: Path
 ) -> None:
     out = _promote(client, "GHOST")
-    assert out["body"]["status"] == "not_found"
+    assert out["status_code"] == 404
 
 
 # ---------- collision ----------
@@ -162,7 +162,9 @@ def test_promote_collision_when_target_already_exists(
     (_stub_external / "demo.py").write_text("# already promoted\n")
 
     out = _promote(client, "DEMO")
-    assert out["body"]["status"] == "collision"
+    assert out["status_code"] == 409
+    # detail names the colliding file.
+    assert "demo.py" in out["body"]["detail"]
     # Both files still on disk — no write/delete happened.
     assert (_stub_external / "proposed_demo.py").exists()
     assert (_stub_external / "demo.py").exists()
@@ -264,8 +266,8 @@ def test_promote_commit_failure_rolls_back_new_file(
     monkeypatch.setattr(indicator_scaffold, "git_commit_promotion", fail)
 
     out = _promote(client, "DEMO")
-    assert out["body"]["status"] == "commit_failed"
-    assert "nope" in (out["body"].get("error") or "")
+    assert out["status_code"] == 500
+    assert "nope" in (out["body"].get("detail") or "")
     # Rolled back: new file is gone.
     assert not (_stub_external / "demo.py").exists()
 

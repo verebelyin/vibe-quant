@@ -205,11 +205,12 @@ class IndicatorScaffoldResponse(BaseModel):
 class PromoteIndicatorResponse(BaseModel):
     """Response from POST /api/research/indicators/{name}/promote.
 
-    ``status`` vocabulary:
-    ``ok | invalid_name | not_found | collision | write_failed |
-    commit_failed``. Git failures map to ``commit_failed``; ``bd
-    remember`` failures are non-fatal — surfaced only in
-    ``bd_remember_ok``.
+    Only the success path returns this body (``status`` is always
+    ``ok``). Failures now map to real HTTP codes — invalid name → 400,
+    no proposed file → 404, collision → 409, write/commit failure → 500
+    — surfaced via the standard ``{"detail": ...}`` error body, not this
+    model. ``bd remember`` failures stay non-fatal: the promote still
+    succeeds (200) and the outcome is reported in ``bd_remember_ok``.
     """
 
     status: str

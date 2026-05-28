@@ -774,6 +774,16 @@ def scaffold_proposed_indicator(
 _PROMOTE_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
+# PromoteError.code → HTTP status. Mirrors the cancel-job endpoint's use of
+# real status codes (the orval customInstance throws on non-2xx → onError).
+_PROMOTE_ERROR_STATUS: dict[str, int] = {
+    "not_found": 404,
+    "collision": 409,
+    "write_failed": 500,
+    "commit_failed": 500,
+}
+
+
 @router.post(
     "/indicators/{name}/promote",
     response_model=PromoteIndicatorResponse,
@@ -783,9 +793,10 @@ def promote_proposed_indicator(name: str, sm: StateMgr) -> PromoteIndicatorRespo
 
     Strips the AUTO-GENERATED header, atomically renames the file, makes
     a local git commit, and records provenance via ``bd remember``. The
-    promotion is rejected with 409-style ``collision`` status if a file
-    at the unprefixed path already exists — the user must rename or
-    delete it manually.
+    promotion is rejected with HTTP 409 if a file at the unprefixed path
+    already exists — the user must rename or delete it manually. Other
+    failures map to real codes too: invalid name → 400, no proposed file
+    → 404, write/commit failure → 500.
 
     Provenance for ``bd remember`` is looked up from
     ``research_indicator_scaffolds`` joined to ``research_items``. If
@@ -793,10 +804,9 @@ def promote_proposed_indicator(name: str, sm: StateMgr) -> PromoteIndicatorRespo
     proceeds — only the source-URL annotation is omitted.
     """
     if not _PROMOTE_NAME_RE.match(name):
-        return PromoteIndicatorResponse(
-            status="invalid_name",
-            name=name,
-            error=f"{name!r} is not a valid uppercase identifier",
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name!r} is not a valid uppercase indicator identifier",
         )
 
     # Best-effort provenance: look up the scaffold row by the canonical
@@ -819,13 +829,13 @@ def promote_proposed_indicator(name: str, sm: StateMgr) -> PromoteIndicatorRespo
             source_url=source_url,
         )
     except PromoteError as e:
-        # Map specific PromoteError codes to HTTP-friendly response
-        # statuses. The frontend keys off ``status`` for what to render.
-        return PromoteIndicatorResponse(
-            status=e.code,
-            name=name,
-            error=e.detail or e.code,
-        )
+        # Real HTTP codes (mirrors the cancel-job endpoint): the orval
+        # customInstance throws on non-2xx, so the frontend handles these
+        # in onError. detail carries the human-readable reason.
+        raise HTTPException(
+            status_code=_PROMOTE_ERROR_STATUS.get(e.code, 500),
+            detail=e.detail or e.code,
+        ) from e
 
     # Pick up the new plugin module without a process restart so the
     # catalog endpoint reflects the rename on the very next poll.

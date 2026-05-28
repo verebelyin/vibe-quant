@@ -192,26 +192,32 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
       { name: type },
       {
         onSuccess: (resp) => {
-          // Non-2xx throws in customInstance → onError; only the 200
-          // PromoteIndicatorResponse reaches here. Status lives in the body,
-          // not the HTTP code (collision/not_found are 200 + status field).
+          // Errors now return real 4xx/5xx → customInstance throws → onError.
+          // Only the 200 "ok" PromoteIndicatorResponse reaches here.
           if (resp.status !== 200) return;
           const body = resp.data;
-          if (body.status === "ok") {
-            const sha = body.commit_sha ? ` (${body.commit_sha.slice(0, 7)})` : "";
-            toast.success(`Promoted ${body.name}${sha}`);
-            if (body.bd_remember_ok === false) {
-              toast.warning("Promoted, but provenance note (bd remember) failed");
-            }
-            setPromotedNames((prev) => new Set(prev).add(type));
-            queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
-          } else if (body.status === "collision") {
+          const sha = body.commit_sha ? ` (${body.commit_sha.slice(0, 7)})` : "";
+          toast.success(`Promoted ${body.name}${sha}`);
+          if (body.bd_remember_ok === false) {
+            toast.warning("Promoted, but provenance note (bd remember) failed");
+          }
+          setPromotedNames((prev) => new Set(prev).add(type));
+          queryClient.invalidateQueries({ queryKey: ["indicators", "catalog"] });
+        },
+        onError: (error) => {
+          // The thrown Error embeds the HTTP status ("API error: 409 …"),
+          // matching how research.queue.tsx handles cancel conflicts.
+          const msg = error instanceof Error ? error.message : "";
+          if (msg.includes("409")) {
             toast.error(`Cannot promote ${type}: ${type.toLowerCase()}.py already exists`);
+          } else if (msg.includes("400")) {
+            toast.error(`Cannot promote ${type}: not a valid indicator name`);
+          } else if (msg.includes("404")) {
+            toast.error(`Cannot promote ${type}: no scaffolded proposed_${type.toLowerCase()}.py found`);
           } else {
-            toast.error(`Promote failed: ${body.error ?? body.status}`);
+            toast.error(`Promote ${type} failed`);
           }
         },
-        onError: () => toast.error(`Promote ${type} request failed`),
       },
     );
   };
