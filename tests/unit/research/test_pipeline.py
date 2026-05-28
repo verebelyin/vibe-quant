@@ -9,7 +9,7 @@ import pytest
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research import auto_screen, extraction_log
-from vibe_quant.research.pipeline import run_scrape
+from vibe_quant.research.pipeline import persist_extractions, run_scrape
 from vibe_quant.research.schema import ExtractionBatch, ExtractionResult, RawItem
 from vibe_quant.research.sources import _reset_for_tests, register_source
 
@@ -814,3 +814,141 @@ def test_auto_screen_failure_in_one_extraction_does_not_block_others(
     assert done["screen_sharpe"] == pytest.approx(1.5)
     assert failed["screen_run_id"] is None
     assert failed["screen_error"] is not None
+
+
+# --- Re-extract / re-scrape idempotency (vibe-quant-w5az0) ---------------------
+# l685's parent AC "kill scrape mid-screening -> next scrape leaves pending rows
+# alone (idempotent)" assumed a screen_status='pending' queue that was never
+# built — auto_screen runs synchronously inline in persist_extractions. These
+# tests are the documented retirement of that obsolete AC: they prove the
+# synchronous design has no equivalent hazard (no duplicate/orphaned screen rows,
+# no wedged extraction) on the two paths that could re-touch a screened item.
+
+
+def _screen_runs_by_extraction(sm: StateManager) -> dict[int, list[int]]:
+    """Map extraction_id -> screening backtest_run ids tagged with it via
+    ``parameters.auto_screen_source``. A correct synchronous auto_screen leaves
+    exactly one run id per parsed extraction; >1 in a bucket is a double-screen,
+    an unexpected bucket is a mislabeled/orphaned run."""
+    buckets: dict[int, list[int]] = {}
+    for run in sm.list_backtest_runs():
+        if run["run_mode"] != "screening":
+            continue
+        src = (run["parameters"] or {}).get("auto_screen_source")
+        if not isinstance(src, dict) or src.get("extraction_id") is None:
+            continue
+        buckets.setdefault(int(src["extraction_id"]), []).append(int(run["id"]))
+    return buckets
+
+
+def _parsed_with_dsl() -> ExtractionResult:
+    return ExtractionResult(
+        status="parsed",
+        confidence=1.0,
+        rationale=None,
+        raw_response="",
+        dsl_yaml="name: x\n",
+        parsed_dsl_json='{"name":"x"}',
+        parse_error=None,
+        llm_model="t",
+    )
+
+
+def _restore_hermetic_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore the real auto_screen (the autouse fixture no-ops it) but keep it
+    hermetic: skip DSL compile + NT backtest, return fixed 'done' metrics. A
+    real backtest_runs row is still created + back-tagged — that's what we
+    count."""
+    from vibe_quant.screening.types import BacktestMetrics
+
+    monkeypatch.setattr(auto_screen, "_normalize_dsl", lambda s: {"timeframe": "1h"})
+    monkeypatch.setattr(
+        auto_screen,
+        "_run_single_metrics",
+        lambda *a, **k: BacktestMetrics(
+            parameters={},
+            sharpe_ratio=2.0,
+            profit_factor=1.5,
+            max_drawdown=0.04,
+            total_return=0.3,
+            total_trades=99,
+        ),
+    )
+    monkeypatch.setattr(auto_screen, "auto_screen_extraction", _REAL_AUTO_SCREEN)
+
+
+def test_reextract_creates_fresh_screen_run_and_preserves_prior(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-extracting an already-screened item INSERTs a new extraction row with
+    its own fresh screen run; the prior extraction's backtest_runs row is
+    preserved (l685.3) and there is exactly one screen run per extraction — no
+    duplicate/orphaned rows, no wedge (vibe-quant-w5az0 AC#1/#3)."""
+    _restore_hermetic_screen(monkeypatch)
+    item_id = sm.create_research_item(
+        source="fake",
+        external_id="e0",
+        url="u",
+        title="t",
+        body="b",
+        author=None,
+        posted_at=None,
+        score=0,
+    )
+
+    # First extraction (E1 + run R1) — the "already-screened" baseline.
+    persist_extractions(sm, item_id, [_parsed_with_dsl()])
+    after_first = sm.list_extractions_for_item(item_id)
+    assert len(after_first) == 1
+    e1 = after_first[0]
+    r1 = e1["screen_run_id"]
+    assert e1["screen_status"] == "done"
+    assert r1 is not None
+
+    # Re-extract the same item (E2 + run R2).
+    persist_extractions(sm, item_id, [_parsed_with_dsl()])
+    after_second = sm.list_extractions_for_item(item_id)
+    assert len(after_second) == 2, "re-extract must INSERT a new extraction row"
+    e2 = next(e for e in after_second if e["id"] != e1["id"])
+    r2 = e2["screen_run_id"]
+    assert r2 is not None
+    assert r2 != r1, "re-extract must create a fresh screen run, not reuse R1"
+
+    # Prior run preserved (l685.3) — re-extract never deletes/overwrites it.
+    assert sm.get_backtest_run(int(r1)) is not None
+    assert sm.get_backtest_run(int(r2)) is not None
+
+    # Exactly one screening run per extraction, each correctly back-tagged:
+    # no double-screen (no bucket of len>1), no orphan (no extra bucket).
+    assert _screen_runs_by_extraction(sm) == {e1["id"]: [int(r1)], e2["id"]: [int(r2)]}
+
+
+def test_rescrape_over_extracted_items_does_not_double_screen(
+    sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-running a scrape over items that already have extractions does NOT
+    re-extract or re-screen them — items dedup on (source, external_id), so the
+    screen-run set is unchanged by the second scrape (vibe-quant-w5az0 AC#2:
+    intended behavior, asserted explicitly)."""
+    _restore_hermetic_screen(monkeypatch)
+    _register_fake_source([_item(i) for i in range(2)])
+
+    def fake_extract(item: RawItem, item_id: int) -> ExtractionBatch:  # noqa: ARG001
+        return ExtractionBatch(prompt="P", raw_response="{}", results=[_parsed_with_dsl()])
+
+    first = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert first.items_new == 2
+    assert first.items_extracted == 2
+    runs_after_first = _screen_runs_by_extraction(sm)
+    assert len(runs_after_first) == 2  # one screen run per item's extraction
+
+    # Second scrape, same source + items → dedup, no re-extract, no re-screen.
+    second = run_scrape(sm=sm, source_name="fake", limit=10, extract_fn=fake_extract)
+    assert second.items_new == 0
+    assert second.items_extracted == 0
+
+    for it in sm.list_research_items(source="fake"):
+        assert len(sm.list_extractions_for_item(it["id"])) == 1
+    assert _screen_runs_by_extraction(sm) == runs_after_first, (
+        "2nd scrape must not create new/duplicate screen runs"
+    )
