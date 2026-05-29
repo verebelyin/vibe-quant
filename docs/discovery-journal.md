@@ -4,6 +4,87 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-05-29: Batch 41 — feature shakedown (PRICE_POSITION + replay-drift fix proven + bootstrap-CI vindicated, runs 837-844)
+
+### Goal
+
+Exercise the **newest landed functionality** in one cycle, not chase a champion:
+1. **Replay-drift fix** (rewru + 1gvyc, both entries below) — prove screening replay == the new `full_range_*` headline, including on a deliberately regime-concentrated champion (the run-812 false-positive class).
+2. **PRICE_POSITION** — newly-scaffolded indicator, never run in live GA before.
+3. **Train/test holdout split** (`train_test_split=0.5`).
+4. **MA-gene crossover surfacing** (KAMA/VIDYA/FRAMA) at larger population (pop=60).
+5. **`no_bootstrap_ci` on `/api/discovery/launch`** (bd-l8ka — now on the schema; Batch 40 had to go via CLI).
+
+3 parallel discoveries by request. 10-core M1 Pro; 837 ran solo-heavy (pop=60), 838+839 alongside.
+
+### Configuration
+
+| Run | Pool | pop×gen | Special | Duration | Outcome |
+|-----|------|---------|---------|----------|---------|
+| 837 | RSI | 60×12 | large pop → MA-gene surfacing test | ~66m | all champs FAIL bootstrap-CI |
+| 838 | PRICE_POSITION+RSI | 40×10 | new indicator | ~43m | all champs FAIL bootstrap-CI |
+| 839 | STOCH+CCI | 40×10 | `train_test_split=0.5` holdout | ~17m | all champs FAIL bootstrap-CI |
+| 840 | PRICE_POSITION+RSI | 30×8 | **`no_bootstrap_ci=true`** (contingency) | ~27m | 2 champs promoted (236, 237) |
+
+4h BTCUSDT, 2025-03-07→2026-03-07, `eval_windows=3`, direction=random.
+
+### GA results — bootstrap-CI is binding on 4h (by design)
+
+All 3 CI-enabled runs hit the **same wall**: DSR significant (p=0.0000) on every champion, yet bootstrap-CI lower bound went negative and failed the floor of 1.0:
+
+| Run | Champion | DSR | Observed Sharpe / n | Bootstrap CI lower | Verdict |
+|-----|----------|-----|---------------------|--------------------|---------|
+| 837 | `8b66101c7244` | p<.0001 ✓ | 1.11 / 56 | **−0.77** | FAIL |
+| 838 | `f962071cee63` | p<.0001 ✓ | 0.44 / 48 | **−1.33** | FAIL |
+| 839 | `28e19530583a` | p<.0001 ✓ | 0.63 / 96 | **−1.39** | FAIL |
+
+`top_strategies` persisted empty for all three → run 840 launched with `no_bootstrap_ci=true` to get promotable champions (PRICE_POSITION+RSI re-used). 840 yielded **#0** (`genome_6509e60a4ea9`, low drift, high screening Sharpe) and **#1** (`genome_7cd55860597e`, deliberately high-drift: aggregate 2.52/70 vs full_range 0.36/80).
+
+### Full pipeline — discovery → screening → validation
+
+| SID | Genome | DSL | Screen (==full_range) Sharpe / Tr | Screen DD / Ret / PF | Val Sharpe / Tr | Val DD / Ret / PF / WR / Fees | Replay fidelity |
+|-----|--------|-----|-----------------------------------|----------------------|------------------|--------------------------------|-----------------|
+| 236 (#0) | `6509e60a4ea9` | SHORT: `price_position crosses_below 0.367` → exit `rsi≥25`; SL **0.81%** / TP 7.27% | **5.395 / 54** | 2.3% / — / 2.38 | **−2.78 / 65** | 6.6% / −6.6% / 0.68 / 30.8% / $30.45 | screen==full_range to digit; **val COLLAPSE** |
+| 237 (#1) | `7cd55860597e` | L+S dual `price_position` entry/exit; SL 8.56% / TP 14.91% | **0.356 / 80** | 13.7% / −0.01% / 1.04 | **+1.73 / 93** | 13.1% / +8.7% / 1.23 / 57.0% / $39.87 | screen==full_range (NOT agg 2.52/70); **val IMPROVED** |
+
+### Key findings
+
+1. **Replay-drift fix PROVEN end-to-end.** Screening 841 = `5.395229723590824 / 54` == champion #0 `full_range` headline **to the digit**. Screening 842 = `0.355998837621825 / 80` == #1 `full_range` **exactly** — and crucially **NOT** the multi-window aggregate `2.52 / 70`. `replay_drift._load_discovery_metrics` correctly prefers `full_range_*`, so the regime-concentrated #1 (which pre-rewru would have false-flagged exactly like run-812) does **not** drift. The rewru/1gvyc fix works on both a clean and a regime-concentrated champion.
+2. **Bootstrap-CI guardrail VINDICATED.** We bypassed it (`no_bootstrap_ci`) and promoted the best-*looking* champion — 236, screening Sharpe **5.40**, DD 2.3%, PF 2.38. In validation it **collapsed to −2.78** (PF 0.68, −6.6% return). The gate we skipped would have blocked exactly this overfit. Forcing a champion past a failed CI on 4h is actively dangerous.
+3. **DSR ≠ bootstrap-CI — and DSR is the weaker gate here.** Every CI-failed champion had DSR p=0.0000 ("significant"). DSR controls for *trial multiplicity*; bootstrap-CI controls for *return-distribution width*. On 4h with 48–180 trades/yr the CI lower bound is structurally negative — DSR alone would have waved 236 straight through to its −2.78 fate.
+4. **PRICE_POSITION fully functional in live GA.** GA selected it as champion in **both** 838 and 840; it compiles, screens, and validates end-to-end. The newly-scaffolded indicator is production-wired.
+5. **Low replay-drift ≠ fill-model-robust — orthogonal checks.** #0 had ~zero drift and collapsed; the high-drift #1 *improved* (0.36→1.73). Drift measures screening-replay determinism; validation measures latency/fill robustness. A champion can be perfectly reproducible and still die under a realistic FillModel. Do not read low drift as "safe."
+6. **MA-genes still don't surface at pop=60.** 837 (RSI pool, pop=60) produced a **pure-RSI** champion — no KAMA/VIDYA/FRAMA cross despite the seeding pathway being live. Reconfirms run-802 / Batch-40 follow-up: MA-cross genes need **pop≥100 or warm-start** (`seed_run_id`). Wired, not selected at this budget.
+7. **Trade-count divergence both >10%, both UP** (236 +20%, 237 +16%) — validation produced *more* trades than screening, the **opposite** of the usual latency-drops-fills direction. Consistent with tight stops (236: 0.81% SL) tripping more often under the realistic FillModel — another tell that 236 was fragile.
+
+### Comparison with Batch 40
+
+| Dimension | Batch 40 (2026-04-23) | Batch 41 (this) |
+|---|---|---|
+| Timeframe | 1h (bear window) | 4h (full year) |
+| Bootstrap CI | disabled via **CLI** | disabled via **API flag** (bd-l8ka done) |
+| CI-enabled runs | n/a | 3/3 FAIL (DSR all pass) |
+| Promotable champs | 3/3 (recipe-tuned) | 2 (only via `no_bootstrap_ci`) |
+| Champion fate in val | tight, clean | **#0 collapsed −2.78; #1 held +1.73** |
+| New feature proven | first MA-cross champion | replay-drift fix + PRICE_POSITION + DSR/CI distinction |
+
+### Recommendations
+
+1. **Default 4h discovery away from promotion, or to 1h** (reconfirms Batch 40). On 4h the bootstrap-CI floor (1.0) is near-unclearable, and the one champion forced past it was overfit. 1h gives ~4× trades → honest CI clearance.
+2. **Never promote a `no_bootstrap_ci` champion without a validation gate.** Screening Sharpe past a failed CI is meaningless (236: 5.40 → −2.78). Consider blocking promote when val Sharpe < ~50% of screening.
+3. **MA-cross discovery needs pop≥100 or `seed_run_id` warm-start** — file bead; pop=60 is insufficient.
+4. **Surface DSR-pass-but-CI-fail in the UI.** Operators will trust a DSR-significant champion; this batch shows that's exactly the trap.
+5. **Drift check stays flag-only and is now correct** — keep it; rewru/1gvyc closed the false-positive class.
+
+### Filed
+
+- **bd-l8ka — already CLOSED (2026-04-23)**: `no_bootstrap_ci` + `bootstrap_min_sharpe` now on `/api/discovery/launch`; this batch exercised it directly (run 840).
+- **bd-gds1c (P2)**: bootstrap-CI floor 1.0 makes 4h discovery effectively unpromotable — timeframe-aware default or surfaced reason.
+- **bd-by4t0 (P2)**: MA-cross genes don't surface at pop≤60 — need pop≥100 or warm-start; raise GA default or document.
+- **bd-o11tp (P2)**: validation-gated promote — auto-flag/block promote when validation Sharpe collapses vs screening (236 is the motivating case).
+
+---
+
 ## 2026-05-29: full-range headline metric per champion — drift root cause FIXED (bd vibe-quant-rewru)
 
 Lands the fix the 1gvyc spike deferred (entry below). The dominant drift cause was an **estimator
