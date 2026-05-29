@@ -21,6 +21,8 @@ def _make_discovery_run(
     sharpe: float,
     trades: int,
     strategy_index: int = 0,
+    full_range_sharpe: float | None = None,
+    full_range_trades: int | None = None,
 ) -> int:
     run_id = state.create_backtest_run(
         strategy_id=None,
@@ -35,11 +37,18 @@ def _make_discovery_run(
         {"dsl": {"name": f"ga_{i}"}, "sharpe": 1.0, "trades": 10}
         for i in range(strategy_index + 1)
     ]
-    top[strategy_index] = {
+    entry: dict[str, object] = {
         "dsl": {"name": f"ga_{strategy_index}"},
         "sharpe": sharpe,
         "trades": trades,
     }
+    # bd vibe-quant-rewru: post-rewru runs also carry a full-range headline; when
+    # absent the drift check must fall back to the aggregate sharpe/trades above.
+    if full_range_sharpe is not None:
+        entry["full_range_sharpe"] = full_range_sharpe
+    if full_range_trades is not None:
+        entry["full_range_trades"] = full_range_trades
+    top[strategy_index] = entry
     notes = json.dumps({"top_strategies": top})
     state.conn.execute(
         "INSERT INTO backtest_results (run_id, notes) VALUES (?, ?)",
@@ -252,6 +261,61 @@ def test_missing_discovery_result_returns_none(state: StateManager) -> None:
     ).fetchone()
     params = json.loads(row[0])
     assert "replay_drift" not in params
+
+
+def test_prefers_full_range_headline_over_aggregate(state: StateManager) -> None:
+    """bd vibe-quant-rewru: the run-812 case, fixed.
+
+    Discovery's multi-window AGGREGATE was sharpe=4.70/trades=79, but a continuous
+    full-range replay yields 2.80/46 -- and the screening replay (sweep) also
+    produces 2.80/46. With the full-range headline as the baseline the drift check
+    compares like-for-like (ratios ~1.0) and does NOT flag, whereas the old
+    aggregate baseline would have flagged this perfectly-reproducing champion.
+    """
+    disc = _make_discovery_run(
+        state,
+        sharpe=4.70,
+        trades=79,
+        full_range_sharpe=2.80,
+        full_range_trades=46,
+    )
+    run_id = _make_promote_screening_run(
+        state,
+        discovery_run_id=disc,
+        strategy_index=0,
+        sweep_sharpe=2.80,
+        sweep_trades=46,
+    )
+    payload = check_replay_drift(state, run_id)
+    assert payload is not None
+    # Baseline is the full-range headline, NOT the multi-window aggregate (4.70/79).
+    assert payload["discovery_sharpe"] == 2.80
+    assert payload["discovery_trades"] == 46
+    assert payload["sharpe_ratio"] == pytest.approx(1.0)
+    assert payload["trade_ratio"] == pytest.approx(1.0)
+    assert payload["flagged"] is False
+
+
+def test_falls_back_to_aggregate_when_full_range_absent(state: StateManager) -> None:
+    """Pre-rewru runs lack full_range_* -> baseline falls back to the aggregate.
+
+    Same inputs as test_flags_large_sharpe_drift, but routed through the fallback
+    path, proving discovery results persisted before rewru keep their original
+    drift behaviour.
+    """
+    disc = _make_discovery_run(state, sharpe=4.70, trades=79)  # no full_range_*
+    run_id = _make_promote_screening_run(
+        state,
+        discovery_run_id=disc,
+        strategy_index=0,
+        sweep_sharpe=2.47,
+        sweep_trades=75,
+    )
+    payload = check_replay_drift(state, run_id)
+    assert payload is not None
+    assert payload["discovery_sharpe"] == 4.70  # aggregate, via fallback
+    assert payload["discovery_trades"] == 79
+    assert payload["flagged"] is True
 
 
 def test_thresholds_reflect_bead_spec() -> None:

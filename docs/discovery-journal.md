@@ -4,6 +4,35 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-05-29: full-range headline metric per champion — drift root cause FIXED (bd vibe-quant-rewru)
+
+Lands the fix the 1gvyc spike deferred (entry below). The dominant drift cause was an **estimator
+mismatch**: discovery's stored `sharpe`/`trades` are the multi-window fitness aggregate
+(`mean(per-window Sharpe)` + `sum(per-window trades)`), and a train/test split further restricts
+them to the training slice — yet promotion replays **one continuous screening backtest over the
+full discovery range**. Different statistics of the same DSL ⇒ `replay_drift` flagged by construction.
+
+**Change:** after the GA picks the top-K, each champion is re-run **once** over `args.start_date..end_date`
+(the exact range the promote endpoint replays) and that single-backtest result is persisted as
+`full_range_{sharpe,trades,max_dd,pf,return_pct}` on each `top_strategies[]` entry. The multi-window
+`sharpe`/`trades` stay as a labelled **robustness** signal. `replay_drift._load_discovery_metrics` now
+prefers `full_range_*`, falling back to `sharpe`/`trades` for pre-rewru runs.
+
+- **Like-for-like, deterministic:** the headline backtest and the promote replay both go through the
+  now-seeded screening path (1gvyc, `SCREENING_FILL_SEED`), so a well-behaved champion's drift ratio → ~1.0.
+- **Bounded cost:** ≤ top-K (5) extra backtests, once, at save time — and only when `eval_windows ≥ 2`
+  **or** `train_test_split > 0` (otherwise GA fitness already *is* the continuous full-range metric, and
+  in mock mode the fallback is used).
+- **Helper:** `discovery/backtest_fn.py:full_range_headline`. **Tests:** `test_full_range_headline.py`
+  (both branches), `test_replay_drift.py::test_prefers_full_range_headline_over_aggregate` (the run-812
+  case: aggregate 4.70/79 but full-range 2.80/46 == replay 2.80/46 ⇒ **not** flagged) +
+  `test_falls_back_to_aggregate_when_full_range_absent`.
+
+`replay_drift` stays flag-only by design — drift now persists *only* for genuinely regime-concentrated
+champions (where mean-of-windows really does diverge from the continuous run), which is the signal we want.
+
+---
+
 ## 2026-05-29: run-812 VIDYA replay drift — ROOT CAUSE (bd vibe-quant-1gvyc, resolves bd-r8i7)
 
 ### The question

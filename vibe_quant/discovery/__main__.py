@@ -67,7 +67,7 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
 # processes can unpickle it. When this file is loaded as ``__main__``
 # (via ``python -m vibe_quant.discovery``), classes defined here would
 # pickle with ``__module__='__main__'`` — workers can't resolve that.
-from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline
 
 
 def _make_nt_backtest_fn(
@@ -813,6 +813,34 @@ def main() -> int:
 
         from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable
 
+        # bd vibe-quant-rewru: the GA's stored sharpe/trades are the multi-window
+        # fitness aggregate (mean-of-windows / sum-of-windows) and, with a train/test
+        # split, cover only the training slice. Promotion replays ONE continuous
+        # screening backtest over the full discovery range, so those numbers are a
+        # different statistic and replay_drift flags the gap by construction. Re-run
+        # each champion ONCE over args.start_date..args.end_date (the exact range the
+        # promote endpoint replays) and persist THAT as the headline so the drift
+        # check compares like-for-like. Skip the extra backtest only when fitness
+        # already IS that continuous full-range metric (single window, no split) or
+        # in mock mode. Bounded cost: top-K champions, once each, at save time.
+        needs_full_range = not use_mock and (eval_windows_count >= 2 or split_ratio > 0)
+        full_range_fn = (
+            _make_nt_backtest_fn(
+                symbols=symbols,
+                timeframe=args.timeframe,
+                start_date=args.start_date,
+                end_date=args.end_date,
+            )
+            if needs_full_range
+            else None
+        )
+        if full_range_fn is not None:
+            logger.info(
+                "Computing full-range headline for top-%d champions over %s..%s "
+                "(multi-window/split fitness != continuous replay; bd-rewru)",
+                len(result.top_strategies[:5]), args.start_date, args.end_date,
+            )
+
         top_dsls = []
         for idx, (chrom, fitness) in enumerate(result.top_strategies[:5]):
             dsl = chromosome_to_dsl(chrom)
@@ -827,6 +855,20 @@ def main() -> int:
                 "trades": fitness.total_trades,
                 "return_pct": fitness.total_return,
             }
+            # Full-range headline (single continuous backtest) for like-for-like
+            # promotion/replay_drift; sharpe/trades above stay as the multi-window
+            # robustness aggregate. full_range_fn(chrom) never raises (NTBacktestFn
+            # swallows backtest errors into failure metrics). bd vibe-quant-rewru.
+            entry.update(
+                full_range_headline(
+                    full_range_fn(chrom) if full_range_fn is not None else None,
+                    fallback_sharpe=fitness.sharpe_ratio,
+                    fallback_trades=fitness.total_trades,
+                    fallback_max_dd=fitness.max_drawdown,
+                    fallback_pf=fitness.profit_factor,
+                    fallback_return=fitness.total_return,
+                )
+            )
             # Attach holdout metrics if available
             if idx < len(result.holdout_results):
                 hr = result.holdout_results[idx]

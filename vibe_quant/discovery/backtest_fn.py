@@ -140,3 +140,58 @@ class NTBacktestFn:
                 "profit_factor": 0.0,
                 "total_trades": 0,
             }
+
+
+def full_range_headline(
+    full_range_metrics: dict[str, float | int] | None,
+    *,
+    fallback_sharpe: float,
+    fallback_trades: int,
+    fallback_max_dd: float,
+    fallback_pf: float,
+    fallback_return: float,
+) -> dict[str, float | int]:
+    """Champion headline metrics measured on ONE continuous backtest over the full range.
+
+    Discovery's multi-window fitness reports mean(per-window Sharpe) and
+    sum(per-window trades) over ``--eval-windows`` sub-windows; a train/test split
+    further restricts fitness to the training slice. Promotion, by contrast,
+    replays a single continuous backtest over the whole discovery range, so the
+    GA's stored ``sharpe``/``trades`` are a different statistic of the same DSL and
+    ``replay_drift`` flags the gap by construction (see bd vibe-quant-1gvyc).
+
+    Persisting a true full-range headline alongside the aggregate lets promotion /
+    ``check_replay_drift`` compare like-for-like; the multi-window aggregate stays
+    as a labelled robustness signal (bd vibe-quant-rewru).
+
+    Args:
+        full_range_metrics: Result of one full-range backtest (the dict
+            :class:`NTBacktestFn` returns), or ``None`` when no separate run was
+            needed -- i.e. single-window discovery with no train/test split (and
+            mock mode), where the GA fitness already IS the continuous full-range
+            metric. In that case the ``fallback_*`` values are echoed verbatim.
+        fallback_sharpe: GA-fitness Sharpe to fall back on.
+        fallback_trades: GA-fitness trade count to fall back on.
+        fallback_max_dd: GA-fitness max drawdown to fall back on.
+        fallback_pf: GA-fitness profit factor to fall back on.
+        fallback_return: GA-fitness total return to fall back on.
+
+    Returns:
+        ``{full_range_sharpe, full_range_trades, full_range_max_dd,
+        full_range_pf, full_range_return_pct}``.
+    """
+    if full_range_metrics is not None:
+        return {
+            "full_range_sharpe": float(full_range_metrics["sharpe_ratio"]),
+            "full_range_trades": int(full_range_metrics["total_trades"]),
+            "full_range_max_dd": float(full_range_metrics["max_drawdown"]),
+            "full_range_pf": float(full_range_metrics["profit_factor"]),
+            "full_range_return_pct": float(full_range_metrics.get("total_return", 0.0)),
+        }
+    return {
+        "full_range_sharpe": float(fallback_sharpe),
+        "full_range_trades": int(fallback_trades),
+        "full_range_max_dd": float(fallback_max_dd),
+        "full_range_pf": float(fallback_pf),
+        "full_range_return_pct": float(fallback_return),
+    }

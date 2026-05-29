@@ -75,8 +75,12 @@ def _load_discovery_metrics(
     entry = strategies[strategy_index]
     if not isinstance(entry, dict):
         return None
-    sharpe_raw = entry.get("sharpe")
-    trades_raw = entry.get("trades")
+    # bd vibe-quant-rewru: prefer the full-range headline (one continuous backtest
+    # over the whole discovery range) so we compare like-for-like with the screening
+    # replay. Fall back to the multi-window aggregate sharpe/trades for runs
+    # persisted before rewru, which lack the full_range_* fields.
+    sharpe_raw = entry.get("full_range_sharpe", entry.get("sharpe"))
+    trades_raw = entry.get("full_range_trades", entry.get("trades"))
     sharpe = float(sharpe_raw) if isinstance(sharpe_raw, (int, float)) else None
     trades = int(trades_raw) if isinstance(trades_raw, (int, float)) else None
     return sharpe, trades
