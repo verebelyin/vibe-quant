@@ -286,10 +286,16 @@ class ScreeningFillModelConfig:
     Attributes:
         prob_fill_on_limit: Probability of limit order fill.
         prob_slippage: Probability of slippage on market orders.
+        random_seed: Seed for the fill model RNG. NT's FillModel is unseeded by
+            default, so with ``prob_slippage > 0`` identical screening runs draw
+            different slippage realizations and metrics drift in the low-order
+            digits run-to-run (the secondary cause in bd vibe-quant-1gvyc). Set a
+            fixed seed to make screening/discovery fitness byte-reproducible.
     """
 
     prob_fill_on_limit: float = 0.8
     prob_slippage: float = 0.5
+    random_seed: int | None = None
 
 
 def create_screening_fill_model(
@@ -312,6 +318,7 @@ def create_screening_fill_model(
     return FillModel(
         prob_fill_on_limit=config.prob_fill_on_limit,
         prob_slippage=config.prob_slippage,
+        random_seed=config.random_seed,
     )
 
 

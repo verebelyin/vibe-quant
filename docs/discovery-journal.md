@@ -4,6 +4,70 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-05-29: run-812 VIDYA replay drift — ROOT CAUSE (bd vibe-quant-1gvyc, resolves bd-r8i7)
+
+### The question
+
+Batch 40 flagged run 812's VIDYA-cross champion (`genome_93359c322feb`) as non-reproducible:
+discovery reported **4.70 Sharpe / 79 trades**, the post-promote screening replay of the *identical*
+DSL gave **2.47 / 51** (−47% Sharpe, −35% trades), while screening→validation was tight (51/51).
+bd-r8i7 hypothesised "pandas-ta VIDYA non-determinism across GA workers." Recommendation 2 (line 66
+below) guessed the alternative: "GA sees a different dataset slice than post-promote `NTScreeningRunner`."
+
+### Reproduction
+
+Re-ran the stored champion DSL through `NTScreeningRunner` two ways (`/tmp/claude/replay_812.py`):
+
+| Path | Method | Sharpe | Trades |
+|---|---|---|---|
+| **A) multi-window** | 3 × 2-month sub-windows, aggregated `mean(Sharpe)` + `sum(trades)` — the GA fitness rule | **4.327** | **70** |
+| — window 1 (Sep–Oct) | | 2.925 | 24 |
+| — window 2 (Oct–Dec) | | **6.164** | 27 |
+| — window 3 (Dec–Feb) | | 3.891 | 19 |
+| **B) single full-range** | one continuous 6-month backtest (×2) | **2.804** | **46** |
+| discovery stored | (reference) | 4.698 | 79 |
+
+The genome→DSL round-trip is logic-identical (only the cosmetic genome-name hash differs) — DSL
+serialization ruled out. A reproduces the discovery regime (~4.3–4.7 / ~70–79); B reproduces the
+screening regime (~2.5–2.8 / ~46–51).
+
+### Root cause — TWO causes, neither is non-determinism of VIDYA
+
+1. **DOMINANT: estimator mismatch.** Discovery fitness runs `--eval-windows` (default **3**) sub-window
+   backtests and aggregates via `backtest_fn.py:_aggregate_multi_window` as **`mean(per-window Sharpe)`**
+   (line 114) + **`sum(per-window trades)`** (line 117). Screening/promotion replays **one continuous
+   range**. The two numbers are different statistics of the same DSL. VIDYA amplifies it: (a) its freak
+   hot middle window (Sharpe 6.16) drags the *mean* far above the full-range Sharpe; (b) summing 3
+   windows' trades double-counts boundary re-entries (each window force-flattens + re-warms the recursive
+   VIDYA from scratch), inflating the count vs one continuous run. **Not a bug** — both are valid.
+2. **SECONDARY: unseeded screening FillModel.** `create_venue_config_for_screening` built
+   `ScreeningFillModelConfig(prob_slippage=0.5)` with **no `random_seed`**, so NT's `FillModel` seeded
+   from system entropy → identical runs disagree in the low-order digits (confirmed: two full-range runs
+   gave byte-identical trades/Sharpe-to-4dp yet `b1 != b2`). This is genuine but tiny noise; it explains
+   part of the replay-70 vs discovery-79 residual, **not** the −47%.
+
+**Refutes bd-r8i7's headline:** the big drift is deterministic windowing, not VIDYA RNG (r8i7 itself
+proved VIDYA deterministic in isolation). The "unseeded RNG" was *present* but **mis-sized** — noise,
+not the cause. **Why STOCH+CCI (73→71) and MFI+WILLR (68→67) didn't drift:** their performance is
+uniform across the 3 windows, so `mean ≈ full-range` and boundary re-entries are negligible.
+
+### Fix shipped (contained — per the 1gvyc spike scope)
+
+- **Seeded the screening fill model.** Added `random_seed` to `ScreeningFillModelConfig`, pinned
+  `SCREENING_FILL_SEED = 42` in `create_venue_config_for_screening`, and propagated it into the
+  `ImportableFillModelConfig` that `BacktestVenueConfig` hands the engine. Screening + GA fitness are
+  now byte-reproducible. Regression guard: `tests/unit/test_screening_determinism.py`.
+
+### Deferred (filed as follow-up)
+
+The dominant estimator mismatch is a **reporting** issue, not an engine bug: discovery's headline
+Sharpe/trades are the multi-window aggregate and by design won't equal a single-range replay. Proper
+fix = also store a **full-range headline metric per champion** at save time (keep mean-of-windows as the
+robustness signal) so promotion and `replay_drift` compare like-for-like. Filed as **bd vibe-quant-rewru**.
+Until then, `replay_drift` stays flag-only (a hard gate would wrongly block every multi-window champion).
+
+---
+
 ## 2026-04-23: Batch 40 — bear-window short + no-bootstrap-CI + 1h (runs 812-820, first MA-cross champion)
 
 ### Goal

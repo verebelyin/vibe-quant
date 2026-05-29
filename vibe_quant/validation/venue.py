@@ -68,6 +68,13 @@ class VenueConfig:
     taker_fee: Decimal = BINANCE_TAKER_FEE
 
 
+# Fixed seed for the screening fill model's probabilistic slippage draws. NT's
+# FillModel is unseeded by default, which made identical screening replays (and
+# GA fitness evals) drift in the low-order digits run-to-run. Pinning it makes
+# the no-latency screening/discovery path byte-reproducible (bd vibe-quant-1gvyc).
+SCREENING_FILL_SEED = 42
+
+
 def create_venue_config_for_screening(
     starting_balance_usdt: int = 1_000,
     default_leverage: Decimal = Decimal("10"),
@@ -98,6 +105,7 @@ def create_venue_config_for_screening(
         fill_config=ScreeningFillModelConfig(
             prob_fill_on_limit=0.8,
             prob_slippage=0.5,
+            random_seed=SCREENING_FILL_SEED,
         ),
     )
 
@@ -258,6 +266,7 @@ def _create_importable_fill_model_config(
             config={
                 "prob_fill_on_limit": fill_cfg.prob_fill_on_limit,
                 "prob_slippage": fill_cfg.prob_slippage,
+                "random_seed": fill_cfg.random_seed,
             },
         )
 
