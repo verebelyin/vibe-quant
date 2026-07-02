@@ -756,7 +756,12 @@ class StrategyCompiler:
         }
 
         for tf in sorted(timeframes):
-            spec = tf_to_spec.get(tf, "5-MINUTE")
+            spec = tf_to_spec.get(tf)
+            if spec is None:
+                # Silently defaulting to 5-MINUTE would subscribe the wrong
+                # bars; fail loudly if VALID_TIMEFRAMES ever outgrows this map.
+                msg = f"No bar spec mapping for timeframe '{tf}'"
+                raise CompilerError(msg)
             lines.append(f"    self.bar_type_{tf} = BarType.from_str(")
             lines.append(f'        f"{{self.instrument_id}}-{spec}-LAST-EXTERNAL"')
             lines.append("    )")

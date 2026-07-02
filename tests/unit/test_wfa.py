@@ -881,3 +881,48 @@ class TestReportGeneration:
         assert "ROBUST: NO" in report
         assert "FAILED CRITERIA:" in report
         assert "OOS Sharpe" in report
+
+
+class TestNegativeIsPositiveOos:
+    """Negative IS + profitable OOS is not degradation (vibe-quant-a2b3q)."""
+
+    def test_negative_is_positive_oos_gets_max_efficiency(self) -> None:
+        cfg = WFAConfig(
+            in_sample_days=90,
+            out_of_sample_days=30,
+            step_days=30,
+            min_windows=2,
+        )
+        is_results = [
+            MockBacktestResult(sharpe=-0.5, total_return=-5.0, params={}),
+            MockBacktestResult(sharpe=-0.5, total_return=-5.0, params={}),
+        ]
+        oos_results = [
+            MockBacktestResult(sharpe=1.0, total_return=5.0, params={}),
+            MockBacktestResult(sharpe=1.0, total_return=5.0, params={}),
+        ]
+        runner = MockRunner(is_results=is_results, oos_results=oos_results)
+        wfa = WalkForwardAnalysis(config=cfg, runner=runner)
+        result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
+        # OOS outperformed IS — no degradation to flag
+        assert result.efficiency == 5.0
+
+    def test_negative_is_negative_oos_zero_efficiency(self) -> None:
+        cfg = WFAConfig(
+            in_sample_days=90,
+            out_of_sample_days=30,
+            step_days=30,
+            min_windows=2,
+        )
+        is_results = [
+            MockBacktestResult(sharpe=-0.5, total_return=-5.0, params={}),
+            MockBacktestResult(sharpe=-0.5, total_return=-5.0, params={}),
+        ]
+        oos_results = [
+            MockBacktestResult(sharpe=-1.0, total_return=-5.0, params={}),
+            MockBacktestResult(sharpe=-1.0, total_return=-5.0, params={}),
+        ]
+        runner = MockRunner(is_results=is_results, oos_results=oos_results)
+        wfa = WalkForwardAnalysis(config=cfg, runner=runner)
+        result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
+        assert result.efficiency == 0.0

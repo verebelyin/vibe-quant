@@ -434,8 +434,15 @@ class WalkForwardAnalysis:
         aggregated_oos_return = sum_oos_return * inv_n
 
         # Tiny IS denominators inflate ratio without real edge; cap output.
+        # Zero/near-zero IS with profitable OOS stays 0 (no demonstrated IS
+        # edge -> no efficiency credit). Strictly NEGATIVE IS with profitable
+        # OOS means OOS outperformed IS — there is no degradation to flag, so
+        # grant max efficiency instead of silently failing the filter
+        # (consistency still gates robustness independently).
         mean_is_return = sum_is_return * inv_n
-        if mean_is_return < _MIN_IS_RETURN:
+        if mean_is_return < 0.0 and aggregated_oos_return > 0:
+            efficiency = _MAX_EFFICIENCY
+        elif mean_is_return < _MIN_IS_RETURN:
             efficiency = 0.0
         else:
             efficiency = min(aggregated_oos_return / mean_is_return, _MAX_EFFICIENCY)

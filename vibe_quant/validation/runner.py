@@ -437,6 +437,19 @@ class ValidationRunner:
             )
             return weighted_sum / total_trades
 
+        # avg_win/avg_loss must weight by winning/losing trade counts, not
+        # total trades — a window with many losses but a big avg_win would
+        # otherwise pull the aggregate avg_win toward itself.
+        def _count_weighted_avg(attr: str, count_attr: str) -> float:
+            counts = [getattr(r, count_attr) for r in window_results]
+            total = sum(counts)
+            if total == 0:
+                return 0.0
+            weighted_sum: float = sum(
+                float(getattr(r, attr)) * c for r, c in zip(window_results, counts, strict=True)
+            )
+            return weighted_sum / float(total)
+
         # Win rate from actual counts, not averaged percentages
         win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
 
@@ -465,8 +478,8 @@ class ValidationRunner:
             max_consecutive_losses=max(r.max_consecutive_losses for r in window_results),
             largest_win=max(r.largest_win for r in window_results),
             largest_loss=min(r.largest_loss for r in window_results),
-            avg_win=_trade_weighted_avg("avg_win"),
-            avg_loss=_trade_weighted_avg("avg_loss"),
+            avg_win=_count_weighted_avg("avg_win", "winning_trades"),
+            avg_loss=_count_weighted_avg("avg_loss", "losing_trades"),
             starting_balance=window_results[0].starting_balance,
         )
         return aggregate
@@ -812,6 +825,8 @@ class ValidationRunner:
                 engine=engine,
                 venue_config=venue_config,
                 primary_timeframe=dsl.timeframe,
+                run_start_date=start_date,
+                run_end_date=end_date,
             )
 
             # Log trade events
@@ -1050,6 +1065,8 @@ class ValidationRunner:
         engine: BacktestEngine,
         venue_config: VenueConfig,
         primary_timeframe: str | None = None,
+        run_start_date: str | None = None,
+        run_end_date: str | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1064,11 +1081,13 @@ class ValidationRunner:
             venue_config: Venue config for leverage info.
             primary_timeframe: Strategy primary timeframe for market-stat
                 bar-group selection.
+            run_start_date / run_end_date: Backtest window for CAGR.
 
         Returns:
             Populated ValidationResult.
         """
         from vibe_quant.validation.extraction import extract_results
+        from vibe_quant.validation.funding import FundingCalculator
 
         return extract_results(
             run_id,
@@ -1077,6 +1096,9 @@ class ValidationRunner:
             engine,
             venue_config,
             primary_timeframe=primary_timeframe,
+            funding_calculator=FundingCalculator(),
+            run_start_date=run_start_date,
+            run_end_date=run_end_date,
         )
 
     def _write_start_event(

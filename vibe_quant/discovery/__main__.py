@@ -791,7 +791,7 @@ def main() -> int:
                     "profit_factor": 0.0,
                     "total_trades": 0,
                     "skewness": 0.0,
-                    "kurtosis": 0.0,
+                    "kurtosis": 3.0,  # normal-distribution default (min valid is 1)
                     "execution_time_seconds": execution_time,
                     "notes": json.dumps(summary_notes),
                 },

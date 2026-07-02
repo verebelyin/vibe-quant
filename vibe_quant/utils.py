@@ -9,13 +9,15 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from datetime import datetime
 
-# Timeframe string to minutes mapping (shared by screening + discovery)
+# Timeframe string to minutes mapping (shared by screening + discovery).
+# Keep in sync with data.catalog.INTERVAL_TO_AGGREGATION (minute+ entries).
 TIMEFRAME_MINUTES: dict[str, int] = {
     "1m": 1,
     "5m": 5,
     "15m": 15,
     "1h": 60,
     "4h": 240,
+    "1d": 1440,
 }
 
 

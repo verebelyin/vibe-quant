@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.validation.fill_model import SlippageEstimator
+from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
@@ -80,8 +81,19 @@ def extract_results(
     engine: BacktestEngine,
     venue_config: VenueConfig,
     primary_timeframe: str | None = None,
+    funding_calculator: FundingCalculator | None = None,
+    run_start_date: str | None = None,
+    run_end_date: str | None = None,
 ) -> ValidationResult:
-    """Extract ValidationResult from NautilusTrader backtest output."""
+    """Extract ValidationResult from NautilusTrader backtest output.
+
+    Args:
+        funding_calculator: When provided, per-trade funding is accrued
+            from archived rates and charged into net PnL / headline return.
+        run_start_date / run_end_date: Backtest window (YYYY-MM-DD) used
+            for CAGR — measuring over first-trade..last-trade instead
+            inflates CAGR for sparse traders.
+    """
     result = ValidationResult(
         run_id=run_id,
         strategy_name=strategy_name,
@@ -95,7 +107,15 @@ def extract_results(
     result.total_trades = bt_result.total_positions
 
     extract_stats(result, bt_result)
-    extract_trades(result, engine, venue_config, primary_timeframe=primary_timeframe)
+    extract_trades(
+        result,
+        engine,
+        venue_config,
+        primary_timeframe=primary_timeframe,
+        funding_calculator=funding_calculator,
+        run_start_date=run_start_date,
+        run_end_date=run_end_date,
+    )
     _extract_return_moments(result, engine)
 
     return result
@@ -218,16 +238,29 @@ def extract_trades(
     engine: BacktestEngine,
     venue_config: VenueConfig,
     primary_timeframe: str | None = None,
+    funding_calculator: FundingCalculator | None = None,
+    run_start_date: str | None = None,
+    run_end_date: str | None = None,
 ) -> None:
     """Extract individual trade records from the engine's closed positions.
 
     Uses the Position objects from the engine cache directly, since the
     positions report DataFrame column names can vary across NT versions.
 
+    Cost accounting: NT's realized_pnl already includes commissions. The
+    post-fill SPEC slippage estimate and (when a calculator is provided)
+    accrued funding are ADDITIONALLY charged into each trade's net_pnl and
+    into the headline total_return, so "full cost modeling" metrics actually
+    contain the modeled costs. sharpe_ratio stays NT-reported (slippage/
+    funding are second-order for its per-day return series).
+
     Args:
         result: ValidationResult to populate trades on (mutated in place).
         engine: BacktestEngine after run.
         venue_config: Venue config for default leverage.
+        primary_timeframe: Strategy timeframe for market-stat selection.
+        funding_calculator: Optional post-hoc funding accrual.
+        run_start_date / run_end_date: Backtest window for CAGR.
     """
     try:
         # NT netting mode reuses position IDs: when a position closes and reopens,
@@ -269,6 +302,8 @@ def extract_trades(
 
     market_stats = estimate_market_stats(engine, primary_timeframe)
 
+    total_funding = 0.0
+
     for pos in positions:
         realized_pnl = float(pos.realized_pnl)
         entry_price = float(pos.avg_px_open)
@@ -278,11 +313,6 @@ def extract_trades(
 
         pos_fees = sum(float(c) for c in pos.commissions())
         total_fees += abs(pos_fees)
-
-        if realized_pnl > 0:
-            winning += 1
-        elif realized_pnl < 0:
-            losing += 1
 
         avg_bar_volume, bar_volatility = market_stats.get(
             str(pos.instrument_id),
@@ -300,12 +330,6 @@ def extract_trades(
             slippage_cost = 0.0
         total_slippage += slippage_cost
 
-        if entry_price > 0 and quantity > 0:
-            notional = entry_price * quantity
-            roi_pct = (realized_pnl / notional) * 100.0
-        else:
-            roi_pct = 0.0
-
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
 
@@ -313,6 +337,33 @@ def extract_trades(
             "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
         )
         instrument_id = str(pos.instrument_id)
+
+        # Post-hoc funding accrual from archived rates (positive = paid)
+        if funding_calculator is not None:
+            funding_fees = funding_calculator.compute_funding(
+                instrument_id=instrument_id,
+                direction=direction,
+                entry_notional=entry_price * quantity,
+                entry_ns=int(pos.ts_opened),
+                exit_ns=int(pos.ts_closed) if pos.ts_closed else None,
+            )
+        else:
+            funding_fees = 0.0
+        total_funding += funding_fees
+
+        # Net PnL: NT realized (fees included) minus modeled slippage/funding
+        net_pnl = realized_pnl - slippage_cost - funding_fees
+
+        if net_pnl > 0:
+            winning += 1
+        elif net_pnl < 0:
+            losing += 1
+
+        if entry_price > 0 and quantity > 0:
+            notional = entry_price * quantity
+            roi_pct = (net_pnl / notional) * 100.0
+        else:
+            roi_pct = 0.0
 
         # Split fees 50/50 between entry and exit.
         # NT's MakerTakerFeeModel uses order.liquidity_side per fill:
@@ -330,12 +381,6 @@ def extract_trades(
         # "signal" for now.
         exit_reason = "signal"
 
-        # TODO: NT Position does not expose cumulative funding fees paid
-        # during the position lifetime. The funding_fees field defaults
-        # to 0.0 until NT provides this data or we accumulate it from
-        # FundingRate events during the backtest.
-        funding_fees = 0.0
-
         trade = TradeRecord(
             symbol=instrument_id,
             direction=direction,
@@ -350,7 +395,7 @@ def extract_trades(
             funding_fees=funding_fees,
             slippage_cost=slippage_cost,
             gross_pnl=realized_pnl + abs(pos_fees),
-            net_pnl=realized_pnl,
+            net_pnl=net_pnl,
             roi_percent=roi_pct,
             exit_reason=exit_reason,
         )
@@ -362,15 +407,16 @@ def extract_trades(
     result.losing_trades = losing
     result.total_fees = total_fees
     result.total_slippage = total_slippage
+    result.total_funding = total_funding
     if result.total_trades > 0:
         result.win_rate = winning / result.total_trades
 
-    # NT Position API exposes no cumulative funding; multi-day holds may diverge.
-    if result.total_trades > 0:
-        logger.warning(
-            "run %s: funding fees not modeled (NT Position API limitation)",
-            result.run_id,
-        )
+    # Charge modeled slippage + funding into the headline return so it is
+    # consistent with the per-trade net PnL (NT's stats know nothing of
+    # either post-fill cost).
+    extra_costs = total_slippage + total_funding
+    if extra_costs != 0.0 and result.starting_balance > 0:
+        result.total_return -= extra_costs / result.starting_balance
 
     # NT 1.222+ may not populate max_drawdown via stats_pnls/stats_returns
     # (the old MaxDrawdown indicator was removed). Compute from equity curve
@@ -380,7 +426,7 @@ def extract_trades(
             result.trades, result.starting_balance
         )
 
-    compute_extended_metrics(result)
+    compute_extended_metrics(result, run_start_date=run_start_date, run_end_date=run_end_date)
 
 
 #: Conservative fallbacks when no usable bar data is in the cache
@@ -515,7 +561,11 @@ def _compute_max_drawdown_from_trades(
     return max_dd
 
 
-def compute_extended_metrics(result: ValidationResult) -> None:
+def compute_extended_metrics(
+    result: ValidationResult,
+    run_start_date: str | None = None,
+    run_end_date: str | None = None,
+) -> None:
     """Compute SPEC-required extended metrics from trades.
 
     Populates: largest_win/loss, avg_win/loss, max_consecutive_wins/losses,
@@ -523,6 +573,10 @@ def compute_extended_metrics(result: ValidationResult) -> None:
 
     Args:
         result: ValidationResult to populate (mutated in place).
+        run_start_date / run_end_date: Backtest window (YYYY-MM-DD). When
+            provided, CAGR annualizes over the run window; the old
+            first-trade..last-trade span inflates CAGR for strategies that
+            trade sparsely within a longer window.
     """
     if not result.trades:
         return
@@ -577,10 +631,22 @@ def compute_extended_metrics(result: ValidationResult) -> None:
 
     if result.total_return != 0.0 and result.trades:
         try:
-            first_entry = datetime.fromisoformat(result.trades[0].entry_time.replace("Z", "+00:00"))
-            last_exit_str = result.trades[-1].exit_time or result.trades[-1].entry_time
-            last_exit = datetime.fromisoformat(last_exit_str.replace("Z", "+00:00"))
-            days = max((last_exit - first_entry).total_seconds() / 86400.0, 1.0)
+            days: float | None = None
+            if run_start_date and run_end_date:
+                try:
+                    window_start = datetime.fromisoformat(run_start_date)
+                    window_end = datetime.fromisoformat(run_end_date)
+                    days = max((window_end - window_start).total_seconds() / 86400.0, 1.0)
+                except ValueError:
+                    days = None
+            if days is None:
+                # Fallback: trade span (inflates CAGR for sparse traders)
+                first_entry = datetime.fromisoformat(
+                    result.trades[0].entry_time.replace("Z", "+00:00")
+                )
+                last_exit_str = result.trades[-1].exit_time or result.trades[-1].entry_time
+                last_exit = datetime.fromisoformat(last_exit_str.replace("Z", "+00:00"))
+                days = max((last_exit - first_entry).total_seconds() / 86400.0, 1.0)
             # total_return is stored as a decimal fraction from NT stats
             # (e.g. 0.12 = 12%). Use directly — no heuristic conversion.
             total_return_frac = result.total_return
