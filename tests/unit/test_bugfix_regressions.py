@@ -68,13 +68,19 @@ class TestStartingBalance:
         assert balance == 50_000.0, f"Expected 50000, got {balance}"
 
     def test_fallback_to_default(self, state_mgr: StateManager) -> None:
-        """When no starting_balance stored, defaults to 10000."""
+        """When no starting_balance stored, falls back to the VENUE default.
+
+        Must match validation.venue.DEFAULT_STARTING_BALANCE_USDT (1000) —
+        the old 10k fallback mis-scaled equity/DD/monthly % by 10x
+        (vibe-quant-x401i).
+        """
         from vibe_quant.api.routers.results import _get_starting_balance
+        from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
 
         run_id = _create_run(state_mgr)
         # No backtest_results row at all
         balance = _get_starting_balance(state_mgr, run_id)
-        assert balance == 10_000.0
+        assert balance == float(DEFAULT_STARTING_BALANCE_USDT) == 1_000.0
 
 
 # ---------------------------------------------------------------------------

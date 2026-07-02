@@ -65,6 +65,8 @@ def db_path(tmp_path: Path) -> Path:
             total_trades INTEGER,
             total_fees REAL,
             total_funding REAL,
+            skewness REAL,
+            kurtosis REAL,
             is_pareto_optimal BOOLEAN DEFAULT 0,
             passed_deflated_sharpe BOOLEAN,
             passed_walk_forward BOOLEAN,
