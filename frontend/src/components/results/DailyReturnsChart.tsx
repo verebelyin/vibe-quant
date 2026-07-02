@@ -10,37 +10,18 @@ import {
   YAxis,
 } from "recharts";
 import type { EquityCurvePoint } from "@/api/generated/models/equityCurvePoint";
+// Resamples per-trade equity points to calendar days so these really are
+// DAILY returns, not per-trade returns (vibe-quant-pazbr).
+import { computeDailyReturns, type DailyReturnPoint } from "@/lib/equity";
 
 interface DailyReturnsChartProps {
   data: EquityCurvePoint[];
   height?: number;
 }
 
-interface DailyReturn {
-  timestamp: string;
-  returnPct: number;
-}
-
 interface TooltipPayloadEntry {
   value: number;
-  payload: DailyReturn;
-}
-
-function computeDailyReturns(data: EquityCurvePoint[]): DailyReturn[] {
-  if (data.length < 2) return [];
-
-  const result: DailyReturn[] = [];
-  for (let i = 1; i < data.length; i++) {
-    const prev = data[i - 1]!.equity;
-    const curr = data[i]!.equity;
-    if (prev !== 0) {
-      result.push({
-        timestamp: data[i]!.timestamp,
-        returnPct: Number.parseFloat((((curr - prev) / prev) * 100).toFixed(4)),
-      });
-    }
-  }
-  return result;
+  payload: DailyReturnPoint;
 }
 
 function formatDate(ts: string): string {

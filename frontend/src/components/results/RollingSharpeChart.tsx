@@ -10,6 +10,12 @@ import {
   YAxis,
 } from "recharts";
 import type { EquityCurvePoint } from "@/api/generated/models/equityCurvePoint";
+import { computeRollingSharpe, type SharpePoint } from "@/lib/equity";
+
+// Re-export so existing imports (tests) keep working; the implementation
+// now resamples per-trade equity points to calendar days first and
+// annualizes with sqrt(365) — see lib/equity.ts (vibe-quant-pazbr).
+export { computeRollingSharpe };
 
 interface RollingSharpeChartProps {
   data: EquityCurvePoint[];
@@ -17,43 +23,9 @@ interface RollingSharpeChartProps {
   window?: number;
 }
 
-interface SharpePoint {
-  timestamp: string;
-  sharpe: number;
-}
-
 interface TooltipPayloadEntry {
   value: number;
   payload: SharpePoint;
-}
-
-export function computeRollingSharpe(data: EquityCurvePoint[], window: number): SharpePoint[] {
-  if (data.length < window + 1) return [];
-
-  // compute daily returns
-  const returns: number[] = [];
-  for (let i = 1; i < data.length; i++) {
-    const prev = data[i - 1]!.equity;
-    const curr = data[i]!.equity;
-    returns.push(prev !== 0 ? (curr - prev) / prev : 0);
-  }
-
-  const result: SharpePoint[] = [];
-  for (let i = window - 1; i < returns.length; i++) {
-    const slice = returns.slice(i - window + 1, i + 1);
-    const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
-    const variance =
-      slice.length > 1
-        ? slice.reduce((a, b) => a + (b - mean) ** 2, 0) / (slice.length - 1)
-        : 0;
-    const std = Math.sqrt(variance);
-    const sharpe = std !== 0 ? (mean / std) * Math.sqrt(252) : 0;
-    result.push({
-      timestamp: data[i + 1]!.timestamp,
-      sharpe: Number.parseFloat(sharpe.toFixed(3)),
-    });
-  }
-  return result;
 }
 
 function formatDate(ts: string): string {

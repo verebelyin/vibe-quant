@@ -62,7 +62,8 @@ describe("Rolling Sharpe sample variance (bd-s5mi)", () => {
     const sampleVariance =
       returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length - 1);
     const std = Math.sqrt(sampleVariance);
-    const expectedSharpe = (mean / std) * Math.sqrt(252);
+    // sqrt(365): crypto trades every calendar day (vibe-quant-pazbr)
+    const expectedSharpe = (mean / std) * Math.sqrt(365);
 
     expect(result[0]!.sharpe).toBeCloseTo(
       Number.parseFloat(expectedSharpe.toFixed(3)),
