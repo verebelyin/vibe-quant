@@ -573,9 +573,11 @@ class ValidationRunner:
         Returns:
             Configured VenueConfig.
         """
-        balance = run_config.get("starting_balance", 1_000)
+        from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
+
+        balance = run_config.get("starting_balance", DEFAULT_STARTING_BALANCE_USDT)
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
-            balance = 1_000
+            balance = DEFAULT_STARTING_BALANCE_USDT
 
         # Skip latency for sub-5m timeframes ONLY when no detail data
         # provides sub-bar resolution for the matching engine

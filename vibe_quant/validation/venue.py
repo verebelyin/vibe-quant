@@ -31,6 +31,11 @@ from vibe_quant.validation.latency import (
 BINANCE_MAKER_FEE = Decimal("0.0002")  # 0.02%
 BINANCE_TAKER_FEE = Decimal("0.0005")  # 0.05%
 
+# Single source of truth for the default account size. The results API
+# fallback MUST match this — a mismatched fallback (e.g. 10k vs 1k) scales
+# every equity-curve/drawdown/monthly-return percentage by 10x.
+DEFAULT_STARTING_BALANCE_USDT: int = 1_000
+
 
 @dataclass
 class VenueConfig:
@@ -50,7 +55,7 @@ class VenueConfig:
     """
 
     name: str = "BINANCE"
-    starting_balance_usdt: int = 1_000
+    starting_balance_usdt: int = DEFAULT_STARTING_BALANCE_USDT
     default_leverage: Decimal = Decimal("10")
     leverages: dict[str, Decimal] = field(default_factory=dict)
 
@@ -76,7 +81,7 @@ SCREENING_FILL_SEED = 42
 
 
 def create_venue_config_for_screening(
-    starting_balance_usdt: int = 1_000,
+    starting_balance_usdt: int = DEFAULT_STARTING_BALANCE_USDT,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
 ) -> VenueConfig:
@@ -111,7 +116,7 @@ def create_venue_config_for_screening(
 
 
 def create_venue_config_for_validation(
-    starting_balance_usdt: int = 1_000,
+    starting_balance_usdt: int = DEFAULT_STARTING_BALANCE_USDT,
     default_leverage: Decimal = Decimal("10"),
     leverages: dict[str, Decimal] | None = None,
     latency_preset: LatencyPreset | str | None = LatencyPreset.CLOUD,
@@ -303,6 +308,7 @@ def _create_importable_fee_model_config() -> ImportableFeeModelConfig:
 # Re-export latency presets for convenience
 __all__ = [
     "VenueConfig",
+    "DEFAULT_STARTING_BALANCE_USDT",
     "BINANCE_MAKER_FEE",
     "BINANCE_TAKER_FEE",
     "LATENCY_PRESETS",

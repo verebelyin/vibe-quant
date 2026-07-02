@@ -387,3 +387,42 @@ class TestConvenienceFunction:
         assert result.strategy_name == "test_strategy"
         assert result.screening_run_id == 1
         assert result.validation_run_id == 4
+
+
+class TestSweepRowSelection:
+    """Deterministic sweep-row selection (vibe-quant-s8kv1).
+
+    A screening run has many sweep_results rows; the unordered fetchone()
+    previously compared validation against an arbitrary combo.
+    """
+
+    def _add_second_row(self, db_path: Path) -> int:
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.execute(
+            "INSERT INTO sweep_results (run_id, parameters, sharpe_ratio, total_return)"
+            " VALUES (1, '{\"rsi_period\": 7}', 0.5, 5.0)"
+        )
+        conn.commit()
+        row_id = cur.lastrowid
+        conn.close()
+        assert row_id is not None
+        return row_id
+
+    def test_default_uses_best_sharpe_row(self, db_path: Path) -> None:
+        """Without sweep_result_id, the best-Sharpe combo is compared."""
+        self._add_second_row(db_path)  # worse row (sharpe 0.5) inserted later
+        checker = ConsistencyChecker(db_path)
+        result = checker.check_consistency(1, 4)
+        checker.close()
+        assert result.screening_sharpe == 2.0  # best, not insertion-order
+
+    def test_explicit_sweep_result_id(self, db_path: Path) -> None:
+        """sweep_result_id pins the comparison to the promoted combo."""
+        worse_id = self._add_second_row(db_path)
+        checker = ConsistencyChecker(db_path)
+        result = checker.check_consistency(1, 4, sweep_result_id=worse_id)
+        checker.close()
+        assert result.screening_sharpe == 0.5
+        assert result.parameters == '{"rsi_period": 7}'

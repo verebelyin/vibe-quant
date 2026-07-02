@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
@@ -86,6 +86,25 @@ def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
     )
 
 
+def _kill_pool_workers(executor: ProcessPoolExecutor) -> None:
+    """Force-kill worker processes of a stalled ProcessPoolExecutor.
+
+    Hung NT backtests never return, so ``shutdown(wait=True)`` would block
+    forever. Mirrors ``vibe_quant.discovery.fitness._force_shutdown_pool``.
+    """
+    processes = getattr(executor, "_processes", None)
+    if not processes:
+        return
+    for pid, proc in list(processes.items()):
+        try:
+            if proc.is_alive():
+                logger.warning("Killing stalled screening worker pid=%d", pid)
+                proc.kill()
+                proc.join(timeout=5)
+        except Exception:
+            logger.warning("Could not kill worker pid=%d", pid, exc_info=True)
+
+
 class ScreeningPipeline:
     """Pipeline for parallel parameter sweep screening.
 
@@ -106,6 +125,10 @@ class ScreeningPipeline:
         result = pipeline.run(filters=MetricFilters(min_sharpe=0.5))
     """
 
+    #: Abandon the sweep's pending combos if NO backtest completes within
+    #: this many seconds (a hung NT worker would otherwise stall forever)
+    DEFAULT_STALL_TIMEOUT_S: float = 600.0
+
     def __init__(
         self,
         dsl: StrategyDSL,
@@ -113,6 +136,7 @@ class ScreeningPipeline:
         max_workers: int | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        stall_timeout_s: float | None = None,
     ) -> None:
         """Initialize screening pipeline.
 
@@ -120,14 +144,17 @@ class ScreeningPipeline:
             dsl: Parsed StrategyDSL with sweep parameters
             backtest_runner: Function to run single backtest. Uses mock if None.
             max_workers: Max parallel workers. Defaults to cpu_count - 1.
-            start_date: Backtest start date (YYYY-MM-DD) for DSR bar count.
-            end_date: Backtest end date (YYYY-MM-DD) for DSR bar count.
+            start_date: Backtest start date (YYYY-MM-DD) for DSR day count.
+            end_date: Backtest end date (YYYY-MM-DD) for DSR day count.
+            stall_timeout_s: Seconds with zero completions before pending
+                combos are abandoned with sentinel metrics.
         """
         self.dsl = dsl
         self._runner = backtest_runner or _run_mock_backtest
         self._max_workers = max_workers or max(1, cpu_count() - 1)
         self._start_date = start_date
         self._end_date = end_date
+        self._stall_timeout_s = stall_timeout_s or self.DEFAULT_STALL_TIMEOUT_S
 
         # Build parameter grid
         self._param_grid = build_parameter_grid(dsl.sweep)
@@ -272,56 +299,79 @@ class ScreeningPipeline:
     ) -> list[BacktestMetrics]:
         """Run backtests in parallel using ProcessPoolExecutor.
 
+        A wait-loop with a stall timeout replaces the old
+        ``as_completed`` + ``future.result(timeout=300)`` pattern: that
+        timeout was dead code (``as_completed`` only yields already-done
+        futures), so a single hung NT worker stalled the sweep forever.
+        Now, if NO backtest completes within ``stall_timeout_s``, all
+        pending combos get sentinel metrics and worker processes are
+        killed so the pipeline still returns.
+
         Args:
             progress_callback: Optional progress callback
 
         Returns:
             List of all backtest results
         """
+        from concurrent.futures import FIRST_COMPLETED, wait
+
         results: list[BacktestMetrics] = []
         total = self.num_combinations
         completed = 0
+        stalled = False
 
-        # Use ProcessPoolExecutor for CPU-bound backtests
-        with ProcessPoolExecutor(max_workers=self._max_workers) as executor:
-            # Submit all tasks
+        executor = ProcessPoolExecutor(max_workers=self._max_workers)
+        try:
             future_to_params = {
                 executor.submit(self._runner, params): params for params in self._param_grid
             }
+            pending = set(future_to_params)
 
-            # Collect results as they complete
-            for future in as_completed(future_to_params):
-                params = future_to_params[future]
-                try:
-                    result = future.result(timeout=300)
-                    results.append(result)
-                except TimeoutError:
-                    logger.warning("Backtest timed out (300s) for params %s", params)
-                    results.append(
-                        BacktestMetrics(
-                            parameters=params,
-                            sharpe_ratio=-999.0,
-                        )
-                    )
-                except Exception as e:
-                    # Log error but continue with other backtests
+            while pending:
+                done, pending = wait(
+                    pending, timeout=self._stall_timeout_s, return_when=FIRST_COMPLETED
+                )
+                if not done:
+                    stalled = True
                     logger.warning(
-                        "Backtest failed for params %s: %s",
-                        params,
-                        e,
+                        "No backtest completed within %.0fs — abandoning %d "
+                        "pending combinations with sentinel metrics",
+                        self._stall_timeout_s,
+                        len(pending),
                     )
-                    # Add failed result with sentinel metrics (-999 avoids
-                    # -inf propagation through Pareto / ranking arithmetic)
-                    results.append(
-                        BacktestMetrics(
-                            parameters=params,
-                            sharpe_ratio=-999.0,
+                    for future in pending:
+                        future.cancel()
+                        results.append(
+                            BacktestMetrics(
+                                parameters=future_to_params[future],
+                                sharpe_ratio=-999.0,
+                            )
                         )
-                    )
+                        completed += 1
+                        if progress_callback:
+                            progress_callback(completed, total)
+                    break
 
-                completed += 1
-                if progress_callback:
-                    progress_callback(completed, total)
+                for future in done:
+                    params = future_to_params[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        # Log error but continue with other backtests.
+                        # Sentinel -999 avoids -inf propagation through
+                        # Pareto / ranking arithmetic.
+                        logger.warning("Backtest failed for params %s: %s", params, e)
+                        results.append(
+                            BacktestMetrics(parameters=params, sharpe_ratio=-999.0)
+                        )
+                    completed += 1
+                    if progress_callback:
+                        progress_callback(completed, total)
+        finally:
+            if stalled:
+                _kill_pool_workers(executor)
+            # wait=False when stalled: hung workers would block shutdown
+            executor.shutdown(wait=not stalled, cancel_futures=True)
 
         return results
 

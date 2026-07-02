@@ -87,12 +87,19 @@ class ConsistencyChecker:
         self,
         screening_run_id: int,
         validation_run_id: int,
+        sweep_result_id: int | None = None,
     ) -> ConsistencyResult:
         """Compare screening vs validation results.
 
+        A screening run has one sweep_results row PER parameter combination.
+        Pass ``sweep_result_id`` to compare the exact combo that was promoted
+        to validation; otherwise the best-Sharpe row is used (deterministic —
+        the previous unordered ``fetchone()`` compared an arbitrary combo).
+
         Args:
-            screening_run_id: ID from sweep_results table.
+            screening_run_id: Run ID whose sweep_results to compare.
             validation_run_id: ID from backtest_results table.
+            sweep_result_id: Specific sweep_results.id to compare (optional).
 
         Returns:
             ConsistencyResult with comparison metrics.
@@ -100,17 +107,31 @@ class ConsistencyChecker:
         Raises:
             ValueError: If run IDs not found.
         """
-        # Get screening result
-        row = self.conn.execute(
-            """
-            SELECT s.name AS strategy_name, sr.sharpe_ratio, sr.total_return, sr.parameters
-            FROM sweep_results sr
-            JOIN backtest_runs br ON sr.run_id = br.id
-            JOIN strategies s ON br.strategy_id = s.id
-            WHERE sr.run_id = ?
-            """,
-            (screening_run_id,),
-        ).fetchone()
+        # Get screening result — specific row if given, else best Sharpe
+        if sweep_result_id is not None:
+            row = self.conn.execute(
+                """
+                SELECT s.name AS strategy_name, sr.sharpe_ratio, sr.total_return, sr.parameters
+                FROM sweep_results sr
+                JOIN backtest_runs br ON sr.run_id = br.id
+                JOIN strategies s ON br.strategy_id = s.id
+                WHERE sr.run_id = ? AND sr.id = ?
+                """,
+                (screening_run_id, sweep_result_id),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """
+                SELECT s.name AS strategy_name, sr.sharpe_ratio, sr.total_return, sr.parameters
+                FROM sweep_results sr
+                JOIN backtest_runs br ON sr.run_id = br.id
+                JOIN strategies s ON br.strategy_id = s.id
+                WHERE sr.run_id = ?
+                ORDER BY sr.sharpe_ratio DESC, sr.id ASC
+                LIMIT 1
+                """,
+                (screening_run_id,),
+            ).fetchone()
 
         if row is None:
             msg = f"Screening run {screening_run_id} not found"
@@ -372,6 +393,7 @@ def check_consistency(
     screening_run_id: int,
     validation_run_id: int,
     db_path: str | Path | None = None,
+    sweep_result_id: int | None = None,
 ) -> ConsistencyResult:
     """Convenience function to check single pair.
 
@@ -379,12 +401,15 @@ def check_consistency(
         screening_run_id: ID from sweep_results.
         validation_run_id: ID from backtest_results.
         db_path: Optional database path.
+        sweep_result_id: Specific sweep row to compare (else best Sharpe).
 
     Returns:
         ConsistencyResult object.
     """
     checker = ConsistencyChecker(db_path)
     try:
-        return checker.check_consistency(screening_run_id, validation_run_id)
+        return checker.check_consistency(
+            screening_run_id, validation_run_id, sweep_result_id=sweep_result_id
+        )
     finally:
         checker.close()

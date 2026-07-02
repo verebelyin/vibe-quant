@@ -28,6 +28,7 @@ from vibe_quant.api.schemas.result import (
     TradeResponse,
 )
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
 
 logger = logging.getLogger(__name__)
 
@@ -399,8 +400,15 @@ def _ensure_run_exists(mgr: StateManager, run_id: int) -> None:
 
 
 def _get_starting_balance(mgr: StateManager, run_id: int) -> float:
-    """Get starting balance from backtest results, default 10_000.0."""
+    """Get starting balance from results, else the run config, else the
+    venue default (1_000 — must match VenueConfig, not an arbitrary 10k:
+    a mismatched fallback mis-scales every equity/drawdown/monthly %)."""
     result = mgr.get_backtest_result(run_id)
     if result and result.get("starting_balance"):
         return float(result["starting_balance"])
-    return 10_000.0
+    run = mgr.get_backtest_run(run_id)
+    if run:
+        balance = run.get("starting_balance")
+        if isinstance(balance, (int, float)) and balance > 0:
+            return float(balance)
+    return float(DEFAULT_STARTING_BALANCE_USDT)
