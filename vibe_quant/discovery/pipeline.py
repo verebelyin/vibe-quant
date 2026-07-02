@@ -32,7 +32,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
-from vibe_quant.utils import compute_bar_count
+from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -1443,10 +1443,10 @@ class DiscoveryPipeline:
             bootstrap_ci_level=self.config.bootstrap_ci_level,
         )
 
-        # Use actual bar count for DSR (not total_trades * 5 proxy)
-        bar_count = compute_bar_count(
-            self.config.start_date, self.config.end_date, self.config.timeframe,
-        )
+        # DSR observation count: NT Sharpe is annualized from daily returns,
+        # and apply_discovery_dsr de-annualizes to daily units — so T must be
+        # the day count of the window, not the bar count (vibe-quant-zmzzh).
+        day_count = compute_day_count(self.config.start_date, self.config.end_date)
 
         import numpy as np
 
@@ -1454,7 +1454,7 @@ class DiscoveryPipeline:
         any_hard_failure = False
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
-            num_obs = bar_count if bar_count else max(100, fitness.total_trades * 5)
+            num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
 
             trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None
             result: GuardrailResult = apply_guardrails(

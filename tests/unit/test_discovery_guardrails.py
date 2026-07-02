@@ -142,15 +142,26 @@ class TestDiscoveryDSR:
         assert result.num_trials == 5000
 
     def test_custom_significance_level(self) -> None:
-        result = apply_discovery_dsr(
+        # Post vibe-quant-zmzzh the annualized Sharpe is de-annualized to
+        # daily units, so significance thresholds reflect real statistical
+        # power: annualized SR=2 over 500 days vs 10 trials is NOT enough
+        # at 1%, while SR=4 over 1000 days clearly is.
+        weak = apply_discovery_dsr(
             observed_sharpe=2.0,
             num_trials=10,
             num_observations=500,
             significance_level=0.01,
         )
-        assert isinstance(result, DSRResult)
-        # With 10 trials and Sharpe=2, should still be significant at 1%
-        assert result.is_significant is True
+        assert isinstance(weak, DSRResult)
+        assert weak.is_significant is False
+
+        strong = apply_discovery_dsr(
+            observed_sharpe=4.0,
+            num_trials=10,
+            num_observations=1000,
+            significance_level=0.01,
+        )
+        assert strong.is_significant is True
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, deannualize_sharpe
 from vibe_quant.screening.grid import (
     build_parameter_grid,
     compute_pareto_front,
@@ -33,7 +33,7 @@ from vibe_quant.screening.types import (
     MetricFilters,
     ScreeningResult,
 )
-from vibe_quant.utils import compute_bar_count
+from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -188,23 +188,24 @@ class ScreeningPipeline:
         if apply_dsr and len(filtered) > 1:
             dsr = DeflatedSharpeRatio(significance_level=dsr_significance)
             num_trials = len(all_results)
-            # DSR needs number of return periods (bars), not trades
-            bar_count = compute_bar_count(
-                self._start_date, self._end_date, self.dsl.timeframe
-            )
-            # Compute empirical variance of trial Sharpes for accurate DSR
+            # NT reports Sharpe annualized from daily returns ("252 days").
+            # DSR needs the statistic and T in the same sampling frequency,
+            # so de-annualize to daily units and use the window's day count
+            # as the observation count (not the bar count).
+            day_count = compute_day_count(self._start_date, self._end_date)
+            # Empirical variance of trial Sharpes (same daily units as SR)
             trials_sharpe_variance: float | None = None
             if len(all_results) >= 2:
-                sharpes = [r.sharpe_ratio for r in all_results]
+                sharpes = [deannualize_sharpe(r.sharpe_ratio) for r in all_results]
                 mean_sr = sum(sharpes) / len(sharpes)
                 trials_sharpe_variance = (
                     sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
                 )
             dsr_passed = []
             for r in filtered:
-                num_obs = bar_count if bar_count else max(r.total_trades, 30)
+                num_obs = day_count if day_count else max(r.total_trades, 30)
                 result = dsr.calculate(
-                    observed_sharpe=r.sharpe_ratio,
+                    observed_sharpe=deannualize_sharpe(r.sharpe_ratio),
                     num_trials=num_trials,
                     num_observations=num_obs,
                     skewness=r.skewness,

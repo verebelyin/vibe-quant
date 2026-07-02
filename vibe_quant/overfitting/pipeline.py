@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH
-from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, DSRResult
+from vibe_quant.overfitting.dsr import (
+    TRADING_DAYS_PER_YEAR,
+    DeflatedSharpeRatio,
+    DSRResult,
+    deannualize_sharpe,
+)
 from vibe_quant.overfitting.mock_runner import MockBacktestRunner
 from vibe_quant.overfitting.purged_kfold import CVConfig, CVResult, PurgedKFoldCV
 from vibe_quant.overfitting.types import (
@@ -97,7 +102,7 @@ class OverfittingPipeline:
         Args:
             run_id: Backtest run ID to filter candidates for.
             config: Filter configuration. Uses default if None.
-            num_observations: Number of observations for DSR (default 252 = 1 year).
+            num_observations: Number of DAILY observations for DSR (default 252 = 1 year). Sharpes are de-annualized internally to match.
             data_start: Start date for WFA windows (optional).
             data_end: End date for WFA windows (optional).
             n_samples: Number of samples for Purged K-Fold (default 1000).
@@ -187,15 +192,27 @@ class OverfittingPipeline:
                 if sharpe is None:
                     passed_dsr = False
                 else:
-                    skewness = candidate.get("skewness", 0.0)
-                    kurtosis = candidate.get("kurtosis", 3.0)
+                    # NULL columns come back as None (not missing keys), so
+                    # coalesce explicitly to the normal-distribution defaults.
+                    raw_skew = candidate.get("skewness")
+                    raw_kurt = candidate.get("kurtosis")
+                    skewness = float(raw_skew) if raw_skew is not None else 0.0
+                    kurtosis = float(raw_kurt) if raw_kurt is not None else 3.0
+                    # Guard against invalid stored values (theoretical min is 1)
+                    kurtosis = max(kurtosis, 1.0)
+                    # Stored Sharpes are NT-annualized (252-day); DSR needs
+                    # per-period units matching num_observations (days).
                     dsr_result = dsr.calculate(
-                        observed_sharpe=float(sharpe),
+                        observed_sharpe=deannualize_sharpe(float(sharpe)),
                         num_trials=num_trials,
                         num_observations=num_observations,
                         skewness=skewness,
                         kurtosis=kurtosis,
-                        trials_sharpe_variance=trials_sharpe_variance,
+                        trials_sharpe_variance=(
+                            trials_sharpe_variance / TRADING_DAYS_PER_YEAR
+                            if trials_sharpe_variance is not None
+                            else None
+                        ),
                     )
                     passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
                 if passed_dsr:
@@ -341,6 +358,7 @@ class OverfittingPipeline:
             """
             SELECT sr.id, sr.run_id, sr.parameters, sr.sharpe_ratio, sr.total_return,
                    sr.sortino_ratio, sr.max_drawdown, sr.profit_factor, sr.win_rate,
+                   sr.skewness, sr.kurtosis,
                    sr.is_pareto_optimal, br.strategy_id, s.name AS strategy_name
             FROM sweep_results sr
             LEFT JOIN backtest_runs br ON sr.run_id = br.id
@@ -381,6 +399,7 @@ class OverfittingPipeline:
             SELECT br.run_id, br.sharpe_ratio, br.sortino_ratio, br.max_drawdown,
                    br.total_return, br.profit_factor, br.win_rate, br.total_trades,
                    br.total_fees, br.total_funding, br.execution_time_seconds,
+                   br.skewness, br.kurtosis,
                    br.notes, r.strategy_id, s.name AS strategy_name
             FROM backtest_results br
             LEFT JOIN backtest_runs r ON br.run_id = r.id
@@ -404,8 +423,8 @@ class OverfittingPipeline:
             INSERT INTO sweep_results
                 (run_id, parameters, sharpe_ratio, sortino_ratio, max_drawdown,
                  total_return, profit_factor, win_rate, total_fees, total_funding,
-                 execution_time_seconds, is_pareto_optimal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                 execution_time_seconds, skewness, kurtosis, is_pareto_optimal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 run_id,
@@ -419,6 +438,8 @@ class OverfittingPipeline:
                 d.get("total_fees"),
                 d.get("total_funding"),
                 d.get("execution_time_seconds"),
+                d.get("skewness"),
+                d.get("kurtosis"),
             ),
         )
         self.conn.commit()
@@ -441,6 +462,8 @@ class OverfittingPipeline:
                 "max_drawdown": d.get("max_drawdown"),
                 "profit_factor": d.get("profit_factor"),
                 "win_rate": d.get("win_rate"),
+                "skewness": d.get("skewness"),
+                "kurtosis": d.get("kurtosis"),
                 "is_pareto_optimal": 1,
                 "strategy_id": br_row["strategy_id"],
                 "strategy_name": br_row["strategy_name"],

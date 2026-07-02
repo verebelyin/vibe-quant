@@ -36,6 +36,23 @@ from statistics import NormalDist
 
 # Euler-Mascheroni constant
 EULER_MASCHERONI: float = 0.5772156649015329
+# NT's SharpeRatio statistic annualizes from daily returns ("252 days")
+TRADING_DAYS_PER_YEAR: float = 252.0
+
+
+def deannualize_sharpe(
+    annualized_sharpe: float,
+    periods_per_year: float = TRADING_DAYS_PER_YEAR,
+) -> float:
+    """Convert an annualized Sharpe ratio to per-period units.
+
+    The DSR formulas (SR₀ and Lo's estimator variance) assume the Sharpe
+    statistic and ``num_observations`` share the same sampling frequency.
+    NautilusTrader reports Sharpe annualized from daily returns, so feed
+    ``deannualize_sharpe(nt_sharpe)`` together with the number of *days*
+    in the backtest window. Uses iid sqrt-time scaling.
+    """
+    return annualized_sharpe / math.sqrt(periods_per_year)
 # Pre-compute 1/sqrt(2) for fast normal CDF
 _INV_SQRT2: float = 1.0 / math.sqrt(2.0)
 # Standard normal for inverse CDF (stdlib, no scipy needed)
@@ -131,9 +148,13 @@ class DeflatedSharpeRatio:
         """Calculate Deflated Sharpe Ratio.
 
         Args:
-            observed_sharpe: The Sharpe ratio being tested.
+            observed_sharpe: The Sharpe ratio being tested, in PER-PERIOD
+                units matching num_observations (e.g. daily Sharpe with
+                num_observations = number of days). Annualized Sharpes must
+                be converted first — see :func:`deannualize_sharpe`.
             num_trials: Number of parameter combinations tested.
-            num_observations: Number of time periods in backtest (bars/trades).
+            num_observations: Number of return observations in the backtest,
+                at the same sampling frequency as observed_sharpe.
             skewness: Return distribution skewness (default 0 = symmetric).
             kurtosis: Return distribution kurtosis (default 3 = normal).
                 Note: this is full kurtosis, not excess kurtosis.

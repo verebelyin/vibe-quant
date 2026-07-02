@@ -39,6 +39,22 @@ def compute_bar_count(
     return max(int(total_minutes / tf_minutes), 1)
 
 
+def compute_day_count(start_date: str | None, end_date: str | None) -> int | None:
+    """Number of calendar days in [start_date, end_date).
+
+    Used as the DSR observation count for NT's daily-return-based Sharpe.
+    Returns None if either date is missing/unparseable.
+    """
+    if not start_date or not end_date:
+        return None
+    try:
+        start = _datetime.strptime(start_date, "%Y-%m-%d")
+        end = _datetime.strptime(end_date, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return max((end - start).days, 1)
+
+
 def split_date_range(
     start_date: str,
     end_date: str,

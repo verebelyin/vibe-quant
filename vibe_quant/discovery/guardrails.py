@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+from vibe_quant.overfitting.dsr import (
+    TRADING_DAYS_PER_YEAR,
+    DeflatedSharpeRatio,
+    deannualize_sharpe,
+)
 
 if TYPE_CHECKING:
     from datetime import date
@@ -153,15 +157,23 @@ def apply_discovery_dsr(
     num_trials should be the total number of candidates evaluated across
     all generations, accounting for the full multiple-testing burden.
 
+    The observed Sharpe is expected in NT's annualized units and is
+    de-annualized to daily units here (sqrt-252 scaling) so it matches
+    ``num_observations`` — pass the number of DAYS in the backtest window,
+    not the bar count. Mixing annualized SR with bar counts made the
+    deflation nearly toothless (vibe-quant-zmzzh).
+
     Args:
-        observed_sharpe: Best candidate's Sharpe ratio.
+        observed_sharpe: Best candidate's Sharpe ratio (annualized, as
+            reported by NT).
         num_trials: Total candidates evaluated in the discovery run.
-        num_observations: Number of bars/periods in the backtest.
+        num_observations: Number of daily observations in the backtest.
         significance_level: p-value threshold for significance.
         skewness: Return distribution skewness.
         kurtosis: Return distribution kurtosis.
-        trials_sharpe_variance: Empirical variance of Sharpe ratios across
-            all evaluated candidates. Improves DSR accuracy for fat-tailed
+        trials_sharpe_variance: Empirical variance of ANNUALIZED Sharpe
+            ratios across all evaluated candidates (converted to daily
+            units internally). Improves DSR accuracy for fat-tailed
             return distributions.
 
     Returns:
@@ -169,12 +181,16 @@ def apply_discovery_dsr(
     """
     dsr = DeflatedSharpeRatio(significance_level=significance_level)
     result = dsr.calculate(
-        observed_sharpe=observed_sharpe,
+        observed_sharpe=deannualize_sharpe(observed_sharpe),
         num_trials=num_trials,
         num_observations=num_observations,
         skewness=skewness,
         kurtosis=kurtosis,
-        trials_sharpe_variance=trials_sharpe_variance,
+        trials_sharpe_variance=(
+            trials_sharpe_variance / TRADING_DAYS_PER_YEAR
+            if trials_sharpe_variance is not None
+            else None
+        ),
     )
     logger.info(
         "DSR: sharpe=%.3f trials=%d p=%.4f significant=%s",
