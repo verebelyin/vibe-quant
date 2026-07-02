@@ -611,6 +611,7 @@ class StrategyCompiler:
             "        self._position_open = False",
             "        self._position_side: OrderSide | None = None",
             "        self._pending_validation_action: str | None = None",
+            "        self._trailing_best_sl: float | None = None",
             "",
             "        # Previous indicator values for crossover detection",
             "        self._prev_values: dict[str, float] = {}",
@@ -621,10 +622,17 @@ class StrategyCompiler:
         ]
 
         # Add pandas-ta bar buffer if any indicators need it
-        has_pta = any(
-            i.spec.nt_class is None and i.spec.compute_fn is not None for i in indicators
-        )
+        pta_infos = [
+            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
+        ]
+        has_pta = bool(pta_infos)
         if has_pta:
+            buffer_cap = self._compute_pta_buffer_cap(pta_infos)
+            cap_comment = (
+                "0 = unbounded (cumulative indicator present)"
+                if buffer_cap == 0
+                else "bars kept for windowed compute_fn indicators"
+            )
             lines.extend(
                 [
                     "        # Bar data buffer for pandas-ta indicators",
@@ -634,6 +642,7 @@ class StrategyCompiler:
                     "        self._pta_open: list[float] = []",
                     "        self._pta_volume: list[float] = []",
                     "        self._pta_values: dict[str, float] = {}",
+                    f"        self._pta_buffer_cap: int = {buffer_cap}  # {cap_comment}",
                     "",
                 ]
             )
@@ -826,7 +835,10 @@ class StrategyCompiler:
             "",
         ]
 
-        # Feed bar data to pandas-ta buffer before indicators_ready check
+        # Feed bar data to pandas-ta buffer before indicators_ready check.
+        # The buffer is trimmed to _pta_buffer_cap (with 25% slack so the
+        # trim amortizes) — recomputing indicators over full history every
+        # bar is O(n^2) across a backtest and dominates 1m-data runtime.
         if has_pta:
             lines.extend(
                 [
@@ -836,6 +848,14 @@ class StrategyCompiler:
                     "    self._pta_low.append(float(bar.low))",
                     "    self._pta_open.append(float(bar.open))",
                     "    self._pta_volume.append(float(bar.volume))",
+                    "    _cap = self._pta_buffer_cap",
+                    "    if _cap and len(self._pta_close) > _cap + (_cap // 4):",
+                    "        _trim = len(self._pta_close) - _cap",
+                    "        del self._pta_close[:_trim]",
+                    "        del self._pta_high[:_trim]",
+                    "        del self._pta_low[:_trim]",
+                    "        del self._pta_open[:_trim]",
+                    "        del self._pta_volume[:_trim]",
                     "    self._update_pta_indicators()",
                     "",
                 ]
@@ -858,17 +878,21 @@ class StrategyCompiler:
             ]
         )
 
-        # Time filters
+        # Time filters. Prev values must still be updated on blocked bars,
+        # otherwise the first allowed bar compares against indicator values
+        # from before the block and fires false/missed crossovers.
         if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
             lines.append("    # Check time filters")
             lines.append("    if not self._check_time_filters(bar.ts_event):")
+            lines.append("        self._update_prev_values()")
             lines.append("        return")
             lines.append("")
 
-        # Funding avoidance
+        # Funding avoidance (same prev-values requirement as time filters)
         if dsl.time_filters.avoid_around_funding.enabled:
             lines.append("    # Check funding avoidance")
             lines.append("    if self._is_near_funding_time(bar.ts_event):")
+            lines.append("        self._update_prev_values()")
             lines.append("        return")
             lines.append("")
 
@@ -1283,6 +1307,27 @@ class StrategyCompiler:
         pairs = ", ".join(f'"{k}": {v!r}' for k, v in merged.items())
         return "{" + pairs + "}"
 
+    # Rolling-buffer cap policy for compute_fn-path indicators. Windowed
+    # indicators (RSI, MACD, STOCH, BBANDS, ...) converge to their full-history
+    # values well within 10x their lookback (EMA/Wilder smoothing weight decay
+    # is geometric: remaining weight after 10 periods-worth of bars ~ e^-20).
+    _PTA_BUFFER_LOOKBACK_MULTIPLE: int = 10
+    _PTA_BUFFER_MIN_CAP: int = 400
+
+    @classmethod
+    def _compute_pta_buffer_cap(cls, pta_infos: list[IndicatorInfo]) -> int:
+        """Bar-buffer cap for the compute_fn path (0 = unbounded).
+
+        Returns 0 when any indicator is cumulative (``requires_full_history``,
+        e.g. OBV/VWAP) since truncation would change its value. Otherwise
+        ``max(MIN_CAP, MULTIPLE x largest lookback)`` — enough warmup that
+        capped values match full-history values to float precision.
+        """
+        if any(i.spec.requires_full_history for i in pta_infos):
+            return 0
+        max_lookback = max((cls._get_pta_lookback(i) for i in pta_infos), default=14)
+        return max(cls._PTA_BUFFER_MIN_CAP, cls._PTA_BUFFER_LOOKBACK_MULTIPLE * max_lookback)
+
     @staticmethod
     def _get_pta_lookback(info: IndicatorInfo) -> int:
         """Minimum lookback bars needed before a compute_fn is valid.
@@ -1489,12 +1534,12 @@ class StrategyCompiler:
             return f"cond_{index} = {left} <= {right}"
         elif cond.operator == Operator.CROSSES_ABOVE:
             prev_left = self._operand_to_prev_code(cond.left)
-            prev_right = self._operand_to_prev_code(cond.right)
+            prev_right = self._crossover_prev_right_code(cond, right)
             prev_guard = self._crossover_prev_guard(cond)
             return f"cond_{index} = ({prev_guard}) and ({left} > {right}) and ({prev_left} <= {prev_right})"
         elif cond.operator == Operator.CROSSES_BELOW:
             prev_left = self._operand_to_prev_code(cond.left)
-            prev_right = self._operand_to_prev_code(cond.right)
+            prev_right = self._crossover_prev_right_code(cond, right)
             prev_guard = self._crossover_prev_guard(cond)
             return f"cond_{index} = ({prev_guard}) and ({left} < {right}) and ({prev_left} >= {prev_right})"
         elif cond.operator == Operator.BETWEEN:
@@ -1551,6 +1596,25 @@ class StrategyCompiler:
             if threshold_name:
                 return f"self.config.{threshold_name}"
         return self._operand_to_code(right_operand)
+
+    def _crossover_prev_right_code(self, cond: Condition, right_code: str) -> str:
+        """Right-side code for the previous-bar half of a crossover check.
+
+        Numeric literals have no previous value, but they may be lifted into
+        a sweepable config threshold. The prev-side comparison must use that
+        SAME config value — otherwise overriding the threshold via sweep
+        params tests `x > config_threshold and prev_x <= <original literal>`,
+        which is a different (and wrong) condition.
+        """
+        from vibe_quant.dsl.conditions import Operand
+
+        if (
+            isinstance(cond.right, Operand)
+            and not cond.right.is_indicator
+            and not cond.right.is_price
+        ):
+            return right_code
+        return self._operand_to_prev_code(cond.right)
 
     @staticmethod
     def _crossover_prev_guard(cond: Condition) -> str:

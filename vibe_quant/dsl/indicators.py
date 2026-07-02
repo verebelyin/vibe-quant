@@ -147,6 +147,13 @@ class IndicatorSpec:
     requires_high_low: bool = False
     requires_volume: bool = False
 
+    # Cumulative indicators (OBV, VWAP) accumulate from the first bar and
+    # change value if the bar buffer is truncated. Setting this True makes
+    # the compiler keep the full bar history for the strategy instead of
+    # capping the compute_fn rolling buffer (windowed indicators converge
+    # within ~10x their lookback and are safe to cap).
+    requires_full_history: bool = False
+
     # UI / catalog metadata.
     display_name: str = ""
     description: str = ""
@@ -960,6 +967,7 @@ def _obv_spec() -> IndicatorSpec:
         param_schema={},
         compute_fn=compute_obv,
         requires_volume=True,
+        requires_full_history=True,
         display_name="On-Balance Volume",
         description=(
             "Cumulative volume indicator: adds volume on up days, subtracts on down days. "
@@ -980,6 +988,7 @@ def _vwap_spec() -> IndicatorSpec:
         compute_fn=compute_vwap,
         requires_high_low=True,
         requires_volume=True,
+        requires_full_history=True,
         display_name="Volume-Weighted Average Price",
         description=(
             "Average price weighted by volume. Resets daily. Institutional benchmark."

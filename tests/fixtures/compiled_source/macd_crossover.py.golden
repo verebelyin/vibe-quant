@@ -1,7 +1,7 @@
 """Auto-generated NautilusTrader Strategy from DSL.
 
 Strategy: macd_crossover
-Generated: 2026-05-28T18:26:26.275243
+Generated: 2026-07-02T17:36:38.600227
 """
 
 from __future__ import annotations
@@ -83,6 +83,7 @@ class MacdCrossoverStrategy(Strategy):
         self._position_open = False
         self._position_side: OrderSide | None = None
         self._pending_validation_action: str | None = None
+        self._trailing_best_sl: float | None = None
 
         # Previous indicator values for crossover detection
         self._prev_values: dict[str, float] = {}
@@ -97,6 +98,7 @@ class MacdCrossoverStrategy(Strategy):
         self._pta_open: list[float] = []
         self._pta_volume: list[float] = []
         self._pta_values: dict[str, float] = {}
+        self._pta_buffer_cap: int = 400  # bars kept for windowed compute_fn indicators
 
     def on_start(self) -> None:
         """Strategy startup: subscribe to bars and register indicators."""
@@ -138,6 +140,14 @@ class MacdCrossoverStrategy(Strategy):
         self._pta_low.append(float(bar.low))
         self._pta_open.append(float(bar.open))
         self._pta_volume.append(float(bar.volume))
+        _cap = self._pta_buffer_cap
+        if _cap and len(self._pta_close) > _cap + (_cap // 4):
+            _trim = len(self._pta_close) - _cap
+            del self._pta_close[:_trim]
+            del self._pta_high[:_trim]
+            del self._pta_low[:_trim]
+            del self._pta_open[:_trim]
+            del self._pta_volume[:_trim]
         self._update_pta_indicators()
 
         # Track last close for computed indicator outputs
@@ -154,6 +164,7 @@ class MacdCrossoverStrategy(Strategy):
 
         # Check time filters
         if not self._check_time_filters(bar.ts_event):
+            self._update_prev_values()
             return
 
         # Evaluate entry conditions
@@ -194,6 +205,7 @@ class MacdCrossoverStrategy(Strategy):
             if event.instrument_id == self.instrument_id:
                 self._position_open = False
                 self._position_side = None
+                self._trailing_best_sl = None
                 self.cancel_all_orders(self.instrument_id)
         elif isinstance(event, OrderFilled):
             if event.instrument_id == self.instrument_id:
@@ -209,6 +221,7 @@ class MacdCrossoverStrategy(Strategy):
         self._position_open = False
         self._position_side = None
         self._pending_validation_action = None
+        self._trailing_best_sl = None
 
     def _indicators_ready(self) -> bool:
         """Check if all indicators have enough data."""

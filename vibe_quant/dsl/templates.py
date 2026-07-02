@@ -26,6 +26,7 @@ ON_EVENT_LINES: tuple[str, ...] = (
     "        if event.instrument_id == self.instrument_id:",
     "            self._position_open = False",
     "            self._position_side = None",
+    "            self._trailing_best_sl = None",
     "            self.cancel_all_orders(self.instrument_id)",
     "    elif isinstance(event, OrderFilled):",
     "        if event.instrument_id == self.instrument_id:",
@@ -45,6 +46,7 @@ ON_RESET_LINES: tuple[str, ...] = (
     "    self._position_open = False",
     "    self._position_side = None",
     "    self._pending_validation_action = None",
+    "    self._trailing_best_sl = None",
 )
 
 # ---------------------------------------------------------------------------

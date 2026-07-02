@@ -1,7 +1,7 @@
 """Auto-generated NautilusTrader Strategy from DSL.
 
 Strategy: bollinger_squeeze
-Generated: 2026-05-28T18:26:26.272459
+Generated: 2026-07-02T17:36:38.597758
 """
 
 from __future__ import annotations
@@ -82,6 +82,7 @@ class BollingerSqueezeStrategy(Strategy):
         self._position_open = False
         self._position_side: OrderSide | None = None
         self._pending_validation_action: str | None = None
+        self._trailing_best_sl: float | None = None
 
         # Previous indicator values for crossover detection
         self._prev_values: dict[str, float] = {}
@@ -138,6 +139,7 @@ class BollingerSqueezeStrategy(Strategy):
 
         # Check time filters
         if not self._check_time_filters(bar.ts_event):
+            self._update_prev_values()
             return
 
         # Evaluate entry conditions
@@ -181,6 +183,7 @@ class BollingerSqueezeStrategy(Strategy):
             if event.instrument_id == self.instrument_id:
                 self._position_open = False
                 self._position_side = None
+                self._trailing_best_sl = None
                 self.cancel_all_orders(self.instrument_id)
         elif isinstance(event, OrderFilled):
             if event.instrument_id == self.instrument_id:
@@ -196,6 +199,7 @@ class BollingerSqueezeStrategy(Strategy):
         self._position_open = False
         self._position_side = None
         self._pending_validation_action = None
+        self._trailing_best_sl = None
 
     def _indicators_ready(self) -> bool:
         """Check if all indicators have enough data."""
