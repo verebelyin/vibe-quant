@@ -809,6 +809,7 @@ class ValidationRunner:
                 bt_result=bt_result,
                 engine=engine,
                 venue_config=venue_config,
+                primary_timeframe=dsl.timeframe,
             )
 
             # Log trade events
@@ -1046,6 +1047,7 @@ class ValidationRunner:
         bt_result: BacktestResult,
         engine: BacktestEngine,
         venue_config: VenueConfig,
+        primary_timeframe: str | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1058,13 +1060,22 @@ class ValidationRunner:
             bt_result: NautilusTrader BacktestResult.
             engine: BacktestEngine after run for report generation.
             venue_config: Venue config for leverage info.
+            primary_timeframe: Strategy primary timeframe for market-stat
+                bar-group selection.
 
         Returns:
             Populated ValidationResult.
         """
         from vibe_quant.validation.extraction import extract_results
 
-        return extract_results(run_id, strategy_name, bt_result, engine, venue_config)
+        return extract_results(
+            run_id,
+            strategy_name,
+            bt_result,
+            engine,
+            venue_config,
+            primary_timeframe=primary_timeframe,
+        )
 
     def _write_start_event(
         self,

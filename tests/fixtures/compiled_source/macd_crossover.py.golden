@@ -1,7 +1,7 @@
 """Auto-generated NautilusTrader Strategy from DSL.
 
 Strategy: macd_crossover
-Generated: 2026-07-02T17:36:38.600227
+Generated: 2026-07-02T17:49:47.124897
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ class MacdCrossoverConfig(StrategyConfig):
     risk_per_trade: float = 0.02  # 2% risk per trade
     max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)
     execution_delay_probability: float = 0.0  # One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3
+    execution_delay_seed: int = 42  # Seed for probabilistic delay draws (reproducible replays)
 
     # Indicator parameters
     macd_fast_period: int = 12
@@ -84,6 +85,11 @@ class MacdCrossoverStrategy(Strategy):
         self._position_side: OrderSide | None = None
         self._pending_validation_action: str | None = None
         self._trailing_best_sl: float | None = None
+        # Seeded RNG for the probabilistic execution-delay path so
+        # identical validation replays are byte-reproducible.
+        self._delay_rng = random.Random(
+            getattr(config, 'execution_delay_seed', 42)
+        )
 
         # Previous indicator values for crossover detection
         self._prev_values: dict[str, float] = {}
@@ -666,7 +672,7 @@ class MacdCrossoverStrategy(Strategy):
             return False
         if self._pending_validation_action is not None:
             return False
-        if delay_prob < 1.0 and random.random() >= delay_prob:
+        if delay_prob < 1.0 and self._delay_rng.random() >= delay_prob:
             return False
         self._pending_validation_action = action
         return True

@@ -182,11 +182,11 @@ class TestFillModels:
 
     def test_volume_slippage_fill_model_best_price_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Best-price branch should keep the synthetic book at current best levels."""
-        monkeypatch.setattr("random.random", lambda: 0.2)
         instrument = TestInstrumentProvider.btcusdt_binance()
         model = create_validation_fill_model(
             VolumeSlippageFillModelConfig(prob_best_price_fill=0.7, max_adverse_ticks=2)
         )
+        monkeypatch.setattr(model._rng, "random", lambda: 0.2)
 
         book = model.get_orderbook_for_fill_simulation(
             instrument,
@@ -200,12 +200,12 @@ class TestFillModels:
 
     def test_volume_slippage_fill_model_adverse_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Adverse branch should shift the synthetic book away from best prices."""
-        monkeypatch.setattr("random.random", lambda: 0.95)
-        monkeypatch.setattr("random.randint", lambda start, stop: 2)
         instrument = TestInstrumentProvider.btcusdt_binance()
         model = create_validation_fill_model(
             VolumeSlippageFillModelConfig(prob_best_price_fill=0.7, max_adverse_ticks=2)
         )
+        monkeypatch.setattr(model._rng, "random", lambda: 0.95)
+        monkeypatch.setattr(model._rng, "randint", lambda start, stop: 2)
 
         book = model.get_orderbook_for_fill_simulation(
             instrument,
@@ -216,6 +216,22 @@ class TestFillModels:
 
         assert book.best_bid_price().as_double() == pytest.approx(99_999.98)
         assert book.best_ask_price().as_double() == pytest.approx(100_000.12)
+
+    def test_volume_slippage_fill_model_seeded_determinism(self) -> None:
+        """Same seed -> identical draw sequences; validation replays reproduce."""
+        cfg = VolumeSlippageFillModelConfig(
+            prob_best_price_fill=0.5, max_adverse_ticks=3, prob_slippage=0.5, random_seed=123
+        )
+        model_a = create_validation_fill_model(cfg)
+        model_b = create_validation_fill_model(cfg)
+        seq_a = [model_a.is_slipped() for _ in range(50)]
+        seq_b = [model_b.is_slipped() for _ in range(50)]
+        assert seq_a == seq_b
+        assert any(seq_a) and not all(seq_a)  # actually probabilistic
+
+    def test_volume_slippage_fill_model_default_seed_fixed(self) -> None:
+        """Default config carries a fixed seed (reproducible by default)."""
+        assert VolumeSlippageFillModelConfig().random_seed == 42
 
     def test_slippage_estimator_calculate(self) -> None:
         """SlippageEstimator calculates slippage factor correctly.

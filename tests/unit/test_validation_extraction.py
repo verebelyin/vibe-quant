@@ -5,6 +5,8 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from vibe_quant.validation.extraction import (
     _compute_max_drawdown_from_trades,
     compute_extended_metrics,
@@ -153,6 +155,69 @@ class TestFeeSplit:
         assert entry_fee == 5.0
         assert exit_fee == 5.0
         assert abs(entry_fee + exit_fee - total_fees) < 1e-9
+
+
+class _FakeBarType:
+    def __init__(self, spec: str, instrument: str) -> None:
+        self._s = f"{instrument}-{spec}-LAST-EXTERNAL"
+        self.instrument_id = instrument
+
+    def __str__(self) -> str:
+        return self._s
+
+
+def _fake_bar(bar_type: _FakeBarType, close: float, volume: float, ts: int) -> SimpleNamespace:
+    return SimpleNamespace(bar_type=bar_type, close=close, volume=volume, ts_init=ts)
+
+
+class TestEstimateMarketStats:
+    """Per-instrument, per-bar-type market stats (vibe-quant-r3mdw)."""
+
+    @staticmethod
+    def _make_engine(bars: list[SimpleNamespace]) -> SimpleNamespace:
+        cache = SimpleNamespace(bars=lambda: bars, positions=list, position_snapshots=list)
+        return SimpleNamespace(kernel=SimpleNamespace(cache=cache))
+
+    def test_instruments_do_not_cross_contaminate(self) -> None:
+        """Interleaved BTC/ETH bars must not inflate volatility.
+
+        Previously log returns were computed across the mixed close series,
+        so a BTC(40000) -> ETH(2000) step registered as a -95% 'return'.
+        """
+        from vibe_quant.validation.extraction import estimate_market_stats
+
+        btc_bt = _FakeBarType("1-HOUR", "BTCUSDT-PERP.BINANCE")
+        eth_bt = _FakeBarType("1-HOUR", "ETHUSDT-PERP.BINANCE")
+        bars = []
+        for i in range(50):
+            bars.append(_fake_bar(btc_bt, 40_000.0 * (1 + 0.001 * (i % 5)), 100.0, i))
+            bars.append(_fake_bar(eth_bt, 2_000.0 * (1 + 0.001 * (i % 5)), 500.0, i))
+
+        stats = estimate_market_stats(self._make_engine(bars))
+
+        assert set(stats) == {"BTCUSDT-PERP.BINANCE", "ETHUSDT-PERP.BINANCE"}
+        for _avg_volume, volatility in stats.values():
+            assert volatility < 0.01  # per-bar vol of a <0.5%-range series
+        assert stats["BTCUSDT-PERP.BINANCE"][0] == pytest.approx(100.0)
+        assert stats["ETHUSDT-PERP.BINANCE"][0] == pytest.approx(500.0)
+
+    def test_primary_timeframe_group_preferred(self) -> None:
+        """Detail bars (more numerous) must not shadow the strategy TF group."""
+        from vibe_quant.validation.extraction import estimate_market_stats
+
+        detail_bt = _FakeBarType("1-MINUTE", "BTCUSDT-PERP.BINANCE")
+        primary_bt = _FakeBarType("1-HOUR", "BTCUSDT-PERP.BINANCE")
+        bars = [_fake_bar(detail_bt, 40_000.0 + i, 10.0, i) for i in range(100)]
+        bars += [_fake_bar(primary_bt, 40_000.0 + 60 * i, 600.0, 1000 + i) for i in range(10)]
+
+        stats = estimate_market_stats(self._make_engine(bars), primary_timeframe="1h")
+
+        assert stats["BTCUSDT-PERP.BINANCE"][0] == pytest.approx(600.0)
+
+    def test_empty_cache_returns_empty(self) -> None:
+        from vibe_quant.validation.extraction import estimate_market_stats
+
+        assert estimate_market_stats(self._make_engine([])) == {}
 
 
 class TestSlippageModelSelection:

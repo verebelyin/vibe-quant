@@ -247,6 +247,7 @@ def _create_importable_fill_model_config(
                 "prob_best_price_fill": fill_cfg.prob_best_price_fill,
                 "max_adverse_ticks": fill_cfg.max_adverse_ticks,
                 "prob_slippage": fill_cfg.prob_slippage,
+                "random_seed": fill_cfg.random_seed,
             },
         )
     else:

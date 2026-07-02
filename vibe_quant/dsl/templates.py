@@ -353,7 +353,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = (
     "        return False",
     "    if self._pending_validation_action is not None:",
     "        return False",
-    "    if delay_prob < 1.0 and random.random() >= delay_prob:",
+    "    if delay_prob < 1.0 and self._delay_rng.random() >= delay_prob:",
     "        return False",
     "    self._pending_validation_action = action",
     "    return True",

@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Any
 
 from nautilus_trader.backtest.models import FillModel
 from nautilus_trader.common.config import NautilusConfig
@@ -34,6 +35,10 @@ class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
         prob_slippage: Probability that market orders experience slippage.
             Default 0.0 in validation to avoid double-counting with
             post-fill SPEC slippage estimation.
+        random_seed: Seed for ALL probabilistic draws (engine slippage,
+            synthetic-book degradation). Unseeded draws made identical
+            validation replays drift run-to-run — the same bug class fixed
+            for screening in bd vibe-quant-1gvyc. None = non-deterministic.
     """
 
     impact_coefficient: float = 0.1
@@ -41,6 +46,7 @@ class VolumeSlippageFillModelConfig(NautilusConfig, frozen=True):
     prob_best_price_fill: float = 1.0
     max_adverse_ticks: int = 1
     prob_slippage: float = 0.0
+    random_seed: int | None = 42
 
 
 class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
@@ -75,6 +81,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         prob_best_price_fill: float = 1.0,
         max_adverse_ticks: int = 1,
         prob_slippage: float = 0.0,
+        random_seed: int | None = 42,
     ) -> None:
         """Initialize VolumeSlippageFillModel.
 
@@ -85,6 +92,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
             prob_best_price_fill: Probability aggressive orders fill at best.
             max_adverse_ticks: Maximum adverse ticks when degrading a fill.
             prob_slippage: Probability of slippage.
+            random_seed: Seed for probabilistic draws (None = non-deterministic).
         """
         if config is not None:
             impact_coefficient = config.impact_coefficient
@@ -92,6 +100,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
             prob_best_price_fill = config.prob_best_price_fill
             max_adverse_ticks = config.max_adverse_ticks
             prob_slippage = config.prob_slippage
+            random_seed = config.random_seed
 
         if not 0.0 <= prob_best_price_fill <= 1.0:
             raise ValueError(
@@ -103,12 +112,16 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         super().__init__(
             prob_fill_on_limit=prob_fill_on_limit,
             prob_slippage=prob_slippage,
+            random_seed=random_seed,
         )
 
         self._impact_coefficient = impact_coefficient
         self._prob_best_price_fill = prob_best_price_fill
         self._max_adverse_ticks = max_adverse_ticks
         self._prob_slippage = prob_slippage
+        # Own RNG for is_slipped/synthetic-book draws: module-level random
+        # is shared process state and unseeded -> non-reproducible replays.
+        self._rng = random.Random(random_seed)
 
     @property
     def impact_coefficient(self) -> float:
@@ -135,9 +148,15 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
             return False
         if self._prob_slippage >= 1.0:
             return True
-        return random.random() < self._prob_slippage
+        return self._rng.random() < self._prob_slippage
 
-    def get_orderbook_for_fill_simulation(self, instrument, order, best_bid, best_ask):
+    def get_orderbook_for_fill_simulation(
+        self,
+        instrument: Any,
+        order: Any,
+        best_bid: Any,
+        best_ask: Any,
+    ) -> Any:
         """Return a synthetic L2 book for moderate sub-bar fill degradation."""
         from nautilus_trader.core.rust.model import BookType, OrderSide
         from nautilus_trader.model.book import OrderBook
@@ -154,11 +173,11 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
         bid_price = best_bid
         ask_price = best_ask
 
-        if random.random() > self._prob_best_price_fill:
+        if self._rng.random() > self._prob_best_price_fill:
             adverse_ticks = (
                 1
                 if self._max_adverse_ticks == 1
-                else random.randint(1, self._max_adverse_ticks)
+                else self._rng.randint(1, self._max_adverse_ticks)
             )
             bid_price = self._shift_price(best_bid, instrument.price_increment, -adverse_ticks)
             ask_price = self._shift_price(best_ask, instrument.price_increment, adverse_ticks)
@@ -186,7 +205,7 @@ class VolumeSlippageFillModel(FillModel):  # type: ignore[misc]
 
         return book
 
-    def _shift_price(self, price, tick, steps: int):
+    def _shift_price(self, price: Any, tick: Any, steps: int) -> Any:
         """Move a price up or down by N instrument ticks."""
         shifted_value = price.as_double() + tick.as_double() * steps
         return type(price)(shifted_value, precision=price.precision)

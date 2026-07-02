@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -79,6 +79,7 @@ def extract_results(
     bt_result: BacktestResult,
     engine: BacktestEngine,
     venue_config: VenueConfig,
+    primary_timeframe: str | None = None,
 ) -> ValidationResult:
     """Extract ValidationResult from NautilusTrader backtest output."""
     result = ValidationResult(
@@ -94,7 +95,7 @@ def extract_results(
     result.total_trades = bt_result.total_positions
 
     extract_stats(result, bt_result)
-    extract_trades(result, engine, venue_config)
+    extract_trades(result, engine, venue_config, primary_timeframe=primary_timeframe)
     _extract_return_moments(result, engine)
 
     return result
@@ -216,6 +217,7 @@ def extract_trades(
     result: ValidationResult,
     engine: BacktestEngine,
     venue_config: VenueConfig,
+    primary_timeframe: str | None = None,
 ) -> None:
     """Extract individual trade records from the engine's closed positions.
 
@@ -265,7 +267,7 @@ def extract_trades(
             engine_prob_slippage,
         )
 
-    avg_bar_volume, bar_volatility = estimate_market_stats(engine)
+    market_stats = estimate_market_stats(engine, primary_timeframe)
 
     for pos in positions:
         realized_pnl = float(pos.realized_pnl)
@@ -282,6 +284,10 @@ def extract_trades(
         elif realized_pnl < 0:
             losing += 1
 
+        avg_bar_volume, bar_volatility = market_stats.get(
+            str(pos.instrument_id),
+            (DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY),
+        )
         if slippage_estimator is not None:
             slippage_cost = slippage_estimator.estimate_cost(
                 entry_price=entry_price,
@@ -377,62 +383,100 @@ def extract_trades(
     compute_extended_metrics(result)
 
 
-def estimate_market_stats(engine: BacktestEngine) -> tuple[float, float]:
-    """Estimate average bar volume and bar-level volatility from engine cache.
+#: Conservative fallbacks when no usable bar data is in the cache
+DEFAULT_AVG_BAR_VOLUME = 1000.0
+DEFAULT_BAR_VOLATILITY = 0.02
 
-    Reads bars from the engine cache to compute realistic slippage
-    parameters instead of using hardcoded values.
+
+def estimate_market_stats(
+    engine: BacktestEngine,
+    primary_timeframe: str | None = None,
+) -> dict[str, tuple[float, float]]:
+    """Estimate per-instrument bar volume and bar-level volatility.
+
+    Bars in the engine cache span multiple instruments AND timeframes
+    (strategy bars, additional-TF bars, sub-bar detail data). Computing
+    log returns over that interleaved series produces spurious jumps
+    (BTC bar -> ETH bar), wildly inflating volatility and therefore the
+    SPEC slippage estimate. Instead, group bars by bar_type, compute
+    stats per group, and pick one group per instrument — preferring the
+    strategy's primary timeframe, else the group with the most bars.
 
     NOTE: The volatility returned is per-bar (std of log returns between
-    consecutive bars), NOT annualized or daily. The timescale depends on
-    the bar frequency (e.g. 1h bars -> hourly vol). To convert to daily
-    volatility, multiply by sqrt(bars_per_day). The SPEC references daily
-    volatility for slippage estimation; callers should scale accordingly
-    if daily precision is needed. Currently SlippageEstimator uses this
-    value directly as a relative magnitude input, so bar-level is acceptable.
+    consecutive bars of the SAME bar type), NOT annualized or daily.
+    SlippageEstimator uses it as a relative magnitude input.
 
     Args:
         engine: BacktestEngine after run.
+        primary_timeframe: Strategy primary timeframe (e.g. "1h") used to
+            select the representative bar group per instrument.
 
     Returns:
-        Tuple of (avg_bar_volume, bar_volatility). Falls back to
-        conservative defaults (1000.0, 0.02) if data is unavailable.
+        Mapping of instrument_id string -> (avg_bar_volume, bar_volatility).
+        Missing instruments should fall back to
+        (DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY).
     """
-    default_volume = 1000.0
-    default_volatility = 0.02
+    # Expected bar-spec fragment for the primary timeframe, e.g. "1-HOUR"
+    primary_spec: str | None = None
+    if primary_timeframe:
+        try:
+            from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+
+            if primary_timeframe in INTERVAL_TO_AGGREGATION:
+                step, agg = INTERVAL_TO_AGGREGATION[primary_timeframe]
+                primary_spec = f"{step}-{agg.name}"
+        except Exception:
+            primary_spec = None
 
     try:
         bars = engine.kernel.cache.bars()
-        if not bars:
-            return default_volume, default_volatility
-
-        volumes: list[float] = []
-        closes: list[float] = []
-        for bar in bars:
-            vol = float(bar.volume)
-            if vol > 0:
-                volumes.append(vol)
-            close = float(bar.close)
-            if close > 0:
-                closes.append(close)
-
-        avg_volume = sum(volumes) / len(volumes) if volumes else default_volume
-
-        volatility = default_volatility
-        if len(closes) >= 2:
-            log_returns: list[float] = []
-            for i in range(1, len(closes)):
-                if closes[i - 1] > 0:
-                    log_returns.append(math.log(closes[i] / closes[i - 1]))
-            if len(log_returns) >= 2:
-                mean_r = sum(log_returns) / len(log_returns)
-                var = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
-                volatility = math.sqrt(var) if var > 0 else default_volatility
-
-        return avg_volume, volatility
     except Exception:
-        logger.debug("Could not estimate market stats, using defaults", exc_info=True)
-        return default_volume, default_volatility
+        logger.debug("Could not read bars from engine cache", exc_info=True)
+        return {}
+    if not bars:
+        return {}
+
+    # Group by full bar type (instrument + spec), chronologically ordered
+    groups: dict[str, list[Any]] = {}
+    for bar in bars:
+        groups.setdefault(str(bar.bar_type), []).append(bar)
+    for group in groups.values():
+        group.sort(key=lambda b: int(b.ts_init))
+
+    def _group_stats(group: list[Any]) -> tuple[float, float]:
+        volumes = [float(b.volume) for b in group if float(b.volume) > 0]
+        closes = [float(b.close) for b in group if float(b.close) > 0]
+        avg_volume = sum(volumes) / len(volumes) if volumes else DEFAULT_AVG_BAR_VOLUME
+        volatility = DEFAULT_BAR_VOLATILITY
+        if len(closes) >= 3:
+            log_returns = [
+                math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))
+            ]
+            mean_r = sum(log_returns) / len(log_returns)
+            var = sum((r - mean_r) ** 2 for r in log_returns) / (len(log_returns) - 1)
+            if var > 0:
+                volatility = math.sqrt(var)
+        return avg_volume, volatility
+
+    # Pick one representative group per instrument
+    result: dict[str, tuple[float, float]] = {}
+    chosen: dict[str, tuple[str, int]] = {}  # instrument -> (bar_type, size)
+    for bar_type_str, group in groups.items():
+        # "BTCUSDT-PERP.BINANCE-1-HOUR-LAST-EXTERNAL" -> instrument is the
+        # part before the bar spec; instrument ids contain exactly one dot.
+        instrument_id = str(group[0].bar_type.instrument_id)
+        is_primary = primary_spec is not None and f"-{primary_spec}-" in bar_type_str
+        prev = chosen.get(instrument_id)
+        prev_is_primary = prev is not None and primary_spec is not None and (
+            f"-{primary_spec}-" in prev[0]
+        )
+        if prev is None or (is_primary and not prev_is_primary) or (
+            is_primary == prev_is_primary and len(group) > prev[1]
+        ):
+            chosen[instrument_id] = (bar_type_str, len(group))
+            result[instrument_id] = _group_stats(group)
+
+    return result
 
 
 def _compute_max_drawdown_from_trades(

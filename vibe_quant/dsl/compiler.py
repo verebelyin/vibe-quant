@@ -459,6 +459,10 @@ class StrategyCompiler:
             "    execution_delay_probability: float = 0.0  "
             "# One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3"
         )
+        lines.append(
+            "    execution_delay_seed: int = 42  "
+            "# Seed for probabilistic delay draws (reproducible replays)"
+        )
         lines.append("")
 
         # Add indicator parameters
@@ -612,6 +616,11 @@ class StrategyCompiler:
             "        self._position_side: OrderSide | None = None",
             "        self._pending_validation_action: str | None = None",
             "        self._trailing_best_sl: float | None = None",
+            "        # Seeded RNG for the probabilistic execution-delay path so",
+            "        # identical validation replays are byte-reproducible.",
+            "        self._delay_rng = random.Random(",
+            "            getattr(config, 'execution_delay_seed', 42)",
+            "        )",
             "",
             "        # Previous indicator values for crossover detection",
             "        self._prev_values: dict[str, float] = {}",
