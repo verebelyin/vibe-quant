@@ -130,3 +130,4 @@
 {"id":"int-d3f79eec","kind":"field_change","created_at":"2026-07-02T16:12:28.048175Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-lp1vb","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-d6daa361","kind":"field_change","created_at":"2026-07-02T16:12:28.371895Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-a2b3q","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-9f0b8210","kind":"field_change","created_at":"2026-07-02T16:16:36.056798Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-pazbr","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-9f4bde75","kind":"field_change","created_at":"2026-07-03T13:34:59.17396Z","actor":"Norbert Verebelyi","issue_id":"vibe-quant-46ot2","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
