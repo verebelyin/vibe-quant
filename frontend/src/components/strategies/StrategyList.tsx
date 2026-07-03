@@ -2,7 +2,6 @@ import { Search, Trash2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { StrategyResponse } from "@/api/generated/models";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
-import { cn } from "@/lib/utils";
 import { StrategyCard, TYPE_META } from "@/components/ui/StrategyCard";
 import {
   Select,
@@ -11,21 +10,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 const SORT_OPTIONS = [
   { value: "updated_at", label: "Last Updated" },
-  { value: "created_at", label: "Created"      },
-  { value: "name",       label: "Name"         },
-  { value: "version",    label: "Version"      },
+  { value: "created_at", label: "Created" },
+  { value: "name", label: "Name" },
+  { value: "version", label: "Version" },
 ] as const;
 
 type SortKey = (typeof SORT_OPTIONS)[number]["value"];
 
-/** Derive a short display label from a strategy_type value */
-function typeShortLabel(type: string): string {
+/** Derive a display label from a strategy_type value */
+function typeLabel(type: string): string {
   const meta = TYPE_META[type.toLowerCase()];
-  if (meta) return meta.label.length <= 5 ? meta.label : meta.label.slice(0, 4).toUpperCase();
-  return type.replace(/_/g, " ").toUpperCase().slice(0, 5);
+  if (meta) return meta.label;
+  return type.replace(/_/g, " ").toUpperCase();
 }
 
 interface StrategyListProps {
@@ -66,7 +66,10 @@ const StrategyCardWithDelete = memo(function StrategyCardWithDelete({
       />
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
         className="absolute bottom-2.5 right-2.5 hidden group-hover:flex cursor-pointer items-center justify-center w-6 h-6 rounded-sm text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-colors duration-100"
         aria-label="Delete strategy"
       >
@@ -109,20 +112,27 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [search]);
 
   const query = useListStrategiesApiStrategiesGet();
   const data = query.data?.data as { strategies?: StrategyResponse[] } | undefined;
 
-  // Derive unique types actually present in the data
+  // Derive unique types actually present in the data, with counts
   const presentTypes = useMemo(() => {
     if (!data?.strategies) return [];
-    const seen = new Set<string>();
+    const counts = new Map<string, number>();
     for (const s of data.strategies) {
-      if (s.strategy_type) seen.add(s.strategy_type.toLowerCase());
+      if (s.strategy_type) {
+        const t = s.strategy_type.toLowerCase();
+        counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
     }
-    return Array.from(seen).sort();
+    return Array.from(counts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([type, count]) => ({ type, count }));
   }, [data?.strategies]);
 
   const filtered = useMemo(() => {
@@ -130,18 +140,25 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
     let items = [...data.strategies];
     if (debouncedSearch) {
       const q = debouncedSearch.toLowerCase();
-      items = items.filter(s => s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q));
+      items = items.filter(
+        (s) => s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q),
+      );
     }
     if (typeFilter !== "all") {
-      items = items.filter(s => (s.strategy_type?.toLowerCase() ?? "") === typeFilter);
+      items = items.filter((s) => (s.strategy_type?.toLowerCase() ?? "") === typeFilter);
     }
     items.sort((a, b) => {
       switch (sortBy) {
-        case "name":       return a.name.localeCompare(b.name);
-        case "created_at": return b.created_at.localeCompare(a.created_at);
-        case "updated_at": return b.updated_at.localeCompare(a.updated_at);
-        case "version":    return b.version - a.version;
-        default:           return 0;
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "created_at":
+          return b.created_at.localeCompare(a.created_at);
+        case "updated_at":
+          return b.updated_at.localeCompare(a.updated_at);
+        case "version":
+          return b.version - a.version;
+        default:
+          return 0;
       }
     });
     return items;
@@ -151,12 +168,12 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
     return (
       <div className="space-y-4">
         <div className="flex gap-2">
-          {(["a","b","c","d"] as const).map(id => (
+          {(["a", "b", "c", "d"] as const).map((id) => (
             <div key={id} className="h-8 w-16 animate-pulse rounded-sm bg-white/[0.05]" />
           ))}
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {(["a","b","c","d","e","f","g","h"] as const).map(id => (
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
+          {(["a", "b", "c", "d", "e", "f", "g", "h"] as const).map((id) => (
             <div key={id} className="h-[172px] animate-pulse rounded-sm bg-white/[0.04]" />
           ))}
         </div>
@@ -180,10 +197,8 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
 
   return (
     <div className="space-y-4">
-
       {/* ── Control bar ─────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3">
-
         {/* Search */}
         <div className="relative min-w-[160px] max-w-[240px] flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-white/20 pointer-events-none" />
@@ -191,7 +206,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
             type="text"
             placeholder="Search…"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
             className={cn(
               "w-full pl-7 pr-3 h-8 rounded-sm font-mono text-[11px] cursor-text",
               "bg-white/[0.04] border border-white/[0.07] text-white/70 placeholder:text-white/20",
@@ -214,7 +229,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
           >
             ALL
           </button>
-          {presentTypes.map(type => {
+          {presentTypes.map(({ type, count }) => {
             const meta = TYPE_META[type];
             const color = meta?.color ?? "#22d3ee";
             const active = typeFilter === type;
@@ -222,15 +237,22 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
               <button
                 key={type}
                 type="button"
-                onClick={() => setTypeFilter(type)}
-                className="cursor-pointer h-8 px-2.5 rounded-sm font-mono text-[10px] font-bold tracking-[0.13em] uppercase transition-all duration-100"
+                onClick={() => setTypeFilter(active ? "all" : type)}
+                title={`${count} ${type.replace(/_/g, " ")} strateg${count === 1 ? "y" : "ies"}`}
+                className="cursor-pointer h-8 px-2.5 rounded-sm font-mono text-[10px] font-bold tracking-[0.13em] uppercase transition-all duration-100 inline-flex items-center gap-1.5"
                 style={
                   active
                     ? { color, background: `${color}18`, border: `1px solid ${color}35` }
                     : { color: "rgba(255,255,255,0.28)", border: "1px solid transparent" }
                 }
               >
-                {typeShortLabel(type)}
+                {typeLabel(type)}
+                <span
+                  className="tabular-nums font-normal tracking-normal"
+                  style={{ color: active ? `${color}90` : "rgba(255,255,255,0.18)" }}
+                >
+                  {count}
+                </span>
               </button>
             );
           })}
@@ -240,16 +262,20 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
         <div className="flex items-center gap-2 ml-auto">
           {total > 0 && (
             <span className="font-mono text-[10px] tabular-nums text-white/22">
-              {shown < total ? `${shown}/${total}` : total} strat{total !== 1 ? "s" : ""}
+              {shown < total ? `${shown} of ${total}` : total} strateg{total !== 1 ? "ies" : "y"}
             </span>
           )}
-          <Select value={sortBy} onValueChange={v => setSortBy(v as SortKey)}>
+          <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
             <SelectTrigger className="w-[130px] h-8 rounded-sm font-mono text-[10px] bg-white/[0.03] border-white/[0.07] text-white/50 cursor-pointer">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {SORT_OPTIONS.map(opt => (
-                <SelectItem key={opt.value} value={opt.value} className="font-mono text-xs cursor-pointer">
+              {SORT_OPTIONS.map((opt) => (
+                <SelectItem
+                  key={opt.value}
+                  value={opt.value}
+                  className="font-mono text-xs cursor-pointer"
+                >
                   {opt.label}
                 </SelectItem>
               ))}
@@ -263,11 +289,14 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
         <div
           className="flex flex-col items-center justify-center py-20 border border-white/[0.05] rounded-sm"
           style={{
-            backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.01) 2px, rgba(255,255,255,0.01) 3px)",
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.01) 2px, rgba(255,255,255,0.01) 3px)",
           }}
         >
           <span className="font-mono text-[28px] text-white/[0.07] mb-3">◈</span>
-          <p className="font-mono text-[11px] text-white/30 tracking-widest uppercase">No strategies found</p>
+          <p className="font-mono text-[11px] text-white/30 tracking-widest uppercase">
+            No strategies found
+          </p>
           <p className="font-mono text-[10px] text-white/15 mt-1.5">
             {debouncedSearch || typeFilter !== "all"
               ? "adjust search or filter"
@@ -275,7 +304,7 @@ export function StrategyList({ onSelect, onDelete }: StrategyListProps) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
           {filtered.map((strategy, i) => (
             <MemoizedCardWrapper
               key={strategy.id}

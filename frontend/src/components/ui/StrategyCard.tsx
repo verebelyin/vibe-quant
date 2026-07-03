@@ -16,18 +16,19 @@ export interface StrategyCardProps {
 }
 
 export const TYPE_META: Record<string, { color: string; label: string }> = {
-  momentum:        { color: "#0ff",    label: "MOMENTUM"   },
-  mean_reversion:  { color: "#a78bfa", label: "MEAN·REV"   },
-  breakout:        { color: "#fbbf24", label: "BREAKOUT"   },
-  trend_following: { color: "#34d399", label: "TREND"      },
-  arbitrage:       { color: "#60a5fa", label: "ARB"        },
-  volatility:      { color: "#fb7185", label: "VOL"        },
-  dsl:             { color: "#22d3ee", label: "DSL"        },
-  discovery:       { color: "#c4b5fd", label: "DISCOVERY"  },
-  strategy:        { color: "#22d3ee", label: "STRATEGY"   },
+  momentum: { color: "#0ff", label: "MOMENTUM" },
+  mean_reversion: { color: "#a78bfa", label: "MEAN·REV" },
+  breakout: { color: "#fbbf24", label: "BREAKOUT" },
+  trend_following: { color: "#34d399", label: "TREND" },
+  arbitrage: { color: "#60a5fa", label: "ARB" },
+  volatility: { color: "#fb7185", label: "VOL" },
+  dsl: { color: "#22d3ee", label: "DSL" },
+  discovery: { color: "#c4b5fd", label: "DISCOVERY" },
+  strategy: { color: "#22d3ee", label: "STRATEGY" },
+  manual: { color: "#94a3b8", label: "MANUAL" },
 };
 
-const DEFAULT: typeof TYPE_META[string] = { color: "#22d3ee", label: "STRATEGY" };
+const DEFAULT: (typeof TYPE_META)[string] = { color: "#22d3ee", label: "STRATEGY" };
 
 function relativeTime(iso: string): string {
   const d = Date.now() - new Date(iso).getTime();
@@ -59,10 +60,14 @@ export function StrategyCard({
   const { color, label } = TYPE_META[key] ?? DEFAULT;
 
   const symbolStr =
-    symbols.length === 0 ? null
-    : symbols.length <= 2
-      ? symbols.map(s => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")
-      : `${symbols.slice(0, 2).map(s => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")} +${symbols.length - 2}`;
+    symbols.length === 0
+      ? null
+      : symbols.length <= 2
+        ? symbols.map((s) => s.replace(/-PERP$/, "").replace(/\/USDT$/, "")).join(" · ")
+        : `${symbols
+            .slice(0, 2)
+            .map((s) => s.replace(/-PERP$/, "").replace(/\/USDT$/, ""))
+            .join(" · ")} +${symbols.length - 2}`;
 
   return (
     <div
@@ -85,7 +90,16 @@ export function StrategyCard({
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
     >
       {/* ── Base bg ─────────────────────────────────────────── */}
       <div className="absolute inset-0 bg-[oklch(0.16_0.01_260)]" />
@@ -121,7 +135,6 @@ export function StrategyCard({
 
       {/* ── Content ──────────────────────────────────────────── */}
       <div className="relative z-10 flex flex-1 flex-col px-4 py-3.5">
-
         {/* Row 1 — type label · live · version */}
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-1.5">
@@ -155,7 +168,10 @@ export function StrategyCard({
             )}
           </div>
           {version !== undefined && (
-            <span className="font-mono text-[11px] tabular-nums" style={{ color: "rgba(255,255,255,0.2)" }}>
+            <span
+              className="font-mono text-[11px] tabular-nums"
+              style={{ color: "rgba(255,255,255,0.2)" }}
+            >
               v{version}
             </span>
           )}
@@ -165,6 +181,7 @@ export function StrategyCard({
         <h3
           className="text-[15px] font-semibold leading-snug line-clamp-1 transition-colors duration-150"
           style={{ color: "rgba(255,255,255,0.88)" }}
+          title={name}
         >
           {name}
         </h3>
@@ -214,12 +231,19 @@ export function StrategyCard({
         {/* Footer — description · timestamp */}
         <div className="mt-auto pt-1.5">
           {description && (
-            <p className="font-mono text-[12px] leading-snug line-clamp-1 mb-0.5" style={{ color: "rgba(255,255,255,0.38)" }}>
+            <p
+              className="font-mono text-[12px] leading-snug line-clamp-1 mb-0.5"
+              style={{ color: "rgba(255,255,255,0.38)" }}
+              title={description}
+            >
               {description}
             </p>
           )}
           {updatedAt && (
-            <p className="font-mono text-[11px] tabular-nums" style={{ color: "rgba(255,255,255,0.22)" }}>
+            <p
+              className="font-mono text-[11px] tabular-nums"
+              style={{ color: "rgba(255,255,255,0.22)" }}
+            >
               {relativeTime(updatedAt)}
             </p>
           )}

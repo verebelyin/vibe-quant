@@ -1,20 +1,20 @@
-import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   type ColumnDef,
-  type SortingState,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
+  type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
 import { ArrowUpDown } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { RunSummaryItem } from "@/api/generated/models";
 import { useListRunsSummaryApiResultsRunsSummaryGet } from "@/api/generated/results/results";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
+import { EmptyState } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui";
 import {
   Select,
   SelectContent,
@@ -76,32 +76,51 @@ function modeVariant(mode: string): "default" | "secondary" | "outline" {
 function SortHeader({
   column,
   children,
+  align,
 }: {
   column: {
     toggleSorting: (desc?: boolean) => void;
     getIsSorted: () => false | "asc" | "desc";
   };
   children: React.ReactNode;
+  align?: "right";
 }) {
+  const sorted = column.getIsSorted();
   return (
     <button
       type="button"
-      className="flex items-center gap-1 hover:text-foreground"
-      onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+      className={cn(
+        "flex w-full items-center gap-1 hover:text-foreground",
+        align === "right" && "justify-end",
+        sorted && "text-foreground",
+      )}
+      onClick={() => column.toggleSorting(sorted === "asc")}
     >
       {children}
-      <ArrowUpDown className="h-3 w-3" />
+      <ArrowUpDown className={cn("h-3 w-3", sorted && "text-primary")} />
     </button>
   );
+}
+
+/** Column meta: alignment class applied to both header and cells */
+interface ColumnMetaWithClass {
+  className?: string;
+}
+
+function columnClass(meta: unknown): string | undefined {
+  return (meta as ColumnMetaWithClass | undefined)?.className;
 }
 
 const columns: ColumnDef<RunSummaryItem>[] = [
   {
     accessorKey: "strategy_name",
     header: ({ column }) => <SortHeader column={column}>Strategy</SortHeader>,
-    cell: ({ row }) => (
-      <span className="font-medium">{row.original.strategy_name ?? "Unknown"}</span>
-    ),
+    cell: ({ row }) =>
+      row.original.strategy_name ? (
+        <span className="font-medium">{row.original.strategy_name}</span>
+      ) : (
+        <span className="text-muted-foreground/60 italic">Unnamed run</span>
+      ),
   },
   {
     accessorKey: "run_mode",
@@ -122,16 +141,21 @@ const columns: ColumnDef<RunSummaryItem>[] = [
   },
   {
     accessorKey: "total_return",
-    header: ({ column }) => <SortHeader column={column}>Return</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        Return
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => {
       const v = row.original.total_return;
       return (
         <span
           className={cn(
             "font-mono font-medium",
-            v != null && v >= 0
+            v != null && v > 0
               ? "text-profit"
-              : v != null
+              : v != null && v < 0
                 ? "text-loss"
                 : "text-muted-foreground",
           )}
@@ -143,16 +167,28 @@ const columns: ColumnDef<RunSummaryItem>[] = [
   },
   {
     accessorKey: "sharpe_ratio",
-    header: ({ column }) => <SortHeader column={column}>Sharpe</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        Sharpe
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => <span className="font-mono">{formatNum(row.original.sharpe_ratio)}</span>,
   },
   {
     accessorKey: "max_drawdown",
-    header: ({ column }) => <SortHeader column={column}>Max DD</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        Max DD
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => {
       const v = row.original.max_drawdown;
       return (
-        <span className={cn("font-mono", v != null ? "text-loss" : "text-muted-foreground")}>
+        <span
+          className={cn("font-mono", v != null && v > 0 ? "text-loss" : "text-muted-foreground")}
+        >
           {v != null ? `${(v * 100).toFixed(2)}%` : "-"}
         </span>
       );
@@ -160,12 +196,18 @@ const columns: ColumnDef<RunSummaryItem>[] = [
   },
   {
     accessorKey: "total_trades",
-    header: ({ column }) => <SortHeader column={column}>Trades</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        Trades
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => <span className="font-mono">{row.original.total_trades ?? "-"}</span>,
   },
   {
     id: "win_loss",
-    header: "W/L",
+    header: () => <div className="text-right">W/L</div>,
+    meta: { className: "text-right" },
     cell: ({ row }) => {
       const w = row.original.winning_trades;
       const l = row.original.losing_trades;
@@ -182,7 +224,12 @@ const columns: ColumnDef<RunSummaryItem>[] = [
   },
   {
     accessorKey: "win_rate",
-    header: ({ column }) => <SortHeader column={column}>Win%</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        Win%
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => {
       const v = row.original.win_rate;
       return <span className="font-mono">{v != null ? `${(v * 100).toFixed(1)}%` : "-"}</span>;
@@ -190,7 +237,12 @@ const columns: ColumnDef<RunSummaryItem>[] = [
   },
   {
     accessorKey: "profit_factor",
-    header: ({ column }) => <SortHeader column={column}>PF</SortHeader>,
+    header: ({ column }) => (
+      <SortHeader column={column} align="right">
+        PF
+      </SortHeader>
+    ),
+    meta: { className: "text-right" },
     cell: ({ row }) => <span className="font-mono">{formatNum(row.original.profit_factor)}</span>,
   },
   {
@@ -251,9 +303,7 @@ export function ResultsPage() {
   const strategiesQuery = useListStrategiesApiStrategiesGet();
   const strategiesResp = strategiesQuery.data;
   const strategies =
-    strategiesResp && strategiesResp.status === 200
-      ? strategiesResp.data.strategies
-      : [];
+    strategiesResp && strategiesResp.status === 200 ? strategiesResp.data.strategies : [];
 
   const table = useReactTable({
     data: filteredRuns,
@@ -315,42 +365,57 @@ export function ResultsPage() {
           description="Run a backtest from the Backtest page to see results here."
         />
       ) : (
-        <div className="overflow-auto rounded-md border">
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((hg) => (
-                <TableRow key={hg.id}>
-                  {hg.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className="cursor-pointer"
-                  onClick={() =>
-                    navigate({
-                      to: "/results/$runId",
-                      params: { runId: String(row.original.run_id) },
-                    })
-                  }
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {filteredRuns.length} run{filteredRuns.length !== 1 ? "s" : ""}
+            {modeFilter === ALL && " — screening runs hidden; pick “All modes” to include them"}
+          </p>
+          <div className="overflow-auto rounded-md border">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                {table.getHeaderGroups().map((hg) => (
+                  <TableRow key={hg.id}>
+                    {hg.headers.map((header) => (
+                      <TableHead
+                        key={header.id}
+                        className={cn(
+                          "whitespace-nowrap",
+                          columnClass(header.column.columnDef.meta),
+                        )}
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    key={row.id}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      navigate({
+                        to: "/results/$runId",
+                        params: { runId: String(row.original.run_id) },
+                      })
+                    }
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell
+                        key={cell.id}
+                        className={cn("whitespace-nowrap", columnClass(cell.column.columnDef.meta))}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
     </div>

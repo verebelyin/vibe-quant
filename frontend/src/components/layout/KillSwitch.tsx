@@ -104,8 +104,8 @@ export function KillSwitch() {
   return (
     <Dialog open={killOpen} onOpenChange={setKillOpen}>
       <DialogTrigger asChild>
-        <Button variant="destructive" size="sm">
-          KILL
+        <Button variant="destructive" size="sm" title="Halt all trading sessions">
+          Kill switch
         </Button>
       </DialogTrigger>
       <DialogContent>
