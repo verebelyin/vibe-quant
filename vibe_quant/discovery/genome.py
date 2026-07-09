@@ -385,22 +385,26 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
         errors.append(
             f"ma_exit_genes count {len(chrom.ma_exit_genes)} exceeds cap {MAX_MA_EXIT_GENES}"
         )
-    for label, genes in [("ma_entry", chrom.ma_entry_genes), ("ma_exit", chrom.ma_exit_genes)]:
-        for i, g in enumerate(genes):
-            prefix = f"{label}[{i}]"
-            if g.indicator_type not in MA_POOL:
-                errors.append(f"{prefix}: unknown MA '{g.indicator_type}'")
+    ma_groups: list[tuple[str, list[PriceVsMAConditionGene]]] = [
+        ("ma_entry", chrom.ma_entry_genes),
+        ("ma_exit", chrom.ma_exit_genes),
+    ]
+    for ma_label, ma_genes in ma_groups:
+        for i, mg in enumerate(ma_genes):
+            prefix = f"{ma_label}[{i}]"
+            if mg.indicator_type not in MA_POOL:
+                errors.append(f"{prefix}: unknown MA '{mg.indicator_type}'")
                 continue
-            if g.op not in _MA_CONDITION_TYPES:
-                errors.append(f"{prefix}: op '{g.op}' not valid for MA gene")
-            ma_def = MA_POOL[g.indicator_type]
+            if mg.op not in _MA_CONDITION_TYPES:
+                errors.append(f"{prefix}: op '{mg.op}' not valid for MA gene")
+            ma_def = MA_POOL[mg.indicator_type]
             for pname, (lo, hi) in ma_def.param_ranges.items():
-                val = g.parameters.get(pname)
+                val = mg.parameters.get(pname)
                 if val is None:
                     errors.append(f"{prefix}: missing param '{pname}'")
                 elif not (lo <= val <= hi):
                     errors.append(f"{prefix}: param '{pname}'={val} out of range [{lo}, {hi}]")
-            for pname in g.parameters:
+            for pname in mg.parameters:
                 if pname not in ma_def.param_ranges:
                     errors.append(f"{prefix}: unexpected param '{pname}'")
 
@@ -684,46 +688,43 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     Inverse of chromosome_to_serializable.
     """
 
-    def _parse_gene(g: dict[str, object]) -> StrategyGene:
-        params_raw = g.get("parameters", {})
-        params: dict[str, float] = {
-            str(k): float(v) for k, v in params_raw.items()  # type: ignore[union-attr]
+    def _params_map(raw: object) -> dict[str, float]:
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(k): float(v)
+            for k, v in raw.items()
+            if isinstance(v, (int, float, str))
         }
+
+    def _gene_dicts(raw: object) -> list[dict[str, object]]:
+        if not isinstance(raw, list):
+            return []
+        return [g for g in raw if isinstance(g, dict)]
+
+    def _parse_gene(g: dict[str, object]) -> StrategyGene:
         return StrategyGene(
             indicator_type=str(g["indicator_type"]),
-            parameters=params,
+            parameters=_params_map(g.get("parameters", {})),
             condition=ConditionType(str(g["condition"])),
             threshold=float(g["threshold"]),  # type: ignore[arg-type]
             sub_value=str(g["sub_value"]) if g.get("sub_value") else None,
         )
 
     def _parse_ma_gene(g: dict[str, object]) -> PriceVsMAConditionGene:
-        params_raw = g.get("parameters", {})
-        params: dict[str, float] = {
-            str(k): float(v) for k, v in params_raw.items()  # type: ignore[union-attr]
-        }
         slow_raw = g.get("parameters_slow")
-        parameters_slow: dict[str, float] | None = None
-        if slow_raw is not None:
-            parameters_slow = {
-                str(k): float(v) for k, v in slow_raw.items()  # type: ignore[union-attr]
-            }
         return PriceVsMAConditionGene(
             indicator_type=str(g["indicator_type"]),
-            parameters=params,
+            parameters=_params_map(g.get("parameters", {})),
             op=ConditionType(str(g["op"])),
-            parameters_slow=parameters_slow,
+            parameters_slow=_params_map(slow_raw) if slow_raw is not None else None,
         )
 
-    entry_genes_raw = d.get("entry_genes", [])
-    exit_genes_raw = d.get("exit_genes", [])
-    entry_genes = [_parse_gene(g) for g in entry_genes_raw]  # type: ignore[union-attr]
-    exit_genes = [_parse_gene(g) for g in exit_genes_raw]  # type: ignore[union-attr]
+    entry_genes = [_parse_gene(g) for g in _gene_dicts(d.get("entry_genes", []))]
+    exit_genes = [_parse_gene(g) for g in _gene_dicts(d.get("exit_genes", []))]
 
-    ma_entry_raw = d.get("ma_entry_genes", [])
-    ma_exit_raw = d.get("ma_exit_genes", [])
-    ma_entry_genes = [_parse_ma_gene(g) for g in ma_entry_raw]  # type: ignore[union-attr]
-    ma_exit_genes = [_parse_ma_gene(g) for g in ma_exit_raw]  # type: ignore[union-attr]
+    ma_entry_genes = [_parse_ma_gene(g) for g in _gene_dicts(d.get("ma_entry_genes", []))]
+    ma_exit_genes = [_parse_ma_gene(g) for g in _gene_dicts(d.get("ma_exit_genes", []))]
 
     direction_raw = d.get("direction", "long")
     direction = Direction(str(direction_raw))

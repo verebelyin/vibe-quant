@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -21,6 +21,9 @@ from vibe_quant.overfitting.dsr import (
 from vibe_quant.overfitting.pipeline import OverfittingPipeline
 from vibe_quant.overfitting.types import FilterConfig
 from vibe_quant.utils import compute_day_count
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestDeannualizeSharpe:

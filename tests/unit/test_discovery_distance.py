@@ -2,7 +2,7 @@
 
 import pytest
 
-from vibe_quant.discovery.distance import gene_distance, chromosome_distance
+from vibe_quant.discovery.distance import chromosome_distance, gene_distance
 from vibe_quant.discovery.operators import (
     ConditionType,
     Direction,

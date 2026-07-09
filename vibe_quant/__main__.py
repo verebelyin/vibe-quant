@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from vibe_quant.validation.latency import LatencyPreset
 
 
-def _latency_presets() -> type:
+def _latency_presets() -> type[LatencyPreset]:
     """Lazy import of LatencyPreset enum for CLI choices."""
     from vibe_quant.validation.latency import LatencyPreset
 

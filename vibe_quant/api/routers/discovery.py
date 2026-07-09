@@ -492,9 +492,9 @@ def _passes_opposing_regime_gate(
         return True
 
     min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
-    try:
+    if isinstance(min_sharpe_raw, (int, float)) and not isinstance(min_sharpe_raw, bool):
         min_sharpe = float(min_sharpe_raw)
-    except (TypeError, ValueError):
+    else:
         min_sharpe = 0.5
 
     max_idx = min(len(offsets_raw), len(windows_raw) - 1)

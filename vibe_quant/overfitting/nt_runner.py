@@ -104,7 +104,12 @@ class NTWFARunner:
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
         )
-        metrics = runner(params)
+        numeric_params: dict[str, float | int] = {
+            k: v
+            for k, v in params.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        metrics = runner(numeric_params)
         sharpe = float(getattr(metrics, "sharpe_ratio", 0.0) or 0.0)
         total_return = float(getattr(metrics, "total_return", 0.0) or 0.0)
         return sharpe, total_return

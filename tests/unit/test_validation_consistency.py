@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.validation.consistency import (
@@ -11,6 +11,9 @@ from vibe_quant.validation.consistency import (
     assess_consistency,
     find_screening_reference,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _ref(sharpe: float, trades: int) -> ScreeningReference:

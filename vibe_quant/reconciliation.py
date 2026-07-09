@@ -190,7 +190,8 @@ def load_trades(
     resolved = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
     log_path = resolved / f"{run_id}.jsonl"
 
-    opens: dict[str, dict[str, object]] = {}  # position_id -> open event dict
+    # position_id -> (open record, open data)
+    opens: dict[str, tuple[dict[str, object], dict[str, object]]] = {}
     trades: list[Trade] = []
 
     try:
@@ -213,18 +214,30 @@ def load_trades(
             if event == "POSITION_OPEN":
                 pid = str(data.get("position_id", ""))
                 if pid:
-                    opens[pid] = {"record": record, "data": data}
+                    opens[pid] = (record, data)
             elif event == "POSITION_CLOSE":
                 pid = str(data.get("position_id", ""))
                 open_rec = opens.pop(pid, None)
                 if open_rec is None:
                     continue  # close without a matching open in this log — orphan
-                trade = _build_trade(open_rec["record"], open_rec["data"], record, data)
+                trade = _build_trade(open_rec[0], open_rec[1], record, data)
                 if trade is not None:
                     trades.append(trade)
 
     trades.sort(key=lambda t: t.entry_time)
     return trades
+
+
+def _num(value: object, default: float = 0.0) -> float:
+    """Coerce a JSON scalar to float; malformed values fall back to default."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
 
 
 def _build_trade(
@@ -245,11 +258,11 @@ def _build_trade(
             side=str(open_data.get("side", "")),
             entry_time=entry_ts,
             exit_time=exit_ts,
-            entry_price=float(open_data.get("entry_price", 0.0)),
-            exit_price=float(close_data.get("exit_price", 0.0)),
-            quantity=float(open_data.get("quantity", 0.0)),
-            net_pnl=float(close_data.get("net_pnl", 0.0)),
-            gross_pnl=float(close_data.get("gross_pnl", 0.0)),
+            entry_price=_num(open_data.get("entry_price")),
+            exit_price=_num(close_data.get("exit_price")),
+            quantity=_num(open_data.get("quantity")),
+            net_pnl=_num(close_data.get("net_pnl")),
+            gross_pnl=_num(close_data.get("gross_pnl")),
             exit_reason=str(close_data.get("exit_reason", "")),
         )
     except (TypeError, ValueError):

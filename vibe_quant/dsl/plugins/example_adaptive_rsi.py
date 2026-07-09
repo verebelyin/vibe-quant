@@ -144,7 +144,7 @@ indicator_registry.register_spec(
         default_params={"period": 14, "alpha": 0.5},
         param_schema={"period": int, "alpha": float},
         compute_fn=compute_adaptive_rsi,
-        pta_lookback_fn=lambda p: int(p.get("period", 14)) * 2,
+        pta_lookback_fn=lambda p: int_param(p, "period", 14) * 2,
         display_name="Adaptive RSI",
         description=(
             "RSI with Kaufman-style adaptive smoothing. Responsive in "

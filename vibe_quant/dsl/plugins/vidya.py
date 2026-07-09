@@ -49,7 +49,7 @@ indicator_registry.register_spec(
         default_params={"period": 14},
         param_schema={"period": int},
         compute_fn=compute_vidya,
-        pta_lookback_fn=lambda p: int(p.get("period", 14)) * 3,
+        pta_lookback_fn=lambda p: int_param(p, "period", 14) * 3,
         display_name="Variable Index Dynamic Avg",
         description=(
             "CMO-weighted adaptive moving average: faster when price "

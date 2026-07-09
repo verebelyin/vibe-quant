@@ -21,7 +21,7 @@ class TestDiversityPreservation:
 
         import random as rng
 
-        for gen in range(10):
+        for _gen in range(10):
             scores = [rng.random() for _ in pop]
 
             # Evolution: simple tournament + crossover + mutation

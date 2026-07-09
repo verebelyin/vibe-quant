@@ -66,7 +66,7 @@ def _sharpe_from_returns(returns: np.ndarray) -> float:
     std = float(np.std(returns, ddof=1))
     if std < 1e-10:
         return 0.0
-    return mean / std * np.sqrt(n)
+    return float(mean / std * np.sqrt(n))
 
 
 def bootstrap_sharpe_ci(

@@ -12,13 +12,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.validation.fill_model import SlippageEstimator
-from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.results import BacktestResult
 
+    from vibe_quant.validation.funding import FundingCalculator
     from vibe_quant.validation.venue import VenueConfig
 
 logger = logging.getLogger(__name__)

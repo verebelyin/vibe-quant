@@ -96,6 +96,7 @@ class TestPerturb:
     def test_perturb_zero_with_narrow_bounds(self) -> None:
         """_perturb(0.0) with narrow bounds should stay within bounds, not use absolute frac."""
         import random
+
         from vibe_quant.discovery.operators import _perturb
         random.seed(42)
         lo, hi = -0.05, 0.05
@@ -114,6 +115,7 @@ class TestPerturb:
     def test_perturb_zero_without_bounds_uses_absolute(self) -> None:
         """_perturb(0.0) without bounds should still use frac as absolute range."""
         import random
+
         from vibe_quant.discovery.operators import _perturb
         random.seed(42)
         results = [_perturb(0.0, 0.2) for _ in range(100)]
@@ -126,8 +128,14 @@ class TestRepairChromosome:
     def test_repair_fixes_out_of_range_threshold(self) -> None:
         """Chromosomes with out-of-range thresholds should be repaired."""
         from vibe_quant.discovery.operators import (
-            StrategyGene, StrategyChromosome, ConditionType, Direction,
-            is_valid_chromosome, _repair_chromosome, _ensure_pool, THRESHOLD_RANGES,
+            THRESHOLD_RANGES,
+            ConditionType,
+            Direction,
+            StrategyChromosome,
+            StrategyGene,
+            _ensure_pool,
+            _repair_chromosome,
+            is_valid_chromosome,
         )
         _ensure_pool()
         # ATR with RSI-scale threshold (impossible: ATR range is 0.001-0.08)
@@ -152,8 +160,12 @@ class TestRepairChromosome:
     def test_repair_preserves_valid_chromosome(self) -> None:
         """Valid chromosomes should pass through repair unchanged."""
         from vibe_quant.discovery.operators import (
-            StrategyGene, StrategyChromosome, ConditionType, Direction,
-            is_valid_chromosome, _repair_chromosome,
+            ConditionType,
+            Direction,
+            StrategyChromosome,
+            StrategyGene,
+            _repair_chromosome,
+            is_valid_chromosome,
         )
         gene = StrategyGene(
             indicator_type="RSI", parameters={"period": 14.0},
@@ -173,6 +185,7 @@ class TestGen1Viability:
     def test_random_chromosomes_mostly_valid_thresholds(self) -> None:
         """All random chromosomes should have valid thresholds (is_valid_chromosome passes)."""
         import random
+
         from vibe_quant.discovery.operators import initialize_population, is_valid_chromosome
         random.seed(42)
         pop = initialize_population(100)
@@ -182,7 +195,12 @@ class TestGen1Viability:
     def test_crossover_produces_valid_offspring(self) -> None:
         """Crossover + repair should always produce valid chromosomes."""
         import random
-        from vibe_quant.discovery.operators import initialize_population, crossover, is_valid_chromosome
+
+        from vibe_quant.discovery.operators import (
+            crossover,
+            initialize_population,
+            is_valid_chromosome,
+        )
         random.seed(42)
         pop = initialize_population(20)
         invalid_count = 0

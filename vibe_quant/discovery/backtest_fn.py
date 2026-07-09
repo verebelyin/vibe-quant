@@ -107,7 +107,7 @@ class NTBacktestFn:
         # Trade-weighted profit factor
         pf_weighted = sum(
             float(r["profit_factor"]) * t
-            for r, t in zip(results, per_window_trades)
+            for r, t in zip(results, per_window_trades, strict=False)
         ) / total_trades_sum
 
         return {
@@ -118,7 +118,7 @@ class NTBacktestFn:
             "total_return": sum(float(r["total_return"]) for r in results) / n,
             "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
             "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
-            "trade_returns": sum(
+            "trade_returns": sum(  # type: ignore[dict-item]
                 (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
             ),
         }

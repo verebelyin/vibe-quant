@@ -10,12 +10,19 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
+from vibe_quant.discovery.pipeline import (
+    DiscoveryConfig,
+    DiscoveryPipeline,
+    DiscoveryResult,
+)
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
+    from vibe_quant.discovery.pipeline import GenerationResult
 
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
@@ -73,7 +80,7 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
         "profit_factor": profit_factor,
         "total_trades": total_trades,
         "total_return": total_return,
-        "trade_returns": trade_returns,
+        "trade_returns": trade_returns,  # type: ignore[dict-item]
     }
 
 
@@ -81,7 +88,7 @@ def _mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
 # processes can unpickle it. When this file is loaded as ``__main__``
 # (via ``python -m vibe_quant.discovery``), classes defined here would
 # pickle with ``__module__='__main__'`` — workers can't resolve that.
-from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline
+from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline  # noqa: E402
 
 
 def _make_nt_backtest_fn(
@@ -190,12 +197,12 @@ def _run_multi_seed(
     all_strategies: list[
         tuple[
             StrategyChromosome,
-            object,
+            FitnessResult,
             DiscoveryResult,
             int,
         ]
     ] = []
-    all_generations: list[object] = []
+    all_generations: list[GenerationResult] = []
     all_rejections: list[dict[str, object]] = []
     total_evaluated = 0
     seed_stats: list[dict[str, float]] = []
@@ -287,7 +294,7 @@ def _run_multi_seed(
         list[
             tuple[
                 StrategyChromosome,
-                object,
+                FitnessResult,
                 DiscoveryResult,
                 int,
             ]
@@ -309,7 +316,7 @@ def _run_multi_seed(
         group: list[
             tuple[
                 StrategyChromosome,
-                object,
+                FitnessResult,
                 DiscoveryResult,
                 int,
             ]
@@ -324,7 +331,7 @@ def _run_multi_seed(
     selected_entries: list[
         tuple[
             StrategyChromosome,
-            object,
+            FitnessResult,
             DiscoveryResult,
             int,
         ]
@@ -376,7 +383,7 @@ def _run_multi_seed(
 
 
 def _load_seed_chromosomes(
-    state: object,
+    state: StateManager,
     run_id: int,
 ) -> list[StrategyChromosome] | None:
     """Load top chromosomes from a prior discovery run for warm-starting.

@@ -11,8 +11,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
     DeflatedSharpeRatio,
@@ -21,6 +19,8 @@ from vibe_quant.overfitting.dsr import (
 
 if TYPE_CHECKING:
     from datetime import date
+
+    import numpy as np
 
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.overfitting.bootstrap_sharpe import BootstrapResult

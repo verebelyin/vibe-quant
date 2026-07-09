@@ -104,7 +104,7 @@ indicator_registry.register_spec(
         default_params={"period": 16},
         param_schema={"period": int},
         compute_fn=compute_frama,
-        pta_lookback_fn=lambda p: int(p.get("period", 16)) * 2,
+        pta_lookback_fn=lambda p: int_param(p, "period", 16) * 2,
         requires_high_low=True,
         display_name="Fractal Adaptive MA",
         description=(

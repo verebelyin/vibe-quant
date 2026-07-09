@@ -10,6 +10,7 @@ import math
 from collections import Counter
 
 from vibe_quant.discovery.operators import (
+    Direction,
     StrategyChromosome,
     _random_chromosome,
 )
@@ -87,7 +88,7 @@ def inject_random_immigrants(
     population: list[StrategyChromosome],
     fitness_scores: list[float],
     fraction: float = 0.1,
-    direction_constraint: object | None = None,
+    direction_constraint: Direction | None = None,
 ) -> list[StrategyChromosome]:
     """Replace worst individuals with random immigrants.
 

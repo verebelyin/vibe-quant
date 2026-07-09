@@ -459,7 +459,7 @@ class NTScreeningRunner:
         return metrics
 
     @staticmethod
-    def _compute_return_moments(engine: object) -> tuple[float, float, tuple[float, ...]]:
+    def _compute_return_moments(engine: Any) -> tuple[float, float, tuple[float, ...]]:
         """Compute skewness, kurtosis, and per-trade returns from closed positions.
 
         Uses adjusted Fisher-Pearson G1 (skewness) and G2 (excess kurtosis)
@@ -523,7 +523,7 @@ class NTScreeningRunner:
 
     def _compute_max_drawdown(
         self,
-        engine: object,
+        engine: Any,
         start_time: float,
         starting_balance: float = 1000.0,
     ) -> float:

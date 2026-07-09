@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+
 from vibe_quant.dsl.schema import StrategyDSL
 
 
@@ -48,7 +49,7 @@ class TestPerDirectionSLTP:
 
     def test_per_direction_atr_validates_indicator(self) -> None:
         """Per-direction ATR SL must reference existing indicator."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="nonexistent"):
             StrategyDSL(**_base_dsl(
                 stop_loss_long={"type": "atr_fixed", "atr_multiplier": 1.5, "indicator": "nonexistent"},
             ))

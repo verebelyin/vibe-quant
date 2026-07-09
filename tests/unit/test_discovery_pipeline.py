@@ -344,8 +344,8 @@ class TestStructuralDedup:
 
     def test_clones_rejected(self) -> None:
         """Structurally identical chromosomes are deduped even with different UIDs."""
+        from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
         from vibe_quant.discovery.pipeline import _select_diverse_top_k
-        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
 
         gene = StrategyGene(
             indicator_type="RSI", parameters={"period": 14.0},
@@ -363,8 +363,8 @@ class TestStructuralDedup:
 
     def test_diverse_strategies_all_kept(self) -> None:
         """Structurally different strategies are all kept."""
+        from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
         from vibe_quant.discovery.pipeline import _select_diverse_top_k
-        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
 
         indicators = ["RSI", "CCI", "ATR", "STOCH", "ADX"]
         candidates = []
@@ -545,7 +545,7 @@ class TestWarmStart:
 
     def test_seed_chromosomes_in_initial_population(self) -> None:
         """Seed chromosomes should appear in the initial population."""
-        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+        from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
 
         seed_gene = StrategyGene(
             indicator_type="CCI", parameters={"period": 20.0},
@@ -571,8 +571,11 @@ class TestWarmStart:
 
     def test_chromosome_round_trip_serialization(self) -> None:
         """chromosome_to_serializable → serializable_to_chromosome should round-trip."""
-        from vibe_quant.discovery.genome import chromosome_to_serializable, serializable_to_chromosome
-        from vibe_quant.discovery.operators import StrategyGene, ConditionType, Direction
+        from vibe_quant.discovery.genome import (
+            chromosome_to_serializable,
+            serializable_to_chromosome,
+        )
+        from vibe_quant.discovery.operators import ConditionType, Direction, StrategyGene
 
         gene = StrategyGene(
             indicator_type="STOCH", parameters={"k_period": 14.0, "d_period": 3.0},
@@ -749,7 +752,7 @@ class TestWFARollingValidation:
 class TestIndicatorPoolFilter:
     @pytest.fixture(autouse=True)
     def _restore_pool(self) -> Any:
-        from vibe_quant.discovery.operators import INDICATOR_POOL, _INDICATOR_NAMES
+        from vibe_quant.discovery.operators import _INDICATOR_NAMES, INDICATOR_POOL
 
         saved = dict(INDICATOR_POOL), list(_INDICATOR_NAMES)
         yield

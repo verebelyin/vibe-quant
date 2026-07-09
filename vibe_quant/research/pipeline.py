@@ -193,7 +193,7 @@ def run_scrape(
             with contextlib.suppress(ValueError, TypeError):
                 signal.signal(sig, prev)  # type: ignore[arg-type]
         with contextlib.suppress(Exception):
-            source.close()
+            source.close()  # type: ignore[attr-defined]
         sm.complete_scrape_run(
             scrape_run_id,
             status=final_status,
