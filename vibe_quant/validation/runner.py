@@ -867,13 +867,15 @@ class ValidationRunner:
             AvgWinner,
             Expectancy,
             LongRatio,
+            MaxDrawdown,
             ProfitFactor,
             SharpeRatio,
             SortinoRatio,
             WinRate,
         )
 
-        # MaxDrawdown excluded: lacks calculate_from_realized_pnls in NT 1.222
+        # MaxDrawdown gained calculate_from_realized_pnls in NT 1.223+
+        # (was excluded on 1.222).
         stats = [
             SharpeRatio(),
             SortinoRatio(),
@@ -883,6 +885,7 @@ class ValidationRunner:
             LongRatio(),
             AvgWinner(),
             AvgLoser(),
+            MaxDrawdown(),
         ]
 
         for engine in node.get_engines():  # type: ignore[attr-defined]
