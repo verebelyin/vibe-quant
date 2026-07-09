@@ -462,7 +462,7 @@ class CatalogManager:
 
             total = 0
             for pq_file in bar_dir.glob("*.parquet"):
-                meta = pq.read_metadata(pq_file)
+                meta = pq.read_metadata(pq_file)  # type: ignore[no-untyped-call]
                 total += meta.num_rows
             return total
         except Exception:
@@ -517,8 +517,8 @@ class CatalogManager:
             min_ns: int | None = None
             max_ns: int | None = None
             for pq_file in bar_dir.glob("*.parquet"):
-                meta = pq.read_metadata(pq_file)
-                schema = pq.read_schema(pq_file)
+                meta = pq.read_metadata(pq_file)  # type: ignore[no-untyped-call]
+                schema = pq.read_schema(pq_file)  # type: ignore[no-untyped-call]
                 col_idx = schema.get_field_index("ts_event")
                 if col_idx < 0:
                     continue
