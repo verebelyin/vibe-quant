@@ -149,10 +149,37 @@ class ValidationRunner:
         # Update run status to running
         self._state.update_backtest_run_status(run_id, "running")
 
+        logger.info(
+            "Run %d setup: strategy=%s (id=%d) timeframe=%s latency=%s detail=%s "
+            "leverage=%sx balance=%s USDT",
+            run_id,
+            strategy_name,
+            strategy_id,
+            dsl.timeframe,
+            effective_latency or "none",
+            effective_detail or "none",
+            venue_config.default_leverage,
+            venue_config.starting_balance_usdt,
+        )
+
         try:
             # Create event writer
             with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
-                self._write_start_event(writer, run_id, strategy_name, venue_config)
+                self._write_start_event(
+                    writer,
+                    run_id,
+                    strategy_name,
+                    venue_config,
+                    extra={
+                        "strategy_id": strategy_id,
+                        "timeframe": dsl.timeframe,
+                        "symbols": self._parse_symbols(run_config),
+                        "start_date": run_config.get("start_date"),
+                        "end_date": run_config.get("end_date"),
+                        "detail_timeframe": effective_detail,
+                        "leverage": float(venue_config.default_leverage),
+                    },
+                )
 
                 result = self._run_backtest(
                     run_id=run_id,
@@ -168,6 +195,22 @@ class ValidationRunner:
 
             result.execution_time_seconds = time.monotonic() - start_time
             self._store_results(run_id, result)
+
+            logger.info(
+                "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe=%.2f "
+                "maxDD=%.2f%% pf=%.2f win=%.1f%% slippage=%.2f in %.1fs",
+                run_id,
+                result.total_trades,
+                result.winning_trades,
+                result.losing_trades,
+                result.total_return * 100,
+                result.sharpe_ratio,
+                result.max_drawdown * 100,
+                result.profit_factor,
+                result.win_rate * 100,
+                result.total_slippage,
+                result.execution_time_seconds,
+            )
 
             if result.total_trades == 0:
                 error_msg = "Validation produced 0 trades — likely missing/empty data"
@@ -586,11 +629,32 @@ class ValidationRunner:
         Returns:
             Configured VenueConfig.
         """
+        from decimal import Decimal
+
         from vibe_quant.validation.venue import DEFAULT_STARTING_BALANCE_USDT
 
-        balance = run_config.get("starting_balance", DEFAULT_STARTING_BALANCE_USDT)
+        # UI/API launch values live in the parameters JSON, not as top-level
+        # run columns (initial_balance was silently ignored before this).
+        raw_params = run_config.get("parameters")
+        launch_params: dict[str, object] = (
+            raw_params if isinstance(raw_params, dict) else {}
+        )
+
+        balance = launch_params.get(
+            "initial_balance",
+            run_config.get("starting_balance", DEFAULT_STARTING_BALANCE_USDT),
+        )
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or balance <= 0:
             balance = DEFAULT_STARTING_BALANCE_USDT
+
+        leverage_raw = launch_params.get("leverage")
+        default_leverage = Decimal("10")
+        if (
+            not isinstance(leverage_raw, bool)
+            and isinstance(leverage_raw, (int, float))
+            and leverage_raw > 0
+        ):
+            default_leverage = Decimal(str(leverage_raw))
 
         # Skip latency for sub-5m timeframes ONLY when no detail data
         # provides sub-bar resolution for the matching engine
@@ -604,11 +668,13 @@ class ValidationRunner:
                 )
             return create_venue_config_for_validation(
                 starting_balance_usdt=int(balance),
+                default_leverage=default_leverage,
                 latency_preset=None,
             )
 
         return create_venue_config_for_validation(
             starting_balance_usdt=int(balance),
+            default_leverage=default_leverage,
             latency_preset=latency_preset or LatencyPreset.CLOUD,
         )
 
@@ -719,10 +785,17 @@ class ValidationRunner:
         if config_fields:
             dropped = sorted(k for k in strategy_params if k not in config_fields)
             if dropped:
-                logger.debug("Dropping non-strategy-config params: %s", dropped)
+                logger.info(
+                    "Run %d: dropping non-strategy-config params: %s", run_id, dropped
+                )
             strategy_params = {
                 k: v for k, v in strategy_params.items() if k in config_fields
             }
+        logger.info(
+            "Run %d strategy params: %s",
+            run_id,
+            strategy_params if strategy_params else "(compiled defaults)",
+        )
 
         # Build strategy configs (one per symbol)
         strategy_configs: list[ImportableStrategyConfig] = []
@@ -789,10 +862,19 @@ class ValidationRunner:
         # Convert our VenueConfig to NautilusTrader BacktestVenueConfig
         bt_venue_config = create_backtest_venue_config(venue_config)
 
-        # Create engine config
+        # Create engine config. NT engine verbosity is tunable per run via
+        # VIBE_QUANT_NT_LOG_LEVEL (TRACE/DEBUG/INFO/WARNING/ERROR); default
+        # INFO matches NT's own default.
+        import os
+
+        from nautilus_trader.config import LoggingConfig
+
         engine_config = BacktestEngineConfig(
             strategies=strategy_configs,
             run_analysis=True,
+            logging=LoggingConfig(
+                log_level=os.environ.get("VIBE_QUANT_NT_LOG_LEVEL", "INFO")
+            ),
         )
 
         # Create run config -- dispose_on_completion=False so we can
@@ -836,6 +918,17 @@ class ValidationRunner:
                     f"Backtest engine not found for run config {bt_run_config.id}"
                 )
             bt_result = engine.get_result()
+
+            logger.info(
+                "Run %d engine stats: %d iterations, %d events, %d orders, "
+                "%d positions over %.0f-day window",
+                run_id,
+                bt_result.iterations,
+                bt_result.total_events,
+                bt_result.total_orders,
+                bt_result.total_positions,
+                bt_result.elapsed_time / 86_400,
+            )
 
             # Extract metrics and trades from the engine
             result = self._extract_results(
@@ -1133,20 +1226,29 @@ class ValidationRunner:
         run_id: int,
         strategy_name: str,
         venue_config: VenueConfig,
+        extra: dict[str, object] | None = None,
     ) -> None:
-        """Write backtest start event."""
+        """Write backtest start event.
+
+        Args:
+            extra: Additional run-setup context (symbols, dates, timeframe,
+                leverage, …) merged into the event payload for analysis.
+        """
+        data: dict[str, object] = {
+            "event": "BACKTEST_START",
+            "venue": venue_config.name,
+            "latency_preset": str(venue_config.latency_preset)
+            if venue_config.latency_preset
+            else None,
+            "starting_balance": venue_config.starting_balance_usdt,
+        }
+        if extra:
+            data.update(extra)
         event = create_event(
             event_type=EventType.LIFECYCLE,
             run_id=str(run_id),
             strategy_name=strategy_name,
-            data={
-                "event": "BACKTEST_START",
-                "venue": venue_config.name,
-                "latency_preset": str(venue_config.latency_preset)
-                if venue_config.latency_preset
-                else None,
-                "starting_balance": venue_config.starting_balance_usdt,
-            },
+            data=data,
         )
         writer.write(event)
 

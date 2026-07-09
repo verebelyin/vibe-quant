@@ -222,12 +222,19 @@ class NTScreeningRunner:
 
         # Suppress NT's verbose INFO logging in discovery/screening mode
         # (every order/fill/position logs at INFO, generating 100s of MB)
+        # Screening runs in parallel workers, so NT engine output defaults to
+        # WARNING to keep sweep logs readable. Override per run via
+        # VIBE_QUANT_NT_LOG_LEVEL_SCREENING (TRACE/DEBUG/INFO/WARNING/ERROR).
+        import os
+
         from nautilus_trader.config import LoggingConfig
 
         engine_config = BacktestEngineConfig(
             strategies=strategy_configs,
             run_analysis=True,
-            logging=LoggingConfig(log_level="WARNING"),
+            logging=LoggingConfig(
+                log_level=os.environ.get("VIBE_QUANT_NT_LOG_LEVEL_SCREENING", "WARNING")
+            ),
         )
 
         bt_run_config = BacktestRunConfig(
@@ -263,13 +270,27 @@ class NTScreeningRunner:
                 )
             bt_result = engine.get_result()
 
-            return self._extract_metrics(
+            metrics = self._extract_metrics(
                 params,
                 bt_result,
                 engine,
                 start_time,
                 starting_balance=float(venue_config.starting_balance_usdt),
             )
+            # One line per grid point so sweep logs are analyzable
+            logger.info(
+                "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
+                "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
+                params or "{}",
+                metrics.sharpe_ratio,
+                metrics.total_trades,
+                metrics.total_return * 100,
+                metrics.max_drawdown * 100,
+                bt_result.total_orders,
+                bt_result.total_events,
+                metrics.execution_time_seconds,
+            )
+            return metrics
         finally:
             # Reset engines before dispose to avoid
             # InvalidStateTrigger('RUNNING -> DISPOSE')
