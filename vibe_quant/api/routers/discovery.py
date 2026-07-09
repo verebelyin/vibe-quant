@@ -584,7 +584,16 @@ async def get_latest_results(state: StateMgr) -> DiscoveryResultResponse:
 
 @router.get("/results/{run_id}", response_model=DiscoveryResultResponse)
 async def get_discovery_results(run_id: int, state: StateMgr) -> DiscoveryResultResponse:
-    return DiscoveryResultResponse(strategies=_load_discovery_strategies(state, run_id))
+    payload = _load_discovery_payload(state, run_id)
+    strategies_raw = payload.get("top_strategies")
+    strategies = strategies_raw if isinstance(strategies_raw, list) else []
+    reason = payload.get("reason")
+    rejections = payload.get("guardrail_rejections")
+    return DiscoveryResultResponse(
+        strategies=strategies,
+        reason=reason if isinstance(reason, str) else None,
+        guardrail_rejections=rejections if isinstance(rejections, list) else None,
+    )
 
 
 @router.post("/results/{run_id}/export/{strategy_index}", status_code=201)

@@ -257,6 +257,7 @@ class DiscoveryResult:
     holdout_dates: tuple[str, str] | None = None
     cross_window_results: list[CrossWindowResult] = field(default_factory=list)
     wfa_results: list[WFARollingResult] = field(default_factory=list)
+    guardrail_rejections: list[dict[str, object]] = field(default_factory=list)
 
 
 def _select_diverse_top_k(
@@ -330,6 +331,7 @@ class DiscoveryPipeline:
         self._holdout_backtest_fn = holdout_backtest_fn
         self._backtest_fn_factory = backtest_fn_factory
         self._seed_chromosomes = seed_chromosomes
+        self._guardrail_rejections: list[dict[str, object]] = []
         self._direction_constraint: Direction | None = None
 
     # -- public API ---------------------------------------------------------
@@ -852,6 +854,7 @@ class DiscoveryPipeline:
             holdout_dates=holdout_dates,
             cross_window_results=cross_window_results,
             wfa_results=wfa_results,
+            guardrail_rejections=getattr(self, "_guardrail_rejections", []),
         )
 
     def _evaluate_holdout(
@@ -1452,6 +1455,7 @@ class DiscoveryPipeline:
 
         validated: list[tuple[StrategyChromosome, FitnessResult]] = []
         any_hard_failure = False
+        self._guardrail_rejections = []
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
@@ -1488,6 +1492,16 @@ class DiscoveryPipeline:
                     chrom.uid,
                     fitness.adjusted_score,
                     result.reasons,
+                )
+                # Persisted with the run so the UI can explain empty results
+                self._guardrail_rejections.append(
+                    {
+                        "uid": chrom.uid,
+                        "score": round(fitness.adjusted_score, 4),
+                        "sharpe": round(fitness.sharpe_ratio, 3),
+                        "trades": fitness.total_trades,
+                        "reasons": list(result.reasons),
+                    }
                 )
 
         if not validated:

@@ -182,6 +182,7 @@ def _run_multi_seed(
         ]
     ] = []
     all_generations: list[object] = []
+    all_rejections: list[dict[str, object]] = []
     total_evaluated = 0
     seed_stats: list[dict[str, float]] = []
     any_converged = False
@@ -232,6 +233,7 @@ def _run_multi_seed(
             for idx, (chrom, fit) in enumerate(result.top_strategies)
         )
         all_generations.extend(result.generations)
+        all_rejections.extend(result.guardrail_rejections)
         total_evaluated += result.total_candidates_evaluated
         if result.converged:
             any_converged = True
@@ -355,6 +357,7 @@ def _run_multi_seed(
         holdout_dates=result_metadata.holdout_dates if result_metadata else None,
         cross_window_results=cross_window_results,
         wfa_results=wfa_results,
+        guardrail_rejections=all_rejections,
     )
 
 
@@ -781,6 +784,7 @@ def main() -> int:
                 "direction": args.direction,
                 "num_seeds": num_seeds if num_seeds > 1 else None,
                 "top_strategies": [],
+                "guardrail_rejections": result.guardrail_rejections,
             }
             state.save_backtest_result(
                 args.run_id,
@@ -962,6 +966,7 @@ def main() -> int:
                         "wfa_oos_step_days": args.wfa_oos_step_days if args.wfa_oos_step_days > 0 else None,
                         "num_seeds": num_seeds if num_seeds > 1 else None,
                         "top_strategies": top_dsls,
+                        "guardrail_rejections": result.guardrail_rejections or None,
                     }
                 ),
             },

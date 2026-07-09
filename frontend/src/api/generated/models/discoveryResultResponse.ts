@@ -4,8 +4,11 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { DiscoveryResultResponseGuardrailRejections } from './discoveryResultResponseGuardrailRejections';
 import type { DiscoveryResultResponseStrategiesItem } from './discoveryResultResponseStrategiesItem';
 
 export interface DiscoveryResultResponse {
   strategies: DiscoveryResultResponseStrategiesItem[];
+  reason?: string | null;
+  guardrail_rejections?: DiscoveryResultResponseGuardrailRejections;
 }

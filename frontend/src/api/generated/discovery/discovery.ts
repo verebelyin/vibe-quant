@@ -958,6 +958,10 @@ export const useReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIn
       return useMutation(getReplayDiscoveredStrategyApiDiscoveryResultsRunIdReplayStrategyIndexPostMutationOptions(options), queryClient);
     }
     /**
+ * Serve the GA genome's indicator pool (the launch-time source of truth).
+
+Names must match ``discovery.operators.INDICATOR_POOL`` exactly — a
+display-name mismatch here fails the run at launch (vibe-quant-rubp1).
  * @summary Get Indicator Pool
  */
 export type getIndicatorPoolApiDiscoveryIndicatorPoolGetResponse200 = {

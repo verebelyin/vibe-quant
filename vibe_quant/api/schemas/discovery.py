@@ -59,6 +59,9 @@ class DiscoveryJobResponse(BaseModel):
 
 class DiscoveryResultResponse(BaseModel):
     strategies: list[dict[str, object]]
+    # Why a completed run has no strategies (all champions guardrail-rejected)
+    reason: str | None = None
+    guardrail_rejections: list[dict[str, object]] | None = None
 
 
 class PromoteResponse(BaseModel):

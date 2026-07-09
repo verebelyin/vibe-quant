@@ -804,6 +804,11 @@ class ValidationRunner:
             start=start_date,
             end=end_date,
             dispose_on_completion=False,
+            # Surface engine-build/run errors directly. Without this,
+            # node.build() logs the real exception (e.g. a strategy-config
+            # decode failure) and get_engine() returns None, which we could
+            # only report as an opaque "engine not found" (vibe-quant-wrlea).
+            raise_exception=True,
         )
 
         detail_info = f", detail={detail_timeframe}" if detail_timeframe else ""

@@ -37,6 +37,7 @@ export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';
 export * from './discoveryLaunchRequest';
 export * from './discoveryResultResponse';
+export * from './discoveryResultResponseGuardrailRejections';
 export * from './discoveryResultResponseStrategiesItem';
 export * from './divergenceSummary';
 export * from './downloadHistoryApiDataHistoryGet200Item';

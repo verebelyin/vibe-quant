@@ -2035,9 +2035,10 @@ export const useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndic
 
 Strips the AUTO-GENERATED header, atomically renames the file, makes
 a local git commit, and records provenance via ``bd remember``. The
-promotion is rejected with 409-style ``collision`` status if a file
-at the unprefixed path already exists — the user must rename or
-delete it manually.
+promotion is rejected with HTTP 409 if a file at the unprefixed path
+already exists — the user must rename or delete it manually. Other
+failures map to real codes too: invalid name → 400, no proposed file
+→ 404, write/commit failure → 500.
 
 Provenance for ``bd remember`` is looked up from
 ``research_indicator_scaffolds`` joined to ``research_items``. If
