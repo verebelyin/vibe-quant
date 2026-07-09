@@ -74,3 +74,7 @@ class PromoteResponse(BaseModel):
 class ReplayResponse(BaseModel):
     replay_run_id: int
     original_run_id: int
+    # Set when replay metrics are NOT expected to equal the stored champion
+    # fitness (e.g. discovery scored worst-of-N eval windows; replay runs
+    # the full window).
+    metrics_note: str | None = None

@@ -287,6 +287,44 @@ async def test_replay_creates_run_with_dsl_override(client: tuple[AsyncClient, S
     assert "dsl_override" in params
 
 
+async def test_replay_metrics_note_absent_for_single_window(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    """No eval_windows (or 1) — replay metrics comparable, no note."""
+    ac, state = client
+    run_id = _create_discovery_run_with_results(state)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/replay/0")
+    assert r.status_code == 201
+    assert r.json()["metrics_note"] is None
+
+
+async def test_replay_metrics_note_for_multi_window_fitness(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    """eval_windows > 1 — stored fitness is worst-of-N, replay is full-window."""
+    ac, state = client
+    run_id = _create_discovery_run_with_results(state)
+    state.conn.execute(
+        "UPDATE backtest_runs SET parameters = ? WHERE id = ?",
+        (json.dumps({"population": 20, "generations": 10, "eval_windows": 3}), run_id),
+    )
+    state.conn.commit()
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/replay/0")
+    assert r.status_code == 201
+    note = r.json()["metrics_note"]
+    assert note is not None
+    assert "worst-of-3" in note
+
+    bt_run = state.get_backtest_run(r.json()["replay_run_id"])
+    assert bt_run is not None
+    params = bt_run.get("parameters", {})
+    if isinstance(params, str):
+        params = json.loads(params)
+    assert "worst-of-3" in str(params.get("replay_note"))
+
+
 async def test_replay_invalid_index(client: tuple[AsyncClient, StateManager]) -> None:
     ac, state = client
     run_id = _create_discovery_run_with_results(state)

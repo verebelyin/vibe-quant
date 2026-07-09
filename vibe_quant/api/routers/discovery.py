@@ -792,6 +792,25 @@ async def replay_discovered_strategy(
     dsl_name = str(dsl.get("name", f"replay_{run_id}_{strategy_index}"))
     translated = translate_dsl_config(dsl, strategy_name=dsl_name)
 
+    # Replay runs the FULL window; discovery with eval_windows > 1 stored
+    # worst-of-N sub-window fitness, so metrics legitimately differ
+    # (trades should still match when the worst window spans the full range).
+    metrics_note: str | None = None
+    run_params_raw = discovery_run.get("parameters")
+    if isinstance(run_params_raw, str):
+        run_params: dict[str, object] = json.loads(run_params_raw)
+    elif isinstance(run_params_raw, dict):
+        run_params = run_params_raw
+    else:
+        run_params = {}
+    eval_windows = run_params.get("eval_windows")
+    if isinstance(eval_windows, int) and eval_windows > 1:
+        metrics_note = (
+            f"Discovery run {run_id} scored fitness as worst-of-{eval_windows} "
+            "eval windows; this replay runs the full window, so Sharpe/return "
+            "will differ from the stored champion fitness by design."
+        )
+
     replay_run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="screening",
@@ -799,14 +818,18 @@ async def replay_discovered_strategy(
         timeframe=str(discovery_run.get("timeframe", "4h")),
         start_date=str(discovery_run.get("start_date", "")),
         end_date=str(discovery_run.get("end_date", "")),
-        parameters={"dsl_override": translated},
+        parameters={"dsl_override": translated, "replay_note": metrics_note},
     )
 
     pid = _launch_backtest_job(state, jobs, replay_run_id, "screening")
     logger.info("replay: discovery=%d genome=%d screening=%d pid=%d", run_id, strategy_index, replay_run_id, pid)
     await ws.broadcast("jobs", {"type": "job_started", "run_id": replay_run_id, "job_type": "screening"})
 
-    return ReplayResponse(replay_run_id=replay_run_id, original_run_id=run_id)
+    return ReplayResponse(
+        replay_run_id=replay_run_id,
+        original_run_id=run_id,
+        metrics_note=metrics_note,
+    )
 
 
 # --- Indicator pool ---
