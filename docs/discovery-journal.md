@@ -4,6 +4,53 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-07-09: Batch 43 — RAMS (Reddit-derived indicator) shakedown, consistency detector's first catch (runs 866-871)
+
+### New indicator: RAMS (Risk-Adjusted Master Score)
+
+Implemented from research extraction 447 (r/algotrading post; scaffolder
+refused without a formula, components defined explicitly): EMA50/SMA200
+macro trend + normalized LSQ slope (single convolution) + proximity to
+rolling high + RSI/100. GA-eligible, threshold 1.8-3.2. Reddit scrape
+itself still IP-403s — run 14 now records **failed** with the real error
+(vibe-quant-ux7t0 fix verified live).
+
+### Runs 866/867 — RAMS+RSI+PRICE_POSITION, pop=24 gen=5, 2024-01-01→2026-03-17
+
+- **866 (bootstrap gate ON, new 4h floor 0.0)**: 0 champions — every CI
+  lower bound was ≤ -1.07 at n=58-124 trades. Gate again refused to
+  certify anything at 4h trade counts.
+- **867 (gate off)**: 5 champions; #0 PRICE_POSITION+RSI (score 0.564,
+  worst-of-3-window Sharpe 0.89), #2 carries **RAMS**.
+
+### Validation — the o11tp collapse detector's first production catch
+
+| Champion | Validation | Verdict |
+|----------|-----------|---------|
+| #0 `genome_1a9cad9f26eb` (strategy 240) | **+5.17%, Sharpe 0.58, PF 1.53, DD 4.3%, 75.4% win** | auto-logged "consistent with screening (0.89 → 0.58)" |
+| #2 `genome_1ecb3b37d52d` (RAMS, strategy 241) | −6.39%, Sharpe −0.36 | **auto-flagged: validation-collapse (sign flip 0.59 → −0.36)** — exactly the Batch-41 failure mode, now caught automatically |
+
+The bootstrap gate's 866 rejection is once again vindicated by 869's collapse.
+
+### Consistency & reproducibility (runs 870/871)
+
+- Validation repeated (868 vs 870): **identical to full float precision**
+  (Sharpe 0.5827484921332822, 61 trades, PF 1.5325932990544877).
+- Replay of champion #0 (871) returns `metrics_note` explaining the
+  designed worst-of-3-window vs full-window divergence (0.89 fitness vs
+  0.59 full-window Sharpe; trades 58 vs champion window count).
+
+### Log analysis (866-871 + scrape 14 + backend)
+
+- **Zero errors** in discovery, validation, and backend logs.
+- Warnings: only the known benign SANITY 0-trade sentinel and by-design
+  guardrail messages.
+- Timing: 3.2-4.2 s/chromosome for **3-window** evals (median single eval
+  3.4s, p90 6.5s, max 20.6s, 365 evals) — vs 12.6 s/chromosome
+  single-window before the data-targeting + KAMA + compile-cache fixes.
+
+---
+
 ## 2026-07-09: Batch 42 — NEW SCREENING SEMANTICS (data-targeting fix), all prior scores re-baselined (runs 854-863)
 
 ### ⚠️ Semantics break — screening scores before this batch are NOT comparable
