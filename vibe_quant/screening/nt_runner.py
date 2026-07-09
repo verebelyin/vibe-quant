@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Process-level compile cache: DSL-content key -> (module_path, strategy_cls,
+# config_cls, timeframes). Multi-window evals (eval_windows > 1) construct a
+# fresh runner per window for the SAME chromosome; without this cache each
+# window recompiled the identical DSL (~1s per compile).
+_COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str]]] = {}
+
 
 class NTScreeningRunner:
     """Real NautilusTrader backtest runner for screening mode.
@@ -94,9 +100,26 @@ class NTScreeningRunner:
         if self._compiled:
             return
 
+        import json
+
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
         )
+
+        # Catalog path (instruments already written during data ingest/rebuild;
+        # writing here from parallel workers causes parquet corruption)
+        self._resolved_catalog_path = (
+            Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
+        )
+
+        cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
+        cached = _COMPILE_CACHE.get(cache_key)
+        if cached is not None:
+            self._module_path, self._strategy_cls_name, self._config_cls_name, tfs = cached
+            self._all_timeframes: set[str] = set(tfs)
+            self._compiled = True
+            return
+
         from vibe_quant.dsl.compiler import StrategyCompiler
         from vibe_quant.dsl.parser import validate_strategy_dict
 
@@ -110,18 +133,18 @@ class NTScreeningRunner:
         self._config_cls_name = f"{class_name}Config"
 
         # Cache parsed DSL fields needed for data config
-        self._all_timeframes: set[str] = {dsl.timeframe}
+        self._all_timeframes = {dsl.timeframe}
         self._all_timeframes.update(dsl.additional_timeframes)
         for ind_config in dsl.indicators.values():
             if ind_config.timeframe:
                 self._all_timeframes.add(ind_config.timeframe)
 
-        # Catalog path (instruments already written during data ingest/rebuild;
-        # writing here from parallel workers causes parquet corruption)
-        self._resolved_catalog_path = (
-            Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
+        _COMPILE_CACHE[cache_key] = (
+            self._module_path,
+            self._strategy_cls_name,
+            self._config_cls_name,
+            frozenset(self._all_timeframes),
         )
-
         self._compiled = True
 
     def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
