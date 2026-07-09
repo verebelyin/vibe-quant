@@ -100,46 +100,20 @@ DB path: `data/state/vibe_quant.db`. Always use WAL mode.
 4. **`row_factory = sqlite3.Row`** enables dict-style access
 5. **Always `conn.commit()` after INSERT/UPDATE** — SQLite doesn't auto-commit
 
-**Pattern for safe queries:**
-```python
-python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('data/state/vibe_quant.db')
-conn.row_factory = sqlite3.Row
-rows = conn.execute('SELECT * FROM backtest_runs WHERE run_mode=? ORDER BY id DESC LIMIT 5', ('discovery',)).fetchall()
-for r in rows: print(dict(r))
-"
-```
-
-**Pattern for safe formatting (handle None):**
+**Canonical pattern (query + mutate):**
 ```python
 python3 -c "
 import sqlite3
 conn = sqlite3.connect('data/state/vibe_quant.db')
 conn.row_factory = sqlite3.Row
-row = conn.execute('SELECT * FROM backtest_runs WHERE id=?', (RUN_ID,)).fetchone()
-if row:
-    d = dict(row)
-    # WRONG: print(f'{d[\"start_date\"]:.2f}')  — crashes if None or str
-    # RIGHT: guard with 'if val is not None'
-    for k, v in d.items():
-        print(f'  {k}: {v}')
+for r in conn.execute('SELECT * FROM backtest_runs WHERE run_mode=? ORDER BY id DESC LIMIT 5', ('discovery',)):
+    print(dict(r))
+conn.execute('UPDATE backtest_runs SET status=? WHERE id=?', ('failed', 999))
+conn.commit()  # DON'T FORGET
 "
 ```
 
-**Pattern for batch updates:**
-```python
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for rid in [237, 238, 239]:
-    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('2025-03-07', '2026-03-07', rid))
-conn.commit()  # DON'T FORGET THIS
-print('Updated')
-"
-```
-
-**Key tables:** `backtest_runs` (all run types), `strategies`, `backtest_results`, `background_jobs`, `trades`, `sweep_results`
+**Key tables:** `backtest_runs` (all run modes), `strategies`, `backtest_results` (validation metrics + discovery notes JSON), `sweep_results` (screening/replay metrics), `background_jobs`, `trades`, `research_extractions`
 
 ## Architecture
 
@@ -174,210 +148,52 @@ See [docs/claude/conventions.md](docs/claude/conventions.md) for full details. C
 
 ## Issue Tracking (Beads)
 
-**CRITICAL:** Use `bd` (beads) for ALL task/issue tracking. **NEVER use TodoWrite, TaskCreate, or markdown files for task tracking.** Beads is the single source of truth.
-
-**Current version:** `bd 1.0.0` — embedded Dolt backend (no daemon, no SQLite, no JSONL sync layer).
-
-### Installing `bd` (v1.0.0+)
-
-**macOS (this machine):** Homebrew or direct binary download.
+**IMPORTANT: Use `bd` (beads) for ALL task/issue tracking. NEVER use TodoWrite, TaskCreate, or markdown files for tasks.** Full reference (install, Dolt architecture, memory taxonomy, performance): [docs/claude/beads.md](docs/claude/beads.md).
 
 ```bash
-# Option A — Homebrew
-brew install beads
-
-# Option B — Direct binary (darwin_arm64 example)
-VERSION=1.0.0
-curl -sL -o /tmp/beads.tar.gz \
-  "https://github.com/gastownhall/beads/releases/download/v${VERSION}/beads_${VERSION}_darwin_arm64.tar.gz"
-tar xzf /tmp/beads.tar.gz -C /tmp
-cp /tmp/beads_${VERSION}_darwin_arm64/bd ~/.local/bin/bd
-chmod +x ~/.local/bin/bd
+bd ready                          # Find available work
+bd show <id>                      # View issue details
+bd update <id> --claim            # Claim work
+bd close <id>                     # Complete work (multiple ids OK)
+bd create --title="..." --description="..." --type=bug --priority=2   # priority 0-4
+bd remember "fact" --key category:specific-item   # Persistent project memory
+bd recall <key> / bd memories <keyword>           # Read memories
 ```
 
-**Init in a new repo:**
-```bash
-bd init --non-interactive --role maintainer    # Fresh init
-bd init --from-jsonl --non-interactive --role maintainer   # Import from existing .beads/issues.jsonl
-chmod 700 .beads                                # bd warns if not 0700
-```
-
-### v1.0.0 architecture
-
-- **Embedded Dolt** — no separate server, no daemon process. Each `bd` command opens the DB, runs, exits. Exclusive file lock means **one writer at a time**.
-- **No `bd sync`, no `bd daemon`** — both removed. Beads auto-commits to Dolt on every mutation.
-- **No SQLite fallback** — SQLite backend was deleted in v0.58. `--backend sqlite` only prints migration advice.
-- **JSONL still exists** (`.beads/issues.jsonl`) as a plain-text export for git diffs, but is no longer the primary store.
-- **`bd doctor` is not supported in embedded mode** — use `ls -la .beads/embeddeddolt/` and `bd info` instead.
-- **Valid issue types:** `bug`, `feature`, `task`, `epic`, `chore`, `spike`, `story`, `milestone`, `merge-request`, `molecule`, `gate`, `agent`, `role`, `rig`, `convoy`, `event`. Use `feature` not `enhancement`.
-
-### Usage
-
-```bash
-bd ready                            # Find available work
-bd show <id>                        # View issue details
-bd update <id> --claim              # Claim work (replaces --status in_progress)
-bd close <id>                       # Complete work
-bd close <id1> <id2>                # Close multiple at once
-bd search "keyword"                 # Full-text search
-bd dolt push / bd dolt pull         # Push/pull beads via Dolt remote
-```
-
-**Workflow:** `bd ready` → `bd update <id> --claim` → implement → `bd close <id>` → `git push`.
-
-**NEVER use `bd edit`** — it opens `$EDITOR` which blocks agents.
-
-### Persistent memory (`bd remember` / `bd memories` / `bd recall` / `bd forget`)
-
-Project-specific facts live in the **beads memory store** — small keyed notes that auto-inject into every session via `bd prime` (installed as a `SessionStart` + `PreCompact` hook). They're an alternative to fragmented `MEMORY.md` files for repo-level knowledge: one canonical store per project, shared across agents on the same machine. Note: memories live in gitignored `.beads/embeddeddolt/`, so they're machine-local by default — see Session Completion below if you want them durable off-machine.
-
-```bash
-bd remember "insight" --key category:specific-item    # Save or update
-bd memories                                           # List all
-bd memories <keyword>                                 # Full-text search
-bd recall <key>                                       # Fetch one by key
-bd forget <key>                                       # Delete
-```
-
-**Key naming convention (from beads team):** `category:specific-item` with a colon separator. Current categories in use:
-
-- `architecture:` — system layout decisions (`architecture:backtest-tiers`, `architecture:data-archive`)
-- `command:` — commonly-used dev commands (`command:backend-start`, `command:dev-toolchain`)
-- `design:` — contentious design decisions + their risks (`design:per-direction-sltp`)
-- `discovery:` — discovery pipeline facts (`discovery:champions`, `discovery:fitness-formula`, `discovery:compiler-hash`)
-- `gotcha:` — non-obvious pitfalls (`gotcha:sqlite-state-db`, `gotcha:bbands-normalized`)
-- `indicator:` — indicator-specific facts (`indicator:rust-native-nt`)
-- `ops:` — operational / rollback playbooks (`ops:bd-v1-rollback`)
-- `pipeline:` — cross-component invariants (`pipeline:discovery-vs-validation`)
-- `policy:` — hard rules (`policy:licenses-secrets`, `policy:indicators`)
-- `reference:` — pointers to canonical docs (`reference:spec`, `reference:research-diaries`)
-
-**When to use `bd remember` vs alternatives:**
-
-| Fact type | Put it in |
-|---|---|
-| Project-level facts, repo-specific gotchas, invariants | `bd remember` (shared across all agents on any machine) |
-| Trackable work with status / priority / dependencies | `bd create` (issues, not memories) |
-| User-level prefs ("I like concise commits", "use rg not grep") | Claude Code auto-memory (`~/.claude/projects/.../memory/`) |
-| Architecture that's already documented in SPEC.md | Nothing — just reference SPEC.md |
-| Conversation-local state ("we're halfway through refactor X") | Plans / tasks, not memory |
-
-**Best practices (from beads team + project conventions):**
-
-1. **Lead with the fact, not the metadata.** Good: `"BacktestDataConfig data_cls must be the class object — a string disables bar-type narrowing"`. Bad: `"Remember that in the July session we found..."`.
-2. **Update in place.** Passing `--key` to an existing key overwrites — don't create `discovery:champions-v2`.
-3. **Keep memories evergreen.** If a fact is a dated snapshot ("as of 2026-04-11 we had 894 beads"), prefer a commit or a bead over a memory.
-4. **Delete when stale.** `bd forget <key>` on facts that turn out wrong or get superseded.
-5. **Don't duplicate CLAUDE.md / SPEC.md.** Those are already loaded. Memories are for facts that are either more specific, or that would otherwise be lost.
-6. **When a session reveals a surprising non-obvious fact, save it** — future sessions get it for free via `bd prime`.
-
-**Instructions for future sessions:** On session start, `bd prime` output will include all current memories. When you learn a new non-obvious project fact, `bd remember "fact" --key category:specific-item`. When CLAUDE.md contradicts a memory, prefer CLAUDE.md and delete or update the memory.
-
-### Performance notes
-
-- **Cold start (first call in a while):** ~1–3s (embedded Dolt schema load). Occasionally seen at ~20s on fully cold caches.
-- **Warm queries:** 0.3–1.0s per command (`bd stats`, `bd list`, `bd ready`). ~5× slower than the old SQLite backend but still sub-second.
-- **Disk usage:** `.beads/embeddeddolt/` ~34 MB vs old `.beads/beads.db` ~10 MB (Dolt stores full commit history).
-- **Parallel agents:** the embedded backend holds an exclusive lock. If you need concurrent writers (multi-agent work), switch to server mode via `bd init --server`.
+- **Workflow:** `bd ready` → `bd update <id> --claim` → implement → `bd close <id>` → `git push`.
+- **NEVER use `bd edit`** — it opens `$EDITOR` which blocks agents.
+- `bd prime` (auto-run by hooks) injects all memories each session. When you learn a surprising non-obvious project fact, `bd remember` it (key taxonomy in [docs/claude/beads.md](docs/claude/beads.md)). If CLAUDE.md contradicts a memory, CLAUDE.md wins — update or `bd forget` the memory.
 
 ### Session Completion
 
-Work is NOT complete until `git push` succeeds.
-
-1. File issues for remaining work
-2. Run quality gates (tests, linters) if code changed
-3. Update issue status — close finished, update in-progress
-4. Push:
-   ```bash
-   git pull --rebase && git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. If push fails, resolve and retry
-
-**Caveat about `bd remember` durability:** `.beads/embeddeddolt/` is gitignored, so `git push` publishes code + `.beads/issues.jsonl` (issues survive) but NOT the Dolt store (memories + Dolt history are machine-local). If you want memories backed up off-machine, run `bd dolt push` — it publishes to `refs/dolt/data` on the same GitHub remote. This is optional and not part of the mandatory session-close flow (matches the beads team's own AGENTS.md recommendation).
+**YOU MUST push before calling work done.** File beads for follow-ups → run quality gates → close/update beads → `git pull --rebase && git push` → `git status` must show "up to date with origin". Optional: `bd dolt push` backs memories up off-machine.
 
 ## Directory Structure
 
 ```
-vibe-quant/
-├── vibe_quant/                    # Backend Python package
-│   ├── api/
-│   │   ├── app.py                 # FastAPI app factory
-│   │   ├── deps.py                # DI dependencies (DB session etc.)
-│   │   ├── routers/               # Route handlers: strategies, backtest, data, discovery, paper_trading, results, settings
-│   │   ├── schemas/               # Pydantic request/response models (same domains as routers)
-│   │   ├── sse/progress.py        # Server-sent events for progress
-│   │   └── ws/                    # WebSocket handlers: discovery, jobs, trading
-│   ├── data/                      # Data pipeline: downloader, archive (SQLite), catalog (Parquet)
-│   ├── db/                        # SQLite: connection (WAL), schema, state_manager
-│   ├── discovery/                 # Genetic algo strategy discovery: genome, operators, fitness, pipeline
-│   ├── dsl/                       # Strategy DSL: parser, compiler, schema, indicators, conditions, translator
-│   ├── overfitting/               # Overfitting filters: WFA, purged k-fold, DSR
-│   ├── paper/                     # Paper trading: node (NT engine), persistence, config, CLI
-│   ├── risk/                      # Risk actors, portfolio/strategy actors, sizing
-│   ├── screening/                 # Screening pipeline: NT runner, grid sweep, consistency checks
-│   ├── strategies/                # Strategy templates + examples
-│   ├── validation/                # Validation pipeline: NT runner, fill/latency models, results extraction
-│   ├── alerts/telegram.py         # Telegram notifications
-│   └── logging/                   # Structured logging
-│
-├── frontend/                      # React/TypeScript SPA (Vite + TailwindCSS 4 + shadcn)
-│   ├── src/
-│   │   ├── api/                   # API client + generated hooks (orval from OpenAPI)
-│   │   │   ├── client.ts          # Axios instance with /api proxy
-│   │   │   └── generated/         # Auto-generated: models + per-router hooks (DO NOT EDIT)
-│   │   ├── components/
-│   │   │   ├── backtest/          # BacktestLaunchForm, SweepBuilder, ActiveJobsPanel, PreflightStatus
-│   │   │   ├── charts/            # Recharts/Plotly charts: CandlestickChart, EquityCurve, Drawdown, Heatmap, etc.
-│   │   │   ├── data/              # DataBrowser, IngestForm, CoverageTable, DownloadProgress
-│   │   │   ├── discovery/         # DiscoveryConfig, DiscoveryJobList, DiscoveryResults, DiscoveryProgress
-│   │   │   ├── layout/            # Header, Sidebar, PageLayout
-│   │   │   ├── paper/             # LiveDashboard, SessionControl, PositionsTable, CheckpointsList
-│   │   │   ├── results/           # MetricsPanel, TradeLog, ChartsPanel, SweepAnalysis, WinLossPanel, etc.
-│   │   │   ├── settings/          # DatabaseTab, LatencyTab, RiskTab, SizingTab, SystemTab
-│   │   │   ├── strategies/        # StrategyList, StrategyCreateDialog, StrategyWizard, StrategyEditor, StrategyDeleteDialog
-│   │   │   │   └── editor/        # GeneralTab, IndicatorsTab, ConditionsTab, RiskTab, TimeTab, YamlEditor, types.ts
-│   │   │   └── ui/                # shadcn primitives + StrategyCard, etc.
-│   │   ├── hooks/                 # Custom React hooks
-│   │   ├── lib/utils.ts           # cn() and other helpers
-│   │   ├── routes/                # TanStack Router file-based routes
-│   │   │   ├── __root.tsx         # Root layout
-│   │   │   ├── index.tsx          # Dashboard/home
-│   │   │   ├── strategies.tsx     # Strategy management list page
-│   │   │   ├── strategies.$strategyId.tsx  # Strategy editor page
-│   │   │   ├── backtest.tsx, discovery.tsx, results.tsx
-│   │   │   ├── paper-trading.tsx, data.tsx, settings.tsx
-│   │   ├── stores/                # Zustand global stores
-│   │   ├── app.tsx                # Router setup + providers
-│   │   └── index.css              # TailwindCSS 4 theme (dark-only, OKLch colors, Geist/JetBrains fonts)
-│   ├── e2e/                       # Playwright E2E tests
-│   └── orval.config.ts            # API codegen config
-│
-├── tests/                         # Python unit tests (pytest)
-│   ├── unit/api/                  # API route tests
-│   └── fixtures/                  # Test data + known_results
-├── data/                          # Runtime data (gitignored)
-│   ├── archive/                   # SQLite raw data archive
-│   ├── catalog/                   # ParquetDataCatalog
-│   └── state/                     # Paper trading state
-├── docs/
-│   ├── claude/conventions.md      # Coding conventions (authoritative)
-│   ├── plans/                     # Implementation plans
-│   └── reviews/                   # Code review notes
-├── scripts/                       # Utility scripts
-├── SPEC.md                        # Authoritative implementation spec
-└── CLAUDE.md                      # This file
+vibe_quant/          # Backend Python package
+  api/               # FastAPI: app.py factory, routers/, schemas/, sse/, ws/
+  data/              # Downloader, SQLite archive, ParquetDataCatalog
+  db/                # SQLite connection (WAL), schema.py, state_manager
+  discovery/         # GA: genome, operators, fitness, pipeline, guardrails
+  dsl/               # Strategy DSL: parser, compiler, schema, indicators; plugins/ (drop-in indicators)
+  overfitting/       # WFA, purged k-fold, DSR, bootstrap CI
+  paper/             # Paper trading: NT TradingNode, persistence, CLI
+  screening/         # nt_runner.py (shared by discovery/screening/WFA), grid sweep
+  validation/        # runner.py, venue/fill/latency models, extraction, consistency.py
+  nt_compat.py       # NT compatibility helpers (log-guard retention)
+frontend/src/        # React SPA (Vite + Tailwind 4 + shadcn + TanStack Router)
+  api/generated/     # orval-generated hooks/models — DO NOT EDIT; regenerate: dump openapi.json + pnpm generate-api
+  components/        # by domain: backtest/ charts/ data/ discovery/ paper/ results/ settings/ strategies/ ui/
+  routes/            # file-based routes (strategies, backtest, discovery, results, paper-trading, data, settings)
+tests/               # pytest; fixtures/known_results = golden metrics
+data/                # Runtime (gitignored): archive/, catalog/, state/vibe_quant.db
+logs/                # Per-run logs: {discovery|validation|screening}_<run_id>_*.log + events/*.jsonl
+docs/                # claude/conventions.md (coding rules), claude/beads.md, discovery-journal.md, plans/
+SPEC.md              # Authoritative implementation spec
 ```
 
-**Key paths to remember:**
-
-- Strategy card: `frontend/src/components/ui/StrategyCard.tsx`
-- Strategy list/page: `frontend/src/components/strategies/StrategyList.tsx`, `frontend/src/routes/strategies.tsx`
-- Theme/CSS vars: `frontend/src/index.css`
-- API hooks: `frontend/src/api/generated/` (auto-generated, don't edit)
-- Backend entry: `vibe_quant/api/app.py` → `main.py` entrypoint via uvicorn
-- DB schema: `vibe_quant/db/schema.py`
-- DSL types: `vibe_quant/dsl/schema.py`, frontend mirror: `frontend/src/components/strategies/editor/types.ts`
+**Key paths:** DB schema `vibe_quant/db/schema.py` · DSL types `vibe_quant/dsl/schema.py` (frontend mirror `frontend/src/components/strategies/editor/types.ts`) · theme `frontend/src/index.css`
 
 ## Discovery Pipeline Notes
 
@@ -397,8 +213,8 @@ vibe-quant/
 
 ## NautilusTrader Gotchas (each of these cost real debugging time)
 
-- **`BacktestDataConfig.data_cls` must be the CLASS object** (`from nautilus_trader.model.data import Bar`), never the import string. `config.query` compares `data_cls is Bar`; a string silently disables `bar_types`/`bar_spec` narrowing and loads the ENTIRE catalog (~300× data, and fills change because the venue processes stray finer-granularity bars). Upstream issue draft: `docs/nt-upstream-issue-data-cls.md`.
-- **Creating a `BacktestEngine`/`BacktestNode` after disposing a previous one in the same process hard-aborts** (Rust logger can only init once; the abort message only appears with tracebacks — the process just dies). Call `vibe_quant.nt_compat.retain_log_guard(engine)` before dispose; both runners and `test_fill_timing.py` already do.
+- **IMPORTANT: `BacktestDataConfig.data_cls` MUST be the CLASS object** (`from nautilus_trader.model.data import Bar`), never the import string. `config.query` compares `data_cls is Bar`; a string silently disables `bar_types`/`bar_spec` narrowing and loads the ENTIRE catalog (~300× data, and fills change because the venue processes stray finer-granularity bars). Upstream issue draft: `docs/nt-upstream-issue-data-cls.md`.
+- **IMPORTANT: creating a `BacktestEngine`/`BacktestNode` after disposing a previous one in the same process hard-aborts** (Rust logger can only init once; the process just dies with no Python traceback). YOU MUST call `vibe_quant.nt_compat.retain_log_guard(engine)` before dispose in any new engine-lifecycle code; both runners and `test_fill_timing.py` already do.
 - **NT 1.226+ config decoding rejects unknown fields** (fast-fail). Forward only params the generated `StrategyConfig` declares (`__struct_fields__` filter in both runners). Run-level knobs like `initial_balance`/`leverage` belong on the venue, not the strategy config.
 - **`node.build()` swallows engine-build exceptions** — `get_engine()` returns `None` and you see only "engine not found". Validation sets `BacktestRunConfig(raise_exception=True)`; keep it that way, and set it when writing new runner code.
 - **NT `BacktestResult.elapsed_time` is the simulated window in seconds**, not wall time. `Iterations` ≈ bars processed — if it's far above the expected bar count, you have a data-loading bug (see Performance Playbook).
@@ -444,12 +260,4 @@ INVALID proofs (these wasted time):
 
 ## Historical Documentation
 
-The files in `docs/` predate `SPEC.md` and contain **outdated architectural decisions** (FreqTrade, VectorBT, PostgreSQL, TimescaleDB, Redis, 5-year data). They are retained as research context only. When any `docs/*.md` file contradicts `SPEC.md`, **SPEC.md wins**.
-
-| File                                       | Status                | Contents                                                    |
-| ------------------------------------------ | --------------------- | ----------------------------------------------------------- |
-| `docs/opus-prd.md`                         | Superseded by SPEC.md | Original PRD (recommends FreqTrade -- no longer applicable) |
-| `docs/opus-spec.md`                        | Superseded by SPEC.md | Older technical spec (hybrid VectorBT approach -- removed)  |
-| `docs/opus-research.md`                    | Historical reference  | Framework comparison research                               |
-| `docs/gpt-research.md`                     | Historical reference  | Extended framework evaluation                               |
-| `docs/crypto-trading-bot-specification.md` | Historical reference  | Original bot specification                                  |
+`docs/opus-prd.md`, `docs/opus-spec.md`, `docs/opus-research.md`, `docs/gpt-research.md`, and `docs/crypto-trading-bot-specification.md` predate SPEC.md and describe **abandoned architectures** (FreqTrade, VectorBT, PostgreSQL, Redis). Never follow them; when any `docs/*.md` contradicts SPEC.md, **SPEC.md wins**.
