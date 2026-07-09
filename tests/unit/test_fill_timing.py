@@ -42,6 +42,7 @@ from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
 from vibe_quant.dsl.parser import validate_strategy_dict
+from vibe_quant.nt_compat import retain_log_guard
 
 # Signal fires on bar 0. The look-ahead fill is bar 0's close; the honest (deferred) fill is
 # bar 1's close. The ~1000 gap (>> 1 tick of 0.1) makes the source bar unambiguous.
@@ -81,6 +82,9 @@ def _new_engine() -> BacktestEngine:
     engine = BacktestEngine(
         config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR"))
     )
+    # NT 1.223+: dispose() tears down logging but the Rust logger can only be
+    # set once per process — retain the guard or the next engine hard-aborts.
+    retain_log_guard(engine)
     engine.add_venue(
         venue=Venue("BINANCE"),
         oms_type=OmsType.NETTING,
@@ -152,6 +156,7 @@ def _run_raw(
         engine = BacktestEngine(
             config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR"))
         )
+        retain_log_guard(engine)
         engine.add_venue(
             venue=Venue("BINANCE"),
             oms_type=OmsType.NETTING,

@@ -352,6 +352,7 @@ class PaperTradingNode:
         """
         try:
             from nautilus_trader.adapters.binance import config as binance_config
+            from nautilus_trader.adapters.binance.common.enums import BinanceEnvironment
             from nautilus_trader.adapters.binance.config import (
                 BinanceDataClientConfig,
                 BinanceExecClientConfig,
@@ -393,6 +394,13 @@ class PaperTradingNode:
         )
         instrument_provider = InstrumentProviderConfig(load_ids=load_ids)
 
+        # NT 1.227+ replaced the `testnet` bool with a BinanceEnvironment enum.
+        environment = (
+            BinanceEnvironment.TESTNET
+            if self._config.binance.testnet
+            else BinanceEnvironment.LIVE
+        )
+
         node_config = TradingNodeConfig(
             trader_id=self._config.trader_id,
             data_clients={
@@ -400,7 +408,7 @@ class PaperTradingNode:
                     api_key=self._config.binance.api_key,
                     api_secret=self._config.binance.api_secret,
                     account_type=account_type,
-                    testnet=self._config.binance.testnet,
+                    environment=environment,
                     instrument_provider=instrument_provider,
                 ),
             },
@@ -409,7 +417,7 @@ class PaperTradingNode:
                     api_key=self._config.binance.api_key,
                     api_secret=self._config.binance.api_secret,
                     account_type=account_type,
-                    testnet=self._config.binance.testnet,
+                    environment=environment,
                     instrument_provider=instrument_provider,
                 ),
             },

@@ -839,7 +839,10 @@ class ValidationRunner:
             # InvalidStateTrigger('RUNNING -> DISPOSE')
             import contextlib
 
+            from vibe_quant.nt_compat import retain_log_guard
+
             for eng in node.get_engines():
+                retain_log_guard(eng)
                 with contextlib.suppress(Exception):
                     eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
