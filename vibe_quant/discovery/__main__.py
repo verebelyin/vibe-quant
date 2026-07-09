@@ -18,6 +18,20 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 
+# Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
+# - 1m: high-frequency noise widens Sharpe CIs; 1.0 rejects nearly everything.
+# - 4h/1d: ~50-180 trades/yr makes the CI lower bound structurally < 1.0 for
+#   ANY strategy (Batch 41: lower bounds -0.77..-1.39 with DSR p=0.0000), so
+#   the gate degrades to "must exclude negative Sharpe" instead of blocking
+#   the entire timeframe. Explicit --bootstrap-min-sharpe always wins.
+_BOOTSTRAP_FLOOR_BY_TIMEFRAME: dict[str, float] = {"1m": 0.5, "4h": 0.0, "1d": 0.0}
+_BOOTSTRAP_FLOOR_DEFAULT = 1.0
+
+
+def _default_bootstrap_min_sharpe(timeframe: str) -> float:
+    return _BOOTSTRAP_FLOOR_BY_TIMEFRAME.get(timeframe, _BOOTSTRAP_FLOOR_DEFAULT)
+
+
 def _get_compiler_version() -> str:
     """Get compiler version hash for staleness detection."""
     try:
@@ -487,7 +501,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Bootstrap CI lower bound threshold. Candidates whose bootstrap "
         "CI lower bound falls below this Sharpe are rejected. Timeframe-aware "
-        "default: 0.5 for 1m (wider CIs on high-freq noise), 1.0 otherwise.",
+        "default: 0.5 for 1m (wider CIs on high-freq noise), 0.0 for 4h/1d "
+        "(low trade counts make the lower bound structurally < 1.0), "
+        "1.0 otherwise.",
     )
     parser.add_argument(
         "--bootstrap-ci-level",
@@ -592,9 +608,8 @@ def main() -> int:
             )
 
         # Resolve timeframe-aware bootstrap_min_sharpe default.
-        # 1m noise widens Sharpe CIs; 1.0 rejects nearly all viable candidates.
         if args.bootstrap_min_sharpe is None:
-            args.bootstrap_min_sharpe = 0.5 if args.timeframe == "1m" else 1.0
+            args.bootstrap_min_sharpe = _default_bootstrap_min_sharpe(args.timeframe)
             logger.info(
                 "Bootstrap min Sharpe default: %.1f (timeframe=%s)",
                 args.bootstrap_min_sharpe, args.timeframe,
@@ -787,6 +802,7 @@ def main() -> int:
                 "train_test_split": split_ratio if split_ratio > 0 else None,
                 "direction": args.direction,
                 "num_seeds": num_seeds if num_seeds > 1 else None,
+                "bootstrap_min_sharpe": args.bootstrap_min_sharpe,
                 "top_strategies": [],
                 "guardrail_rejections": result.guardrail_rejections,
             }
@@ -969,6 +985,7 @@ def main() -> int:
                         ),
                         "wfa_oos_step_days": args.wfa_oos_step_days if args.wfa_oos_step_days > 0 else None,
                         "num_seeds": num_seeds if num_seeds > 1 else None,
+                        "bootstrap_min_sharpe": args.bootstrap_min_sharpe,
                         "top_strategies": top_dsls,
                         "guardrail_rejections": result.guardrail_rejections or None,
                     }

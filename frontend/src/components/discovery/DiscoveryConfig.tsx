@@ -735,7 +735,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                     type="number"
                     min={0}
                     step={0.1}
-                    placeholder="auto (0.5 for 1m, 1.0 otherwise)"
+                    placeholder="auto (0.5 for 1m, 0.0 for 4h/1d, 1.0 otherwise)"
                     value={bootstrapMinSharpe}
                     onChange={(e) => setBootstrapMinSharpe(e.target.value)}
                     disabled={noBootstrapCi}

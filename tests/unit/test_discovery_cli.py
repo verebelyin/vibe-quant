@@ -317,6 +317,42 @@ def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch,
     )
 
 
+def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, caplog) -> None:
+    """4h defaults to 0.0 — low trade counts make the CI lower bound
+    structurally < 1.0 for any strategy (vibe-quant-gds1c)."""
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id),
+            "--population-size", "6", "--max-generations", "2",
+            "--mutation-rate", "0.1", "--elite-count", "1",
+            "--symbols", "BTCUSDT", "--timeframe", "4h",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--db", str(db_path), "--mock",
+        ],
+    )
+    with caplog.at_level("INFO", logger="vibe_quant.discovery.__main__"):
+        assert main() == 0
+
+    assert any(
+        "Bootstrap min Sharpe default: 0.0" in r.message and "timeframe=4h" in r.message
+        for r in caplog.records
+    )
+
+
+def test_default_bootstrap_floor_by_timeframe() -> None:
+    from vibe_quant.discovery.__main__ import _default_bootstrap_min_sharpe
+
+    assert _default_bootstrap_min_sharpe("1m") == 0.5
+    assert _default_bootstrap_min_sharpe("4h") == 0.0
+    assert _default_bootstrap_min_sharpe("1d") == 0.0
+    assert _default_bootstrap_min_sharpe("1h") == 1.0
+    assert _default_bootstrap_min_sharpe("15m") == 1.0
+
+
 def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeypatch, caplog) -> None:
     """Explicit --bootstrap-min-sharpe should override the timeframe-aware default."""
     db_path = tmp_path / "state.db"
