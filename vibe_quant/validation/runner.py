@@ -709,6 +709,21 @@ class ValidationRunner:
             has_detail_data=detail_timeframe is not None,
         )
 
+        # NT 1.226+ rejects unknown config fields (fast-fail decoding), so
+        # forward only params the generated StrategyConfig actually declares.
+        # Run-level knobs like initial_balance/leverage live on the venue, not
+        # the strategy config.
+        config_fields: tuple[str, ...] = getattr(
+            getattr(module, config_cls_name), "__struct_fields__", ()
+        )
+        if config_fields:
+            dropped = sorted(k for k in strategy_params if k not in config_fields)
+            if dropped:
+                logger.debug("Dropping non-strategy-config params: %s", dropped)
+            strategy_params = {
+                k: v for k, v in strategy_params.items() if k in config_fields
+            }
+
         # Build strategy configs (one per symbol)
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in symbols:

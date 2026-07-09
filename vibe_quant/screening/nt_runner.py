@@ -157,6 +157,13 @@ class NTScreeningRunner:
         config_cls_name = self._config_cls_name
         catalog_path = self._resolved_catalog_path
 
+        # NT 1.226+ rejects unknown config fields (fast-fail decoding), so
+        # forward only params the generated StrategyConfig actually declares.
+        import sys
+
+        config_cls = getattr(sys.modules[module_path], config_cls_name, None)
+        config_fields: tuple[str, ...] = getattr(config_cls, "__struct_fields__", ())
+
         # Strategy configs (with parameter overrides)
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in self._symbols:
@@ -166,6 +173,8 @@ class NTScreeningRunner:
             # config underscore-notation (e.g. "ema_fast_period")
             for k, v in params.items():
                 config_key = k.replace(".", "_")
+                if config_fields and config_key not in config_fields:
+                    continue
                 config_dict[config_key] = v
             # Always defer entries/exits one bar. NT (bar_execution, no latency)
             # fills a market order from on_bar(t) at close[t] -- the signal bar's

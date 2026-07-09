@@ -37,35 +37,6 @@ StateMgr = Annotated[StateManager, Depends(get_state_manager)]
 JobMgr = Annotated[BacktestJobManager, Depends(get_job_manager)]
 WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
 
-# Hardcoded indicator pool; replaced by DSL catalog when available
-_DEFAULT_INDICATOR_POOL: list[dict[str, object]] = [
-    {"name": "SMA", "params": {"period": {"min": 5, "max": 200, "step": 5}}},
-    {"name": "EMA", "params": {"period": {"min": 5, "max": 200, "step": 5}}},
-    {"name": "RSI", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
-    {
-        "name": "MACD",
-        "params": {
-            "fast": {"min": 8, "max": 21},
-            "slow": {"min": 21, "max": 55},
-            "signal": {"min": 5, "max": 13},
-        },
-    },
-    {
-        "name": "BollingerBands",
-        "params": {
-            "period": {"min": 10, "max": 50, "step": 5},
-            "std_dev": {"min": 1.5, "max": 3.0, "step": 0.25},
-        },
-    },
-    {"name": "ATR", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
-    {
-        "name": "Stochastic",
-        "params": {"period_k": {"min": 5, "max": 21}, "period_d": {"min": 3, "max": 9}},
-    },
-    {"name": "ADX", "params": {"period": {"min": 7, "max": 28, "step": 1}}},
-    {"name": "CCI", "params": {"period": {"min": 10, "max": 40, "step": 5}}},
-    {"name": "VWAP", "params": {}},
-]
 
 
 def _read_progress_file(run_id: int) -> dict[str, object] | None:
@@ -834,12 +805,20 @@ async def replay_discovered_strategy(
 
 @router.get("/indicator-pool")
 async def get_indicator_pool() -> list[dict[str, object]]:
-    try:
-        from vibe_quant.dsl import indicators as _ind_mod
+    """Serve the GA genome's indicator pool (the launch-time source of truth).
 
-        catalog: list[dict[str, object]] = getattr(
-            _ind_mod, "INDICATOR_CATALOG", _DEFAULT_INDICATOR_POOL
-        )
-        return catalog
-    except ImportError:
-        return _DEFAULT_INDICATOR_POOL
+    Names must match ``discovery.operators.INDICATOR_POOL`` exactly — a
+    display-name mismatch here fails the run at launch (vibe-quant-rubp1).
+    """
+    from vibe_quant.discovery.operators import INDICATOR_POOL, _ensure_pool
+
+    _ensure_pool()
+    return [
+        {
+            "name": name,
+            "params": {
+                param: {"min": lo, "max": hi} for param, (lo, hi) in ranges.items()
+            },
+        }
+        for name, ranges in INDICATOR_POOL.items()
+    ]
