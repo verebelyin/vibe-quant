@@ -6,13 +6,11 @@ Does NOT touch research_extractions / research_items — strictly logs.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
-from vibe_quant.research import extraction_log
 from vibe_quant.research.archive import row_to_raw_item
 from vibe_quant.research.extraction_log import write_extraction_log
 from vibe_quant.research.extractor import ClaudePExtractor, extractor_version
