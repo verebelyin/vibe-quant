@@ -122,8 +122,9 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
     return [];
   }, [activeResp.data]);
 
-  // Populated when a completed run produced no champions (guardrail-rejected)
-  const emptyDetails = useMemo(() => {
+  // Guardrail-rejected candidates — shown alongside champions (partial
+  // rejection) and in the empty state (total rejection).
+  const rejectionDetails = useMemo(() => {
     if (!activeResp.data || activeResp.data.status !== 200) return null;
     const { reason, guardrail_rejections } = activeResp.data.data;
     if (!reason && !guardrail_rejections?.length) return null;
@@ -171,36 +172,10 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
             ? "No strategies found for this run."
             : "No discovery results available yet. Run a discovery job first."}
         </p>
-        {emptyDetails?.reason && (
-          <p className="mt-2 text-xs text-amber-400">{emptyDetails.reason}</p>
+        {rejectionDetails?.reason && (
+          <p className="mt-2 text-xs text-amber-400">{rejectionDetails.reason}</p>
         )}
-        {emptyDetails != null && emptyDetails.rejections.length > 0 && (
-          <div className="mt-3 space-y-1">
-            <h4 className="text-xs font-semibold text-muted-foreground">
-              Rejected candidates
-            </h4>
-            {emptyDetails.rejections.map((r, i) => (
-              <div
-                key={i}
-                className="rounded-md border border-amber-500/20 bg-amber-950/10 p-2 font-mono text-[11px] text-muted-foreground"
-              >
-                <span className="text-foreground">
-                  {typeof r.uid === "string" ? r.uid : `#${i + 1}`}
-                </span>
-                {typeof r.score === "number" && ` score=${r.score}`}
-                {typeof r.sharpe === "number" && ` sharpe=${r.sharpe}`}
-                {typeof r.trades === "number" && ` trades=${r.trades}`}
-                {Array.isArray(r.reasons) && (
-                  <ul className="mt-1 list-inside list-disc text-amber-300/80">
-                    {r.reasons.map((reason, j) => (
-                      <li key={j}>{String(reason)}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <RejectionList rejections={rejectionDetails?.rejections ?? []} />
       </div>
     );
   }
@@ -357,6 +332,40 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
         const entry = expandedIdx >= 0 ? sorted[expandedIdx] : undefined;
         return entry ? <StrategyDetail strategy={entry.strategy} rank={expandedIdx + 1} /> : null;
       })()}
+
+      {/* Candidates that made top-K but failed guardrails */}
+      <RejectionList rejections={rejectionDetails?.rejections ?? []} />
+    </div>
+  );
+}
+
+function RejectionList({ rejections }: { rejections: { [key: string]: unknown }[] }) {
+  if (rejections.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-1">
+      <h4 className="text-xs font-semibold text-muted-foreground">
+        Rejected candidates
+      </h4>
+      {rejections.map((r, i) => (
+        <div
+          key={i}
+          className="rounded-md border border-amber-500/20 bg-amber-950/10 p-2 font-mono text-[11px] text-muted-foreground"
+        >
+          <span className="text-foreground">
+            {typeof r.uid === "string" ? r.uid : `#${i + 1}`}
+          </span>
+          {typeof r.score === "number" && ` score=${r.score}`}
+          {typeof r.sharpe === "number" && ` sharpe=${r.sharpe}`}
+          {typeof r.trades === "number" && ` trades=${r.trades}`}
+          {Array.isArray(r.reasons) && (
+            <ul className="mt-1 list-inside list-disc text-amber-300/80">
+              {r.reasons.map((reason, j) => (
+                <li key={j}>{String(reason)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
