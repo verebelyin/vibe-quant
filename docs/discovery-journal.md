@@ -4,6 +4,59 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-07-09: Batch 42 — NEW SCREENING SEMANTICS (data-targeting fix), all prior scores re-baselined (runs 854-863)
+
+### ⚠️ Semantics break — screening scores before this batch are NOT comparable
+
+Commit `11c5f00` fixed an NT bug (`BacktestDataConfig` string `data_cls`
+silently disabled bar-type narrowing): every backtest since 1.222 had loaded
+EVERY bar timeframe in the catalog (~300×), giving screening accidental
+intrabar (1m-stream) fill resolution. Screening now feeds only the strategy
+timeframe (SPEC "simplified fills"); validation loads 1m detail explicitly
+and reproduces historical results bit-for-bit (runs 850=851=857). See
+`bd recall pipeline:screening-data-targeting`.
+
+Also in this stack: pandas-ta-classic 0.6 (KAMA/VIDYA price-seeded warm-up —
+MA-cross genes now select naturally, see run 854 below), NT 1.230, and the
+timeframe-aware bootstrap-CI floor (4h/1d default 0.0, vibe-quant-gds1c).
+
+### Speed
+
+Discovery eval cost dropped 12.6 → **1.6-2.0 s/chromosome** (~8×) on
+4h/2yr windows. Run 863 (pop=24, 6 gens, 144 evals) finished in 414s.
+
+### Run 854 — Reddit-informed pool (ADX/RSI/BBANDS/PRICE_POSITION), pop=24 gen=4, 2024-01-01→2026-03-17
+
+- 5 champions; **3/5 carry MA-cross genes** (pop=24! old pop≥100 guidance obsolete)
+- #1 `genome_47b1365029e0` (PRICE_POSITION entry + ADX/KAMA-cross exit):
+  screening score 0.550, Sharpe 1.13, 64 trades
+- **Validated (run 858): +17.7%, Sharpe 0.80, PF 1.64, DD 6.3%, 67 trades** —
+  best validated champion since the semantics change; exported as strategy 239
+
+### Run 863 — STOCH+CCI re-baseline, pop=24 gen=6, same window
+
+New-semantics baseline for the old flagship combo:
+
+| Rank | Score | Sharpe | Trades | Return |
+|------|-------|--------|--------|--------|
+| 1 | 0.440 | 0.46 | 109 | +3.0% |
+| 2 | 0.426 | 0.35 | 55 | +0.8% |
+| 3 | 0.424 | 0.41 | 107 | +3.0% |
+
+Old batch-13 STOCH+CCI headline (Sharpe 3.52 validated) predates both the
+2944ad3 fix era metrics AND this semantics change — treat as historical only.
+On the new baseline, the Reddit-informed PRICE_POSITION/KAMA pool (854)
+clearly outperforms STOCH+CCI.
+
+### Consistency proofs (runs 859-862)
+
+- Discovery ↔ screening replay: **exact to full float precision**
+  (Sharpe 0.3888028094154778, 108 trades) with eval_windows=1
+- eval_windows=3 runs legitimately differ from full-window replay
+  (worst-of-N fitness) — replay API now returns `metrics_note` explaining this
+
+---
+
 ## 2026-05-29: Batch 41 — feature shakedown (PRICE_POSITION + replay-drift fix proven + bootstrap-CI vindicated, runs 837-844)
 
 ### Goal
