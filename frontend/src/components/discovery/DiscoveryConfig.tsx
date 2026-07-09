@@ -91,7 +91,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
     const resp = jobsQuery.data;
     if (!resp || resp.status !== 200) return [];
     return resp.data
-      .filter((j) => j.status === "completed")
+      .filter(
+        // Runs without persisted champions have nothing to seed from — the
+        // pipeline would silently fall back to a random population.
+        (j) => j.status === "completed" && (j.strategies_found ?? 0) > 0,
+      )
       .sort((a, b) => (b.run_id ?? 0) - (a.run_id ?? 0));
   })();
 

@@ -719,9 +719,13 @@ def main() -> int:
                     len(seed_chromosomes), args.seed_from_run,
                 )
             else:
-                logger.warning(
-                    "No chromosomes found in run %d — starting with random population",
-                    args.seed_from_run,
+                # An explicitly requested warm-start that can't be honored is
+                # an operator error — fail loudly instead of silently running
+                # a random population under a warm-start label.
+                raise ValueError(
+                    f"warm-start run {args.seed_from_run} has no persisted "
+                    "champions to seed from (guardrails may have rejected "
+                    "all candidates); launch without seed_run_id instead"
                 )
 
         num_seeds = max(1, args.num_seeds)
