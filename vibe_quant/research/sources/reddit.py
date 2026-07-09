@@ -91,12 +91,25 @@ class RedditSource:
             limit: Per-subreddit cap on submissions to inspect.
         """
         since_ts = since.timestamp() if since is not None else None
+        failures: list[tuple[str, httpx.HTTPError]] = []
+        yielded = False
         for subreddit in self._subreddits:
             try:
-                yield from self._fetch_subreddit(subreddit, since_ts, limit)
+                for item in self._fetch_subreddit(subreddit, since_ts, limit):
+                    yielded = True
+                    yield item
             except httpx.HTTPError as e:
                 logger.warning("subreddit %r failed: %s", subreddit, e)
+                failures.append((subreddit, e))
                 continue
+        # Every subreddit failed and nothing was yielded: raise so the scrape
+        # run records status=failed instead of a silent completed/0-items
+        # (e.g. Reddit hard-403s the whole IP — vibe-quant-ux7t0).
+        if failures and not yielded and len(failures) == len(self._subreddits):
+            names = ", ".join(name for name, _ in failures)
+            raise RuntimeError(
+                f"all {len(failures)} subreddit(s) failed ({names}): {failures[-1][1]}"
+            ) from failures[-1][1]
 
     def _fetch_subreddit(
         self, subreddit: str, since_ts: float | None, limit: int

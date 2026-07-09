@@ -603,6 +603,44 @@ def test_429_without_retry_after_exhausts_retries_and_skips(
     assert any("exhausted" in rec.message for rec in caplog.records)
 
 
+def test_all_subreddits_failing_raises(ua_env: None) -> None:
+    """Hard HTTP failure on every subreddit must raise so the scrape run
+    records failed instead of a silent completed/0-items (vibe-quant-ux7t0)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="blocked")
+
+    with patch("time.sleep", _no_sleep):
+        src = RedditSource(
+            config=RedditConfig.from_env(),
+            subreddits=["algotrading", "quant"],
+            client=_make_client(handler),
+        )
+        with pytest.raises(RuntimeError, match="all 2 subreddit"):
+            list(src.fetch(since=None, limit=5))
+
+
+def test_partial_subreddit_failure_stays_lenient(ua_env: None) -> None:
+    """One subreddit failing while another yields keeps the lenient skip."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if "/r/quant/" in str(req.url):
+            return httpx.Response(403, text="blocked")
+        if req.url.path.endswith("/new.json"):
+            return httpx.Response(200, json=_listing([_post(sid="ok1")]))
+        return httpx.Response(200, json=_comment_thread([]))
+
+    with patch("time.sleep", _no_sleep):
+        src = RedditSource(
+            config=RedditConfig.from_env(),
+            subreddits=["algotrading", "quant"],
+            client=_make_client(handler),
+        )
+        items = list(src.fetch(since=None, limit=5))
+
+    assert len(items) == 1
+
+
 def test_no_praw_imports_remain() -> None:
     """Regression guard: praw must not creep back into the module."""
     import inspect
