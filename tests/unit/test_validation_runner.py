@@ -732,7 +732,8 @@ class TestDetailTimeframe:
     def test_resolve_detail_non_sub_bar_timeframe(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """Non-sub-bar timeframes (4h, 1h) return None — no detail needed."""
+        """Supra-5m timeframes (4h, 1h) default to 1m fill-resolution detail
+        when the catalog covers the window, else None (coverage-gated)."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
         result = runner._resolve_detail_timeframe(
             run_config={
@@ -743,7 +744,7 @@ class TestDetailTimeframe:
             strategy_timeframe="4h",
             override=None,
         )
-        assert result is None
+        assert result in ("1m", None)
         runner.close()
 
     def test_resolve_detail_from_run_config_parameters(

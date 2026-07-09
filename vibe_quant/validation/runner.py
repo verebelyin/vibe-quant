@@ -723,6 +723,7 @@ class ValidationRunner:
             BacktestRunConfig,
             ImportableStrategyConfig,
         )
+        from nautilus_trader.model.data import Bar
 
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
@@ -819,12 +820,15 @@ class ValidationRunner:
                     logger.warning("Unknown timeframe %s, skipping", tf)
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
+                # NT 1.226+: pass data_cls as the CLASS, not the import
+                # string — BacktestDataConfig.query compares `data_cls is Bar`
+                # so a string silently disables bar-type narrowing and loads
+                # every bar timeframe in the catalog (~300x the needed data).
                 data_configs.append(
                     BacktestDataConfig(
                         catalog_path=str(catalog_path.resolve()),
-                        data_cls="nautilus_trader.model.data:Bar",
-                        instrument_id=instrument_id,
-                        bar_spec=f"{step}-{agg.name}-LAST",
+                        data_cls=Bar,
+                        bar_types=[f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"],
                         start_time=start_date,
                         end_time=end_date,
                     )
@@ -837,9 +841,10 @@ class ValidationRunner:
                     data_configs.append(
                         BacktestDataConfig(
                             catalog_path=str(catalog_path.resolve()),
-                            data_cls="nautilus_trader.model.data:Bar",
-                            instrument_id=instrument_id,
-                            bar_spec=f"{detail_step}-{detail_agg.name}-LAST",
+                            data_cls=Bar,
+                            bar_types=[
+                                f"{instrument_id}-{detail_step}-{detail_agg.name}-LAST-EXTERNAL"
+                            ],
                             start_time=start_date,
                             end_time=end_date,
                         )
@@ -1053,6 +1058,9 @@ class ValidationRunner:
     # Default detail timeframe for sub-5m strategies when detail data exists
     _DEFAULT_DETAIL_TIMEFRAME = "5s"
 
+    # Default fill-resolution detail for supra-5m strategies (intrabar SL/TP)
+    _DEFAULT_COARSE_DETAIL_TIMEFRAME = "1m"
+
     def _resolve_detail_timeframe(
         self,
         run_config: dict[str, object],
@@ -1076,10 +1084,6 @@ class ValidationRunner:
         if override is not None:
             return override
 
-        # Only relevant for sub-5m timeframes
-        if strategy_timeframe not in self._SUB_BAR_TIMEFRAMES:
-            return None
-
         # Check run config for detail_timeframe parameter
         params = run_config.get("parameters")
         if isinstance(params, dict) and params.get("detail_timeframe"):
@@ -1099,8 +1103,17 @@ class ValidationRunner:
         if not symbols:
             return None
 
-        detail_tf = self._DEFAULT_DETAIL_TIMEFRAME
-        if detail_tf not in INTERVAL_TO_AGGREGATION:
+        # Sub-5m strategies get 5s detail; coarser strategies default to 1m
+        # detail so the matching engine triggers stops/TPs intrabar. The
+        # latter preserves historical validation semantics: before the NT
+        # 1.230 data-targeting fix, untargeted catalog loading fed the venue
+        # the full 1m stream on every validation run.
+        detail_tf = (
+            self._DEFAULT_DETAIL_TIMEFRAME
+            if strategy_timeframe in self._SUB_BAR_TIMEFRAMES
+            else self._DEFAULT_COARSE_DETAIL_TIMEFRAME
+        )
+        if detail_tf == strategy_timeframe or detail_tf not in INTERVAL_TO_AGGREGATION:
             return None
 
         # Parse run date window for coverage check

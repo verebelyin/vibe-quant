@@ -139,6 +139,7 @@ class NTScreeningRunner:
             SortinoRatio,
             WinRate,
         )
+        from nautilus_trader.model.data import Bar
 
         from vibe_quant.data.catalog import (
             INTERVAL_TO_AGGREGATION,
@@ -198,12 +199,15 @@ class NTScreeningRunner:
                 if tf not in INTERVAL_TO_AGGREGATION:
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
+                # NT 1.226+: pass data_cls as the CLASS, not the import
+                # string — BacktestDataConfig.query compares `data_cls is Bar`
+                # so a string silently disables bar-type narrowing and loads
+                # every bar timeframe in the catalog (~300x the needed data).
                 data_configs.append(
                     BacktestDataConfig(
                         catalog_path=str(catalog_path.resolve()),
-                        data_cls="nautilus_trader.model.data:Bar",
-                        instrument_id=instrument_id,
-                        bar_spec=f"{step}-{agg.name}-LAST",
+                        data_cls=Bar,
+                        bar_types=[f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"],
                         start_time=self._start_date,
                         end_time=self._end_date,
                     )
