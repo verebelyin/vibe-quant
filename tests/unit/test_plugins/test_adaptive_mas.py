@@ -69,9 +69,11 @@ def test_kama_golden_values(fixture_df: pd.DataFrame) -> None:
     assert len(valid) > 50
 
     # Pin values (hand-verified from upstream pandas_ta_classic.kama).
-    assert abs(result.iloc[20] - 84.754) < 0.5, f"bar 20: {result.iloc[20]:.4f}"
-    assert abs(result.iloc[50] - 95.115) < 0.5, f"bar 50: {result.iloc[50]:.4f}"
-    assert abs(result.iloc[80] - 95.715) < 0.5, f"bar 80: {result.iloc[80]:.4f}"
+    # pandas-ta-classic 0.6 seeds KAMA from price instead of ramping from 0,
+    # so warm-up bars now track close (old 0.3.x pins were ramp artifacts).
+    assert abs(result.iloc[20] - 99.559) < 0.5, f"bar 20: {result.iloc[20]:.4f}"
+    assert abs(result.iloc[50] - 95.520) < 0.5, f"bar 50: {result.iloc[50]:.4f}"
+    assert abs(result.iloc[80] - 95.799) < 0.5, f"bar 80: {result.iloc[80]:.4f}"
 
     # KAMA tracks price — max deviation should be modest.
     close_final = fixture_df["close"].iloc[-1]
@@ -93,9 +95,11 @@ def test_vidya_golden_values(fixture_df: pd.DataFrame) -> None:
     assert len(valid) > 50
 
     # Pin values.
-    assert abs(result.iloc[20] - 23.016) < 1.0, f"bar 20: {result.iloc[20]:.4f}"
-    assert abs(result.iloc[50] - 84.242) < 1.0, f"bar 50: {result.iloc[50]:.4f}"
-    assert abs(result.iloc[80] - 90.038) < 1.0, f"bar 80: {result.iloc[80]:.4f}"
+    # pandas-ta-classic 0.6 seeds VIDYA from price instead of ramping from 0,
+    # so warm-up bars now track close (old 0.3.x pins were ramp artifacts).
+    assert abs(result.iloc[20] - 100.816) < 1.0, f"bar 20: {result.iloc[20]:.4f}"
+    assert abs(result.iloc[50] - 96.786) < 1.0, f"bar 50: {result.iloc[50]:.4f}"
+    assert abs(result.iloc[80] - 96.101) < 1.0, f"bar 80: {result.iloc[80]:.4f}"
 
 
 def test_vidya_deterministic_repeated_call(fixture_df: pd.DataFrame) -> None:
