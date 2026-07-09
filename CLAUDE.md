@@ -264,7 +264,7 @@ bd forget <key>                                       # Delete
 
 **Best practices (from beads team + project conventions):**
 
-1. **Lead with the fact, not the metadata.** Good: `"STOCH+CCI is the 4h champion: Sharpe 3.52, DD 2.1%"`. Bad: `"Remember that in batch 13 we found..."`.
+1. **Lead with the fact, not the metadata.** Good: `"BacktestDataConfig data_cls must be the class object — a string disables bar-type narrowing"`. Bad: `"Remember that in the July session we found..."`.
 2. **Update in place.** Passing `--key` to an existing key overwrites — don't create `discovery:champions-v2`.
 3. **Keep memories evergreen.** If a fact is a dated snapshot ("as of 2026-04-11 we had 894 beads"), prefer a commit or a bead over a memory.
 4. **Delete when stale.** `bd forget <key>` on facts that turn out wrong or get superseded.
