@@ -23,7 +23,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # v1 defaults (locked via bd-l685 design decisions: BTC-only, 6mo lookback)
-DEFAULT_SYMBOLS: list[str] = ["BTCUSDT-PERP.BINANCE"]
+# Bare symbol — NTScreeningRunner appends "-PERP.BINANCE" itself
+# (the old "BTCUSDT-PERP.BINANCE" value double-suffixed the instrument ID,
+# so every auto-screen ran against a nonexistent instrument: 0 trades).
+DEFAULT_SYMBOLS: list[str] = ["BTCUSDT"]
 DEFAULT_LOOKBACK_DAYS: int = 180
 DEFAULT_TIMEFRAME: str = "1h"
 DEFAULT_TIMEOUT_SECONDS: int = 300
@@ -33,10 +36,28 @@ class _ScreenTimeout(Exception):
     """Raised when a single screening run exceeds DEFAULT_TIMEOUT_SECONDS."""
 
 
-def _default_window() -> tuple[str, str]:
+def _default_window(timeframe: str) -> tuple[str, str] | None:
+    """Lookback window clamped to catalog coverage.
+
+    A wall-clock window silently runs past the end of downloaded data
+    (0 trades, reported as success). Clamp the end to the last catalog bar;
+    return None when there is no data at all so the caller can fail loudly.
+    """
     today = datetime.now(tz=UTC).date()
-    start = today - timedelta(days=DEFAULT_LOOKBACK_DAYS)
-    return start.isoformat(), today.isoformat()
+    end = today
+    try:
+        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH, CatalogManager
+
+        date_range = CatalogManager(DEFAULT_CATALOG_PATH).get_bar_date_range(
+            DEFAULT_SYMBOLS[0], timeframe
+        )
+        if date_range is None:
+            return None
+        end = min(today, date_range[1].date())
+    except Exception:  # noqa: BLE001 — clamping is best-effort
+        logger.warning("auto_screen: could not read catalog coverage, using today")
+    start = end - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    return start.isoformat(), end.isoformat()
 
 
 def _now_iso() -> str:
@@ -57,7 +78,6 @@ def auto_screen_extraction(
     recorded as `screen_status='failed'` with an error string — never
     propagates.
     """
-    start_date, end_date = _default_window()
     try:
         dsl_dict = _normalize_dsl(parsed_dsl_json)
     except Exception as e:  # noqa: BLE001
@@ -75,6 +95,22 @@ def auto_screen_extraction(
 
     tf_value = dsl_dict.get("timeframe", DEFAULT_TIMEFRAME)
     timeframe = str(tf_value) if tf_value is not None else DEFAULT_TIMEFRAME
+
+    window = _default_window(timeframe)
+    if window is None:
+        msg = f"no {timeframe} catalog data for {DEFAULT_SYMBOLS[0]}"
+        logger.warning("auto_screen: %s (extraction %s)", msg, extraction_id)
+        sm.update_extraction_screen_results(
+            extraction_id,
+            screen_sharpe=None,
+            screen_status="failed",
+            screen_run_id=None,
+            screen_error=msg,
+            screen_completed_at=_now_iso(),
+        )
+        return
+    start_date, end_date = window
+
     run_id = sm.create_backtest_run(
         strategy_id=None,
         run_mode="screening",
@@ -91,6 +127,7 @@ def auto_screen_extraction(
         logger.warning(
             "auto_screen: timeout for extraction %s (run %d)", extraction_id, run_id
         )
+        sm.update_backtest_run_status(run_id, "failed", error_message="auto-screen timeout")
         sm.update_extraction_screen_results(
             extraction_id,
             screen_sharpe=None,
@@ -108,6 +145,7 @@ def auto_screen_extraction(
             run_id,
             msg,
         )
+        sm.update_backtest_run_status(run_id, "failed", error_message=msg)
         sm.update_extraction_screen_results(
             extraction_id,
             screen_sharpe=None,
@@ -118,6 +156,9 @@ def auto_screen_extraction(
         )
         return
 
+    # Close out the run row — auto-screen previously left these 'pending'
+    # forever, polluting Results Analysis.
+    sm.update_backtest_run_status(run_id, "completed")
     sm.update_extraction_screen_results(
         extraction_id,
         screen_sharpe=_finite_or_none(metrics.sharpe_ratio),
