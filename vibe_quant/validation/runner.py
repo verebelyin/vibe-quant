@@ -195,6 +195,7 @@ class ValidationRunner:
 
             result.execution_time_seconds = time.monotonic() - start_time
             self._store_results(run_id, result)
+            self._check_screening_consistency(run_id, strategy_id, strategy_name, result)
 
             logger.info(
                 "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe=%.2f "
@@ -1339,6 +1340,53 @@ class ValidationRunner:
         # Save individual trades
         trade_dicts = [t.to_dict() for t in result.trades]
         self._state.save_trades_batch(run_id, trade_dicts)
+
+    def _check_screening_consistency(
+        self,
+        run_id: int,
+        strategy_id: int,
+        strategy_name: str,
+        result: ValidationResult,
+    ) -> None:
+        """Flag overfit promotions: validation collapsing vs screening.
+
+        Compares this validation result against the strategy's screening
+        reference (standalone screening run or discovery champion metrics)
+        and persists any flags to the result notes (vibe-quant-o11tp).
+        Best-effort — never fails the run.
+        """
+        import json
+
+        from vibe_quant.validation.consistency import (
+            assess_consistency,
+            find_screening_reference,
+        )
+
+        try:
+            reference = find_screening_reference(self._state, strategy_id, strategy_name)
+            if reference is None:
+                return
+            report = assess_consistency(
+                reference,
+                val_sharpe=result.sharpe_ratio,
+                val_trades=result.total_trades,
+            )
+            if not report.is_flagged:
+                logger.info(
+                    "Run %d consistent with screening (%s): sharpe %.2f → %.2f",
+                    run_id,
+                    reference.source,
+                    reference.sharpe,
+                    result.sharpe_ratio,
+                )
+                return
+            for flag in report.flags:
+                logger.warning("Run %d %s", run_id, flag)
+            self._state.update_result_notes(
+                run_id, json.dumps({"consistency": report.to_dict()})
+            )
+        except Exception:  # noqa: BLE001 — advisory check must not fail the run
+            logger.exception("Run %d: consistency check failed", run_id)
 
 
 def list_validation_runs(
