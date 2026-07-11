@@ -8,4 +8,5 @@
 export interface ReplayResponse {
   replay_run_id: number;
   original_run_id: number;
+  metrics_note?: string | null;
 }

@@ -113,6 +113,8 @@ def _extraction_to_response(
         extracted_at=row.get("extracted_at"),
         llm_model=row.get("llm_model"),
         confidence=row.get("confidence"),
+        evidence_level=row.get("evidence_level"),
+        completeness=row.get("completeness"),
         rationale=row.get("rationale"),
         raw_response=row.get("raw_response"),
         prompt=row.get("prompt"),
@@ -302,6 +304,7 @@ _VALID_SORTS = {
     "newest_posted",
     "highest_score",
     "highest_confidence",
+    "credibility",
     "screen_sharpe",
 }
 

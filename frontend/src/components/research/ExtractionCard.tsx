@@ -32,6 +32,12 @@ function formatTimestamp(iso: string | null): string {
   return new Date(t).toLocaleString();
 }
 
+const EVIDENCE_LABELS: Record<NonNullable<ExtractionResponse["evidence_level"]>, string> = {
+  live_traded: "Live traded",
+  backtested: "Backtested",
+  idea_only: "Idea only",
+};
+
 function dslIndicatorTypes(parsedDslJson: string | null | undefined): string[] {
   if (!parsedDslJson) return [];
   try {
@@ -216,6 +222,19 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
           <ConfidenceBar value={extraction.confidence} />
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <span className="uppercase tracking-wide text-muted-foreground">Credibility</span>
+        <span className="rounded border border-border/50 bg-muted/30 px-2 py-1 text-foreground/80">
+          Evidence: {extraction.evidence_level ? EVIDENCE_LABELS[extraction.evidence_level] : "—"}
+        </span>
+        <span className="rounded border border-border/50 bg-muted/30 px-2 py-1 text-foreground/80">
+          Completeness:{" "}
+          {typeof extraction.completeness === "number"
+            ? `${Math.round(extraction.completeness * 100)}%`
+            : "—"}
+        </span>
+      </div>
 
       {extraction.rationale && (
         <div className="text-xs text-muted-foreground whitespace-pre-wrap">

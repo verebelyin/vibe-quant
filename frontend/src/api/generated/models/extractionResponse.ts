@@ -12,6 +12,8 @@ export interface ExtractionResponse {
   extracted_at: string | null;
   llm_model: string | null;
   confidence: number | null;
+  evidence_level: 'live_traded' | 'backtested' | 'idea_only' | null;
+  completeness: number | null;
   rationale: string | null;
   raw_response: string | null;
   prompt?: string | null;

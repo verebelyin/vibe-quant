@@ -1067,6 +1067,7 @@ class StateManager:
             "newest_posted": "i.posted_at DESC, i.id DESC",
             "highest_score": "i.score IS NULL, i.score DESC, i.id DESC",
             "highest_confidence": "latest_confidence IS NULL, latest_confidence DESC, i.id DESC",
+            "credibility": "credibility_score IS NULL, credibility_score DESC, i.id DESC",
             "screen_sharpe": "max_screen_sharpe IS NULL, max_screen_sharpe DESC, i.id DESC",
         }
         order_by = order_clauses.get(sort, order_clauses["newest_scraped"])
@@ -1080,6 +1081,13 @@ class StateManager:
             " WHERE e.research_item_id = i.id"
             " ORDER BY e.extracted_at DESC, e.id DESC LIMIT 1"
             ") AS latest_confidence, ("
+            # Tier weight *3 vs completeness range [-1,1] (width 2) keeps evidence
+            # tiers non-overlapping: evidence level always dominates completeness.
+            " SELECT MAX((CASE e.evidence_level"
+            " WHEN 'live_traded' THEN 3 WHEN 'backtested' THEN 2"
+            " WHEN 'idea_only' THEN 1 END) * 3 + COALESCE(e.completeness, -1))"
+            " FROM research_extractions e WHERE e.research_item_id = i.id"
+            ") AS credibility_score, ("
             " SELECT MAX(screen_sharpe) FROM research_extractions e"
             " WHERE e.research_item_id = i.id"
             ") AS max_screen_sharpe FROM research_items i WHERE 1=1"
@@ -1131,6 +1139,8 @@ class StateManager:
         dsl_yaml: str | None,
         parsed_dsl_json: str | None,
         parse_error: str | None,
+        evidence_level: str | None = None,
+        completeness: float | None = None,
         proposed_indicators_json: str | None = None,
         prompt: str | None = None,
     ) -> int:
@@ -1139,8 +1149,8 @@ class StateManager:
                 """INSERT INTO research_extractions
                    (research_item_id, status, llm_model, confidence, rationale,
                     raw_response, dsl_yaml, parsed_dsl_json, parse_error,
-                    proposed_indicators_json, prompt)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    proposed_indicators_json, prompt, evidence_level, completeness)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     research_item_id,
                     status,
@@ -1153,6 +1163,8 @@ class StateManager:
                     parse_error,
                     proposed_indicators_json,
                     prompt,
+                    evidence_level,
+                    completeness,
                 ),
             )
             self.conn.commit()

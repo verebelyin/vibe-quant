@@ -245,6 +245,8 @@ def persist_extractions(
             dsl_yaml=result.dsl_yaml,
             parsed_dsl_json=result.parsed_dsl_json,
             parse_error=result.parse_error,
+            evidence_level=result.evidence_level,
+            completeness=result.completeness,
             proposed_indicators_json=result.proposed_indicators_json,
             prompt=prompt,
         )

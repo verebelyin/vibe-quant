@@ -88,6 +88,63 @@ def test_golden_negative_skips() -> None:
     assert result.dsl_yaml is None
 
 
+@pytest.mark.parametrize("extracted", [True, False])
+def test_credibility_fields_parse_for_every_finding(extracted: bool) -> None:
+    raw = _claude_envelope({
+        "extracted": extracted,
+        "confidence": 0.8,
+        "rationale": "Evidence and rules are described.",
+        "dsl": _good_dsl() if extracted else None,
+        "evidence_level": "live_traded",
+        "completeness": 0.91,
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.evidence_level == "live_traded"
+    assert result.completeness == 0.91
+
+
+@pytest.mark.parametrize(
+    ("evidence_level", "completeness", "expected_evidence", "expected_completeness"),
+    [
+        (None, None, None, None),
+        ("paper_traded", 0.5, None, 0.5),
+        ("backtested", "0.8", "backtested", None),
+        ("idea_only", 1.01, "idea_only", None),
+        ([], True, None, None),
+    ],
+)
+def test_invalid_credibility_fields_are_discarded(
+    evidence_level: object,
+    completeness: object,
+    expected_evidence: str | None,
+    expected_completeness: float | None,
+) -> None:
+    raw = _claude_envelope({
+        "extracted": False,
+        "confidence": 0.2,
+        "rationale": "Not extractable.",
+        "dsl": None,
+        "evidence_level": evidence_level,
+        "completeness": completeness,
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.evidence_level == expected_evidence
+    assert result.completeness == expected_completeness
+
+
+def test_prompt_requires_credibility_for_parsed_and_skipped_findings() -> None:
+    prompt = _build_system_prompt()
+    assert '"evidence_level": "live_traded" | "backtested" | "idea_only"' in prompt
+    assert '"completeness": <float 0..1>' in prompt
+    assert "every finding, whether extracted=true or extracted=false" in prompt
+
+
 def test_prompt_injection_attempt_caught_by_dsl_validation() -> None:
     """If Claude is tricked into returning a 'pwned' DSL, parse_strategy_string
 

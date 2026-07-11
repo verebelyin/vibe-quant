@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -36,11 +37,37 @@ def test_schema_creates_all_research_tables(sm: StateManager) -> None:
 
 
 def test_init_schema_idempotent(tmp_path: Path) -> None:
-    sm1 = StateManager(tmp_path / "x.db")
+    db_path = tmp_path / "x.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.execute(
+        """CREATE TABLE research_extractions (
+               id INTEGER PRIMARY KEY,
+               research_item_id INTEGER,
+               status TEXT
+           )"""
+    )
+    legacy.commit()
+    legacy.close()
+
+    sm1 = StateManager(db_path)
     _ = sm1.conn
     sm1.close()
-    sm2 = StateManager(tmp_path / "x.db")
-    _ = sm2.conn
+    sm2 = StateManager(db_path)
+    columns = {
+        row["name"]
+        for row in sm2.conn.execute("PRAGMA table_info(research_extractions)").fetchall()
+    }
+    assert {"evidence_level", "completeness"} <= columns
+    with pytest.raises(sqlite3.IntegrityError):
+        sm2.conn.execute(
+            "INSERT INTO research_extractions (evidence_level) VALUES (?)",
+            ("paper_traded",),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        sm2.conn.execute(
+            "INSERT INTO research_extractions (completeness) VALUES (?)",
+            (1.01,),
+        )
     sm2.close()
 
 
@@ -171,11 +198,15 @@ def test_extraction_round_trip(sm: StateManager) -> None:
         dsl_yaml="name: foo\n",
         parsed_dsl_json='{"name":"foo"}',
         parse_error=None,
+        evidence_level="backtested",
+        completeness=0.84,
     )
     got = sm.get_extraction(ex_id)
     assert got is not None
     assert got["status"] == "parsed"
     assert got["confidence"] == 0.87
+    assert got["evidence_level"] == "backtested"
+    assert got["completeness"] == 0.84
     assert got["strategy_id"] is None
 
     items = sm.list_extractions_for_item(item_id)
@@ -184,8 +215,6 @@ def test_extraction_round_trip(sm: StateManager) -> None:
 
 
 def test_extraction_fk_violation_raises(sm: StateManager) -> None:
-    import sqlite3
-
     sm.conn.execute("PRAGMA foreign_keys = ON")
     with pytest.raises(sqlite3.IntegrityError):
         sm.create_extraction(

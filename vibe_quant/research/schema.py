@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+EvidenceLevel = Literal["live_traded", "backtested", "idea_only"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ class ExtractionResult:
     parse_error: str | None
     llm_model: str | None
     proposed_indicators_json: str | None = None
+    evidence_level: EvidenceLevel | None = None
+    completeness: float | None = None
 
 
 @dataclass(frozen=True)

@@ -23,13 +23,13 @@ import json
 import logging
 import shutil
 import subprocess
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
 from vibe_quant.dsl.indicators import indicator_registry
 from vibe_quant.dsl.parser import DSLParseError, parse_strategy_string
-from vibe_quant.research.schema import ExtractionBatch, ExtractionResult
+from vibe_quant.research.schema import EvidenceLevel, ExtractionBatch, ExtractionResult
 
 if TYPE_CHECKING:
     from vibe_quant.research.schema import RawItem
@@ -92,12 +92,22 @@ def _build_system_prompt() -> str:
         '    "source": "post" | "comment:u/<author>",\n'
         '    "extracted": <true|false>,\n'
         '    "confidence": <float 0..1>,\n'
+        '    "evidence_level": "live_traded" | "backtested" | "idea_only",\n'
+        '    "completeness": <float 0..1>,\n'
         '    "rationale": <string, 1-3 sentences>,\n'
         '    "dsl": <object|null>,\n'
         '    "proposed_indicators": <array, may be empty>\n'
         "  },\n"
         "  ...\n"
         "]\n\n"
+        "CREDIBILITY — include both fields on every finding, whether "
+        "extracted=true or extracted=false. Set evidence_level=live_traded "
+        "only when the source says the author actually traded it, such as "
+        "PnL screenshots, broker statements, or a live-trading duration. Set "
+        "it to backtested when only backtest results are reported, otherwise "
+        "idea_only. Completeness measures how implementable the stated rules "
+        "are: exact entries, exits, and parameters score high; vague concepts "
+        "score low.\n\n"
         "Set extracted=false on a finding when the corresponding source "
         "(post or comment) is a question, off-topic, lacks concrete "
         "entry/exit rules, or you can't be confident. "
@@ -241,6 +251,22 @@ def _is_empty_input(item: RawItem) -> bool:
 _STATUS_PRIORITY = {"parsed": 0, "failed": 1, "skipped": 2}
 
 
+_EVIDENCE_LEVELS: frozenset[str] = frozenset({"live_traded", "backtested", "idea_only"})
+
+
+def _coerce_evidence_level(value: Any) -> EvidenceLevel | None:
+    if isinstance(value, str) and value in _EVIDENCE_LEVELS:
+        return cast("EvidenceLevel", value)
+    return None
+
+
+def _coerce_completeness(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if 0.0 <= result <= 1.0 else None
+
+
 def _single(
     *,
     status: str,
@@ -306,6 +332,8 @@ def _finding_to_result(finding: dict[str, Any], raw_response: str) -> Extraction
         str(rationale) if rationale is not None else None,
     )
     proposed_json = _extract_proposed_indicators(finding)
+    evidence_level = _coerce_evidence_level(finding.get("evidence_level"))
+    completeness = _coerce_completeness(finding.get("completeness"))
 
     if not finding.get("extracted"):
         return ExtractionResult(
@@ -318,6 +346,8 @@ def _finding_to_result(finding: dict[str, Any], raw_response: str) -> Extraction
             parse_error=None,
             llm_model=LLM_MODEL_LABEL,
             proposed_indicators_json=proposed_json,
+            evidence_level=evidence_level,
+            completeness=completeness,
         )
 
     dsl = finding.get("dsl")
@@ -332,6 +362,8 @@ def _finding_to_result(finding: dict[str, Any], raw_response: str) -> Extraction
             parse_error="extracted=true but dsl is missing or not an object",
             llm_model=LLM_MODEL_LABEL,
             proposed_indicators_json=proposed_json,
+            evidence_level=evidence_level,
+            completeness=completeness,
         )
 
     dsl_yaml = yaml.safe_dump(dsl, sort_keys=False, default_flow_style=False)
@@ -348,6 +380,8 @@ def _finding_to_result(finding: dict[str, Any], raw_response: str) -> Extraction
             parse_error=str(e),
             llm_model=LLM_MODEL_LABEL,
             proposed_indicators_json=proposed_json,
+            evidence_level=evidence_level,
+            completeness=completeness,
         )
 
     return ExtractionResult(
@@ -360,6 +394,8 @@ def _finding_to_result(finding: dict[str, Any], raw_response: str) -> Extraction
         parse_error=None,
         llm_model=LLM_MODEL_LABEL,
         proposed_indicators_json=proposed_json,
+        evidence_level=evidence_level,
+        completeness=completeness,
     )
 
 

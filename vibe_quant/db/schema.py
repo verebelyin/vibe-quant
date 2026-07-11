@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 13
+SCHEMA_VERSION: int = 14
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -217,6 +217,12 @@ CREATE TABLE IF NOT EXISTS research_extractions (
     extracted_at TEXT DEFAULT (datetime('now')),
     llm_model TEXT,
     confidence REAL,
+    evidence_level TEXT CHECK (
+        evidence_level IS NULL OR evidence_level IN ('live_traded', 'backtested', 'idea_only')
+    ),
+    completeness REAL CHECK (
+        completeness IS NULL OR (completeness >= 0.0 AND completeness <= 1.0)
+    ),
     rationale TEXT,
     raw_response TEXT,
     prompt TEXT,
@@ -341,6 +347,18 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("backtest_results", "kurtosis", "REAL"),
         ("research_extractions", "proposed_indicators_json", "TEXT"),
         ("research_extractions", "prompt", "TEXT"),
+        (
+            "research_extractions",
+            "evidence_level",
+            "TEXT CHECK (evidence_level IS NULL OR "
+            "evidence_level IN ('live_traded', 'backtested', 'idea_only'))",
+        ),
+        (
+            "research_extractions",
+            "completeness",
+            "REAL CHECK (completeness IS NULL OR "
+            "(completeness >= 0.0 AND completeness <= 1.0))",
+        ),
         ("research_extractions", "screen_sharpe", "REAL"),
         ("research_extractions", "screen_status", "TEXT"),
         ("research_extractions", "screen_run_id", "INTEGER"),

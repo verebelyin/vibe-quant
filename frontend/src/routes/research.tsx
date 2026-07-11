@@ -22,6 +22,7 @@ const VALID_SORTS: ResearchSort[] = [
   "newest_posted",
   "highest_score",
   "highest_confidence",
+  "credibility",
   "screen_sharpe",
 ];
 
@@ -40,6 +41,7 @@ const SORT_OPTIONS: { value: ResearchSort; label: string }[] = [
   { value: "newest_posted", label: "Newest posted" },
   { value: "highest_score", label: "Highest score" },
   { value: "highest_confidence", label: "Highest confidence" },
+  { value: "credibility", label: "Highest credibility" },
   { value: "screen_sharpe", label: "Highest screen Sharpe" },
 ];
 

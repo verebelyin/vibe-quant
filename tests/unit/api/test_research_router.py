@@ -81,6 +81,8 @@ def _seed_extraction(
     *,
     status: str = "parsed",
     parsed_dsl_json: str | None = None,
+    evidence_level: str | None = None,
+    completeness: float | None = None,
 ) -> int:
     if parsed_dsl_json is None and status == "parsed":
         parsed_dsl_json = (
@@ -101,6 +103,8 @@ def _seed_extraction(
         dsl_yaml="name: x\n",
         parsed_dsl_json=parsed_dsl_json,
         parse_error=None,
+        evidence_level=evidence_level,
+        completeness=completeness,
     )
 
 
@@ -488,13 +492,20 @@ def test_get_item_404(client: TestClient) -> None:
 
 def test_get_item_returns_item_plus_extractions(client: TestClient, sm: StateManager) -> None:
     iid = _seed_item(sm)
-    eid = _seed_extraction(sm, iid)
+    eid = _seed_extraction(
+        sm,
+        iid,
+        evidence_level="live_traded",
+        completeness=0.93,
+    )
     resp = client.get(f"/api/research/items/{iid}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == iid
     assert len(body["extractions"]) == 1
     assert body["extractions"][0]["id"] == eid
+    assert body["extractions"][0]["evidence_level"] == "live_traded"
+    assert body["extractions"][0]["completeness"] == 0.93
 
 
 def test_extract_item_enqueues_job_and_worker_processes_it(
@@ -800,6 +811,35 @@ def test_list_items_sort_screen_sharpe(client: TestClient, sm: StateManager) -> 
     titles = [it["external_id"] for it in resp.json()["items"]]
     # Highest Sharpe first.
     assert titles[:3] == ["b", "c", "a"]
+
+
+def test_list_items_sort_credibility(client: TestClient, sm: StateManager) -> None:
+    cases = [
+        ("idea", "idea_only", 0.99),
+        ("backtest-low", "backtested", 0.25),
+        ("backtest-high", "backtested", 0.8),
+        ("live", "live_traded", 0.1),
+        ("unknown", None, None),
+    ]
+    for external_id, evidence_level, completeness in cases:
+        iid = _seed_item(sm, external_id=external_id)
+        _seed_extraction(
+            sm,
+            iid,
+            evidence_level=evidence_level,
+            completeness=completeness,
+        )
+
+    resp = client.get("/api/research/items", params={"sort": "credibility"})
+
+    assert resp.status_code == 200
+    assert [item["external_id"] for item in resp.json()["items"]] == [
+        "live",
+        "backtest-high",
+        "backtest-low",
+        "idea",
+        "unknown",
+    ]
 
 
 def test_list_items_invalid_sort_422(client: TestClient) -> None:

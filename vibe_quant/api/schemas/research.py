@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,8 @@ class ExtractionResponse(BaseModel):
     extracted_at: str | None
     llm_model: str | None
     confidence: float | None
+    evidence_level: Literal["live_traded", "backtested", "idea_only"] | None
+    completeness: float | None
     rationale: str | None
     raw_response: str | None
     prompt: str | None = None

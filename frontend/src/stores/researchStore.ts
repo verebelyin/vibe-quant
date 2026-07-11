@@ -16,6 +16,7 @@ export type ResearchSort =
   | "newest_posted"
   | "highest_score"
   | "highest_confidence"
+  | "credibility"
   | "screen_sharpe";
 
 interface ResearchState {
