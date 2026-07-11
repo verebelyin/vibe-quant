@@ -4,6 +4,48 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-07-11: Reddit research pipeline first catch — EMA/ADX crossover (extraction-sourced, screened negative)
+
+First strategy sourced end-to-end through the upgraded Reddit research pipeline
+(wayfinder map vibe-quant-7go7m: challenge scraper → 9-sub backfill → vision
+extraction → credibility ranking → screening).
+
+**Corpus**: backfilled 50 → 378 items across 9 approved subs (top/year + partial
+top/all via the glance-style challenge scraper). 428 images archived; 214/378
+items carry screenshots. Prioritized extraction sweep over strategy-dense subs.
+
+**Parse rate**: 6 parsed strategies / 279 findings = **2.2%** — matches the
+historical ~2/217 base rate. Confirmed finding: the vision extractor works (it
+reads equity-curve metrics like "Sharpe 1.58, MaxDD 18.64%" straight off
+dashboard screenshots), but **top-voted Reddit posts are overwhelmingly memes and
+results-brags, not DSL-encodable rule-sets**. Implementable strategies are rare
+and uncorrelated with post score.
+
+**First catch** — item 184 (r/algotrading), top-credibility parsed strategy
+(evidence=backtested, completeness 0.65): `ema_crossover_adx_trend_1m` — 13/34
+EMA crossover gated by ADX>33, ATR 2.45× stop / 5.0× target, 1m. Author reported
+a 2022-2026 Alpaca backtest. Rules are asset-agnostic so ported to crypto perps.
+
+**Screen (isolated, trustworthy)** — BTCUSDT 1m, 30d (2026-02-15→03-17):
+**Sharpe −3.79, return −1.00%, 16 trades, MaxDD 1.11%** (106s, ADX pandas path).
+A clear loser on BTC 1m: the ADX>33 gate fires rarely (16 trades/30d) and the
+crossovers whipsaw. Honest negative — the destination bar was "implemented +
+honestly screened + journaled," not "profitable."
+
+**⚠️ Ops gotcha discovered**: running multiple screening processes CONCURRENTLY
+(a manual screen + the sweep's per-extraction auto_screen) produces **contaminated
+metrics**. The same EMA strategy screened −1.50 under concurrency vs −3.79 in
+isolation, and an unrelated extraction (item 462) inherited an identical Sharpe to
+12 decimals. NT's process-level engine/log-guard state does not tolerate
+concurrent `NTScreeningRunner` instances. **The `screen_*` columns written to
+`research_extractions` during the concurrent sweep are UNRELIABLE and must be
+re-run in isolation before trust.** Filed as a bead.
+
+Other parsed candidates (screens need isolated re-run): item 184 VWAP mean-reversion
+(completeness 0.4), item 149 mean-reversion comment (idea_only, 0.35).
+
+---
+
 ## 2026-07-09: Batch 43 — RAMS (Reddit-derived indicator) shakedown, consistency detector's first catch (runs 866-871)
 
 ### New indicator: RAMS (Risk-Adjusted Master Score)
