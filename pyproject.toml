@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.13.0",
     "python-telegram-bot>=22.8",
     "httpx>=0.27.0",
+    "curl_cffi>=0.7.0",
     "scipy>=1.18.0",
     "eth_account>=0.13.0",
     "python-socketio[asyncio_client]>=5.16.0",

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 ENV_REDDIT_USER_AGENT = "REDDIT_USER_AGENT"
 ENV_REDDIT_SUBREDDITS = "REDDIT_SUBREDDITS"
+ENV_REDDIT_USE_CHALLENGE = "REDDIT_USE_CHALLENGE"
 
 DEFAULT_SUBREDDITS = ("algotrading",)
 DEFAULT_USER_AGENT = "vibe-quant-research:0.1 (by anonymous)"
@@ -65,6 +66,17 @@ def _warn_deprecated_creds_once() -> None:
                 "Safe to remove from env.",
                 var,
             )
+
+
+def use_challenge_from_env() -> bool:
+    """Whether to use the glance-style browser-challenge fetch path.
+
+    Off by default: it is a ToS-grey stopgap (see docs/reddit-access-research.md)
+    for the period before OAuth access is approved. Enable with
+    REDDIT_USE_CHALLENGE=1 (also accepts true/yes/on).
+    """
+    raw = os.getenv(ENV_REDDIT_USE_CHALLENGE, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def subreddits_from_env() -> list[str]:

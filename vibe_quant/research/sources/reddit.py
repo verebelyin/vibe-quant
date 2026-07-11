@@ -13,16 +13,29 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import httpx
 
-from vibe_quant.research.config import RedditConfig, subreddits_from_env
+from vibe_quant.research.config import (
+    RedditConfig,
+    subreddits_from_env,
+    use_challenge_from_env,
+)
 from vibe_quant.research.schema import RawItem
 from vibe_quant.research.sources import register_source
+from vibe_quant.research.sources._reddit_challenge import ChallengeClient
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
+
+
+class _HttpGetter(Protocol):
+    """The subset of ``httpx.Client`` this source relies on."""
+
+    def get(self, url: str, *, params: Mapping[str, str] | None = None) -> httpx.Response: ...
+
+    def close(self) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +64,10 @@ class RedditSource:
         self,
         config: RedditConfig | None = None,
         subreddits: list[str] | None = None,
-        client: httpx.Client | None = None,
+        client: _HttpGetter | None = None,
         listing: str = "new",
         time_filter: str | None = None,
+        use_challenge: bool | None = None,
     ) -> None:
         if listing not in VALID_LISTINGS:
             raise ValueError(f"listing must be one of {sorted(VALID_LISTINGS)}, got {listing!r}")
@@ -67,15 +81,24 @@ class RedditSource:
         self._time_filter = time_filter
         self._config = config or RedditConfig.from_env()
         self._subreddits = subreddits if subreddits is not None else subreddits_from_env()
-        self._client = client or httpx.Client(
-            timeout=HTTP_TIMEOUT_S,
-            headers={
-                "User-Agent": self._config.user_agent,
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate",
-            },
-        )
+        use_challenge = use_challenge_from_env() if use_challenge is None else use_challenge
+        if client is not None:
+            self._client: _HttpGetter = client
+        elif use_challenge:
+            # ToS-grey stopgap until OAuth is approved — see _reddit_challenge.
+            # Uses a browser User-Agent (its default) to match the spoofed TLS
+            # fingerprint; the API-style config UA would defeat the impersonation.
+            self._client = ChallengeClient()
+        else:
+            self._client = httpx.Client(
+                timeout=HTTP_TIMEOUT_S,
+                headers={
+                    "User-Agent": self._config.user_agent,
+                    "Accept": "application/json",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate",
+                },
+            )
         self._last_request_at: float = 0.0
 
     def close(self) -> None:
