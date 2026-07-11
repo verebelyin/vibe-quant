@@ -641,6 +641,89 @@ def test_partial_subreddit_failure_stays_lenient(ua_env: None) -> None:
     assert len(items) == 1
 
 
+# ---------- Image URL extraction tests ----------
+
+
+def _fetch_one(post: dict[str, Any], ua_env: None) -> Any:  # noqa: ARG001
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/new.json"):
+            return httpx.Response(200, json=_listing([post]))
+        return httpx.Response(200, json=_comment_thread([]))
+
+    with patch("time.sleep", _no_sleep):
+        src = RedditSource(
+            config=RedditConfig.from_env(),
+            subreddits=["algotrading"],
+            client=_make_client(handler),
+        )
+        items = list(src.fetch(since=None, limit=1))
+    assert len(items) == 1
+    return items[0]
+
+
+def test_direct_image_link_captured(ua_env: None) -> None:
+    post = _post(sid="d1", num_comments=0)
+    post["data"]["url"] = "https://i.redd.it/abc123.png"
+    item = _fetch_one(post, ua_env)
+    assert item.extras["image_urls"] == ["https://i.redd.it/abc123.png"]
+
+
+def test_direct_non_image_link_ignored(ua_env: None) -> None:
+    post = _post(sid="d2", num_comments=0)
+    post["data"]["url"] = "https://example.com/article.html"
+    item = _fetch_one(post, ua_env)
+    assert "image_urls" not in item.extras
+
+
+def test_preview_image_url_html_unescaped(ua_env: None) -> None:
+    post = _post(sid="p1", num_comments=0)
+    post["data"]["preview"] = {
+        "images": [
+            {"source": {"url": "https://preview.redd.it/x.png?width=640&amp;crop=smart&amp;s=deadbeef"}}
+        ]
+    }
+    item = _fetch_one(post, ua_env)
+    assert item.extras["image_urls"] == [
+        "https://preview.redd.it/x.png?width=640&crop=smart&s=deadbeef"
+    ]
+
+
+def test_gallery_media_metadata_captured(ua_env: None) -> None:
+    post = _post(sid="g1", num_comments=0)
+    post["data"]["media_metadata"] = {
+        "m1": {"s": {"u": "https://preview.redd.it/one.jpg?s=aaa&amp;w=1"}},
+        "m2": {"s": {"gif": "https://preview.redd.it/two.gif?s=bbb"}},
+    }
+    item = _fetch_one(post, ua_env)
+    assert item.extras["image_urls"] == [
+        "https://preview.redd.it/one.jpg?s=aaa&w=1",
+        "https://preview.redd.it/two.gif?s=bbb",
+    ]
+
+
+def test_image_urls_capped_at_four(ua_env: None) -> None:
+    post = _post(sid="cap", num_comments=0)
+    post["data"]["media_metadata"] = {
+        f"m{i}": {"s": {"u": f"https://preview.redd.it/{i}.png"}} for i in range(10)
+    }
+    item = _fetch_one(post, ua_env)
+    assert len(item.extras["image_urls"]) == 4
+
+
+def test_image_urls_deduplicated(ua_env: None) -> None:
+    """A direct link that also appears in preview must not be listed twice."""
+    post = _post(sid="dup", num_comments=0)
+    post["data"]["url"] = "https://i.redd.it/same.png"
+    post["data"]["preview"] = {"images": [{"source": {"url": "https://i.redd.it/same.png"}}]}
+    item = _fetch_one(post, ua_env)
+    assert item.extras["image_urls"] == ["https://i.redd.it/same.png"]
+
+
+def test_post_without_images_has_no_image_urls_key(ua_env: None) -> None:
+    item = _fetch_one(_post(sid="none", num_comments=0), ua_env)
+    assert "image_urls" not in item.extras
+
+
 def test_no_praw_imports_remain() -> None:
     """Regression guard: praw must not creep back into the module."""
     import inspect

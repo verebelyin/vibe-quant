@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 import subprocess
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from vibe_quant.research.extractor import (
     LLM_MODEL_LABEL,
     ClaudePExtractor,
     ExtractorUnavailable,
+    _build_prompt,
     _build_system_prompt,
     extractor_version,
     get_default_extractor,
@@ -20,7 +25,16 @@ from vibe_quant.research.extractor import (
 from vibe_quant.research.schema import ExtractionBatch, RawItem
 
 
-def _item(*, body: str = "Try RSI<30 long entry, RSI>70 exit on BTC 1h", title: str = "RSI mean reversion", comments: list[dict] | None = None) -> RawItem:
+def _item(
+    *,
+    body: str = "Try RSI<30 long entry, RSI>70 exit on BTC 1h",
+    title: str = "RSI mean reversion",
+    comments: list[dict] | None = None,
+    image_paths: list[str] | None = None,
+) -> RawItem:
+    extras: dict[str, object] = {"comments": comments or []}
+    if image_paths is not None:
+        extras["image_paths"] = image_paths
     return RawItem(
         source="reddit",
         external_id="abc123",
@@ -30,7 +44,7 @@ def _item(*, body: str = "Try RSI<30 long entry, RSI>70 exit on BTC 1h", title: 
         author="u/quantnerd",
         posted_at=datetime(2026, 5, 1, tzinfo=UTC),
         score=42,
-        extras={"comments": comments or []},
+        extras=extras,
     )
 
 
@@ -511,6 +525,81 @@ def test_prompt_invites_proposed_indicators_for_novel_signals() -> None:
     # return.
     for field in ("formula", "parameters", "source_quote"):
         assert field in prompt
+
+
+# ---------- Image (vision) path tests ----------
+
+
+def _capture_argv() -> tuple[list[list[str]], Callable[..., subprocess.CompletedProcess[str]]]:
+    calls: list[list[str]] = []
+    envelope = _claude_envelope({"extracted": False, "confidence": 0.0, "rationale": "x", "dsl": None})
+
+    def fake_run(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout=envelope, stderr="")
+
+    return calls, fake_run
+
+
+def test_prompt_references_image_paths_when_present() -> None:
+    paths = ["/data/archive/research_images/reddit/abc123/0.png"]
+    prompt = _build_prompt(_item(image_paths=paths))
+    assert "ATTACHED IMAGES" in prompt
+    assert paths[0] in prompt
+    assert "Read tool" in prompt
+    assert "equity-curve" in prompt
+
+
+def test_prompt_unchanged_without_images() -> None:
+    """No-image prompt must be byte-for-byte identical to the pre-image prompt."""
+    with_key = _build_prompt(_item(image_paths=[]))
+    without_key = _build_prompt(_item())
+    assert with_key == without_key
+    assert "ATTACHED IMAGES" not in without_key
+
+
+def test_argv_includes_read_tool_only_with_images() -> None:
+    calls, fake_run = _capture_argv()
+    ext = ClaudePExtractor(claude_path="/usr/local/bin/claude")
+    with patch("vibe_quant.research.extractor.subprocess.run", side_effect=fake_run):
+        ext.extract(_item(image_paths=["/imgs/0.png"]))
+        ext.extract(_item())
+
+    with_images, without_images = calls[0], calls[1]
+    assert "--allowedTools" in with_images
+    assert with_images[with_images.index("--allowedTools") + 1] == "Read"
+    # The Read grant must come AFTER the prompt positional — --allowedTools is
+    # variadic and would otherwise swallow the prompt as a tool name (a live
+    # `claude -p` regression this pins down). The prompt references the path.
+    prompt_arg = with_images[with_images.index("--allowedTools") - 1]
+    assert "/imgs/0.png" in prompt_arg
+    assert with_images[-2:] == ["--allowedTools", "Read"]
+    # No-image argv is unchanged: no Read grant, prompt is the final element.
+    assert "--allowedTools" not in without_images
+    assert without_images == [
+        "/usr/local/bin/claude", "-p", "--output-format", "json", without_images[-1]
+    ]
+
+
+def test_image_only_post_not_short_circuited_as_empty() -> None:
+    """An image-only post (empty title/body) must still call claude."""
+    calls, fake_run = _capture_argv()
+    ext = ClaudePExtractor(claude_path="/usr/local/bin/claude")
+    image_only = RawItem(
+        source="reddit",
+        external_id="imgonly",
+        url="https://reddit.com/x",
+        title="",
+        body="",
+        author=None,
+        posted_at=datetime(2026, 5, 1, tzinfo=UTC),
+        score=None,
+        extras={"comments": [], "image_paths": ["/imgs/0.png"]},
+    )
+    with patch("vibe_quant.research.extractor.subprocess.run", side_effect=fake_run):
+        ext.extract(image_only)
+    assert len(calls) == 1  # claude WAS invoked, not skipped as empty input
+    assert "--allowedTools" in calls[0]
 
 
 def test_subprocess_nonzero_exit_treated_as_failure() -> None:

@@ -10,10 +10,12 @@ inter-request floor and respect Retry-After on 429.
 
 from __future__ import annotations
 
+import html
 import logging
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -49,6 +51,14 @@ TOP_COMMENT_COUNT = 10
 DELETED_AUTHOR_PLACEHOLDERS = frozenset({"[deleted]", "[removed]"})
 KIND_POST = "t3"
 KIND_COMMENT = "t1"
+
+# Reddit strategy posts often carry the real content in screenshots (rule
+# tables, TradingView setups, equity curves). Capture their URLs so the
+# scraper can archive them for the vision-capable extractor. Capped small so a
+# gallery post can't balloon the archive or the extractor's image budget.
+MAX_IMAGES_PER_POST = 4
+IMAGE_URL_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+REDDIT_IMAGE_HOSTS = frozenset({"i.redd.it"})
 
 VALID_LISTINGS = frozenset({"new", "top", "hot", "rising"})
 VALID_TIME_FILTERS = frozenset({"hour", "day", "week", "month", "year", "all"})
@@ -195,6 +205,15 @@ class RedditSource:
         permalink = str(data.get("permalink") or "")
         num_comments = int(data.get("num_comments") or 0)
         comments = self._fetch_comments(permalink) if permalink and num_comments > 0 else []
+        extras: dict[str, Any] = {
+            "subreddit": subreddit,
+            "flair": data.get("link_flair_text"),
+            "num_comments": num_comments,
+            "comments": comments,
+        }
+        image_urls = _extract_image_urls(data)
+        if image_urls:
+            extras["image_urls"] = image_urls
         return RawItem(
             source="reddit",
             external_id=str(data.get("id") or ""),
@@ -204,12 +223,7 @@ class RedditSource:
             author=_normalize_author(data.get("author")),
             posted_at=datetime.fromtimestamp(float(data.get("created_utc") or 0.0), tz=UTC),
             score=int(data.get("score") or 0),
-            extras={
-                "subreddit": subreddit,
-                "flair": data.get("link_flair_text"),
-                "num_comments": num_comments,
-                "comments": comments,
-            },
+            extras=extras,
         )
 
     def _request(self, url: str, params: dict[str, str]) -> Any:
@@ -241,6 +255,52 @@ class RedditSource:
         elapsed = time.monotonic() - self._last_request_at
         if elapsed < MIN_REQUEST_INTERVAL_S:
             time.sleep(MIN_REQUEST_INTERVAL_S - elapsed)
+
+
+def _is_image_link(url: str) -> bool:
+    low = url.lower()
+    if low.endswith(IMAGE_URL_SUFFIXES):
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    return host in REDDIT_IMAGE_HOSTS
+
+
+def _extract_image_urls(data: dict[str, Any]) -> list[str]:
+    """Pull image URLs off a Reddit post JSON, top-level post only.
+
+    Covers three shapes: a direct image `data.url` (i.redd.it or an image
+    suffix), the `data.preview.images[].source.url` thumbnails, and gallery
+    posts via `data.media_metadata`. Reddit HTML-escapes `&` to `&amp;` in
+    preview/gallery URLs, so every candidate is unescaped. Order-preserving,
+    de-duplicated, and capped at ``MAX_IMAGES_PER_POST``.
+    """
+    urls: list[str] = []
+
+    def _add(candidate: Any) -> None:
+        if not isinstance(candidate, str) or not candidate:
+            return
+        unescaped = html.unescape(candidate)
+        if unescaped and unescaped not in urls:
+            urls.append(unescaped)
+
+    direct = data.get("url")
+    if isinstance(direct, str) and direct and _is_image_link(direct):
+        _add(direct)
+
+    preview = data.get("preview")
+    if isinstance(preview, dict):
+        for img in preview.get("images") or []:
+            if isinstance(img, dict) and isinstance(img.get("source"), dict):
+                _add(img["source"].get("url"))
+
+    media = data.get("media_metadata")
+    if isinstance(media, dict):
+        for meta in media.values():
+            if isinstance(meta, dict) and isinstance(meta.get("s"), dict):
+                s = meta["s"]
+                _add(s.get("u") or s.get("gif"))
+
+    return urls[:MAX_IMAGES_PER_POST]
 
 
 def _normalize_author(value: Any) -> str | None:

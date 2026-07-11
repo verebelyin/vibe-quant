@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from vibe_quant.research.archive import archive_item
 from vibe_quant.research.extraction_log import log_dir_for_scrape, write_extraction_log
 from vibe_quant.research.extractor import extractor_version
+from vibe_quant.research.image_archive import archive_item_images
 from vibe_quant.research.sources import get_source, load_builtin_sources
 
 if TYPE_CHECKING:
@@ -139,6 +140,13 @@ def run_scrape(
                 final_status = "killed"
                 break
             fetched += 1
+            # Download any post images before archiving so the persisted
+            # extras_json carries local `image_paths` for the vision extractor.
+            # Best-effort: a download failure must not sink the whole item.
+            try:
+                archive_item_images(item)
+            except Exception:  # noqa: BLE001
+                logger.exception("image archive failed for %s/%s", item.source, item.external_id)
             try:
                 was_new, item_id = archive_item(sm, item)
             except Exception:  # noqa: BLE001
