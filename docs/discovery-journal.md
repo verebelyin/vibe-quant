@@ -32,17 +32,22 @@ A clear loser on BTC 1m: the ADX>33 gate fires rarely (16 trades/30d) and the
 crossovers whipsaw. Honest negative — the destination bar was "implemented +
 honestly screened + journaled," not "profitable."
 
-**⚠️ Ops gotcha discovered**: running multiple screening processes CONCURRENTLY
-(a manual screen + the sweep's per-extraction auto_screen) produces **contaminated
-metrics**. The same EMA strategy screened −1.50 under concurrency vs −3.79 in
-isolation, and an unrelated extraction (item 462) inherited an identical Sharpe to
-12 decimals. NT's process-level engine/log-guard state does not tolerate
-concurrent `NTScreeningRunner` instances. **The `screen_*` columns written to
-`research_extractions` during the concurrent sweep are UNRELIABLE and must be
-re-run in isolation before trust.** Filed as a bead.
+**False alarm (recorded for the next agent)**: I briefly suspected concurrent
+screening was contaminating metrics — the EMA strategy showed −1.50 in one run
+vs −3.79 in another, and item 462 shared a Sharpe near −1.5. Verified by
+re-screening item 462 in isolation: it reproduces `−1.504339534038952`
+**bit-identically** to its concurrent-sweep value. No contamination. The −1.50
+vs −3.79 gap was just different windows (60d vs 30d), and my "−1.50 for EMA"
+reading was a **leaked NT log line** from item 462's auto_screen landing in the
+shared log stream while my own EMA screen had hung. Lesson: NT's screening logger
+writes to a shared stream — never attribute a `Screening backtest: …` line to a
+process by proximity; check `screen_run_id`. Discovery's reproducible parallel
+screening already proves concurrent `NTScreeningRunner` across processes is fine;
+the `research_extractions.screen_*` columns are reliable.
 
-Other parsed candidates (screens need isolated re-run): item 184 VWAP mean-reversion
-(completeness 0.4), item 149 mean-reversion comment (idea_only, 0.35).
+Other parsed candidates screened during the sweep (reliable): item 184 VWAP
+mean-reversion (completeness 0.4), item 149 mean-reversion comment (idea_only,
+0.35). See docs/reddit-triage.md.
 
 ---
 
