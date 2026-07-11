@@ -38,6 +38,49 @@ const EVIDENCE_LABELS: Record<NonNullable<ExtractionResponse["evidence_level"]>,
   idea_only: "Idea only",
 };
 
+const RISK_FIELD_LABELS: Record<string, string> = {
+  position_sizing: "Sizing",
+  bankroll_rules: "Bankroll",
+  leverage: "Leverage",
+  max_positions: "Max positions",
+  scaling: "Scaling",
+};
+
+function parseRiskManagement(json: string | null | undefined): [string, string][] {
+  if (!json) return [];
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
+    return Object.entries(parsed as Record<string, unknown>)
+      .filter(([key, value]) => key !== "source_quote" && value !== null && value !== "")
+      .map(([key, value]) => [RISK_FIELD_LABELS[key] ?? key, String(value)]);
+  } catch {
+    return [];
+  }
+}
+
+interface NotableParameter {
+  name: string;
+  value?: string | null;
+  claim?: string | null;
+}
+
+function parseNotableParameters(json: string | null | undefined): NotableParameter[] {
+  if (!json) return [];
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is NotableParameter =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as { name?: unknown }).name === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
 function dslIndicatorTypes(parsedDslJson: string | null | undefined): string[] {
   if (!parsedDslJson) return [];
   try {
@@ -80,6 +123,9 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
   );
   const dslTypes = dslIndicatorTypes(extraction.parsed_dsl_json);
   const missingTypes = dslTypes.filter((t) => !registeredTypes.has(t));
+
+  const riskEntries = parseRiskManagement(extraction.risk_management_json);
+  const notableParams = parseNotableParameters(extraction.notable_parameters_json);
 
   const status = extraction.status;
   const isParsed = status === "parsed";
@@ -267,6 +313,39 @@ export function ExtractionCard({ extraction, itemId, index }: Props) {
         itemId={itemId}
         scaffolds={extraction.scaffolds ?? []}
       />
+
+      {riskEntries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px]">
+          <span className="uppercase tracking-wide text-muted-foreground">Risk mgmt</span>
+          {riskEntries.map(([label, value]) => (
+            <span
+              key={label}
+              className="rounded border border-border/50 bg-muted/30 px-2 py-1 text-foreground/80"
+            >
+              {label}: {value}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {notableParams.length > 0 && (
+        <div className="flex flex-col gap-1 text-[10px]">
+          <span className="uppercase tracking-wide text-muted-foreground">Notable parameters</span>
+          <div className="flex flex-wrap gap-2">
+            {notableParams.map((p) => (
+              <span
+                key={p.name}
+                className="rounded border border-border/50 bg-muted/30 px-2 py-1 text-foreground/80"
+                title={p.claim ?? undefined}
+              >
+                {p.name}
+                {p.value != null && p.value !== "" ? ` = ${p.value}` : ""}
+                {p.claim ? " ★" : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isPromoted && extraction.strategy_id != null && (
         <div className="text-xs">

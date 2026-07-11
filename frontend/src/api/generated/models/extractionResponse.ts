@@ -21,6 +21,8 @@ export interface ExtractionResponse {
   parsed_dsl_json: string | null;
   parse_error: string | null;
   proposed_indicators_json?: string | null;
+  risk_management_json?: string | null;
+  notable_parameters_json?: string | null;
   strategy_id: number | null;
   status: string;
   screen_sharpe?: number | null;

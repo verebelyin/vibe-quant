@@ -46,6 +46,10 @@ class ExtractionResult:
     proposed_indicators_json: str | None = None
     evidence_level: EvidenceLevel | None = None
     completeness: float | None = None
+    # Money-management rules (sizing/bankroll/leverage) — JSON object.
+    risk_management_json: str | None = None
+    # Author-emphasised settings worth sweeping — JSON array of objects.
+    notable_parameters_json: str | None = None
 
 
 @dataclass(frozen=True)

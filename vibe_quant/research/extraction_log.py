@@ -87,6 +87,8 @@ def write_extraction_log(
                 "has_dsl_yaml": r.dsl_yaml is not None,
                 "has_parsed_dsl_json": r.parsed_dsl_json is not None,
                 "has_proposed_indicators": r.proposed_indicators_json is not None,
+                "has_risk_management": r.risk_management_json is not None,
+                "has_notable_parameters": r.notable_parameters_json is not None,
             }
             for r in batch.results
         ],

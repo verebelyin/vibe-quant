@@ -60,6 +60,8 @@ class ExtractionResponse(BaseModel):
     parsed_dsl_json: str | None
     parse_error: str | None
     proposed_indicators_json: str | None = None
+    risk_management_json: str | None = None
+    notable_parameters_json: str | None = None
     strategy_id: int | None
     status: str
     screen_sharpe: float | None = None

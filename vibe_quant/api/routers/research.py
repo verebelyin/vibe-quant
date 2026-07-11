@@ -122,6 +122,8 @@ def _extraction_to_response(
         parsed_dsl_json=row.get("parsed_dsl_json"),
         parse_error=row.get("parse_error"),
         proposed_indicators_json=row.get("proposed_indicators_json"),
+        risk_management_json=row.get("risk_management_json"),
+        notable_parameters_json=row.get("notable_parameters_json"),
         strategy_id=row.get("strategy_id"),
         status=str(row.get("status") or "parsed"),
         screen_sharpe=row.get("screen_sharpe"),

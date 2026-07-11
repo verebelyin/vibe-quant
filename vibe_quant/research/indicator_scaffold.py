@@ -18,10 +18,12 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -291,6 +293,11 @@ def proposed_to_spec_args(proposed: dict[str, Any]) -> IndicatorSpecArgs:
 
 CLAUDE_BIN = "claude"
 CODEGEN_TIMEOUT_SECONDS = 60
+# Without --model, claude -p runs the CLI's default (Fable 5) and burns
+# premium quota on a task the mypy/ruff/AST gates already guard. Sonnet 5
+# handles single-function codegen fine; override per-deployment if a formula
+# proves too hard for it.
+CODEGEN_MODEL = os.getenv("VQ_CODEGEN_MODEL", "claude-sonnet-5")
 
 # Where ``proposed_<name>.py`` files land. A module-level value (not a
 # constant evaluated at function call time) so tests can monkeypatch
@@ -361,12 +368,11 @@ def _build_codegen_prompt(
         "  - df has columns: open, high, low, close, volume (lowercase). "
         "Use `df['close']` etc. directly — they are `pd.Series`.\n"
         f"  - params keys: {param_keys}\n"
-        "  - To coerce a param: `period = int(cast(int, params.get('period', 14)))` "
-        "after `from typing import cast`. But `from typing import cast` "
-        "is NOT allowed (no module-level imports outside the function). "
-        "Instead, write it inline: e.g. `period_raw = params.get('period', 14); "
-        "period = int(period_raw) if isinstance(period_raw, (int, float)) else 14`. "
-        "Always handle the `object` static type with a runtime isinstance check.\n\n"
+        "  - params values are statically typed `object` — mypy --strict "
+        "rejects `int(params.get('period', 14))`. Coerce every param with a "
+        "runtime isinstance check, e.g.:\n"
+        "        period_raw = params.get('period', 14)\n"
+        "        period = int(period_raw) if isinstance(period_raw, (int, float)) else 14\n\n"
         "OUTPUT\n"
         "  - Return a pd.Series indexed exactly like df.index, same length as df.\n"
         "  - Use np.nan (after `import numpy as np`) for warmup bars where "
@@ -394,11 +400,14 @@ def _run_claude_codegen(
         raise CodegenError("codegen_unavailable", f"{CLAUDE_BIN!r} CLI not on PATH")
     try:
         proc = subprocess.run(  # noqa: S603
-            [claude_path, "-p", "--output-format", "json", prompt],
+            [claude_path, "-p", "--output-format", "json", "--model", CODEGEN_MODEL, prompt],
             check=False,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            # Neutral cwd: from the repo, claude -p would load CLAUDE.md +
+            # AGENTS.md (~5k irrelevant tokens per call) into context.
+            cwd=tempfile.gettempdir(),
         )
     except subprocess.TimeoutExpired as e:
         raise CodegenError("timeout", f"{timeout_seconds}s") from e

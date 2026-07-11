@@ -396,8 +396,8 @@ def test_extract_all_empty_array_yields_one_skipped_sentinel() -> None:
 def test_extractor_version_includes_model_label_and_prompt_hash() -> None:
     v = extractor_version()
     assert v.startswith(f"{LLM_MODEL_LABEL}:")
-    # 12-char hex digest
-    assert len(v.split(":", 1)[1]) == 12
+    # 12-char hex digest (rsplit: the label itself contains a colon)
+    assert len(v.rsplit(":", 1)[1]) == 12
 
 
 def test_extract_back_compat_returns_best_finding() -> None:
@@ -573,7 +573,10 @@ def test_argv_includes_read_tool_only_with_images() -> None:
     # `claude -p` regression this pins down). The prompt references the path.
     prompt_arg = with_images[with_images.index("--allowedTools") - 1]
     assert "/imgs/0.png" in prompt_arg
-    assert with_images[-2:] == ["--allowedTools", "Read"]
+    # --add-dir grants the archive dir: the subprocess runs from a neutral
+    # cwd (temp dir) so absolute image paths need an explicit workspace grant.
+    assert with_images[with_images.index("--add-dir") + 1] == "/imgs"
+    assert with_images[-4:] == ["--allowedTools", "Read", "--add-dir", "/imgs"]
     # No-image argv is unchanged: no Read grant, prompt is the final element.
     assert "--allowedTools" not in without_images
     assert without_images == [
@@ -614,3 +617,116 @@ def test_subprocess_nonzero_exit_treated_as_failure() -> None:
     assert result.status == "failed"
     assert result.parse_error is not None
     assert "auth error" in result.parse_error or "exited" in result.parse_error
+
+
+# ---------------------------------------------------------------------------
+# risk_management / notable_parameters capture channels
+# ---------------------------------------------------------------------------
+
+
+def test_risk_management_and_notable_parameters_captured_on_skipped() -> None:
+    """Channels 2-4 survive even when no strategy is extractable."""
+    raw = _claude_envelope({
+        "extracted": False,
+        "confidence": 0.3,
+        "rationale": "No entry rules, but sizing and settings revealed",
+        "dsl": None,
+        "risk_management": {
+            "position_sizing": "risk 1% of equity per trade",
+            "leverage": "3x isolated",
+            "source_quote": "I risk 1% at 3x",
+        },
+        "notable_parameters": [
+            {"name": "RSI period", "value": "9", "claim": "works best"},
+            {"name": "timeframe", "value": "15m", "claim": None},
+        ],
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+
+    assert result.status == "skipped"
+    assert result.risk_management_json is not None
+    rm = json.loads(result.risk_management_json)
+    assert rm["position_sizing"] == "risk 1% of equity per trade"
+    assert result.notable_parameters_json is not None
+    params = json.loads(result.notable_parameters_json)
+    assert len(params) == 2
+    assert params[0]["name"] == "RSI period"
+
+
+def test_risk_management_captured_on_parsed() -> None:
+    raw = _claude_envelope({
+        "extracted": True,
+        "confidence": 0.8,
+        "rationale": "ok",
+        "dsl": _good_dsl(),
+        "risk_management": {"position_sizing": "half-Kelly", "leverage": None},
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+    assert result.status == "parsed"
+    assert result.risk_management_json is not None
+    assert json.loads(result.risk_management_json)["position_sizing"] == "half-Kelly"
+
+
+def test_risk_management_all_null_or_wrong_shape_dropped() -> None:
+    for rm in ({"position_sizing": None, "leverage": None}, {}, "1% risk", 42, ["x"]):
+        raw = _claude_envelope({
+            "extracted": False,
+            "confidence": 0.1,
+            "rationale": "nothing",
+            "dsl": None,
+            "risk_management": rm,
+        })
+        ext = ClaudePExtractor()
+        with patch.object(ext, "_run_claude", return_value=raw):
+            result = ext.extract(_item())
+        assert result.risk_management_json is None, f"shape {rm!r} should be dropped"
+
+
+def test_notable_parameters_entries_without_name_filtered() -> None:
+    raw = _claude_envelope({
+        "extracted": False,
+        "confidence": 0.1,
+        "rationale": "nothing",
+        "dsl": None,
+        "notable_parameters": [
+            {"value": "9"},          # no name -> dropped
+            {"name": "  "},           # blank name -> dropped
+            "just a string",           # wrong shape -> dropped
+            {"name": "ATR multiple", "value": "2.45"},
+        ],
+    })
+    ext = ClaudePExtractor()
+    with patch.object(ext, "_run_claude", return_value=raw):
+        result = ext.extract(_item())
+    assert result.notable_parameters_json is not None
+    params = json.loads(result.notable_parameters_json)
+    assert [p["name"] for p in params] == ["ATR multiple"]
+
+
+def test_worked_example_in_prompt_is_valid() -> None:
+    """The WORKED EXAMPLE embedded in the system prompt must stay parseable.
+
+    Guards against prompt edits teaching the model an output shape our own
+    parser rejects: the example JSON must load, and its dsl must round-trip
+    through parse_strategy_string.
+    """
+    import yaml as _yaml
+
+    from vibe_quant.dsl.parser import parse_strategy_string
+
+    prompt = _build_system_prompt()
+    start = prompt.index("yields exactly:\n") + len("yields exactly:\n")
+    end = prompt.index("\nNote the pattern")
+    findings = json.loads(prompt[start:end])
+    assert isinstance(findings, list) and len(findings) == 1
+    finding = findings[0]
+    assert finding["extracted"] is True
+    assert finding["risk_management"]["position_sizing"] == "half-Kelly"
+    assert finding["notable_parameters"][0]["name"] == "RSI period"
+    dsl_yaml = _yaml.safe_dump(finding["dsl"], sort_keys=False)
+    strategy = parse_strategy_string(dsl_yaml)
+    assert strategy.name == "rsi_fade_15m"

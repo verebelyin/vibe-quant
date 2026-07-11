@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 14
+SCHEMA_VERSION: int = 15
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -230,6 +230,8 @@ CREATE TABLE IF NOT EXISTS research_extractions (
     parsed_dsl_json TEXT,
     parse_error TEXT,
     proposed_indicators_json TEXT,
+    risk_management_json TEXT,
+    notable_parameters_json TEXT,
     strategy_id INTEGER REFERENCES strategies(id),
     status TEXT DEFAULT 'parsed'
         CHECK (status IN ('parsed', 'failed', 'skipped', 'promoted', 'rejected')),
@@ -368,6 +370,8 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("research_extractions", "screen_trades", "INTEGER"),
         ("research_extractions", "screen_error", "TEXT"),
         ("research_extractions", "screen_completed_at", "TEXT"),
+        ("research_extractions", "risk_management_json", "TEXT"),
+        ("research_extractions", "notable_parameters_json", "TEXT"),
         ("research_extraction_jobs", "attempts", "INTEGER NOT NULL DEFAULT 0"),
         ("research_extraction_jobs", "max_attempts", "INTEGER NOT NULL DEFAULT 3"),
         ("research_extraction_jobs", "last_error", "TEXT"),

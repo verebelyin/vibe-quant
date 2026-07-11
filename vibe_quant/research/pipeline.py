@@ -257,6 +257,8 @@ def persist_extractions(
             completeness=result.completeness,
             proposed_indicators_json=result.proposed_indicators_json,
             prompt=prompt,
+            risk_management_json=result.risk_management_json,
+            notable_parameters_json=result.notable_parameters_json,
         )
         if result.status == "parsed" and result.parsed_dsl_json:
             _auto_screen.auto_screen_extraction(

@@ -1143,14 +1143,17 @@ class StateManager:
         completeness: float | None = None,
         proposed_indicators_json: str | None = None,
         prompt: str | None = None,
+        risk_management_json: str | None = None,
+        notable_parameters_json: str | None = None,
     ) -> int:
         with self._write_lock:
             cursor = self.conn.execute(
                 """INSERT INTO research_extractions
                    (research_item_id, status, llm_model, confidence, rationale,
                     raw_response, dsl_yaml, parsed_dsl_json, parse_error,
-                    proposed_indicators_json, prompt, evidence_level, completeness)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    proposed_indicators_json, prompt, evidence_level, completeness,
+                    risk_management_json, notable_parameters_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     research_item_id,
                     status,
@@ -1165,6 +1168,8 @@ class StateManager:
                     prompt,
                     evidence_level,
                     completeness,
+                    risk_management_json,
+                    notable_parameters_json,
                 ),
             )
             self.conn.commit()
