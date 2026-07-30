@@ -4,7 +4,7 @@ Algorithmic trading engine for crypto perpetual futures using NautilusTrader (Ru
 
 ## This file
 
-The rule of this file is to describe common mistakes and confusion points that agents might encounter as they work in this project. If you ever encounter something in this project that surprises you, or you failed to do after multiple attempts, please alert the developer working with you and indicate and describe that in the @AGENTS.md file to help prevent future agents from having the same issue.
+The rule of this file is to describe common mistakes and confusion points that agents might encounter as they work in this project. If you ever encounter something in this project that surprises you, or you failed to do after multiple attempts, please alert the developer working with you and describe it in this file to help prevent future agents from having the same issue. (AGENTS.md is a pointer to this file for non-Claude tools — never duplicate content there.)
 
 ## Quick Reference
 
@@ -34,57 +34,15 @@ The rule of this file is to describe common mistakes and confusion points that a
    containers.** `scrollIntoView({block:'center'})` via `eval` first, then click;
    re-snapshot after every DOM change (refs go stale).
 5. Long test suites / servers: use `run_in_background`, never `sleep`-polling.
-
-## UI Testing (agent-browser)
-
-Start backend + frontend then test with `agent-browser`. **Always use `dangerouslyDisableSandbox: true`** for agent-browser commands (it needs `~/.agent-browser` socket dir).
-
-**Quick start:**
-
-```bash
-# Start backend + frontend (background)
-.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000 &
-cd frontend && pnpm dev --port 5173 &
-
-# Open and take initial screenshot
-agent-browser open http://localhost:5173 && agent-browser screenshot /tmp/claude/page.png
-```
-
-**Chain commands with `&&`** to reduce round-trips:
-
-```bash
-# Navigate + snapshot in one call
-agent-browser open http://localhost:5173 && agent-browser snapshot -i
-
-# Click + wait + screenshot in one call
-agent-browser click @e5 && agent-browser wait 2000 && agent-browser screenshot /tmp/claude/result.png
-
-# Fill form + click save in one call
-agent-browser fill @e1 "test_strategy" && agent-browser fill @e2 "description" && agent-browser click @e3
-```
-
-**Key workflow:**
-
-1. `agent-browser open <url>` — navigate
-2. `agent-browser snapshot -i` — get interactive elements with refs (`@e1`, `@e2`...)
-3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` — interact using refs
-4. `agent-browser screenshot /tmp/claude/name.png` — capture state
-5. Re-snapshot after any navigation or DOM change (refs get invalidated)
-
-**Navigation pages** (sidebar links): Strategy Management, Discovery, Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings
-
-**Test flow:** Data Management (download data) → Strategy Management (create strategy) → Backtest Launch (run screening) → Results Analysis (verify results)
+6. **UI testing:** use the `agent-browser` skill — **always with `dangerouslyDisableSandbox: true`**
+   (it needs the `~/.agent-browser` socket dir). Sidebar pages: Strategy Management, Discovery,
+   Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings. E2E flow:
+   Data Management (download) → Strategy Management (create) → Backtest Launch (screen) →
+   Results Analysis (verify).
 
 ## Shell Preferences
 
 - **Always use `rg` (ripgrep) instead of `grep`** — faster, simpler regex syntax (no escaping `|`), better defaults. Use `rg` in Bash tool calls, skills, and scripts. This applies to ALL search operations in the terminal.
-  ```bash
-  rg "ERROR|Exception" logs/          # NOT: grep "ERROR\|Exception" logs/
-  rg -c "pattern" file                # count matches
-  rg "pattern" -A5 file               # context after
-  rg "pattern" -l                     # list files only
-  rg "pattern" -B2 -A2 file           # context before and after
-  ```
 - **`status` is read-only in zsh** — never use it as a variable name in shell scripts. Use `st`, `stat`, or `run_status` instead.
 - **Don't use `sleep N` in Bash tool calls for polling** — make separate tool calls when ready instead. `sleep` blocks the tool and wastes time.
 - **Check ports before starting servers**: `lsof -i :8000` before launching uvicorn. Avoids "address already in use" errors.
@@ -220,25 +178,11 @@ SPEC.md              # Authoritative implementation spec
 - **NT `BacktestResult.elapsed_time` is the simulated window in seconds**, not wall time. `Iterations` ≈ bars processed — if it's far above the expected bar count, you have a data-loading bug (see Performance Playbook).
 - ADX stays on the pandas path deliberately (NT has no true ADX — `DirectionalMovement.value` is always 0). Don't "optimize" it to `nt_class` without checking values.
 
-## Performance Profiling Playbook (how the 300× and 4.4× wins were found)
+## Performance Profiling
 
-1. **Read the engine's own numbers first.** Run one eval with
-   `VIBE_QUANT_NT_LOG_LEVEL_SCREENING=INFO` (validation logs INFO by default) and read:
-   `Added N ... Bar elements` (data volume ground truth), `Read N events from parquet in Xs`,
-   `Engine load took Xs`, `Iterations: N`. Iterations ≫ expected bars ⇒ data bug, not slow compute.
-2. **Time phases coarsely before profiling**: compile (`_ensure_compiled`), data load, engine
-   run. Most "slow engine" reports are actually one phase.
-3. **cProfile only on SHORT windows** (1–2 months). Full-window + profiler overhead exceeds
-   command timeouts. `py-spy` needs root on macOS. Sort by `tottime` to find pandas
-   internals; sort by `cumulative` to attribute them to indicator functions.
-4. **Discovery `s/chromosome` is wall time across ~8 workers** — multiply by worker count for
-   per-eval CPU. A "1.6s/chromosome" gen can hide 100s-CPU genomes.
-5. **pandas-ta functions with per-element `.iloc` loops are pathological** (KAMA was 62% of
-   eval time at ~220 pandas calls/bar). Fix = exact numpy port of the recurrence keeping the
-   library's vectorized prep, guarded by **zero-tolerance equality tests**
-   (`tests/unit/test_plugins/test_kama_exactness.py` is the template). `ta.adx` is the next
-   known target (bead vibe-quant-3f0er).
-6. **Every perf change ships with an exactness proof** — see Verification Rules.
+Use the `perf-profiling` skill (`.claude/skills/perf-profiling/SKILL.md`) when investigating
+slow runs or indicators — it documents how the 300× and 4.4× wins were found. Every perf
+change ships with an exactness proof (see Verification Rules).
 
 ## Verification Rules (what counts as "results are the same")
 
