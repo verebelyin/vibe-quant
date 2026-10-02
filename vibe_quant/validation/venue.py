@@ -253,6 +253,7 @@ def _create_importable_fill_model_config(
                 "max_adverse_ticks": fill_cfg.max_adverse_ticks,
                 "prob_slippage": fill_cfg.prob_slippage,
                 "random_seed": fill_cfg.random_seed,
+                "stop_slippage_ticks": fill_cfg.stop_slippage_ticks,
             },
         )
     else:
