@@ -81,7 +81,7 @@ Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting Filt
 
 Single engine (NautilusTrader) with two modes:
 
-- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- still models leverage/funding/liquidation
+- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- models leverage but NOT funding (`total_funding = 0.0`) or liquidation (bead vibe-quant-e70tl.20)
 - **Validation mode**: custom FillModel, LatencyModel (co-located 1ms → retail 200ms), full cost modeling
 
 ## Key Specifications
@@ -155,6 +155,8 @@ SPEC.md              # Authoritative implementation spec
 
 ## Discovery Pipeline Notes
 
+- **Open audit (2026-10-02):** `docs/reviews/2026-10-02-deep-audit.md`, epic `vibe-quant-e70tl`. Read it before trusting champion/validation metrics or touching paper/live — fill model, PF, max DD, overfitting gates and paper risk controls have confirmed bugs.
+
 - **Research diary:** `docs/discovery-journal.md` — experiment log with GA configs, metrics, and findings
 - Discovery and screening use **identical** code path (`NTScreeningRunner` → `StrategyCompiler`). Results match exactly *within one run* (champion → replay).
 - Validation uses custom fill model + latency → fewer trades and worse metrics (expected)
@@ -164,7 +166,7 @@ SPEC.md              # Authoritative implementation spec
 - Champion rankings live in `bd recall discovery:champions` (journal has full history). Batch-13 STOCH+CCI headline numbers are historical only (pre-`11c5f00`).
 - **1m data is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) ~10x faster than pandas-path ones (ADX/MACD/BBANDS/KAMA). Budget accordingly.
 - **Fitness function:** 35% Sharpe + 25% (1-MaxDD) + 20% PF + 20% Return. Hard gate: 0 if <50 trades.
-- **`eval_windows` (default 3) stores worst-of-N sub-window fitness** — a full-window replay legitimately shows different Sharpe/return (`ReplayResponse.metrics_note` explains this). Not a bug.
+- **`eval_windows` (default 3) stores the MEAN of N sub-window metrics** (`backtest_fn._aggregate_multi_window`), despite docstrings saying worst-of-N (bead vibe-quant-e70tl.6) — a full-window replay legitimately shows different Sharpe/return (`ReplayResponse.metrics_note` explains this). Not a bug.
 - **Single-seed discovery is unseeded** — identical configs produce different populations across runs. Never compare two discovery runs to validate a code change (see Verification Rules below).
 - **Bootstrap-CI gate keeps being vindicated:** every champion forced past it with `no_bootstrap_ci=true` and then validated has collapsed (Batch 41: 5.40→−2.78; Batch 43 RAMS: 0.59→−0.36). The validation runner auto-flags collapses (`validation/consistency.py`); treat a flagged strategy as overfit, not as a validation bug.
 - 4h/1d discovery uses bootstrap floor 0.0 by default (1.0 is structurally unpassable at ~50-180 trades/yr); 1m uses 0.5.
@@ -199,7 +201,7 @@ INVALID proofs (these wasted time):
 - Comparing two discovery runs — single-seed runs are unseeded and nondeterministic
   (vibe-quant-8t7nv), and ANY code change shifts the RNG draw sequence.
 - Comparing an `eval_windows>1` champion's stored fitness to a full-window replay
-  (worst-of-N vs full window — differs by design).
+  (mean-of-N sub-windows vs full window — differs by design).
 - Comparing screening metrics across the `11c5f00` semantics break.
 
 ## Historical Documentation
