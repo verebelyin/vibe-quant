@@ -907,7 +907,7 @@ class StrategyCompiler:
                 "",
                 "    # Execute any validation-only delayed action before new signals",
                 "    if self._dispatch_pending_validation_action(bar):",
-                "        self._update_prev_values()",
+                "        self._update_prev_values(bar)",
                 "        return",
                 "",
             ]
@@ -919,7 +919,7 @@ class StrategyCompiler:
         if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
             lines.append("    # Check time filters")
             lines.append("    if not self._check_time_filters(bar.ts_event):")
-            lines.append("        self._update_prev_values()")
+            lines.append("        self._update_prev_values(bar)")
             lines.append("        return")
             lines.append("")
 
@@ -927,7 +927,7 @@ class StrategyCompiler:
         if dsl.time_filters.avoid_around_funding.enabled:
             lines.append("    # Check funding avoidance")
             lines.append("    if self._is_near_funding_time(bar.ts_event):")
-            lines.append("        self._update_prev_values()")
+            lines.append("        self._update_prev_values(bar)")
             lines.append("        return")
             lines.append("")
 
@@ -979,7 +979,7 @@ class StrategyCompiler:
         # Update previous values for crossover detection
         lines.append("")
         lines.append("    # Update previous values for crossover detection")
-        lines.append("    self._update_prev_values()")
+        lines.append("    self._update_prev_values(bar)")
 
         return "\n".join(lines)
 
@@ -1034,7 +1034,11 @@ class StrategyCompiler:
         lines.append("")
 
         # _update_prev_values
-        lines.extend(self._generate_update_prev_values(indicators))
+        lines.extend(
+            self._generate_update_prev_values(
+                indicators, self._crossover_price_refs(dsl, indicator_names)
+            )
+        )
         lines.append("")
 
         # _update_pta_indicators (if any compute_fn indicators exist)
@@ -1189,18 +1193,56 @@ class StrategyCompiler:
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
         return lines
 
-    def _generate_update_prev_values(self, indicators: list[IndicatorInfo]) -> list[str]:
+    @staticmethod
+    def _prev_price_key(price: str) -> str:
+        """``_prev_values`` key for a price operand. ``@`` cannot appear in an
+        indicator name, so price keys never collide with indicator keys."""
+        return f"@{price}"
+
+    @staticmethod
+    def _crossover_price_refs(dsl: StrategyDSL, indicator_names: list[str]) -> list[str]:
+        """Price operands (close/open/high/low/volume) used in any crossover.
+
+        Their previous-bar values must be tracked: without them a
+        ``close crosses_above ema`` check degenerates to
+        ``close > ema and close <= prev_ema`` (vibe-quant-e70tl.3).
+        """
+        refs: set[str] = set()
+        for cond_str in (
+            dsl.entry_conditions.long
+            + dsl.entry_conditions.short
+            + dsl.exit_conditions.long
+            + dsl.exit_conditions.short
+        ):
+            cond = parse_condition(cond_str, indicator_names)
+            if cond.operator not in (Operator.CROSSES_ABOVE, Operator.CROSSES_BELOW):
+                continue
+            for operand in (cond.left, cond.right):
+                if operand.is_price:
+                    refs.add(str(operand.value))
+        return sorted(refs)
+
+    def _generate_update_prev_values(
+        self, indicators: list[IndicatorInfo], price_refs: list[str] | None = None
+    ) -> list[str]:
         """Generate the ``_update_prev_values`` helper.
 
         Mirrors ``_generate_get_indicator_value`` but writes into
         ``self._prev_values`` for crossover detection on the next bar.
+        Price operands used in crossovers are stored under ``@<price>``.
         """
         lines = [
-            "def _update_prev_values(self) -> None:",
-            '    """Store current indicator values for crossover detection."""',
+            "def _update_prev_values(self, bar: Bar) -> None:",
+            '    """Store current indicator/price values for crossover detection."""',
         ]
 
         has_any = False
+        for price in price_refs or []:
+            has_any = True
+            lines.append(
+                f'    self._prev_values["{self._prev_price_key(price)}"] = '
+                f"float(bar.{price}.as_double())"
+            )
         for info in indicators:
             spec = info.spec
             if spec.nt_class is not None:
@@ -1655,8 +1697,8 @@ class StrategyCompiler:
     def _crossover_prev_guard(cond: Condition) -> str:
         """Generate guard expression ensuring prev values exist for crossover.
 
-        Returns 'True' if no indicators need guarding, otherwise an 'in' check
-        so the first bar after warmup doesn't fire a false crossover.
+        Returns 'True' if no operand needs guarding, otherwise an 'in' check
+        (indicators AND prices) so the first bar after warmup never fires.
         """
         from vibe_quant.dsl.conditions import Operand
 
@@ -1664,6 +1706,9 @@ class StrategyCompiler:
         for operand in (cond.left, cond.right):
             if isinstance(operand, Operand) and operand.is_indicator:
                 checks.append(f'"{operand.value}" in self._prev_values')
+            elif isinstance(operand, Operand) and operand.is_price:
+                key = StrategyCompiler._prev_price_key(str(operand.value))
+                checks.append(f'"{key}" in self._prev_values')
         return " and ".join(checks) if checks else "True"
 
     def _operand_to_prev_code(self, operand: object) -> str:
@@ -1682,9 +1727,11 @@ class StrategyCompiler:
 
         if operand.is_indicator:
             return f'self._prev_values.get("{operand.value}", 0.0)'
-        else:
-            # Literals and prices don't have previous values
-            return self._operand_to_code(operand)
+        if operand.is_price:
+            key = self._prev_price_key(str(operand.value))
+            return f'self._prev_values.get("{key}", 0.0)'
+        # Literals have no previous value
+        return self._operand_to_code(operand)
 
     def _generate_order_methods(self) -> list[str]:
         """Generate order submission methods with SL/TP and event-based tracking.

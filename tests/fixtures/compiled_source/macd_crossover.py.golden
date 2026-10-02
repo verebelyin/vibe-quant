@@ -1,7 +1,7 @@
 """Auto-generated NautilusTrader Strategy from DSL.
 
 Strategy: macd_crossover
-Generated: 2026-07-02T17:49:47.124897
+Generated: <timestamp-stripped>
 """
 
 from __future__ import annotations
@@ -165,12 +165,12 @@ class MacdCrossoverStrategy(Strategy):
 
         # Execute any validation-only delayed action before new signals
         if self._dispatch_pending_validation_action(bar):
-            self._update_prev_values()
+            self._update_prev_values(bar)
             return
 
         # Check time filters
         if not self._check_time_filters(bar.ts_event):
-            self._update_prev_values()
+            self._update_prev_values(bar)
             return
 
         # Evaluate entry conditions
@@ -194,7 +194,7 @@ class MacdCrossoverStrategy(Strategy):
                         self._submit_exit(bar)
 
         # Update previous values for crossover detection
-        self._update_prev_values()
+        self._update_prev_values(bar)
 
     def on_event(self, event) -> None:
         """Handle strategy events for position tracking and SL/TP submission."""
@@ -268,8 +268,8 @@ class MacdCrossoverStrategy(Strategy):
             return float(_v) if _v is not None else 0.0
         raise ValueError(f"Unknown indicator: {name}")
 
-    def _update_prev_values(self) -> None:
-        """Store current indicator values for crossover detection."""
+    def _update_prev_values(self, bar: Bar) -> None:
+        """Store current indicator/price values for crossover detection."""
         self._prev_values["macd"] = self._pta_values.get("macd", 0.0)
         self._prev_values["macd_macd"] = self._pta_values.get("macd_macd", 0.0)
         self._prev_values["macd_signal"] = self._pta_values.get("macd_signal", 0.0)

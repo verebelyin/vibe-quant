@@ -77,12 +77,12 @@ take_profit:
 
         # Time-filter early return updates prev values first
         first, second = next_two("if not self._check_time_filters(bar.ts_event):")
-        assert first == "self._update_prev_values()"
+        assert first == "self._update_prev_values(bar)"
         assert second == "return"
 
         # Funding-avoidance early return updates prev values first
         first, second = next_two("if self._is_near_funding_time(bar.ts_event):")
-        assert first == "self._update_prev_values()"
+        assert first == "self._update_prev_values(bar)"
         assert second == "return"
 
 
