@@ -20,6 +20,7 @@ from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
+from vibe_quant.metrics import profit_factor
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.venue import (
@@ -505,7 +506,11 @@ class ValidationRunner:
             sharpe_ratio=_trade_weighted_avg("sharpe_ratio"),
             sortino_ratio=_trade_weighted_avg("sortino_ratio"),
             max_drawdown=max(r.max_drawdown for r in window_results),
-            profit_factor=_trade_weighted_avg("profit_factor"),
+            # Pooled trade PF over every window's trades (same definition
+            # as a single run), not a trade-weighted mean of window PFs.
+            profit_factor=profit_factor(
+                t.net_pnl for r in window_results for t in r.trades
+            ),
             win_rate=win_rate,
             total_trades=total_trades,
             total_fees=sum(r.total_fees for r in window_results),

@@ -352,6 +352,7 @@ class NTScreeningRunner:
                 ``stats_pnls["max drawdown"]`` (NT >= 1.222). Defaults to 1000
                 to preserve legacy behaviour.
         """
+        from vibe_quant.metrics import profit_factor
         from vibe_quant.screening.types import BacktestMetrics
 
         metrics = BacktestMetrics(
@@ -407,9 +408,6 @@ class NTScreeningRunner:
                 elif key_lower == "win rate":
                     metrics.win_rate = fval
                     _populated.add("win_rate")
-                elif key_lower == "profit factor":
-                    metrics.profit_factor = fval
-                    _populated.add("profit_factor")
                 elif not any(k in key_lower for k in _known_pnl_keys):
                     logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
@@ -433,8 +431,6 @@ class NTScreeningRunner:
                 metrics.max_drawdown = abs(fval)
             elif key_lower == "win rate" and "win_rate" not in _populated:
                 metrics.win_rate = fval
-            elif key_lower == "profit factor" and "profit_factor" not in _populated:
-                metrics.profit_factor = fval
             elif not any(k in key_lower for k in _known_returns_keys):
                 logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
@@ -452,9 +448,10 @@ class NTScreeningRunner:
                 list(stats_returns.keys()) if stats_returns else "empty",
             )
 
-        # Extract fees from closed positions
+        # Extract fees and trade PnLs from closed positions
         # NT netting mode removes closed positions from the main index;
         # combine positions() + position_snapshots() to capture all.
+        trade_pnls: list[float] = []
         try:
             cache = engine.kernel.cache
             all_positions = list(cache.positions()) + list(cache.position_snapshots())
@@ -462,9 +459,16 @@ class NTScreeningRunner:
             for pos in all_positions:
                 if pos.is_closed:
                     total_fees += sum(abs(float(c)) for c in pos.commissions())
+                    # NT realized_pnl is net of commissions
+                    trade_pnls.append(float(pos.realized_pnl))
             metrics.total_fees = total_fees
         except Exception:
             logger.warning("Could not extract fees from engine cache", exc_info=True)
+
+        # Trade-based profit factor (shared definition with validation). NT's
+        # realized-PnL PF is unimplemented, and its returns-based PF is a
+        # daily-return statistic, not a trade PF (bd vibe-quant-e70tl.7).
+        metrics.profit_factor = profit_factor(trade_pnls)
 
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)

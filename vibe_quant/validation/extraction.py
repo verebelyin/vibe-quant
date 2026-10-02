@@ -11,6 +11,7 @@ import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.metrics import profit_factor
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
@@ -137,6 +138,10 @@ def extract_stats(
                      "Profit Factor", "Expectancy", "Avg Winner", "Avg Loser"
         stats_returns: same statistic names
 
+    Profit factor is deliberately NOT taken from NT: its realized-PnL PF is
+    unimplemented and its returns PF is a daily-return statistic. The trade
+    PF is computed from net trade PnLs in :func:`extract_trades`.
+
     Args:
         result: ValidationResult to populate (mutated in place).
         bt_result: NautilusTrader BacktestResult.
@@ -189,9 +194,6 @@ def extract_stats(
             elif key_lower == "win rate":
                 result.win_rate = fval
                 _populated.add("win_rate")
-            elif key_lower == "profit factor":
-                result.profit_factor = fval
-                _populated.add("profit_factor")
             elif key_lower == "avg winner":
                 result.avg_win = fval
             elif key_lower == "avg loser":
@@ -227,8 +229,6 @@ def extract_stats(
             result.max_drawdown = abs(fval)
         elif key_lower == "win rate" and "win_rate" not in _populated:
             result.win_rate = fval
-        elif key_lower == "profit factor" and "profit_factor" not in _populated:
-            result.profit_factor = fval
         elif not any(k in key_lower for k in _known_returns_keys):
             logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
@@ -272,9 +272,11 @@ def extract_trades(
         positions = [p for p in all_positions if p.is_closed]
     except Exception:
         logger.warning("Could not read positions from engine cache", exc_info=True)
+        result.profit_factor = 0.0
         return
 
     if not positions:
+        result.profit_factor = 0.0
         return
 
     default_leverage = int(venue_config.default_leverage)
@@ -410,6 +412,9 @@ def extract_trades(
     result.total_funding = total_funding
     if result.total_trades > 0:
         result.win_rate = winning / result.total_trades
+    # Trade PF on net PnL (fees, modeled slippage and funding included) —
+    # same definition as screening (bd vibe-quant-e70tl.7).
+    result.profit_factor = profit_factor(t.net_pnl for t in result.trades)
 
     # Charge modeled slippage + funding into the headline return so it is
     # consistent with the per-trade net PnL (NT's stats know nothing of

@@ -101,10 +101,11 @@ class TestComputeMetrics:
         assert metrics.sharpe > 0
         assert metrics.profit_factor > 1.0
 
-    def test_all_winners_pf_inf(self):
-        """All-winning trades should produce infinite profit factor, not 0."""
-        from math import isinf
+    def test_all_winners_pf_capped(self):
+        """All-winning trades produce the finite PF cap, not 0 and not inf (e70tl.7)."""
+        from math import isfinite
 
+        from vibe_quant.metrics import PROFIT_FACTOR_CAP
         from vibe_quant.validation.random_baseline import TradeResult
 
         trades = [
@@ -112,8 +113,8 @@ class TestComputeMetrics:
             for i in range(10)
         ]
         metrics = _compute_metrics(trades, taker_fee=0.0)
-        assert isinf(metrics.profit_factor)
-        assert metrics.profit_factor > 0
+        assert isfinite(metrics.profit_factor)
+        assert metrics.profit_factor == PROFIT_FACTOR_CAP
 
 
 class TestRunRandomShortBaseline:

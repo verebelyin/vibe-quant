@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from vibe_quant.metrics import profit_factor
+
 logger = logging.getLogger(__name__)
 
 # Taker fee per side (Binance perp default)
@@ -251,7 +253,6 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
 
     # Basic stats
     wins = pnls[pnls > 0]
-    losses = pnls[pnls < 0]
     win_rate = len(wins) / n if n > 0 else 0.0
 
     # Total return (compounded)
@@ -275,10 +276,8 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
     downside_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 1.0
     sortino = mean_pnl / downside_std * np.sqrt(n) if downside_std > 1e-10 else 0.0
 
-    # Profit factor
-    gross_profit = float(np.sum(wins)) if len(wins) > 0 else 0.0
-    gross_loss = float(np.abs(np.sum(losses))) if len(losses) > 0 else 0.0
-    profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else float("inf")
+    # Profit factor (shared, capped definition — never inf)
+    pf = profit_factor(float(x) for x in pnls)
 
     # Total fees
     total_fees_pct = taker_fee * 100.0 * 2.0 * n
@@ -288,7 +287,7 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
         sortino=float(sortino),
         max_drawdown=max_dd,
         total_return=total_return,
-        profit_factor=profit_factor,
+        profit_factor=pf,
         win_rate=win_rate,
         total_trades=n,
         total_fees_pct=total_fees_pct,
