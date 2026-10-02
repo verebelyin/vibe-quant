@@ -91,3 +91,6 @@ uv.lock
 # Local-only bd v0.49 → v1.0.0 migration backups (disaster recovery)
 .beads.backup-v0.49/
 .beads.old-sqlite/
+
+# beads 1.3+ cooperative gate flock files
+*.gate.lock*

@@ -4,7 +4,7 @@ Extracted from CLAUDE.md (kept lean per CLAUDE.md best practices). Read this
 when installing bd, debugging bd itself, or deciding where a fact belongs.
 Day-to-day usage lives in CLAUDE.md § Issue Tracking.
 
-## Installing `bd` (v1.0.0+)
+## Installing `bd` (current: v1.3.1, repo `gastownhall/beads`)
 
 **macOS (this machine):** Homebrew or direct binary download.
 
@@ -13,13 +13,25 @@ Day-to-day usage lives in CLAUDE.md § Issue Tracking.
 brew install beads
 
 # Option B — Direct binary (darwin_arm64 example)
-VERSION=1.0.0
+VERSION=1.3.1
 curl -sL -o /tmp/beads.tar.gz \
   "https://github.com/gastownhall/beads/releases/download/v${VERSION}/beads_${VERSION}_darwin_arm64.tar.gz"
-tar xzf /tmp/beads.tar.gz -C /tmp
-cp /tmp/beads_${VERSION}_darwin_arm64/bd ~/.local/bin/bd
+mkdir -p /tmp/bd_x && tar xzf /tmp/beads.tar.gz -C /tmp/bd_x   # tarball has flat layout (bd at top level)
+cp /tmp/bd_x/bd ~/.local/bin/bd
 chmod +x ~/.local/bin/bd
 ```
+
+This machine uses Option B (`~/.local/bin/bd`; `which -a bd` must show only one).
+Verify against `checksums.txt` from the same release.
+
+**Upgrading (official order — https://beads.gascity.com/getting-started/upgrading):**
+1. With the OLD binary: `bd dolt push`, then `bd export --all -o .beads/backup/pre-migrate-$(date +%Y%m%d).jsonl`
+   (a new binary migrates before exporting, so a post-install export protects nothing). Also
+   `tar czf ~/beads-backups/vibe-quant-dotbeads-<ver>-<date>.tgz .beads` + keep old binary as `~/.local/bin/bd-<ver>`.
+2. Swap the binary.
+3. `bd migrate` — the remote-backed store is gated; this solo machine IS the designated migrator:
+   `bd migrate --force`, then `bd dolt push`.
+4. `bd hooks install`; verify `bd version`, `bd stats` counts, `bd memories | wc -l`; read `bd upgrade review` / `bd info --whats-new`.
 
 **Init in a new repo:**
 ```bash
@@ -28,10 +40,11 @@ bd init --from-jsonl --non-interactive --role maintainer   # Import from existin
 chmod 700 .beads                                # bd warns if not 0700
 ```
 
-## v1.0.0 architecture
+## Architecture (embedded mode)
 
 - **Embedded Dolt** — no separate server, no daemon process. Each `bd` command opens the DB, runs, exits. Exclusive file lock means **one writer at a time**.
-- **No `bd sync`, no `bd daemon`** — both removed. Beads auto-commits to Dolt on every mutation.
+- **No `bd daemon`.** Beads auto-commits to Dolt on every mutation. (`bd sync` returned in 1.3 as a federation verb — export/commit/pull/import/push — not needed for this solo setup.)
+- **1.3 changes worth knowing:** `.beads/interactions.jsonl` audit sidecar is now opt-in (use `bd history <id> --events`); `bd search` includes closed by default; `bd close a b c` exits non-zero if any id fails; `*.gate.lock` flock files appear beside `.beads` (gitignored).
 - **No SQLite fallback** — SQLite backend was deleted in v0.58. `--backend sqlite` only prints migration advice.
 - **JSONL still exists** (`.beads/issues.jsonl`) as a plain-text export for git diffs, but is no longer the primary store.
 - **`bd doctor` is not supported in embedded mode** — use `ls -la .beads/embeddeddolt/` and `bd info` instead.
