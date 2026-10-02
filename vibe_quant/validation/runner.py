@@ -760,7 +760,7 @@ class ValidationRunner:
         # Compile strategy to an importable module (registers in sys.modules)
         module = self._compiler.compile_to_module(dsl)
         class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        module_path = module.__name__  # content-addressed (vibe-quant-e70tl.1)
 
         # Verify generated classes exist in the module
         strategy_cls_name = f"{class_name}Strategy"

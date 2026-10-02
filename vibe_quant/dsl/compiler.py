@@ -11,6 +11,7 @@ import ast
 import hashlib
 import importlib.util
 import logging
+import re
 import sys
 import textwrap
 from dataclasses import dataclass
@@ -101,6 +102,21 @@ class IndicatorInfo:
     timeframe: str
     bar_type_var: str
     indicator_var: str
+
+
+_GENERATED_TS_LINE = re.compile(r"^Generated: .*$", re.MULTILINE)
+
+
+def generated_module_name(dsl_name: str, source: str) -> str:
+    """Content-addressed ``sys.modules`` name for a compiled strategy.
+
+    Keyed by the generated source (minus the ``Generated:`` timestamp line),
+    so two DSLs sharing a name but differing in any compiled detail (GA
+    elite vs. mutant with the same ``genome_{uid}``) can never overwrite
+    each other's module, while recompiling an identical DSL is idempotent.
+    """
+    digest = hashlib.sha256(_GENERATED_TS_LINE.sub("", source).encode()).hexdigest()[:16]
+    return f"vibe_quant.dsl.generated.{dsl_name}_{digest}"
 
 
 def compiler_version_hash() -> str:
@@ -215,6 +231,11 @@ class StrategyCompiler:
     def compile_to_module(self, dsl: StrategyDSL) -> ModuleType:
         """Compile DSL to a loadable Python module.
 
+        The module is registered in ``sys.modules`` under a content-addressed
+        name (see :func:`generated_module_name`); callers must use the
+        returned ``module.__name__`` for ``ImportableStrategyConfig`` paths,
+        never re-derive it from ``dsl.name``.
+
         Args:
             dsl: Parsed and validated StrategyDSL
 
@@ -226,7 +247,7 @@ class StrategyCompiler:
         """
         source = self.compile(dsl)
         self._validate_generated_source(source)
-        module_name = f"vibe_quant.dsl.generated.{dsl.name}"
+        module_name = generated_module_name(dsl.name, source)
 
         # Create module
         spec = importlib.util.spec_from_loader(module_name, loader=None)

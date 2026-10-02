@@ -97,7 +97,11 @@ class NTScreeningRunner:
         Results are cached in instance attributes so subsequent calls
         to _run_backtest skip recompilation.
         """
-        if self._compiled:
+        import sys
+
+        # A runner pickled into a fresh worker process keeps ``_compiled`` but
+        # not the dynamically registered module -- recompile in that case.
+        if self._compiled and self._module_path in sys.modules:
             return
 
         import json
@@ -114,7 +118,7 @@ class NTScreeningRunner:
 
         cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
         cached = _COMPILE_CACHE.get(cache_key)
-        if cached is not None:
+        if cached is not None and cached[0] in sys.modules:
             self._module_path, self._strategy_cls_name, self._config_cls_name, tfs = cached
             self._all_timeframes: set[str] = set(tfs)
             self._compiled = True
@@ -125,10 +129,12 @@ class NTScreeningRunner:
 
         dsl = validate_strategy_dict(self._dsl_dict)
         compiler = StrategyCompiler()
-        compiler.compile_to_module(dsl)  # registers in sys.modules
+        # Content-addressed module name (vibe-quant-e70tl.1): two DSLs sharing
+        # a name (GA elite + mutant) must never resolve to each other's code.
+        module = compiler.compile_to_module(dsl)  # registers in sys.modules
 
         class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        self._module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        self._module_path = module.__name__
         self._strategy_cls_name = f"{class_name}Strategy"
         self._config_cls_name = f"{class_name}Config"
 
