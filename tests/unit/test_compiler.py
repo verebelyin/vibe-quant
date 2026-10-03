@@ -775,9 +775,11 @@ class TestCompiledModuleImports:
         import sys
 
         dsl = parse_strategy_string(minimal_strategy_yaml)
-        compiler.compile_to_module(dsl)
+        module = compiler.compile_to_module(dsl)
 
-        assert "vibe_quant.dsl.generated.test_minimal" in sys.modules
+        # Content-addressed name: <dsl.name>_<source digest> (vibe-quant-e70tl.1)
+        assert module.__name__.startswith("vibe_quant.dsl.generated.test_minimal_")
+        assert sys.modules[module.__name__] is module
 
     def test_compiled_module_can_instantiate_config(
         self, compiler: StrategyCompiler, minimal_strategy_yaml: str

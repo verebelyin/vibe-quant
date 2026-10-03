@@ -138,9 +138,9 @@ class TestRepairChromosome:
             is_valid_chromosome,
         )
         _ensure_pool()
-        # ATR with RSI-scale threshold (impossible: ATR range is 0.001-0.08)
+        # NATR with RSI-scale threshold (impossible: NATR GA range ~0.9-1.2)
         bad_gene = StrategyGene(
-            indicator_type="ATR", parameters={"period": 14.0},
+            indicator_type="NATR", parameters={"period": 14.0},
             condition=ConditionType.GT, threshold=72.0,
         )
         chrom = StrategyChromosome(
@@ -154,7 +154,7 @@ class TestRepairChromosome:
         assert not is_valid_chromosome(chrom)
         repaired = _repair_chromosome(chrom)
         assert is_valid_chromosome(repaired)
-        lo, hi = THRESHOLD_RANGES["ATR"]
+        lo, hi = THRESHOLD_RANGES["NATR"]
         assert lo <= repaired.entry_genes[0].threshold <= hi
 
     def test_repair_preserves_valid_chromosome(self) -> None:
@@ -224,10 +224,12 @@ class TestThresholdRanges:
         assert hi - lo >= 0.05, f"MACD range too narrow: ({lo}, {hi})"
 
     def test_atr_threshold_range_wide_enough(self) -> None:
-        """ATR threshold range must span at least 0.05 to produce viable signals."""
+        """ATR (absolute price units) is out of the GA threshold pool; its
+        scale-free replacement NATR spans a usable range (vibe-quant-e70tl.14)."""
         from vibe_quant.discovery.operators import THRESHOLD_RANGES, _ensure_pool
 
         THRESHOLD_RANGES.clear()
         _ensure_pool()
-        lo, hi = THRESHOLD_RANGES["ATR"]
-        assert hi - lo >= 0.05, f"ATR range too narrow: ({lo}, {hi})"
+        assert "ATR" not in THRESHOLD_RANGES
+        lo, hi = THRESHOLD_RANGES["NATR"]
+        assert hi - lo >= 0.25, f"NATR range too narrow: ({lo}, {hi})"

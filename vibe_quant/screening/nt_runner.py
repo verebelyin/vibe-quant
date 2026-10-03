@@ -24,6 +24,75 @@ logger = logging.getLogger(__name__)
 _COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str]]] = {}
 
 
+class UnknownStrategyParamError(ValueError):
+    """A sweep/override key matches no field of the compiled strategy config.
+
+    Raised instead of silently dropping the key: a silently ignored override
+    makes every combination of a sweep identical (vibe-quant-e70tl.8).
+    """
+
+
+# Known spelling mismatches between sweep keys and compiled config fields
+# (suffix -> replacement), applied only when the key itself is not a field.
+_PARAM_KEY_ALIASES: tuple[tuple[str, str], ...] = (
+    # take_profit[_long|_short].risk_reward_ratio -> ..._risk_reward
+    ("_risk_reward_ratio", "_risk_reward"),
+    # STOCH: NT/GA spell k/d as period_k/period_d; the DSL fields are period/d_period
+    ("_period_k", "_period"),
+    ("_k_period", "_period"),
+    ("_period_d", "_d_period"),
+)
+
+
+def resolve_strategy_params(
+    params: dict[str, Any], config_fields: tuple[str, ...] | list[str]
+) -> dict[str, Any]:
+    """Map sweep/override keys onto compiled strategy-config field names.
+
+    Dot notation (``ema_fast.period``) becomes underscore notation
+    (``ema_fast_period``); known aliases (``take_profit.risk_reward_ratio``,
+    STOCH ``period_k``/``period_d``) are mapped to their real fields.
+
+    Raises:
+        UnknownStrategyParamError: if any key matches no config field, or two
+            keys resolve to the same field.
+    """
+    fields = set(config_fields)
+    if not fields:
+        msg = "Compiled strategy config exposes no fields; cannot apply overrides"
+        raise UnknownStrategyParamError(msg)
+    resolved: dict[str, Any] = {}
+    source_key: dict[str, str] = {}
+    unknown: list[str] = []
+    for key, value in params.items():
+        cfg_key = key.replace(".", "_")
+        if cfg_key not in fields:
+            for suffix, repl in _PARAM_KEY_ALIASES:
+                candidate = cfg_key[: -len(suffix)] + repl
+                if cfg_key.endswith(suffix) and candidate in fields:
+                    cfg_key = candidate
+                    break
+        if cfg_key not in fields:
+            unknown.append(key)
+            continue
+        if cfg_key in resolved:
+            msg = f"Override keys {source_key[cfg_key]!r} and {key!r} both map to {cfg_key!r}"
+            raise UnknownStrategyParamError(msg)
+        resolved[cfg_key] = value
+        source_key[cfg_key] = key
+    if unknown:
+        from nautilus_trader.trading.config import StrategyConfig
+
+        base_fields = set(getattr(StrategyConfig, "__struct_fields__", ()))
+        valid = sorted(fields - base_fields - {"instrument_id"})
+        msg = (
+            f"Unknown strategy parameter(s) {sorted(unknown)}: no matching field in the "
+            f"compiled strategy config. Valid keys (dot or underscore notation): {valid}"
+        )
+        raise UnknownStrategyParamError(msg)
+    return resolved
+
+
 class NTScreeningRunner:
     """Real NautilusTrader backtest runner for screening mode.
 
@@ -69,6 +138,23 @@ class NTScreeningRunner:
         self._strategy_cls_name: str = ""
         self._config_cls_name: str = ""
 
+        # Fail fast on sweep keys that match no config field (they used to be
+        # silently dropped, making every grid point identical).
+        sweep = dsl_dict.get("sweep") or {}
+        if sweep:
+            self.validate_param_keys(list(sweep))
+
+    def validate_param_keys(self, keys: list[str]) -> None:
+        """Raise :class:`UnknownStrategyParamError` if any key is not overridable."""
+        self._ensure_compiled()
+        resolve_strategy_params(dict.fromkeys(keys), self._config_fields())
+
+    def _config_fields(self) -> tuple[str, ...]:
+        import sys
+
+        config_cls = getattr(sys.modules[self._module_path], self._config_cls_name, None)
+        return tuple(getattr(config_cls, "__struct_fields__", ()))
+
     def __call__(self, params: dict[str, float | int]) -> BacktestMetrics:
         """Run a single screening backtest with the given parameters.
 
@@ -83,6 +169,10 @@ class NTScreeningRunner:
         start_time = time.time()
         try:
             return self._run_backtest(params, start_time)
+        except UnknownStrategyParamError:
+            # Configuration error, not a backtest failure: never mask it as a
+            # -inf result (vibe-quant-e70tl.8).
+            raise
         except Exception as e:
             logger.warning(
                 "NT screening backtest failed: params=%s strategy=%s error=%s",
@@ -102,7 +192,11 @@ class NTScreeningRunner:
         Results are cached in instance attributes so subsequent calls
         to _run_backtest skip recompilation.
         """
-        if self._compiled:
+        import sys
+
+        # A runner pickled into a fresh worker process keeps ``_compiled`` but
+        # not the dynamically registered module -- recompile in that case.
+        if self._compiled and self._module_path in sys.modules:
             return
 
         import json
@@ -119,7 +213,7 @@ class NTScreeningRunner:
 
         cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
         cached = _COMPILE_CACHE.get(cache_key)
-        if cached is not None:
+        if cached is not None and cached[0] in sys.modules:
             self._module_path, self._strategy_cls_name, self._config_cls_name, tfs = cached
             self._all_timeframes: set[str] = set(tfs)
             self._compiled = True
@@ -130,10 +224,12 @@ class NTScreeningRunner:
 
         dsl = validate_strategy_dict(self._dsl_dict)
         compiler = StrategyCompiler()
-        compiler.compile_to_module(dsl)  # registers in sys.modules
+        # Content-addressed module name (vibe-quant-e70tl.1): two DSLs sharing
+        # a name (GA elite + mutant) must never resolve to each other's code.
+        module = compiler.compile_to_module(dsl)  # registers in sys.modules
 
         class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        self._module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        self._module_path = module.__name__
         self._strategy_cls_name = f"{class_name}Strategy"
         self._config_cls_name = f"{class_name}Config"
 
@@ -186,25 +282,16 @@ class NTScreeningRunner:
         config_cls_name = self._config_cls_name
         catalog_path = self._resolved_catalog_path
 
-        # NT 1.226+ rejects unknown config fields (fast-fail decoding), so
-        # forward only params the generated StrategyConfig actually declares.
-        import sys
-
-        config_cls = getattr(sys.modules[module_path], config_cls_name, None)
-        config_fields: tuple[str, ...] = getattr(config_cls, "__struct_fields__", ())
+        # Map sweep keys (dot notation, known aliases) onto the generated
+        # StrategyConfig's fields; an unknown key raises instead of being
+        # silently dropped (NT 1.226+ would also reject it at decode time).
+        strategy_params = resolve_strategy_params(params, self._config_fields())
 
         # Strategy configs (with parameter overrides)
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in self._symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
-            config_dict: dict[str, Any] = {"instrument_id": instrument_id}
-            # Convert sweep dot-notation (e.g. "ema_fast.period") to
-            # config underscore-notation (e.g. "ema_fast_period")
-            for k, v in params.items():
-                config_key = k.replace(".", "_")
-                if config_fields and config_key not in config_fields:
-                    continue
-                config_dict[config_key] = v
+            config_dict: dict[str, Any] = {"instrument_id": instrument_id, **strategy_params}
             # Always defer entries/exits one bar. NT (bar_execution, no latency)
             # fills a market order from on_bar(t) at close[t] -- the signal bar's
             # own close -- which is same-bar look-ahead. Deferring makes the fill

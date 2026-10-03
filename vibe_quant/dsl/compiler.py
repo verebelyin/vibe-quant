@@ -11,20 +11,28 @@ import ast
 import hashlib
 import importlib.util
 import logging
+import re
 import sys
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
-from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.indicators import (
+    IndicatorSpec,
+    indicator_registry,
+    pta_buffer_cap,
+    pta_lookback,
+)
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
     ON_RESET_LINES,
+    ON_START_RECOVERY_LINES,
     ON_STOP_LINES,
     ORDER_METHODS_LINES,
+    PTA_FEED_LINES,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,6 +111,21 @@ class IndicatorInfo:
     indicator_var: str
 
 
+_GENERATED_TS_LINE = re.compile(r"^Generated: .*$", re.MULTILINE)
+
+
+def generated_module_name(dsl_name: str, source: str) -> str:
+    """Content-addressed ``sys.modules`` name for a compiled strategy.
+
+    Keyed by the generated source (minus the ``Generated:`` timestamp line),
+    so two DSLs sharing a name but differing in any compiled detail (GA
+    elite vs. mutant with the same ``genome_{uid}``) can never overwrite
+    each other's module, while recompiling an identical DSL is idempotent.
+    """
+    digest = hashlib.sha256(_GENERATED_TS_LINE.sub("", source).encode()).hexdigest()[:16]
+    return f"vibe_quant.dsl.generated.{dsl_name}_{digest}"
+
+
 def compiler_version_hash() -> str:
     """Return short SHA-256 hash of compiler + templates source.
 
@@ -112,9 +135,24 @@ def compiler_version_hash() -> str:
     """
     h = hashlib.sha256()
     dsl_dir = Path(__file__).parent
-    for name in ("compiler.py", "templates.py", "conditions.py", "indicators.py"):
-        src = dsl_dir / name
+    # Everything that shapes generated code or indicator values: compute_fn
+    # bodies, derived helpers, schema normalization and drop-in plugins too.
+    sources = [
+        dsl_dir / name
+        for name in (
+            "compiler.py",
+            "templates.py",
+            "conditions.py",
+            "indicators.py",
+            "compute_builtins.py",
+            "derived.py",
+            "schema.py",
+        )
+    ]
+    sources += sorted((dsl_dir / "plugins").glob("*.py"))
+    for src in sources:
         if src.exists():
+            h.update(src.name.encode())
             h.update(src.read_bytes())
     return h.hexdigest()[:12]
 
@@ -205,7 +243,7 @@ class StrategyCompiler:
 
         # Generate parts
         imports = self._generate_imports(dsl, indicators)
-        config_class = self._generate_config_class(dsl, indicator_names)
+        config_class = self._generate_config_class(dsl, indicator_names, indicators)
         strategy_class = self._generate_strategy_class(dsl, indicators, timeframes, indicator_names)
 
         # Combine
@@ -214,6 +252,11 @@ class StrategyCompiler:
 
     def compile_to_module(self, dsl: StrategyDSL) -> ModuleType:
         """Compile DSL to a loadable Python module.
+
+        The module is registered in ``sys.modules`` under a content-addressed
+        name (see :func:`generated_module_name`); callers must use the
+        returned ``module.__name__`` for ``ImportableStrategyConfig`` paths,
+        never re-derive it from ``dsl.name``.
 
         Args:
             dsl: Parsed and validated StrategyDSL
@@ -226,7 +269,7 @@ class StrategyCompiler:
         """
         source = self.compile(dsl)
         self._validate_generated_source(source)
-        module_name = f"vibe_quant.dsl.generated.{dsl.name}"
+        module_name = generated_module_name(dsl.name, source)
 
         # Create module
         spec = importlib.util.spec_from_loader(module_name, loader=None)
@@ -363,11 +406,11 @@ class StrategyCompiler:
             "",
             "from nautilus_trader.core.uuid import UUID4",
             "from nautilus_trader.model.data import Bar, BarType",
-            "from nautilus_trader.model.enums import OrderSide, PositionSide, TimeInForce",
+            "from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, TimeInForce",
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
-            "from nautilus_trader.model.events import OrderFilled, PositionOpened, PositionClosed",
+            "from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionClosed, PositionOpened",
             "from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder",
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
         ]
@@ -384,6 +427,10 @@ class StrategyCompiler:
                 nt_classes[class_name] = module_path
                 # NT-path indicators with computed_outputs need derived helpers.
                 for helper_name in info.spec.computed_outputs.values():
+                    derived_helpers.add(helper_name)
+                if info.spec.primary_helper:
+                    derived_helpers.add(info.spec.primary_helper)
+                for _kwarg, helper_name, _field in info.spec.nt_codegen_helper_kwargs:
                     derived_helpers.add(helper_name)
             elif info.spec.compute_fn is not None:
                 has_pta = True
@@ -404,6 +451,7 @@ class StrategyCompiler:
             imports.append("import warnings")
             imports.append("warnings.filterwarnings('ignore', category=FutureWarning)")
             imports.append("import pandas as pd")
+            imports.append("from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback")
             for module_path in sorted(compute_fn_imports):
                 names = ", ".join(sorted(compute_fn_imports[module_path]))
                 imports.append(f"from {module_path} import {names}")
@@ -422,13 +470,18 @@ class StrategyCompiler:
         return "\n".join(imports)
 
     def _generate_config_class(
-        self, dsl: StrategyDSL, indicator_names: list[str] | None = None
+        self,
+        dsl: StrategyDSL,
+        indicator_names: list[str] | None = None,
+        indicators: list[IndicatorInfo] | None = None,
     ) -> str:
         """Generate the Strategy config dataclass.
 
         Args:
             dsl: Parsed DSL
             indicator_names: Expanded indicator names (includes sub-outputs)
+            indicators: Indicator infos (after compute_fn forcing); every
+                compute_fn-path param gets a config field so sweeps apply.
 
         Returns:
             Config class source code
@@ -482,6 +535,17 @@ class StrategyCompiler:
                 lines.append(f"    {name}_d_period: int = {config.d_period}")
             if config.atr_multiplier is not None:
                 lines.append(f"    {name}_atr_multiplier: float = {config.atr_multiplier}")
+
+        # compute_fn-path params not covered above (spec defaults such as
+        # WILLR period / ICHIMOKU tenkan, plugin extras such as alpha) also
+        # become config fields: the generated code reads every compute_fn
+        # param from self.config so sweep/WFA overrides take effect.
+        for info in indicators or []:
+            if not self._is_pta(info):
+                continue
+            for _key, field_name, type_name, default, native in self._pta_param_fields(info):
+                if not native:
+                    lines.append(f"    {field_name}: {type_name} = {default!r}")
 
         # Add stop loss parameters
         lines.append("")
@@ -616,6 +680,8 @@ class StrategyCompiler:
             "        self._position_side: OrderSide | None = None",
             "        self._pending_validation_action: str | None = None",
             "        self._trailing_best_sl: float | None = None",
+            "        # Set when on_start adopts an unprotected position before indicators are ready",
+            "        self._rearm_protection = False",
             "        # Seeded RNG for the probabilistic execution-delay path so",
             "        # identical validation replays are byte-reproducible.",
             "        self._delay_rng = random.Random(",
@@ -630,31 +696,11 @@ class StrategyCompiler:
             "",
         ]
 
-        # Add pandas-ta bar buffer if any indicators need it
-        pta_infos = [
-            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
-        ]
-        has_pta = bool(pta_infos)
-        if has_pta:
-            buffer_cap = self._compute_pta_buffer_cap(pta_infos)
-            cap_comment = (
-                "0 = unbounded (cumulative indicator present)"
-                if buffer_cap == 0
-                else "bars kept for windowed compute_fn indicators"
-            )
-            lines.extend(
-                [
-                    "        # Bar data buffer for pandas-ta indicators",
-                    "        self._pta_close: list[float] = []",
-                    "        self._pta_high: list[float] = []",
-                    "        self._pta_low: list[float] = []",
-                    "        self._pta_open: list[float] = []",
-                    "        self._pta_volume: list[float] = []",
-                    "        self._pta_values: dict[str, float] = {}",
-                    f"        self._pta_buffer_cap: int = {buffer_cap}  # {cap_comment}",
-                    "",
-                ]
-            )
+        # compute_fn (pandas) path: per-timeframe bar buffers + params read
+        # from config (vibe-quant-e70tl.8).
+        pta_infos = [i for i in indicators if self._is_pta(i)]
+        if pta_infos:
+            lines.extend(self._generate_pta_init(pta_infos))
 
         # Add on_start method
         on_start = self._generate_on_start(dsl, indicators, timeframes)
@@ -783,6 +829,9 @@ class StrategyCompiler:
         for info in indicators:
             lines.extend(self._generate_indicator_init(info))
 
+        lines.append("")
+        lines.extend(f"    {line}" if line else "" for line in ON_START_RECOVERY_LINES)
+
         return "\n".join(lines)
 
     def _generate_indicator_init(self, info: IndicatorInfo) -> list[str]:
@@ -812,6 +861,10 @@ class StrategyCompiler:
             f"{nt_kwarg}=self.config.{info.name}_{dsl_field}"
             for nt_kwarg, dsl_field in spec.nt_codegen_kwargs
         ]
+        args.extend(
+            f"{nt_kwarg}={helper}(self.config.{info.name}_{dsl_field})"
+            for nt_kwarg, helper, dsl_field in spec.nt_codegen_helper_kwargs
+        )
         args_str = ", ".join(args)
         lines.append(f"    {info.indicator_var} = {class_name}({args_str})")
         lines.append(
@@ -836,44 +889,33 @@ class StrategyCompiler:
         Returns:
             on_bar method source code
         """
-        has_pta = any(
-            i.spec.nt_class is None and i.spec.compute_fn is not None for i in indicators
-        )
+        pta_tfs = sorted({i.timeframe for i in indicators if self._is_pta(i)})
 
         lines = [
             "def on_bar(self, bar: Bar) -> None:",
             '    """Handle bar updates."""',
-            "    # Only process primary timeframe bars",
-            "    if bar.bar_type != self.primary_bar_type:",
-            "        return",
-            "",
         ]
 
-        # Feed bar data to pandas-ta buffer before indicators_ready check.
-        # The buffer is trimmed to _pta_buffer_cap (with 25% slack so the
-        # trim amortizes) — recomputing indicators over full history every
-        # bar is O(n^2) across a backtest and dominates 1m-data runtime.
-        if has_pta:
-            lines.extend(
-                [
-                    "    # Feed bar data to pandas-ta buffer",
-                    "    self._pta_close.append(float(bar.close))",
-                    "    self._pta_high.append(float(bar.high))",
-                    "    self._pta_low.append(float(bar.low))",
-                    "    self._pta_open.append(float(bar.open))",
-                    "    self._pta_volume.append(float(bar.volume))",
-                    "    _cap = self._pta_buffer_cap",
-                    "    if _cap and len(self._pta_close) > _cap + (_cap // 4):",
-                    "        _trim = len(self._pta_close) - _cap",
-                    "        del self._pta_close[:_trim]",
-                    "        del self._pta_high[:_trim]",
-                    "        del self._pta_low[:_trim]",
-                    "        del self._pta_open[:_trim]",
-                    "        del self._pta_volume[:_trim]",
-                    "    self._update_pta_indicators()",
-                    "",
-                ]
-            )
+        # Feed compute_fn bar buffers BEFORE the primary-timeframe filter so an
+        # indicator declared on another timeframe (e.g. a 4h ADX on a 1h
+        # strategy) is computed from that timeframe's bars -- the same update
+        # semantics NT applies to register_indicator_for_bars indicators.
+        if pta_tfs:
+            lines.append("    # Feed compute_fn indicator buffers (per timeframe)")
+            for idx, tf in enumerate(pta_tfs):
+                kw = "if" if idx == 0 else "elif"
+                lines.append(f"    {kw} bar.bar_type == self.bar_type_{tf}:")
+                lines.append(f'        self._feed_pta_buffer("{tf}", bar)')
+            lines.append("")
+
+        lines.extend(
+            [
+                "    # Only process primary timeframe bars",
+                "    if bar.bar_type != self.primary_bar_type:",
+                "        return",
+                "",
+            ]
+        )
 
         lines.extend(
             [
@@ -884,35 +926,42 @@ class StrategyCompiler:
                 "    if not self._indicators_ready():",
                 "        return",
                 "",
+                "    # Restart recovery: protect a position adopted in on_start",
+                "    if self._rearm_protection:",
+                "        self._ensure_protection()",
+                "",
                 "    # Execute any validation-only delayed action before new signals",
                 "    if self._dispatch_pending_validation_action(bar):",
-                "        self._update_prev_values()",
+                "        self._update_prev_values(bar)",
                 "        return",
                 "",
             ]
         )
 
-        # Time filters. Prev values must still be updated on blocked bars,
-        # otherwise the first allowed bar compares against indicator values
-        # from before the block and fires false/missed crossovers.
-        if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
-            lines.append("    # Check time filters")
-            lines.append("    if not self._check_time_filters(bar.ts_event):")
-            lines.append("        self._update_prev_values()")
-            lines.append("        return")
+        # Time filters / funding avoidance gate NEW ENTRIES only: exits,
+        # trailing-stop updates and prev values always run. Evaluated at the
+        # bar's close time (ts_init rounded to the bar boundary): ts_event is
+        # the bar OPEN in backtests but the close for live Binance bars.
+        has_session_filter = bool(
+            dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days
+        )
+        has_funding_filter = dsl.time_filters.avoid_around_funding.enabled
+        entry_gate = ""
+        if has_session_filter or has_funding_filter:
+            checks: list[str] = []
+            if has_session_filter:
+                checks.append("self._check_time_filters(_close_ns)")
+            if has_funding_filter:
+                checks.append("not self._is_near_funding_time(_close_ns)")
+            lines.append("    # Time filters gate entries only (evaluated at bar close time)")
+            lines.append("    _close_ns = self._bar_close_ns(bar)")
+            lines.append(f"    _entries_allowed = {' and '.join(checks)}")
             lines.append("")
-
-        # Funding avoidance (same prev-values requirement as time filters)
-        if dsl.time_filters.avoid_around_funding.enabled:
-            lines.append("    # Check funding avoidance")
-            lines.append("    if self._is_near_funding_time(bar.ts_event):")
-            lines.append("        self._update_prev_values()")
-            lines.append("        return")
-            lines.append("")
+            entry_gate = " and _entries_allowed"
 
         # Entry conditions
         lines.append("    # Evaluate entry conditions")
-        lines.append("    if not self._position_open:")
+        lines.append(f"    if not self._position_open{entry_gate}:")
         if dsl.entry_conditions.long:
             lines.append("        if self._check_long_entry(bar):")
             lines.append("            if not self._maybe_delay_validation_action('long_entry'):")
@@ -958,7 +1007,7 @@ class StrategyCompiler:
         # Update previous values for crossover detection
         lines.append("")
         lines.append("    # Update previous values for crossover detection")
-        lines.append("    self._update_prev_values()")
+        lines.append("    self._update_prev_values(bar)")
 
         return "\n".join(lines)
 
@@ -1013,20 +1062,42 @@ class StrategyCompiler:
         lines.append("")
 
         # _update_prev_values
-        lines.extend(self._generate_update_prev_values(indicators))
+        lines.extend(
+            self._generate_update_prev_values(
+                indicators, self._crossover_price_refs(dsl, indicator_names)
+            )
+        )
         lines.append("")
 
-        # _update_pta_indicators (if any compute_fn indicators exist)
-        pta_indicators = [
-            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
-        ]
+        # _feed_pta_buffer + _update_pta_indicators (compute_fn indicators)
+        pta_indicators = [i for i in indicators if self._is_pta(i)]
         if pta_indicators:
+            lines.extend(PTA_FEED_LINES)
+            lines.append("")
             lines.extend(self._generate_update_pta_indicators(pta_indicators))
             lines.append("")
 
         # Time filter method
         lines.extend(self._generate_time_filter_method(dsl.time_filters))
         lines.append("")
+
+        tf = dsl.time_filters
+        if tf.allowed_sessions or tf.blocked_days or tf.avoid_around_funding.enabled:
+            step_ns = self._TIMEFRAME_MINUTES[dsl.timeframe] * 60_000_000_000
+            lines.extend(
+                [
+                    "def _bar_close_ns(self, bar: Bar) -> int:",
+                    '    """Bar close time: ts_init rounded to the nearest bar boundary.',
+                    "",
+                    "    Backtest bars carry ts_init = exchange close_time (hh:59:59.999), live",
+                    "    bars the receive time (just after the boundary); both round to the",
+                    "    same boundary. ts_event would be the OPEN time in backtests.",
+                    '    """',
+                    f"    _step = {step_ns}",
+                    "    return ((bar.ts_init + _step // 2) // _step) * _step",
+                    "",
+                ]
+            )
 
         # Funding avoidance method
         if dsl.time_filters.avoid_around_funding.enabled:
@@ -1096,6 +1167,22 @@ class StrategyCompiler:
             return spec.output_names[0]
         return "value"
 
+    _TIMEFRAME_MINUTES: ClassVar[dict[str, int]] = {
+        "1m": 1,
+        "5m": 5,
+        "15m": 15,
+        "1h": 60,
+        "4h": 240,
+    }
+
+    def _primary_helper_call(self, info: IndicatorInfo) -> str:
+        """``helper(ind, last_close, bar_minutes)`` for ``spec.primary_helper``."""
+        minutes = self._TIMEFRAME_MINUTES.get(info.timeframe)
+        if minutes is None:
+            msg = f"No bar length for timeframe '{info.timeframe}' (indicator '{info.name}')"
+            raise CompilerError(msg)
+        return f"{info.spec.primary_helper}({info.indicator_var}, self._last_close, {minutes})"
+
     def _generate_get_indicator_value(self, indicators: list[IndicatorInfo]) -> list[str]:
         """Generate the ``_get_indicator_value`` lookup.
 
@@ -1131,13 +1218,16 @@ class StrategyCompiler:
             primary_attr = spec.nt_output_attrs.get(primary, "value")
             primary_scale = spec.nt_output_scale.get(primary, 1.0)
             lines.append(f'    if name == "{info.name}":')
-            lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
-            if primary_scale != 1.0:
-                lines.append(
-                    f"        return float(_v) * {primary_scale} if _v is not None else 0.0"
-                )
+            if spec.primary_helper:
+                lines.append(f"        return {self._primary_helper_call(info)}")
             else:
-                lines.append("        return float(_v) if _v is not None else 0.0")
+                lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
+                if primary_scale != 1.0:
+                    lines.append(
+                        f"        return float(_v) * {primary_scale} if _v is not None else 0.0"
+                    )
+                else:
+                    lines.append("        return float(_v) if _v is not None else 0.0")
 
             if spec.output_names != ("value",):
                 for output_name in spec.output_names:
@@ -1168,18 +1258,56 @@ class StrategyCompiler:
         lines.append('    raise ValueError(f"Unknown indicator: {name}")')
         return lines
 
-    def _generate_update_prev_values(self, indicators: list[IndicatorInfo]) -> list[str]:
+    @staticmethod
+    def _prev_price_key(price: str) -> str:
+        """``_prev_values`` key for a price operand. ``@`` cannot appear in an
+        indicator name, so price keys never collide with indicator keys."""
+        return f"@{price}"
+
+    @staticmethod
+    def _crossover_price_refs(dsl: StrategyDSL, indicator_names: list[str]) -> list[str]:
+        """Price operands (close/open/high/low/volume) used in any crossover.
+
+        Their previous-bar values must be tracked: without them a
+        ``close crosses_above ema`` check degenerates to
+        ``close > ema and close <= prev_ema`` (vibe-quant-e70tl.3).
+        """
+        refs: set[str] = set()
+        for cond_str in (
+            dsl.entry_conditions.long
+            + dsl.entry_conditions.short
+            + dsl.exit_conditions.long
+            + dsl.exit_conditions.short
+        ):
+            cond = parse_condition(cond_str, indicator_names)
+            if cond.operator not in (Operator.CROSSES_ABOVE, Operator.CROSSES_BELOW):
+                continue
+            for operand in (cond.left, cond.right):
+                if operand.is_price:
+                    refs.add(str(operand.value))
+        return sorted(refs)
+
+    def _generate_update_prev_values(
+        self, indicators: list[IndicatorInfo], price_refs: list[str] | None = None
+    ) -> list[str]:
         """Generate the ``_update_prev_values`` helper.
 
         Mirrors ``_generate_get_indicator_value`` but writes into
         ``self._prev_values`` for crossover detection on the next bar.
+        Price operands used in crossovers are stored under ``@<price>``.
         """
         lines = [
-            "def _update_prev_values(self) -> None:",
-            '    """Store current indicator values for crossover detection."""',
+            "def _update_prev_values(self, bar: Bar) -> None:",
+            '    """Store current indicator/price values for crossover detection."""',
         ]
 
         has_any = False
+        for price in price_refs or []:
+            has_any = True
+            lines.append(
+                f'    self._prev_values["{self._prev_price_key(price)}"] = '
+                f"float(bar.{price}.as_double())"
+            )
         for info in indicators:
             spec = info.spec
             if spec.nt_class is not None:
@@ -1188,10 +1316,16 @@ class StrategyCompiler:
                 primary_attr = spec.nt_output_attrs.get(primary, "value")
                 primary_scale = spec.nt_output_scale.get(primary, 1.0)
                 _scale_suffix = f" * {primary_scale}" if primary_scale != 1.0 else ""
-                lines.append(
-                    f'    self._prev_values["{info.name}"] = '
-                    f"float({info.indicator_var}.{primary_attr}){_scale_suffix}"
-                )
+                if spec.primary_helper:
+                    lines.append(
+                        f'    self._prev_values["{info.name}"] = '
+                        f"{self._primary_helper_call(info)}"
+                    )
+                else:
+                    lines.append(
+                        f'    self._prev_values["{info.name}"] = '
+                        f"float({info.indicator_var}.{primary_attr}){_scale_suffix}"
+                    )
                 if spec.output_names != ("value",):
                     for output_name in spec.output_names:
                         key = f"{info.name}_{output_name}"
@@ -1225,59 +1359,121 @@ class StrategyCompiler:
 
         return lines
 
+    @staticmethod
+    def _is_pta(info: IndicatorInfo) -> bool:
+        """True when the indicator runs on the compute_fn (pandas) path."""
+        return info.spec.nt_class is None and info.spec.compute_fn is not None
+
+    def _generate_pta_init(self, pta_infos: list[IndicatorInfo]) -> list[str]:
+        """``__init__`` state for compute_fn-path indicators.
+
+        * one OHLCV buffer per timeframe used by a compute_fn indicator, so a
+          4h indicator on a 1h strategy is fed 4h bars;
+        * ``_pta_params``: every compute_fn param read from ``config`` (sweep /
+          WFA overrides of e.g. ``adx_period`` must change the computation);
+        * warmup gate and rolling-buffer cap derived from those params at
+          runtime via the same helpers the compiler uses.
+        """
+        tfs = sorted({i.timeframe for i in pta_infos})
+        lines = [
+            "        # compute_fn (pandas) indicators: one OHLCV bar buffer per timeframe",
+            "        self._pta_bufs: dict[str, dict[str, list[float]]] = {",
+        ]
+        for tf in tfs:
+            lines.append(
+                f'            "{tf}": {{"open": [], "high": [], "low": [], "close": [], "volume": []}},'
+            )
+        lines.append("        }")
+        lines.append("        self._pta_values: dict[str, float] = {}")
+        lines.append("        # compute_fn params come from config so sweep/WFA overrides apply")
+        lines.append("        self._pta_params: dict[str, dict[str, object]] = {")
+        for info in pta_infos:
+            pairs = ", ".join(
+                f'"{key}": config.{field}' for key, field, *_ in self._pta_param_fields(info)
+            )
+            lines.append(f'            "{info.name}": {{{pairs}}},')
+        lines.append("        }")
+        lines.append("        # Bars buffered before each compute_fn is first called")
+        lines.append("        self._pta_lookback: dict[str, int] = {")
+        for info in pta_infos:
+            lines.append(
+                f'            "{info.name}": pta_lookback("{info.spec.name}", '
+                f'self._pta_params["{info.name}"]),'
+            )
+        lines.append("        }")
+        lines.append(
+            "        # Rolling-buffer cap per timeframe (0 = unbounded: cumulative indicator)"
+        )
+        lines.append("        self._pta_buffer_cap: dict[str, int] = {")
+        for tf in tfs:
+            tf_infos = [i for i in pta_infos if i.timeframe == tf]
+            lbs = ", ".join(f'self._pta_lookback["{i.name}"]' for i in tf_infos)
+            full = any(i.spec.requires_full_history for i in tf_infos)
+            lines.append(f'            "{tf}": pta_buffer_cap([{lbs}], full_history={full}),')
+        lines.append("        }")
+        lines.append("")
+        return lines
+
     def _generate_update_pta_indicators(self, pta_indicators: list[IndicatorInfo]) -> list[str]:
-        """Generate ``_update_pta_indicators`` for compute_fn-path indicators.
+        """Generate ``_update_pta_indicators(tf)`` for compute_fn-path indicators.
 
-        Emits a generic dispatcher that builds a single OHLCV DataFrame per
-        bar, then for each compute_fn-path indicator imports the spec's
-        ``compute_fn`` by name and calls it with the merged params. Results
-        are unpacked into ``self._pta_values`` either as a single scalar
-        (single-output) or namespaced by sub-output key (multi-output).
-
-        This replaces the ~200-line per-type elif chain from the P4
-        refactor; new plugins with a ``compute_fn`` slot in without
-        touching the compiler.
+        Called by ``_feed_pta_buffer`` after a bar of timeframe ``tf`` lands in
+        its buffer. Builds one OHLCV DataFrame per call, then calls each of the
+        timeframe's ``compute_fn`` with its config-resolved params. Results are
+        unpacked into ``self._pta_values`` either as a single scalar
+        (single-output) or namespaced by sub-output key (multi-output). A NaN
+        result (warmup) is never stored, so the indicator stays not-ready.
         """
         lines = [
-            "def _update_pta_indicators(self) -> None:",
-            '    """Compute compute_fn-path indicators from bar buffer."""',
+            "def _update_pta_indicators(self, tf: str) -> None:",
+            '    """Compute the compute_fn indicators of timeframe ``tf`` from its buffer."""',
+            "    _buf = self._pta_bufs[tf]",
+            '    _n = len(_buf["close"])',
             "    _df = None",
         ]
 
-        for info in pta_indicators:
-            spec = info.spec
-            if spec.compute_fn is None:
-                continue
-            fn_name = spec.compute_fn.__name__
-            lookback = self._get_pta_lookback(info)
-            params_literal = self._compile_pta_params_literal(info)
-            primary = self._effective_primary(spec)
-
-            lines.append(f"    # {info.name} ({info.config.type}) via {fn_name} — lookback {lookback}")
-            lines.append(f"    if len(self._pta_close) >= {lookback}:")
-            lines.append("        if _df is None:")
-            lines.append('            _df = pd.DataFrame({"open": self._pta_open, "high": self._pta_high, "low": self._pta_low, "close": self._pta_close, "volume": self._pta_volume})')
-            lines.append(f"        _res = {fn_name}(_df, {params_literal})")
-
-            if len(spec.output_names) > 1:
-                lines.append("        if isinstance(_res, dict):")
-                lines.append(f'            _primary = _res.get("{primary}")')
-                lines.append("            if _primary is not None and len(_primary) > 0:")
-                lines.append("                _v = _primary.iloc[-1]")
-                lines.append("                if not pd.isna(_v):")
-                lines.append(f'                    self._pta_values["{info.name}"] = float(_v)')
-                lines.append("            for _k, _s in _res.items():")
-                lines.append("                if _s is not None and len(_s) > 0:")
-                lines.append("                    _v = _s.iloc[-1]")
-                lines.append("                    if not pd.isna(_v):")
+        tfs = sorted({i.timeframe for i in pta_indicators})
+        for idx, tf in enumerate(tfs):
+            kw = "if" if idx == 0 else "elif"
+            lines.append(f'    {kw} tf == "{tf}":')
+            for info in (i for i in pta_indicators if i.timeframe == tf):
+                spec = info.spec
+                if spec.compute_fn is None:
+                    continue
+                fn_name = spec.compute_fn.__name__
+                primary = self._effective_primary(spec)
+                ind = "        "
                 lines.append(
-                    f'                        self._pta_values["{info.name}_" + _k] = float(_v)'
+                    f"{ind}# {info.name} ({info.config.type}) via {fn_name}"
+                    f" — default lookback {self._get_pta_lookback(info)}"
                 )
-            else:
-                lines.append("        if _res is not None and len(_res) > 0:")
-                lines.append("            _v = _res.iloc[-1]")
-                lines.append("            if not pd.isna(_v):")
-                lines.append(f'                self._pta_values["{info.name}"] = float(_v)')
+                lines.append(f'{ind}if _n >= self._pta_lookback["{info.name}"]:')
+                lines.append(f"{ind}    if _df is None:")
+                lines.append(
+                    f'{ind}        _df = pd.DataFrame({{"open": _buf["open"], "high": _buf["high"], '
+                    '"low": _buf["low"], "close": _buf["close"], "volume": _buf["volume"]})'
+                )
+                lines.append(f'{ind}    _res = {fn_name}(_df, self._pta_params["{info.name}"])')
+
+                if len(spec.output_names) > 1:
+                    lines.append(f"{ind}    if isinstance(_res, dict):")
+                    lines.append(f'{ind}        _primary = _res.get("{primary}")')
+                    lines.append(f"{ind}        if _primary is not None and len(_primary) > 0:")
+                    lines.append(f"{ind}            _v = _primary.iloc[-1]")
+                    lines.append(f"{ind}            if not pd.isna(_v):")
+                    lines.append(f'{ind}                self._pta_values["{info.name}"] = float(_v)')
+                    lines.append(f"{ind}        for _k, _s in _res.items():")
+                    lines.append(f"{ind}            if _s is not None and len(_s) > 0:")
+                    lines.append(f"{ind}                _v = _s.iloc[-1]")
+                    lines.append(f"{ind}                if not pd.isna(_v):")
+                    lines.append(
+                        f'{ind}                    self._pta_values["{info.name}_" + _k] = float(_v)'
+                    )
+                else:
+                    lines.append(f"{ind}    if _res is not None and len(_res) > 0:")
+                    lines.append(f"{ind}        _v = _res.iloc[-1]")
+                    lines.append(f"{ind}        if not pd.isna(_v):")
+                    lines.append(f'{ind}            self._pta_values["{info.name}"] = float(_v)')
 
         return lines
 
@@ -1291,12 +1487,23 @@ class StrategyCompiler:
         "atr_multiplier",
     )
 
+    # Spec-default param names that alias a DSL-native field (STOCH declares
+    # ``period_k``/``period_d`` while the DSL field is ``period``/``d_period``).
+    # When the DSL field is set the alias is dropped so exactly one config
+    # field drives the value.
+    _PARAM_ALIASES: ClassVar[dict[str, str]] = {
+        "period_k": "period",
+        "k_period": "period",
+        "period_d": "d_period",
+    }
+
     @staticmethod
     def _merge_effective_params(info: IndicatorInfo) -> dict[str, object]:
         """Overlay DSL IndicatorConfig overrides on top of spec defaults.
 
-        Called by both ``_compile_pta_params_literal`` and
-        ``_get_pta_lookback`` so the merge logic lives in one place.
+        Single source for the compute_fn param set: config fields, the
+        runtime ``_pta_params`` dict and the compile-time lookback all derive
+        from it.
 
         Both schema-native fields (``period``, ``fast_period``, ...) and
         plugin-declared extras (ADAPTIVE_RSI's ``alpha``, etc.) are folded
@@ -1308,6 +1515,9 @@ class StrategyCompiler:
             val = getattr(info.config, dsl_field, None)
             if val is not None:
                 merged[dsl_field] = val
+                for alias, target in StrategyCompiler._PARAM_ALIASES.items():
+                    if target == dsl_field:
+                        merged.pop(alias, None)
         extras = getattr(info.config, "model_extra", None) or {}
         for key, val in extras.items():
             if val is not None and key in info.spec.param_schema:
@@ -1315,49 +1525,52 @@ class StrategyCompiler:
         return merged
 
     @staticmethod
-    def _compile_pta_params_literal(info: IndicatorInfo) -> str:
-        """Build a Python-literal dict string for the ``compute_fn`` call."""
-        merged = StrategyCompiler._merge_effective_params(info)
-        pairs = ", ".join(f'"{k}": {v!r}' for k, v in merged.items())
-        return "{" + pairs + "}"
+    def _pta_param_fields(
+        info: IndicatorInfo,
+    ) -> list[tuple[str, str, str, object, bool]]:
+        """Config fields backing a compute_fn indicator's params.
 
-    # Rolling-buffer cap policy for compute_fn-path indicators. Windowed
-    # indicators (RSI, MACD, STOCH, BBANDS, ...) converge to their full-history
-    # values well within 10x their lookback (EMA/Wilder smoothing weight decay
-    # is geometric: remaining weight after 10 periods-worth of bars ~ e^-20).
-    _PTA_BUFFER_LOOKBACK_MULTIPLE: int = 10
-    _PTA_BUFFER_MIN_CAP: int = 400
+        Returns ``(param_key, config_field, type_name, default, native)``
+        tuples. ``native`` marks DSL-native fields (``period`` etc.) that the
+        indicator-parameters block of the config class already emits.
+        """
+        out: list[tuple[str, str, str, object, bool]] = []
+        for key, val in StrategyCompiler._merge_effective_params(info).items():
+            field_name = f"{info.name}_{key}"
+            native = (
+                key in StrategyCompiler._DSL_CONFIG_FIELDS
+                and getattr(info.config, key, None) is not None
+            )
+            declared = info.spec.param_schema.get(key)
+            if declared in (int, float, bool, str):
+                type_name = declared.__name__
+            elif isinstance(val, (bool, int, float, str)):
+                type_name = type(val).__name__
+            else:
+                msg = (
+                    f"Indicator '{info.name}' ({info.config.type}) param '{key}' has "
+                    f"unsupported value type {type(val).__name__}"
+                )
+                raise CompilerError(msg)
+            out.append((key, field_name, type_name, val, native))
+        return out
 
     @classmethod
     def _compute_pta_buffer_cap(cls, pta_infos: list[IndicatorInfo]) -> int:
-        """Bar-buffer cap for the compute_fn path (0 = unbounded).
+        """Default-param bar-buffer cap for the compute_fn path (0 = unbounded).
 
-        Returns 0 when any indicator is cumulative (``requires_full_history``,
-        e.g. OBV/VWAP) since truncation would change its value. Otherwise
-        ``max(MIN_CAP, MULTIPLE x largest lookback)`` — enough warmup that
-        capped values match full-history values to float precision.
+        The generated strategy recomputes this at runtime from its config via
+        :func:`vibe_quant.dsl.indicators.pta_buffer_cap`.
         """
-        if any(i.spec.requires_full_history for i in pta_infos):
-            return 0
-        max_lookback = max((cls._get_pta_lookback(i) for i in pta_infos), default=14)
-        return max(cls._PTA_BUFFER_MIN_CAP, cls._PTA_BUFFER_LOOKBACK_MULTIPLE * max_lookback)
+        return pta_buffer_cap(
+            [cls._get_pta_lookback(i) for i in pta_infos],
+            full_history=any(i.spec.requires_full_history for i in pta_infos),
+        )
 
     @staticmethod
     def _get_pta_lookback(info: IndicatorInfo) -> int:
-        """Minimum lookback bars needed before a compute_fn is valid.
-
-        Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD,
-        ICHIMOKU have custom formulas). Default: read ``period`` from the
-        effective param dict.
-        """
-        spec = info.spec
-        merged = StrategyCompiler._merge_effective_params(info)
-        if spec.pta_lookback_fn is not None:
-            return int(spec.pta_lookback_fn(merged))
-        period = merged.get("period")
-        if isinstance(period, (int, float)):
-            return int(period)
-        return 14
+        """Default-param lookback (see :func:`vibe_quant.dsl.indicators.pta_lookback`)."""
+        return pta_lookback(info.spec, StrategyCompiler._merge_effective_params(info))
 
     def _generate_time_filter_method(self, time_filters: TimeFilterConfig) -> list[str]:
         """Generate _check_time_filters method.
@@ -1634,8 +1847,8 @@ class StrategyCompiler:
     def _crossover_prev_guard(cond: Condition) -> str:
         """Generate guard expression ensuring prev values exist for crossover.
 
-        Returns 'True' if no indicators need guarding, otherwise an 'in' check
-        so the first bar after warmup doesn't fire a false crossover.
+        Returns 'True' if no operand needs guarding, otherwise an 'in' check
+        (indicators AND prices) so the first bar after warmup never fires.
         """
         from vibe_quant.dsl.conditions import Operand
 
@@ -1643,6 +1856,9 @@ class StrategyCompiler:
         for operand in (cond.left, cond.right):
             if isinstance(operand, Operand) and operand.is_indicator:
                 checks.append(f'"{operand.value}" in self._prev_values')
+            elif isinstance(operand, Operand) and operand.is_price:
+                key = StrategyCompiler._prev_price_key(str(operand.value))
+                checks.append(f'"{key}" in self._prev_values')
         return " and ".join(checks) if checks else "True"
 
     def _operand_to_prev_code(self, operand: object) -> str:
@@ -1661,9 +1877,11 @@ class StrategyCompiler:
 
         if operand.is_indicator:
             return f'self._prev_values.get("{operand.value}", 0.0)'
-        else:
-            # Literals and prices don't have previous values
-            return self._operand_to_code(operand)
+        if operand.is_price:
+            key = self._prev_price_key(str(operand.value))
+            return f'self._prev_values.get("{key}", 0.0)'
+        # Literals have no previous value
+        return self._operand_to_code(operand)
 
     def _generate_order_methods(self) -> list[str]:
         """Generate order submission methods with SL/TP and event-based tracking.

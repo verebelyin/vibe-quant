@@ -60,7 +60,7 @@ take_profit:
         assert "import pandas as pd" in source
         assert "from vibe_quant.dsl.compute_builtins import compute_tema" in source
         # Should have bar buffer init
-        assert "self._pta_close" in source
+        assert "self._pta_bufs" in source
         assert "self._pta_values" in source
         # Should compute TEMA via compute_tema
         assert "compute_tema(" in source
@@ -152,7 +152,7 @@ take_profit:
         compile(source, "<generated>", "exec")
         # The OHLCV DataFrame the compute_fn receives wires self._pta_volume
         # into its "volume" column, so the reference must be present.
-        assert "self._pta_volume" in source
+        assert '_buf["volume"].append(float(bar.volume))' in source
         # VOLSMA routes through compute_volsma (applies SMA to the volume
         # column internally) instead of calling ta.sma directly.
         assert "compute_volsma(" in source
@@ -164,10 +164,11 @@ take_profit:
 
 
 class TestPositionChangedImport:
-    """Generated code should not import unused PositionChanged."""
+    """PositionChanged is imported AND handled (SL/TP resize on partial fills,
+    vibe-quant-e70tl.4)."""
 
     def test_no_position_changed_import(self) -> None:
-        """Compiled source must not import PositionChanged."""
+        """Compiled source imports PositionChanged and dispatches it."""
         yaml_content = """
 name: import_test
 timeframe: 5m
@@ -188,7 +189,9 @@ take_profit:
         dsl = parse_strategy_string(yaml_content)
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
-        assert "PositionChanged" not in source
+        assert "PositionChanged" in source.split("class ")[0]  # imported
+        assert "isinstance(event, PositionChanged)" in source
+        assert "self._sync_protective_orders(pos)" in source
 
     def test_still_imports_position_opened_closed(self) -> None:
         """PositionOpened and PositionClosed should still be imported."""

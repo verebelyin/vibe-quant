@@ -27,9 +27,9 @@ Usage::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-from vibe_quant.dsl.compute_builtins import int_param
+from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ def compute_kama(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
 
     close = verify_series(df["close"], max(fast, slow, period))
     if close is None:
-        return cast("pd.Series", df["close"] * 0)
+        return nan_like(df)  # insufficient data: not ready (NaN), never 0
 
     # Smoothing constant — identical pandas ops to pandas_ta_classic.kama.
     fr = 2 / (fast + 1)

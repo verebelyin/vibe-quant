@@ -768,12 +768,12 @@ class TestIndicatorPoolFilter:
             pipe._apply_indicator_pool_filter()
 
     def test_known_subset_filters_cleanly(self) -> None:
-        cfg = _make_config(indicator_pool=["RSI", "ATR"])
+        cfg = _make_config(indicator_pool=["RSI", "NATR"])
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         pipe._apply_indicator_pool_filter()
         from vibe_quant.discovery.operators import INDICATOR_POOL
 
-        assert set(INDICATOR_POOL.keys()) == {"RSI", "ATR"}
+        assert set(INDICATOR_POOL.keys()) == {"RSI", "NATR"}
 
 
 class TestElitePreservation:

@@ -38,19 +38,21 @@ def test_bit_identical_to_library(seed: int, n: int, period: int) -> None:
     expected = ta.kama(df["close"], length=period)
     actual = compute_kama(df, {"period": period})
     if expected is None:
-        # Series shorter than warmup: plugin returns a zeroed series
-        assert (actual == 0).all()
+        # Series shorter than warmup: plugin returns all-NaN (not ready), never 0
+        assert actual.isna().all()
         return
     # Exact — no tolerance. NaN positions must also match.
     np.testing.assert_array_equal(actual.to_numpy(), expected.to_numpy())
     assert actual.name == expected.name
 
 
-def test_too_short_series_returns_zeroes() -> None:
+def test_too_short_series_returns_nan() -> None:
+    """Warmup must read as not-ready: a 0.0 KAMA made ``close > kama`` true
+    throughout warmup (vibe-quant-e70tl.23)."""
     df = _df(7, 8)  # shorter than slow=30 warmup
     result = compute_kama(df, {"period": 10})
     assert len(result) == 8
-    assert (result == 0).all()
+    assert result.isna().all()
 
 
 def test_flat_series_exact() -> None:

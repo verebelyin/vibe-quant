@@ -59,6 +59,15 @@ def _translate_indicators(indicators_raw: list[dict[str, Any]]) -> dict[str, dic
         # ATR-based
         if "atr_multiplier" in params:
             config["atr_multiplier"] = float(params["atr_multiplier"])
+        # STOCH (editor spells the periods k_period / d_period)
+        if "k_period" in params and "period" not in params:
+            config["period"] = int(params["k_period"])
+        if "d_period" in params:
+            config["d_period"] = int(params["d_period"])
+        # Per-indicator timeframe (was silently dropped)
+        tf_override = ind.get("timeframe_override")
+        if tf_override:
+            config["timeframe"] = str(tf_override)
 
         result[name] = config
     return result
@@ -119,23 +128,50 @@ def _condition_to_str(cond: dict[str, Any] | str, ref_map: dict[str, str] | None
     return f"{left} {op} {right}"
 
 
+def _condition_list(
+    conditions: dict[str, Any], key: str, ref_map: dict[str, str] | None
+) -> list[str]:
+    """Translate one editor condition list; AND-only (StrategyDSL semantics).
+
+    Raises:
+        ValueError: if any condition after the first is joined with ``or`` --
+            silently AND-ing it would trade a different strategy.
+    """
+    raw = conditions.get(key)
+    if not isinstance(raw, list):
+        return []
+    for i, cond in enumerate(raw):
+        if i > 0 and isinstance(cond, dict) and str(cond.get("logic") or "and").lower() == "or":
+            msg = (
+                f"conditions.{key}[{i}] uses 'or' logic, which the backtest engine does not "
+                "support (conditions are AND-ed); split it into separate strategies"
+            )
+            raise ValueError(msg)
+    return [_condition_to_str(c, ref_map) for c in raw]
+
+
 def _translate_conditions(
     conditions: dict[str, Any], ref_map: dict[str, str] | None = None
-) -> tuple[list[str], list[str]]:
-    """Return (long_entry_conditions, short_entry_conditions)."""
-    long_conds: list[str] = []
-    short_conds: list[str] = []
-
-    if isinstance(conditions.get("long_entry"), list):
-        long_conds = [_condition_to_str(c, ref_map) for c in conditions["long_entry"]]
-    if isinstance(conditions.get("short_entry"), list):
-        short_conds = [_condition_to_str(c, ref_map) for c in conditions["short_entry"]]
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Return (long_entry, short_entry, long_exit, short_exit) condition lists."""
+    long_conds = _condition_list(conditions, "long_entry", ref_map)
+    short_conds = _condition_list(conditions, "short_entry", ref_map)
 
     # Fall back: generic entry → long
-    if not long_conds and not short_conds and isinstance(conditions.get("entry"), list):
-        long_conds = [_condition_to_str(c, ref_map) for c in conditions["entry"]]
+    if not long_conds and not short_conds:
+        long_conds = _condition_list(conditions, "entry", ref_map)
 
-    return long_conds, short_conds
+    long_exit = _condition_list(conditions, "long_exit", ref_map)
+    short_exit = _condition_list(conditions, "short_exit", ref_map)
+    # Generic exit applies to every direction that has entries (was dropped)
+    if not long_exit and not short_exit:
+        generic_exit = _condition_list(conditions, "exit", ref_map)
+        if long_conds:
+            long_exit = list(generic_exit)
+        if short_conds:
+            short_exit = list(generic_exit)
+
+    return long_conds, short_conds, long_exit, short_exit
 
 
 def _translate_stop_loss(sl_raw: dict[str, Any]) -> dict[str, Any]:
@@ -196,7 +232,9 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
 
     # Conditions
     conditions_raw = raw.get("conditions", {}) or {}
-    long_entry, short_entry = _translate_conditions(conditions_raw, ref_map)
+    long_entry, short_entry, long_exit, short_exit = _translate_conditions(
+        conditions_raw, ref_map
+    )
 
     # Ensure at least one condition (StrategyDSL requires it)
     if not long_entry and not short_entry:
@@ -208,6 +246,12 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
     tp_raw = risk.get("take_profit", {}) or {}
     stop_loss = _translate_stop_loss(sl_raw)
     take_profit = _translate_take_profit(tp_raw)
+    if risk.get("trailing_stop_pct"):
+        msg = (
+            "risk.trailing_stop_pct is not supported by the backtest engine (only ATR "
+            "trailing stops: stop_loss.type 'atr_trailing'); remove it or switch the stop type"
+        )
+        raise ValueError(msg)
 
     # Time filters
     time_raw = raw.get("time", {}) or {}
@@ -237,6 +281,13 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
         "stop_loss": stop_loss,
         "take_profit": take_profit,
     }
+    if long_exit or short_exit:
+        result["exit_conditions"] = {"long": long_exit, "short": short_exit}
+    # Indicator timeframe overrides must be declared as additional timeframes
+    for cfg in indicators.values() if isinstance(indicators, dict) else []:
+        tf = cfg.get("timeframe") if isinstance(cfg, dict) else None
+        if tf and tf != timeframe and tf not in additional_tfs:
+            additional_tfs.append(tf)
     if additional_tfs:
         result["additional_timeframes"] = additional_tfs
     if time_filters:
