@@ -31,7 +31,12 @@ def main() -> int:
     runner = ValidationRunner(db_path=db_path)
     try:
         result = runner.run(args.run_id, detail_timeframe=args.detail_timeframe)
+        # mark_completed keeps a failure the runner recorded (e.g. 0 trades).
         job_manager.mark_completed(args.run_id)
+        run_error = job_manager.run_failure(args.run_id)
+        if run_error is not None:
+            print(f"Validation failed: {run_error}", file=sys.stderr)
+            return 1
         # total_return is stored as a fraction (0.15 = 15%); multiply by 100 for display
         print(
             f"Validation complete: Sharpe={result.sharpe_ratio:.2f}, Return={result.total_return * 100:.2f}%",
