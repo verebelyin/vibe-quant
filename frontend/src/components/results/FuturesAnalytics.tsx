@@ -2,6 +2,7 @@ import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatSignedUsd, grossPnlUsd, netPnlUsd } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 
 interface FuturesAnalyticsProps {
@@ -32,18 +33,15 @@ export function FuturesAnalytics({ runId }: FuturesAnalyticsProps) {
 
   if (query.isError || !data) return null;
 
+  // Bar widths use magnitudes; PnL math keeps funding's sign (negative = received).
   const fees = Math.abs(data.total_fees ?? 0);
   const funding = Math.abs(data.total_funding ?? 0);
   const slippage = Math.abs(data.total_slippage ?? 0);
   const totalCosts = fees + funding + slippage;
 
-  // total_return from backend is NET (after fees)
-  const netPnl =
-    data.total_return != null && data.starting_balance != null
-      ? (data.total_return / 100) * data.starting_balance
-      : null;
-
-  const grossPnl = netPnl != null ? netPnl + totalCosts : null;
+  // total_return is a NET fraction (after fees, slippage, funding).
+  const netPnl = netPnlUsd(data.total_return, data.starting_balance);
+  const grossPnl = grossPnlUsd(netPnl, data.total_fees, data.total_slippage, data.total_funding);
   const fundingPctOfGross =
     grossPnl != null && grossPnl !== 0 ? (funding / Math.abs(grossPnl)) * 100 : null;
 
@@ -97,7 +95,7 @@ export function FuturesAnalytics({ runId }: FuturesAnalyticsProps) {
                 grossPnl != null && grossPnl >= 0 ? "text-green-500" : "text-red-500",
               )}
             >
-              {grossPnl != null ? `$${grossPnl.toFixed(2)}` : "N/A"}
+              {formatSignedUsd(grossPnl)}
             </p>
           </div>
           <div className="text-center">
@@ -114,7 +112,7 @@ export function FuturesAnalytics({ runId }: FuturesAnalyticsProps) {
                 netPnl != null && netPnl >= 0 ? "text-green-500" : "text-red-500",
               )}
             >
-              {netPnl != null ? `$${netPnl.toFixed(2)}` : "N/A"}
+              {formatSignedUsd(netPnl)}
             </p>
           </div>
           <div className="text-center">

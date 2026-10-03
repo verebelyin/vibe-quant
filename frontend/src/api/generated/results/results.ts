@@ -1273,6 +1273,10 @@ export function useGetMonthlyReturnsApiResultsRunsRunIdMonthlyReturnsGet<TData =
 
 
 /**
+ * Save the user's free-text notes (``user_notes``).
+
+Never touches ``notes``, which holds machine JSON (discovery results,
+consistency flags) that promote/export depend on.
  * @summary Update Notes
  */
 export type updateNotesApiResultsRunsRunIdNotesPutResponse200 = {

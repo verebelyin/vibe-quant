@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import sqlite3
 import sys
 import time
 from datetime import UTC, datetime
@@ -182,30 +183,54 @@ async def ingest_preview(body: IngestRequest) -> IngestPreviewResponse:
 # --- Ingest (background job) ---
 
 
-@router.post("/ingest", status_code=202)
-async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
-    log_file = f"logs/ingest_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log"
+def _start_data_job(
+    jobs: BacktestJobManager, job_type: str, log_prefix: str, data_args: list[str]
+) -> tuple[int, int]:
+    """Spawn a data CLI command via the heartbeating job wrapper.
+
+    Returns (job_id, pid). ``job_id`` (negative, never a backtest run id)
+    keys the job row and the ``/api/data/ingest/{job_id}/progress`` stream.
+    """
+    job_id = _next_data_run_id()
+    log_file = f"logs/{log_prefix}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log"
     command = [
         sys.executable,
         "-m",
-        "vibe_quant.data",
-        "ingest",
-        "--symbols",
-        ",".join(body.symbols),
-        "--start",
-        body.start_date,
-        "--end",
-        body.end_date,
+        "vibe_quant.jobs.data_job",
+        "--run-id",
+        str(job_id),
+        "--db",
+        str(jobs.db_path),
+        "--",
+        *data_args,
     ]
-
     try:
-        pid = jobs.start_job(_next_data_run_id(), "data_ingest", command, log_file=log_file)
+        pid = jobs.start_job(job_id, job_type, command, log_file=log_file)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return job_id, pid
 
-    logger.info("data ingest started pid=%d symbols=%s", pid, body.symbols)
+
+@router.post("/ingest", status_code=202)
+async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
+    job_id, pid = _start_data_job(
+        jobs,
+        "data_ingest",
+        "ingest",
+        [
+            "ingest",
+            "--symbols",
+            ",".join(body.symbols),
+            "--start",
+            body.start_date,
+            "--end",
+            body.end_date,
+        ],
+    )
+    logger.info("data ingest started job_id=%d pid=%d symbols=%s", job_id, pid, body.symbols)
     return {
         "status": "started",
+        "job_id": job_id,
         "pid": pid,
         "symbols": body.symbols,
         "start_date": body.start_date,
@@ -218,44 +243,21 @@ async def start_ingest(body: IngestRequest, jobs: JobMgr) -> dict[str, object]:
 
 @router.post("/update", status_code=202)
 async def start_update(jobs: JobMgr) -> dict[str, object]:
-    log_file = f"logs/update_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log"
-    command = [
-        sys.executable,
-        "-m",
-        "vibe_quant.data",
-        "update",
-    ]
-
-    try:
-        pid = jobs.start_job(_next_data_run_id(), "data_update", command, log_file=log_file)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    logger.info("data update started pid=%d", pid)
-    return {"status": "started", "pid": pid}
+    job_id, pid = _start_data_job(jobs, "data_update", "update", ["update"])
+    logger.info("data update started job_id=%d pid=%d", job_id, pid)
+    return {"status": "started", "job_id": job_id, "pid": pid}
 
 
-# --- Rebuild catalog (stub) ---
+# --- Rebuild catalog ---
 
 
 @router.post("/rebuild", status_code=202)
 async def rebuild_catalog(jobs: JobMgr) -> dict[str, object]:
-    log_file = f"logs/rebuild_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log"
-    command = [
-        sys.executable,
-        "-m",
-        "vibe_quant.data",
-        "rebuild",
-        "--from-archive",
-    ]
-
-    try:
-        pid = jobs.start_job(_next_data_run_id(), "catalog_rebuild", command, log_file=log_file)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    logger.info("catalog rebuild started pid=%d", pid)
-    return {"status": "started", "pid": pid}
+    job_id, pid = _start_data_job(
+        jobs, "catalog_rebuild", "rebuild", ["rebuild", "--from-archive"]
+    )
+    logger.info("catalog rebuild started job_id=%d pid=%d", job_id, pid)
+    return {"status": "started", "job_id": job_id, "pid": pid}
 
 
 # --- Browse OHLCV data ---
@@ -461,77 +463,69 @@ async def compute_indicators_endpoint(
         archive.close()
 
 
-# --- Data quality (stub) ---
+# --- Data quality ---
+
+
+def _iso_ms(ts: int) -> str:
+    return datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M")
 
 
 @router.get("/quality/{symbol}", response_model=DataQualityResponse)
-async def data_quality(symbol: str, catalog: CatMgr) -> DataQualityResponse:
-    ohlc_errors: list[OhlcError] = []
-    quality_error: str | None = None
-    try:
-        bars = catalog.get_bars(symbol, "1m")
-        for bar in bars:
-            o = float(bar.get("open", 0) or 0)
-            h = float(bar.get("high", 0) or 0)
-            lo = float(bar.get("low", 0) or 0)
-            c = float(bar.get("close", 0) or 0)
-            v = float(bar.get("volume", 0) or 0)
-            ts = str(bar.get("timestamp", ""))
-            if h < lo:
-                ohlc_errors.append(
-                    OhlcError(
-                        timestamp=ts,
-                        error_type="high_lt_low",
-                        values={"high": h, "low": lo},
-                    )
-                )
-            if c <= 0:
-                ohlc_errors.append(
-                    OhlcError(
-                        timestamp=ts,
-                        error_type="zero_close",
-                        values={"close": c},
-                    )
-                )
-            if v < 0:
-                ohlc_errors.append(
-                    OhlcError(
-                        timestamp=ts,
-                        error_type="negative_volume",
-                        values={"volume": v},
-                    )
-                )
-            if o <= 0:
-                ohlc_errors.append(
-                    OhlcError(
-                        timestamp=ts,
-                        error_type="zero_open",
-                        values={"open": o},
-                    )
-                )
-    except Exception:
-        logger.warning("data quality check failed for %s", symbol, exc_info=True)
-        quality_error = f"Quality check failed for {symbol}"
+def data_quality(symbol: str) -> DataQualityResponse:
+    """Verify the archived 1m klines: exact 1-minute continuity, OHLC sanity,
+    flat zero-volume filler runs. Sync endpoint (threadpool): it streams ~1M rows.
+    """
+    from vibe_quant.data.verify import scan_klines
 
-    if quality_error:
+    archive = _get_archive()
+    try:
+        cursor = archive.conn.execute(
+            """SELECT open_time, open, high, low, close, volume FROM raw_klines
+               WHERE symbol = ? AND interval = '1m' ORDER BY open_time""",
+            (symbol,),
+        )
+        cursor.row_factory = sqlite3.Row
+        result = scan_klines(cursor)
+    finally:
+        archive.close()
+
+    if result["kline_count"] == 0:
         return DataQualityResponse(
             symbol=symbol,
             gaps=[],
             quality_score=None,
-            ohlc_errors=[],
-            ohlc_error_count=0,
-            error=quality_error,
+            error=f"No 1m data archived for {symbol}",
         )
 
-    error_count = len(ohlc_errors)
-    quality_score = max(0.0, 1.0 - min(1.0, error_count / 100.0)) if error_count > 0 else 1.0
+    gaps: list[dict[str, object]] = [
+        {"start": _iso_ms(a), "end": _iso_ms(b), "missing_bars": max(step - 1, 0)}
+        for a, b, step in result["gaps"]
+    ]
+    filler: list[dict[str, object]] = [
+        {"start": _iso_ms(a), "end": _iso_ms(b), "bars": n}
+        for a, b, n in result["zero_volume_runs"]
+    ]
+    ohlc_errors = [
+        OhlcError(timestamp=_iso_ms(ts), error_type="ohlc_inconsistent", values={"message": msg})
+        for ts, msg in result["ohlc_errors"]
+    ]
+    missing = sum(max(step - 1, 0) for _a, _b, step in result["gaps"])
+    filler_bars = sum(n for _a, _b, n in result["zero_volume_runs"])
+    bad_ohlc_bars = len({ts for ts, _msg in result["ohlc_errors"]})
+    expected = result["kline_count"] + missing
+    quality_score = max(0.0, 1.0 - (missing + filler_bars + bad_ohlc_bars) / expected)
 
     return DataQualityResponse(
         symbol=symbol,
-        gaps=[],
+        gaps=gaps[:500],
+        gap_count=len(gaps),
+        missing_bars=missing,
+        zero_volume_runs=filler[:500],
+        zero_volume_bars=filler_bars,
         quality_score=quality_score,
         ohlc_errors=ohlc_errors[:50],  # Cap to 50 for response size
-        ohlc_error_count=error_count,
+        ohlc_error_count=len(ohlc_errors),
+        kline_count=result["kline_count"],
     )
 
 

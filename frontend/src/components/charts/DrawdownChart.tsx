@@ -7,6 +7,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { drawdownToNegativePercent } from "@/lib/metrics";
 import type { DrawdownPoint } from "../../api/generated/models/drawdownPoint";
 
 export interface DrawdownChartProps {
@@ -20,9 +21,15 @@ function formatDate(ts: string): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+interface UnderwaterPoint {
+  timestamp: string;
+  /** Percent below the running peak, as a negative number (-3.12 = 3.12% under water). */
+  drawdown_pct: number;
+}
+
 interface TooltipPayloadEntry {
   value: number;
-  payload: DrawdownPoint;
+  payload: UnderwaterPoint;
 }
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {
@@ -33,16 +40,21 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: Toolti
       <p className="text-muted-foreground">
         {new Date(point.payload.timestamp).toLocaleDateString()}
       </p>
-      <p className="font-medium text-red-500">{(point.value * 100).toFixed(2)}%</p>
+      <p className="font-medium text-red-500">{point.value.toFixed(2)}%</p>
     </div>
   );
 }
 
 export default function DrawdownChart({ data, height = 200, className }: DrawdownChartProps) {
+  // The API sends positive fractions ((peak - equity) / peak); plot them under the zero line.
+  const underwater: UnderwaterPoint[] = data.map((p) => ({
+    timestamp: p.timestamp,
+    drawdown_pct: drawdownToNegativePercent(p.drawdown),
+  }));
   return (
     <div className={className}>
       <ResponsiveContainer width="100%" height={height}>
-        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <AreaChart data={underwater} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id="drawdownGradient" x1="0" y1="1" x2="0" y2="0">
               <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
@@ -59,7 +71,7 @@ export default function DrawdownChart({ data, height = 200, className }: Drawdow
             axisLine={false}
           />
           <YAxis
-            tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+            tickFormatter={(v: number) => `${v.toFixed(0)}%`}
             stroke="hsl(var(--muted-foreground))"
             fontSize={12}
             tickLine={false}
@@ -70,7 +82,7 @@ export default function DrawdownChart({ data, height = 200, className }: Drawdow
           <Tooltip content={<CustomTooltip />} />
           <Area
             type="monotone"
-            dataKey="drawdown"
+            dataKey="drawdown_pct"
             stroke="#ef4444"
             strokeWidth={2}
             fill="url(#drawdownGradient)"

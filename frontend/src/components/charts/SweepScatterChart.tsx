@@ -90,7 +90,13 @@ export default function SweepScatterChart({
               fontSize: 12,
             }}
           />
-          <ZAxis dataKey="total_return" range={[40, 400]} domain={[0, maxReturn]} />
+          {/* Bubble size = |return| so losing combos stay visible (negative values
+              fell below the domain and vanished). */}
+          <ZAxis
+            dataKey={(d: SweepScatterPoint) => Math.abs(d.total_return)}
+            range={[40, 400]}
+            domain={[0, maxReturn]}
+          />
           <Tooltip content={<CustomTooltip />} />
           <Scatter
             name="Other"

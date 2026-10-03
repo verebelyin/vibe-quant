@@ -70,21 +70,29 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
                 if not isinstance(w, dict):
                     continue
                 sharpe = w.get("sharpe")
-                offset = (
-                    offsets[i]
-                    if isinstance(offsets, list) and i < len(offsets)
-                    else None
-                )
+                ret = w.get("return_pct")  # fraction despite the name
+                # windows[0] is the original (in-sample) window; windows[i>=1]
+                # are shifted by cross_window_months[i-1] (discovery pipeline).
+                if i == 0:
+                    offset: int | None = 0
+                elif isinstance(offsets, list) and i - 1 < len(offsets):
+                    offset = offsets[i - 1]
+                else:
+                    offset = None
+                # Same rule as DiscoveryPipeline._evaluate_cross_windows.
                 passed = (
-                    sharpe is not None
+                    isinstance(sharpe, (int, float))
+                    and isinstance(ret, (int, float))
                     and isinstance(min_sharpe, (int, float))
+                    and ret > 0
                     and sharpe >= min_sharpe
                 )
                 mapped.append(
                     {
                         "offset": offset,
+                        "in_sample": i == 0,
                         "sharpe": sharpe,
-                        "return_pct": w.get("return_pct"),
+                        "return_pct": ret,
                         "max_dd": w.get("max_dd"),
                         "trades": w.get("trades"),
                         "passed": passed,
@@ -92,11 +100,25 @@ def _enrich_result_with_notes(row: dict[str, Any]) -> dict[str, Any]:
                 )
             enriched["cross_window_results"] = mapped
 
+        if isinstance(cw.get("passed"), bool):
+            enriched["cross_window_passed"] = cw["passed"]
+
     wfa = best.get("wfa")
     if isinstance(wfa, dict):
         sc = wfa.get("sharpe_consistency")
         if isinstance(sc, (int, float)):
             enriched["wfa_sharpe_consistency"] = float(sc)
+        # The discovery WFA gate is the return-based consistency, not Sharpe's.
+        rc = wfa.get("consistency")
+        if isinstance(rc, (int, float)):
+            enriched["wfa_consistency"] = float(rc)
+        if isinstance(wfa.get("passed"), bool):
+            enriched["wfa_passed"] = wfa["passed"]
+
+    # Effective bootstrap floor the run was gated with (timeframe default or override).
+    bms = payload.get("bootstrap_min_sharpe")
+    if isinstance(bms, (int, float)):
+        enriched["bootstrap_min_sharpe"] = float(bms)
 
     bootstrap = payload.get("bootstrap_ci") or best.get("bootstrap_ci")
     if isinstance(bootstrap, dict):
@@ -180,7 +202,11 @@ async def compare_runs(
 ) -> ComparisonResponse:
     if not run_ids.strip():
         raise HTTPException(status_code=400, detail="run_ids query param required")
-    id_list = [int(x.strip()) for x in run_ids.split(",") if x.strip()]
+    parts = [x.strip() for x in run_ids.split(",") if x.strip()]
+    bad = [x for x in parts if not x.isdigit()]
+    if bad:
+        raise HTTPException(status_code=422, detail=f"run_ids must be integers, got {bad}")
+    id_list = [int(x) for x in parts]
     results: list[BacktestResultResponse] = []
     for rid in id_list:
         row = mgr.get_backtest_result(rid)
@@ -358,13 +384,16 @@ async def update_notes(
     body: NotesUpdateRequest,
     mgr: StateMgr,
 ) -> BacktestResultResponse:
+    """Save the user's free-text notes (``user_notes``).
+
+    Never touches ``notes``, which holds machine JSON (discovery results,
+    consistency flags) that promote/export depend on.
+    """
     _ensure_run_exists(mgr, run_id)
-    row = mgr.get_backtest_result(run_id)
-    if row is None:
+    if not mgr.update_result_user_notes(run_id, body.notes):
         raise HTTPException(
             status_code=404, detail="No results for this run — notes require completed results"
         )
-    mgr.update_result_notes(run_id, body.notes)
     row = mgr.get_backtest_result(run_id)
     if row is None:  # pragma: no cover
         raise HTTPException(status_code=500, detail="Result disappeared after update")

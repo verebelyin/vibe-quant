@@ -25,7 +25,6 @@ import type {
 
 import type {
   DatabaseInfoResponse,
-  DatabaseSwitchRequest,
   HTTPValidationError,
   LatencyPreset,
   RiskConfigCreate,
@@ -1253,6 +1252,12 @@ export function useGetSystemInfoApiSettingsSystemInfoGet<TData = Awaited<ReturnT
 
 
 /**
+ * Active state DB (read-only).
+
+There is deliberately no runtime switch: swapping the API's StateManager
+left the job manager, every job subprocess and other workers on the old DB
+(runs and results split across two DBs). Choose the DB at backend start
+with ``VIBE_QUANT_DB=path``.
  * @summary Get Database Info
  */
 export type getDatabaseInfoApiSettingsDatabaseGetResponse200 = {
@@ -1362,93 +1367,3 @@ export function useGetDatabaseInfoApiSettingsDatabaseGet<TData = Awaited<ReturnT
 
 
 
-/**
- * @summary Switch Database
- */
-export type switchDatabaseApiSettingsDatabasePutResponse200 = {
-  data: DatabaseInfoResponse
-  status: 200
-}
-
-export type switchDatabaseApiSettingsDatabasePutResponse422 = {
-  data: HTTPValidationError
-  status: 422
-}
-
-export type switchDatabaseApiSettingsDatabasePutResponseSuccess = (switchDatabaseApiSettingsDatabasePutResponse200) & {
-  headers: Headers;
-};
-export type switchDatabaseApiSettingsDatabasePutResponseError = (switchDatabaseApiSettingsDatabasePutResponse422) & {
-  headers: Headers;
-};
-
-export type switchDatabaseApiSettingsDatabasePutResponse = (switchDatabaseApiSettingsDatabasePutResponseSuccess | switchDatabaseApiSettingsDatabasePutResponseError)
-
-export const getSwitchDatabaseApiSettingsDatabasePutUrl = () => {
-
-
-  
-
-  return `/api/settings/database`
-}
-
-export const switchDatabaseApiSettingsDatabasePut = async (databaseSwitchRequest: DatabaseSwitchRequest, options?: RequestInit): Promise<switchDatabaseApiSettingsDatabasePutResponse> => {
-  
-  return customInstance<switchDatabaseApiSettingsDatabasePutResponse>(getSwitchDatabaseApiSettingsDatabasePutUrl(),
-  {      
-    ...options,
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      databaseSwitchRequest,)
-  }
-);}
-
-
-
-
-export const getSwitchDatabaseApiSettingsDatabasePutMutationOptions = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext> => {
-
-const mutationKey = ['switchDatabaseApiSettingsDatabasePut'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-      
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, {data: DatabaseSwitchRequest}> = (props) => {
-          const {data} = props ?? {};
-
-          return  switchDatabaseApiSettingsDatabasePut(data,requestOptions)
-        }
-
-
-
-        
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type SwitchDatabaseApiSettingsDatabasePutMutationResult = NonNullable<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>>
-    export type SwitchDatabaseApiSettingsDatabasePutMutationBody = DatabaseSwitchRequest
-    export type SwitchDatabaseApiSettingsDatabasePutMutationError = HTTPValidationError
-
-    /**
- * @summary Switch Database
- */
-export const useSwitchDatabaseApiSettingsDatabasePut = <TError = HTTPValidationError,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>, TError,{data: DatabaseSwitchRequest}, TContext>, request?: SecondParameter<typeof customInstance>}
- , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof switchDatabaseApiSettingsDatabasePut>>,
-        TError,
-        {data: DatabaseSwitchRequest},
-        TContext
-      > => {
-      return useMutation(getSwitchDatabaseApiSettingsDatabasePutMutationOptions(options), queryClient);
-    }
-    

@@ -40,14 +40,20 @@ class BacktestResultResponse(BaseModel):
     purged_kfold_mean_sharpe: float | None
     execution_time_seconds: float | None
     starting_balance: float | None
+    # Machine JSON written by the pipelines — never shown/edited as user notes.
     notes: str | None
     created_at: str | None
+    user_notes: str | None = None
     skewness: float | None = None
     kurtosis: float | None = None
     bootstrap_sharpe_lower: float | None = None
     bootstrap_sharpe_upper: float | None = None
     bootstrap_ci_level: float | None = None
+    bootstrap_min_sharpe: float | None = None
     wfa_sharpe_consistency: float | None = None
+    wfa_consistency: float | None = None
+    wfa_passed: bool | None = None
+    cross_window_passed: bool | None = None
     cross_window_results: list[dict[str, object]] | None = None
     cross_regime_results: list[dict[str, object]] | None = None
     random_short_baseline_pct: float | None = None
@@ -149,4 +155,6 @@ class ComparisonResponse(BaseModel):
 
 
 class NotesUpdateRequest(BaseModel):
+    """User free-text notes (stored in ``backtest_results.user_notes``)."""
+
     notes: str

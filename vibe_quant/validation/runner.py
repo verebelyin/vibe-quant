@@ -1459,12 +1459,10 @@ class ValidationRunner:
             run_id: Run ID.
             result: Validation result to store.
         """
-        # Save backtest results
-        self._state.save_backtest_result(run_id, result.to_metrics_dict())
-
-        # Save individual trades
-        trade_dicts = [t.to_dict() for t in result.trades]
-        self._state.save_trades_batch(run_id, trade_dicts)
+        # Result + trades replace any prior attempt of this run atomically.
+        self._state.save_backtest_result(
+            run_id, result.to_metrics_dict(), trades=[t.to_dict() for t in result.trades]
+        )
 
     def _check_screening_consistency(
         self,

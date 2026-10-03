@@ -1,32 +1,11 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { toast } from "sonner";
-import {
-  getGetDatabaseInfoApiSettingsDatabaseGetQueryKey,
-  useGetDatabaseInfoApiSettingsDatabaseGet,
-  useSwitchDatabaseApiSettingsDatabasePut,
-} from "@/api/generated/settings/settings";
+import { useGetDatabaseInfoApiSettingsDatabaseGet } from "@/api/generated/settings/settings";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
-import { Label } from "@/components/ui/label";
 
 export function DatabaseTab() {
-  const qc = useQueryClient();
   const query = useGetDatabaseInfoApiSettingsDatabaseGet();
-  const switchMut = useSwitchDatabaseApiSettingsDatabasePut();
-
-  const [newPath, setNewPath] = useState("");
-  const [showSwitch, setShowSwitch] = useState(false);
-
   const info = query.data?.data;
-
-  const invalidate = () =>
-    qc.invalidateQueries({
-      queryKey: getGetDatabaseInfoApiSettingsDatabaseGetQueryKey(),
-    });
 
   if (query.isLoading) {
     return (
@@ -75,68 +54,16 @@ export function DatabaseTab() {
               </div>
             </div>
           )}
+
+          {/* No runtime switch: it only re-pointed the API, while running jobs and
+              their results kept using the old database. */}
+          <p className="mt-4 text-xs text-muted-foreground">
+            To use a different database, restart the backend with{" "}
+            <code className="font-mono">VIBE_QUANT_DB=/path/to/file.db</code>. Every job started by
+            the backend then uses that database.
+          </p>
         </CardContent>
       </Card>
-
-      {/* Switch DB */}
-      {!showSwitch ? (
-        <Button variant="outline" size="sm" onClick={() => setShowSwitch(true)}>
-          Switch Database
-        </Button>
-      ) : (
-        <Card className="py-4">
-          <CardContent>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Switch Database
-            </p>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">New DB Path</Label>
-              <Input
-                type="text"
-                value={newPath}
-                onChange={(e) => setNewPath(e.target.value)}
-                placeholder="/path/to/database.db"
-              />
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Button
-                size="sm"
-                disabled={switchMut.isPending || !newPath.trim()}
-                onClick={() => {
-                  switchMut.mutate(
-                    { data: { path: newPath.trim() } },
-                    {
-                      onSuccess: () => {
-                        invalidate();
-                        setShowSwitch(false);
-                        setNewPath("");
-                        toast.success("Database switched");
-                      },
-                    },
-                  );
-                }}
-              >
-                {switchMut.isPending ? "Switching..." : "Switch"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setShowSwitch(false);
-                  setNewPath("");
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-            {switchMut.isError && (
-              <p className="mt-2 text-xs text-destructive">
-                Failed to switch database. Check the path is valid.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

@@ -6,7 +6,6 @@
  */
 
 export * from './backtestLaunchRequest';
-export * from './backtestLaunchRequestOverfittingFilters';
 export * from './backtestLaunchRequestParameters';
 export * from './backtestResultResponse';
 export * from './backtestResultResponseCrossRegimeResults';
@@ -27,11 +26,11 @@ export * from './coverageCheckResponse';
 export * from './coverageCheckResponseCoverage';
 export * from './credentialsStatusResponse';
 export * from './databaseInfoResponse';
-export * from './databaseSwitchRequest';
 export * from './dataCoverageItem';
 export * from './dataCoverageResponse';
 export * from './dataQualityResponse';
 export * from './dataQualityResponseGapsItem';
+export * from './dataQualityResponseZeroVolumeRunsItem';
 export * from './dataStatusResponse';
 export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';

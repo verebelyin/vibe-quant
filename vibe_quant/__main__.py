@@ -53,7 +53,12 @@ def cmd_validation_run(args: argparse.Namespace) -> int:
         runner = ValidationRunner(db_path=db_path)
         result = runner.run(run_id=run_id, latency_preset=latency)
 
+        # mark_completed keeps a failure the runner recorded (e.g. 0 trades).
         job_manager.mark_completed(run_id)
+        run_error = job_manager.run_failure(run_id)
+        if run_error is not None:
+            print(f"Validation failed: {run_error}", file=sys.stderr)
+            return 1
 
         print("\nValidation Results:")
         print(f"  Strategy: {result.strategy_name}")
@@ -95,11 +100,14 @@ def cmd_validation_list(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success).
     """
+    from pathlib import Path
+
     from vibe_quant.validation.runner import list_validation_runs
 
     limit = args.limit
+    db = getattr(args, "db", None)
 
-    runs = list_validation_runs(limit=limit)
+    runs = list_validation_runs(db_path=Path(db) if db else None, limit=limit)
 
     if not runs:
         print("No validation runs found.")
@@ -336,6 +344,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override latency preset (default: from database or retail)",
     )
+    val_run_parser.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="Database path (default: data/state/vibe_quant.db)",
+    )
     val_run_parser.set_defaults(func=cmd_validation_run)
 
     # validation list
@@ -349,6 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=20,
         help="Maximum runs to show (default: 20)",
     )
+    val_list_parser.add_argument("--db", type=str, default=None, help="Database path")
     val_list_parser.set_defaults(func=cmd_validation_list)
 
     # validation batch

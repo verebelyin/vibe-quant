@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from vibe_quant import __version__
 from vibe_quant.api.routers.backtest import router as backtest_router
@@ -31,9 +33,48 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+    from starlette.requests import Request
+    from starlette.responses import Response
 
 __all__ = ["create_app"]
+
+logger = logging.getLogger(__name__)
+
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Not CORS-safelisted → a cross-site page cannot send it without a preflight,
+# which CORSMiddleware rejects for foreign origins.
+CSRF_HEADER = "x-requested-with"
+
+
+async def _csrf_guard(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject browser-originated state-changing requests a foreign page could forge.
+
+    Cross-site "simple" requests (HTML form posts, ``fetch`` with ``no-cors``)
+    skip the CORS preflight, so bodyless POSTs like ``/jobs/cleanup-stale`` or
+    ``/indicators/reload`` could be triggered from any website. Browsers always
+    attach ``Origin``/``Sec-Fetch-Site`` to such requests; when present we
+    require a JSON body type or the custom ``X-Requested-With`` header — both
+    force a preflight cross-origin. Non-browser clients (CLI, tests) are
+    unaffected.
+    """
+    if request.method in _UNSAFE_METHODS and (
+        "origin" in request.headers or "sec-fetch-site" in request.headers
+    ):
+        content_type = request.headers.get("content-type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        if media_type != "application/json" and CSRF_HEADER not in request.headers:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Cross-site request rejected: send Content-Type: "
+                    "application/json or an X-Requested-With header"
+                },
+            )
+    return await call_next(request)
 
 
 @asynccontextmanager
@@ -48,6 +89,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.job_manager = job_mgr
     app.state.catalog_manager = catalog_mgr
     app.state.ws_manager = ws_mgr
+
+    # Jobs that died while the backend was down would otherwise show
+    # 'running' forever; live ones keep running (they heartbeat themselves).
+    reconciled = job_mgr.reconcile_jobs()
+    if reconciled:
+        logger.warning("startup: marked %d dead 'running' job(s) failed", reconciled)
 
     await ws_mgr.start()
     try:
@@ -65,6 +112,8 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
+    # Registered before CORS so CORS stays outermost (preflights answered first).
+    app.middleware("http")(_csrf_guard)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
