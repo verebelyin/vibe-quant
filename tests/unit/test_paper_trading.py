@@ -98,33 +98,45 @@ class TestBinanceTestnetConfig:
         assert config.account_type == "USDT_FUTURES"
 
     def test_from_env_missing_key(self):
-        """Raises error if API key missing."""
+        """Raises error if testnet API key missing (live keys are not a fallback)."""
         with (
-            patch.dict(os.environ, {}, clear=True),
-            pytest.raises(ConfigurationError, match="BINANCE_API_KEY"),
+            patch.dict(
+                os.environ, {"BINANCE_API_KEY": "live", "BINANCE_API_SECRET": "live"}, clear=True
+            ),
+            pytest.raises(ConfigurationError, match="BINANCE_TESTNET_API_KEY"),
         ):
             BinanceTestnetConfig.from_env()
 
     def test_from_env_missing_secret(self):
         """Raises error if API secret missing."""
         with (
-            patch.dict(os.environ, {"BINANCE_API_KEY": "key"}, clear=True),
-            pytest.raises(ConfigurationError, match="BINANCE_API_SECRET"),
+            patch.dict(os.environ, {"BINANCE_TESTNET_API_KEY": "key"}, clear=True),
+            pytest.raises(ConfigurationError, match="BINANCE_TESTNET_API_SECRET"),
         ):
             BinanceTestnetConfig.from_env()
 
     def test_from_env_success(self):
-        """Creates config from env vars."""
+        """Testnet reads BINANCE_TESTNET_*; live reads BINANCE_*."""
         env = {
-            "BINANCE_API_KEY": "test_key",
-            "BINANCE_API_SECRET": "test_secret",
+            "BINANCE_TESTNET_API_KEY": "test_key",
+            "BINANCE_TESTNET_API_SECRET": "test_secret",
+            "BINANCE_API_KEY": "live_key",
+            "BINANCE_API_SECRET": "live_secret",
         }
         with patch.dict(os.environ, env, clear=True):
             config = BinanceTestnetConfig.from_env(testnet=True)
+            live = BinanceTestnetConfig.from_env(testnet=False)
 
         assert config.api_key == "test_key"
         assert config.api_secret == "test_secret"
         assert config.testnet is True
+        assert live.api_key == "live_key"
+        assert live.testnet is False
+
+    def test_repr_hides_secrets(self):
+        config = BinanceTestnetConfig("SECRETKEY123", "SECRETSECRET456")
+        assert "SECRETKEY123" not in repr(config)
+        assert "SECRETSECRET456" not in repr(config)
 
 
 class TestSizingModuleConfig:
@@ -136,8 +148,9 @@ class TestSizingModuleConfig:
 
         assert config.method == "fixed_fractional"
         assert config.max_leverage == Decimal("20")
-        assert config.max_position_pct == Decimal("0.5")
-        assert config.risk_per_trade == Decimal("0.02")
+        # None = keep the strategy's validated sizing values (no silent override).
+        assert config.max_position_pct is None
+        assert config.risk_per_trade is None
 
     def test_custom_values(self):
         """Can set custom values."""
@@ -247,8 +260,8 @@ class TestPaperTradingConfig:
     def test_create_from_env(self):
         """Can create from env vars."""
         env = {
-            "BINANCE_API_KEY": "test_key",
-            "BINANCE_API_SECRET": "test_secret",
+            "BINANCE_TESTNET_API_KEY": "test_key",
+            "BINANCE_TESTNET_API_SECRET": "test_secret",
         }
         with patch.dict(os.environ, env, clear=True):
             config = PaperTradingConfig.create(
@@ -432,8 +445,8 @@ class TestPaperTradingNode:
         assert node.status.error_message == "Hit 15% drawdown"
         assert not node._shutdown_event.is_set()
 
-    def test_halt_cancels_open_orders(self, db_path: Path):
-        """Halt cancels currently open orders via loaded runtime strategies."""
+    def test_halt_delegates_to_guard(self, db_path: Path):
+        """With a running trading node, halt is executed by the TradingGuard."""
         binance = BinanceTestnetConfig("key", "secret")
         config = PaperTradingConfig(
             trader_id="PAPER-001",
@@ -443,54 +456,25 @@ class TestPaperTradingNode:
             db_path=db_path,
         )
 
-        class _Strategy:
-            def __init__(self, strategy_id: str) -> None:
-                self.id = strategy_id
-                self.cancelled: list[object] = []
+        class _Guard:
+            def __init__(self) -> None:
+                self.halts: list[tuple[HaltReason, str]] = []
 
-            def cancel_order(self, order: object) -> None:
-                self.cancelled.append(order)
-
-        class _Trader:
-            def __init__(self, strategies: list[_Strategy]) -> None:
-                self._strategies = strategies
-
-            def strategies(self) -> list[_Strategy]:
-                return self._strategies
-
-        class _Cache:
-            def __init__(self, orders_by_strategy: dict[str, list[object]]) -> None:
-                self._orders_by_strategy = orders_by_strategy
-
-            def orders_open(self, strategy_id: object | None = None) -> list[object]:
-                if strategy_id is None:
-                    return []
-                return list(self._orders_by_strategy.get(str(strategy_id), []))
-
-        class _TradingNode:
-            def __init__(self, trader: _Trader, cache: _Cache) -> None:
-                self.trader = trader
-                self.cache = cache
-
-        strategy_a = _Strategy("S-A")
-        strategy_b = _Strategy("S-B")
-        order_1 = object()
-        order_2 = object()
-        order_3 = object()
+            def halt(self, reason: HaltReason, message: str) -> bool:
+                self.halts.append((reason, message))
+                return True
 
         node = PaperTradingNode(config)
-        node._trading_node = _TradingNode(
-            trader=_Trader([strategy_a, strategy_b]),
-            cache=_Cache({"S-A": [order_1, order_2], "S-B": [order_3]}),
-        )
+        guard = _Guard()
+        node._guard = guard  # type: ignore[assignment]
+        node.halt(HaltReason.MANUAL, "operator halt")
+        assert guard.halts == [(HaltReason.MANUAL, "operator halt")]
+        node._state_manager.close()
 
-        node.halt(HaltReason.ERROR, "Risk threshold breached")
+    def test_halt_event_keeps_payload_and_is_not_passed(self, db_path: Path, tmp_path: Path):
+        """Audit: RISK_CHECK halt events lost their payload and read passed=True."""
+        from vibe_quant.logging.writer import EventWriter
 
-        assert strategy_a.cancelled == [order_1, order_2]
-        assert strategy_b.cancelled == [order_3]
-
-    def test_halt_ignores_cancel_failures(self, db_path: Path):
-        """Halt continues even if individual order cancellations fail."""
         binance = BinanceTestnetConfig("key", "secret")
         config = PaperTradingConfig(
             trader_id="PAPER-001",
@@ -498,36 +482,22 @@ class TestPaperTradingNode:
             symbols=["BTCUSDT"],
             strategy_id=1,
             db_path=db_path,
+            logs_path=tmp_path / "logs",
         )
-
-        class _Strategy:
-            def __init__(self) -> None:
-                self.id = "S-ERR"
-                self.calls = 0
-
-            def cancel_order(self, order: object) -> None:
-                self.calls += 1
-                raise RuntimeError("cancel failed")
-
-        class _TradingNode:
-            def __init__(self) -> None:
-                strategy = _Strategy()
-                self.strategy = strategy
-                self.trader = type("Trader", (), {"strategies": lambda _self: [strategy]})()
-                self.cache = type(
-                    "Cache",
-                    (),
-                    {"orders_open": lambda _self, strategy_id=None: [object()]},
-                )()
-
         node = PaperTradingNode(config)
-        fake_runtime = _TradingNode()
-        node._trading_node = fake_runtime
-
-        node.halt(HaltReason.ERROR, "halt")
-
-        assert fake_runtime.strategy.calls == 1
-        assert node.status.state == NodeState.HALTED
+        node._event_writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
+        node.halt(HaltReason.MAX_DRAWDOWN, "dd 6%")
+        node._event_writer.close()
+        records = [
+            json.loads(line)
+            for line in (tmp_path / "logs" / "PAPER-001.jsonl").read_text().splitlines()
+        ]
+        halt = [r for r in records if r["event"] == "RISK_CHECK"][-1]
+        assert halt["data"]["action"] == "halt"
+        assert halt["data"]["reason"] == "max_drawdown"
+        assert halt["data"]["message"] == "dd 6%"
+        assert halt["data"]["passed"] is False
+        node._state_manager.close()
 
     def test_pause_resume(self, db_path: Path):
         """Can pause and resume node."""

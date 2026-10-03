@@ -1,7 +1,13 @@
 """Configuration for paper trading TradingNode.
 
 Provides configuration dataclasses and factory functions for setting up
-NautilusTrader TradingNode with Binance testnet.
+NautilusTrader TradingNode with Binance testnet (or, with explicit opt-in, live).
+
+Credentials are read from the environment only and never accepted through
+config files or the API:
+
+* testnet: ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET``
+* live:    ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET``
 """
 
 from __future__ import annotations
@@ -18,6 +24,24 @@ if TYPE_CHECKING:
 # Environment variable names
 ENV_BINANCE_API_KEY = "BINANCE_API_KEY"
 ENV_BINANCE_API_SECRET = "BINANCE_API_SECRET"
+ENV_BINANCE_TESTNET_API_KEY = "BINANCE_TESTNET_API_KEY"
+ENV_BINANCE_TESTNET_API_SECRET = "BINANCE_TESTNET_API_SECRET"
+
+#: Default directory for paper event logs (``{trader_id}.jsonl``).
+DEFAULT_PAPER_LOGS_PATH = Path("logs/paper")
+
+#: Leverage validation runs use when the run does not specify one
+#: (``ValidationRunner._create_venue_config``).
+DEFAULT_VALIDATION_LEVERAGE = 10
+
+#: Binance futures margin type matching NT's backtest MARGIN account (one
+#: shared wallet = cross margin).
+DEFAULT_MARGIN_TYPE = "CROSSED"
+
+#: Sizing methods the compiled strategies actually implement. Kelly/ATR sizers
+#: exist in ``vibe_quant.risk.sizing`` but are not wired into generated
+#: strategies, so accepting them would silently trade fixed-fractional.
+SUPPORTED_SIZING_METHODS = frozenset({"fixed_fractional"})
 
 
 class ConfigurationError(Exception):
@@ -26,19 +50,37 @@ class ConfigurationError(Exception):
     pass
 
 
+def credential_env_names(testnet: bool) -> tuple[str, str]:
+    """Return ``(key_var, secret_var)`` for the requested environment."""
+    if testnet:
+        return ENV_BINANCE_TESTNET_API_KEY, ENV_BINANCE_TESTNET_API_SECRET
+    return ENV_BINANCE_API_KEY, ENV_BINANCE_API_SECRET
+
+
+def is_valid_trader_id(trader_id: str) -> bool:
+    """NautilusTrader TraderId needs ``NAME-TAG`` (a hyphen); anything else aborts NT."""
+    try:
+        from nautilus_trader.model.identifiers import TraderId
+
+        TraderId(trader_id)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class BinanceTestnetConfig:
-    """Configuration for Binance testnet connection.
+    """Configuration for Binance connection.
 
     Attributes:
-        api_key: Binance API key (from env var or direct).
-        api_secret: Binance API secret (from env var or direct).
+        api_key: Binance API key (from env).
+        api_secret: Binance API secret (from env).
         testnet: If True, use Binance testnet. Defaults to True.
         account_type: Account type (USDT_FUTURES for perpetuals).
     """
 
-    api_key: str
-    api_secret: str
+    api_key: str = field(repr=False)
+    api_secret: str = field(repr=False)
     testnet: bool = True
     account_type: str = "USDT_FUTURES"
 
@@ -46,63 +88,60 @@ class BinanceTestnetConfig:
     def from_env(cls, testnet: bool = True) -> BinanceTestnetConfig:
         """Create config from environment variables.
 
-        Args:
-            testnet: If True, use Binance testnet.
-
-        Returns:
-            BinanceTestnetConfig instance.
+        Testnet reads ``BINANCE_TESTNET_API_*``; live reads ``BINANCE_API_*``.
 
         Raises:
             ConfigurationError: If required env vars are missing.
         """
-        api_key = os.getenv(ENV_BINANCE_API_KEY)
-        api_secret = os.getenv(ENV_BINANCE_API_SECRET)
+        key_var, secret_var = credential_env_names(testnet)
+        api_key = os.getenv(key_var)
+        api_secret = os.getenv(secret_var)
 
         if not api_key:
-            raise ConfigurationError(f"Missing {ENV_BINANCE_API_KEY} environment variable")
+            raise ConfigurationError(f"Missing {key_var} environment variable")
         if not api_secret:
-            raise ConfigurationError(f"Missing {ENV_BINANCE_API_SECRET} environment variable")
+            raise ConfigurationError(f"Missing {secret_var} environment variable")
 
-        return cls(
-            api_key=api_key,
-            api_secret=api_secret,
-            testnet=testnet,
-        )
+        return cls(api_key=api_key, api_secret=api_secret, testnet=testnet)
 
 
 @dataclass
 class SizingModuleConfig:
-    """Configuration for position sizing module.
+    """Position sizing overrides.
+
+    ``risk_per_trade`` / ``max_position_pct`` map onto the compiled strategy's
+    config fields. ``None`` (default) keeps the value the strategy was validated
+    with; any explicit value is applied and shows up in the logged config diff.
 
     Attributes:
-        method: Sizing method (fixed_fractional, kelly, atr).
-        max_leverage: Maximum leverage to use.
-        max_position_pct: Maximum position size as % of equity.
-        risk_per_trade: Risk per trade as % of equity.
-        kelly_fraction: Fractional Kelly to use (if kelly method).
-        atr_multiplier: ATR multiplier for stop distance (if atr method).
+        method: Sizing method; only ``fixed_fractional`` is implemented.
+        max_leverage: Upper bound for the venue leverage.
+        max_position_pct: Max position notional as fraction of equity (override).
+        risk_per_trade: Risk per trade as fraction of equity (override).
+        kelly_fraction: Unused until Kelly sizing is wired into strategies.
+        atr_multiplier: Unused until ATR sizing is wired into strategies.
     """
 
     method: str = "fixed_fractional"
     max_leverage: Decimal = field(default_factory=lambda: Decimal("20"))
-    max_position_pct: Decimal = field(default_factory=lambda: Decimal("0.5"))
-    risk_per_trade: Decimal = field(default_factory=lambda: Decimal("0.02"))
+    max_position_pct: Decimal | None = None
+    risk_per_trade: Decimal | None = None
     kelly_fraction: Decimal = field(default_factory=lambda: Decimal("0.5"))
     atr_multiplier: Decimal = field(default_factory=lambda: Decimal("2.0"))
 
 
 @dataclass
 class RiskModuleConfig:
-    """Configuration for risk management module.
+    """Risk limits enforced by the node's TradingGuard.
 
     Attributes:
-        max_drawdown_pct: Maximum drawdown before halting (0.15 = 15%).
-        max_daily_loss_pct: Maximum daily loss before halting.
-        max_consecutive_losses: Maximum consecutive losses before halting.
-        max_position_count: Maximum concurrent positions.
-        max_portfolio_drawdown_pct: Maximum portfolio-level drawdown.
-        max_total_exposure_pct: Maximum total exposure as % of equity.
-        max_single_instrument_pct: Maximum exposure to single instrument.
+        max_drawdown_pct: Equity drawdown from high water mark that halts (0.15 = 15%).
+        max_daily_loss_pct: Loss vs. UTC-day starting equity that halts until next UTC day.
+        max_consecutive_losses: Consecutive losing positions that halt.
+        max_position_count: Maximum concurrent open positions (gate-enforced).
+        max_portfolio_drawdown_pct: Not enforced (single-account node: same as max_drawdown_pct).
+        max_total_exposure_pct: Not enforced.
+        max_single_instrument_pct: Not enforced.
     """
 
     max_drawdown_pct: Decimal = field(default_factory=lambda: Decimal("0.15"))
@@ -119,26 +158,35 @@ class PaperTradingConfig:
     """Complete configuration for paper trading node.
 
     Attributes:
-        trader_id: Unique identifier for this trader instance.
-        binance: Binance testnet configuration.
-        symbols: List of symbols to subscribe to.
+        trader_id: Unique identifier (NT format ``NAME-TAG``, e.g. ``PAPER-007``).
+        binance: Binance connection configuration.
+        symbols: Symbols to trade (filled from the validation run when empty).
         strategy_id: Strategy ID from database to deploy.
-        sizing: Position sizing configuration.
-        risk: Risk management configuration.
+        validation_run_id: Completed validation run whose exact parameters,
+            symbols and leverage paper must reproduce.
+        leverage: Venue leverage override (None = validation run's leverage).
+        margin_type: Binance futures margin type (``CROSSED`` / ``ISOLATED``).
+        sizing: Position sizing overrides.
+        risk: Risk limits.
         db_path: Path to SQLite state database.
         logs_path: Path for event log files.
         state_persistence_interval: Seconds between state snapshots.
+        control_poll_interval: Seconds between command/kill-switch polls.
     """
 
     trader_id: str
     binance: BinanceTestnetConfig
     symbols: list[str] = field(default_factory=list)
     strategy_id: int | None = None
+    validation_run_id: int | None = None
+    leverage: int | None = None
+    margin_type: str = DEFAULT_MARGIN_TYPE
     sizing: SizingModuleConfig = field(default_factory=SizingModuleConfig)
     risk: RiskModuleConfig = field(default_factory=RiskModuleConfig)
     db_path: Path | None = None
-    logs_path: Path = field(default_factory=lambda: Path("logs/paper"))
+    logs_path: Path = field(default_factory=lambda: DEFAULT_PAPER_LOGS_PATH)
     state_persistence_interval: int = 60
+    control_poll_interval: float = 1.0
 
     def validate(self) -> list[str]:
         """Validate configuration.
@@ -150,27 +198,58 @@ class PaperTradingConfig:
 
         if not self.trader_id:
             errors.append("trader_id is required")
+        elif not is_valid_trader_id(self.trader_id):
+            errors.append(
+                f"trader_id {self.trader_id!r} is not a valid NautilusTrader TraderId "
+                "(needs NAME-TAG with a hyphen, e.g. 'PAPER-001')"
+            )
 
-        if not self.symbols:
-            errors.append("At least one symbol is required")
+        if not self.symbols and self.validation_run_id is None:
+            errors.append("At least one symbol is required (or a validation_run_id)")
 
         if self.strategy_id is None:
             errors.append("strategy_id is required")
 
-        _VALID_SIZING_METHODS = {"fixed_fractional", "kelly", "atr"}
-        if self.sizing.method not in _VALID_SIZING_METHODS:
+        if self.sizing.method not in SUPPORTED_SIZING_METHODS:
             errors.append(
-                f"sizing method must be one of {sorted(_VALID_SIZING_METHODS)}, got '{self.sizing.method}'"
+                f"sizing method '{self.sizing.method}' is not implemented by compiled "
+                f"strategies; supported: {sorted(SUPPORTED_SIZING_METHODS)}"
             )
 
-        if self.sizing.risk_per_trade <= 0 or self.sizing.risk_per_trade > Decimal("0.5"):
+        rpt = self.sizing.risk_per_trade
+        if rpt is not None and (rpt <= 0 or rpt > Decimal("0.5")):
             errors.append("risk_per_trade must be between 0 and 0.5")
+
+        mpp = self.sizing.max_position_pct
+        if mpp is not None and (mpp <= 0 or mpp > Decimal("125")):
+            errors.append("max_position_pct must be > 0 (fraction of equity)")
 
         if self.sizing.max_leverage < 1 or self.sizing.max_leverage > 125:
             errors.append("max_leverage must be between 1 and 125")
 
+        if self.leverage is not None:
+            if self.leverage < 1 or self.leverage > 125:
+                errors.append("leverage must be between 1 and 125")
+            elif Decimal(self.leverage) > self.sizing.max_leverage:
+                errors.append(
+                    f"leverage {self.leverage} exceeds max_leverage {self.sizing.max_leverage}"
+                )
+
+        if self.margin_type not in ("CROSSED", "ISOLATED"):
+            errors.append("margin_type must be CROSSED or ISOLATED")
+
         if self.risk.max_drawdown_pct <= 0 or self.risk.max_drawdown_pct > 1:
             errors.append("max_drawdown_pct must be between 0 and 1")
+        if self.risk.max_daily_loss_pct <= 0 or self.risk.max_daily_loss_pct > 1:
+            errors.append("max_daily_loss_pct must be between 0 and 1")
+        if self.risk.max_consecutive_losses < 1:
+            errors.append("max_consecutive_losses must be >= 1")
+        if self.risk.max_position_count < 1:
+            errors.append("max_position_count must be >= 1")
+
+        if not self.binance.api_key or not self.binance.api_secret:
+            key_var, secret_var = credential_env_names(self.binance.testnet)
+            errors.append(f"Binance credentials missing: set {key_var} and {secret_var}")
 
         return errors
 
@@ -183,17 +262,7 @@ class PaperTradingConfig:
         testnet: bool = True,
         db_path: Path | None = None,
     ) -> PaperTradingConfig:
-        """Create paper trading config with defaults.
-
-        Args:
-            trader_id: Unique trader identifier.
-            symbols: Symbols to trade.
-            strategy_id: Strategy ID from database.
-            testnet: Use Binance testnet.
-            db_path: Database path.
-
-        Returns:
-            PaperTradingConfig instance.
+        """Create paper trading config with defaults (credentials from env).
 
         Raises:
             ConfigurationError: If configuration is invalid.
@@ -216,47 +285,43 @@ class PaperTradingConfig:
 
 
 def create_trading_node_config(config: PaperTradingConfig) -> dict[str, Any]:
-    """Create NautilusTrader TradingNodeConfig dictionary.
+    """Summarise the TradingNode configuration as a JSON-safe dict (no secrets).
 
-    This generates the configuration dictionary that can be passed to
-    TradingNode for paper trading with Binance testnet.
-
-    Args:
-        config: PaperTradingConfig instance.
-
-    Returns:
-        Dictionary of TradingNode configuration parameters.
-
-    Note:
-        The actual TradingNodeConfig instantiation requires nautilus_trader
-        imports which may not be available in all environments. This function
-        returns the raw config dict that can be used with TradingNodeConfig.
+    Used for logging/inspection only; the node builds the real NautilusTrader
+    ``TradingNodeConfig`` itself.
     """
     return {
         "trader_id": config.trader_id,
         "data_clients": {
             "BINANCE": {
-                "api_key": config.binance.api_key,
-                "api_secret": config.binance.api_secret,
                 "account_type": config.binance.account_type,
                 "testnet": config.binance.testnet,
             },
         },
         "exec_clients": {
             "BINANCE": {
-                "api_key": config.binance.api_key,
-                "api_secret": config.binance.api_secret,
                 "account_type": config.binance.account_type,
                 "testnet": config.binance.testnet,
+                "leverage": config.leverage,
+                "margin_type": config.margin_type,
             },
         },
         "symbols": config.symbols,
         "strategy_id": config.strategy_id,
+        "validation_run_id": config.validation_run_id,
         "sizing": {
             "method": config.sizing.method,
             "max_leverage": str(config.sizing.max_leverage),
-            "max_position_pct": str(config.sizing.max_position_pct),
-            "risk_per_trade": str(config.sizing.risk_per_trade),
+            "max_position_pct": (
+                str(config.sizing.max_position_pct)
+                if config.sizing.max_position_pct is not None
+                else None
+            ),
+            "risk_per_trade": (
+                str(config.sizing.risk_per_trade)
+                if config.sizing.risk_per_trade is not None
+                else None
+            ),
         },
         "risk": {
             "max_drawdown_pct": str(config.risk.max_drawdown_pct),

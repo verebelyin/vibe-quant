@@ -341,6 +341,171 @@ class StatePersistence:
                 logger.exception("checkpoint loop error")
 
 
+# ---------------------------------------------------------------------------
+# Operator command queue (API -> running paper node)
+# ---------------------------------------------------------------------------
+
+COMMANDS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS paper_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trader_id TEXT NOT NULL,
+    command TEXT NOT NULL,
+    payload JSON NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    result JSON,
+    error TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_commands_pending
+    ON paper_commands(trader_id, status);
+"""
+
+#: Commands a paper node understands.
+PAPER_COMMANDS = frozenset({"halt", "pause", "resume", "close_all", "kill"})
+
+#: Terminal command states.
+COMMAND_DONE = "done"
+COMMAND_FAILED = "failed"
+COMMAND_EXPIRED = "expired"
+_TERMINAL = frozenset({COMMAND_DONE, COMMAND_FAILED, COMMAND_EXPIRED})
+
+
+@dataclass
+class PaperCommand:
+    """One operator command and its outcome."""
+
+    id: int
+    trader_id: str
+    command: str
+    payload: JsonDict
+    status: str
+    result: JsonDict | None
+    error: str | None
+
+    @property
+    def finished(self) -> bool:
+        return self.status in _TERMINAL
+
+
+class PaperCommandQueue:
+    """SQLite-backed command queue between the API and a paper node process.
+
+    Replaces signal-based control (SIGUSR1/SIGWINCH): commands carry a payload,
+    the node acknowledges with a result or an error, and the API can return that
+    outcome to the caller instead of a fire-and-forget "signal sent".
+    """
+
+    def __init__(self, db_path: Path | None = None) -> None:
+        self._db_path = db_path
+        self._conn: sqlite3.Connection | None = None
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = get_connection(self._db_path)
+            self._conn.executescript(COMMANDS_TABLE_SQL)
+            self._conn.commit()
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def enqueue(self, trader_id: str, command: str, payload: JsonDict | None = None) -> int:
+        if command not in PAPER_COMMANDS:
+            raise ValueError(f"unknown paper command {command!r}")
+        cursor = self.conn.execute(
+            "INSERT INTO paper_commands (trader_id, command, payload) VALUES (?, ?, ?)",
+            (trader_id, command, json.dumps(payload or {})),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def claim_pending(self, trader_id: str) -> list[PaperCommand]:
+        """Atomically move this trader's pending commands to ``running``."""
+        rows = self.conn.execute(
+            "SELECT * FROM paper_commands WHERE trader_id = ? AND status = 'pending' ORDER BY id",
+            (trader_id,),
+        ).fetchall()
+        claimed: list[PaperCommand] = []
+        for row in rows:
+            cur = self.conn.execute(
+                "UPDATE paper_commands SET status = 'running', "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "WHERE id = ? AND status = 'pending'",
+                (row["id"],),
+            )
+            if cur.rowcount == 1:
+                cmd = self._row_to_command(row)
+                cmd.status = "running"
+                claimed.append(cmd)
+        self.conn.commit()
+        return claimed
+
+    def complete(self, command_id: int, result: JsonDict) -> None:
+        self._finish(command_id, COMMAND_DONE, result, None)
+
+    def fail(self, command_id: int, error: str, result: JsonDict | None = None) -> None:
+        self._finish(command_id, COMMAND_FAILED, result, error)
+
+    def expire(self, command_id: int) -> bool:
+        """Expire a command nobody claimed yet; False if the node already took it."""
+        cur = self.conn.execute(
+            "UPDATE paper_commands SET status = ?, "
+            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+            "WHERE id = ? AND status = 'pending'",
+            (COMMAND_EXPIRED, command_id),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def get(self, command_id: int) -> PaperCommand | None:
+        row = self.conn.execute(
+            "SELECT * FROM paper_commands WHERE id = ?", (command_id,)
+        ).fetchone()
+        return None if row is None else self._row_to_command(row)
+
+    async def wait_for(
+        self, command_id: int, timeout: float, poll_interval: float = 0.2
+    ) -> PaperCommand | None:
+        """Poll (non-blocking) until the command finishes; None on timeout."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            cmd = self.get(command_id)
+            if cmd is not None and cmd.finished:
+                return cmd
+            if loop.time() >= deadline:
+                return None
+            await asyncio.sleep(poll_interval)
+
+    def _finish(
+        self, command_id: int, status: str, result: JsonDict | None, error: str | None
+    ) -> None:
+        self.conn.execute(
+            "UPDATE paper_commands SET status = ?, result = ?, error = ?, "
+            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+            (status, json.dumps(result) if result is not None else None, error, command_id),
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _row_to_command(row: sqlite3.Row) -> PaperCommand:
+        result_raw = row["result"]
+        return PaperCommand(
+            id=row["id"],
+            trader_id=row["trader_id"],
+            command=row["command"],
+            payload=json.loads(row["payload"] or "{}"),
+            status=row["status"],
+            result=json.loads(result_raw) if result_raw else None,
+            error=row["error"],
+        )
+
+
 def recover_state(
     db_path: Path | None = None,
     trader_id: str = "default",
