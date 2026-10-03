@@ -10,8 +10,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Bump when adding new migrations to _migrate_add_columns
-SCHEMA_VERSION: int = 15
+# Bump when adding new migrations to _migrate_add_columns. One-time data
+# migrations are additionally gated by ``PRAGMA user_version`` markers.
+SCHEMA_VERSION: int = 16
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -101,7 +102,10 @@ CREATE TABLE IF NOT EXISTS backtest_results (
     purged_kfold_mean_sharpe REAL,
     execution_time_seconds REAL,
     starting_balance REAL,
+    -- Machine-written JSON (discovery payload, consistency flags, compiler
+    -- version). Never user-editable: the Notes panel writes user_notes.
     notes TEXT,
+    user_notes TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -161,7 +165,10 @@ CREATE TABLE IF NOT EXISTS background_jobs (
     started_at TEXT DEFAULT (datetime('now')),
     completed_at TEXT,
     log_file TEXT,
-    error_message TEXT
+    error_message TEXT,
+    -- Process identity (OS start time of `pid`) so a recycled PID is never
+    -- mistaken for the job's process (signalled or reported alive).
+    pid_start_time TEXT
 );
 
 -- Screening-to-validation consistency checks
@@ -376,6 +383,8 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("research_extraction_jobs", "max_attempts", "INTEGER NOT NULL DEFAULT 3"),
         ("research_extraction_jobs", "last_error", "TEXT"),
         ("research_extraction_jobs", "heartbeat_at", "TEXT"),
+        ("backtest_results", "user_notes", "TEXT"),
+        ("background_jobs", "pid_start_time", "TEXT"),
     ]
     applied = 0
     for table, column, col_type in migrations:
@@ -456,6 +465,177 @@ def _migrate_research_items_allow_queued(conn: sqlite3.Connection) -> None:
         conn.execute(f"PRAGMA foreign_keys = {'ON' if prev_fk else 'OFF'}")
 
 
+ZERO_TRADE_ERROR_PATTERN = "%produced 0 trades%"
+# PRAGMA user_version marker for _migrate_v16_dedupe_results (one-time data fix).
+_USER_VERSION_V16 = 16
+
+
+def _trade_attempt_segments(rows: list[sqlite3.Row]) -> list[list[int]]:
+    """Split one run's trade rows (ordered by id) into per-attempt segments.
+
+    Each attempt inserted its trades in a single ``executemany`` transaction,
+    so one attempt's ids are contiguous and its entry times non-decreasing.
+    A new attempt starts at an id gap or where entry_time jumps backwards.
+    """
+    segments: list[list[int]] = []
+    prev_id: int | None = None
+    prev_entry: str | None = None
+    for row in rows:
+        trade_id = int(row[0])
+        entry = str(row[1])
+        new_attempt = (
+            prev_id is None
+            or trade_id != prev_id + 1
+            or (prev_entry is not None and entry < prev_entry)
+        )
+        if new_attempt:
+            segments.append([])
+        segments[-1].append(trade_id)
+        prev_id, prev_entry = trade_id, entry
+    return segments
+
+
+def _dedupe_run_trades(
+    conn: sqlite3.Connection, run_id: int, n_results: int, kept_trades: int | None
+) -> None:
+    """Keep only the latest attempt's trades for ``run_id`` (see migration v16)."""
+    rows = conn.execute(
+        "SELECT id, entry_time FROM trades WHERE run_id = ? ORDER BY id", (run_id,)
+    ).fetchall()
+    if not rows or kept_trades is None:
+        return
+    if kept_trades == 0:
+        if n_results > 1:
+            # Latest attempt produced no trades: every stored trade is stale.
+            conn.execute("DELETE FROM trades WHERE run_id = ?", (run_id,))
+            logger.info("Migration v16: run %d dropped %d stale trades", run_id, len(rows))
+        else:
+            logger.warning(
+                "Migration v16: run %d has %d trades but result says 0; left untouched",
+                run_id,
+                len(rows),
+            )
+        return
+    if len(rows) <= kept_trades:
+        return
+    last = _trade_attempt_segments(rows)[-1]
+    if len(last) != kept_trades:
+        logger.warning(
+            "Migration v16: run %d has %d trades for %d expected and no clean attempt "
+            "boundary; left untouched",
+            run_id,
+            len(rows),
+            kept_trades,
+        )
+        return
+    conn.execute(
+        "DELETE FROM trades WHERE run_id = ? AND (id < ? OR id > ?)",
+        (run_id, last[0], last[-1]),
+    )
+    logger.info(
+        "Migration v16: run %d kept latest attempt's %d trades (dropped %d)",
+        run_id,
+        len(last),
+        len(rows) - len(last),
+    )
+
+
+def _migrate_v16_dedupe_results(conn: sqlite3.Connection) -> None:
+    """One-time data migration: one result row per run, latest attempt wins.
+
+    Re-running a run used to append a second ``backtest_results`` row and a
+    second batch of trades (reads then picked an arbitrary row / summed all
+    batches). Also re-marks runs left ``completed`` with the runner's
+    "produced 0 trades" error (mark_completed() used to overwrite ``failed``),
+    moves user-typed notes out of the machine ``notes`` column, and adds a
+    UNIQUE index on ``backtest_results.run_id``.
+
+    Gated by ``PRAGMA user_version`` and run inside ``BEGIN IMMEDIATE`` so
+    concurrent processes opening the DB apply it exactly once.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= _USER_VERSION_V16:
+        return
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= _USER_VERSION_V16:
+            conn.rollback()
+            return
+
+        plan = conn.execute(
+            """SELECT r.run_id, r.n_results, r.kept_id, k.total_trades AS kept_trades,
+                      COALESCE(t.n_trades, 0) AS n_trades
+               FROM (SELECT run_id, COUNT(*) AS n_results, MAX(id) AS kept_id
+                     FROM backtest_results WHERE run_id IS NOT NULL GROUP BY run_id) r
+               JOIN backtest_results k ON k.id = r.kept_id
+               LEFT JOIN (SELECT run_id, COUNT(*) AS n_trades FROM trades GROUP BY run_id) t
+                    ON t.run_id = r.run_id
+               WHERE r.n_results > 1 OR COALESCE(t.n_trades, 0) > COALESCE(k.total_trades, 0)"""
+        ).fetchall()
+        for run_id, n_results, kept_id, kept_trades, _n_trades in plan:
+            if n_results > 1:
+                # Preserve notes written on an older row if the kept row has none.
+                conn.execute(
+                    """UPDATE backtest_results SET notes = (
+                           SELECT notes FROM backtest_results
+                           WHERE run_id = ? AND notes IS NOT NULL ORDER BY id DESC LIMIT 1)
+                       WHERE id = ? AND notes IS NULL""",
+                    (run_id, kept_id),
+                )
+                conn.execute(
+                    "DELETE FROM backtest_results WHERE run_id = ? AND id != ?",
+                    (run_id, kept_id),
+                )
+                logger.info(
+                    "Migration v16: run %d kept result row %d (dropped %d older)",
+                    run_id,
+                    kept_id,
+                    n_results - 1,
+                )
+            _dedupe_run_trades(conn, int(run_id), int(n_results), kept_trades)
+
+        # 0-trade validations: runner marked failed, mark_completed() flipped it back.
+        stuck = conn.execute(
+            """SELECT r.id, br.total_trades, r.error_message
+               FROM backtest_runs r
+               LEFT JOIN backtest_results br ON br.run_id = r.id
+               WHERE r.status = 'completed' AND r.error_message LIKE ?""",
+            (ZERO_TRADE_ERROR_PATTERN,),
+        ).fetchall()
+        for run_id, total_trades, error in stuck:
+            if total_trades is not None and total_trades > 0:
+                # A later attempt succeeded; the error belongs to the stale attempt.
+                conn.execute("UPDATE backtest_runs SET error_message = NULL WHERE id = ?", (run_id,))
+            else:
+                conn.execute("UPDATE backtest_runs SET status = 'failed' WHERE id = ?", (run_id,))
+                conn.execute(
+                    """UPDATE background_jobs SET status = 'failed', error_message = ?
+                       WHERE run_id = ? AND status = 'completed'""",
+                    (error, run_id),
+                )
+            logger.info("Migration v16: run %d status repaired", run_id)
+
+        # User text typed into the machine notes column (non-discovery runs only;
+        # discovery notes are always machine output, even legacy non-JSON ones).
+        conn.execute(
+            """UPDATE backtest_results SET user_notes = notes, notes = NULL
+               WHERE notes IS NOT NULL AND user_notes IS NULL
+                 AND (CASE WHEN json_valid(notes) THEN json_type(notes) END)
+                     IS NOT 'object'
+                 AND run_id IN (SELECT id FROM backtest_runs WHERE run_mode != 'discovery')"""
+        )
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_backtest_results_run_id "
+            "ON backtest_results(run_id)"
+        )
+        conn.execute(f"PRAGMA user_version = {_USER_VERSION_V16}")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     """Initialize database schema.
 
@@ -466,3 +646,4 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_add_columns(conn)
     _migrate_research_items_allow_queued(conn)
     conn.commit()
+    _migrate_v16_dedupe_results(conn)

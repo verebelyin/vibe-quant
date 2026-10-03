@@ -112,6 +112,26 @@ def _validate_columns(columns: list[str], allowed: frozenset[str], table: str) -
         raise ValueError(f"Unknown columns for {table}: {sorted(bad)}")
 
 
+def _trade_insert(run_id: int, trades: Sequence[JsonDict]) -> tuple[str, list[list[Any]]]:
+    """Validated (INSERT sql, rows) for writing ``trades`` of ``run_id``.
+
+    Columns come from the first trade; every trade must have the same keys in
+    the same order (a misaligned positional insert would corrupt the table).
+    """
+    if not trades:
+        return "", []
+    keys = list(trades[0].keys())
+    columns = ["run_id", *keys]
+    _validate_columns(columns, _TRADES_COLUMNS, "trades")
+    rows: list[list[Any]] = []
+    for trade in trades:
+        if list(trade.keys()) != keys:
+            raise ValueError(f"Inconsistent trade keys: {list(trade.keys())} vs {keys}")
+        rows.append([run_id, *trade.values()])
+    placeholders = ", ".join(["?"] * len(columns))
+    return f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})", rows
+
+
 class StateManager:
     """Manager for vibe-quant SQLite state database.
 
@@ -619,12 +639,23 @@ class StateManager:
 
     # --- Backtest Results CRUD ---
 
-    def save_backtest_result(self, run_id: int, metrics: JsonDict) -> int:
-        """Save backtest results.
+    def save_backtest_result(
+        self,
+        run_id: int,
+        metrics: JsonDict,
+        trades: Sequence[JsonDict] | None = None,
+    ) -> int:
+        """Save the result of one attempt of a run, replacing any prior attempt.
+
+        A run has exactly one result row (UNIQUE run_id). Re-running a run is a
+        new attempt: its previous result row AND all its trades are deleted and
+        the new row (+ ``trades``) inserted in one transaction. User notes
+        (``user_notes``) survive re-runs.
 
         Args:
             run_id: Backtest run ID.
             metrics: Dict of metric names to values.
+            trades: This attempt's trades (None/empty → the run has no trades).
 
         Returns:
             ID of created result.
@@ -633,18 +664,42 @@ class StateManager:
         _validate_columns(columns, _BACKTEST_RESULTS_COLUMNS, "backtest_results")
         placeholders = ", ".join(["?"] * len(columns))
         values = [run_id] + list(metrics.values())
+        trade_sql, trade_rows = _trade_insert(run_id, trades or [])
 
         with self._write_lock:
-            cursor = self.conn.execute(
-                f"INSERT INTO backtest_results ({', '.join(columns)}) VALUES ({placeholders})",
-                values,
-            )
-            self.conn.commit()
-            return cursor.lastrowid or 0
+            conn = self.conn
+            try:
+                prev = conn.execute(
+                    "SELECT user_notes FROM backtest_results WHERE run_id = ? "
+                    "AND user_notes IS NOT NULL ORDER BY id DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                conn.execute("DELETE FROM backtest_results WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM trades WHERE run_id = ?", (run_id,))
+                cursor = conn.execute(
+                    f"INSERT INTO backtest_results ({', '.join(columns)}) VALUES ({placeholders})",
+                    values,
+                )
+                result_id = cursor.lastrowid or 0
+                if prev is not None:
+                    conn.execute(
+                        "UPDATE backtest_results SET user_notes = ? WHERE id = ?",
+                        (prev[0], result_id),
+                    )
+                if trade_rows:
+                    conn.executemany(trade_sql, trade_rows)
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+            return result_id
 
     def get_backtest_result(self, run_id: int) -> JsonDict | None:
-        """Get backtest result for a run."""
-        cursor = self.conn.execute("SELECT * FROM backtest_results WHERE run_id = ?", (run_id,))
+        """Get the (latest) backtest result for a run."""
+        cursor = self.conn.execute(
+            "SELECT * FROM backtest_results WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        )
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -668,7 +723,7 @@ class StateManager:
                    r.start_date, r.end_date, r.status, r.created_at AS run_created_at
             FROM backtest_results br
             JOIN backtest_runs r ON br.run_id = r.id
-            WHERE 1=1
+            WHERE br.id = (SELECT MAX(id) FROM backtest_results WHERE run_id = r.id)
         """
         params: list[Any] = []
 
@@ -693,11 +748,10 @@ class StateManager:
         return results
 
     def update_result_notes(self, run_id: int, notes: str) -> None:
-        """Update notes/annotations for a backtest result.
+        """Overwrite the machine ``notes`` JSON of a run's result.
 
-        Args:
-            run_id: Backtest run ID.
-            notes: Notes text to store.
+        Pipeline-internal (discovery payload, consistency flags, compiler
+        version). User-typed notes go through :meth:`update_result_user_notes`.
         """
         with self._write_lock:
             self.conn.execute(
@@ -705,6 +759,20 @@ class StateManager:
                 (notes, run_id),
             )
             self.conn.commit()
+
+    def update_result_user_notes(self, run_id: int, user_notes: str) -> bool:
+        """Set the user's free-text notes on a run's result.
+
+        Returns:
+            False if the run has no result row.
+        """
+        with self._write_lock:
+            cursor = self.conn.execute(
+                "UPDATE backtest_results SET user_notes = ? WHERE run_id = ?",
+                (user_notes, run_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
 
     # --- Trade CRUD ---
 
@@ -732,26 +800,26 @@ class StateManager:
             return cursor.lastrowid or 0
 
     def save_trades_batch(self, run_id: int, trades: Sequence[JsonDict]) -> None:
-        """Save multiple trades in a batch.
+        """Replace all trades of a run with ``trades`` (one transaction).
+
+        A batch is the complete trade list of one attempt; saving again
+        (re-run) must replace, never append duplicates.
 
         Args:
             run_id: Backtest run ID.
             trades: List of trade data dicts.
         """
-        if not trades:
-            return
-
-        # Get columns from first trade
-        columns = ["run_id"] + list(trades[0].keys())
-        _validate_columns(columns, _TRADES_COLUMNS, "trades")
-        placeholders = ", ".join(["?"] * len(columns))
-
+        sql, rows = _trade_insert(run_id, trades)
         with self._write_lock:
-            self.conn.executemany(
-                f"INSERT INTO trades ({', '.join(columns)}) VALUES ({placeholders})",
-                [[run_id] + list(t.values()) for t in trades],
-            )
-            self.conn.commit()
+            conn = self.conn
+            try:
+                conn.execute("DELETE FROM trades WHERE run_id = ?", (run_id,))
+                if rows:
+                    conn.executemany(sql, rows)
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
 
     def get_trades(self, run_id: int) -> list[JsonDict]:
         """Get all trades for a backtest run."""
@@ -951,7 +1019,9 @@ class StateManager:
                 COALESCE(br.profit_factor, sw.profit_factor) AS profit_factor
             FROM backtest_runs r
             LEFT JOIN strategies s ON r.strategy_id = s.id
-            LEFT JOIN backtest_results br ON r.id = br.run_id
+            LEFT JOIN backtest_results br ON br.id = (
+                SELECT MAX(id) FROM backtest_results WHERE run_id = r.id
+            )
             LEFT JOIN (
                 SELECT run_id,
                        total_return, sharpe_ratio, max_drawdown,
