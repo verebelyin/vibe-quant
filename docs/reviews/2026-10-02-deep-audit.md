@@ -11,6 +11,24 @@ Repro scripts (ephemeral, not committed): `/tmp/vq_audit/`, `/tmp/vqaudit/`, `/t
 
 Legend: **[V]** re-verified by hand · **[R]** agent repro script / real DB evidence · **[C]** code read.
 
+## Status — 2026-10-03
+
+All CRITICAL (C1–C6) and HIGH (H1–H16) findings fixed on branch `audit-fixes` (5 parallel agents,
+merged + integration-tested), plus most MEDIUM items in the touched files. Gates: pytest 2700+ pass,
+ruff/mypy zero, frontend build + vitest green.
+
+Verified end-to-end on real data (DB copies): strategy 239 screening `1.3165049716553048`/68 trades
+(bit-identical ×2); validation `0.7802305953007851`/67 trades (bit-identical ×2); v16 migration on a
+real-DB copy (runs 337/556 → 66/62 trades, 459 → 105 trade rows, 368 → failed); discovery with
+default holdout → gates fail closed with recorded rejections; promote → holdout validation via API.
+
+Integration fixes found while merging: paper `/stop` PID-identity check, warm-start re-injecting
+legacy ATR genes, consistency check comparing different windows, tests able to migrate the real DB.
+
+**Semantics break:** all screening/discovery/validation scores before 2026-10-03 are not comparable.
+Remaining MEDIUM/LOW items (mostly data layer: Vision filler candles, `update` skips funding,
+partial candles, silent ingest holes, instrument spec drift): bead `vibe-quant-e70tl.23`.
+
 ## Bottom line
 
 Backtest numbers are currently not trustworthy enough to deploy capital on:
