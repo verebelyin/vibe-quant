@@ -150,8 +150,9 @@ export function useGetStatusApiSystemStatusGet<TData = Awaited<ReturnType<typeof
 /**
  * Engage the system-wide kill switch.
 
-- Persists kill state to the DB so restarts stay halted.
-- Sends SIGUSR1 to any active paper-trading PID (best-effort).
+- Persists kill state to the DB so restarts stay halted (nodes poll it).
+- Queues a ``kill`` command for every active paper session (no signals:
+  a recycled PID can never receive it).
 - Broadcasts `system_killed` over the trading WebSocket.
  * @summary Kill
  */

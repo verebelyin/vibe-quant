@@ -62,6 +62,8 @@ export * from './getPositionsApiPaperPositionsGetParams';
 export * from './getSweepsApiResultsRunsRunIdSweepsGetParams';
 export * from './getTradesApiResultsRunsRunIdTradesGetParams';
 export * from './haltPaperApiPaperHaltPost200';
+export * from './haltPaperApiPaperHaltPostMode';
+export * from './haltPaperApiPaperHaltPostParams';
 export * from './healthHealthGet200';
 export * from './heartbeatApiBacktestJobsRunIdHeartbeatPost200';
 export * from './hTTPValidationError';

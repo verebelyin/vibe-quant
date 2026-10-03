@@ -37,8 +37,12 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 V1: post-stop only. If the paper session is still running, returns 400.
 
-If `validation_run_id` is omitted, we try to pick the most recent
-successful validation run for the same strategy_id as the paper session.
+If `validation_run_id` is omitted, the validation run the session was
+started from is used, else the most recent completed validation run for
+the same strategy_id.
+
+Paper trades come from the node's event log (``{logs_path}/{trader_id}.jsonl``),
+validation trades from the ``trades`` table. Zero trades -> parity ``null``.
  * @summary Reconcile Paper Session
  */
 export type reconcilePaperSessionApiReconciliationPaperSessionIdGetResponse200 = {
