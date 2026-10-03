@@ -25,17 +25,16 @@ class ConnectionManager:
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:
+        """Stop the ping task. Never raises (runs in lifespan shutdown)."""
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._heartbeat_task
             self._heartbeat_task = None
 
     async def connect(self, websocket: WebSocket, channel: str) -> None:
         await websocket.accept()
-        if channel not in self._channels:
-            self._channels[channel] = set()
-        self._channels[channel].add(websocket)
+        self._channels.setdefault(channel, set()).add(websocket)
         logger.debug("ws connect channel=%s clients=%d", channel, len(self._channels[channel]))
 
     def disconnect(self, websocket: WebSocket, channel: str) -> None:
@@ -43,42 +42,46 @@ class ConnectionManager:
         if conns is not None:
             conns.discard(websocket)
             if not conns:
-                del self._channels[channel]
+                self._channels.pop(channel, None)
         logger.debug("ws disconnect channel=%s", channel)
 
-    async def broadcast(self, channel: str, data: dict[str, object]) -> None:
+    async def _send_all(self, channel: str, payload: str) -> None:
+        """Send to every socket of ``channel``; drop the ones that fail.
+
+        Iterates a snapshot: sends await, and connect/disconnect may mutate the
+        live set meanwhile ("Set changed size during iteration" used to turn a
+        successful job launch into a 500 — inviting a duplicate launch).
+        """
         conns = self._channels.get(channel)
         if not conns:
             return
-        payload = json.dumps(data)
         dead: list[WebSocket] = []
-        for ws in conns:
+        for ws in list(conns):
             try:
                 await ws.send_text(payload)
             except Exception:  # noqa: BLE001
                 dead.append(ws)
         for ws in dead:
-            conns.discard(ws)
+            self.disconnect(ws, channel)
             logger.debug("ws removed dead connection channel=%s", channel)
-        if not conns:
-            del self._channels[channel]
+
+    async def broadcast(self, channel: str, data: dict[str, object]) -> None:
+        """Best-effort fan-out; never raises into the calling endpoint."""
+        try:
+            await self._send_all(channel, json.dumps(data))
+        except Exception:  # noqa: BLE001
+            logger.exception("ws broadcast failed channel=%s", channel)
 
     async def send_personal(self, websocket: WebSocket, data: dict[str, object]) -> None:
         payload = json.dumps(data)
         await websocket.send_text(payload)
 
     async def _heartbeat_loop(self) -> None:
+        ping = json.dumps({"type": "ping"})
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
-            for channel, conns in list(self._channels.items()):
-                dead: list[WebSocket] = []
-                for ws in conns:
-                    try:
-                        await ws.send_json({"type": "ping"})
-                    except Exception:  # noqa: BLE001
-                        dead.append(ws)
-                for ws in dead:
-                    conns.discard(ws)
-                    logger.debug("ws heartbeat removed stale connection channel=%s", channel)
-                if not conns:
-                    del self._channels[channel]
+            for channel in list(self._channels):
+                try:
+                    await self._send_all(channel, ping)
+                except Exception:  # noqa: BLE001 — keep pinging other channels/rounds
+                    logger.exception("ws heartbeat failed channel=%s", channel)

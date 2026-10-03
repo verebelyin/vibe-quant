@@ -72,10 +72,13 @@ def test_enrich_populates_cross_window_from_top_strategy() -> None:
     assert enriched["wfa_sharpe_consistency"] == 0.82
     cw = enriched["cross_window_results"]
     assert isinstance(cw, list) and len(cw) == 2
-    assert cw[0]["offset"] == 1
+    # windows[0] is the original in-sample window; windows[1] is shifted +1mo
+    assert cw[0]["offset"] == 0
+    assert cw[0]["in_sample"] is True
     assert cw[0]["sharpe"] == 1.2
     assert cw[0]["passed"] is True
-    assert cw[1]["offset"] == 2
+    assert cw[1]["offset"] == 1
+    assert cw[1]["in_sample"] is False
     assert cw[1]["passed"] is False  # 0.3 < 0.5
 
 
