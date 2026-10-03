@@ -7,6 +7,7 @@ ranking, and computing Pareto fronts. No I/O or side effects.
 from __future__ import annotations
 
 import itertools
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -59,12 +60,14 @@ def filter_by_metrics(
     filtered: list[BacktestMetrics] = []
 
     for r in results:
-        # Check all filter conditions
-        if r.sharpe_ratio < filters.min_sharpe:
+        # NaN compares False against every threshold, so a "<" check let NaN
+        # metrics straight through. Require the positive condition instead.
+        # (+inf profit factor = no losing trades, a legitimate pass.)
+        if not (math.isfinite(r.sharpe_ratio) and r.sharpe_ratio >= filters.min_sharpe):
             continue
-        if r.profit_factor < filters.min_profit_factor:
+        if not r.profit_factor >= filters.min_profit_factor:
             continue
-        if r.max_drawdown > filters.max_drawdown:
+        if not r.max_drawdown <= filters.max_drawdown:
             continue
         if r.total_trades < filters.min_trades:
             continue
@@ -72,6 +75,11 @@ def filter_by_metrics(
         filtered.append(r)
 
     return filtered
+
+
+def _rank_key(value: float) -> float:
+    """Sort key: NaN ranks below every real value (and below -inf)."""
+    return value if not math.isnan(value) else -math.inf
 
 
 def rank_by_sharpe(results: list[BacktestMetrics]) -> list[BacktestMetrics]:
@@ -83,7 +91,13 @@ def rank_by_sharpe(results: list[BacktestMetrics]) -> list[BacktestMetrics]:
     Returns:
         Sorted list with highest Sharpe first
     """
-    return sorted(results, key=lambda r: r.sharpe_ratio, reverse=True)
+    # NaN in a sort key breaks ordering for the whole list (NaN < x and
+    # NaN > x are both False); NaN rows go last, stable among themselves.
+    return sorted(
+        results,
+        key=lambda r: (not math.isnan(r.sharpe_ratio), _rank_key(r.sharpe_ratio)),
+        reverse=True,
+    )
 
 
 def compute_pareto_front(
@@ -113,15 +127,23 @@ def compute_pareto_front(
         return []
 
     n = len(results)
-    if n == 1:
-        return [0]
 
-    # Pre-extract objectives to avoid repeated attribute access in O(n^2) loop
-    sharpes = [r.sharpe_ratio for r in results]
-    inv_dds = [1.0 - r.max_drawdown for r in results]
-    pfs = [r.profit_factor for r in results]
+    # Pre-extract objectives to avoid repeated attribute access in O(n^2) loop.
+    # A NaN objective is "worst possible" (-inf): NaN comparisons are always
+    # False, so NaN rows could never be dominated and sat on every front.
+    sharpes = [_rank_key(r.sharpe_ratio) for r in results]
+    inv_dds = [_rank_key(1.0 - r.max_drawdown) for r in results]
+    pfs = [_rank_key(r.profit_factor) for r in results]
 
-    is_pareto = [True] * n
+    # Rows with any NaN objective are never Pareto-optimal
+    is_pareto = [
+        not (
+            math.isnan(r.sharpe_ratio)
+            or math.isnan(r.max_drawdown)
+            or math.isnan(r.profit_factor)
+        )
+        for r in results
+    ]
 
     for i in range(n):
         if not is_pareto[i]:

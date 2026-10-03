@@ -546,9 +546,9 @@ class TestWFARun:
         # OOS Return avg = (8 + 6 - 3) / 3 = 3.67
         assert abs(result.aggregated_oos_return - 3.67) < 0.1
 
-        # IS Return avg = (20 + 15 + 18) / 3 = 17.67
-        # Efficiency = 3.67 / 17.67 = 0.208
-        assert abs(result.efficiency - 0.208) < 0.01
+        # Length-normalized: IS windows are 90 days, OOS 30 days
+        # mean IS/day = (53/3)/90, mean OOS/day = (11/3)/30 -> 0.6226
+        assert result.efficiency == pytest.approx((11 / 3 / 30) / (53 / 3 / 90), rel=1e-12)
 
         # Consistency = 2/3 = 0.667
         assert abs(result.consistency_ratio - 0.667) < 0.01
@@ -593,7 +593,11 @@ class TestRobustnessCheck:
         # Consistency = 2/2 = 1.0 > 0.5
 
     def test_fails_oos_sharpe_threshold(self) -> None:
-        """Strategy fails OOS Sharpe threshold."""
+        """Weak OOS fails robustness.
+
+        ``min_oos_sharpe`` is informational (reported, not gated); the strategy
+        fails on length-normalized efficiency: (2.2/30) / (15/90) = 0.44 < 0.5.
+        """
         cfg = WFAConfig(
             in_sample_days=90,
             out_of_sample_days=30,
@@ -607,8 +611,8 @@ class TestRobustnessCheck:
             MockBacktestResult(sharpe=1.5, total_return=15.0, params={}),
         ]
         oos_results = [
-            MockBacktestResult(sharpe=0.3, total_return=5.0, params={}),
-            MockBacktestResult(sharpe=0.5, total_return=8.0, params={}),
+            MockBacktestResult(sharpe=0.3, total_return=2.0, params={}),
+            MockBacktestResult(sharpe=0.5, total_return=2.4, params={}),
         ]
 
         runner = MockRunner(is_results=is_results, oos_results=oos_results)
@@ -633,9 +637,11 @@ class TestRobustnessCheck:
             MockBacktestResult(sharpe=2.0, total_return=20.0, params={}),
             MockBacktestResult(sharpe=2.0, total_return=20.0, params={}),
         ]
+        # 60% / 55% Sharpe degradation; returns also degrade per day:
+        # efficiency = (2.5/30) / (20/90) = 0.375 < 0.5
         oos_results = [
-            MockBacktestResult(sharpe=0.8, total_return=8.0, params={}),  # 60% degradation
-            MockBacktestResult(sharpe=0.9, total_return=9.0, params={}),  # 55% degradation
+            MockBacktestResult(sharpe=0.8, total_return=2.0, params={}),
+            MockBacktestResult(sharpe=0.9, total_return=3.0, params={}),
         ]
 
         runner = MockRunner(is_results=is_results, oos_results=oos_results)
@@ -867,9 +873,10 @@ class TestReportGeneration:
             MockBacktestResult(sharpe=1.5, total_return=15.0, params={}),
             MockBacktestResult(sharpe=1.5, total_return=15.0, params={}),
         ]
+        # efficiency = (1/30) / (15/90) = 0.2 -> not robust
         oos_results = [
-            MockBacktestResult(sharpe=0.5, total_return=5.0, params={}),
-            MockBacktestResult(sharpe=0.5, total_return=5.0, params={}),
+            MockBacktestResult(sharpe=0.5, total_return=1.0, params={}),
+            MockBacktestResult(sharpe=0.5, total_return=1.0, params={}),
         ]
 
         runner = MockRunner(is_results=is_results, oos_results=oos_results)
@@ -884,9 +891,14 @@ class TestReportGeneration:
 
 
 class TestNegativeIsPositiveOos:
-    """Negative IS + profitable OOS is not degradation (vibe-quant-a2b3q)."""
+    """Negative IS + profitable OOS must NOT auto-pass (vibe-quant-e70tl.10).
 
-    def test_negative_is_positive_oos_gets_max_efficiency(self) -> None:
+    Supersedes vibe-quant-a2b3q's "max efficiency" rule: a strategy that loses
+    in-sample has no edge to retain -- the 5.0 grant let a strategy losing
+    18.6% overall pass WFA.
+    """
+
+    def test_negative_is_positive_oos_is_not_efficient(self) -> None:
         cfg = WFAConfig(
             in_sample_days=90,
             out_of_sample_days=30,
@@ -904,8 +916,8 @@ class TestNegativeIsPositiveOos:
         runner = MockRunner(is_results=is_results, oos_results=oos_results)
         wfa = WalkForwardAnalysis(config=cfg, runner=runner)
         result = wfa.run("test", date(2023, 1, 1), date(2023, 5, 30), {})
-        # OOS outperformed IS — no degradation to flag
-        assert result.efficiency == 5.0
+        assert result.efficiency == 0.0
+        assert result.is_robust is False
 
     def test_negative_is_negative_oos_zero_efficiency(self) -> None:
         cfg = WFAConfig(

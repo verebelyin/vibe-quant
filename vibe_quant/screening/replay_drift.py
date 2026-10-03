@@ -34,6 +34,13 @@ def _safe_ratio(numerator: float | None, denominator: float | None) -> float | N
     return float(numerator) / float(denominator)
 
 
+def _outside_band(ratio: float | None, threshold: float) -> bool:
+    """True when ``ratio`` is outside ``[threshold, 1 / threshold]``."""
+    if ratio is None:
+        return False
+    return not (threshold <= ratio <= 1.0 / threshold)
+
+
 def _get_promote_source(parameters: object) -> dict[str, object] | None:
     """Extract promote_source dict from a backtest_runs.parameters value."""
     params: dict[str, object]
@@ -107,13 +114,19 @@ def _build_drift_payload(
     screening_sharpe: float | None,
     screening_trades: int | None,
 ) -> dict[str, object]:
-    """Compute drift ratios + flagged verdict from the four metric values."""
+    """Compute drift ratios + flagged verdict from the four metric values.
+
+    Drift is TWO-sided: a replay is flagged when it deviates either way --
+    ratio below ``THRESHOLD`` or above ``1 / THRESHOLD``. A negative ratio
+    (sign flip) is always flagged, and because the bounds are on the ratio,
+    a negative discovery Sharpe that replays twice as negative (ratio 2.0) is
+    flagged too (the old one-sided ``ratio < threshold`` check passed both
+    "much better than discovery" and "much worse but same negative sign").
+    """
     trade_ratio = _safe_ratio(screening_trades, discovery_trades)
     sharpe_ratio = _safe_ratio(screening_sharpe, discovery_sharpe)
-    trade_flagged = trade_ratio is not None and trade_ratio < TRADE_DRIFT_THRESHOLD
-    sharpe_flagged = (
-        sharpe_ratio is not None and sharpe_ratio < SHARPE_DRIFT_THRESHOLD
-    )
+    trade_flagged = _outside_band(trade_ratio, TRADE_DRIFT_THRESHOLD)
+    sharpe_flagged = _outside_band(sharpe_ratio, SHARPE_DRIFT_THRESHOLD)
     return {
         "discovery_sharpe": discovery_sharpe,
         "discovery_trades": discovery_trades,

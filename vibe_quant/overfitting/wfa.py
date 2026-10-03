@@ -10,8 +10,10 @@ Configuration (from SPEC.md for 2-year data):
 - Produces ~13 windows from 24 months
 
 Filter criteria:
-- Walk-forward efficiency > 0.5 (mean OOS / mean IS return)
+- Walk-forward efficiency > 0.5 (mean OOS return PER DAY / mean IS return per
+  day -- length-normalized, so a stationary edge scores ~1.0)
 - > 50% of OOS windows profitable
+- concatenated OOS return > 0 (an overall-losing strategy fails)
 """
 
 from __future__ import annotations
@@ -19,7 +21,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +139,7 @@ class WFAResult:
         windows: Individual window results.
         aggregated_oos_sharpe: Combined Sharpe across all OOS periods.
         aggregated_oos_return: Combined return across all OOS periods.
-        efficiency: mean(OOS_return) / mean(IS_return).
+        efficiency: mean(OOS return/day) / mean(IS return/day) (0 without IS edge).
         is_vs_oos_degradation: Average IS vs OOS Sharpe degradation.
         consistency_ratio: Fraction of profitable OOS windows.
         is_robust: Whether strategy passes all thresholds.
@@ -389,6 +394,37 @@ class WalkForwardAnalysis:
 
         return self._aggregate_results(windows)
 
+    @staticmethod
+    def walk_forward_efficiency(windows: Sequence[WFAWindow]) -> float:
+        """Length-normalized walk-forward efficiency (Pardo).
+
+        ``mean(OOS return per day) / mean(IS return per day)`` with each
+        window's day counts taken from its dates (inclusive). Comparing TOTAL
+        returns over a 270-day IS and a 90-day OOS made a perfectly
+        stationary edge score 0.33 and fail.
+
+        No in-sample edge (mean IS return below ``_MIN_IS_RETURN`` over an
+        average IS window) -> 0.0: a strategy that LOSES in-sample has nothing
+        to "retain", so a positive OOS no longer earns the old automatic max
+        efficiency. Capped at ``_MAX_EFFICIENCY`` against tiny positive
+        denominators.
+        """
+        if not windows:
+            return 0.0
+
+        def _days(start: str, end: str) -> int:
+            return max(1, (date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+
+        is_days = [_days(w.is_start_date, w.is_end_date) for w in windows]
+        oos_days = [_days(w.oos_start_date, w.oos_end_date) for w in windows]
+        n = len(windows)
+        mean_is = sum(w.is_return / d for w, d in zip(windows, is_days, strict=True)) / n
+        mean_oos = sum(w.oos_return / d for w, d in zip(windows, oos_days, strict=True)) / n
+        mean_is_days = sum(is_days) / n
+        if mean_is < _MIN_IS_RETURN / mean_is_days:
+            return 0.0
+        return min(mean_oos / mean_is, _MAX_EFFICIENCY)
+
     def _aggregate_results(self, windows: list[WFAWindow]) -> WFAResult:
         """Aggregate window results into final WFAResult.
 
@@ -418,14 +454,12 @@ class WalkForwardAnalysis:
         inv_n = 1.0 / n
         sum_oos_sharpe = 0.0
         sum_oos_return = 0.0
-        sum_is_return = 0.0
         sum_degradation = 0.0
         profitable_count = 0
 
         for w in windows:
             sum_oos_sharpe += w.oos_sharpe
             sum_oos_return += w.oos_return
-            sum_is_return += w.is_return
             sum_degradation += w.sharpe_degradation
             if w.oos_return > 0:
                 profitable_count += 1
@@ -433,26 +467,18 @@ class WalkForwardAnalysis:
         aggregated_oos_sharpe = sum_oos_sharpe * inv_n
         aggregated_oos_return = sum_oos_return * inv_n
 
-        # Tiny IS denominators inflate ratio without real edge; cap output.
-        # Zero/near-zero IS with profitable OOS stays 0 (no demonstrated IS
-        # edge -> no efficiency credit). Strictly NEGATIVE IS with profitable
-        # OOS means OOS outperformed IS — there is no degradation to flag, so
-        # grant max efficiency instead of silently failing the filter
-        # (consistency still gates robustness independently).
-        mean_is_return = sum_is_return * inv_n
-        if mean_is_return < 0.0 and aggregated_oos_return > 0:
-            efficiency = _MAX_EFFICIENCY
-        elif mean_is_return < _MIN_IS_RETURN:
-            efficiency = 0.0
-        else:
-            efficiency = min(aggregated_oos_return / mean_is_return, _MAX_EFFICIENCY)
+        efficiency = self.walk_forward_efficiency(windows)
 
         avg_degradation = sum_degradation * inv_n
         consistency = profitable_count * inv_n
 
-        # Robustness check (SPEC Section 8: efficiency > 0.5 AND > 50% OOS profitable)
+        # Robustness (SPEC Section 8): efficiency > 0.5 AND > 50% OOS windows
+        # profitable AND the concatenated OOS periods make money overall -- a
+        # few large OOS losses must fail even when most windows are green.
         is_robust = (
-            consistency > self._config.min_consistency and efficiency > self._config.min_efficiency
+            consistency > self._config.min_consistency
+            and efficiency > self._config.min_efficiency
+            and sum_oos_return > 0.0
         )
 
         return WFAResult(

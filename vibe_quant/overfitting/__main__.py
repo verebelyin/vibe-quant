@@ -162,12 +162,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         result = pipeline.run(
             run_id=args.run_id,
             config=config,
+            # None -> day count of the run's (train) date range
             num_observations=args.observations,
             data_start=data_start,
             data_end=data_end,
             n_samples=effective_samples,
             allow_mock=args.allow_mock,
+            # None -> discovery 'evaluated' count / full sweep size
+            total_trials=getattr(args, "total_trials", None),
         )
+        if args.allow_mock and (
+            (config.enable_wfa and wfa_runner is None)
+            or (config.enable_purged_kfold and cv_runner is None)
+        ):
+            print(
+                "NOTE: WFA/CV used MockBacktestRunner (synthetic) — those verdicts are "
+                "shown below but NOT written to sweep_results."
+            )
 
         # Print summary
         print("=" * 60)
@@ -213,6 +224,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             print(
                 f"  WFA (Walk-Forward):         {result.passed_wfa:4d} / {result.total_candidates:4d}  ({pct:5.1f}%)"
+            )
+            print(
+                "    (walk-forward STABILITY test: each candidate's params held fixed "
+                "across windows, no per-window re-optimization)"
             )
 
         if config.enable_purged_kfold:
@@ -367,18 +382,26 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument(
         "--observations",
         type=int,
-        default=252,
-        help="Number of observations for DSR (default: 252)",
+        default=None,
+        help="Daily observations for DSR (default: day count of the run's date "
+        "range -- a discovery run's train range)",
+    )
+    run_parser.add_argument(
+        "--total-trials",
+        type=int,
+        default=None,
+        help="DSR multiple-testing trial count N (default: a discovery run's "
+        "'evaluated' count, else the number of sweep combos)",
     )
     run_parser.add_argument(
         "--start-date",
         type=str,
-        help="Start date for WFA (YYYY-MM-DD)",
+        help="Start date for WFA (YYYY-MM-DD; default: the run's start date)",
     )
     run_parser.add_argument(
         "--end-date",
         type=str,
-        help="End date for WFA (YYYY-MM-DD)",
+        help="End date for WFA (YYYY-MM-DD; default: the run's end date)",
     )
     run_parser.add_argument(
         "--samples",
@@ -395,7 +418,8 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument(
         "--allow-mock",
         action="store_true",
-        help="Allow MockBacktestRunner fallback for WFA/CV (synthetic results)",
+        help="Allow MockBacktestRunner fallback for WFA/CV (synthetic results; "
+        "reported but never persisted to sweep_results)",
     )
     run_parser.add_argument(
         "--real-wfa",
