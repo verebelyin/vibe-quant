@@ -661,3 +661,75 @@ def test_risk_state_restored_from_checkpoint_keeps_drawdown_limit() -> None:
     # 10000 equity vs 10600 HWM = 5.66% drawdown -> halted before any trade fills.
     assert h.guard.halt_reason == HaltReason.MAX_DRAWDOWN
     assert h.filled_entries() == []
+
+
+def test_compiled_dsl_strategy_dd_halt_flattens_and_stops() -> None:
+    """Same DD scenario with a real StrategyCompiler strategy (entry always true)."""
+    import json
+
+    from vibe_quant.dsl.compiler import StrategyCompiler
+    from vibe_quant.dsl.parser import validate_strategy_dict
+
+    dsl = validate_strategy_dict(
+        {
+            "name": "audit_guard_probe",
+            "timeframe": "1m",
+            "indicators": {"sma_2": {"type": "SMA", "period": 2}},
+            "entry_conditions": {"long": ["sma_2 > 0"]},
+            "stop_loss": {"type": "fixed_pct", "percent": 20.0},
+            "take_profit": {"type": "fixed_pct", "percent": 50.0},
+        }
+    )
+    module = StrategyCompiler().compile_to_module(dsl)
+    cfg = module.AuditGuardProbeConfig.parse(
+        json.dumps(
+            {
+                "instrument_id": "BTCUSDT-PERP.BINANCE",
+                "order_id_tag": "000",
+                "external_order_claims": ["BTCUSDT-PERP.BINANCE"],
+                "max_position_pct": 2.0,
+                "risk_per_trade": 0.5,
+            }
+        )
+    )
+    strat = module.AuditGuardProbeStrategy(config=cfg)
+    engine = _new_engine()
+    engine.add_venue(
+        venue=Venue("BINANCE"),
+        oms_type=OmsType.NETTING,
+        account_type=AccountType.MARGIN,
+        starting_balances=[Money(10_000, Currency.from_str("USDT"))],
+        default_leverage=Decimal("10"),
+        bar_execution=True,
+    )
+    engine.add_instrument(create_instrument("BTCUSDT"))
+    listener = RecordingListener()
+    guard = TradingGuard(
+        TradingGuardConfig(
+            check_interval_secs=60,
+            max_drawdown_pct=Decimal("0.05"),
+            max_daily_loss_pct=Decimal("0.5"),
+        ),
+        strategies=[strat],
+        risk_engine=engine.kernel.risk_engine,
+        listener=listener,
+    )
+    listener.clock_ns = lambda: guard.clock.timestamp_ns()
+    engine.add_actor(guard)
+    engine.add_strategy(strat)
+    h = Harness(engine=engine, guard=guard, strategies=[strat], listener=listener)
+    closes = [10000.0] * 5 + [9900.0, 9800.0, 9700.0, 9600.0, 9500.0] + [9400.0] * 12
+    snaps: dict[str, Any] = {}
+    run(
+        h,
+        _flat_bars(get_bar_type("BTCUSDT", "1m"), closes),
+        actions=[(h.at(19.5), h.snap(snaps, "after"))],
+    )
+
+    assert guard.halt_reason == HaltReason.MAX_DRAWDOWN
+    assert snaps["after"]["running"] == [False]
+    assert snaps["after"]["positions_open"] == 0
+    assert snaps["after"]["orders_open"] == []
+    assert h.accepted_entries_after(h.halt_ns()) == []
+    exits = [o for o in h.orders() if o.tags and "MARKET_EXIT" in o.tags]
+    assert exits and all(o.is_reduce_only for o in exits)
