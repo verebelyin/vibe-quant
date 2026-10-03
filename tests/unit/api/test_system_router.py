@@ -24,7 +24,7 @@ async def client(tmp_db: Path):
     app = create_app()
     state_mgr = StateManager(db_path=tmp_db)
     _ = state_mgr.conn  # init schema
-    job_mgr = BacktestJobManager()
+    job_mgr = BacktestJobManager(tmp_db)  # never the real default DB
     catalog_mgr = CatalogManager()
     ws_mgr = ConnectionManager()
     await ws_mgr.start()
