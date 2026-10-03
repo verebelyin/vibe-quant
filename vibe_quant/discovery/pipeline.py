@@ -3,18 +3,32 @@
 Orchestrates population initialization, fitness evaluation, selection,
 crossover, mutation, and convergence detection to discover profitable
 strategy candidates expressed as DSL YAML dicts.
+
+Champion gates (vibe-quant-e70tl.5) all FAIL CLOSED: a candidate that fails a
+gate is dropped and recorded in ``guardrail_rejections`` with the reason; when
+every candidate fails, the run persists ZERO champions. Order:
+
+1. guardrails (min trades/return, complexity, DSR, bootstrap CI) on top-K
+2. cross-window: shifted sub-windows of the TRAIN range (in-sample window
+   never counts as a pass)
+3. WFA rolling: rolling sub-windows of the TRAIN range
+4. holdout: one final out-of-sample pass/fail gate (never used for ranking)
+
+No cross-window / WFA window may overlap the holdout.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import random
 import statistics
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -44,6 +58,9 @@ logger = logging.getLogger(__name__)
 # Max retries when generating valid offspring via crossover+mutation
 _MAX_OFFSPRING_RETRIES: int = 10
 
+# Shortest shifted cross-window (days) worth backtesting
+_MIN_CROSS_WINDOW_DAYS: int = 7
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -67,8 +84,21 @@ class DiscoveryConfig:
         min_trades: Minimum trades for a strategy to be considered valid.
         symbols: Trading symbols to evaluate on.
         timeframe: Bar timeframe (e.g. "1h").
-        start_date: Backtest start date (ISO format).
-        end_date: Backtest end date (ISO format).
+        start_date: TRAIN range start (ISO format). With a holdout this is the
+            training slice only.
+        end_date: TRAIN range end (ISO format) == holdout start when split.
+        eval_windows: Worst-of-N sub-window fitness (see
+            ``NTBacktestFn._aggregate_multi_window``); 1 = single window.
+        train_test_split: TRAIN fraction of the full range (0 = no holdout).
+            The CLI/API default is 0.8 (20% holdout).
+        cross_window_min_pass: Shifted cross-windows that must pass. ``None``
+            = all of them. The in-sample window never counts.
+        wfa_oos_step_days: >0 enables the rolling-window stability check over
+            the TRAIN range (``wfa_min_consistency`` of windows profitable).
+        holdout_min_sharpe: Holdout Sharpe must exceed this.
+        holdout_min_trades: Holdout trade floor. ``None`` = derived: half the
+            trade rate the train gate demands, ``max(1, min_trades *
+            holdout_days / (2 * train_days))``.
     """
 
     population_size: int = 20
@@ -91,15 +121,17 @@ class DiscoveryConfig:
     immigrant_fraction: float = 0.15  # Fraction of population replaced when entropy is low
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
-    eval_windows: int = 3  # 3 = default multi-window fitness (PKFOLD-biased); 1 = single-window
-    train_test_split: float = 0.0  # 0 = disabled; >0 = fraction for train (e.g. 0.5)
+    eval_windows: int = 3  # worst-of-N sub-window fitness; 1 = single-window
+    train_test_split: float = 0.0  # 0 = no holdout; >0 = TRAIN fraction (e.g. 0.8)
     holdout_start_date: str = ""  # Pre-computed holdout start (set by CLI, not re-split)
     holdout_end_date: str = ""  # Pre-computed holdout end
     cross_window_months: list[int] = field(default_factory=list)  # shifted windows, e.g. [1, 2]
-    cross_window_min_pass: int = 2  # min windows (of total) that must pass
+    cross_window_min_pass: int | None = None  # shifted windows that must pass (None = all)
     cross_window_min_sharpe: float = 0.5  # min Sharpe on each window to count as pass
-    wfa_oos_step_days: int = 0  # >0 enables WFA: split holdout into rolling windows of N days
-    wfa_min_consistency: float = 0.75  # fraction of OOS windows that must be profitable
+    wfa_oos_step_days: int = 0  # >0 enables rolling-window stability check over TRAIN range
+    wfa_min_consistency: float = 0.75  # fraction of rolling windows that must be profitable
+    holdout_min_sharpe: float = 0.0  # holdout gate: Sharpe must exceed this
+    holdout_min_trades: int | None = None  # holdout gate trade floor (None = derived)
     require_bootstrap_ci: bool = True  # Bootstrap Sharpe CI guardrail
     bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound < this
     bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
@@ -132,6 +164,10 @@ class DiscoveryConfig:
             errors.append("top_k must be >= 1")
         if self.train_test_split < 0.0 or self.train_test_split >= 1.0:
             errors.append("train_test_split must be in [0, 1)")
+        if self.cross_window_min_pass is not None and self.cross_window_min_pass < 1:
+            errors.append("cross_window_min_pass must be >= 1 (or None = all shifted windows)")
+        if self.holdout_min_trades is not None and self.holdout_min_trades < 0:
+            errors.append("holdout_min_trades must be >= 0")
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -141,6 +177,15 @@ class DiscoveryConfig:
             from vibe_quant.discovery.fitness import MIN_TRADES_1M
 
             object.__setattr__(self, "min_trades", MIN_TRADES_1M)
+
+    @property
+    def has_holdout(self) -> bool:
+        """True when a holdout slice was split off the discovery range."""
+        return (
+            self.train_test_split > 0
+            and bool(self.holdout_start_date)
+            and bool(self.holdout_end_date)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +218,14 @@ class GenerationResult:
 
 @dataclass(frozen=True, slots=True)
 class HoldoutResult:
-    """Holdout (out-of-sample) evaluation for a single strategy.
+    """Metrics of one strategy on one (holdout / shifted / rolling) window.
 
     Attributes:
-        sharpe_ratio: Holdout Sharpe ratio.
-        max_drawdown: Holdout max drawdown.
-        profit_factor: Holdout profit factor.
-        total_trades: Holdout trade count.
-        total_return: Holdout total return.
+        sharpe_ratio: Sharpe ratio.
+        max_drawdown: Max drawdown.
+        profit_factor: Profit factor.
+        total_trades: Trade count.
+        total_return: Total return.
     """
 
     sharpe_ratio: float
@@ -195,28 +240,35 @@ class CrossWindowResult:
     """Cross-window validation result for a single strategy.
 
     Attributes:
-        window_results: Per-window HoldoutResult (index 0 = original, 1+ = shifted).
-        windows_passed: Number of windows where strategy passed thresholds.
-        total_windows: Total number of windows evaluated.
-        passed: Whether strategy met cross_window_min_pass.
+        window_results: Per SHIFTED window metrics (the in-sample training
+            window is excluded -- it never counts as a pass).
+        windows_passed: Number of shifted windows that passed.
+        total_windows: Number of shifted windows evaluated.
+        passed: Whether ``windows_passed >= required`` shifted windows.
+        window_dates: (start, end) per shifted window, parallel to results.
+        offsets_months: Month offset per shifted window, parallel to results.
+        required: Shifted windows that had to pass.
     """
 
     window_results: list[HoldoutResult]
     windows_passed: int
     total_windows: int
     passed: bool
+    window_dates: list[tuple[str, str]] = field(default_factory=list)
+    offsets_months: list[int] = field(default_factory=list)
+    required: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class WFARollingResult:
-    """Walk-forward rolling OOS validation for a single strategy.
+    """Rolling-window stability check (over the TRAIN range) for one strategy.
 
     Attributes:
-        oos_windows: Per-window HoldoutResult for each rolling OOS window.
-        window_dates: (start, end) for each OOS window.
-        windows_profitable: Number of OOS windows with total_return > 0.
-        windows_sharpe_positive: Number of OOS windows with sharpe > 0.
-        total_windows: Total OOS windows.
+        oos_windows: Per-window HoldoutResult for each rolling window.
+        window_dates: (start, end) for each rolling window.
+        windows_profitable: Number of windows with total_return > 0.
+        windows_sharpe_positive: Number of windows with sharpe > 0.
+        total_windows: Total rolling windows.
         consistency: Fraction of profitable (return-based) windows — the gate.
         sharpe_consistency: Fraction of sharpe-positive windows — exposure only.
         passed: Whether consistency >= wfa_min_consistency (return-based).
@@ -238,13 +290,17 @@ class DiscoveryResult:
 
     Attributes:
         generations: Per-generation metrics.
-        top_strategies: Top K (chromosome, fitness) pairs sorted descending.
-        total_candidates_evaluated: Cumulative evaluations across all generations.
+        top_strategies: Champions that passed EVERY enabled gate, sorted by
+            training score (may be empty).
+        total_candidates_evaluated: Distinct strategies backtested (DSR N).
         converged: Whether the pipeline terminated due to convergence.
         convergence_generation: Generation index where convergence detected (None if not).
-        holdout_results: Per-strategy holdout metrics (parallel to top_strategies). Empty if no split.
+        holdout_results: Per-champion holdout metrics (parallel to top_strategies).
+            Empty if no holdout.
         train_dates: (start, end) for train period. None if no split.
         holdout_dates: (start, end) for holdout period. None if no split.
+        guardrail_rejections: One entry per rejected candidate with the
+            failing ``stage`` and ``reasons``.
     """
 
     generations: list[GenerationResult]
@@ -258,6 +314,7 @@ class DiscoveryResult:
     cross_window_results: list[CrossWindowResult] = field(default_factory=list)
     wfa_results: list[WFARollingResult] = field(default_factory=list)
     guardrail_rejections: list[dict[str, object]] = field(default_factory=list)
+    holdout_min_trades: int | None = None
 
 
 def _select_diverse_top_k(
@@ -298,6 +355,50 @@ def _select_diverse_top_k(
     return selected
 
 
+def _metrics_to_holdout_result(bt: dict[str, float | int]) -> HoldoutResult:
+    """Window metrics dict -> HoldoutResult, NaN coerced to failing values."""
+    sharpe = float(bt.get("sharpe_ratio", 0.0))
+    max_dd = float(bt.get("max_drawdown", 1.0))
+    pf = float(bt.get("profit_factor", 0.0))
+    trades = int(bt.get("total_trades", 0))
+    ret = float(bt.get("total_return", 0.0))
+    return HoldoutResult(
+        sharpe_ratio=0.0 if math.isnan(sharpe) else sharpe,
+        max_drawdown=1.0 if math.isnan(max_dd) else max_dd,
+        profit_factor=0.0 if math.isnan(pf) else pf,
+        total_trades=trades,
+        total_return=0.0 if math.isnan(ret) else ret,
+    )
+
+
+_FAILED_WINDOW = HoldoutResult(
+    sharpe_ratio=0.0, max_drawdown=1.0, profit_factor=0.0, total_trades=0, total_return=0.0,
+)
+
+
+def _parse_date(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d")
+
+
+def assert_windows_outside_holdout(
+    windows: Sequence[tuple[str, str]], holdout_start: str, label: str
+) -> None:
+    """Raise if any [start, end) window reaches past ``holdout_start``.
+
+    Windows are half-open: a window ending exactly at the holdout start (the
+    train end) does not overlap it.
+    """
+    if not holdout_start:
+        return
+    for ws, we in windows:
+        if we > holdout_start or ws >= holdout_start:
+            msg = (
+                f"{label} window {ws}..{we} overlaps the holdout starting "
+                f"{holdout_start} -- the holdout must stay unseen until the final gate"
+            )
+            raise ValueError(msg)
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -311,6 +412,9 @@ class DiscoveryPipeline:
         backtest_fn: Callable that runs a backtest for a chromosome and returns
             a dict with keys: sharpe_ratio, max_drawdown, profit_factor, total_trades.
         filter_fn: Optional callable for overfitting filter evaluation.
+        holdout_backtest_fn: Backtest over the holdout range (final gate).
+        backtest_fn_factory: ``(start, end) -> backtest_fn`` for cross-window /
+            rolling windows (all inside the TRAIN range).
     """
 
     def __init__(
@@ -333,6 +437,11 @@ class DiscoveryPipeline:
         self._seed_chromosomes = seed_chromosomes
         self._guardrail_rejections: list[dict[str, object]] = []
         self._direction_constraint: Direction | None = None
+        # Evaluation bookkeeping (reset per run)
+        self._fitness_cache: dict[str, FitnessResult] = {}
+        self._total_evaluated: int = 0
+        self._all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
+        self._executor: ProcessPoolExecutor | None = None
 
     # -- public API ---------------------------------------------------------
 
@@ -391,6 +500,50 @@ class DiscoveryPipeline:
         _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
         logger.info("Indicator pool filtered to: %s", list(INDICATOR_POOL.keys()))
 
+    # -- evaluation ---------------------------------------------------------
+
+    @staticmethod
+    def _dsl_key(chrom: StrategyChromosome) -> str:
+        """Content key of the strategy a chromosome compiles to (name excluded)."""
+        try:
+            dsl = chromosome_to_dsl(chrom)
+        except Exception:
+            return f"uid:{chrom.uid}"  # unconvertible: never shares a cache slot
+        dsl.pop("name", None)
+        return json.dumps(dsl, sort_keys=True, default=str)
+
+    def _evaluate_new(self, chroms: list[StrategyChromosome]) -> list[FitnessResult]:
+        """Evaluate chromosomes; each distinct strategy is backtested once per run.
+
+        Backtests are deterministic for a given DSL + date windows, so
+        identical genomes (clones, no-op mutations, elites) reuse the cached
+        fitness. ``_total_evaluated`` counts DISTINCT strategies backtested --
+        the multiple-testing N for DSR.
+        """
+        cfg = self.config
+        keys = [self._dsl_key(c) for c in chroms]
+        todo: dict[str, int] = {}
+        for i, key in enumerate(keys):
+            if key not in self._fitness_cache and key not in todo:
+                todo[key] = i
+        if todo:
+            reps = [chroms[i] for i in todo.values()]
+            fresh = evaluate_population(
+                reps,
+                self._backtest_fn,
+                self._filter_fn,
+                max_workers=cfg.max_workers,
+                executor=self._executor,
+                min_trades=cfg.min_trades,
+                timeframe=cfg.timeframe,
+            )
+            for (key, idx), fr in zip(todo.items(), fresh, strict=True):
+                self._fitness_cache[key] = fr
+                self._total_evaluated += 1
+                if fr.adjusted_score > 0:
+                    self._all_scored.append((chroms[idx].clone(), fr))
+        return [self._fitness_cache[key] for key in keys]
+
     def run(self) -> DiscoveryResult:
         """Execute the full evolutionary discovery loop.
 
@@ -412,12 +565,14 @@ class DiscoveryPipeline:
             direction_constraint=direction_constraint,
             seed_chromosomes=self._seed_chromosomes,
         )
+        known: list[FitnessResult | None] = [None] * len(population)
         generation_results: list[GenerationResult] = []
-        total_evaluated = 0
         last_fitness_results: list[FitnessResult] = []
 
-        # Track global best for top-K across all generations
-        all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
+        self._fitness_cache = {}
+        self._total_evaluated = 0
+        self._all_scored = []
+        self._guardrail_rejections = []
 
         converged = False
         convergence_gen: int | None = None
@@ -445,31 +600,29 @@ class DiscoveryPipeline:
 
         # Create a long-lived worker pool to avoid per-generation pool startup
         # overhead (fixes idle workers when pool creation is slower than work)
-        executor = self._create_executor(cfg.max_workers, cfg.population_size)
+        self._executor = self._create_executor(cfg.max_workers, cfg.population_size)
 
+        phase_start = time.monotonic()
+        evaluated_at_phase_start = 0
         for gen in range(cfg.max_generations):
-            gen_start = time.monotonic()
-
-            # Evaluate (parallel if max_workers configured)
-            fitness_results = evaluate_population(
-                population,
-                self._backtest_fn,
-                self._filter_fn,
-                max_workers=cfg.max_workers,
-                executor=executor,
-                min_trades=cfg.min_trades,
-                timeframe=cfg.timeframe,
-            )
+            # Evaluate individuals without known fitness (initial population,
+            # tournament offspring, immigrants). Crowding offspring were
+            # already evaluated during selection.
+            todo = [i for i, fr in enumerate(known) if fr is None]
+            if todo:
+                fresh = self._evaluate_new([population[i] for i in todo])
+                for i, fr in zip(todo, fresh, strict=True):
+                    known[i] = fr
+            fitness_results = [fr for fr in known if fr is not None]
+            if len(fitness_results) != len(population):  # pragma: no cover - invariant
+                msg = "fitness/population misalignment after evaluation"
+                raise RuntimeError(msg)
             last_fitness_results = fitness_results
-            total_evaluated += len(population)
+            total_evaluated = self._total_evaluated
 
-            gen_elapsed = time.monotonic() - gen_start
+            gen_elapsed = time.monotonic() - phase_start
+            evals_this_gen = total_evaluated - evaluated_at_phase_start
             total_elapsed = time.monotonic() - pipeline_start
-
-            # Record per-individual scores (skip zero-fitness to reduce memory)
-            for chrom, fr in zip(population, fitness_results, strict=True):
-                if fr.adjusted_score > 0:
-                    all_scored.append((chrom.clone(), fr))
 
             # Build generation metrics
             scores = [fr.adjusted_score for fr in fitness_results]
@@ -485,136 +638,30 @@ class DiscoveryPipeline:
             )
             generation_results.append(gen_result)
 
+            self._log_generation(
+                gen=gen,
+                population=population,
+                fitness_results=fitness_results,
+                generation_results=generation_results,
+                best_idx=best_idx,
+                gen_elapsed=gen_elapsed,
+                total_elapsed=total_elapsed,
+                evals_this_gen=evals_this_gen,
+            )
+
             # ETA calculation
             avg_gen_time = total_elapsed / (gen + 1)
             remaining_gens = cfg.max_generations - gen - 1
             eta_seconds = avg_gen_time * remaining_gens
-
-            # Best metrics from top scorer
             best_fr = fitness_results[best_idx]
-            best_trades = best_fr.total_trades
-            best_return = best_fr.total_return
-
-            # === Population analytics ===
-
-            # Score distribution
-            score_std = (sum((s - gen_result.mean_fitness) ** 2 for s in scores) / len(scores)) ** 0.5
-            nonzero_scores = [s for s in scores if s > 0]
-            zero_count = len(scores) - len(nonzero_scores)
-            median_score = statistics.median(scores) if scores else 0.0
-
-            # Metric distributions across population (for correctness checks)
-            all_sharpes = [fr.sharpe_ratio for fr in fitness_results if fr.total_trades > 0]
-            all_trades = [fr.total_trades for fr in fitness_results if fr.total_trades > 0]
-            all_returns = [fr.total_return for fr in fitness_results if fr.total_trades > 0]
-            all_dds = [fr.max_drawdown for fr in fitness_results if fr.total_trades > 0]
-
-            # Indicator frequency across population
-            ind_counter: Counter[str] = Counter()
-            for c in population:
-                for g in c.entry_genes + c.exit_genes:
-                    ind_counter[g.indicator_type] += 1
-            total_genes = sum(ind_counter.values()) or 1
-            ind_pcts = {k: f"{v/total_genes*100:.0f}%" for k, v in ind_counter.most_common()}
-
-            # Direction distribution
-            dir_counts: dict[str, int] = {}
-            for c in population:
-                d = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
-                dir_counts[d] = dir_counts.get(d, 0) + 1
-
-            # Gen-over-gen improvement tracking
-            if gen > 0:
-                prev_best = generation_results[-2].best_fitness
-                improvement = gen_result.best_fitness - prev_best
-                improvement_str = f" Δbest={improvement:+.4f}" if improvement != 0 else " (no change)"
-            else:
-                improvement_str = " (initial)"
-
-            logger.info(
-                "=== GEN %d/%d === best=%.4f mean=%.4f median=%.4f std=%.4f | "
-                "zero_score=%d/%d | gen_time=%.1fs total=%.0fs ETA=%.0fs%s",
-                gen + 1,
-                cfg.max_generations,
-                gen_result.best_fitness,
-                gen_result.mean_fitness,
-                median_score,
-                score_std,
-                zero_count,
-                len(scores),
-                gen_elapsed,
-                total_elapsed,
-                eta_seconds,
-                improvement_str,
-            )
-
-            # Best chromosome details with full metrics
-            best_chrom = population[best_idx]
-            entry_indicators = [g.indicator_type for g in best_chrom.entry_genes]
-            exit_indicators = [g.indicator_type for g in best_chrom.exit_genes]
-            logger.info(
-                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
-                "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
-                best_chrom.uid,
-                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
-                entry_indicators,
-                exit_indicators,
-                best_chrom.stop_loss_pct,
-                best_chrom.take_profit_pct,
-                best_fr.sharpe_ratio,
-                best_fr.profit_factor,
-                best_fr.max_drawdown * 100,
-                best_fr.total_return * 100,
-                best_fr.total_trades,
-            )
-
-            # Score decomposition for best (helps verify fitness calc)
-            logger.info(
-                "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
-                best_fr.raw_score,
-                best_fr.complexity_penalty,
-                best_fr.overtrade_penalty,
-                best_fr.adjusted_score,
-            )
-
-            # Population distributions
-            if all_sharpes:
-                logger.info(
-                    "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "
-                    "trades=[%d, %d, %d] dd=[%.1f%%, %.1f%%, %.1f%%] return=[%.1f%%, %.1f%%, %.1f%%]",
-                    len(all_sharpes),
-                    min(all_sharpes), statistics.median(all_sharpes), max(all_sharpes),
-                    min(all_trades), int(statistics.median(all_trades)), max(all_trades),
-                    min(all_dds) * 100, statistics.median(all_dds) * 100, max(all_dds) * 100,
-                    min(all_returns) * 100, statistics.median(all_returns) * 100, max(all_returns) * 100,
-                )
-
-            # Diversity metrics
-            from vibe_quant.discovery.diversity import population_entropy
-            logger.info(
-                "  Diversity: entropy=%.3f indicators=%s directions=%s",
-                population_entropy(population),
-                ind_pcts,
-                dir_counts,
-            )
-
-            # Backtest timing stats (from gen_elapsed and pop size)
-            avg_bt_time = gen_elapsed / len(population) if population else 0
-            logger.info(
-                "  Timing: %.1fs/chromosome avg (%.1fs total for %d chromosomes)",
-                avg_bt_time,
-                gen_elapsed,
-                len(population),
-            )
-
             self._write_progress(
                 generation=gen + 1,
                 max_generations=cfg.max_generations,
                 best_fitness=gen_result.best_fitness,
                 mean_fitness=gen_result.mean_fitness,
                 worst_fitness=gen_result.worst_fitness,
-                best_trades=best_trades,
-                best_return=best_return,
+                best_trades=best_fr.total_trades,
+                best_return=best_fr.total_return,
                 gen_time=gen_elapsed,
                 total_elapsed=total_elapsed,
                 eta_seconds=eta_seconds,
@@ -640,31 +687,24 @@ class DiscoveryPipeline:
                 )
                 break
 
-            # Evolve next generation (skip on last iteration)
-            population = self._evolve_generation(population, fitness_results)
+            # No evolution after the last generation (crowding would evaluate
+            # offspring nobody scores).
+            if gen == cfg.max_generations - 1:
+                break
 
-            # Diversity monitoring + immigrant injection
-            from vibe_quant.discovery.diversity import (
-                inject_random_immigrants,
-                population_entropy,
-                should_inject_immigrants,
-            )
-            entropy = population_entropy(population)
-            if should_inject_immigrants(entropy, threshold=cfg.entropy_threshold):
-                scores_for_inject = [fr.adjusted_score for fr in fitness_results]
-                population = inject_random_immigrants(
-                    population, scores_for_inject, fraction=cfg.immigrant_fraction,
-                    direction_constraint=self._direction_constraint,
-                )
-                n_immigrants = max(1, int(len(population) * cfg.immigrant_fraction))
-                logger.info(
-                    "  Diversity intervention: entropy=%.3f < %.1f, injected %d random immigrants",
-                    entropy, cfg.entropy_threshold, n_immigrants,
-                )
+            phase_start = time.monotonic()
+            evaluated_at_phase_start = self._total_evaluated
+
+            population, known = self._evolve_generation(population, fitness_results)
+            population, known = self._maybe_inject_immigrants(population, known)
 
         # Shut down worker pool after all generations complete
-        if executor is not None:
-            executor.shutdown(wait=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
+
+        total_evaluated = self._total_evaluated
+        all_scored = self._all_scored
 
         # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
@@ -694,12 +734,9 @@ class DiscoveryPipeline:
                 len(sharpes), mean_sr, var_sr ** 0.5, min(sharpes), max(sharpes),
             )
 
-        # Validate top strategies with guardrails (DSR + min trades + complexity + bootstrap CI)
-        validated = self._validate_top_strategies(top_strategies, total_evaluated)
-        if validated is None:
-            pass  # Soft failures only — keep unfiltered
-        else:
-            top_strategies = validated  # May be empty if hard guardrails rejected all
+        # Gate 1: guardrails (DSR + min trades + complexity + bootstrap CI).
+        # Fails closed: candidates failing ANY guardrail are dropped.
+        top_strategies = self._validate_top_strategies(top_strategies, total_evaluated)
 
         # Final summary
         total_time = time.monotonic() - pipeline_start
@@ -729,141 +766,226 @@ class DiscoveryPipeline:
                 f"{(best_gen_idx + 1) / len(generation_results) * 100:.0f}%",
             )
 
-        # Top-K strategy details (not just winner)
-        if top_strategies:
-            logger.info("  --- Top %d strategies ---", len(top_strategies))
-            for rank, (chrom, fit) in enumerate(top_strategies, 1):
-                entry = [g.indicator_type for g in chrom.entry_genes]
-                exit_ = [g.indicator_type for g in chrom.exit_genes]
-                _dir = chrom.direction.value if hasattr(chrom.direction, "value") else chrom.direction
-                logger.info(
-                    "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
-                    "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
-                    rank,
-                    chrom.uid,
-                    fit.adjusted_score,
-                    fit.sharpe_ratio,
-                    fit.profit_factor,
-                    fit.max_drawdown * 100,
-                    fit.total_return * 100,
-                    fit.total_trades,
-                    _dir,
-                    entry,
-                    exit_,
-                    chrom.stop_loss_pct,
-                    chrom.take_profit_pct,
-                )
+        self._log_top_strategies(top_strategies)
 
-                # Log entry/exit gene details (thresholds, params) for reproduceability
-                for i, gene in enumerate(chrom.entry_genes):
-                    logger.info(
-                        "    entry[%d]: %s(%s) %s %.4f%s",
-                        i,
-                        gene.indicator_type,
-                        ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
-                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
-                        gene.threshold,
-                        f" sub={gene.sub_value}" if gene.sub_value else "",
-                    )
-                for i, gene in enumerate(chrom.exit_genes):
-                    logger.info(
-                        "    exit[%d]: %s(%s) %s %.4f%s",
-                        i,
-                        gene.indicator_type,
-                        ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
-                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
-                        gene.threshold,
-                        f" sub={gene.sub_value}" if gene.sub_value else "",
-                    )
+        return self._apply_validation_gates(
+            top_strategies,
+            generations=generation_results,
+            total_evaluated=total_evaluated,
+            converged=converged,
+            convergence_gen=convergence_gen,
+        )
 
-        # --- Validation phase: all steps run on the SAME strategy list ---
-        # Filtering happens at the end to keep arrays aligned.
-        holdout_results: list[HoldoutResult] = []
+    # -- validation gates ----------------------------------------------------
+
+    def _reject(
+        self,
+        chrom: StrategyChromosome,
+        fitness: FitnessResult,
+        stage: str,
+        reasons: list[str],
+    ) -> None:
+        """Record a rejected candidate (persisted with the run, shown in the UI)."""
+        self._guardrail_rejections.append(
+            {
+                "uid": chrom.uid,
+                "stage": stage,
+                "score": round(fitness.adjusted_score, 4),
+                "sharpe": round(fitness.sharpe_ratio, 3),
+                "trades": fitness.total_trades,
+                "reasons": list(reasons),
+            }
+        )
+        logger.info("Gate FAIL [%s]: %s reasons=%s", stage, chrom.uid, reasons)
+
+    def holdout_min_trades(self) -> int:
+        """Holdout trade floor (explicit, or half the train-gate trade rate)."""
+        cfg = self.config
+        if cfg.holdout_min_trades is not None:
+            return cfg.holdout_min_trades
+        train_days = compute_day_count(cfg.start_date, cfg.end_date)
+        holdout_days = compute_day_count(cfg.holdout_start_date, cfg.holdout_end_date)
+        if not train_days or not holdout_days:
+            return 1
+        return max(1, int(cfg.min_trades * holdout_days / (2 * train_days)))
+
+    def _holdout_reasons(self, hr: HoldoutResult, min_trades: int) -> list[str]:
+        """Failure reasons of the holdout gate (empty = pass)."""
+        cfg = self.config
+        reasons: list[str] = []
+        if hr.total_trades < min_trades:
+            reasons.append(f"Holdout: {hr.total_trades} trades < {min_trades}")
+        if not hr.total_return > 0:
+            reasons.append(f"Holdout: return {hr.total_return:.2%} <= 0")
+        if not hr.sharpe_ratio > cfg.holdout_min_sharpe:
+            reasons.append(
+                f"Holdout: sharpe {hr.sharpe_ratio:.2f} <= {cfg.holdout_min_sharpe:.2f}"
+            )
+        return reasons
+
+    def _apply_validation_gates(
+        self,
+        top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+        *,
+        generations: list[GenerationResult],
+        total_evaluated: int,
+        converged: bool,
+        convergence_gen: int | None,
+    ) -> DiscoveryResult:
+        """Run cross-window -> rolling WFA -> holdout on guardrail survivors.
+
+        Each gate only sees the previous gate's survivors and rejects (never
+        keeps) failures. The holdout runs last and exactly once per survivor.
+        """
+        cfg = self.config
+        survivors = list(top_strategies)
+        cw_by_uid: dict[str, CrossWindowResult] = {}
+        wfa_by_uid: dict[str, WFARollingResult] = {}
+        holdout_by_uid: dict[str, HoldoutResult] = {}
+
         train_dates: tuple[str, str] | None = None
         holdout_dates: tuple[str, str] | None = None
-        cross_window_results: list[CrossWindowResult] = []
-        wfa_results: list[WFARollingResult] = []
-
-        if self._holdout_backtest_fn is not None and top_strategies and cfg.train_test_split > 0:
-            holdout_results = self._evaluate_holdout(top_strategies)
+        if cfg.train_test_split > 0:
             train_dates = (cfg.start_date, cfg.end_date)
-            holdout_dates = (cfg.holdout_start_date, cfg.holdout_end_date)
+            if cfg.has_holdout:
+                holdout_dates = (cfg.holdout_start_date, cfg.holdout_end_date)
 
-        if (
-            cfg.cross_window_months
-            and self._backtest_fn_factory is not None
-            and top_strategies
-        ):
-            # Don't filter here — just compute results
-            cross_window_results, _ = self._evaluate_cross_windows(top_strategies)
+        # Gate 2: cross-window (shifted sub-windows of the train range)
+        if cfg.cross_window_months:
+            if not survivors:
+                logger.warning("Cross-window requested but no strategies survived guardrails")
+            elif self._backtest_fn_factory is None:
+                logger.warning(
+                    "Cross-window requested (months=%s) but cannot run: no backtest_fn_factory "
+                    "configured — failing closed",
+                    cfg.cross_window_months,
+                )
+                for chrom, fit in survivors:
+                    self._reject(chrom, fit, "cross_window", ["Cross-window: no backtest factory"])
+                survivors = []
+            else:
+                results, error = self._evaluate_cross_windows(survivors)
+                kept: list[tuple[StrategyChromosome, FitnessResult]] = []
+                if error is not None:
+                    for chrom, fit in survivors:
+                        self._reject(chrom, fit, "cross_window", [error])
+                for (chrom, fit), cwr in zip(survivors, results, strict=False):
+                    if cwr.passed:
+                        cw_by_uid[chrom.uid] = cwr
+                        kept.append((chrom, fit))
+                    else:
+                        self._reject(
+                            chrom, fit, "cross_window",
+                            [
+                                f"Cross-window: {cwr.windows_passed}/{cwr.total_windows} "
+                                f"shifted windows passed (need {cwr.required}; "
+                                f"sharpe>={cfg.cross_window_min_sharpe} and return>0)"
+                            ],
+                        )
+                survivors = kept
 
+        # Gate 3: rolling-window stability (WFA) over the train range
         if cfg.wfa_oos_step_days > 0:
             skip_reason: str | None = None
-            if cfg.train_test_split <= 0:
-                skip_reason = "train_test_split=0 (pass --train-test-split > 0)"
-            elif not top_strategies:
+            if not survivors:
                 skip_reason = "no top strategies survived guardrails"
-            elif holdout_dates is None:
-                skip_reason = "holdout_dates unavailable"
             elif self._backtest_fn_factory is None:
                 skip_reason = "no backtest_fn_factory configured"
 
-            if skip_reason is None:
-                assert holdout_dates is not None
-                wfa_results, _ = self._evaluate_wfa_rolling(
-                    top_strategies, holdout_dates[0], holdout_dates[1],
-                )
-            else:
+            if skip_reason is not None:
                 logger.warning(
-                    "WFA requested (wfa_oos_step_days=%d) but skipped: %s",
+                    "WFA requested (wfa_oos_step_days=%d) but not run: %s",
                     cfg.wfa_oos_step_days, skip_reason,
                 )
-
-        # Filter all arrays in sync: keep only strategies that passed all validations
-        if cross_window_results or wfa_results:
-            keep = []
-            for i in range(len(top_strategies)):
-                cw_ok = cross_window_results[i].passed if i < len(cross_window_results) else True
-                wfa_ok = wfa_results[i].passed if i < len(wfa_results) else True
-                if cw_ok and wfa_ok:
-                    keep.append(i)
-
-            if keep and len(keep) < len(top_strategies):
-                top_strategies = [top_strategies[i] for i in keep]
-                if holdout_results:
-                    holdout_results = [holdout_results[i] for i in keep]
-                if cross_window_results:
-                    cross_window_results = [cross_window_results[i] for i in keep]
-                if wfa_results:
-                    wfa_results = [wfa_results[i] for i in keep]
-                logger.info(
-                    "Post-validation filter: %d/%d strategies kept",
-                    len(keep), len(top_strategies) + (len(top_strategies) - len(keep)),
+                for chrom, fit in survivors:  # fail closed
+                    self._reject(chrom, fit, "wfa", [f"WFA: {skip_reason}"])
+                survivors = []
+            else:
+                wfa_results, error = self._evaluate_wfa_rolling(
+                    survivors, cfg.start_date, cfg.end_date,
                 )
-            elif not keep:
-                logger.warning("All strategies failed validation — keeping originals")
+                kept = []
+                if error is not None:
+                    for chrom, fit in survivors:
+                        self._reject(chrom, fit, "wfa", [error])
+                else:
+                    for (chrom, fit), wfa in zip(survivors, wfa_results, strict=True):
+                        if wfa.passed:
+                            wfa_by_uid[chrom.uid] = wfa
+                            kept.append((chrom, fit))
+                        else:
+                            self._reject(
+                                chrom, fit, "wfa",
+                                [
+                                    f"WFA: {wfa.windows_profitable}/{wfa.total_windows} rolling "
+                                    f"windows profitable ({wfa.consistency:.0%} < "
+                                    f"{cfg.wfa_min_consistency:.0%})"
+                                ],
+                            )
+                survivors = kept
+
+        # Gate 4: holdout -- the single final out-of-sample pass/fail
+        holdout_min_trades: int | None = None
+        if cfg.train_test_split > 0:
+            if not cfg.has_holdout:
+                logger.warning(
+                    "train_test_split=%.2f but no holdout dates — failing closed",
+                    cfg.train_test_split,
+                )
+                for chrom, fit in survivors:
+                    self._reject(chrom, fit, "holdout", ["Holdout: no holdout dates"])
+                survivors = []
+            elif self._holdout_backtest_fn is None:
+                logger.warning("Holdout configured but no holdout_backtest_fn — failing closed")
+                for chrom, fit in survivors:
+                    self._reject(chrom, fit, "holdout", ["Holdout: no holdout backtest"])
+                survivors = []
+            elif survivors:
+                holdout_min_trades = self.holdout_min_trades()
+                holdout_results = self._evaluate_holdout(survivors)
+                kept = []
+                for (chrom, fit), hr in zip(survivors, holdout_results, strict=True):
+                    reasons = self._holdout_reasons(hr, holdout_min_trades)
+                    if reasons:
+                        self._reject(chrom, fit, "holdout", reasons)
+                    else:
+                        holdout_by_uid[chrom.uid] = hr
+                        kept.append((chrom, fit))
+                logger.info(
+                    "  Holdout gate: %d/%d passed (min_trades=%d, sharpe>%.2f, return>0)",
+                    len(kept), len(survivors), holdout_min_trades, cfg.holdout_min_sharpe,
+                )
+                survivors = kept
+
+        if not survivors:
+            logger.warning(
+                "No champion passed every gate — run persists 0 champions (%d rejections)",
+                len(self._guardrail_rejections),
+            )
 
         return DiscoveryResult(
-            generations=generation_results,
-            top_strategies=top_strategies,
+            generations=generations,
+            top_strategies=survivors,
             total_candidates_evaluated=total_evaluated,
             converged=converged,
             convergence_generation=convergence_gen,
-            holdout_results=holdout_results,
+            holdout_results=[holdout_by_uid[c.uid] for c, _ in survivors if c.uid in holdout_by_uid],
             train_dates=train_dates,
             holdout_dates=holdout_dates,
-            cross_window_results=cross_window_results,
-            wfa_results=wfa_results,
-            guardrail_rejections=getattr(self, "_guardrail_rejections", []),
+            cross_window_results=[cw_by_uid[c.uid] for c, _ in survivors if c.uid in cw_by_uid],
+            wfa_results=[wfa_by_uid[c.uid] for c, _ in survivors if c.uid in wfa_by_uid],
+            guardrail_rejections=list(self._guardrail_rejections),
+            holdout_min_trades=holdout_min_trades,
         )
 
     def _evaluate_holdout(
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
     ) -> list[HoldoutResult]:
-        """Evaluate top strategies on holdout (out-of-sample) period.
+        """Evaluate strategies on the holdout (out-of-sample) period.
 
         Returns HoldoutResult for each strategy, parallel to top_strategies.
+        A failed backtest yields failing metrics (fails the gate).
         """
         assert self._holdout_backtest_fn is not None
         holdout_fn = self._holdout_backtest_fn
@@ -873,34 +995,10 @@ class DiscoveryPipeline:
 
         for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
             try:
-                bt = holdout_fn(chrom)
-                import math as _math
-                sharpe = float(bt.get("sharpe_ratio", 0.0))
-                max_dd = float(bt.get("max_drawdown", 1.0))
-                pf = float(bt.get("profit_factor", 0.0))
-                trades = int(bt.get("total_trades", 0))
-                ret = float(bt.get("total_return", 0.0))
-                if _math.isnan(sharpe):
-                    sharpe = 0.0
-                if _math.isnan(max_dd):
-                    max_dd = 1.0
-                if _math.isnan(pf):
-                    pf = 0.0
-                if _math.isnan(ret):
-                    ret = 0.0
-                hr = HoldoutResult(
-                    sharpe_ratio=sharpe,
-                    max_drawdown=max_dd,
-                    profit_factor=pf,
-                    total_trades=trades,
-                    total_return=ret,
-                )
+                hr = _metrics_to_holdout_result(holdout_fn(chrom))
             except Exception:
                 logger.warning("Holdout eval failed for %s", chrom.uid, exc_info=True)
-                hr = HoldoutResult(
-                    sharpe_ratio=0.0, max_drawdown=1.0,
-                    profit_factor=0.0, total_trades=0, total_return=0.0,
-                )
+                hr = _FAILED_WINDOW
             results.append(hr)
 
             # Log train vs holdout comparison
@@ -929,250 +1027,207 @@ class DiscoveryPipeline:
 
         return results
 
+    def cross_window_ranges(self) -> list[tuple[int, str, str]]:
+        """Shifted cross-windows ``(offset_months, start, end)`` inside the TRAIN range.
+
+        Window k starts ``offset_k`` months after the train start and ends at
+        the train end -- shifting the END forward would run into the holdout
+        (or past the data), so windows are clipped to the train range.
+
+        Raises:
+            ValueError: A window is shorter than ``_MIN_CROSS_WINDOW_DAYS`` or
+                (defensively) overlaps the holdout.
+        """
+        cfg = self.config
+        from dateutil.relativedelta import relativedelta
+
+        base_start = _parse_date(cfg.start_date)
+        base_end = _parse_date(cfg.end_date)
+        windows: list[tuple[int, str, str]] = []
+        for months in cfg.cross_window_months:
+            ws_dt = base_start + relativedelta(months=months)
+            if base_end - ws_dt < timedelta(days=_MIN_CROSS_WINDOW_DAYS):
+                msg = (
+                    f"Cross-window: +{months}mo window {ws_dt:%Y-%m-%d}..{cfg.end_date} "
+                    f"shorter than {_MIN_CROSS_WINDOW_DAYS}d inside the train range "
+                    f"{cfg.start_date}..{cfg.end_date}"
+                )
+                raise ValueError(msg)
+            windows.append((months, ws_dt.strftime("%Y-%m-%d"), cfg.end_date))
+        if cfg.has_holdout:
+            assert_windows_outside_holdout(
+                [(ws, we) for _, ws, we in windows], cfg.holdout_start_date, "Cross-window",
+            )
+        return windows
+
     def _evaluate_cross_windows(
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-    ) -> tuple[list[CrossWindowResult], list[tuple[StrategyChromosome, FitnessResult]]]:
-        """Evaluate top strategies across shifted time windows.
+    ) -> tuple[list[CrossWindowResult], str | None]:
+        """Evaluate strategies on shifted sub-windows of the train range.
 
-        Creates shifted windows by offsetting start/end dates by N months.
-        Filters strategies that don't pass on enough windows.
+        Only the SHIFTED windows count -- the full train window is where the
+        GA selected the strategy, so it is never evidence of robustness.
 
         Returns:
-            (cross_window_results, filtered_top_strategies)
+            (cross_window_results parallel to top_strategies, error). ``error``
+            is set (and results empty) when the windows can't be built.
         """
         assert self._backtest_fn_factory is not None
         cfg = self.config
-        offsets = cfg.cross_window_months
         min_sharpe = cfg.cross_window_min_sharpe
-        min_pass = cfg.cross_window_min_pass
 
-        from datetime import datetime as _dt
+        try:
+            windows = self.cross_window_ranges()
+        except ValueError as exc:
+            logger.warning("%s — failing closed", exc)
+            return [], str(exc)
 
-        from dateutil.relativedelta import relativedelta
-
-        base_start = _dt.strptime(cfg.start_date, "%Y-%m-%d")
-        base_end = _dt.strptime(cfg.end_date, "%Y-%m-%d")
-
-        # Build list of windows: original + shifted
-        windows: list[tuple[str, str]] = [(cfg.start_date, cfg.end_date)]
-        for months in offsets:
-            ws = (base_start + relativedelta(months=months)).strftime("%Y-%m-%d")
-            we = (base_end + relativedelta(months=months)).strftime("%Y-%m-%d")
-            windows.append((ws, we))
+        required = len(windows)
+        if cfg.cross_window_min_pass is not None:
+            required = min(cfg.cross_window_min_pass, len(windows))
 
         logger.info(
-            "=== CROSS-WINDOW VALIDATION: %d strategies × %d windows ===",
-            len(top_strategies), len(windows),
+            "=== CROSS-WINDOW VALIDATION: %d strategies × %d shifted windows (need %d) ===",
+            len(top_strategies), len(windows), required,
         )
-        for i, (ws, we) in enumerate(windows):
-            label = "original" if i == 0 else f"+{offsets[i-1]}mo"
-            logger.info("  Window %d (%s): %s → %s", i, label, ws, we)
+        for months, ws, we in windows:
+            logger.info("  Window +%dmo: %s → %s", months, ws, we)
 
         cross_results: list[CrossWindowResult] = []
-        filtered: list[tuple[StrategyChromosome, FitnessResult]] = []
-
-        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
+        for rank, (chrom, _train_fit) in enumerate(top_strategies, 1):
             window_hrs: list[HoldoutResult] = []
             passes = 0
-
-            for w_idx, (ws, we) in enumerate(windows):
+            for months, ws, we in windows:
                 try:
-                    if w_idx == 0:
-                        # Original window — use train fitness directly
-                        hr = HoldoutResult(
-                            sharpe_ratio=train_fit.sharpe_ratio,
-                            max_drawdown=train_fit.max_drawdown,
-                            profit_factor=train_fit.profit_factor,
-                            total_trades=train_fit.total_trades,
-                            total_return=train_fit.total_return,
-                        )
-                    else:
-                        bt_fn = self._backtest_fn_factory(ws, we)
-                        bt = bt_fn(chrom)
-                        import math as _math
-                        sharpe = float(bt.get("sharpe_ratio", 0.0))
-                        max_dd = float(bt.get("max_drawdown", 1.0))
-                        pf = float(bt.get("profit_factor", 0.0))
-                        trades = int(bt.get("total_trades", 0))
-                        ret = float(bt.get("total_return", 0.0))
-                        if _math.isnan(sharpe):
-                            sharpe = 0.0
-                        if _math.isnan(max_dd):
-                            max_dd = 1.0
-                        if _math.isnan(pf):
-                            pf = 0.0
-                        if _math.isnan(ret):
-                            ret = 0.0
-                        hr = HoldoutResult(
-                            sharpe_ratio=sharpe,
-                            max_drawdown=max_dd,
-                            profit_factor=pf,
-                            total_trades=trades,
-                            total_return=ret,
-                        )
+                    hr = _metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
                 except Exception:
                     logger.warning(
-                        "Cross-window eval failed: %s window %d", chrom.uid, w_idx,
+                        "Cross-window eval failed: %s window +%dmo", chrom.uid, months,
                         exc_info=True,
                     )
-                    hr = HoldoutResult(
-                        sharpe_ratio=0.0, max_drawdown=1.0,
-                        profit_factor=0.0, total_trades=0, total_return=0.0,
-                    )
-
+                    hr = _FAILED_WINDOW
                 window_hrs.append(hr)
                 if hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe:
                     passes += 1
 
-            passed = passes >= min_pass
-            cwr = CrossWindowResult(
-                window_results=window_hrs,
-                windows_passed=passes,
-                total_windows=len(windows),
-                passed=passed,
-            )
-            cross_results.append(cwr)
-
-            # Log per-strategy cross-window summary
-            window_strs = []
-            for i, hr in enumerate(window_hrs):
-                label = "W0" if i == 0 else f"W+{offsets[i-1]}mo"
-                status = "PASS" if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else "FAIL"
-                window_strs.append(
-                    f"{label}: sharpe={hr.sharpe_ratio:.2f} ret={hr.total_return*100:.1f}% [{status}]"
+            passed = passes >= required
+            cross_results.append(
+                CrossWindowResult(
+                    window_results=window_hrs,
+                    windows_passed=passes,
+                    total_windows=len(windows),
+                    passed=passed,
+                    window_dates=[(ws, we) for _, ws, we in windows],
+                    offsets_months=[m for m, _, _ in windows],
+                    required=required,
                 )
+            )
+
+            window_strs = [
+                f"W+{months}mo: sharpe={hr.sharpe_ratio:.2f} ret={hr.total_return*100:.1f}% "
+                f"[{'PASS' if (hr.total_return > 0 and hr.sharpe_ratio >= min_sharpe) else 'FAIL'}]"
+                for (months, _, _), hr in zip(windows, window_hrs, strict=True)
+            ]
             logger.info(
-                "  #%d %s: %s → %d/%d windows %s",
+                "  #%d %s: %s → %d/%d shifted windows %s",
                 rank, chrom.uid,
                 " | ".join(window_strs),
                 passes, len(windows),
                 "PROMOTED" if passed else "REJECTED",
             )
 
-            if passed:
-                filtered.append((chrom, train_fit))
-
         logger.info(
             "  Cross-window summary: %d/%d strategies promoted",
-            len(filtered), len(top_strategies),
+            sum(1 for r in cross_results if r.passed), len(top_strategies),
         )
+        return cross_results, None
 
-        # If all rejected, keep original strategies with a warning
-        if not filtered:
-            logger.warning(
-                "All strategies failed cross-window validation — keeping originals"
-            )
-            filtered = top_strategies
-
-        return cross_results, filtered
+    def wfa_window_ranges(self, range_start: str, range_end: str) -> list[tuple[str, str]]:
+        """Rolling ``wfa_oos_step_days`` windows tiling [range_start, range_end]."""
+        step = self.config.wfa_oos_step_days
+        start = _parse_date(range_start)
+        end = _parse_date(range_end)
+        windows: list[tuple[str, str]] = []
+        current = start
+        while current + timedelta(days=step) <= end:
+            nxt = current + timedelta(days=step)
+            windows.append((current.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
+            current = nxt
+        if self.config.has_holdout:
+            assert_windows_outside_holdout(windows, self.config.holdout_start_date, "WFA")
+        return windows
 
     def _evaluate_wfa_rolling(
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
-        holdout_start: str,
-        holdout_end: str,
-    ) -> tuple[list[WFARollingResult], list[tuple[StrategyChromosome, FitnessResult]]]:
-        """Walk-Forward rolling OOS validation.
+        range_start: str,
+        range_end: str,
+    ) -> tuple[list[WFARollingResult], str | None]:
+        """Rolling-window stability check over the TRAIN range.
 
-        Splits the holdout period into rolling windows of wfa_oos_step_days
-        and evaluates each strategy on every window. Filters strategies that
-        don't meet wfa_min_consistency.
+        Tiles [range_start, range_end] with ``wfa_oos_step_days`` windows and
+        requires ``wfa_min_consistency`` of them to be profitable. The windows
+        are in-sample for the GA, so this measures stability over time, not
+        out-of-sample skill (the holdout is the out-of-sample gate).
 
         Returns:
-            (wfa_results, filtered_strategies)
+            (results parallel to top_strategies, error). ``error`` is set when
+            the range is too short for a single window.
         """
         assert self._backtest_fn_factory is not None
         cfg = self.config
         step = cfg.wfa_oos_step_days
         min_consistency = cfg.wfa_min_consistency
 
-        from datetime import datetime as _dt
-        from datetime import timedelta
-
-        start = _dt.strptime(holdout_start, "%Y-%m-%d")
-        end = _dt.strptime(holdout_end, "%Y-%m-%d")
-
-        # Generate rolling OOS windows
-        windows: list[tuple[str, str]] = []
-        current = start
-        while current + timedelta(days=step) <= end:
-            ws = current.strftime("%Y-%m-%d")
-            we = (current + timedelta(days=step)).strftime("%Y-%m-%d")
-            windows.append((ws, we))
-            current += timedelta(days=step)
-
+        windows = self.wfa_window_ranges(range_start, range_end)
         if not windows:
-            logger.warning("WFA: holdout period too short for rolling windows")
-            return [], top_strategies
+            error = f"WFA: range {range_start}..{range_end} too short for {step}d windows"
+            logger.warning("%s — failing closed", error)
+            return [], error
 
         logger.info(
-            "=== WFA ROLLING VALIDATION: %d strategies × %d windows (%dd each) ===",
+            "=== WFA ROLLING VALIDATION: %d strategies × %d windows (%dd each, train range) ===",
             len(top_strategies), len(windows), step,
         )
         for i, (ws, we) in enumerate(windows):
             logger.info("  Window %d: %s → %s", i, ws, we)
 
         wfa_results: list[WFARollingResult] = []
-        filtered: list[tuple[StrategyChromosome, FitnessResult]] = []
-
-        for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
+        for rank, (chrom, _train_fit) in enumerate(top_strategies, 1):
             oos_results: list[HoldoutResult] = []
             profitable = 0
             sharpe_positive = 0
 
             for ws, we in windows:
                 try:
-                    bt_fn = self._backtest_fn_factory(ws, we)
-                    bt = bt_fn(chrom)
-                    import math as _math
-                    sharpe = float(bt.get("sharpe_ratio", 0.0))
-                    max_dd = float(bt.get("max_drawdown", 1.0))
-                    pf = float(bt.get("profit_factor", 0.0))
-                    trades = int(bt.get("total_trades", 0))
-                    ret = float(bt.get("total_return", 0.0))
-                    if _math.isnan(sharpe):
-                        sharpe = 0.0
-                    if _math.isnan(max_dd):
-                        max_dd = 1.0
-                    if _math.isnan(pf):
-                        pf = 0.0
-                    if _math.isnan(ret):
-                        ret = 0.0
-                    hr = HoldoutResult(
-                        sharpe_ratio=sharpe, max_drawdown=max_dd,
-                        profit_factor=pf, total_trades=trades, total_return=ret,
-                    )
+                    hr = _metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
                 except Exception:
                     logger.warning("WFA eval failed: %s", chrom.uid, exc_info=True)
-                    hr = HoldoutResult(
-                        sharpe_ratio=0.0, max_drawdown=1.0,
-                        profit_factor=0.0, total_trades=0, total_return=0.0,
-                    )
-
+                    hr = _FAILED_WINDOW
                 oos_results.append(hr)
                 if hr.total_return > 0:
                     profitable += 1
                 if hr.sharpe_ratio > 0:
                     sharpe_positive += 1
 
-            consistency = profitable / len(windows) if windows else 0.0
-            sharpe_consistency = sharpe_positive / len(windows) if windows else 0.0
+            consistency = profitable / len(windows)
+            sharpe_consistency = sharpe_positive / len(windows)
             passed = consistency >= min_consistency
 
-            wfa = WFARollingResult(
-                oos_windows=oos_results,
-                window_dates=list(windows),
-                windows_profitable=profitable,
-                windows_sharpe_positive=sharpe_positive,
-                total_windows=len(windows),
-                consistency=consistency,
-                sharpe_consistency=sharpe_consistency,
-                passed=passed,
+            wfa_results.append(
+                WFARollingResult(
+                    oos_windows=oos_results,
+                    window_dates=list(windows),
+                    windows_profitable=profitable,
+                    windows_sharpe_positive=sharpe_positive,
+                    total_windows=len(windows),
+                    consistency=consistency,
+                    sharpe_consistency=sharpe_consistency,
+                    passed=passed,
+                )
             )
-            wfa_results.append(wfa)
 
-            # Per-window detail log
             w_strs = [
                 f"W{i}: ret={hr.total_return*100:.1f}% {'OK' if hr.total_return > 0 else 'LOSS'}"
                 for i, hr in enumerate(oos_results)
@@ -1185,19 +1240,11 @@ class DiscoveryPipeline:
                 "PASS" if passed else "FAIL",
             )
 
-            if passed:
-                filtered.append((chrom, train_fit))
-
         logger.info(
             "  WFA summary: %d/%d passed (min_consistency=%.0f%%)",
-            len(filtered), len(top_strategies), min_consistency * 100,
+            sum(1 for r in wfa_results if r.passed), len(top_strategies), min_consistency * 100,
         )
-
-        if not filtered:
-            logger.warning("All strategies failed WFA — keeping originals")
-            filtered = top_strategies
-
-        return wfa_results, filtered
+        return wfa_results, None
 
     def _write_progress(self, **kwargs: object) -> None:
         """Write progress JSON file for API polling."""
@@ -1211,13 +1258,188 @@ class DiscoveryPipeline:
         except Exception:
             logger.debug("Failed to write progress file", exc_info=True)
 
+    # -- logging -------------------------------------------------------------
+
+    def _log_generation(
+        self,
+        *,
+        gen: int,
+        population: list[StrategyChromosome],
+        fitness_results: list[FitnessResult],
+        generation_results: list[GenerationResult],
+        best_idx: int,
+        gen_elapsed: float,
+        total_elapsed: float,
+        evals_this_gen: int,
+    ) -> None:
+        """Per-generation population analytics (log only)."""
+        cfg = self.config
+        gen_result = generation_results[-1]
+        scores = [fr.adjusted_score for fr in fitness_results]
+        avg_gen_time = total_elapsed / (gen + 1)
+        eta_seconds = avg_gen_time * (cfg.max_generations - gen - 1)
+        best_fr = fitness_results[best_idx]
+
+        score_std = (sum((s - gen_result.mean_fitness) ** 2 for s in scores) / len(scores)) ** 0.5
+        zero_count = sum(1 for s in scores if s <= 0)
+        median_score = statistics.median(scores) if scores else 0.0
+
+        active = [fr for fr in fitness_results if fr.total_trades > 0]
+        all_sharpes = [fr.sharpe_ratio for fr in active]
+        all_trades = [fr.total_trades for fr in active]
+        all_returns = [fr.total_return for fr in active]
+        all_dds = [fr.max_drawdown for fr in active]
+
+        ind_counter: Counter[str] = Counter()
+        for c in population:
+            for g in c.entry_genes + c.exit_genes:
+                ind_counter[g.indicator_type] += 1
+        total_genes = sum(ind_counter.values()) or 1
+        ind_pcts = {k: f"{v/total_genes*100:.0f}%" for k, v in ind_counter.most_common()}
+
+        dir_counts: dict[str, int] = {}
+        for c in population:
+            d = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
+            dir_counts[d] = dir_counts.get(d, 0) + 1
+
+        if gen > 0:
+            improvement = gen_result.best_fitness - generation_results[-2].best_fitness
+            improvement_str = f" Δbest={improvement:+.4f}" if improvement != 0 else " (no change)"
+        else:
+            improvement_str = " (initial)"
+
+        logger.info(
+            "=== GEN %d/%d === best=%.4f mean=%.4f median=%.4f std=%.4f | "
+            "zero_score=%d/%d | gen_time=%.1fs total=%.0fs ETA=%.0fs%s",
+            gen + 1, cfg.max_generations,
+            gen_result.best_fitness, gen_result.mean_fitness, median_score, score_std,
+            zero_count, len(scores),
+            gen_elapsed, total_elapsed, eta_seconds, improvement_str,
+        )
+
+        best_chrom = population[best_idx]
+        logger.info(
+            "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
+            "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
+            best_chrom.uid,
+            best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
+            [g.indicator_type for g in best_chrom.entry_genes],
+            [g.indicator_type for g in best_chrom.exit_genes],
+            best_chrom.stop_loss_pct, best_chrom.take_profit_pct,
+            best_fr.sharpe_ratio, best_fr.profit_factor,
+            best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
+        )
+        logger.info(
+            "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
+            best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
+            best_fr.adjusted_score,
+        )
+        if all_sharpes:
+            logger.info(
+                "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "
+                "trades=[%d, %d, %d] dd=[%.1f%%, %.1f%%, %.1f%%] return=[%.1f%%, %.1f%%, %.1f%%]",
+                len(all_sharpes),
+                min(all_sharpes), statistics.median(all_sharpes), max(all_sharpes),
+                min(all_trades), int(statistics.median(all_trades)), max(all_trades),
+                min(all_dds) * 100, statistics.median(all_dds) * 100, max(all_dds) * 100,
+                min(all_returns) * 100, statistics.median(all_returns) * 100, max(all_returns) * 100,
+            )
+
+        from vibe_quant.discovery.diversity import population_entropy
+        logger.info(
+            "  Diversity: entropy=%.3f indicators=%s directions=%s",
+            population_entropy(population), ind_pcts, dir_counts,
+        )
+        logger.info(
+            "  Timing: %d new backtests (%.1fs/backtest avg, %.1fs gen total, %d distinct so far)",
+            evals_this_gen,
+            gen_elapsed / evals_this_gen if evals_this_gen else 0.0,
+            gen_elapsed,
+            self._total_evaluated,
+        )
+
+    def _log_top_strategies(
+        self, top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
+    ) -> None:
+        """Top-K strategy details (log only)."""
+        if not top_strategies:
+            return
+        logger.info("  --- Top %d strategies ---", len(top_strategies))
+        for rank, (chrom, fit) in enumerate(top_strategies, 1):
+            _dir = chrom.direction.value if hasattr(chrom.direction, "value") else chrom.direction
+            logger.info(
+                "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
+                "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
+                fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
+                _dir,
+                [g.indicator_type for g in chrom.entry_genes],
+                [g.indicator_type for g in chrom.exit_genes],
+                chrom.stop_loss_pct, chrom.take_profit_pct,
+            )
+            for label, genes in (("entry", chrom.entry_genes), ("exit", chrom.exit_genes)):
+                for i, gene in enumerate(genes):
+                    logger.info(
+                        "    %s[%d]: %s(%s) %s %.4f%s",
+                        label, i, gene.indicator_type,
+                        ", ".join(f"{k}={v}" for k, v in gene.parameters.items()),
+                        gene.condition.value if hasattr(gene.condition, "value") else gene.condition,
+                        gene.threshold,
+                        f" sub={gene.sub_value}" if gene.sub_value else "",
+                    )
+
     # -- internal -----------------------------------------------------------
+
+    def _elite_slots(self) -> int:
+        """Leading population slots holding elites after evolution."""
+        if self.config.use_crowding:
+            return min(1, self.config.elite_count)
+        return self.config.elite_count
+
+    def _maybe_inject_immigrants(
+        self,
+        population: list[StrategyChromosome],
+        known: list[FitnessResult | None],
+    ) -> tuple[list[StrategyChromosome], list[FitnessResult | None]]:
+        """Replace random non-elite members with immigrants when entropy is low.
+
+        The new population's members are the ones replaced (never scored with
+        another generation's fitness); elites are protected. Immigrants get
+        evaluated at the top of the next generation.
+        """
+        cfg = self.config
+        from vibe_quant.discovery.diversity import (
+            inject_random_immigrants,
+            population_entropy,
+            should_inject_immigrants,
+        )
+
+        entropy = population_entropy(population)
+        if not should_inject_immigrants(entropy, threshold=cfg.entropy_threshold):
+            return population, known
+        new_pop = inject_random_immigrants(
+            population,
+            None,
+            fraction=cfg.immigrant_fraction,
+            direction_constraint=self._direction_constraint,
+            protected=range(min(self._elite_slots(), len(population))),
+        )
+        replaced = [i for i, (a, b) in enumerate(zip(population, new_pop, strict=True)) if a is not b]
+        new_known = list(known)
+        for i in replaced:
+            new_known[i] = None
+        if replaced:
+            logger.info(
+                "  Diversity intervention: entropy=%.3f < %.1f, injected %d random immigrants",
+                entropy, cfg.entropy_threshold, len(replaced),
+            )
+        return new_pop, new_known
 
     def _evolve_generation(
         self,
         population: list[StrategyChromosome],
         fitness_results: list[FitnessResult],
-    ) -> list[StrategyChromosome]:
+    ) -> tuple[list[StrategyChromosome], list[FitnessResult | None]]:
         """Produce next generation via crowding or classic tournament.
 
         Args:
@@ -1225,57 +1447,80 @@ class DiscoveryPipeline:
             fitness_results: Parallel fitness results.
 
         Returns:
-            New population of the same size.
+            (new population, parallel known fitness). ``None`` = not yet
+            evaluated (evaluated at the top of the next generation).
+        """
+        if self.config.use_crowding:
+            return self._evolve_crowding(population, fitness_results)
+        return self._evolve_tournament(population, fitness_results)
+
+    def _make_valid(self, child: StrategyChromosome) -> tuple[StrategyChromosome, int, bool]:
+        """Return (valid child, retries used, random fallback used)."""
+        valid_child = child
+        for attempt in range(_MAX_OFFSPRING_RETRIES):
+            if is_valid_chromosome(valid_child):
+                return valid_child, attempt, False
+            valid_child = mutate(child, self.config.mutation_rate)
+        if is_valid_chromosome(valid_child):
+            return valid_child, _MAX_OFFSPRING_RETRIES, False
+        return _random_chromosome(direction_constraint=self._direction_constraint), _MAX_OFFSPRING_RETRIES, True
+
+    def _breed(
+        self, parent_a: StrategyChromosome, parent_b: StrategyChromosome,
+    ) -> tuple[list[StrategyChromosome], int, int]:
+        """Crossover + mutation + direction constraint + validity repair.
+
+        Returns (two children, retries, random fallbacks). Children always
+        carry fresh uids (crossover/mutate assign them).
         """
         cfg = self.config
-        scores = [fr.adjusted_score for fr in fitness_results]
-
-        if cfg.use_crowding:
-            return self._evolve_crowding(population, scores)
-        return self._evolve_tournament(population, scores)
+        if random.random() < cfg.crossover_rate:
+            child_a, child_b = crossover(parent_a, parent_b)
+        else:
+            child_a, child_b = parent_a, parent_b
+        child_a = mutate(child_a, cfg.mutation_rate)
+        child_b = mutate(child_b, cfg.mutation_rate)
+        if self._direction_constraint is not None:
+            child_a.direction = self._direction_constraint
+            child_b.direction = self._direction_constraint
+        children: list[StrategyChromosome] = []
+        retries = 0
+        fallbacks = 0
+        for child in (child_a, child_b):
+            valid, used, fell_back = self._make_valid(child)
+            retries += used
+            fallbacks += int(fell_back)
+            children.append(valid)
+        return children, retries, fallbacks
 
     def _evolve_tournament(
         self,
         population: list[StrategyChromosome],
-        scores: list[float],
-    ) -> list[StrategyChromosome]:
+        fitness_results: list[FitnessResult],
+    ) -> tuple[list[StrategyChromosome], list[FitnessResult | None]]:
         """Classic evolution: elitism + tournament selection + crossover + mutation."""
         cfg = self.config
+        scores = [fr.adjusted_score for fr in fitness_results]
         new_pop = apply_elitism(population, scores, cfg.elite_count)
+        # Elites are unchanged clones: their fitness is known
+        elite_fit: dict[str, FitnessResult] = {
+            population[i].uid: fitness_results[i] for i in range(len(population))
+        }
+        new_known: list[FitnessResult | None] = [elite_fit.get(c.uid) for c in new_pop]
 
-        remaining = cfg.population_size - len(new_pop)
         retries = 0
         random_fallbacks = 0
-        while remaining > 0:
+        while len(new_pop) < cfg.population_size:
             parent_a = tournament_select(population, scores, cfg.tournament_size)
             parent_b = tournament_select(population, scores, cfg.tournament_size)
-            if random.random() < cfg.crossover_rate:
-                child_a, child_b = crossover(parent_a, parent_b)
-            else:
-                child_a, child_b = parent_a, parent_b
-            child_a = mutate(child_a, cfg.mutation_rate)
-            child_b = mutate(child_b, cfg.mutation_rate)
-
-            if self._direction_constraint is not None:
-                child_a.direction = self._direction_constraint
-                child_b.direction = self._direction_constraint
-
-            for child in (child_a, child_b):
-                if remaining <= 0:
+            children, r, f = self._breed(parent_a, parent_b)
+            retries += r
+            random_fallbacks += f
+            for child in children:
+                if len(new_pop) >= cfg.population_size:
                     break
-                valid_child = child
-                for attempt in range(_MAX_OFFSPRING_RETRIES):
-                    if is_valid_chromosome(valid_child):
-                        if attempt > 0:
-                            retries += attempt
-                        break
-                    valid_child = mutate(child, cfg.mutation_rate)
-                else:
-                    if not is_valid_chromosome(valid_child):
-                        valid_child = _random_chromosome(direction_constraint=self._direction_constraint)
-                        random_fallbacks += 1
-                new_pop.append(valid_child)
-                remaining -= 1
+                new_pop.append(child)
+                new_known.append(None)
 
         if retries > 0 or random_fallbacks > 0:
             logger.info(
@@ -1284,94 +1529,86 @@ class DiscoveryPipeline:
                 random_fallbacks,
             )
 
-        return new_pop
+        return new_pop, new_known
 
     def _evolve_crowding(
         self,
         population: list[StrategyChromosome],
-        scores: list[float],
-    ) -> list[StrategyChromosome]:
+        fitness_results: list[FitnessResult],
+    ) -> tuple[list[StrategyChromosome], list[FitnessResult | None]]:
         """Deterministic crowding evolution.
 
         1. Keep 1 elite as safety net
         2. Randomly pair remaining individuals
         3. Each pair produces 2 offspring (crossover + mutation)
-        4. Offspring replaces most-similar parent only if fitter
-
-        Offspring aren't evaluated until next gen, so they get a "free pass"
-        into the population. The real crowding competition happens at
-        subsequent generations when fitness values are available.
+        4. Offspring are EVALUATED, then each replaces its most-similar parent
+           only if at least as fit (real offspring fitness -- feeding the
+           parents' scores in as offspring fitness let every child win and
+           removed all selection pressure).
         """
         cfg = self.config
+        scores = [fr.adjusted_score for fr in fitness_results]
 
-        # Keep 1 elite as safety net (down from default 2)
-        elite = apply_elitism(population, scores, min(1, cfg.elite_count))
+        n_elite = min(1, cfg.elite_count)
+        elite_indices: list[int] = []
+        if n_elite:
+            elite_indices = [max(range(len(scores)), key=lambda i: scores[i])]
 
-        # Build replacement pool (all non-elite)
-        elite_indices = set()
-        if elite:
-            best_idx = max(range(len(scores)), key=lambda i: scores[i])
-            elite_indices.add(best_idx)
+        new_pop: list[StrategyChromosome] = [population[i].clone() for i in elite_indices]
+        new_known: list[FitnessResult | None] = [fitness_results[i] for i in elite_indices]
 
         pool_indices = [i for i in range(len(population)) if i not in elite_indices]
         random.shuffle(pool_indices)
+        pairs = [
+            (pool_indices[k], pool_indices[k + 1])
+            for k in range(0, len(pool_indices) - 1, 2)
+        ]
 
-        # Pair up for crowding
-        new_pop = list(elite)
         retries = 0
         random_fallbacks = 0
+        offspring: list[list[StrategyChromosome]] = []
+        for i, j in pairs:
+            children, r, f = self._breed(population[i], population[j])
+            retries += r
+            random_fallbacks += f
+            offspring.append(children)
 
-        for pair_start in range(0, len(pool_indices) - 1, 2):
-            i, j = pool_indices[pair_start], pool_indices[pair_start + 1]
-            parent_a, parent_b = population[i], population[j]
+        flat = [c for kids in offspring for c in kids]
+        child_fit = self._evaluate_new(flat) if flat else []
 
-            # Crossover + mutation
-            if random.random() < cfg.crossover_rate:
-                child_a, child_b = crossover(parent_a, parent_b)
-            else:
-                child_a, child_b = parent_a.clone(), parent_b.clone()
-            child_a = mutate(child_a, cfg.mutation_rate)
-            child_b = mutate(child_b, cfg.mutation_rate)
-
-            if self._direction_constraint is not None:
-                child_a.direction = self._direction_constraint
-                child_b.direction = self._direction_constraint
-
-            # Validate offspring
-            children = []
-            for child in (child_a, child_b):
-                valid = child
-                for attempt in range(_MAX_OFFSPRING_RETRIES):
-                    if is_valid_chromosome(valid):
-                        if attempt > 0:
-                            retries += attempt
-                        break
-                    valid = mutate(child, cfg.mutation_rate)
-                else:
-                    if not is_valid_chromosome(valid):
-                        valid = _random_chromosome(direction_constraint=self._direction_constraint)
-                        random_fallbacks += 1
-                children.append(valid)
-
-            # Crowding replacement: offspring compete against similar parent
-            result = crowding_replace(
-                parents=[parent_a, parent_b],
+        for p, ((i, j), kids) in enumerate(zip(pairs, offspring, strict=True)):
+            kids_fit = child_fit[2 * p: 2 * p + 2]
+            parents = [population[i], population[j]]
+            parents_fit = [fitness_results[i], fitness_results[j]]
+            winners = crowding_replace(
+                parents=parents,
                 parent_fitness=[scores[i], scores[j]],
-                offspring=children,
-                offspring_fitness=[scores[i], scores[j]],  # No real fitness yet; tie = offspring wins
+                offspring=kids,
+                offspring_fitness=[kids_fit[0].adjusted_score, kids_fit[1].adjusted_score],
             )
-            new_pop.extend(result)
+            for winner in winners:
+                fit: FitnessResult | None = None
+                for cand, cand_fit in zip(kids + parents, kids_fit + parents_fit, strict=True):
+                    if winner is cand:
+                        fit = cand_fit
+                        break
+                new_pop.append(winner)
+                new_known.append(fit)
 
         # Handle odd pool (last unpaired individual)
         if len(pool_indices) % 2 == 1:
-            new_pop.append(population[pool_indices[-1]].clone())
+            last = pool_indices[-1]
+            new_pop.append(population[last].clone())
+            new_known.append(fitness_results[last])
 
         # Trim to population size
         if len(new_pop) > cfg.population_size:
             new_pop = new_pop[: cfg.population_size]
+            new_known = new_known[: cfg.population_size]
         # Pad if somehow short
         while len(new_pop) < cfg.population_size:
             new_pop.append(_random_chromosome(direction_constraint=self._direction_constraint))
+            new_known.append(None)
 
         if retries > 0 or random_fallbacks > 0:
             logger.info(
@@ -1380,7 +1617,7 @@ class DiscoveryPipeline:
                 random_fallbacks,
             )
 
-        return new_pop
+        return new_pop, new_known
 
     def _stagnant_generations(self, generation_results: list[GenerationResult]) -> int:
         """Count consecutive generations without improvement from the end."""
@@ -1420,20 +1657,21 @@ class DiscoveryPipeline:
         self,
         top_strategies: list[tuple[StrategyChromosome, FitnessResult]],
         total_evaluated: int,
-    ) -> list[tuple[StrategyChromosome, FitnessResult]] | None:
-        """Apply guardrails (DSR, complexity, min trades) to top strategies.
+    ) -> list[tuple[StrategyChromosome, FitnessResult]]:
+        """Apply guardrails (DSR, complexity, min trades, bootstrap CI) to top strategies.
 
-        Logs validation results and filters out strategies that fail.
-
-        When all candidates fail:
-        - If any "hard" guardrail failed (bootstrap CI, min trades), returns
-          empty list — the run found nothing statistically significant.
-        - If only "soft" guardrails failed (DSR, complexity), returns None
-          so the caller keeps best-available candidates.
+        FAILS CLOSED: returns only the candidates that pass every enabled
+        guardrail -- an empty list when none do (vibe-quant-e70tl.5). Every
+        rejected candidate is recorded in ``_guardrail_rejections`` with its
+        reasons so the UI can explain an empty run.
 
         DSR uses theoretical variance (1/(T-1)) rather than empirical
         cross-strategy variance, which inflates SR₀ beyond what any
         strategy can achieve (see vibe-quant-fici).
+
+        Args:
+            top_strategies: Candidates to check.
+            total_evaluated: DSR trial count N (distinct strategies tried).
         """
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
@@ -1454,8 +1692,6 @@ class DiscoveryPipeline:
         import numpy as np
 
         validated: list[tuple[StrategyChromosome, FitnessResult]] = []
-        any_hard_failure = False
-        self._guardrail_rejections = []
         for chrom, fitness in top_strategies:
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
@@ -1465,7 +1701,7 @@ class DiscoveryPipeline:
                 fitness=fitness,
                 num_genes=num_genes,
                 config=guardrail_cfg,
-                num_trials=total_evaluated,
+                num_trials=max(1, total_evaluated),
                 num_observations=num_obs,
                 skewness=fitness.skewness,
                 kurtosis=fitness.kurtosis,
@@ -1484,37 +1720,16 @@ class DiscoveryPipeline:
                     fitness.total_trades,
                 )
             else:
-                # Track hard guardrail failures (bootstrap CI, min trades)
-                if not result.min_trades_passed or result.bootstrap_passed is False:
-                    any_hard_failure = True
-                logger.info(
-                    "Guardrail FAIL: %s score=%.4f reasons=%s",
-                    chrom.uid,
-                    fitness.adjusted_score,
-                    result.reasons,
-                )
-                # Persisted with the run so the UI can explain empty results
-                self._guardrail_rejections.append(
-                    {
-                        "uid": chrom.uid,
-                        "score": round(fitness.adjusted_score, 4),
-                        "sharpe": round(fitness.sharpe_ratio, 3),
-                        "trades": fitness.total_trades,
-                        "reasons": list(result.reasons),
-                    }
-                )
+                self._reject(chrom, fitness, "guardrails", list(result.reasons))
 
-        if not validated:
-            if any_hard_failure:
-                logger.warning(
-                    "All top strategies failed hard guardrails (bootstrap CI / min trades) "
-                    "— run found nothing statistically significant"
-                )
-                return []
-            logger.warning("All top strategies failed soft guardrails, keeping unfiltered")
-            return None
-
-        logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
+        if not validated and top_strategies:
+            logger.warning(
+                "All %d top strategies failed guardrails — no champion is statistically "
+                "significant (failing closed)",
+                len(top_strategies),
+            )
+        else:
+            logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
         return validated
 
     def _export_top_strategies(
