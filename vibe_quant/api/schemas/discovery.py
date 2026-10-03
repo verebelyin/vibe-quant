@@ -19,12 +19,14 @@ class DiscoveryLaunchRequest(BaseModel):
     direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
-    eval_windows: int = 3  # 3=default multi-window worst-case fitness (PKFOLD-biased); 1=single
-    train_test_split: float = 0.0  # 0=disabled, 0.5=50/50 train/holdout split
-    cross_window_months: list[int] | None = None  # e.g. [1, 2] for +1mo, +2mo shifted windows
-    cross_window_min_sharpe: float = 0.5  # min Sharpe on shifted windows
+    eval_windows: int = 3  # worst-of-N sub-window fitness + per-window trade gate; 1=single
+    # TRAIN fraction; default 0.8 = last 20% is a holdout used once as the final
+    # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
+    train_test_split: float = 0.8
+    cross_window_months: list[int] | None = None  # e.g. [1, 2]: train sub-windows starting +1mo/+2mo
+    cross_window_min_sharpe: float = 0.5  # min Sharpe on each shifted window (all must pass)
     num_seeds: int = 1  # >1 enables multi-seed ensemble
-    wfa_oos_step_days: int = 0  # >0 enables WFA rolling validation (e.g. 30 = monthly)
+    wfa_oos_step_days: int = 0  # >0 enables rolling-window stability check over the TRAIN range
     wfa_min_consistency: float = 0.75  # min profitable fraction for WFA
     immigrant_fraction: float = 0.15  # fraction of pop replaced when entropy low; 0 disables
     entropy_threshold: float = 0.4  # population entropy below this triggers immigrant injection
@@ -69,12 +71,17 @@ class PromoteResponse(BaseModel):
     run_id: int
     name: str
     mode: str
+    # Range the launched run covers: "holdout" (out-of-sample, validation
+    # default when the discovery has a holdout) or "full" (discovery range).
+    date_range: str = "full"
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 class ReplayResponse(BaseModel):
     replay_run_id: int
     original_run_id: int
     # Set when replay metrics are NOT expected to equal the stored champion
-    # fitness (e.g. discovery scored worst-of-N eval windows; replay runs
-    # the full window).
+    # fitness (discovery scored worst-of-N eval windows; replay runs one
+    # continuous full-range backtest).
     metrics_note: str | None = None

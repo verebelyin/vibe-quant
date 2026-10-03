@@ -253,6 +253,33 @@ def compute_sl_tp_penalty(sl_pct: float, tp_pct: float) -> float:
     return min(SL_TP_RATIO_PENALTY_CAP, SL_TP_RATIO_PENALTY_SCALE * excess)
 
 
+def chromosome_sl_tp_penalty(chrom: StrategyChromosome) -> float:
+    """SL/TP imbalance penalty on the SL/TP values the strategy actually trades.
+
+    ``chromosome_to_dsl`` emits per-direction ``stop_loss_long`` /
+    ``take_profit_short`` ... overrides for direction=BOTH, so the generic
+    ``stop_loss_pct``/``take_profit_pct`` are not what a BOTH strategy uses.
+    Penalize the worst side (each side falls back to the generic value when
+    its override is unset, matching the DSL).
+    """
+    direction = getattr(chrom.direction, "value", chrom.direction)
+    if direction != "both":
+        return compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)
+
+    def _or(value: float | None, fallback: float) -> float:
+        return fallback if value is None else value
+
+    long_pen = compute_sl_tp_penalty(
+        _or(chrom.stop_loss_long_pct, chrom.stop_loss_pct),
+        _or(chrom.take_profit_long_pct, chrom.take_profit_pct),
+    )
+    short_pen = compute_sl_tp_penalty(
+        _or(chrom.stop_loss_short_pct, chrom.stop_loss_pct),
+        _or(chrom.take_profit_short_pct, chrom.take_profit_pct),
+    )
+    return max(long_pen, short_pen)
+
+
 # ---------------------------------------------------------------------------
 # Pareto dominance
 # ---------------------------------------------------------------------------
@@ -416,10 +443,12 @@ def _evaluate_single(
         sharpe = 0.0
     if _math.isnan(max_dd):
         max_dd = 0.0
-    if _math.isnan(pf):
-        pf = 0.0
     if _math.isnan(total_return):
         total_return = 0.0
+    if _math.isnan(pf):
+        # NaN PF = no losing periods (gross loss 0). With trades and a profit
+        # that is the BEST case -> score at the PF cap, not as PF=0.
+        pf = PF_MAX if trades > 0 and total_return > 0 else 0.0
 
     # Sanity checks on backtest output — flag impossible metric combinations
     _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
@@ -427,7 +456,7 @@ def _evaluate_single(
     num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
     complexity_pen = compute_complexity_penalty(num_genes)
     overtrade_pen = compute_overtrade_penalty(trades, timeframe)
-    sl_tp_pen = compute_sl_tp_penalty(chrom.stop_loss_pct, chrom.take_profit_pct)
+    sl_tp_pen = chromosome_sl_tp_penalty(chrom)
 
     # Filter evaluation
     filter_results = filter_fn(chrom, bt) if filter_fn is not None else {}

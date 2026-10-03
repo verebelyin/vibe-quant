@@ -7,8 +7,9 @@ to the StrategyDSL format.
 
 from __future__ import annotations
 
+import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from vibe_quant.discovery.operators import (
     _MA_CONDITION_TYPES,
@@ -21,6 +22,7 @@ from vibe_quant.discovery.operators import (
     StrategyChromosome,
     StrategyGene,
     _ensure_pool,
+    canonicalize_gene,
 )
 
 # ---------------------------------------------------------------------------
@@ -74,12 +76,36 @@ class IndicatorDef:
         default_threshold_range: (min, max) for a sensible threshold when
             the indicator is used in a condition against a numeric value.
         dsl_type: Indicator type string for the DSL schema.
+        int_params: Params the indicator consumes as integers (from the spec's
+            ``param_schema``). The GA samples/rounds these to whole numbers so
+            two genes never differ only in a fractional part the compiler
+            truncates away (fake diversity, duplicate DSR trials).
+        default_params: Spec defaults, used to pin params that cannot affect
+            the gene's evaluated output (see ``operators.canonicalize_gene``).
     """
 
     name: str
     param_ranges: dict[str, tuple[float, float]]
     default_threshold_range: tuple[float, float]
     dsl_type: str
+    int_params: frozenset[str] = field(default_factory=frozenset)
+    default_params: dict[str, float] = field(default_factory=dict)
+
+
+def _spec_int_params(spec: object) -> frozenset[str]:
+    """Names of params a registry spec declares as ``int`` in ``param_schema``."""
+    schema = getattr(spec, "param_schema", None) or {}
+    return frozenset(name for name, typ in schema.items() if typ is int)
+
+
+def _spec_default_params(spec: object) -> dict[str, float]:
+    """Numeric spec defaults as floats (genes store params as floats)."""
+    defaults = getattr(spec, "default_params", None) or {}
+    return {
+        name: float(val)
+        for name, val in defaults.items()
+        if isinstance(val, (int, float)) and not isinstance(val, bool)
+    }
 
 
 def build_indicator_pool() -> dict[str, IndicatorDef]:
@@ -118,6 +144,8 @@ def build_indicator_pool() -> dict[str, IndicatorDef]:
             param_ranges=dict(spec.param_ranges),
             default_threshold_range=spec.threshold_range,
             dsl_type=spec.name,
+            int_params=_spec_int_params(spec),
+            default_params=_spec_default_params(spec),
         )
     return pool
 
@@ -139,11 +167,13 @@ class MAIndicatorDef:
         name: Canonical indicator name (uppercase).
         param_ranges: Mapping of param name -> (min, max) inclusive.
         dsl_type: Indicator type string for the DSL schema.
+        int_params: Params consumed as integers (see ``IndicatorDef``).
     """
 
     name: str
     param_ranges: dict[str, tuple[float, float]]
     dsl_type: str
+    int_params: frozenset[str] = field(default_factory=frozenset)
 
 
 def build_ma_pool() -> dict[str, MAIndicatorDef]:
@@ -162,6 +192,7 @@ def build_ma_pool() -> dict[str, MAIndicatorDef]:
             name=spec.name,
             param_ranges=dict(spec.param_ranges),
             dsl_type=spec.name,
+            int_params=_spec_int_params(spec),
         )
     return pool
 
@@ -202,12 +233,12 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
     ind_name = r.choice(list(INDICATOR_POOL))
     ind_def = INDICATOR_POOL[ind_name]
 
-    # Sample parameters
-    params: dict[str, int | float] = {}
+    # Sample parameters (integer-typed params as whole numbers — the compiler
+    # consumes them as ints, so fractional parts would be dead genes)
+    params: dict[str, float] = {}
     for pname, (lo, hi) in ind_def.param_ranges.items():
-        # Heuristic: if both bounds are ints and >= 1, treat as int
-        if lo == int(lo) and hi == int(hi) and lo >= 1:
-            params[pname] = r.randint(int(lo), int(hi))
+        if pname in ind_def.int_params:
+            params[pname] = float(r.randint(math.ceil(lo), math.floor(hi)))
         else:
             params[pname] = round(r.uniform(lo, hi), 4)
 
@@ -237,13 +268,15 @@ def _random_gene(rng: random.Random | None = None) -> StrategyGene:
     elif ind_name == "DONCHIAN":
         sub_value = "position"
 
-    return StrategyGene(
+    gene = StrategyGene(
         indicator_type=ind_name,
         parameters=params,
         condition=condition,
         threshold=threshold,
         sub_value=sub_value,
     )
+    canonicalize_gene(gene)
+    return gene
 
 
 def generate_random_chromosome(
@@ -421,33 +454,42 @@ def _gene_indicator_name(gene: StrategyGene, idx: int, prefix: str) -> str:
     return f"{gene.indicator_type.lower()}_{prefix}_{idx}"
 
 
+def _as_int(value: float) -> int:
+    """Integer DSL param from a gene value (nearest int, not truncation)."""
+    return int(round(float(value)))
+
+
 def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
-    """Build DSL IndicatorConfig dict from a gene."""
+    """Build DSL IndicatorConfig dict from a gene.
+
+    Every gene param must reach the DSL — a param the GA mutates but the DSL
+    drops is a dead gene (e.g. ADAPTIVE_RSI ``alpha`` used to be discarded, so
+    alpha=0.1 and alpha=0.9 compiled to the identical strategy).
+    """
     cfg: dict[str, object] = {"type": gene.indicator_type}
+    params = gene.parameters
 
     if gene.indicator_type == "MACD":
-        cfg["fast_period"] = int(gene.parameters.get("fast_period", 12))
-        cfg["slow_period"] = int(gene.parameters.get("slow_period", 26))
-        cfg["signal_period"] = int(gene.parameters.get("signal_period", 9))
+        cfg["fast_period"] = _as_int(params.get("fast_period", 12))
+        cfg["slow_period"] = _as_int(params.get("slow_period", 26))
+        cfg["signal_period"] = _as_int(params.get("signal_period", 9))
     elif gene.indicator_type == "STOCH":
         # Accept legacy k_period/d_period spellings to stay wire-compatible
         # with warm-start seeds from pre-bd-p36r discovery runs.
-        cfg["period"] = int(
-            gene.parameters.get("period_k", gene.parameters.get("k_period", 14))
-        )
-        cfg["d_period"] = int(
-            gene.parameters.get("period_d", gene.parameters.get("d_period", 3))
-        )
+        cfg["period"] = _as_int(params.get("period_k", params.get("k_period", 14)))
+        cfg["d_period"] = _as_int(params.get("period_d", params.get("d_period", 3)))
     elif gene.indicator_type == "BBANDS":
-        cfg["period"] = int(gene.parameters.get("period", 20))
-        cfg["std_dev"] = float(gene.parameters.get("std_dev", 2.0))
-    elif gene.indicator_type == "DONCHIAN":
-        cfg["period"] = int(gene.parameters.get("period", 20))
-    elif gene.indicator_type == "ATR":
-        cfg["period"] = int(gene.parameters.get("period", 14))
+        cfg["period"] = _as_int(params.get("period", 20))
+        cfg["std_dev"] = float(params.get("std_dev", 2.0))
     else:
-        # RSI, EMA, etc. -- single "period" param
-        cfg["period"] = int(gene.parameters.get("period", 14))
+        # RSI, ATR, plugins, ... -- "period" plus any extra declared params
+        cfg["period"] = _as_int(params.get("period", 14))
+        ind_def = INDICATOR_POOL.get(gene.indicator_type)
+        int_params = ind_def.int_params if ind_def is not None else frozenset()
+        for pname, pval in params.items():
+            if pname == "period":
+                continue
+            cfg[pname] = _as_int(pval) if pname in int_params else float(pval)
 
     return cfg
 
@@ -463,7 +505,7 @@ def _ma_params_to_indicator_config(
     cfg: dict[str, object] = {"type": indicator_type}
     period = parameters.get("period")
     if period is not None:
-        cfg["period"] = int(period)
+        cfg["period"] = _as_int(period)
     for pname, pval in parameters.items():
         if pname == "period":
             continue

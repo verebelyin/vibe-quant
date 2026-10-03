@@ -746,12 +746,18 @@ def _reference_aggregate_wfa(windows: list[WFAWindow], config: WFAConfig) -> dic
 
     agg_oos_sharpe = sum(oos_sharpes) / n
     agg_oos_return = sum(oos_returns) / n
-    mean_is_return = sum(is_returns) / n
-    efficiency = (
-        0.0
-        if mean_is_return == 0
-        else (agg_oos_return / mean_is_return if agg_oos_return != 0 else 0.0)
-    )
+    # Length-normalized (per-day) efficiency, inclusive day counts
+    # (vibe-quant-e70tl.10)
+    from datetime import date as _date
+
+    def _days(a: str, b: str) -> int:
+        return (_date.fromisoformat(b) - _date.fromisoformat(a)).days + 1
+
+    is_days = [_days(w.is_start_date, w.is_end_date) for w in windows]
+    oos_days = [_days(w.oos_start_date, w.oos_end_date) for w in windows]
+    mean_is_per_day = sum(r / d for r, d in zip(is_returns, is_days, strict=True)) / n
+    mean_oos_per_day = sum(r / d for r, d in zip(oos_returns, oos_days, strict=True)) / n
+    efficiency = 0.0 if mean_is_per_day <= 0 else mean_oos_per_day / mean_is_per_day
     avg_degradation = sum(degradations) / n
     consistency = sum(1 for w in windows if w.oos_return > 0) / n
 

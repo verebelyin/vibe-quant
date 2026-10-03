@@ -17,6 +17,7 @@ the test fold is acceptable for the robustness check.
 
 from __future__ import annotations
 
+import copy
 import glob
 import json
 import logging
@@ -70,13 +71,37 @@ class NTPurgedKFoldRunner:
         self._symbols: list[str] = []
         self._timeframe: str = ""
         self._bar_ts_ns: list[int] = []
+        # Strategy param overrides of the candidate being CV'd (see bind_params)
+        self._params: dict[str, float | int] = {}
         self._resolve()
         self._load_bar_timestamps()
+
+    def bind_params(self, params: dict[str, object]) -> NTPurgedKFoldRunner:
+        """Runner for ONE candidate: every fold backtests with ``params``.
+
+        Shallow copy sharing the (large) bar-timestamp list. Non-numeric
+        values are dropped (sweep params are numeric).
+        """
+        bound = copy.copy(self)
+        bound._params = {
+            k: v
+            for k, v in params.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        return bound
 
     @property
     def n_samples(self) -> int:
         """Number of bars available for splitting."""
         return len(self._bar_ts_ns)
+
+    @property
+    def bars_per_day(self) -> float | None:
+        """Bars per calendar day of the run's timeframe (None if unknown)."""
+        from vibe_quant.utils import TIMEFRAME_MINUTES
+
+        minutes = TIMEFRAME_MINUTES.get(self._timeframe)
+        return 1440.0 / minutes if minutes else None
 
     def _resolve(self) -> None:
         """Look up strategy DSL, symbols, and timeframe for the given run."""
@@ -189,12 +214,10 @@ class NTPurgedKFoldRunner:
             end_date=end_date,
             catalog_path=str(self._catalog_path) if self._catalog_path else None,
         )
-        # Empty params: use the DSL's defaults (the candidate's params are
-        # already baked into the persisted DSL for discovery runs; for
-        # screening sweeps the per-candidate params would need plumbing
-        # through the candidate row — out of scope for this initial
-        # purged-k-fold wiring).
-        metrics = runner({})
+        # The bound candidate's sweep params (empty for discovery champions,
+        # whose params are baked into the DSL). Running ``{}`` for everyone
+        # gave every sweep candidate the same CV verdict.
+        metrics = runner(dict(self._params))
         sharpe = float(getattr(metrics, "sharpe_ratio", 0.0) or 0.0)
         total_return = float(getattr(metrics, "total_return", 0.0) or 0.0)
         return sharpe, total_return

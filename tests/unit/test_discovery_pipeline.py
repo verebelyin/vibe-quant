@@ -60,6 +60,19 @@ def _mock_filter(chrom: StrategyChromosome, bt: dict[str, Any]) -> dict[str, boo
     return {"sharpe_check": bt["sharpe_ratio"] > 1.0}
 
 
+def _fit(
+    sharpe: float = 2.0, trades: int = 150, ret: float = 0.4, score: float = 0.6,
+) -> Any:
+    """Minimal passing FitnessResult for gate tests."""
+    from vibe_quant.discovery.fitness import FitnessResult
+
+    return FitnessResult(
+        sharpe_ratio=sharpe, max_drawdown=0.1, profit_factor=1.8, total_trades=trades,
+        total_return=ret, complexity_penalty=0.0, overtrade_penalty=0.0, sl_tp_penalty=0.0,
+        raw_score=score, adjusted_score=score, passed_filters=True, filter_results={},
+    )
+
+
 def _make_config(**overrides: Any) -> DiscoveryConfig:
     """Create a small config suitable for testing."""
     defaults: dict[str, Any] = {
@@ -75,6 +88,9 @@ def _make_config(**overrides: Any) -> DiscoveryConfig:
         "timeframe": "1h",
         "start_date": "2024-01-01",
         "end_date": "2024-06-01",
+        # The mock Sharpes (~2.5 over 5 months) are not DSR-significant; gates
+        # fail closed now, so tests of OTHER gates disable DSR explicitly.
+        "require_dsr": False,
     }
     defaults.update(overrides)
     return DiscoveryConfig(**defaults)
@@ -166,8 +182,9 @@ class TestEvolveGeneration:
         from vibe_quant.discovery.fitness import evaluate_population
 
         fitness = evaluate_population(pop, _mock_backtest)  # type: ignore[arg-type]
-        new_pop = pipe._evolve_generation(pop, fitness)
+        new_pop, known = pipe._evolve_generation(pop, fitness)
         assert len(new_pop) == 10
+        assert len(known) == 10
 
     def test_evolve_returns_valid_chromosomes(self) -> None:
         cfg = _make_config(population_size=8, elite_count=1)
@@ -176,7 +193,7 @@ class TestEvolveGeneration:
         from vibe_quant.discovery.fitness import evaluate_population
 
         fitness = evaluate_population(pop, _mock_backtest)  # type: ignore[arg-type]
-        new_pop = pipe._evolve_generation(pop, fitness)
+        new_pop, _known = pipe._evolve_generation(pop, fitness)
         for chrom in new_pop:
             assert is_valid_chromosome(chrom)
 
@@ -494,8 +511,14 @@ class TestCrossWindowValidation:
         # Should have cross-window results for each top strategy
         assert len(result.cross_window_results) > 0
         for cwr in result.cross_window_results:
-            assert cwr.total_windows == 3  # original + 2 shifted
-            assert len(cwr.window_results) == 3
+            # Only the 2 SHIFTED windows count (in-sample window excluded)
+            assert cwr.total_windows == 2
+            assert len(cwr.window_results) == 2
+            # Shifted windows stay inside the train range (end clipped)
+            assert cwr.window_dates == [
+                ("2024-02-01", "2024-06-01"),
+                ("2024-03-01", "2024-06-01"),
+            ]
 
         # Factory should have been called for shifted windows
         assert len(call_log) > 0
@@ -527,10 +550,12 @@ class TestCrossWindowValidation:
         )
         result = pipe.run()
 
-        # All strategies should fail cross-window (shifted window returns negative)
-        for cwr in result.cross_window_results:
-            # Window 0 (original) passes, Window 1 (shifted) fails → 1/2 < 2 → rejected
-            assert not cwr.passed or cwr.windows_passed < 2
+        # Every strategy fails the shifted window -> 0 champions (fail closed,
+        # never "keeping originals"), each with a cross-window rejection
+        assert result.top_strategies == []
+        assert result.cross_window_results == []
+        stages = {r["stage"] for r in result.guardrail_rejections}
+        assert "cross_window" in stages
 
     def test_no_cross_window_when_disabled(self) -> None:
         """No cross-window when cross_window_months is empty."""
@@ -656,22 +681,20 @@ class TestWFARollingValidation:
                         "profit_factor": 1.2, "total_trades": 80, "total_return": ret}
             return bt
 
+        # 91-day TRAIN range -> 3 rolling 30d windows (WFA runs on the train
+        # range; the holdout is reserved for the final gate)
         cfg = _make_config(
             population_size=6, max_generations=2, top_k=1, elite_count=1,
-            train_test_split=0.5,
-            start_date="2024-01-01", end_date="2024-03-16",
-            holdout_start_date="2024-03-16", holdout_end_date="2024-06-15",
+            start_date="2024-01-01", end_date="2024-04-01",
             wfa_oos_step_days=30, wfa_min_consistency=0.5,
         )
-        pipe = DiscoveryPipeline(
-            cfg, _mock_backtest,
-            holdout_backtest_fn=_mock_backtest,
-            backtest_fn_factory=_factory,
-        )
-        result = pipe.run()
+        pipe = DiscoveryPipeline(cfg, _mock_backtest, backtest_fn_factory=_factory)
+        top = [(initialize_population(1)[0], _fit())]
+        results, error = pipe._evaluate_wfa_rolling(top, cfg.start_date, cfg.end_date)
 
-        assert len(result.wfa_results) == 1
-        wfa = result.wfa_results[0]
+        assert error is None
+        assert len(results) == 1
+        wfa = results[0]
         assert wfa.total_windows == 3
         assert wfa.windows_profitable == 1
         assert wfa.windows_sharpe_positive == 2
@@ -680,22 +703,25 @@ class TestWFARollingValidation:
         # Gate still return-based: 1/3 < 0.5 → FAIL
         assert wfa.passed is False
 
-    def test_wfa_skip_warns_when_train_test_split_zero(
-        self, caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """WFA requested but train_test_split=0 → warning, not silent skip."""
+    def test_wfa_runs_on_train_range_without_split(self) -> None:
+        """WFA windows tile the TRAIN range, so no holdout split is needed."""
+        seen: list[tuple[str, str]] = []
+
+        def _factory(start: str, end: str) -> Any:
+            def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+                seen.append((start, end))
+                return {"sharpe_ratio": 1.5, "max_drawdown": 0.1,
+                        "profit_factor": 1.8, "total_trades": 80, "total_return": 0.15}
+            return bt
+
         cfg = _make_config(
             population_size=6, max_generations=2, top_k=2, elite_count=1,
-            wfa_oos_step_days=30,  # requested
-            # train_test_split defaults to 0
+            wfa_oos_step_days=30,  # train_test_split defaults to 0
         )
-        pipe = DiscoveryPipeline(cfg, _mock_backtest)
-        with caplog.at_level("WARNING", logger="vibe_quant.discovery.pipeline"):
-            pipe.run()
-        assert any(
-            "WFA requested" in r.message and "train_test_split=0" in r.message
-            for r in caplog.records
-        ), f"expected WFA skip warning for train_test_split=0, got: {[r.message for r in caplog.records]}"
+        result = DiscoveryPipeline(cfg, _mock_backtest, backtest_fn_factory=_factory).run()
+        assert result.wfa_results
+        assert seen
+        assert all(cfg.start_date <= s and e <= cfg.end_date for s, e in seen)
 
     def test_wfa_skip_warns_when_no_backtest_factory(
         self, caplog: pytest.LogCaptureFixture,
@@ -789,7 +815,10 @@ class TestElitePreservation:
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         elite_slp = [pop[ranked[0]].stop_loss_pct, pop[ranked[1]].stop_loss_pct]
 
-        new_pop = pipe._evolve_generation(pop, fitness)
+        new_pop, known = pipe._evolve_generation(pop, fitness)
         new_slp = [c.stop_loss_pct for c in new_pop[:2]]
+        # Elites keep their (known) fitness -- no re-evaluation next gen
+        assert known[0] is fitness[ranked[0]]
+        assert known[1] is fitness[ranked[1]]
         # Elites are cloned into first positions
         assert new_slp == elite_slp

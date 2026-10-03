@@ -7,13 +7,18 @@ Injects random immigrants when diversity drops below threshold.
 from __future__ import annotations
 
 import math
+import random
 from collections import Counter
+from typing import TYPE_CHECKING
 
 from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     _random_chromosome,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Collection, Sequence
 
 
 def _shannon_entropy(counts: Counter[str]) -> float:
@@ -84,33 +89,62 @@ def should_inject_immigrants(entropy: float, threshold: float = 0.3) -> bool:
     return entropy < threshold
 
 
+def immigrant_count(population_size: int, fraction: float) -> int:
+    """Number of immigrants for ``fraction``: 0 when fraction <= 0, else >= 1."""
+    if fraction <= 0.0 or population_size <= 0:
+        return 0
+    return max(1, int(population_size * fraction))
+
+
 def inject_random_immigrants(
     population: list[StrategyChromosome],
-    fitness_scores: list[float],
+    fitness_scores: Sequence[float] | None,
     fraction: float = 0.1,
     direction_constraint: Direction | None = None,
+    protected: Collection[int] = (),
 ) -> list[StrategyChromosome]:
-    """Replace worst individuals with random immigrants.
+    """Replace individuals with random immigrants.
 
     Args:
         population: Current population.
-        fitness_scores: Parallel fitness scores.
+        fitness_scores: Fitness scores PARALLEL to ``population`` -- the worst
+            are replaced. Pass ``None`` when the population is not evaluated
+            yet (e.g. freshly evolved offspring): random members are replaced
+            instead. Scores of a different population must never be used --
+            indexing a new population with the previous generation's scores
+            replaced arbitrary members, including the elite.
         fraction: Fraction of population to replace (e.g. 0.1 = 10%).
+            ``0`` disables injection.
         direction_constraint: Direction constraint for new chromosomes.
+        protected: Indices that must never be replaced (elites).
 
     Returns:
-        New population with immigrants replacing worst individuals.
+        New population with immigrants replacing the chosen individuals.
+
+    Raises:
+        ValueError: If ``fitness_scores`` is not parallel to ``population``.
     """
-    n_replace = max(1, int(len(population) * fraction))
+    if fitness_scores is not None and len(fitness_scores) != len(population):
+        msg = (
+            f"fitness_scores ({len(fitness_scores)}) not parallel to "
+            f"population ({len(population)})"
+        )
+        raise ValueError(msg)
 
-    indexed = sorted(enumerate(fitness_scores), key=lambda x: x[1])
-    worst_indices = {idx for idx, _ in indexed[:n_replace]}
+    protected_set = set(protected)
+    candidates = [i for i in range(len(population)) if i not in protected_set]
+    n_replace = min(immigrant_count(len(population), fraction), len(candidates))
+    if n_replace == 0:
+        return list(population)
 
-    new_pop: list[StrategyChromosome] = []
-    for i, chrom in enumerate(population):
-        if i in worst_indices:
-            new_pop.append(_random_chromosome(direction_constraint=direction_constraint))
-        else:
-            new_pop.append(chrom)
+    if fitness_scores is not None:
+        scores = fitness_scores
+        candidates.sort(key=lambda i: scores[i])
+        replace = set(candidates[:n_replace])
+    else:
+        replace = set(random.sample(candidates, n_replace))
 
-    return new_pop
+    return [
+        _random_chromosome(direction_constraint=direction_constraint) if i in replace else chrom
+        for i, chrom in enumerate(population)
+    ]

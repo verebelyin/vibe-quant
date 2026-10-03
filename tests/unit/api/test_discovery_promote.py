@@ -377,3 +377,227 @@ def test_screening_cmd_run_with_dsl_override(tmp_path: Path) -> None:
     assert "dsl_override" in params
 
     state.close()
+
+
+# --- vibe-quant-e70tl.1 / .5: promote by DSL content, validate on holdout ---
+
+
+def _genome_dsl(name: str, threshold: int) -> dict[str, object]:
+    return {
+        "name": name,
+        "timeframe": "4h",
+        "indicators": {"rsi_entry_0": {"type": "RSI", "period": 14}},
+        "entry_conditions": {"long": [f"rsi_entry_0 < {threshold}"]},
+        "exit_conditions": {"long": ["rsi_entry_0 > 70"]},
+        "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+        "take_profit": {"type": "fixed_pct", "percent": 4.0},
+    }
+
+
+def _stored_dsl(state: StateManager, strategy_id: int) -> dict[str, object]:
+    row = state.conn.execute(
+        "SELECT dsl_config FROM strategies WHERE id = ?", (strategy_id,)
+    ).fetchone()
+    assert row is not None
+    loaded: dict[str, object] = json.loads(row[0])
+    return loaded
+
+
+async def test_promote_same_name_different_dsl_creates_new_strategy(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    """#0 (elite) and #2 (its mutant) share genome_<uid> -> #2 must get its OWN row."""
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state,
+        top_strategies=[
+            {"dsl": _genome_dsl("genome_abc123", 30), "score": 0.9},
+            {"dsl": _genome_dsl("genome_other", 25), "score": 0.8},
+            {"dsl": _genome_dsl("genome_abc123", 35), "score": 0.7},
+        ],
+    )
+
+    r0 = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    r2 = await ac.post(f"/api/discovery/results/{run_id}/promote/2")
+    assert r0.status_code == 201 and r2.status_code == 201
+    sid0, sid2 = r0.json()["strategy_id"], r2.json()["strategy_id"]
+    assert sid0 != sid2
+    assert r2.json()["name"] == "genome_abc123_2"
+
+    stored2 = _stored_dsl(state, sid2)
+    expected2 = _genome_dsl("genome_abc123", 35)
+    assert {k: v for k, v in stored2.items() if k != "name"} == {
+        k: v for k, v in expected2.items() if k != "name"
+    }
+    assert stored2["name"] == "genome_abc123_2"
+    # #0's row still holds #0's DSL
+    assert _stored_dsl(state, sid0)["entry_conditions"] == {"long": ["rsi_entry_0 < 30"]}
+
+
+async def test_promote_same_genome_twice_is_idempotent(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state, top_strategies=[{"dsl": _genome_dsl("genome_x1", 30), "score": 0.9}],
+    )
+    r1 = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    r2 = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    assert r1.json()["strategy_id"] == r2.json()["strategy_id"]
+    (count,) = state.conn.execute(
+        "SELECT COUNT(*) FROM strategies WHERE name LIKE 'genome_x1%'"
+    ).fetchone()
+    assert count == 1
+
+
+async def test_export_matches_by_dsl_not_name(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state,
+        top_strategies=[
+            {"dsl": _genome_dsl("genome_dup", 30), "score": 0.9},
+            {"dsl": _genome_dsl("genome_dup", 40), "score": 0.8},
+        ],
+    )
+    e0 = await ac.post(f"/api/discovery/results/{run_id}/export/0")
+    e1 = await ac.post(f"/api/discovery/results/{run_id}/export/1")
+    e0_again = await ac.post(f"/api/discovery/results/{run_id}/export/0")
+    assert e0.json()["status"] == "created"
+    assert e1.json()["status"] == "created"
+    assert e1.json()["strategy_id"] != e0.json()["strategy_id"]
+    assert e0_again.json() == {**e0.json(), "status": "exists"}
+
+
+async def test_promote_validation_uses_holdout_range_by_default(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state,
+        top_strategies=[{"dsl": _genome_dsl("genome_h1", 30), "score": 0.9}],
+        notes_extra={
+            "train_dates": ["2024-01-01", "2024-10-19"],
+            "holdout_dates": ["2024-10-19", "2025-01-01"],
+        },
+    )
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0?mode=validation")
+    assert r.status_code == 201
+    data = r.json()
+    assert data["date_range"] == "holdout"
+    assert (data["start_date"], data["end_date"]) == ("2024-10-19", "2025-01-01")
+    bt_run = state.get_backtest_run(data["run_id"])
+    assert bt_run is not None
+    assert (bt_run["start_date"], bt_run["end_date"]) == ("2024-10-19", "2025-01-01")
+    params = bt_run["parameters"]
+    if isinstance(params, str):
+        params = json.loads(params)
+    assert params["promote_source"]["date_range"] == "holdout"
+
+
+async def test_promote_validation_full_range_is_explicit_opt_in(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state,
+        top_strategies=[{"dsl": _genome_dsl("genome_h2", 30), "score": 0.9}],
+        notes_extra={"holdout_dates": ["2024-10-19", "2025-01-01"]},
+    )
+    r = await ac.post(
+        f"/api/discovery/results/{run_id}/promote/0?mode=validation&validation_range=full"
+    )
+    assert r.status_code == 201
+    assert r.json()["date_range"] == "full"
+    assert (r.json()["start_date"], r.json()["end_date"]) == ("2024-01-01", "2025-01-01")
+    bad = await ac.post(
+        f"/api/discovery/results/{run_id}/promote/0?mode=validation&validation_range=x"
+    )
+    assert bad.status_code == 400
+
+
+async def test_promote_validation_without_holdout_uses_full_range(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    ac, state = client
+    run_id = _create_discovery_run_with_results(
+        state, top_strategies=[{"dsl": _genome_dsl("genome_h3", 30), "score": 0.9}],
+    )
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0?mode=validation")
+    assert r.status_code == 201
+    assert r.json()["date_range"] == "full"
+
+
+async def test_regime_gate_uses_persisted_window_dates_and_blocks_neutral_base(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """New-format cross-window payload (shifted windows only, with dates).
+
+    A neutral base regime no longer waves a 1m short through: it needs a pass
+    on a BULL window (adverse for shorts).
+    """
+    ac, state = client
+    entry = {
+        "dsl": _genome_dsl("genome_short1m", 30),
+        "chromosome": {"direction": "short"},
+        "score": 1.0,
+        "cross_window": {
+            "windows_passed": 1, "total_windows": 1, "passed": True,
+            "windows": [
+                {"sharpe": 1.2, "return_pct": 0.05, "trades": 40,
+                 "offset_months": 1, "dates": ["2024-02-01", "2024-10-19"]},
+            ],
+        },
+    }
+    run_id = _create_discovery_run_with_results(
+        state, timeframe="1m", symbols=["BTCUSDT"], top_strategies=[entry],
+        notes_extra={
+            "cross_window_months": [1],
+            "train_dates": ["2024-01-01", "2024-10-19"],
+        },
+    )
+    seen: list[tuple[str, str]] = []
+
+    def neutral_base_bear_window(_s: str, start: str, end: str) -> int:
+        seen.append((start, end))
+        return 0 if start == "2024-01-01" else -1
+
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.discovery._window_regime_sign", neutral_base_bear_window,
+    )
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    assert r.status_code == 409
+    # base = TRAIN range, shifted window = its persisted dates
+    assert seen == [("2024-01-01", "2024-10-19"), ("2024-02-01", "2024-10-19")]
+
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.discovery._window_regime_sign",
+        lambda _s, start, _e: 0 if start == "2024-01-01" else 1,
+    )
+    r_ok = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+    assert r_ok.status_code == 201
+
+
+async def test_launch_defaults_to_holdout_and_passes_explicit_zero(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ac, _state = client
+    commands: list[list[str]] = []
+
+    def fake_start_job(
+        self: object, run_id: int, job_type: str, command: list[str], **_: object
+    ) -> int:
+        commands.append(command)
+        return 4242
+
+    monkeypatch.setattr(BacktestJobManager, "start_job", fake_start_job)
+    await ac.post("/api/discovery/launch", json={})
+    await ac.post("/api/discovery/launch", json={"train_test_split": 0})
+    assert len(commands) == 2
+    i0 = commands[0].index("--train-test-split")
+    assert commands[0][i0 + 1] == "0.8"
+    i1 = commands[1].index("--train-test-split")
+    assert commands[1][i1 + 1] == "0.0"

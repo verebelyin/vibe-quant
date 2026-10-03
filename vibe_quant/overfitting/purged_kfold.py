@@ -16,7 +16,9 @@ Example with purge_pct=0.01, embargo_pct=0.01, n_samples=1000, fold 2 as test:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
+from statistics import NormalDist
 from typing import TYPE_CHECKING, Protocol
 
 logger = logging.getLogger(__name__)
@@ -109,12 +111,18 @@ class CVConfig:
             EMA-50). Per SPEC Section 8, the purge period should equal the
             max indicator lookback. If set, overrides purge_pct when
             n_samples is known.
+        bars_per_day: Bars per calendar day of the sampled series (e.g. 6 for
+            4h). When set, the fold-Sharpe dispersion check compares the
+            spread against the sampling noise expected for each fold's length
+            (see ``PurgedKFoldCV._aggregate_results``) instead of the fixed
+            ``std < max_oos_sharpe_std`` rule.
     """
 
     n_splits: int = 5
     purge_pct: float = 0.01
     embargo_pct: float = 0.01
     indicator_lookback_bars: int | None = None
+    bars_per_day: float | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
@@ -138,7 +146,11 @@ class CVResult:
         mean_oos_sharpe: Mean out-of-sample Sharpe across folds.
         std_oos_sharpe: Standard deviation of out-of-sample Sharpe.
         mean_oos_return: Mean out-of-sample return across folds.
-        is_robust: True if mean OOS Sharpe > threshold AND std OOS Sharpe < max.
+        is_robust: True if mean OOS Sharpe > threshold AND the fold Sharpes are
+            consistent (dispersion test, or std < max without bar timing).
+        dispersion_q: Cochran's Q of fold Sharpes vs their sampling noise
+            (None when the fixed std rule was used).
+        dispersion_q_critical: chi-square critical value Q was compared with.
     """
 
     fold_results: list[FoldResult]
@@ -146,6 +158,8 @@ class CVResult:
     std_oos_sharpe: float
     mean_oos_return: float
     is_robust: bool
+    dispersion_q: float | None = None
+    dispersion_q_critical: float | None = None
 
 
 class PurgedKFold:
@@ -291,6 +305,15 @@ class PurgedKFold:
             # Collect ranges first, then build list in one shot
             train_ranges: list[range] = []
 
+            # Purge [test_start - purge_len, test_start) and embargo
+            # [test_end, test_end + embargo_len) from EVERY train fold, not just
+            # the adjacent ones: a lookback longer than one fold reaches into
+            # the fold before the neighbour too.
+            test_start = fold_starts[fold_idx]
+            test_end = fold_ends[fold_idx]
+            purge_from = test_start - purge_len
+            embargo_until = test_end + embargo_len
+
             for train_fold_idx in range(self.n_splits):
                 if train_fold_idx == fold_idx:
                     continue
@@ -298,15 +321,10 @@ class PurgedKFold:
                 train_fold_start = fold_starts[train_fold_idx]
                 train_fold_end = fold_ends[train_fold_idx]
 
-                # Apply purge if train fold immediately precedes test fold
-                if train_fold_idx == fold_idx - 1:
-                    purge_start = max(train_fold_start, train_fold_end - purge_len)
-                    train_fold_end = purge_start
-
-                # Apply embargo if train fold immediately follows test fold
-                if train_fold_idx == fold_idx + 1:
-                    embargo_end = min(train_fold_end, train_fold_start + embargo_len)
-                    train_fold_start = embargo_end
+                if train_fold_idx < fold_idx:
+                    train_fold_end = min(train_fold_end, max(train_fold_start, purge_from))
+                else:
+                    train_fold_start = max(train_fold_start, min(train_fold_end, embargo_until))
 
                 # Only add if we have samples left after purge/embargo
                 if train_fold_start < train_fold_end:
@@ -328,6 +346,42 @@ class PurgedKFold:
         return self.n_splits
 
 
+# NT annualizes Sharpe from DAILY returns with sqrt(252)
+_SHARPE_PERIODS_PER_YEAR = 252.0
+
+
+def _chi2_quantile(p: float, df: int) -> float:
+    """Chi-square quantile via Wilson-Hilferty (abs err < 1% for df >= 2)."""
+    z = NormalDist().inv_cdf(p)
+    k = float(df)
+    return k * (1.0 - 2.0 / (9.0 * k) + z * math.sqrt(2.0 / (9.0 * k))) ** 3
+
+
+def _sharpe_dispersion_test(
+    fold_results: list[FoldResult], bars_per_day: float, alpha: float,
+) -> tuple[float, float, float]:
+    """Cochran's Q of fold Sharpes against their sampling noise.
+
+    Each fold's annualized Sharpe has standard error
+    ``sqrt(252 / days) * sqrt(1 + SR_d^2 / 2)`` (Lo 2002, daily SR_d) under a
+    common true Sharpe. ``Q = sum(w_i (SR_i - SR_w)^2)`` with inverse-variance
+    weights is chi-square(K-1) when the folds share one Sharpe.
+
+    Returns:
+        (Q, critical value at ``1 - alpha``, z-score of the pooled Sharpe).
+    """
+    n = len(fold_results)
+    days = [max(1.0, r.test_size / bars_per_day) for r in fold_results]
+    sharpes = [r.test_sharpe for r in fold_results]
+    pooled_daily = (sum(sharpes) / n) / math.sqrt(_SHARPE_PERIODS_PER_YEAR)
+    noise = 1.0 + pooled_daily * pooled_daily / 2.0
+    weights = [d / (_SHARPE_PERIODS_PER_YEAR * noise) for d in days]
+    sr_w = sum(w * s for w, s in zip(weights, sharpes, strict=True)) / sum(weights)
+    q = sum(w * (s - sr_w) ** 2 for w, s in zip(weights, sharpes, strict=True))
+    z_pooled = sr_w * math.sqrt(sum(weights))
+    return q, _chi2_quantile(1.0 - alpha, n - 1), z_pooled
+
+
 @dataclass
 class PurgedKFoldCV:
     """Cross-validation runner using Purged K-Fold splits.
@@ -337,7 +391,14 @@ class PurgedKFoldCV:
 
     SPEC Section 8 robustness criteria:
         - Mean OOS Sharpe > min_oos_sharpe (default 0.5)
-        - std(OOS Sharpe) < max_oos_sharpe_std (default 1.0)
+        - fold Sharpes consistent with each other. With ``config.bars_per_day``
+          set: Cochran's Q test -- the spread must not exceed the sampling noise
+          of an annualized Sharpe estimated on a fold of that length
+          (SE ~ sqrt(252 / fold_days)); a 73-day fold has SE ~1.9, so the
+          fixed ``std < 1.0`` rule rejected genuinely good strategies most of
+          the time. The pooled OOS Sharpe must also be significantly > 0
+          (one-sided, ``dispersion_alpha``). Without bar timing: legacy
+          ``std < max_oos_sharpe_std``.
 
     Args:
         config: CV configuration (n_splits, purge_pct, embargo_pct).
@@ -350,6 +411,7 @@ class PurgedKFoldCV:
     robustness_threshold: float = 0.5
     min_oos_sharpe: float = 0.5
     max_oos_sharpe_std: float = 1.0
+    dispersion_alpha: float = 0.05
     _kfold: PurgedKFold = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -458,7 +520,22 @@ class PurgedKFoldCV:
         else:
             std_sharpe = 0.0
 
-        is_robust = (mean_sharpe > self.min_oos_sharpe) and (std_sharpe < self.max_oos_sharpe_std)
+        q_stat: float | None = None
+        q_crit: float | None = None
+        if self.config.bars_per_day and n > 1:
+            q_stat, q_crit, z_pooled = _sharpe_dispersion_test(
+                fold_results, self.config.bars_per_day, self.dispersion_alpha,
+            )
+            # Homogeneous folds AND a pooled OOS edge significantly > 0: the
+            # fixed std rule doubled as a (very strict) noise filter, so the
+            # replacement keeps one explicitly.
+            consistent = q_stat <= q_crit and z_pooled > NormalDist().inv_cdf(
+                1.0 - self.dispersion_alpha
+            )
+        else:
+            consistent = std_sharpe < self.max_oos_sharpe_std
+
+        is_robust = (mean_sharpe > self.min_oos_sharpe) and consistent
 
         return CVResult(
             fold_results=list(fold_results),
@@ -466,6 +543,8 @@ class PurgedKFoldCV:
             std_oos_sharpe=std_sharpe,
             mean_oos_return=mean_return,
             is_robust=is_robust,
+            dispersion_q=q_stat,
+            dispersion_q_critical=q_crit,
         )
 
     def get_splits(self, n_samples: int) -> list[tuple[list[int], list[int]]]:
