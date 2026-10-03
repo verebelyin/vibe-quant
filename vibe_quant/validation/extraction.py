@@ -1,7 +1,9 @@
 """Result extraction helpers for validation runner.
 
 Extracts metrics and trades from NautilusTrader backtest output
-into vibe-quant's ValidationResult format.
+into vibe-quant's ValidationResult format. The cost/equity helpers in the
+"Shared metric helpers" section are also used by the screening runner so
+both tiers compute PF, funding and Sharpe the same way.
 """
 
 from __future__ import annotations
@@ -11,18 +13,108 @@ import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.metrics import profit_factor
+from vibe_quant.metrics import daily_balance_returns, profit_factor
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.results import BacktestResult
 
-    from vibe_quant.validation.funding import FundingCalculator
+    from vibe_quant.validation.funding import FundingAccrual, FundingCalculator
     from vibe_quant.validation.venue import VenueConfig
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared metric helpers (screening + validation)
+# ---------------------------------------------------------------------------
+
+
+def all_positions(engine: Any) -> list[Any]:
+    """Every position incarnation in the engine cache.
+
+    NT netting mode reuses position IDs: a closed-then-reopened position is
+    removed from the main index and kept as a snapshot, so positions() +
+    position_snapshots() is needed to see all of them.
+    """
+    cache = engine.kernel.cache
+    return list(cache.positions()) + list(cache.position_snapshots())
+
+
+def position_direction(pos: Any) -> str:
+    """'LONG' / 'SHORT' from a position's entry side."""
+    return "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
+
+
+def accrue_position_funding(
+    calculator: FundingCalculator,
+    pos: Any,
+    exit_ns: int | None = None,
+) -> FundingAccrual:
+    """Funding for one position (entry notional, held until close or ``exit_ns``)."""
+    entry_price = float(pos.avg_px_open)
+    quantity = float(pos.peak_qty)
+    close_ns = exit_ns if exit_ns is not None else (int(pos.ts_closed) or None)
+    return calculator.accrue(
+        instrument_id=str(pos.instrument_id),
+        direction=position_direction(pos),
+        entry_notional=entry_price * quantity,
+        entry_ns=int(pos.ts_opened),
+        exit_ns=close_ns,
+    )
+
+
+def date_to_ns(value: str | None) -> int | None:
+    """'YYYY-MM-DD' (or ISO datetime) as UTC nanoseconds; None if unparseable."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.timestamp()) * 1_000_000_000
+
+
+def sharpe_sortino_from_returns(returns: dict[int, float]) -> tuple[float, float]:
+    """NT's own SharpeRatio / SortinoRatio (252-day) on a daily returns dict.
+
+    Using NT's pyo3 statistics keeps the math identical to what NT reported
+    before (mean / std(ddof=1) * sqrt(252)); non-finite results (flat
+    equity, fewer than 2 days) map to 0.0 instead of NaN.
+    """
+    from nautilus_trader.core.nautilus_pyo3 import SharpeRatio, SortinoRatio
+
+    def _finite(value: object) -> float:
+        try:
+            f = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
+        return f if math.isfinite(f) else 0.0
+
+    if len(returns) < 2:
+        return 0.0, 0.0
+    return (
+        _finite(SharpeRatio().calculate_from_returns(returns)),
+        _finite(SortinoRatio().calculate_from_returns(returns)),
+    )
+
+
+def daily_sharpe_sortino(
+    starting_balance: float,
+    cash_events: Iterable[tuple[int, float]],
+    start_ns: int,
+    end_ns: int,
+) -> tuple[float, float]:
+    """Sharpe/Sortino of the daily realized balance incl. modeled costs."""
+    return sharpe_sortino_from_returns(
+        daily_balance_returns(starting_balance, cash_events, start_ns, end_ns)
+    )
 
 
 def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
@@ -249,10 +341,10 @@ def extract_trades(
 
     Cost accounting: NT's realized_pnl already includes commissions. The
     post-fill SPEC slippage estimate and (when a calculator is provided)
-    accrued funding are ADDITIONALLY charged into each trade's net_pnl and
-    into the headline total_return, so "full cost modeling" metrics actually
-    contain the modeled costs. sharpe_ratio stays NT-reported (slippage/
-    funding are second-order for its per-day return series).
+    accrued funding are ADDITIONALLY charged into each trade's net_pnl, into
+    the headline total_return, the trade profit factor and -- when the run
+    window is known -- the daily-balance Sharpe/Sortino (same computation as
+    screening, bd vibe-quant-e70tl.20).
 
     Args:
         result: ValidationResult to populate trades on (mutated in place).
@@ -262,21 +354,27 @@ def extract_trades(
         funding_calculator: Optional post-hoc funding accrual.
         run_start_date / run_end_date: Backtest window for CAGR.
     """
+    window_start_ns = date_to_ns(run_start_date)
+    window_end_ns = date_to_ns(run_end_date)
+    has_window = (
+        window_start_ns is not None
+        and window_end_ns is not None
+        and window_end_ns > window_start_ns
+    )
     try:
         # NT netting mode reuses position IDs: when a position closes and reopens,
         # it's removed from _index_positions_closed. The closed state is preserved
         # as a "snapshot". We must combine positions() + position_snapshots() and
         # filter by is_closed, exactly as NT's own "Total positions" log does.
-        cache = engine.kernel.cache
-        all_positions = list(cache.positions()) + list(cache.position_snapshots())
-        positions = [p for p in all_positions if p.is_closed]
+        positions = [p for p in all_positions(engine) if p.is_closed]
     except Exception:
         logger.warning("Could not read positions from engine cache", exc_info=True)
-        result.profit_factor = 0.0
-        return
+        positions = []
 
     if not positions:
         result.profit_factor = 0.0
+        if has_window:
+            result.sharpe_ratio, result.sortino_ratio = 0.0, 0.0
         return
 
     default_leverage = int(venue_config.default_leverage)
@@ -305,6 +403,9 @@ def extract_trades(
     market_stats = estimate_market_stats(engine, primary_timeframe)
 
     total_funding = 0.0
+    funding_fallbacks = 0
+    # Realized balance changes for the daily Sharpe series
+    cash_events: list[tuple[int, float]] = []
 
     for pos in positions:
         realized_pnl = float(pos.realized_pnl)
@@ -335,26 +436,22 @@ def extract_trades(
         entry_time = _ns_to_isoformat(pos.ts_opened)
         exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
 
-        direction = (
-            "LONG" if getattr(pos.entry, "name", str(pos.entry)).upper() == "BUY" else "SHORT"
-        )
+        direction = position_direction(pos)
         instrument_id = str(pos.instrument_id)
 
         # Post-hoc funding accrual from archived rates (positive = paid)
         if funding_calculator is not None:
-            funding_fees = funding_calculator.compute_funding(
-                instrument_id=instrument_id,
-                direction=direction,
-                entry_notional=entry_price * quantity,
-                entry_ns=int(pos.ts_opened),
-                exit_ns=int(pos.ts_closed) if pos.ts_closed else None,
-            )
+            accrual = accrue_position_funding(funding_calculator, pos)
+            funding_fees = accrual.total
+            funding_fallbacks += accrual.fallback_settlements
+            cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
         else:
             funding_fees = 0.0
         total_funding += funding_fees
 
         # Net PnL: NT realized (fees included) minus modeled slippage/funding
         net_pnl = realized_pnl - slippage_cost - funding_fees
+        cash_events.append((int(pos.ts_closed), realized_pnl - slippage_cost))
 
         if net_pnl > 0:
             winning += 1
@@ -410,6 +507,13 @@ def extract_trades(
     result.total_fees = total_fees
     result.total_slippage = total_slippage
     result.total_funding = total_funding
+    result.funding_fallback_settlements = funding_fallbacks
+    if funding_fallbacks:
+        logger.warning(
+            "Validation funding: %d settlement(s) charged at the fallback rate "
+            "(no archived rate)",
+            funding_fallbacks,
+        )
     if result.total_trades > 0:
         result.win_rate = winning / result.total_trades
     # Trade PF on net PnL (fees, modeled slippage and funding included) —
@@ -422,6 +526,13 @@ def extract_trades(
     extra_costs = total_slippage + total_funding
     if extra_costs != 0.0 and result.starting_balance > 0:
         result.total_return -= extra_costs / result.starting_balance
+
+    # Daily realized-balance Sharpe/Sortino including slippage + funding,
+    # spanning the whole run window (shared with screening).
+    if window_start_ns is not None and window_end_ns is not None and has_window:
+        result.sharpe_ratio, result.sortino_ratio = daily_sharpe_sortino(
+            result.starting_balance, cash_events, window_start_ns, window_end_ns
+        )
 
     # NT 1.222+ may not populate max_drawdown via stats_pnls/stats_returns
     # (the old MaxDrawdown indicator was removed). Compute from equity curve

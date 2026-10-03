@@ -47,6 +47,53 @@ def profit_factor(trade_pnls: Iterable[float]) -> float:
     return min(gross_profit / gross_loss, PROFIT_FACTOR_CAP)
 
 
+_DAY_NS = 86_400 * 1_000_000_000
+
+
+def daily_balance_returns(
+    starting_balance: float,
+    cash_events: Iterable[tuple[int, float]],
+    start_ns: int,
+    end_ns: int,
+) -> dict[int, float]:
+    """Daily returns of the realized account balance over the whole window.
+
+    Mirrors NT's ``PortfolioAnalyzer`` portfolio returns (UTC daily last
+    balance, forward-filled, ``pct_change``) but (a) lets callers add cash
+    flows NT never sees (funding, modeled slippage) and (b) spans the full
+    backtest window instead of stopping at the last fill, so idle days after
+    the last trade count as zero-return days.
+
+    Args:
+        starting_balance: Account balance at ``start_ns``.
+        cash_events: ``(ts_ns, delta)`` realized balance changes (trade net
+            PnL at close, funding payments as negative deltas, ...). Events
+            outside the window are clamped to its first/last day.
+        start_ns / end_ns: Backtest window (end exclusive).
+
+    Returns:
+        ``{day_start_ns: return}`` for every day after the first, the format
+        NT's pyo3 ``SharpeRatio.calculate_from_returns`` expects.
+    """
+    first_day = start_ns // _DAY_NS
+    last_day = max(first_day, (end_ns - 1) // _DAY_NS)
+    n_days = last_day - first_day + 1
+    per_day = [0.0] * n_days
+    for ts, delta in cash_events:
+        idx = min(max(ts // _DAY_NS - first_day, 0), n_days - 1)
+        per_day[idx] += delta
+    returns: dict[int, float] = {}
+    balance = starting_balance + per_day[0]
+    for i in range(1, n_days):
+        prev = balance
+        balance += per_day[i]
+        if prev != 0.0:
+            ret = balance / prev - 1.0
+            if math.isfinite(ret):
+                returns[(first_day + i) * _DAY_NS] = ret
+    return returns
+
+
 @dataclass
 class PerformanceMetrics:
     """Core performance metrics common to all backtest result types.
@@ -75,3 +122,6 @@ class PerformanceMetrics:
     skewness: float = 0.0  # Return distribution skewness (0 = symmetric)
     kurtosis: float = 3.0  # Return distribution kurtosis (3 = normal)
     trade_returns: tuple[float, ...] = ()  # Per-trade PnL returns (fraction)
+    # Funding settlements charged at the fallback rate because the archive
+    # had no rate for them (0 = funding fully from archived rates).
+    funding_fallback_settlements: int = 0

@@ -68,7 +68,7 @@ class _Position:
 
     def __init__(self, realized_pnl: float, idx: int) -> None:
         self.realized_pnl = realized_pnl
-        self.ts_opened = _BASE_NS + idx * 3_600_000_000_000
+        self.ts_opened = _BASE_NS + 60_000_000_000 + idx * 3_600_000_000_000
         self.ts_closed = self.ts_opened + 600_000_000_000  # 10 minutes later, same day
 
     def commissions(self) -> list[float]:
@@ -108,10 +108,20 @@ def _venue_config() -> SimpleNamespace:
 
 
 PNLS = [10.0, -5.0, 10.0, -5.0]
+# Isolate from the real archive: no funding data -> no settlements crossed by
+# these 10-minute trades -> funding 0, so net PnL == realized PnL.
+_NO_ARCHIVE = "/nonexistent/vq_test_funding_archive.db"
+
+
+def _runner() -> NTScreeningRunner:
+    return NTScreeningRunner(
+        dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="",
+        funding_archive_path=_NO_ARCHIVE,
+    )
 
 
 def test_screening_pf_from_trades_not_daily_returns() -> None:
-    runner = NTScreeningRunner(dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="")
+    runner = _runner()
     metrics = runner._extract_metrics(
         {}, _bt_result(len(PNLS)), _fake_engine(PNLS), time.time(), starting_balance=1000.0
     )
@@ -126,7 +136,7 @@ def test_validation_pf_from_trades_not_daily_returns() -> None:
 
 
 def test_screening_and_validation_pf_agree() -> None:
-    runner = NTScreeningRunner(dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="")
+    runner = _runner()
     pnls = [12.5, -3.0, 7.0, -9.25, 4.0]
     screening = runner._extract_metrics(
         {}, _bt_result(len(pnls)), _fake_engine(pnls), time.time(), starting_balance=1000.0
@@ -144,7 +154,7 @@ def test_validation_no_trades_pf_zero() -> None:
 
 
 def test_screening_no_trades_pf_zero() -> None:
-    runner = NTScreeningRunner(dsl_dict={}, symbols=["BTCUSDT"], start_date="", end_date="")
+    runner = _runner()
     metrics = runner._extract_metrics(
         {}, _bt_result(0), _fake_engine([]), time.time(), starting_balance=1000.0
     )

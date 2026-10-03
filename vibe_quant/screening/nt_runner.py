@@ -42,6 +42,7 @@ class NTScreeningRunner:
         start_date: str,
         end_date: str,
         catalog_path: str | None = None,
+        funding_archive_path: str | None = None,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -51,12 +52,16 @@ class NTScreeningRunner:
             start_date: Start date string (YYYY-MM-DD).
             end_date: End date string (YYYY-MM-DD).
             catalog_path: Path to ParquetDataCatalog. Uses default if None.
+            funding_archive_path: Raw-data archive holding funding rates.
+                Uses the default archive if None. Funding series are cached
+                per worker process (see validation.funding).
         """
         self._dsl_dict = dsl_dict
         self._symbols = symbols
         self._start_date = start_date
         self._end_date = end_date
         self._catalog_path = catalog_path
+        self._funding_archive_path = funding_archive_path
 
         # Cached per-process compilation results (populated on first __call__)
         self._compiled = False
@@ -354,6 +359,13 @@ class NTScreeningRunner:
         """
         from vibe_quant.metrics import profit_factor
         from vibe_quant.screening.types import BacktestMetrics
+        from vibe_quant.validation.extraction import (
+            accrue_position_funding,
+            all_positions,
+            daily_sharpe_sortino,
+            date_to_ns,
+        )
+        from vibe_quant.validation.funding import FundingCalculator
 
         metrics = BacktestMetrics(
             parameters=params,
@@ -448,33 +460,62 @@ class NTScreeningRunner:
                 list(stats_returns.keys()) if stats_returns else "empty",
             )
 
-        # Extract fees and trade PnLs from closed positions
+        # Fees, funding and net trade PnLs from closed positions.
         # NT netting mode removes closed positions from the main index;
         # combine positions() + position_snapshots() to capture all.
         trade_pnls: list[float] = []
+        cash_events: list[tuple[int, float]] = []
+        total_funding = 0.0
+        funding_fallbacks = 0
         try:
-            cache = engine.kernel.cache
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            total_fees = 0.0
-            for pos in all_positions:
-                if pos.is_closed:
-                    total_fees += sum(abs(float(c)) for c in pos.commissions())
-                    # NT realized_pnl is net of commissions
-                    trade_pnls.append(float(pos.realized_pnl))
-            metrics.total_fees = total_fees
+            closed = [p for p in all_positions(engine) if p.is_closed]
         except Exception:
-            logger.warning("Could not extract fees from engine cache", exc_info=True)
+            logger.warning("Could not read positions from engine cache", exc_info=True)
+            closed = []
+        funding_calc = FundingCalculator(self._funding_archive_path)
+        total_fees = 0.0
+        for pos in closed:
+            total_fees += sum(abs(float(c)) for c in pos.commissions())
+            # Funding is modeled post-hoc (NT's engine applies none) with
+            # the same calculator validation uses (bd vibe-quant-e70tl.20).
+            accrual = accrue_position_funding(funding_calc, pos)
+            total_funding += accrual.total
+            funding_fallbacks += accrual.fallback_settlements
+            # NT realized_pnl is net of commissions
+            realized = float(pos.realized_pnl)
+            trade_pnls.append(realized - accrual.total)
+            cash_events.append((int(pos.ts_closed), realized))
+            cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
+        metrics.total_fees = total_fees
+        metrics.total_funding = total_funding
+        metrics.funding_fallback_settlements = funding_fallbacks
+        if funding_fallbacks:
+            logger.warning(
+                "Screening funding for params %s: %d settlement(s) charged at the "
+                "fallback rate (no archived rate)",
+                params or "{}",
+                funding_fallbacks,
+            )
+        if total_funding != 0.0 and starting_balance > 0:
+            metrics.total_return -= total_funding / starting_balance
 
-        # Trade-based profit factor (shared definition with validation). NT's
-        # realized-PnL PF is unimplemented, and its returns-based PF is a
-        # daily-return statistic, not a trade PF (bd vibe-quant-e70tl.7).
+        # Trade-based profit factor on net PnL (shared definition with
+        # validation). NT's realized-PnL PF is unimplemented, and its
+        # returns-based PF is a daily-return statistic (bd vibe-quant-e70tl.7).
         metrics.profit_factor = profit_factor(trade_pnls)
+
+        # Sharpe/Sortino from the daily realized balance INCLUDING funding,
+        # over the whole backtest window (NT's series stops at the last fill
+        # and knows nothing of funding). Same function as validation.
+        start_ns = date_to_ns(self._start_date)
+        end_ns = date_to_ns(self._end_date)
+        if start_ns is not None and end_ns is not None and end_ns > start_ns:
+            metrics.sharpe_ratio, metrics.sortino_ratio = daily_sharpe_sortino(
+                starting_balance, cash_events, start_ns, end_ns
+            )
 
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)
-
-        # Screening mode doesn't model funding; set explicitly for DB storage
-        metrics.total_funding = 0.0
 
         # NT 1.222+ removed MaxDrawdown indicator, so stats may not contain it.
         # Compute from trade PnLs as fallback (same approach as validation).
