@@ -409,6 +409,32 @@ def test_evolved_population_has_unique_names() -> None:
         assert len(set(names)) == len(names)
 
 
+def test_seed_genes_outside_ga_pool_are_dropped() -> None:
+    """Warm-start must not re-inject genes that left the GA pool (legacy ATR
+    genes: absolute-price thresholds, e70tl.14) — runs 785/786 still carry them."""
+    atr = _gene("ATR", {"period": 14.0}, ConditionType.GT, 0.1324)
+    rsi_exit = _gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)
+    mixed = _chrom(
+        entry_genes=[atr, _gene("RSI", {"period": 14.0})], exit_genes=[atr, rsi_exit]
+    )
+    atr_only = _chrom(entry_genes=[atr], exit_genes=[atr])
+    pop = initialize_population(6, seed_chromosomes=[atr_only, mixed])
+    for chrom in pop:
+        kinds = {g.indicator_type for g in chrom.entry_genes + chrom.exit_genes}
+        assert "ATR" not in kinds
+        assert chrom.entry_genes and chrom.exit_genes
+    # The mixed seed survives minus its ATR genes (seeded first); the
+    # ATR-only seed would be left with no genes, so it is skipped entirely.
+    assert [g.indicator_type for g in pop[0].entry_genes] == ["RSI"]
+    assert [g.indicator_type for g in pop[0].exit_genes] == ["RSI"]
+
+
+def test_warm_start_with_no_usable_seed_fails_loudly() -> None:
+    atr = _gene("ATR", {"period": 14.0}, ConditionType.GT, 0.1324)
+    with pytest.raises(ValueError, match="none of 1 seed"):
+        initialize_population(6, seed_chromosomes=[_chrom(entry_genes=[atr], exit_genes=[atr])])
+
+
 def test_seed_clones_get_fresh_uids() -> None:
     seed = _chrom()
     pop = initialize_population(4, seed_chromosomes=[seed])

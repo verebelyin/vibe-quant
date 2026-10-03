@@ -100,3 +100,65 @@ def test_discovery_reference_prefers_full_range_metrics(state: StateManager) -> 
     ref = find_screening_reference(state, sid, "genome_abc123")
     assert ref is not None
     assert (ref.sharpe, ref.trades) == (1.1, 88)
+
+
+# --- window-aware reference (promote now validates on the holdout window) ---
+
+
+def _discovery_run(state: StateManager, name: str) -> int:
+    run_id = state.create_backtest_run(
+        strategy_id=None, run_mode="discovery", symbols=["BTCUSDT"], timeframe="4h",
+        start_date="2025-03-07", end_date="2026-03-07", parameters={},
+    )
+    state.update_backtest_run_status(run_id, "completed")
+    notes = {
+        "holdout_dates": ["2025-12-24", "2026-03-07"],
+        "top_strategies": [{
+            "dsl": {"name": name},
+            "sharpe": 0.58, "trades": 182,
+            "full_range_sharpe": 0.29, "full_range_trades": 205,
+            "holdout": {"sharpe": 1.84, "trades": 12},
+        }],
+    }
+    state.save_backtest_result(run_id, {"total_trades": 0}, trades=[])
+    state.update_result_notes(run_id, json.dumps(notes))
+    return run_id
+
+
+def test_holdout_validation_compares_against_champion_holdout(state: StateManager) -> None:
+    run_id = _discovery_run(state, "genome_abc123def456")
+    ref = find_screening_reference(
+        state, 999, "genome_abc123def456", val_window=("2025-12-24", "2026-03-07")
+    )
+    assert ref is not None
+    assert (ref.sharpe, ref.trades) == (1.84, 12)
+    assert ref.source == f"discovery_run:{run_id}:holdout"
+
+
+def test_full_range_reference_carries_its_window(state: StateManager) -> None:
+    _discovery_run(state, "genome_abc123def456")
+    ref = find_screening_reference(
+        state, 999, "genome_abc123def456", val_window=("2025-03-07", "2026-03-07")
+    )
+    assert ref is not None
+    assert (ref.sharpe, ref.trades) == (0.29, 205)
+    assert (ref.start_date, ref.end_date) == ("2025-03-07", "2026-03-07")
+
+
+def test_trade_divergence_uses_rates_when_windows_differ() -> None:
+    from vibe_quant.validation.consistency import ScreeningReference
+
+    ref = ScreeningReference(
+        sharpe=1.0, trades=100, source="x", start_date="2025-01-01", end_date="2025-04-11"
+    )  # 100 trades / 100 days
+    same_rate = assess_consistency(
+        ref, val_sharpe=1.0, val_trades=25, val_window=("2025-04-11", "2025-05-06")
+    )  # 25 trades / 25 days
+    assert not same_rate.flags
+    half_rate = assess_consistency(
+        ref, val_sharpe=1.0, val_trades=12, val_window=("2025-04-11", "2025-05-06")
+    )
+    assert any("trade-rate-divergence" in f for f in half_rate.flags)
+    # Unknown windows keep the raw-count comparison.
+    raw = assess_consistency(ref, val_sharpe=1.0, val_trades=25)
+    assert any("trade-count-divergence" in f for f in raw.flags)

@@ -1486,11 +1486,15 @@ class ValidationRunner:
         )
 
         try:
+            cfg = run_config or {}
+            start, end = cfg.get("start_date"), cfg.get("end_date")
+            val_window = (str(start), str(end)) if start and end else None
             reference = find_screening_reference(
                 self._state,
                 strategy_id,
                 strategy_name,
-                validated_params=self._build_strategy_params(run_config or {}),
+                validated_params=self._build_strategy_params(cfg),
+                val_window=val_window,
             )
             if reference is None:
                 return None
@@ -1498,6 +1502,7 @@ class ValidationRunner:
                 reference,
                 val_sharpe=result.sharpe_ratio,
                 val_trades=result.total_trades,
+                val_window=val_window,
             )
             if not report.is_flagged:
                 logger.info(

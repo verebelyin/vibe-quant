@@ -1172,10 +1172,18 @@ def initialize_population(
 
         _logger = logging.getLogger(__name__)
         # Clone seeds into population (cap at half the population to preserve exploration)
+        _ensure_pool()
         max_seeds = min(len(seed_chromosomes), size // 2)
-        for chrom in seed_chromosomes[:max_seeds]:
+        skipped = 0
+        for chrom in seed_chromosomes:
+            if len(population) >= max_seeds:
+                break
             clone = chrom.clone()
             clone.uid = _new_uid()  # may be re-directioned below: new genome
+            # Genes whose indicator left the GA pool (e.g. legacy ATR genes with
+            # absolute-price thresholds) must not re-enter via warm-start.
+            clone.entry_genes = [g for g in clone.entry_genes if g.indicator_type in INDICATOR_POOL]
+            clone.exit_genes = [g for g in clone.exit_genes if g.indicator_type in INDICATOR_POOL]
             # Seeds from older runs may carry fractional int params / dead params
             for gene in clone.entry_genes + clone.exit_genes:
                 canonicalize_gene(gene)
@@ -1183,7 +1191,21 @@ def initialize_population(
                 canonicalize_ma_gene(ma_gene)
             if direction_constraint is not None:
                 clone.direction = direction_constraint
+            if not is_valid_chromosome(clone):
+                skipped += 1
+                continue
             population.append(clone)
+        if not population:
+            msg = (
+                f"warm-start: none of {len(seed_chromosomes)} seed chromosome(s) is valid "
+                "after dropping genes outside the current GA pool"
+            )
+            raise ValueError(msg)
+        if skipped:
+            _logger.warning(
+                "Warm-start: skipped %d seed(s) invalid after dropping out-of-pool genes",
+                skipped,
+            )
         _logger.info(
             "Warm-start: seeded %d/%d slots from prior chromosomes",
             len(population), size,
