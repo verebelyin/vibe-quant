@@ -1032,7 +1032,7 @@
           "discovery"
         ],
         "summary": "Promote Discovered Strategy",
-        "description": "Export genome as strategy and launch screening/validation backtest.",
+        "description": "Export genome as strategy and launch screening/validation backtest.\n\n``mode=validation`` validates on the discovery run's HOLDOUT (out-of-sample)\nrange by default; ``validation_range=full`` opts into the full discovery\nrange (mostly in-sample). Runs without a holdout always use the full range.\n``mode=screening`` is a like-for-like replay of the full discovery range\n(the replay-drift check compares it with the full-range headline). The\nrange used is recorded in the run's ``promote_source``.",
         "operationId": "promote_discovered_strategy_api_discovery_results__run_id__promote__strategy_index__post",
         "parameters": [
           {
@@ -1061,6 +1061,16 @@
               "type": "string",
               "default": "screening",
               "title": "Mode"
+            }
+          },
+          {
+            "name": "validation_range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "holdout",
+              "title": "Validation Range"
             }
           }
         ],
@@ -5823,7 +5833,7 @@
           "train_test_split": {
             "type": "number",
             "title": "Train Test Split",
-            "default": 0.0
+            "default": 0.8
           },
           "cross_window_months": {
             "anyOf": [
@@ -9653,6 +9663,33 @@
           "mode": {
             "type": "string",
             "title": "Mode"
+          },
+          "date_range": {
+            "type": "string",
+            "title": "Date Range",
+            "default": "full"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
           }
         },
         "type": "object",

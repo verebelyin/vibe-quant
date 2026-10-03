@@ -10,4 +10,7 @@ export interface VibeQuantApiSchemasDiscoveryPromoteResponse {
   run_id: number;
   name: string;
   mode: string;
+  date_range?: string;
+  start_date?: string | null;
+  end_date?: string | null;
 }

@@ -485,12 +485,10 @@ async def resume_paper(state: StateMgr, jobs: JobMgr, ws: WsMgr) -> dict[str, ob
 @router.post("/stop", status_code=200)
 async def stop_paper(jobs: JobMgr, ws: WsMgr) -> dict[str, str]:
     run_id, pid = _find_active_paper_job(jobs)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass  # already dead, still mark killed
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Signal failed: {exc}") from exc
+    # Identity-checked: a stored PID may have been recycled by an unrelated
+    # process. False means the node is already gone (or the PID isn't ours).
+    if not jobs.signal_job(run_id, signal.SIGTERM):
+        logger.warning("paper stop: run_id=%d pid=%d not signalled (not running/not ours)", run_id, pid)
 
     logger.info("paper trading stopped run_id=%d pid=%d", run_id, pid)
     await ws.broadcast("trading", {"type": "paper_stopped", "run_id": run_id})

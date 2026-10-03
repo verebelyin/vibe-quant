@@ -445,3 +445,49 @@ async def test_restore_live_session_requires_confirmation(ctx: Ctx) -> None:
     r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "LIVE-001"})
     assert r.status_code == 400 and "confirm_live" in r.text
     assert ctx.launched == []
+
+
+# ------------------------------------------------------------------- /stop
+
+
+def _register_paper_job(ctx: Ctx, pid: int, identity: str | None) -> None:
+    ctx.jobs.conn.execute(
+        """INSERT OR REPLACE INTO background_jobs
+           (run_id, pid, pid_start_time, job_type, status, started_at, heartbeat_at)
+           VALUES (?, ?, ?, 'paper', 'running', datetime('now'), datetime('now'))""",
+        (ctx.validation_run + 1000, pid, identity),
+    )
+    ctx.jobs.conn.commit()
+
+
+async def test_stop_never_signals_a_recycled_pid(ctx: Ctx) -> None:
+    """Stored PID now owned by an unrelated process -> /stop leaves it alone."""
+    import subprocess
+
+    victim = subprocess.Popen(["sleep", "30"])
+    try:
+        _register_paper_job(ctx, victim.pid, identity="not-this-process")
+        r = await ctx.ac.post("/api/paper/stop")
+        assert r.status_code == 200, r.text
+        await asyncio.sleep(0.2)
+        assert victim.poll() is None, "unrelated process was killed via a recycled PID"
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+async def test_stop_terminates_the_owned_node_process(ctx: Ctx) -> None:
+    import subprocess
+
+    from vibe_quant.jobs.manager import process_start_time
+
+    node = subprocess.Popen(["sleep", "30"])
+    try:
+        _register_paper_job(ctx, node.pid, identity=process_start_time(node.pid))
+        r = await ctx.ac.post("/api/paper/stop")
+        assert r.status_code == 200, r.text
+        assert node.wait(timeout=5) == -15  # SIGTERM
+    finally:
+        if node.poll() is None:
+            node.kill()
+            node.wait()

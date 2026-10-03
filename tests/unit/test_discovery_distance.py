@@ -42,6 +42,14 @@ class TestGeneDistance:
         g = _gene("RSI", 14, ConditionType.GT, 50.0)
         assert gene_distance(g, g) == pytest.approx(0.0)
 
+    def test_identical_out_of_pool_genes_zero_distance(self) -> None:
+        # ATR left the GA pool (NATR replaced it); legacy warm-start genes
+        # must still compare as identical to themselves.
+        a = _gene("ATR", 14, ConditionType.GT, 40.0)
+        b = _gene("ATR", 14, ConditionType.GT, 40.0)
+        assert gene_distance(a, b) == pytest.approx(0.0)
+        assert gene_distance(a, _gene("ATR", 20, ConditionType.GT, 40.0)) > 0.0
+
     def test_different_indicator_high_distance(self) -> None:
         a = _gene("RSI", 14, ConditionType.GT, 50.0)
         b = _gene("MACD", 12, ConditionType.GT, 0.001)

@@ -104,7 +104,9 @@ def gene_distance(a: StrategyGene, b: StrategyGene) -> float:
                     param_dists.append(0.0)
             weighted_sum += _W_PARAMS * (sum(param_dists) / len(param_dists))
         else:
-            weighted_sum += _W_PARAMS * 0.5  # unknown indicator, moderate distance
+            # Out-of-pool indicator (e.g. legacy ATR genes from warm-start seeds):
+            # no ranges to normalise by, but identical params are still distance 0.
+            weighted_sum += _W_PARAMS * (0.0 if a.parameters == b.parameters else 0.5)
     else:
         # Different indicators -> max distance for threshold and params
         weighted_sum += _W_THRESHOLD * 1.0

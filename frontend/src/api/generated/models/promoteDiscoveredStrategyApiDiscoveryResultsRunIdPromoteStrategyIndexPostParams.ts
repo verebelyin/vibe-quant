@@ -7,4 +7,5 @@
 
 export type PromoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostParams = {
 mode?: string;
+validation_range?: string;
 };
