@@ -4,7 +4,6 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
-import type { BacktestLaunchRequestOverfittingFilters } from './backtestLaunchRequestOverfittingFilters';
 import type { BacktestLaunchRequestParameters } from './backtestLaunchRequestParameters';
 
 export interface BacktestLaunchRequest {
@@ -14,8 +13,5 @@ export interface BacktestLaunchRequest {
   start_date: string;
   end_date: string;
   parameters: BacktestLaunchRequestParameters;
-  sizing_config_id?: number | null;
-  risk_config_id?: number | null;
   latency_preset?: string | null;
-  overfitting_filters?: BacktestLaunchRequestOverfittingFilters;
 }

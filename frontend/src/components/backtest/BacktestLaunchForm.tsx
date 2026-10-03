@@ -8,11 +8,7 @@ import {
 } from "@/api/generated/backtest/backtest";
 import { useListSymbolsApiDataSymbolsGet } from "@/api/generated/data/data";
 import type { CoverageCheckResponseCoverage } from "@/api/generated/models";
-import {
-  useListLatencyPresetsApiSettingsLatencyPresetsGet,
-  useListRiskConfigsApiSettingsRiskGet,
-  useListSizingConfigsApiSettingsSizingGet,
-} from "@/api/generated/settings/settings";
+import { useListLatencyPresetsApiSettingsLatencyPresetsGet } from "@/api/generated/settings/settings";
 import { useListStrategiesApiStrategiesGet } from "@/api/generated/strategies/strategies";
 import { parseDslConfig } from "@/components/strategies/editor/types";
 import { Button } from "@/components/ui/button";
@@ -28,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 import { PreflightStatus } from "./PreflightStatus";
@@ -48,17 +43,9 @@ export function BacktestLaunchForm() {
   const [timeframe, setTimeframe] = useState("1m");
   // Validation-only fields
   const [latencyPreset, setLatencyPreset] = useState("");
-  const [sizingConfigId, setSizingConfigId] = useState<string>("");
-  const [riskConfigId, setRiskConfigId] = useState<string>("");
   // Sweep state
   const [sweepEnabled, setSweepEnabled] = useState(false);
   const [sweepConfig, setSweepConfig] = useState<SweepConfig>({ params: [] });
-  // Overfitting filter state
-  const [dsrEnabled, setDsrEnabled] = useState(false);
-  const [wfaEnabled, setWfaEnabled] = useState(false);
-  const [wfaSplits, setWfaSplits] = useState(5);
-  const [purgedKfoldEnabled, setPurgedKfoldEnabled] = useState(false);
-  const [purgeEmbargoPct, setPurgeEmbargoPct] = useState(1);
 
   // Preflight / launch result state
   const [coverageResult, setCoverageResult] = useState<CoverageCheckResponseCoverage | null>(null);
@@ -71,8 +58,6 @@ export function BacktestLaunchForm() {
   const strategiesQuery = useListStrategiesApiStrategiesGet();
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
   const latencyQuery = useListLatencyPresetsApiSettingsLatencyPresetsGet();
-  const sizingQuery = useListSizingConfigsApiSettingsSizingGet();
-  const riskQuery = useListRiskConfigsApiSettingsRiskGet();
   const datasetRange = useDatasetDateRange();
 
   // Reset sweep config when strategy changes to avoid stale indicator indices
@@ -96,8 +81,6 @@ export function BacktestLaunchForm() {
     strategiesQuery.data?.status === 200 ? strategiesQuery.data.data.strategies : [];
   const symbols = symbolsQuery.data?.status === 200 ? symbolsQuery.data.data : [];
   const latencyPresets = latencyQuery.data?.status === 200 ? latencyQuery.data.data : [];
-  const sizingConfigs = sizingQuery.data?.status === 200 ? sizingQuery.data.data : [];
-  const riskConfigs = riskQuery.data?.status === 200 ? riskQuery.data.data : [];
 
   // Extract indicators from selected strategy for sweep builder
   const selectedStrategy = strategies.find((s) => String(s.id) === strategyId);
@@ -164,11 +147,9 @@ export function BacktestLaunchForm() {
     if (strategyId === "" || selectedSymbols.length === 0) return;
     setLaunchResult(null);
 
-    const overfittingFilters: Record<string, boolean> = {};
-    if (dsrEnabled) overfittingFilters.deflated_sharpe_ratio = true;
-    if (wfaEnabled) overfittingFilters.walk_forward_analysis = true;
-    if (purgedKfoldEnabled) overfittingFilters.purged_kfold_cv = true;
-
+    // Sizing/risk configs and overfitting toggles used to be sent here but no
+    // backtest runner ever applied them (the API now rejects them). Overfitting
+    // filters run in discovery / the overfitting CLI.
     const payload = {
       strategy_id: Number(strategyId),
       symbols: selectedSymbols,
@@ -182,16 +163,9 @@ export function BacktestLaunchForm() {
           sweepConfig.params.length > 0 && {
             sweep: sweepToPayload(sweepConfig),
           }),
-        ...(wfaEnabled && { wfa_splits: wfaSplits }),
-        ...(purgedKfoldEnabled && { purge_embargo_pct: purgeEmbargoPct }),
       },
-      ...(Object.keys(overfittingFilters).length > 0 && {
-        overfitting_filters: overfittingFilters,
-      }),
       ...(mode === "validation" && {
-        latency_preset: latencyPreset || null,
-        sizing_config_id: sizingConfigId === "" ? null : Number(sizingConfigId),
-        risk_config_id: riskConfigId === "" ? null : Number(riskConfigId),
+        latency_preset: latencyPreset && latencyPreset !== "__none__" ? latencyPreset : null,
       }),
     };
 
@@ -401,75 +375,6 @@ export function BacktestLaunchForm() {
             </div>
           </div>
 
-          {/* Overfitting Filters */}
-          <div className="space-y-3 rounded-lg border border-border bg-card p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-foreground">
-              Overfitting Filters
-            </h3>
-
-            <div className="flex items-center justify-between">
-              <Label htmlFor="dsr-toggle" className="cursor-pointer">
-                Deflated Sharpe Ratio (DSR)
-              </Label>
-              <Switch id="dsr-toggle" checked={dsrEnabled} onCheckedChange={setDsrEnabled} />
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="wfa-toggle" className="cursor-pointer">
-                  Walk-Forward Analysis (WFA)
-                </Label>
-                <Switch id="wfa-toggle" checked={wfaEnabled} onCheckedChange={setWfaEnabled} />
-              </div>
-              {wfaEnabled && (
-                <div className="ml-4 space-y-1">
-                  <Label htmlFor="wfa-splits" className="text-xs">
-                    Splits
-                  </Label>
-                  <Input
-                    id="wfa-splits"
-                    type="number"
-                    min={2}
-                    max={20}
-                    value={wfaSplits}
-                    onChange={(e) => setWfaSplits(Number(e.target.value))}
-                    className="h-8 w-24"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="kfold-toggle" className="cursor-pointer">
-                  Purged K-Fold CV
-                </Label>
-                <Switch
-                  id="kfold-toggle"
-                  checked={purgedKfoldEnabled}
-                  onCheckedChange={setPurgedKfoldEnabled}
-                />
-              </div>
-              {purgedKfoldEnabled && (
-                <div className="ml-4 space-y-1">
-                  <Label htmlFor="purge-embargo" className="text-xs">
-                    Purge embargo %
-                  </Label>
-                  <Input
-                    id="purge-embargo"
-                    type="number"
-                    min={0}
-                    max={50}
-                    step={0.5}
-                    value={purgeEmbargoPct}
-                    onChange={(e) => setPurgeEmbargoPct(Number(e.target.value))}
-                    className="h-8 w-24"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Validation-only fields */}
           {mode === "validation" && (
             <div className="space-y-4 rounded-lg border border-border bg-card p-4">
@@ -489,42 +394,6 @@ export function BacktestLaunchForm() {
                     {latencyPresets.map((p) => (
                       <SelectItem key={p.name} value={p.name}>
                         {p.name} - {p.description} ({p.base_latency_ms}ms)
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Sizing config */}
-              <div className="space-y-2">
-                <Label htmlFor="sizing-config">Sizing Config</Label>
-                <Select value={sizingConfigId} onValueChange={setSizingConfigId}>
-                  <SelectTrigger id="sizing-config" className="w-full">
-                    <SelectValue placeholder="Default sizing" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">Default sizing</SelectItem>
-                    {sizingConfigs.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.name} ({c.method})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Risk config */}
-              <div className="space-y-2">
-                <Label htmlFor="risk-config">Risk Config</Label>
-                <Select value={riskConfigId} onValueChange={setRiskConfigId}>
-                  <SelectTrigger id="risk-config" className="w-full">
-                    <SelectValue placeholder="Default risk" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__default__">Default risk</SelectItem>
-                    {riskConfigs.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.name}
                       </SelectItem>
                     ))}
                   </SelectContent>

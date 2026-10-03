@@ -983,6 +983,8 @@ export function useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet<TData = A
 
 
 /**
+ * Verify the archived 1m klines: exact 1-minute continuity, OHLC sanity,
+flat zero-volume filler runs. Sync endpoint (threadpool): it streams ~1M rows.
  * @summary Data Quality
  */
 export type dataQualityApiDataQualitySymbolGetResponse200 = {

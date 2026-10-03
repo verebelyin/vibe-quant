@@ -5,13 +5,19 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { DataQualityResponseGapsItem } from './dataQualityResponseGapsItem';
+import type { DataQualityResponseZeroVolumeRunsItem } from './dataQualityResponseZeroVolumeRunsItem';
 import type { OhlcError } from './ohlcError';
 
 export interface DataQualityResponse {
   symbol: string;
   gaps: DataQualityResponseGapsItem[];
+  gap_count?: number;
+  missing_bars?: number;
+  zero_volume_runs?: DataQualityResponseZeroVolumeRunsItem[];
+  zero_volume_bars?: number;
   quality_score: number | null;
   ohlc_errors?: OhlcError[];
   ohlc_error_count?: number;
+  kline_count?: number;
   error?: string | null;
 }

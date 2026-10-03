@@ -676,6 +676,7 @@
           "data"
         ],
         "summary": "Data Quality",
+        "description": "Verify the archived 1m klines: exact 1-minute continuity, OHLC sanity,\nflat zero-volume filler runs. Sync endpoint (threadpool): it streams ~1M rows.",
         "operationId": "data_quality_api_data_quality__symbol__get",
         "parameters": [
           {
@@ -3418,6 +3419,7 @@
           "results"
         ],
         "summary": "Update Notes",
+        "description": "Save the user's free-text notes (``user_notes``).\n\nNever touches ``notes``, which holds machine JSON (discovery results,\nconsistency flags) that promote/export depend on.",
         "operationId": "update_notes_api_results_runs__run_id__notes_put",
         "parameters": [
           {
@@ -3934,6 +3936,7 @@
           "settings"
         ],
         "summary": "Get Database Info",
+        "description": "Active state DB (read-only).\n\nThere is deliberately no runtime switch: swapping the API's StateManager\nleft the job manager, every job subprocess and other workers on the old DB\n(runs and results split across two DBs). Choose the DB at backend start\nwith ``VIBE_QUANT_DB=path``.",
         "operationId": "get_database_info_api_settings_database_get",
         "responses": {
           "200": {
@@ -3942,45 +3945,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DatabaseInfoResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Switch Database",
-        "operationId": "switch_database_api_settings_database_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DatabaseSwitchRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatabaseInfoResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -4503,28 +4467,6 @@
             "type": "object",
             "title": "Parameters"
           },
-          "sizing_config_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sizing Config Id"
-          },
-          "risk_config_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Risk Config Id"
-          },
           "latency_preset": {
             "anyOf": [
               {
@@ -4535,22 +4477,9 @@
               }
             ],
             "title": "Latency Preset"
-          },
-          "overfitting_filters": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "boolean"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Overfitting Filters"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "strategy_id",
@@ -4902,6 +4831,17 @@
             ],
             "title": "Created At"
           },
+          "user_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Notes"
+          },
           "skewness": {
             "anyOf": [
               {
@@ -4957,6 +4897,17 @@
             ],
             "title": "Bootstrap Ci Level"
           },
+          "bootstrap_min_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Min Sharpe"
+          },
           "wfa_sharpe_consistency": {
             "anyOf": [
               {
@@ -4967,6 +4918,39 @@
               }
             ],
             "title": "Wfa Sharpe Consistency"
+          },
+          "wfa_consistency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Consistency"
+          },
+          "wfa_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Passed"
+          },
+          "cross_window_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Passed"
           },
           "cross_window_results": {
             "anyOf": [
@@ -5386,6 +5370,30 @@
             "type": "array",
             "title": "Gaps"
           },
+          "gap_count": {
+            "type": "integer",
+            "title": "Gap Count",
+            "default": 0
+          },
+          "missing_bars": {
+            "type": "integer",
+            "title": "Missing Bars",
+            "default": 0
+          },
+          "zero_volume_runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Zero Volume Runs",
+            "default": []
+          },
+          "zero_volume_bars": {
+            "type": "integer",
+            "title": "Zero Volume Bars",
+            "default": 0
+          },
           "quality_score": {
             "anyOf": [
               {
@@ -5408,6 +5416,11 @@
           "ohlc_error_count": {
             "type": "integer",
             "title": "Ohlc Error Count",
+            "default": 0
+          },
+          "kline_count": {
+            "type": "integer",
+            "title": "Kline Count",
             "default": 0
           },
           "error": {
@@ -5473,19 +5486,6 @@
           "tables"
         ],
         "title": "DatabaseInfoResponse"
-      },
-      "DatabaseSwitchRequest": {
-        "properties": {
-          "path": {
-            "type": "string",
-            "title": "Path"
-          }
-        },
-        "type": "object",
-        "required": [
-          "path"
-        ],
-        "title": "DatabaseSwitchRequest"
       },
       "DiscoveryJobResponse": {
         "properties": {
@@ -7275,7 +7275,8 @@
         "required": [
           "notes"
         ],
-        "title": "NotesUpdateRequest"
+        "title": "NotesUpdateRequest",
+        "description": "User free-text notes (stored in ``backtest_results.user_notes``)."
       },
       "OhlcError": {
         "properties": {
