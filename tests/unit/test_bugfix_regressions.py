@@ -239,11 +239,11 @@ class TestJobManagerAtomicStart:
         jm.close()
         sm.close()
 
-    def test_start_lock_exists(self) -> None:
+    def test_start_lock_exists(self, tmp_path: Path) -> None:
         """BacktestJobManager has _start_lock attribute (threading.Lock)."""
         from vibe_quant.jobs.manager import BacktestJobManager
 
-        mgr = BacktestJobManager()
+        mgr = BacktestJobManager(db_path=tmp_path / "jobs.db")
         assert hasattr(mgr, "_start_lock")
         assert isinstance(mgr._start_lock, type(threading.Lock()))
         mgr.close()

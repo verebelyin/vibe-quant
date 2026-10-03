@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
+# Must run before any vibe_quant import: DEFAULT_DB_PATH is resolved at import
+# time, and opening a DB runs schema migrations. A test that forgets to pass a
+# tmp DB must never touch (or migrate) the real data/state/vibe_quant.db.
+os.environ.setdefault(
+    "VIBE_QUANT_DB", os.path.join(tempfile.mkdtemp(prefix="vq_test_db_"), "default.db")
+)
+
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
