@@ -6,7 +6,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      // @ts-expect-error -- import.meta.dirname is available in Node 21+ / Vite 7
       "@": `${import.meta.dirname}/src`,
     },
   },
