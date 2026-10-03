@@ -101,7 +101,7 @@ _HALT_PRIORITY: dict[HaltReason, int] = {
 _KEEP_STRATEGIES_RUNNING: frozenset[HaltReason] = frozenset({HaltReason.MAX_DAILY_LOSS})
 
 # Halts an operator may resume from without restarting the session.
-_OPERATOR_RESUMABLE: frozenset[HaltReason] = frozenset(
+OPERATOR_RESUMABLE_HALTS: frozenset[HaltReason] = frozenset(
     {HaltReason.MANUAL, HaltReason.SIGNAL, HaltReason.ERROR, HaltReason.KILL_SWITCH}
 )
 
@@ -288,6 +288,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._venue = Venue(config.venue)
         self._currency = Currency.from_str(config.settlement_currency)
         self._state = GuardState.RUNNING
+        self._state_before_halt = GuardState.RUNNING
         self._halt_reason: HaltReason | None = None
         self._message = ""
         self._pending_stop: set[str] = set()
@@ -580,6 +581,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
             and _HALT_PRIORITY[reason] <= _HALT_PRIORITY[current]
         ):
             return False
+        if self._state != GuardState.HALTED:
+            # A paused session that gets halted returns to PAUSED on resume.
+            self._state_before_halt = self._state
         self._state = GuardState.HALTED
         self._halt_reason = reason
         self._message = message
@@ -602,20 +606,20 @@ class TradingGuard(Actor):  # type: ignore[misc]
         return True
 
     def resume(self, *, kill_switch_engaged: bool = False) -> tuple[bool, str]:
-        """Resume from pause or an operator-resumable halt."""
+        """Resume from pause or an operator-resumable halt (never while killed)."""
         if self._state == GuardState.RUNNING:
             return True, "already running"
+        if kill_switch_engaged:
+            return False, "system kill switch is engaged; unlock it before resuming"
         if self._state == GuardState.PAUSED:
             self._state = GuardState.RUNNING
             self._message = "resumed"
             self._listener.on_state_change(self._state, None, self._message, {})
             return True, "resumed from pause"
         reason = self._halt_reason
-        if kill_switch_engaged:
-            return False, "system kill switch is engaged; unlock it before resuming"
         if reason == HaltReason.MAX_DAILY_LOSS:
             return False, "daily-loss halt lifts automatically at the next UTC day"
-        if reason not in _OPERATOR_RESUMABLE:
+        if reason not in OPERATOR_RESUMABLE_HALTS:
             why = reason.value if reason else "unknown"
             return False, f"{why} halt requires manual review; restart the session to trade again"
         self._lift_halt("resumed by operator")
@@ -636,7 +640,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 sync = getattr(strategy, "_sync_position_state", None)
                 if callable(sync):
                     sync()
-        self._state = GuardState.RUNNING
+        self._state = self._state_before_halt
+        self._state_before_halt = GuardState.RUNNING
         self._halt_reason = None
         self._message = message
         self._listener.on_state_change(self._state, None, message, {})
@@ -725,6 +730,7 @@ __all__ = [
     "CloseAllResult",
     "GuardListener",
     "GuardState",
+    "OPERATOR_RESUMABLE_HALTS",
     "HaltReason",
     "RiskLimits",
     "RiskState",

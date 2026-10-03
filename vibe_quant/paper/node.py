@@ -40,6 +40,7 @@ from vibe_quant.paper.config import (
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.guard import (
+    OPERATOR_RESUMABLE_HALTS,
     CloseAllResult,
     GuardListener,
     GuardState,
@@ -274,6 +275,7 @@ class PaperTradingNode:
         self._control_task: asyncio.Task[None] | None = None
         self._connected: bool | None = None
         self._kill_reason_seen: str | None = None
+        self._previous_state: NodeState | None = None  # pre-start halt fallback
 
         # Optional Telegram alerts (if env vars configured)
         self._telegram: TelegramBot | None = None
@@ -1403,6 +1405,8 @@ class PaperTradingNode:
             self._guard.halt(reason, msg)
             return
         # Before the trading node exists there is nothing to flatten; record it.
+        if self._status.state in (NodeState.RUNNING, NodeState.PAUSED):
+            self._previous_state = self._status.state
         self._status.state = NodeState.HALTED
         self._status.halt_reason = reason
         self._status.error_message = msg
@@ -1451,6 +1455,27 @@ class PaperTradingNode:
             return True, "resumed from pause"
         if self._status.state == NodeState.RUNNING:
             return True, "already running"
+        reason = self._status.halt_reason
+        if self._status.state == NodeState.HALTED and reason in OPERATOR_RESUMABLE_HALTS:
+            target = self._previous_state or NodeState.RUNNING
+            self._status.state = target
+            self._status.halt_reason = None
+            self._status.error_message = None
+            self._status.updated_at = datetime.now(UTC)
+            self._previous_state = None
+            self._write_event(
+                EventType.SIGNAL,
+                {
+                    "action": "state_change",
+                    "from_state": NodeState.HALTED.value,
+                    "to_state": target.value,
+                    "resumed": True,
+                },
+            )
+            return True, "resumed from halt"
+        if self._status.state == NodeState.HALTED:
+            why = reason.value if reason else "unknown"
+            return False, f"{why} halt cannot be resumed by the operator"
         return False, "trading node not running"
 
     def resume_from_halt(self) -> bool:
