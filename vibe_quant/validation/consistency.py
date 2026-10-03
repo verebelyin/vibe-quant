@@ -7,17 +7,23 @@ the operator. After each validation run this module compares the result
 against the strategy's screening reference and records flags.
 
 Reference lookup order:
-1. Latest completed standalone screening run for the strategy_id
-   (``sweep_results`` row).
+1. Latest completed standalone screening run for the strategy_id: the
+   ``sweep_results`` row whose parameters match the validated parameters,
+   else the best finite-Sharpe row with trades > 0. (An arbitrary
+   ``LIMIT 1`` row used to be picked -- e.g. sharpe=-inf / 0 trades -- so the
+   collapse flag could never fire; bd vibe-quant-e70tl.15.)
 2. The discovery run's persisted champion metrics, matched by generated
    strategy name (``genome_<uid>``) in the discovery notes payload —
    discovery-exported strategies usually have no standalone screening run.
+   The continuous full-range headline (``full_range_*``) is preferred over
+   the multi-window GA aggregate.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -97,27 +103,80 @@ def assess_consistency(
     return report
 
 
+# Run-level launch knobs stored next to strategy params in run parameters
+_NON_STRATEGY_PARAM_KEYS = frozenset(
+    {"sweep", "overfitting_filters", "initial_balance", "leverage", "detail_timeframe"}
+)
+
+
+def _normalize_params(params: object) -> dict[str, float | str] | None:
+    """Comparable form: dot/underscore-insensitive keys, numeric values as float."""
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(params, dict):
+        return None
+    normalized: dict[str, float | str] = {}
+    for key, value in params.items():
+        if key in _NON_STRATEGY_PARAM_KEYS:
+            continue
+        norm_key = str(key).replace(".", "_")
+        if isinstance(value, bool):
+            normalized[norm_key] = str(value)
+        elif isinstance(value, (int, float)):
+            normalized[norm_key] = float(value)
+        else:
+            normalized[norm_key] = str(value)
+    return normalized
+
+
 def find_screening_reference(
-    state: StateManager, strategy_id: int, strategy_name: str
+    state: StateManager,
+    strategy_id: int,
+    strategy_name: str,
+    validated_params: dict[str, object] | None = None,
 ) -> ScreeningReference | None:
-    """Locate screening-tier metrics for a strategy, if any exist."""
-    row = state.conn.execute(
+    """Locate screening-tier metrics for a strategy, if any exist.
+
+    Args:
+        validated_params: Strategy parameters the validation run used; the
+            screening row with the same parameters is the like-for-like
+            reference.
+    """
+    run_row = state.conn.execute(
         """
-        SELECT br.id, sr.sharpe_ratio, sr.total_trades
-        FROM backtest_runs br
-        JOIN sweep_results sr ON sr.run_id = br.id
+        SELECT br.id FROM backtest_runs br
         WHERE br.strategy_id = ? AND br.run_mode = 'screening'
               AND br.status = 'completed'
+              AND EXISTS (SELECT 1 FROM sweep_results sr WHERE sr.run_id = br.id)
         ORDER BY br.id DESC LIMIT 1
         """,
         (strategy_id,),
     ).fetchone()
-    if row is not None and row[1] is not None:
-        return ScreeningReference(
-            sharpe=float(row[1]),
-            trades=int(row[2] or 0),
-            source=f"screening_run:{row[0]}",
-        )
+    if run_row is not None:
+        rows = state.conn.execute(
+            "SELECT parameters, sharpe_ratio, total_trades FROM sweep_results "
+            "WHERE run_id = ? ORDER BY id",
+            (run_row[0],),
+        ).fetchall()
+        usable = [
+            (params, float(sharpe), int(trades or 0))
+            for params, sharpe, trades in rows
+            if sharpe is not None and math.isfinite(float(sharpe)) and int(trades or 0) > 0
+        ]
+        wanted = _normalize_params(validated_params or {})
+        for params, sharpe, trades in usable:
+            if wanted is not None and _normalize_params(params) == wanted:
+                return ScreeningReference(
+                    sharpe=sharpe, trades=trades, source=f"screening_run:{run_row[0]}"
+                )
+        if usable:
+            _, sharpe, trades = max(usable, key=lambda r: r[1])
+            return ScreeningReference(
+                sharpe=sharpe, trades=trades, source=f"screening_run:{run_row[0]}:best"
+            )
 
     return _reference_from_discovery_notes(state, strategy_name)
 
@@ -152,8 +211,10 @@ def _reference_from_discovery_notes(
             name = dsl.get("name") if isinstance(dsl, dict) else None
             if name != strategy_name:
                 continue
-            sharpe = entry.get("sharpe")
-            trades = entry.get("trades")
+            # Continuous full-range headline when persisted (bd rewru); the
+            # GA aggregate is a mean over sub-windows.
+            sharpe = entry.get("full_range_sharpe", entry.get("sharpe"))
+            trades = entry.get("full_range_trades", entry.get("trades"))
             if isinstance(sharpe, (int, float)) and isinstance(trades, (int, float)):
                 return ScreeningReference(
                     sharpe=float(sharpe),
