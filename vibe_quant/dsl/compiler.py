@@ -29,6 +29,7 @@ from vibe_quant.dsl.indicators import (
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
     ON_RESET_LINES,
+    ON_START_RECOVERY_LINES,
     ON_STOP_LINES,
     ORDER_METHODS_LINES,
     PTA_FEED_LINES,
@@ -390,11 +391,11 @@ class StrategyCompiler:
             "",
             "from nautilus_trader.core.uuid import UUID4",
             "from nautilus_trader.model.data import Bar, BarType",
-            "from nautilus_trader.model.enums import OrderSide, PositionSide, TimeInForce",
+            "from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, TimeInForce",
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
-            "from nautilus_trader.model.events import OrderFilled, PositionOpened, PositionClosed",
+            "from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionClosed, PositionOpened",
             "from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder",
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
         ]
@@ -662,6 +663,8 @@ class StrategyCompiler:
             "        self._position_side: OrderSide | None = None",
             "        self._pending_validation_action: str | None = None",
             "        self._trailing_best_sl: float | None = None",
+            "        # Set when on_start adopts an unprotected position before indicators are ready",
+            "        self._rearm_protection = False",
             "        # Seeded RNG for the probabilistic execution-delay path so",
             "        # identical validation replays are byte-reproducible.",
             "        self._delay_rng = random.Random(",
@@ -809,6 +812,9 @@ class StrategyCompiler:
         for info in indicators:
             lines.extend(self._generate_indicator_init(info))
 
+        lines.append("")
+        lines.extend(f"    {line}" if line else "" for line in ON_START_RECOVERY_LINES)
+
         return "\n".join(lines)
 
     def _generate_indicator_init(self, info: IndicatorInfo) -> list[str]:
@@ -898,6 +904,10 @@ class StrategyCompiler:
                 "    # Check if indicators are ready",
                 "    if not self._indicators_ready():",
                 "        return",
+                "",
+                "    # Restart recovery: protect a position adopted in on_start",
+                "    if self._rearm_protection:",
+                "        self._ensure_protection()",
                 "",
                 "    # Execute any validation-only delayed action before new signals",
                 "    if self._dispatch_pending_validation_action(bar):",

@@ -164,10 +164,11 @@ take_profit:
 
 
 class TestPositionChangedImport:
-    """Generated code should not import unused PositionChanged."""
+    """PositionChanged is imported AND handled (SL/TP resize on partial fills,
+    vibe-quant-e70tl.4)."""
 
     def test_no_position_changed_import(self) -> None:
-        """Compiled source must not import PositionChanged."""
+        """Compiled source imports PositionChanged and dispatches it."""
         yaml_content = """
 name: import_test
 timeframe: 5m
@@ -188,7 +189,9 @@ take_profit:
         dsl = parse_strategy_string(yaml_content)
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
-        assert "PositionChanged" not in source
+        assert "PositionChanged" in source.split("class ")[0]  # imported
+        assert "isinstance(event, PositionChanged)" in source
+        assert "self._sync_protective_orders(pos)" in source
 
     def test_still_imports_position_opened_closed(self) -> None:
         """PositionOpened and PositionClosed should still be imported."""
