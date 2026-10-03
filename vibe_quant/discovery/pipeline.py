@@ -925,7 +925,7 @@ class DiscoveryPipeline:
                 survivors = kept
 
         # Gate 4: holdout -- the single final out-of-sample pass/fail
-        holdout_min_trades: int | None = None
+        holdout_min_trades: int | None = self.holdout_min_trades() if cfg.has_holdout else None
         if cfg.train_test_split > 0:
             if not cfg.has_holdout:
                 logger.warning(
@@ -940,8 +940,7 @@ class DiscoveryPipeline:
                 for chrom, fit in survivors:
                     self._reject(chrom, fit, "holdout", ["Holdout: no holdout backtest"])
                 survivors = []
-            elif survivors:
-                holdout_min_trades = self.holdout_min_trades()
+            elif survivors and holdout_min_trades is not None:
                 holdout_results = self._evaluate_holdout(survivors)
                 kept = []
                 for (chrom, fit), hr in zip(survivors, holdout_results, strict=True):

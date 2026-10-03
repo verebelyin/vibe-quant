@@ -308,6 +308,8 @@ def test_full_run_all_fail_holdout_persists_zero_with_reasons(
     assert notes["top_strategies"] == []
     # 182 days * 0.8 = 145 train days -> holdout from 2024-05-25
     assert notes["holdout_dates"] == ["2024-05-25", "2024-07-01"]
+    # 50 * 37 holdout days / (2 * 145 train days) = 6.38 -> 6
+    assert notes["holdout_gate"]["min_trades"] == 6
     assert notes["guardrail_rejections"]
     assert {r["stage"] for r in notes["guardrail_rejections"]} == {"holdout"}
     assert "holdout" in notes["reason"]
