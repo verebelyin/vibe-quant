@@ -158,6 +158,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         effective_samples = args.samples
         if cv_runner is not None and hasattr(cv_runner, "n_samples"):
             effective_samples = cv_runner.n_samples
+        # Real bars -> fold lengths in days are known, so the CV consistency
+        # check can use the Sharpe sampling-noise test instead of std < 1.0.
+        bars_per_day = getattr(cv_runner, "bars_per_day", None)
+        if bars_per_day:
+            from vibe_quant.overfitting.purged_kfold import CVConfig
+
+            base_cv = config.cv_config or CVConfig()
+            config = dataclasses.replace(
+                config, cv_config=dataclasses.replace(base_cv, bars_per_day=bars_per_day)
+            )
 
         result = pipeline.run(
             run_id=args.run_id,

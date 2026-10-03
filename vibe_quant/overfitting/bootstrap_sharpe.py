@@ -69,6 +69,15 @@ def _sharpe_from_returns(returns: np.ndarray) -> float:
     return float(mean / std * np.sqrt(n))
 
 
+def default_block_length(n_trades: int) -> int:
+    """Block length for the moving-block bootstrap: ``round(n ** (1/3))``.
+
+    The standard rate for variance estimation under weak dependence; 150
+    trades -> 5-trade blocks.
+    """
+    return max(1, int(round(float(n_trades) ** (1.0 / 3.0))))
+
+
 def bootstrap_sharpe_ci(
     trade_returns: np.ndarray | list[float],
     *,
@@ -76,11 +85,15 @@ def bootstrap_sharpe_ci(
     ci_level: float = 0.95,
     min_sharpe: float = 1.0,
     seed: int | None = 42,
+    block_length: int | None = None,
 ) -> BootstrapResult:
     """Compute bootstrap confidence interval for trade-level Sharpe.
 
-    Resamples (with replacement) the trade returns n_bootstrap times,
-    computes Sharpe for each resample, then takes percentile CI.
+    Circular MOVING-BLOCK bootstrap: each resample concatenates random runs of
+    ``block_length`` consecutive trades, preserving short-range serial
+    correlation (streaks). The i.i.d. bootstrap (``block_length=1``) made the
+    CI too narrow for autocorrelated trades -- a zero-edge strategy with
+    rho=0.5 passed the 0.0 floor 13% of the time instead of ~2.5%.
 
     Args:
         trade_returns: Array of per-trade PnL returns (as fractions or
@@ -89,6 +102,8 @@ def bootstrap_sharpe_ci(
         ci_level: Confidence level (default 0.95 = 95% CI).
         min_sharpe: Minimum Sharpe for the lower CI bound to pass.
         seed: Random seed for reproducibility.
+        block_length: Trades per block; ``None`` = ``default_block_length``.
+            ``1`` = classic i.i.d. bootstrap.
 
     Returns:
         BootstrapResult with CI bounds, pass/fail, and full distribution.
@@ -113,9 +128,14 @@ def bootstrap_sharpe_ci(
     rng = np.random.default_rng(seed)
     observed = _sharpe_from_returns(returns)
 
-    # Vectorized bootstrap: generate all resamples at once
-    # Shape: (n_bootstrap, n) — each row is one bootstrap sample
-    indices = rng.integers(0, n, size=(n_bootstrap, n))
+    # Vectorized circular block bootstrap: ceil(n / b) random block starts
+    # per resample, each expanded to b consecutive (wrapping) trade indices,
+    # truncated to n. Shape: (n_bootstrap, n).
+    b = default_block_length(n) if block_length is None else max(1, min(block_length, n))
+    n_blocks = -(-n // b)
+    starts = rng.integers(0, n, size=(n_bootstrap, n_blocks))
+    indices = (starts[:, :, None] + np.arange(b)[None, None, :]) % n
+    indices = indices.reshape(n_bootstrap, n_blocks * b)[:, :n]
     samples = returns[indices]  # (n_bootstrap, n)
 
     # Compute Sharpe for each bootstrap sample

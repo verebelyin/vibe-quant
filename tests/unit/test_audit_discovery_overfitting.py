@@ -367,3 +367,77 @@ def test_replay_drift_trades_two_sided() -> None:
 
     assert _build_drift_payload(1.0, 100, 1.0, 150)["flagged"] is True
     assert _build_drift_payload(1.0, 100, 1.0, 105)["flagged"] is False
+
+
+# ---------------------------------------------------------------------------
+# Medium: purged k-fold purge/embargo, CV consistency rule, block bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_purge_and_embargo_cover_non_adjacent_folds() -> None:
+    """Gap 1100 bars > fold size 1000: purge/embargo must reach two folds away."""
+    from vibe_quant.overfitting.purged_kfold import PurgedKFold
+
+    purge_kf = PurgedKFold(n_splits=5, indicator_lookback_bars=1100, embargo_pct=0.0)
+    embargo_kf = PurgedKFold(n_splits=5, purge_pct=0.0, embargo_pct=0.22)  # 1100 bars
+    for train, test in purge_kf.split(5000):
+        before = [i for i in train if i < test[0]]
+        if before:
+            assert test[0] - max(before) - 1 >= 1100
+    for train, test in embargo_kf.split(5000):
+        after = [i for i in train if i > test[-1]]
+        if after:
+            assert min(after) - test[-1] - 1 >= 1100
+
+
+def _folds(sharpes: list[float], days: int = 73) -> list[Any]:
+    from vibe_quant.overfitting.purged_kfold import FoldResult
+
+    return [FoldResult(i, 0, days, 0.0, s, 0.0, 0.0) for i, s in enumerate(sharpes)]
+
+
+def test_cv_consistency_uses_sampling_noise_not_fixed_std() -> None:
+    """Annualized fold Sharpes from 73-day folds have SE ~1.9 (sqrt(252/73)).
+
+    Spread [5.5, 2.5, 4.0, 3.0, 5.0] (std 1.22) is pure noise for a true
+    Sharpe-4 strategy: the old ``std < 1.0`` rule rejected it.
+    """
+    from vibe_quant.overfitting.purged_kfold import CVConfig, PurgedKFoldCV
+
+    folds = _folds([5.5, 2.5, 4.0, 3.0, 5.0])
+    legacy = PurgedKFoldCV(config=CVConfig())._aggregate_results(folds)
+    timed = PurgedKFoldCV(config=CVConfig(bars_per_day=1.0))._aggregate_results(folds)
+    assert legacy.is_robust is False
+    assert timed.is_robust is True
+    # Q by hand: equal weights w = 73 / (252 * (1 + (4/sqrt(252))^2 / 2))
+    w = 73 / (252 * (1 + (4.0 / math.sqrt(252)) ** 2 / 2))
+    q = w * sum((s - 4.0) ** 2 for s in [5.5, 2.5, 4.0, 3.0, 5.0])
+    assert timed.dispersion_q == pytest.approx(q, rel=1e-12)
+    assert timed.dispersion_q_critical == pytest.approx(9.4877, abs=0.05)  # chi2_0.95(4)
+
+
+def test_cv_consistency_rejects_regime_flips_and_zero_edge() -> None:
+    from vibe_quant.overfitting.purged_kfold import CVConfig, PurgedKFoldCV
+
+    cv = PurgedKFoldCV(config=CVConfig(bars_per_day=1.0))
+    assert cv._aggregate_results(_folds([6.0, -4.0, 6.0, -4.0, 6.0], days=146)).is_robust is False
+    # mean 0.6 > 0.5 but the pooled edge is not significant (z ~ 0.7)
+    assert cv._aggregate_results(_folds([2.0, -1.0, 1.0, 0.5, 0.5])).is_robust is False
+
+
+def test_block_bootstrap_widens_ci_for_autocorrelated_trades() -> None:
+    import numpy as np
+
+    from vibe_quant.overfitting.bootstrap_sharpe import bootstrap_sharpe_ci, default_block_length
+
+    assert default_block_length(150) == 5
+    rng = np.random.default_rng(3)
+    e = rng.normal(0, 0.01, 400)
+    x = np.empty(400)
+    x[0] = e[0]
+    for i in range(1, 400):
+        x[i] = 0.6 * x[i - 1] + e[i]
+    x = x + 0.001
+    iid = bootstrap_sharpe_ci(x, block_length=1, min_sharpe=0.0)
+    block = bootstrap_sharpe_ci(x, min_sharpe=0.0)
+    assert (block.ci_upper - block.ci_lower) > 1.3 * (iid.ci_upper - iid.ci_lower)

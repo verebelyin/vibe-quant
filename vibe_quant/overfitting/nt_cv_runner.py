@@ -95,6 +95,14 @@ class NTPurgedKFoldRunner:
         """Number of bars available for splitting."""
         return len(self._bar_ts_ns)
 
+    @property
+    def bars_per_day(self) -> float | None:
+        """Bars per calendar day of the run's timeframe (None if unknown)."""
+        from vibe_quant.utils import TIMEFRAME_MINUTES
+
+        minutes = TIMEFRAME_MINUTES.get(self._timeframe)
+        return 1440.0 / minutes if minutes else None
+
     def _resolve(self) -> None:
         """Look up strategy DSL, symbols, and timeframe for the given run."""
         conn = sqlite3.connect(str(self._db_path))
