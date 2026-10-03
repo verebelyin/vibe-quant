@@ -110,7 +110,7 @@ class _Bracket(Strategy):
 
 def _run(
     fill_model: FillModel, bars: list[Bar], *, side: str = "BUY", tp: float = 0.0,
-    sl: float = 0.0, entry_bar: int = 0,
+    sl: float = 0.0, entry_bar: int = 0, adaptive: bool = False,
 ) -> list[tuple[str, str, float]]:
     engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR")))
     retain_log_guard(engine)
@@ -126,6 +126,7 @@ def _run(
         reject_stop_orders=False,
         use_position_ids=True,
         use_reduce_only=True,
+        bar_adaptive_high_low_ordering=adaptive,
     )
     engine.add_instrument(create_instrument("BTCUSDT"))
     engine.add_data(bars)
