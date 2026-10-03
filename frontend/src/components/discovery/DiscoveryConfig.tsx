@@ -57,7 +57,9 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [robustnessOpen, setRobustnessOpen] = useState(false);
   const [direction, setDirection] = useState<"long" | "short" | "both" | "random">("random");
   const [evalWindows, setEvalWindows] = useState(3);
-  const [trainTestSplit, setTrainTestSplit] = useState(0);
+  // Default 0.8 = last 20% of the range is a holdout used once as the final
+  // pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables it.
+  const [trainTestSplit, setTrainTestSplit] = useState(0.8);
   const [numSeeds, setNumSeeds] = useState(1);
   const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
   const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
@@ -459,7 +461,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           <div className="flex items-center gap-2">
             {(direction !== "random" ||
               evalWindows !== 3 ||
-              trainTestSplit !== 0 ||
+              trainTestSplit !== 0.8 ||
               numSeeds !== 1 ||
               wfaOosStepDays !== 0 ||
               parsedCrossWindowMonths.length > 0 ||
@@ -509,7 +511,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   onChange={(e) => setEvalWindows(Number(e.target.value))}
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  Worst-case fitness across N sub-windows (PKFOLD-biased).
+                  Worst-case fitness across N train sub-windows (each must trade).
                 </p>
               </div>
               <div className="space-y-2">
@@ -538,7 +540,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   onChange={(e) => setTrainTestSplit(Number(e.target.value))}
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  Fraction used for <strong>training</strong> (not holdout). 0 = disabled.
+                  Fraction used for <strong>training</strong>; the rest is a holdout that
+                  every champion must pass once. 0 = no holdout (no out-of-sample gate).
                 </p>
               </div>
             </div>

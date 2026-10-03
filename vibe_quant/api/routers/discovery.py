@@ -211,8 +211,8 @@ async def launch_discovery(
         params["direction"] = body.direction
     if body.eval_windows >= 1:
         params["eval_windows"] = body.eval_windows
-    if body.train_test_split > 0:
-        params["train_test_split"] = body.train_test_split
+    # Always recorded: 0 is an explicit opt-out of the default holdout
+    params["train_test_split"] = body.train_test_split
     if body.cross_window_months:
         params["cross_window_months"] = body.cross_window_months
         params["cross_window_min_sharpe"] = body.cross_window_min_sharpe
@@ -291,8 +291,9 @@ async def launch_discovery(
         command.extend(["--direction", body.direction])
     if body.eval_windows >= 1:
         command.extend(["--eval-windows", str(body.eval_windows)])
-    if body.train_test_split > 0:
-        command.extend(["--train-test-split", str(body.train_test_split)])
+    # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
+    # reach the subprocess to disable it.
+    command.extend(["--train-test-split", str(body.train_test_split)])
     if body.cross_window_months:
         command.extend(["--cross-window-months", ",".join(str(m) for m in body.cross_window_months)])
         command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
@@ -458,7 +459,7 @@ def _passes_opposing_regime_gate(
         return False
 
     windows_raw = cross_window_raw.get("windows")
-    if not isinstance(windows_raw, list) or len(windows_raw) < 2:
+    if not isinstance(windows_raw, list) or not windows_raw:
         return False
 
     symbol = ""
@@ -477,19 +478,27 @@ def _passes_opposing_regime_gate(
     if not symbol:
         return False
 
+    # The base regime is the range the GA trained on (train slice when a
+    # holdout was split off), i.e. the range the cross-windows were cut from.
     start_date = str(discovery_run.get("start_date", ""))
     end_date = str(discovery_run.get("end_date", ""))
+    train_dates = payload.get("train_dates")
+    if isinstance(train_dates, list) and len(train_dates) == 2:
+        start_date, end_date = str(train_dates[0]), str(train_dates[1])
     if not start_date or not end_date:
         return False
 
     base_sign = _window_regime_sign(symbol, start_date, end_date)
+    # Short-only champions: the adverse regime is a bull market. A neutral base
+    # has no "opposite", so demand proof on a bull window rather than waving
+    # the champion through (the old neutral-base pass-through).
+    required_sign = -base_sign if base_sign != 0 else 1
     if base_sign == 0:
-        # Neutral base regime — can't determine opposing regime, pass through
         logger.info(
-            "Regime gate: base window %s→%s is neutral (|ret| < %.0f%%), skipping gate",
+            "Regime gate: base window %s→%s is neutral (|ret| < %.0f%%) — "
+            "requiring a pass on a bullish window",
             start_date, end_date, _REGIME_RETURN_THRESHOLD * 100,
         )
-        return True
 
     min_sharpe_raw = payload.get("cross_window_min_sharpe", 0.5)
     if isinstance(min_sharpe_raw, (int, float)) and not isinstance(min_sharpe_raw, bool):
@@ -497,32 +506,60 @@ def _passes_opposing_regime_gate(
     else:
         min_sharpe = 0.5
 
-    max_idx = min(len(offsets_raw), len(windows_raw) - 1)
-    for idx in range(max_idx):
-        try:
-            months = int(offsets_raw[idx])
-        except (TypeError, ValueError):
-            continue
-
-        shifted_start, shifted_end = _shift_window(start_date, end_date, months)
+    for window, (shifted_start, shifted_end) in _shifted_windows_with_dates(
+        windows_raw, offsets_raw, start_date, end_date,
+    ):
         shifted_sign = _window_regime_sign(symbol, shifted_start, shifted_end)
-        if shifted_sign == 0 or shifted_sign == base_sign:
+        if shifted_sign != required_sign:
             continue
-
-        shifted_window = windows_raw[idx + 1]
-        if not isinstance(shifted_window, dict):
+        sharpe_raw = window.get("sharpe")
+        return_raw = window.get("return_pct")
+        if not isinstance(sharpe_raw, (int, float)) or not isinstance(return_raw, (int, float)):
             continue
-
-        try:
-            sharpe = float(shifted_window.get("sharpe", 0.0) or 0.0)
-            total_return = float(shifted_window.get("return_pct", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-
+        sharpe = float(sharpe_raw)
+        total_return = float(return_raw)
         if sharpe >= min_sharpe and total_return > 0:
             return True
 
     return False
+
+
+def _shifted_windows_with_dates(
+    windows_raw: list[object],
+    offsets_raw: list[object],
+    start_date: str,
+    end_date: str,
+) -> list[tuple[dict[str, object], tuple[str, str]]]:
+    """Pair each persisted SHIFTED cross-window with the dates it was run on.
+
+    Current runs persist shifted windows only, each with its exact ``dates``.
+    Legacy runs (pre vibe-quant-e70tl.5) list the in-sample window at index 0
+    and no dates -- their shifted windows were ``(start, end) + offset``.
+    """
+    pairs: list[tuple[dict[str, object], tuple[str, str]]] = []
+    has_dates = any(isinstance(w, dict) and "dates" in w for w in windows_raw)
+    if has_dates:
+        for w in windows_raw:
+            if not isinstance(w, dict):
+                continue
+            dates = w.get("dates")
+            if isinstance(dates, list) and len(dates) == 2:
+                pairs.append((w, (str(dates[0]), str(dates[1]))))
+        return pairs
+
+    max_idx = min(len(offsets_raw), len(windows_raw) - 1)
+    for idx in range(max_idx):
+        raw_offset = offsets_raw[idx]
+        if not isinstance(raw_offset, (int, float, str)):
+            continue
+        try:
+            months = int(raw_offset)
+        except (TypeError, ValueError):
+            continue
+        window = windows_raw[idx + 1]
+        if isinstance(window, dict):
+            pairs.append((window, _shift_window(start_date, end_date, months)))
+    return pairs
 
 
 def _enforce_short_1m_cross_regime_gate(
@@ -608,16 +645,93 @@ async def export_discovered_strategy(
         raise HTTPException(status_code=404, detail="Strategy index out of range")
 
     entry = strategies[strategy_index]
-    dsl_raw = entry.get("dsl", {})
-    dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
-    name = str(dsl.get("name", f"discovery_{run_id}_{strategy_index}"))
+    strategy_id, name, created = _find_or_create_discovered_strategy(
+        state, run_id, strategy_index, entry,
+    )
+    return {
+        "status": "created" if created else "exists",
+        "strategy_id": strategy_id,
+        "name": name,
+    }
 
-    # Check if strategy name already exists
-    existing = state.conn.execute("SELECT id FROM strategies WHERE name = ?", (name,)).fetchone()
-    if existing:
-        return {"status": "exists", "strategy_id": existing[0], "name": name}
 
+def _dsl_body_key(dsl: dict[str, object]) -> str:
+    """Canonical JSON of a DSL minus its ``name`` (the strategy's identity)."""
     import json
+
+    body = {k: v for k, v in dsl.items() if k != "name"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _find_strategy_by_dsl(
+    state: StateManager, dsl: dict[str, object]
+) -> tuple[int, str] | None:
+    """Active strategy whose DSL equals ``dsl`` (ignoring name), else None."""
+    import json
+
+    key = _dsl_body_key(dsl)
+    rows = state.conn.execute(
+        "SELECT id, name, dsl_config FROM strategies "
+        "WHERE is_active IS NULL OR is_active = 1 ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        try:
+            stored = json.loads(row[2]) if isinstance(row[2], str) else row[2]
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(stored, dict) and _dsl_body_key(stored) == key:
+            return int(row[0]), str(row[1])
+    return None
+
+
+def _unique_strategy_name(state: StateManager, base: str) -> str:
+    """``base`` if unused, else ``base_2``, ``base_3``, ... (names are UNIQUE)."""
+
+    def _taken(name: str) -> bool:
+        return (
+            state.conn.execute("SELECT 1 FROM strategies WHERE name = ?", (name,)).fetchone()
+            is not None
+        )
+
+    if not _taken(base):
+        return base
+    k = 2
+    while _taken(f"{base}_{k}"):
+        k += 1
+    return f"{base}_{k}"
+
+
+def _find_or_create_discovered_strategy(
+    state: StateManager,
+    run_id: int,
+    strategy_index: int,
+    entry: dict[str, object],
+) -> tuple[int, str, bool]:
+    """Strategy row for a discovered genome, matched by DSL content -- never by name.
+
+    Genome names (``genome_<uid>``) used to collide between an elite and its
+    mutant, so a by-name lookup could hand back ANOTHER genome's strategy and
+    validate the wrong DSL (vibe-quant-e70tl.1). Same DSL -> reuse the row
+    (idempotent re-promote); same name but different DSL -> new row with a
+    disambiguated name.
+
+    Returns:
+        (strategy_id, name, created).
+    """
+    import json
+
+    dsl_raw = entry.get("dsl", {})
+    dsl: dict[str, object] = dict(dsl_raw) if isinstance(dsl_raw, dict) else {}
+    if not dsl:
+        raise HTTPException(status_code=422, detail="Discovery entry has no DSL")
+
+    found = _find_strategy_by_dsl(state, dsl)
+    if found is not None:
+        return found[0], found[1], False
+
+    base = str(dsl.get("name") or f"discovery_{run_id}_{strategy_index}")
+    name = _unique_strategy_name(state, base)
+    dsl["name"] = name  # strategy name and DSL name stay in sync
 
     _score_raw = entry.get("score", 0)
     _score: float = _score_raw if isinstance(_score_raw, (int, float)) else 0.0
@@ -625,13 +739,13 @@ async def export_discovered_strategy(
         "INSERT INTO strategies (name, description, dsl_config, strategy_type) VALUES (?, ?, ?, ?)",
         (
             name,
-            f"Discovered via GA run {run_id} (score={_score:.4f})",
+            f"Discovered via GA run {run_id} #{strategy_index} (score={_score:.4f})",
             json.dumps(dsl),
             dsl.get("strategy_type", "momentum"),
         ),
     )
     state.conn.commit()
-    return {"status": "created", "strategy_id": cursor.lastrowid, "name": name}
+    return int(cursor.lastrowid or 0), name, True
 
 
 # --- Promote & Replay ---
@@ -695,63 +809,77 @@ async def promote_discovered_strategy(
     jobs: JobMgr,
     ws: WsMgr,
     mode: str = "screening",
+    validation_range: str = "holdout",
 ) -> PromoteResponse:
-    """Export genome as strategy and launch screening/validation backtest."""
+    """Export genome as strategy and launch screening/validation backtest.
+
+    ``mode=validation`` validates on the discovery run's HOLDOUT (out-of-sample)
+    range by default; ``validation_range=full`` opts into the full discovery
+    range (mostly in-sample). Runs without a holdout always use the full range.
+    ``mode=screening`` is a like-for-like replay of the full discovery range
+    (the replay-drift check compares it with the full-range headline). The
+    range used is recorded in the run's ``promote_source``.
+    """
     if mode not in ("screening", "validation"):
         raise HTTPException(status_code=400, detail="mode must be 'screening' or 'validation'")
+    if validation_range not in ("holdout", "full"):
+        raise HTTPException(
+            status_code=400, detail="validation_range must be 'holdout' or 'full'"
+        )
 
     discovery_run = _get_discovery_run_config(state, run_id)
     entry = _get_genome_entry(state, run_id, strategy_index)
     _enforce_short_1m_cross_regime_gate(state, run_id, discovery_run, entry)
 
-    # Export genome to strategies table (reuse export logic)
+    # Export genome to strategies table (matched by DSL content, not name)
     import json
 
-    dsl_raw = entry.get("dsl", {})
-    dsl: dict[str, object] = dsl_raw if isinstance(dsl_raw, dict) else {}
-    name = str(dsl.get("name", f"discovery_{run_id}_{strategy_index}"))
-
-    existing = state.conn.execute("SELECT id FROM strategies WHERE name = ?", (name,)).fetchone()
-    if existing:
-        strategy_id: int = existing[0]
-    else:
-        _score_raw = entry.get("score", 0)
-        _score: float = _score_raw if isinstance(_score_raw, (int, float)) else 0.0
-        cursor = state.conn.execute(
-            "INSERT INTO strategies (name, description, dsl_config, strategy_type) VALUES (?, ?, ?, ?)",
-            (
-                name,
-                f"Discovered via GA run {run_id} (score={_score:.4f})",
-                json.dumps(dsl),
-                dsl.get("strategy_type", "momentum"),
-            ),
-        )
-        state.conn.commit()
-        strategy_id = cursor.lastrowid or 0
+    strategy_id, name, _created = _find_or_create_discovered_strategy(
+        state, run_id, strategy_index, entry,
+    )
 
     # Create backtest run using discovery run's symbols/timeframe/dates
     symbols_raw = discovery_run.get("symbols", [])
     symbols_list: list[str] = json.loads(symbols_raw) if isinstance(symbols_raw, str) else list(symbols_raw) if isinstance(symbols_raw, list) else []
-    # Tag screening runs with promote source so post-run drift check (bd-l6ml)
-    # can compare replay metrics vs the originating discovery genome.
-    run_parameters: dict[str, object] = {}
-    if mode == "screening":
-        run_parameters["promote_source"] = {
+
+    start_date = str(discovery_run.get("start_date", ""))
+    end_date = str(discovery_run.get("end_date", ""))
+    date_range = "full"
+    holdout_raw = _load_discovery_payload(state, run_id).get("holdout_dates")
+    holdout_dates = (
+        (str(holdout_raw[0]), str(holdout_raw[1]))
+        if isinstance(holdout_raw, list) and len(holdout_raw) == 2
+        else None
+    )
+    if mode == "validation" and validation_range == "holdout" and holdout_dates is not None:
+        start_date, end_date = holdout_dates
+        date_range = "holdout"
+
+    # promote_source: lets the post-run drift check (bd-l6ml) find the genome
+    # and records WHICH range was validated (OOS holdout vs full range).
+    run_parameters: dict[str, object] = {
+        "promote_source": {
             "discovery_run_id": run_id,
             "strategy_index": strategy_index,
+            "date_range": date_range,
+            "holdout_dates": list(holdout_dates) if holdout_dates else None,
         }
+    }
     backtest_run_id = state.create_backtest_run(
         strategy_id=strategy_id,
         run_mode=mode,
         symbols=symbols_list,
         timeframe=str(discovery_run.get("timeframe", "4h")),
-        start_date=str(discovery_run.get("start_date", "")),
-        end_date=str(discovery_run.get("end_date", "")),
+        start_date=start_date,
+        end_date=end_date,
         parameters=run_parameters,
     )
 
     pid = _launch_backtest_job(state, jobs, backtest_run_id, mode)
-    logger.info("promote: strategy=%d %s run=%d pid=%d", strategy_id, mode, backtest_run_id, pid)
+    logger.info(
+        "promote: strategy=%d %s run=%d range=%s %s..%s pid=%d",
+        strategy_id, mode, backtest_run_id, date_range, start_date, end_date, pid,
+    )
     await ws.broadcast("jobs", {"type": "job_started", "run_id": backtest_run_id, "job_type": mode})
 
     return PromoteResponse(
@@ -759,6 +887,9 @@ async def promote_discovered_strategy(
         run_id=backtest_run_id,
         name=name,
         mode=mode,
+        date_range=date_range,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -793,8 +924,8 @@ async def replay_discovered_strategy(
     translated = translate_dsl_config(dsl, strategy_name=dsl_name)
 
     # Replay runs the FULL window; discovery with eval_windows > 1 stored
-    # worst-of-N sub-window fitness, so metrics legitimately differ
-    # (trades should still match when the worst window spans the full range).
+    # worst-of-N sub-window fitness (min Sharpe / min return / max DD / min
+    # PF over the windows, trades summed), so metrics legitimately differ.
     metrics_note: str | None = None
     run_params_raw = discovery_run.get("parameters")
     if isinstance(run_params_raw, str):
@@ -807,8 +938,11 @@ async def replay_discovered_strategy(
     if isinstance(eval_windows, int) and eval_windows > 1:
         metrics_note = (
             f"Discovery run {run_id} scored fitness as worst-of-{eval_windows} "
-            "eval windows; this replay runs the full window, so Sharpe/return "
-            "will differ from the stored champion fitness by design."
+            "eval windows (min Sharpe, min return, max drawdown, min PF across "
+            "the train sub-windows; trades summed); this replay runs one "
+            "continuous backtest over the full range, so Sharpe/return will "
+            "differ from the stored champion fitness by design. Compare against "
+            "the champion's full_range_* headline instead."
         )
 
     replay_run_id = state.create_backtest_run(
