@@ -142,6 +142,10 @@ class IndicatorSpec:
     # the spec declares ``period`` in ``default_params``. Specs that use
     # no NT kwargs (OBV/VWAP) keep the empty default.
     nt_codegen_kwargs: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # Extra NT constructor kwargs derived from a DSL field by a
+    # ``vibe_quant.dsl.derived`` helper: ``(nt_kwarg, helper, dsl_field)``
+    # emits ``nt_kwarg=helper(self.config.{name}_{dsl_field})`` (WMA weights).
+    nt_codegen_helper_kwargs: tuple[tuple[str, str, str], ...] = field(default_factory=tuple)
 
     # Name of the output returned when the indicator is referenced without
     # a sub-value. Defaults to ``output_names[0]``. Channel indicators
@@ -239,12 +243,14 @@ class IndicatorSpec:
 
         # computed_outputs / primary_helper helpers must resolve in
         # vibe_quant.dsl.derived. Lazy-imported to avoid an init-time cycle.
-        if self.computed_outputs or self.primary_helper:
+        if self.computed_outputs or self.primary_helper or self.nt_codegen_helper_kwargs:
             from vibe_quant.dsl import derived as _derived
 
             helpers = dict(self.computed_outputs)
             if self.primary_helper:
                 helpers["<primary>"] = self.primary_helper
+            for kwarg, helper, _field in self.nt_codegen_helper_kwargs:
+                helpers[f"<{kwarg}>"] = helper
             missing_helpers = [
                 (out, helper) for out, helper in helpers.items() if not hasattr(_derived, helper)
             ]
@@ -542,6 +548,13 @@ def _period_kwargs(params: dict[str, object]) -> dict[str, object]:
     return {"period": params.get("period", 14)}
 
 
+def _wma_kwargs(params: dict[str, object]) -> dict[str, object]:
+    from vibe_quant.dsl.derived import linear_weights
+
+    period = int_param(params, "period", 14)
+    return {"period": period, "weights": linear_weights(period)}
+
+
 def _macd_kwargs(params: dict[str, object]) -> dict[str, object]:
     return {
         "fast_period": params.get("fast_period", 12),
@@ -655,8 +668,10 @@ def _wma_spec() -> IndicatorSpec:
         pandas_ta_func="wma",
         default_params={"period": 14},
         param_schema={"period": int},
-        nt_kwargs_fn=_period_kwargs,
+        nt_kwargs_fn=_wma_kwargs,
         nt_codegen_kwargs=(("period", "period"),),
+        # NT's WeightedMovingAverage without weights is an equal-weight SMA.
+        nt_codegen_helper_kwargs=(("weights", "linear_weights", "period"),),
         compute_fn=compute_wma,
         display_name="Weighted Moving Average",
         description="Linearly-weighted moving average. Middle ground between SMA and EMA.",

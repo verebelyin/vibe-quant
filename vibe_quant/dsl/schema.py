@@ -157,6 +157,29 @@ class IndicatorConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def validate_source_supported(self) -> IndicatorConfig:
+        """Reject a ``source`` the runtime would silently ignore.
+
+        Compiled indicators are always computed on close (OHLC/volume for
+        range/volume indicators); ``source: hl2`` etc. used to compile to the
+        exact same code as ``close``. ``volume`` is accepted only as a
+        description of volume-based indicators (VOLSMA, OBV, MFI, VWAP).
+        """
+        if self.source == "close":
+            return self
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        spec = indicator_registry.get(self.type)
+        if self.source == "volume" and spec is not None and spec.requires_volume:
+            return self
+        msg = (
+            f"Indicator '{self.type}' source '{self.source}' is not supported: "
+            "indicators are computed on close (OHLC for range indicators); "
+            "omit 'source' or use 'close'"
+        )
+        raise ValueError(msg)
+
+    @model_validator(mode="after")
     def validate_indicator_params(self) -> IndicatorConfig:
         """Validate indicator-specific parameters."""
         if self.type == "MACD":

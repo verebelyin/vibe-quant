@@ -135,9 +135,24 @@ def compiler_version_hash() -> str:
     """
     h = hashlib.sha256()
     dsl_dir = Path(__file__).parent
-    for name in ("compiler.py", "templates.py", "conditions.py", "indicators.py"):
-        src = dsl_dir / name
+    # Everything that shapes generated code or indicator values: compute_fn
+    # bodies, derived helpers, schema normalization and drop-in plugins too.
+    sources = [
+        dsl_dir / name
+        for name in (
+            "compiler.py",
+            "templates.py",
+            "conditions.py",
+            "indicators.py",
+            "compute_builtins.py",
+            "derived.py",
+            "schema.py",
+        )
+    ]
+    sources += sorted((dsl_dir / "plugins").glob("*.py"))
+    for src in sources:
         if src.exists():
+            h.update(src.name.encode())
             h.update(src.read_bytes())
     return h.hexdigest()[:12]
 
@@ -415,6 +430,8 @@ class StrategyCompiler:
                     derived_helpers.add(helper_name)
                 if info.spec.primary_helper:
                     derived_helpers.add(info.spec.primary_helper)
+                for _kwarg, helper_name, _field in info.spec.nt_codegen_helper_kwargs:
+                    derived_helpers.add(helper_name)
             elif info.spec.compute_fn is not None:
                 has_pta = True
                 fn = info.spec.compute_fn
@@ -844,6 +861,10 @@ class StrategyCompiler:
             f"{nt_kwarg}=self.config.{info.name}_{dsl_field}"
             for nt_kwarg, dsl_field in spec.nt_codegen_kwargs
         ]
+        args.extend(
+            f"{nt_kwarg}={helper}(self.config.{info.name}_{dsl_field})"
+            for nt_kwarg, helper, dsl_field in spec.nt_codegen_helper_kwargs
+        )
         args_str = ", ".join(args)
         lines.append(f"    {info.indicator_var} = {class_name}({args_str})")
         lines.append(
@@ -917,27 +938,30 @@ class StrategyCompiler:
             ]
         )
 
-        # Time filters. Prev values must still be updated on blocked bars,
-        # otherwise the first allowed bar compares against indicator values
-        # from before the block and fires false/missed crossovers.
-        if dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days:
-            lines.append("    # Check time filters")
-            lines.append("    if not self._check_time_filters(bar.ts_event):")
-            lines.append("        self._update_prev_values(bar)")
-            lines.append("        return")
+        # Time filters / funding avoidance gate NEW ENTRIES only: exits,
+        # trailing-stop updates and prev values always run. Evaluated at the
+        # bar's close time (ts_init rounded to the bar boundary): ts_event is
+        # the bar OPEN in backtests but the close for live Binance bars.
+        has_session_filter = bool(
+            dsl.time_filters.allowed_sessions or dsl.time_filters.blocked_days
+        )
+        has_funding_filter = dsl.time_filters.avoid_around_funding.enabled
+        entry_gate = ""
+        if has_session_filter or has_funding_filter:
+            checks: list[str] = []
+            if has_session_filter:
+                checks.append("self._check_time_filters(_close_ns)")
+            if has_funding_filter:
+                checks.append("not self._is_near_funding_time(_close_ns)")
+            lines.append("    # Time filters gate entries only (evaluated at bar close time)")
+            lines.append("    _close_ns = self._bar_close_ns(bar)")
+            lines.append(f"    _entries_allowed = {' and '.join(checks)}")
             lines.append("")
-
-        # Funding avoidance (same prev-values requirement as time filters)
-        if dsl.time_filters.avoid_around_funding.enabled:
-            lines.append("    # Check funding avoidance")
-            lines.append("    if self._is_near_funding_time(bar.ts_event):")
-            lines.append("        self._update_prev_values(bar)")
-            lines.append("        return")
-            lines.append("")
+            entry_gate = " and _entries_allowed"
 
         # Entry conditions
         lines.append("    # Evaluate entry conditions")
-        lines.append("    if not self._position_open:")
+        lines.append(f"    if not self._position_open{entry_gate}:")
         if dsl.entry_conditions.long:
             lines.append("        if self._check_long_entry(bar):")
             lines.append("            if not self._maybe_delay_validation_action('long_entry'):")
@@ -1056,6 +1080,24 @@ class StrategyCompiler:
         # Time filter method
         lines.extend(self._generate_time_filter_method(dsl.time_filters))
         lines.append("")
+
+        tf = dsl.time_filters
+        if tf.allowed_sessions or tf.blocked_days or tf.avoid_around_funding.enabled:
+            step_ns = self._TIMEFRAME_MINUTES[dsl.timeframe] * 60_000_000_000
+            lines.extend(
+                [
+                    "def _bar_close_ns(self, bar: Bar) -> int:",
+                    '    """Bar close time: ts_init rounded to the nearest bar boundary.',
+                    "",
+                    "    Backtest bars carry ts_init = exchange close_time (hh:59:59.999), live",
+                    "    bars the receive time (just after the boundary); both round to the",
+                    "    same boundary. ts_event would be the OPEN time in backtests.",
+                    '    """',
+                    f"    _step = {step_ns}",
+                    "    return ((bar.ts_init + _step // 2) // _step) * _step",
+                    "",
+                ]
+            )
 
         # Funding avoidance method
         if dsl.time_filters.avoid_around_funding.enabled:

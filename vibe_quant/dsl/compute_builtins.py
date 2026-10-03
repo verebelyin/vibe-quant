@@ -47,6 +47,19 @@ def float_param(params: dict[str, object], key: str, default: float) -> float:
     return float(val) if isinstance(val, (int, float)) else default
 
 
+def nan_like(df: pd.DataFrame) -> pd.Series:
+    """All-NaN series on ``df``'s index: the "not enough data yet" result.
+
+    Never return zeros for warmup -- the compiled strategy treats NaN as
+    not-ready, but a 0.0 would be stored as a real value (e.g. KAMA = 0 makes
+    ``close > kama`` true throughout warmup).
+    """
+    import numpy as np
+    import pandas as pd
+
+    return pd.Series(np.full(len(df.index), np.nan, dtype=np.float64), index=df.index)
+
+
 # ---------------------------------------------------------------------------
 # Single-output indicators — Series return
 # ---------------------------------------------------------------------------
@@ -136,7 +149,7 @@ def compute_vwap(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:  # n
         view.index = synthetic
         result = _ta().vwap(view["high"], view["low"], view["close"], view["volume"])
         if result is None:
-            return cast("pd.Series", df["close"] * 0)
+            return nan_like(df)
         return cast("pd.Series", pd.Series(result.to_numpy(), index=df.index))
     return cast("pd.Series", _ta().vwap(df["high"], df["low"], df["close"], df["volume"]))
 
@@ -149,7 +162,7 @@ def compute_adx(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """ADX — pandas-ta returns a DataFrame with ADX/DMP/DMN; surface just ADX."""
     result = _ta().adx(df["high"], df["low"], df["close"], length=int_param(params, "period", 14))
     if result is None:
-        return cast("pd.Series", df["close"] * 0)
+        return nan_like(df)
     return cast("pd.Series", result.iloc[:, 0])
 
 
@@ -169,7 +182,7 @@ def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Se
     signal = int_param(params, "signal_period", 9)
     result = _ta().macd(df["close"], fast=fast, slow=slow, signal=signal)
     if result is None:
-        empty = df["close"] * 0
+        empty = nan_like(df)
         return {"macd": empty, "histogram": empty, "signal": empty}
     return {
         "macd": result.iloc[:, 0],
@@ -189,7 +202,7 @@ def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.S
     d_period = int_param(params, "d_period", int_param(params, "period_d", 3))
     result = _ta().stoch(df["high"], df["low"], df["close"], k=k_period, d=d_period)
     if result is None:
-        empty = df["close"] * 0
+        empty = nan_like(df)
         return {"k": empty, "d": empty}
     return {"k": result.iloc[:, 0], "d": result.iloc[:, 1]}
 
@@ -204,7 +217,7 @@ def compute_bbands(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.
     std_dev = float_param(params, "std_dev", 2.0)
     result = _ta().bbands(df["close"], length=period, std=std_dev)
     if result is None:
-        empty = df["close"] * 0
+        empty = nan_like(df)
         return {
             "lower": empty,
             "middle": empty,
@@ -227,7 +240,7 @@ def compute_kc(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Seri
     scalar = float_param(params, "atr_multiplier", 2.0)
     result = _ta().kc(df["high"], df["low"], df["close"], length=period, scalar=scalar)
     if result is None:
-        empty = df["close"] * 0
+        empty = nan_like(df)
         return {"lower": empty, "middle": empty, "upper": empty}
     return {
         "lower": result.iloc[:, 0],
@@ -246,7 +259,7 @@ def compute_donchian(df: pd.DataFrame, params: dict[str, object]) -> dict[str, p
     period = int_param(params, "period", 20)
     result = _ta().donchian(df["high"], df["low"], lower_length=period, upper_length=period)
     if result is None:
-        empty = df["close"] * 0
+        empty = nan_like(df)
         return {"lower": empty, "middle": empty, "upper": empty}
     return {
         "lower": result.iloc[:, 0],
@@ -258,9 +271,15 @@ def compute_donchian(df: pd.DataFrame, params: dict[str, object]) -> dict[str, p
 def compute_ichimoku(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
     """Ichimoku Cloud — ``{"conversion", "base", "span_a", "span_b"}``.
 
-    pandas-ta-classic's ``ta.ichimoku`` returns a tuple ``(ichimoku_df,
-    span_df)``. Conversion/base are in the first DataFrame's columns 0/1;
-    span_a/span_b are in the span DataFrame's columns 0/1.
+    pandas-ta-classic's ``ta.ichimoku`` returns ``(core_df, projected_df)``;
+    ``core_df`` columns are ``ISA_t, ISB_k, ITS_t, IKS_k, ICS_k``. Outputs map
+    BY NAME: conversion = Tenkan-sen (ITS), base = Kijun-sen (IKS), span_a /
+    span_b = Senkou spans as plotted AT the current bar (ISA/ISB, i.e. the
+    cloud price trades against, computed ``kijun`` bars ago). The projected
+    frame (cloud ahead of price) and Chikou (ICS, built from FUTURE closes)
+    are never exposed. Before vibe-quant-e70tl.23 positional indexing
+    labelled span A as "conversion", span B as "base" and the forward
+    projection as the spans.
     """
     tenkan = int_param(params, "tenkan", 9)
     kijun = int_param(params, "kijun", 26)
@@ -268,14 +287,20 @@ def compute_ichimoku(df: pd.DataFrame, params: dict[str, object]) -> dict[str, p
     ichi = _ta().ichimoku(
         df["high"], df["low"], df["close"], tenkan=tenkan, kijun=kijun, senkou=senkou
     )
-    empty = df["close"] * 0
-    if ichi is None or not isinstance(ichi, tuple) or len(ichi) < 1:
+    empty = nan_like(df)
+    core = ichi[0] if isinstance(ichi, tuple) and len(ichi) >= 1 else None
+    if core is None:
         return {"conversion": empty, "base": empty, "span_a": empty, "span_b": empty}
-    core = ichi[0]
-    span = ichi[1] if len(ichi) >= 2 else None
+
+    def col(prefix: str) -> pd.Series:
+        for name in core.columns:
+            if str(name).startswith(prefix):
+                return cast("pd.Series", core[name])
+        return empty
+
     return {
-        "conversion": core.iloc[:, 0] if core is not None and core.shape[1] >= 1 else empty,
-        "base": core.iloc[:, 1] if core is not None and core.shape[1] >= 2 else empty,
-        "span_a": span.iloc[:, 0] if span is not None and span.shape[1] >= 1 else empty,
-        "span_b": span.iloc[:, 1] if span is not None and span.shape[1] >= 2 else empty,
+        "conversion": col("ITS_"),
+        "base": col("IKS_"),
+        "span_a": col("ISA_"),
+        "span_b": col("ISB_"),
     }

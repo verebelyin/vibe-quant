@@ -178,13 +178,12 @@ class MacdCrossoverStrategy(Strategy):
             self._update_prev_values(bar)
             return
 
-        # Check time filters
-        if not self._check_time_filters(bar.ts_event):
-            self._update_prev_values(bar)
-            return
+        # Time filters gate entries only (evaluated at bar close time)
+        _close_ns = self._bar_close_ns(bar)
+        _entries_allowed = self._check_time_filters(_close_ns)
 
         # Evaluate entry conditions
-        if not self._position_open:
+        if not self._position_open and _entries_allowed:
             if self._check_long_entry(bar):
                 if not self._maybe_delay_validation_action('long_entry'):
                     self._submit_long_entry(bar)
@@ -377,6 +376,16 @@ class MacdCrossoverStrategy(Strategy):
             return False
 
         return True
+
+    def _bar_close_ns(self, bar: Bar) -> int:
+        """Bar close time: ts_init rounded to the nearest bar boundary.
+
+        Backtest bars carry ts_init = exchange close_time (hh:59:59.999), live
+        bars the receive time (just after the boundary); both round to the
+        same boundary. ts_event would be the OPEN time in backtests.
+        """
+        _step = 900000000000
+        return ((bar.ts_init + _step // 2) // _step) * _step
 
     def _check_long_entry(self, bar: Bar) -> bool:
         """Check long entry conditions."""

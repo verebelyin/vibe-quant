@@ -116,3 +116,12 @@ def compute_natr_hourly(ind_obj: object, close: float, bar_minutes: int) -> floa
         return 0.0
     atr = float(ind_obj.value)  # type: ignore[attr-defined]
     return atr / close * 100.0 * math.sqrt(60.0 / bar_minutes)
+
+
+def linear_weights(period: int) -> list[float]:
+    """Linear WMA weights ``[1, 2, ..., period]`` (newest bar weighs most).
+
+    NT's ``WeightedMovingAverage`` with ``weights=None`` is an equal-weight
+    SMA; passing these weights makes it the standard (pandas-ta) WMA.
+    """
+    return [float(i) for i in range(1, int(period) + 1)]

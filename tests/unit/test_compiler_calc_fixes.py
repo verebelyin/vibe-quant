@@ -64,26 +64,24 @@ take_profit:
 """
 
     def test_blocked_bars_still_update_prev_values(self, compiler: StrategyCompiler) -> None:
-        """Each early return after indicators are ready must refresh prev values."""
+        """Filters gate entries only -- no early return, so prev values (and
+        exits / trailing updates) always run (vibe-quant-e70tl.23)."""
         dsl = parse_strategy_string(self.YAML)
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
 
-        lines = [line.strip() for line in source.splitlines()]
-
-        def next_two(after: str) -> tuple[str, str]:
-            idx = lines.index(after)
-            return lines[idx + 1], lines[idx + 2]
-
-        # Time-filter early return updates prev values first
-        first, second = next_two("if not self._check_time_filters(bar.ts_event):")
-        assert first == "self._update_prev_values(bar)"
-        assert second == "return"
-
-        # Funding-avoidance early return updates prev values first
-        first, second = next_two("if self._is_near_funding_time(bar.ts_event):")
-        assert first == "self._update_prev_values(bar)"
-        assert second == "return"
+        on_bar = source.split("def on_bar")[1].split("def on_event")[0]
+        assert "bar.ts_event" not in on_bar
+        assert (
+            "_entries_allowed = self._check_time_filters(_close_ns) and "
+            "not self._is_near_funding_time(_close_ns)"
+        ) in on_bar
+        assert "if not self._position_open and _entries_allowed:" in on_bar
+        # Only returns after the primary filter: the readiness gate itself and
+        # the delayed-action dispatch (no time-filter early return).
+        after_ready = on_bar.split("if not self._indicators_ready():")[1]
+        assert after_ready.count("return") == 2
+        assert on_bar.rstrip().endswith("self._update_prev_values(bar)")
 
 
 # =============================================================================
