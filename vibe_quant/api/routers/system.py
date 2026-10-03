@@ -1,16 +1,18 @@
 """System router (/api/system).
 
 Portfolio-wide kill switch persisted in the state DB. Setting it
-prevents starting new paper/live sessions and signals any active
-paper job to halt. Clearing it requires an explicit operator unlock
-— there is no auto-release.
+prevents starting new paper/live sessions and halts every active paper
+node: each node polls the flag (and also gets a ``kill`` command on the
+paper command queue), then flattens positions with reduce-only market
+orders, cancels orders and stops its strategies. Clearing it requires an
+explicit operator unlock — there is no auto-release, and unlocking does
+not auto-resume sessions.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import signal
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +22,8 @@ from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manag
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.paper.config import default_paper_trader_id
+from vibe_quant.paper.persistence import PaperCommandQueue
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +71,9 @@ async def kill(
 ) -> SystemStatusResponse:
     """Engage the system-wide kill switch.
 
-    - Persists kill state to the DB so restarts stay halted.
-    - Sends SIGUSR1 to any active paper-trading PID (best-effort).
+    - Persists kill state to the DB so restarts stay halted (nodes poll it).
+    - Queues a ``kill`` command for every active paper session (no signals:
+      a recycled PID can never receive it).
     - Broadcasts `system_killed` over the trading WebSocket.
     """
     state.set_kill_switch(body.reason, body.killed_by)
@@ -76,16 +81,26 @@ async def kill(
         "system kill engaged reason=%r by=%r", body.reason, body.killed_by
     )
 
-    # Best-effort cascade to any live paper job. Never raise here —
-    # the kill-switch flag is the source of truth regardless.
-    for job in jobs.list_active_jobs():
-        if job.job_type != "paper":
-            continue
-        try:
-            os.kill(job.pid, signal.SIGUSR1)
-            logger.info("cascaded kill SIGUSR1 to paper pid=%d", job.pid)
-        except (ProcessLookupError, OSError) as exc:
-            logger.warning("kill cascade failed pid=%d err=%s", job.pid, exc)
+    # Fast-path cascade. Never raise here — the persisted flag is the source
+    # of truth and every node polls it independently.
+    db_row = state.conn.execute("PRAGMA database_list").fetchone()
+    db_file = db_row["file"] if db_row is not None else ""
+    queue = PaperCommandQueue(Path(db_file) if db_file else None)
+    try:
+        for job in jobs.list_active_jobs():
+            if job.job_type != "paper":
+                continue
+            run = state.get_backtest_run(job.run_id) or {}
+            raw_params = run.get("parameters")
+            params: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
+            trader_id = str(params.get("trader_id") or default_paper_trader_id(job.run_id))
+            try:
+                queue.enqueue(trader_id, "kill", {"message": f"kill switch: {body.reason}"})
+                logger.info("queued kill for paper trader_id=%s run_id=%d", trader_id, job.run_id)
+            except Exception as exc:
+                logger.warning("kill cascade failed run_id=%d err=%s", job.run_id, exc)
+    finally:
+        queue.close()
 
     await ws.broadcast(
         "trading",

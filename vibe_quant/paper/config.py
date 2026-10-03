@@ -13,6 +13,7 @@ config files or the API:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -57,15 +58,21 @@ def credential_env_names(testnet: bool) -> tuple[str, str]:
     return ENV_BINANCE_API_KEY, ENV_BINANCE_API_SECRET
 
 
-def is_valid_trader_id(trader_id: str) -> bool:
-    """NautilusTrader TraderId needs ``NAME-TAG`` (a hyphen); anything else aborts NT."""
-    try:
-        from nautilus_trader.model.identifiers import TraderId
+def default_paper_trader_id(run_id: int) -> str:
+    """Default trader_id for an API-launched session (``paper_{id}`` aborted NT)."""
+    return f"PAPER-{run_id:03d}"
 
-        TraderId(trader_id)
-    except (ValueError, TypeError):
-        return False
-    return True
+
+#: NautilusTrader TraderId is ``NAME-TAG``. Constructing ``TraderId`` with an
+#: invalid value panics in Rust and ABORTS the process (no Python exception),
+#: so validate with a pure-Python pattern. Also restricted to the characters
+#: the event-log file name allows (alphanumerics, ``_``, ``-``).
+_TRADER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+")
+
+
+def is_valid_trader_id(trader_id: str) -> bool:
+    """True for ``NAME-TAG`` ids NautilusTrader accepts (e.g. ``PAPER-001``)."""
+    return bool(_TRADER_ID_RE.fullmatch(trader_id))
 
 
 @dataclass(frozen=True)
