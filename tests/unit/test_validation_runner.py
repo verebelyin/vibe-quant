@@ -20,6 +20,16 @@ from vibe_quant.validation.runner import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_catalog_coverage_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests mock the backtest and use a fake symbol ("BTCUSDT-PERP")
+    with no catalog data; data-window clamping/failure is covered by
+    tests/unit/test_audit_metrics_window.py."""
+    monkeypatch.setattr(
+        ValidationRunner, "_clamp_run_window", lambda self, run_config, tf: (run_config, None)
+    )
+
+
 def _make_mock_result(run_id: int = 1, strategy_name: str = "test_strategy") -> ValidationResult:
     """Create a realistic mock ValidationResult for unit tests."""
     return ValidationResult(
@@ -324,12 +334,12 @@ class TestValidationRunner:
         temp_db: Path,
         temp_logs: Path,
     ) -> None:
-        """Sub-5m validation should inject one-bar delay by default."""
+        """Sub-5m validation without finer data defers EVERY fill one bar (e70tl.13)."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
 
         params = runner._augment_strategy_params_for_validation({}, timeframe="1m")
 
-        assert params["execution_delay_probability"] == 0.3
+        assert params["execution_delay_probability"] == 1.0
         runner.close()
 
     def test_validation_param_override_is_preserved(

@@ -42,6 +42,7 @@ class NTScreeningRunner:
         start_date: str,
         end_date: str,
         catalog_path: str | None = None,
+        funding_archive_path: str | None = None,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -51,12 +52,16 @@ class NTScreeningRunner:
             start_date: Start date string (YYYY-MM-DD).
             end_date: End date string (YYYY-MM-DD).
             catalog_path: Path to ParquetDataCatalog. Uses default if None.
+            funding_archive_path: Raw-data archive holding funding rates.
+                Uses the default archive if None. Funding series are cached
+                per worker process (see validation.funding).
         """
         self._dsl_dict = dsl_dict
         self._symbols = symbols
         self._start_date = start_date
         self._end_date = end_date
         self._catalog_path = catalog_path
+        self._funding_archive_path = funding_archive_path
 
         # Cached per-process compilation results (populated on first __call__)
         self._compiled = False
@@ -347,12 +352,21 @@ class NTScreeningRunner:
         """Extract BacktestMetrics from NT BacktestResult.
 
         Args:
-            starting_balance: Venue starting balance (quote currency). Used only
-                by the fallback drawdown computation when NT does not populate
-                ``stats_pnls["max drawdown"]`` (NT >= 1.222). Defaults to 1000
-                to preserve legacy behaviour.
+            starting_balance: Venue starting balance (quote currency). Must
+                match the venue config: it scales the funding charge in
+                total_return, the daily-balance Sharpe and the drawdown.
         """
+        from vibe_quant.metrics import closed_trade_drawdown, profit_factor
         from vibe_quant.screening.types import BacktestMetrics
+        from vibe_quant.validation.extraction import (
+            accrue_position_funding,
+            all_positions,
+            daily_sharpe_sortino,
+            date_to_ns,
+            finest_timeframe,
+            mark_to_market_drawdown,
+        )
+        from vibe_quant.validation.funding import FundingCalculator
 
         metrics = BacktestMetrics(
             parameters=params,
@@ -407,9 +421,6 @@ class NTScreeningRunner:
                 elif key_lower == "win rate":
                     metrics.win_rate = fval
                     _populated.add("win_rate")
-                elif key_lower == "profit factor":
-                    metrics.profit_factor = fval
-                    _populated.add("profit_factor")
                 elif not any(k in key_lower for k in _known_pnl_keys):
                     logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
@@ -433,8 +444,6 @@ class NTScreeningRunner:
                 metrics.max_drawdown = abs(fval)
             elif key_lower == "win rate" and "win_rate" not in _populated:
                 metrics.win_rate = fval
-            elif key_lower == "profit factor" and "profit_factor" not in _populated:
-                metrics.profit_factor = fval
             elif not any(k in key_lower for k in _known_returns_keys):
                 logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
@@ -452,32 +461,91 @@ class NTScreeningRunner:
                 list(stats_returns.keys()) if stats_returns else "empty",
             )
 
-        # Extract fees from closed positions
+        # Fees, funding and net trade PnLs from closed positions.
         # NT netting mode removes closed positions from the main index;
         # combine positions() + position_snapshots() to capture all.
+        trade_pnls: list[float] = []
+        closed_net: list[tuple[int, float]] = []
+        cash_events: list[tuple[int, float]] = []
+        funding_cash: dict[str, list[tuple[int, float]]] = {}
+        total_funding = 0.0
+        funding_fallbacks = 0
         try:
-            cache = engine.kernel.cache
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            total_fees = 0.0
-            for pos in all_positions:
-                if pos.is_closed:
-                    total_fees += sum(abs(float(c)) for c in pos.commissions())
-            metrics.total_fees = total_fees
+            closed = [p for p in all_positions(engine) if p.is_closed]
         except Exception:
-            logger.warning("Could not extract fees from engine cache", exc_info=True)
+            logger.warning("Could not read positions from engine cache", exc_info=True)
+            closed = []
+        funding_calc = FundingCalculator(self._funding_archive_path)
+        total_fees = 0.0
+        for pos in closed:
+            total_fees += sum(abs(float(c)) for c in pos.commissions())
+            # Funding is modeled post-hoc (NT's engine applies none) with
+            # the same calculator validation uses (bd vibe-quant-e70tl.20).
+            accrual = accrue_position_funding(funding_calc, pos)
+            total_funding += accrual.total
+            funding_fallbacks += accrual.fallback_settlements
+            # NT realized_pnl is net of commissions
+            realized = float(pos.realized_pnl)
+            trade_pnls.append(realized - accrual.total)
+            closed_net.append((int(pos.ts_closed), realized - accrual.total))
+            cash_events.append((int(pos.ts_closed), realized))
+            cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
+            funding_cash.setdefault(str(pos.instrument_id), []).extend(
+                (ts, -amount) for ts, amount in accrual.payments
+            )
+        metrics.total_fees = total_fees
+        metrics.total_funding = total_funding
+        metrics.funding_fallback_settlements = funding_fallbacks
+        if funding_fallbacks:
+            logger.warning(
+                "Screening funding for params %s: %d settlement(s) charged at the "
+                "fallback rate (no archived rate)",
+                params or "{}",
+                funding_fallbacks,
+            )
+        if total_funding != 0.0 and starting_balance > 0:
+            metrics.total_return -= total_funding / starting_balance
+
+        # Trade-based profit factor on net PnL (shared definition with
+        # validation). NT's realized-PnL PF is unimplemented, and its
+        # returns-based PF is a daily-return statistic (bd vibe-quant-e70tl.7).
+        metrics.profit_factor = profit_factor(trade_pnls)
+
+        # Sharpe/Sortino from the daily realized balance INCLUDING funding,
+        # over the whole backtest window (NT's series stops at the last fill
+        # and knows nothing of funding). Same function as validation.
+        start_ns = date_to_ns(self._start_date)
+        end_ns = date_to_ns(self._end_date)
+        if start_ns is not None and end_ns is not None and end_ns > start_ns:
+            metrics.sharpe_ratio, metrics.sortino_ratio = daily_sharpe_sortino(
+                starting_balance, cash_events, start_ns, end_ns
+            )
 
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)
 
-        # Screening mode doesn't model funding; set explicitly for DB storage
-        metrics.total_funding = 0.0
-
-        # NT 1.222+ removed MaxDrawdown indicator, so stats may not contain it.
-        # Compute from trade PnLs as fallback (same approach as validation).
-        if metrics.max_drawdown == 0.0 and metrics.total_trades > 0:
-            metrics.max_drawdown = self._compute_max_drawdown(
-                engine, start_time, starting_balance=starting_balance
+        # Mark-to-market max drawdown incl. open-trade intrabar losses and
+        # funding (bd vibe-quant-e70tl.11). NT's own DD stats are daily
+        # realized-balance figures and are not used.
+        execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
+        mtm_dd = mark_to_market_drawdown(
+            engine,
+            starting_balance,
+            execution_timeframe=execution_tf,
+            catalog_path=getattr(self, "_resolved_catalog_path", None),
+            start_ns=start_ns,
+            end_ns=end_ns,
+            extra_cash=funding_cash,
+        )
+        if mtm_dd is None:
+            logger.warning(
+                "Mark-to-market drawdown unavailable for params %s (timeframe=%s) — "
+                "using closed-trade drawdown, which ignores open-trade losses",
+                params or "{}",
+                execution_tf,
             )
+            mtm_dd = closed_trade_drawdown(starting_balance, closed_net)
+        metrics.max_drawdown = mtm_dd
 
         return metrics
 
@@ -543,52 +611,3 @@ class NTScreeningRunner:
         except Exception:
             logger.warning("Could not compute return moments", exc_info=True)
             return 0.0, 3.0, ()
-
-    def _compute_max_drawdown(
-        self,
-        engine: Any,
-        start_time: float,
-        starting_balance: float = 1000.0,
-    ) -> float:
-        """Compute max drawdown from closed positions' realized PnL.
-
-        Reconstructs equity curve from cumulative PnL and finds the
-        maximum peak-to-trough decline as a fraction of peak equity.
-
-        Args:
-            engine: BacktestEngine after run.
-            start_time: Backtest start time (unused, kept for signature compat).
-            starting_balance: Initial account equity in the venue's quote
-                currency. Must match the venue config used for the backtest
-                or the DD fraction will be mis-scaled.
-
-        Returns:
-            Max drawdown as positive fraction (e.g. 0.12 for 12%).
-        """
-        try:
-            cache = engine.kernel.cache
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            closed = [p for p in all_positions if p.is_closed]
-            if not closed:
-                return 0.0
-
-            # Sort by close time for correct equity curve
-            closed.sort(key=lambda p: int(p.ts_closed))
-
-            equity = float(starting_balance)
-            peak = equity
-            max_dd = 0.0
-
-            for pos in closed:
-                equity += float(pos.realized_pnl)
-                if equity > peak:
-                    peak = equity
-                if peak > 0:
-                    dd = (peak - equity) / peak
-                    if dd > max_dd:
-                        max_dd = dd
-
-            return max_dd
-        except Exception:
-            logger.warning("Could not compute max drawdown from positions", exc_info=True)
-            return 0.0

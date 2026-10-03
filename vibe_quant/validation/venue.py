@@ -52,6 +52,12 @@ class VenueConfig:
         fill_config: Fill model configuration.
         maker_fee: Maker fee rate as decimal.
         taker_fee: Taker fee rate as decimal.
+        bar_adaptive_high_low_ordering: When one bar touches both a long's
+            SL and TP, NT's default O->H->L->C path books longs at TP and
+            shorts at SL. Adaptive ordering (extreme nearer the open first)
+            is direction-symmetric. SPEC asks for SL-first, which NT cannot
+            express (ordering is per bar, not per order) — bd
+            vibe-quant-e70tl.12. Shared by screening and validation.
     """
 
     name: str = "BINANCE"
@@ -71,6 +77,9 @@ class VenueConfig:
     # These are for reference; actual fees come from instrument definition
     maker_fee: Decimal = BINANCE_MAKER_FEE
     taker_fee: Decimal = BINANCE_TAKER_FEE
+
+    # Same-bar SL/TP ambiguity resolution (see docstring)
+    bar_adaptive_high_low_ordering: bool = True
 
 
 # Fixed seed for the screening fill model's probabilistic slippage draws. NT's
@@ -216,6 +225,7 @@ def create_backtest_venue_config(config: VenueConfig) -> BacktestVenueConfig:
         latency_model=latency_model,
         fee_model=fee_model,
         bar_execution=True,
+        bar_adaptive_high_low_ordering=config.bar_adaptive_high_low_ordering,
         reject_stop_orders=False,
         support_gtd_orders=True,
         support_contingent_orders=True,
@@ -253,6 +263,7 @@ def _create_importable_fill_model_config(
                 "max_adverse_ticks": fill_cfg.max_adverse_ticks,
                 "prob_slippage": fill_cfg.prob_slippage,
                 "random_seed": fill_cfg.random_seed,
+                "stop_slippage_ticks": fill_cfg.stop_slippage_ticks,
             },
         )
     else:
