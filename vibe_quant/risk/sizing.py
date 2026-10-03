@@ -19,6 +19,18 @@ if TYPE_CHECKING:
     from nautilus_trader.model.objects import Quantity
 
 
+def _as_decimal(value: object) -> Decimal | None:
+    """NT Quantity/Money (``as_decimal()``) or plain number -> Decimal; None if absent."""
+    if value is None:
+        return None
+    as_decimal = getattr(value, "as_decimal", None)
+    if callable(as_decimal):
+        return Decimal(str(as_decimal()))
+    if isinstance(value, (int, float, str, Decimal)) and not isinstance(value, bool):
+        return Decimal(str(value))
+    return None
+
+
 @dataclass(frozen=True)
 class SizerConfig:
     """Base configuration for all position sizers.
@@ -164,19 +176,24 @@ class PositionSizer(ABC):
         raw_size: Decimal,
         account_equity: Decimal,
         entry_price: Decimal,
-        size_precision: int,
+        instrument: "CryptoPerpetual",
     ) -> Decimal:
-        """Apply max leverage and max position limits to raw size.
+        """Apply max leverage / max position limits and the instrument's lot rules.
+
+        Rounds DOWN to ``size_increment`` and returns 0 (no trade) when the
+        result is below ``min_quantity`` or its notional below ``min_notional``
+        -- the venue would reject such an order anyway.
 
         Args:
             raw_size: Calculated position size before limits.
             account_equity: Current account equity.
             entry_price: Entry price for notional calculation.
-            size_precision: Decimal precision for rounding.
+            instrument: Instrument providing size precision / increment / minimums.
 
         Returns:
-            Adjusted position size respecting all limits.
+            Adjusted position size respecting all limits (0 = skip the trade).
         """
+        size_precision = int(instrument.size_precision)
         if raw_size <= Decimal(0):
             return Decimal(0)
 
@@ -197,7 +214,24 @@ class PositionSizer(ABC):
 
         # Round down to avoid exceeding limits
         quantize_str = "1." + "0" * size_precision if size_precision > 0 else "1"
-        return final_size.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
+        final_size = final_size.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
+
+        step = _as_decimal(getattr(instrument, "size_increment", None))
+        if step is not None and step > 0:
+            final_size = (final_size // step) * step
+        min_qty = _as_decimal(getattr(instrument, "min_quantity", None))
+        if min_qty is not None and final_size < min_qty:
+            logger.debug("size %s below min_quantity %s -> no trade", final_size, min_qty)
+            return Decimal(0)
+        min_notional = _as_decimal(getattr(instrument, "min_notional", None))
+        if min_notional is not None and final_size * entry_price < min_notional:
+            logger.debug(
+                "notional %s below min_notional %s -> no trade",
+                final_size * entry_price,
+                min_notional,
+            )
+            return Decimal(0)
+        return final_size
 
 
 class FixedFractionalSizer(PositionSizer):
@@ -271,7 +305,7 @@ class FixedFractionalSizer(PositionSizer):
 
         # Apply limits
         final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument.size_precision
+            raw_size, account_equity, entry_price, instrument
         )
 
         # NautilusTrader Quantity requires float, not Decimal
@@ -372,7 +406,7 @@ class KellySizer(PositionSizer):
 
         # Apply limits
         final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument.size_precision
+            raw_size, account_equity, entry_price, instrument
         )
 
         # NautilusTrader Quantity requires float, not Decimal
@@ -451,7 +485,7 @@ class ATRSizer(PositionSizer):
 
         # Apply limits
         final_size = self._apply_limits(
-            raw_size, account_equity, entry_price, instrument.size_precision
+            raw_size, account_equity, entry_price, instrument
         )
 
         # NautilusTrader Quantity requires float, not Decimal
