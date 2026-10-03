@@ -70,16 +70,17 @@ def _insert_stopped_paper_job(
     state: StateManager,
     job_mgr: BacktestJobManager,
     strategy_id: int = 1,
+    parameters: dict[str, object] | None = None,
 ) -> int:
     _ensure_strategy(state, strategy_id)
     run_id = state.create_backtest_run(
         strategy_id=strategy_id,
         run_mode="paper",
-        symbols=[],
+        symbols=["BTCUSDT"],
         timeframe="1m",
         start_date="",
         end_date="",
-        parameters={},
+        parameters=parameters or {},
     )
     job_mgr.conn.execute(
         """INSERT INTO background_jobs
@@ -224,37 +225,64 @@ async def test_reconcile_404_when_no_validation_run(
     assert "No completed validation run" in r.json()["detail"]
 
 
+def _insert_validation_trade(
+    state: StateManager, run_id: int, *, entry: str, exit_: str, entry_price: float, net_pnl: float
+) -> None:
+    state.save_trades_batch(
+        run_id,
+        [
+            {
+                "symbol": "BTCUSDT",
+                "direction": "LONG",
+                "leverage": 1,
+                "entry_time": entry,
+                "exit_time": exit_,
+                "entry_price": entry_price,
+                "exit_price": 51000.0,
+                "quantity": 0.1,
+                "gross_pnl": net_pnl + 2.0,
+                "net_pnl": net_pnl,
+                "exit_reason": "signal",
+            }
+        ],
+    )
+
+
 async def test_reconcile_happy_path(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
-    events_dir: Path,
+    tmp_path: Path,
 ) -> None:
+    """Paper trades from the node's event log, validation trades from the DB."""
     ac, state, job_mgr = client
-    paper_id = _insert_stopped_paper_job(state, job_mgr, strategy_id=5)
+    paper_logs = tmp_path / "paper_logs"
+    paper_logs.mkdir()
     val_id = _insert_validation_run(state, strategy_id=5)
+    paper_id = _insert_stopped_paper_job(
+        state,
+        job_mgr,
+        strategy_id=5,
+        parameters={"logs_path": str(paper_logs), "validation_run_id": val_id},
+    )
 
     entry = "2026-01-01T00:00:00+00:00"
     exit_ = "2026-01-01T00:10:00+00:00"
+    trader_id = f"PAPER-{paper_id:03d}"
     _write_event_log(
-        events_dir,
-        f"paper_{paper_id}",
+        paper_logs,
+        trader_id,
         entry_ts=entry,
         exit_ts=exit_,
         entry_price=50010.0,
         net_pnl=95.0,
     )
-    _write_event_log(
-        events_dir,
-        str(val_id),
-        entry_ts=entry,
-        exit_ts=exit_,
-        entry_price=50000.0,
-        net_pnl=100.0,
+    _insert_validation_trade(
+        state, val_id, entry=entry, exit_=exit_, entry_price=50000.0, net_pnl=100.0
     )
 
     r = await ac.get(f"/api/reconciliation/{paper_id}")
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["paper_run"] == f"paper_{paper_id}"
+    assert data["paper_run"] == trader_id
     assert data["validation_run"] == str(val_id)
     assert len(data["paired_trades"]) == 1
     pair = data["paired_trades"][0]
@@ -262,3 +290,24 @@ async def test_reconcile_happy_path(
     assert pair["pnl_delta"] == pytest.approx(-5.0)
     assert data["divergence_summary"]["matched"] == 1
     assert data["divergence_summary"]["parity_rate"] == pytest.approx(1.0)
+
+
+async def test_reconcile_zero_trades_reports_no_data(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+    tmp_path: Path,
+) -> None:
+    """Audit: an empty comparison used to report 100% parity."""
+    ac, state, job_mgr = client
+    paper_logs = tmp_path / "paper_logs"
+    paper_logs.mkdir()
+    val_id = _insert_validation_run(state, strategy_id=6)
+    paper_id = _insert_stopped_paper_job(
+        state, job_mgr, strategy_id=6, parameters={"logs_path": str(paper_logs)}
+    )
+    (paper_logs / f"PAPER-{paper_id:03d}.jsonl").write_text("")
+    r = await ac.get(f"/api/reconciliation/{paper_id}?validation_run_id={val_id}")
+    assert r.status_code == 200, r.text
+    summary = r.json()["divergence_summary"]
+    assert summary["parity_rate"] is None
+    assert summary["mean_entry_slippage"] is None
+    assert summary["mean_pnl_delta"] is None
