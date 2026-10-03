@@ -22,17 +22,38 @@ interface Bin {
   count: number;
 }
 
-function buildHistogram(
+const BIN_COUNT = 20;
+
+/**
+ * Bin range from the data. roi_percent is a percent of notional (typically
+ * well under ±5%), so the old fixed ±50% / 5% bins put nearly every trade
+ * into the two bins around zero.
+ */
+export function histogramRange(values: number[]): { min: number; max: number; step: number } {
+  if (!values.length) return { min: -1, max: 1, step: 0.1 };
+  let lo = Math.min(...values);
+  let hi = Math.max(...values);
+  if (lo === hi) {
+    lo -= 0.5;
+    hi += 0.5;
+  }
+  const step = (hi - lo) / BIN_COUNT;
+  return { min: lo, max: hi, step };
+}
+
+export function buildHistogram(
   trades: { roi_percent: number }[],
   min: number,
   max: number,
   step: number,
 ): Bin[] {
   const bins: Bin[] = [];
-  for (let lo = min; lo < max; lo += step) {
+  const n = Math.max(1, Math.round((max - min) / step));
+  for (let i = 0; i < n; i++) {
+    const lo = min + i * step;
     const hi = lo + step;
     bins.push({
-      range: `${lo}% to ${hi}%`,
+      range: `${lo.toFixed(2)}% to ${hi.toFixed(2)}%`,
       center: lo + step / 2,
       count: 0,
     });
@@ -82,7 +103,8 @@ export default function TradeDistributionChart({
   className,
 }: TradeDistributionChartProps) {
   const roiValues = trades.map((t) => t.roi_percent);
-  const bins = buildHistogram(trades, -50, 50, 5);
+  const { min, max, step } = histogramRange(roiValues);
+  const bins = buildHistogram(trades, min, max, step);
   const mean = computeMean(roiValues);
   const median = computeMedian(roiValues);
 
@@ -91,9 +113,13 @@ export default function TradeDistributionChart({
       <ResponsiveContainer width="100%" height={height}>
         <BarChart data={bins} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+          {/* Numeric axis so the mean/median reference lines land at their values
+              (on a category axis they only rendered on an exact bin centre). */}
           <XAxis
+            type="number"
             dataKey="center"
-            tickFormatter={(v: number) => `${v}%`}
+            domain={[min, max]}
+            tickFormatter={(v: number) => `${v.toFixed(2)}%`}
             stroke="hsl(var(--muted-foreground))"
             fontSize={12}
             tickLine={false}

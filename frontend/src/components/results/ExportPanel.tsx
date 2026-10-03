@@ -2,6 +2,7 @@ import { FileJson, FileSpreadsheet, FileText } from "lucide-react";
 import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { Button } from "@/components/ui/button";
+import { formatSignedUsd, fractionToPercent, netPnlUsd } from "@/lib/metrics";
 
 interface ExportPanelProps {
   runId: number;
@@ -19,19 +20,21 @@ function downloadBlob(content: string, filename: string, mimeType: string) {
   URL.revokeObjectURL(url);
 }
 
-function metricsToCSV(data: BacktestResultResponse): string {
+// Backend sends fractions; every "(%)" column / "%" suffix is fraction * 100.
+export function metricsToCSV(data: BacktestResultResponse): string {
   const fields: Array<[string, string | number | null]> = [
     ["Run ID", data.run_id],
-    ["Total Return (%)", data.total_return],
-    ["CAGR (%)", data.cagr],
+    ["Total Return (%)", fractionToPercent(data.total_return)],
+    ["Net PnL (USDT)", netPnlUsd(data.total_return, data.starting_balance)],
+    ["CAGR (%)", fractionToPercent(data.cagr)],
     ["Sharpe Ratio", data.sharpe_ratio],
     ["Sortino Ratio", data.sortino_ratio],
     ["Calmar Ratio", data.calmar_ratio],
-    ["Max Drawdown (%)", data.max_drawdown],
+    ["Max Drawdown (%)", fractionToPercent(data.max_drawdown)],
     ["Max DD Duration (days)", data.max_drawdown_duration_days],
-    ["Annual Volatility (%)", data.volatility_annual],
+    ["Annual Volatility (%)", fractionToPercent(data.volatility_annual)],
     ["Total Trades", data.total_trades],
-    ["Win Rate (%)", data.win_rate],
+    ["Win Rate (%)", fractionToPercent(data.win_rate)],
     ["Profit Factor", data.profit_factor],
     ["Avg Win", data.avg_win],
     ["Avg Loss", data.avg_loss],
@@ -51,26 +54,28 @@ function metricsToCSV(data: BacktestResultResponse): string {
   return `${header}\n${values}`;
 }
 
-function metricsToReport(data: BacktestResultResponse): string {
+export function metricsToReport(data: BacktestResultResponse): string {
   const fmt = (v: number | null | undefined, dec = 2, suffix = "") =>
     v == null ? "N/A" : `${v.toFixed(dec)}${suffix}`;
+  const pct = (v: number | null | undefined, dec = 2) => fmt(fractionToPercent(v), dec, "%");
 
   const lines = [
     `=== Backtest Report: Run #${data.run_id} ===`,
     `Generated: ${new Date().toISOString()}`,
     "",
     "--- Performance ---",
-    `Total Return:     ${fmt(data.total_return, 2, "%")}`,
-    `CAGR:             ${fmt(data.cagr, 2, "%")}`,
+    `Total Return:     ${pct(data.total_return)}`,
+    `Net PnL:          ${formatSignedUsd(netPnlUsd(data.total_return, data.starting_balance))}`,
+    `CAGR:             ${pct(data.cagr)}`,
     `Sharpe Ratio:     ${fmt(data.sharpe_ratio)}`,
     `Sortino Ratio:    ${fmt(data.sortino_ratio)}`,
     `Calmar Ratio:     ${fmt(data.calmar_ratio)}`,
-    `Max Drawdown:     ${fmt(data.max_drawdown, 2, "%")}`,
-    `Annual Volatility: ${fmt(data.volatility_annual, 2, "%")}`,
+    `Max Drawdown:     ${pct(data.max_drawdown)}`,
+    `Annual Volatility: ${pct(data.volatility_annual)}`,
     "",
     "--- Trading ---",
     `Total Trades:     ${data.total_trades ?? "N/A"}`,
-    `Win Rate:         ${fmt(data.win_rate, 1, "%")}`,
+    `Win Rate:         ${pct(data.win_rate, 1)}`,
     `Profit Factor:    ${fmt(data.profit_factor)}`,
     `Winning Trades:   ${data.winning_trades ?? "N/A"}`,
     `Losing Trades:    ${data.losing_trades ?? "N/A"}`,
@@ -86,8 +91,9 @@ function metricsToReport(data: BacktestResultResponse): string {
     `Purged K-Fold Sharpe:  ${fmt(data.purged_kfold_mean_sharpe)}`,
   ];
 
-  if (data.notes) {
-    lines.push("", "--- Notes ---", data.notes);
+  // user_notes only: `notes` is machine JSON (discovery payload, flags).
+  if (data.user_notes) {
+    lines.push("", "--- Notes ---", data.user_notes);
   }
 
   return lines.join("\n");
