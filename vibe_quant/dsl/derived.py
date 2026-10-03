@@ -19,6 +19,7 @@ accept any duck match so tests can pass a ``SimpleNamespace``.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -92,3 +93,26 @@ def compute_position(ind_obj: object, close: float) -> float:
     if channel_range > 0:
         return (close - lower) / channel_range
     return 0.5
+
+
+def compute_natr_hourly(ind_obj: object, close: float, bar_minutes: int) -> float:
+    """Normalized ATR in % of price, rescaled to a 1-hour-bar equivalent.
+
+    ``100 * ATR / close * sqrt(60 / bar_minutes)``. On 1h bars this is the
+    classic NATR; on other timeframes the square-root-of-time factor maps the
+    value onto the 1h scale, so one threshold denotes the same volatility
+    regime on every timeframe and every symbol (an absolute-price ATR
+    threshold cannot: BTC 1m ATR ~40 USD vs SOL ~0.1 USD).
+
+    Args:
+        ind_obj: Object exposing ``.value`` (a live NT ``AverageTrueRange``).
+        close: Latest close price; non-positive -> 0.0.
+        bar_minutes: Bar length of the indicator's timeframe in minutes.
+
+    Returns:
+        1h-equivalent NATR (percent).
+    """
+    if close <= 0:
+        return 0.0
+    atr = float(ind_obj.value)  # type: ignore[attr-defined]
+    return atr / close * 100.0 * math.sqrt(60.0 / bar_minutes)

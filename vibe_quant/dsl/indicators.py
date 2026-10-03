@@ -128,6 +128,11 @@ class IndicatorSpec:
     # default to 1.0 when missing.
     nt_output_scale: dict[str, float] = field(default_factory=dict)
     computed_outputs: dict[str, str] = field(default_factory=dict)
+    # NT path only: name of a ``vibe_quant.dsl.derived`` helper that computes
+    # the primary value as ``helper(nt_indicator, last_close, bar_minutes)``
+    # instead of reading ``nt_output_attrs[primary]`` (NATR: ATR / close,
+    # timeframe-normalized). ``bar_minutes`` is the indicator's timeframe.
+    primary_helper: str = ""
     pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
 
     # Code-generation metadata: maps each NT constructor kwarg name to the
@@ -232,15 +237,16 @@ class IndicatorSpec:
             )
             raise ValueError(msg)
 
-        # computed_outputs helpers must resolve in vibe_quant.dsl.derived.
-        # Lazy-imported to avoid a cycle during module initialization.
-        if self.computed_outputs:
+        # computed_outputs / primary_helper helpers must resolve in
+        # vibe_quant.dsl.derived. Lazy-imported to avoid an init-time cycle.
+        if self.computed_outputs or self.primary_helper:
             from vibe_quant.dsl import derived as _derived
 
+            helpers = dict(self.computed_outputs)
+            if self.primary_helper:
+                helpers["<primary>"] = self.primary_helper
             missing_helpers = [
-                (out, helper)
-                for out, helper in self.computed_outputs.items()
-                if not hasattr(_derived, helper)
+                (out, helper) for out, helper in helpers.items() if not hasattr(_derived, helper)
             ]
             if missing_helpers:
                 missing_str = ", ".join(
@@ -866,7 +872,40 @@ def _atr_spec() -> IndicatorSpec:
         category="Volatility",
         popular=True,
         param_ranges={"period": (5.0, 30.0)},
-        threshold_range=(0.001, 0.15),
+        # ATR is in absolute price units (BTC 1m median ~40 USD, SOL ~0.1), so
+        # no fixed scalar range is meaningful: the old (0.001, 0.15) made every
+        # ATR gene constant true/false (vibe-quant-e70tl.14). Excluded from the
+        # GA threshold pool; use NATR for volatility-regime genes.
+        threshold_range=None,
+    )
+
+
+@indicator_registry.register("NATR")
+def _natr_spec() -> IndicatorSpec:
+    return IndicatorSpec(
+        name="NATR",
+        nt_class=_get_nt_class("nautilus_trader.indicators", "AverageTrueRange"),
+        pandas_ta_func=None,
+        default_params={"period": 14},
+        param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
+        # value = 100 * ATR / close * sqrt(60 / bar_minutes): scale-free across
+        # symbols AND timeframes (equals classic NATR on 1h bars).
+        primary_helper="compute_natr_hourly",
+        requires_high_low=True,
+        display_name="Normalized ATR (% of price, 1h-equivalent)",
+        description=(
+            "ATR as a percentage of price, rescaled to a 1-hour bar "
+            "(x sqrt(60 / bar minutes)) so one threshold means the same "
+            "volatility regime on every symbol and timeframe."
+        ),
+        category="Volatility",
+        param_ranges={"period": (5.0, 30.0)},
+        # Validated on BTC/ETH/SOL 1m/5m/15m/1h/4h (2024-01..2026-03, 1m:
+        # 2025-03..2026-03) for periods 5/14/30: `natr > thr` fires on
+        # 5-95% of bars for every thr in this range.
+        threshold_range=(0.9, 1.2),
     )
 
 

@@ -422,8 +422,8 @@ class TestDSLConversion:
 
 class TestThresholdValidation:
     def test_threshold_out_of_range_detected(self) -> None:
-        """ATR with threshold=72 (RSI range) should fail validation."""
-        gene = StrategyGene("ATR", {"period": 14}, "greater_than", 72.0)
+        """NATR with threshold=72 (RSI range) should fail validation."""
+        gene = StrategyGene("NATR", {"period": 14}, "greater_than", 72.0)
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],
@@ -434,8 +434,8 @@ class TestThresholdValidation:
         assert any("threshold" in e.lower() for e in errors)
 
     def test_threshold_in_range_passes(self) -> None:
-        """ATR with valid threshold should pass."""
-        gene = StrategyGene("ATR", {"period": 14}, "greater_than", 0.015)
+        """NATR (GA replacement for ATR, vibe-quant-e70tl.14) with valid threshold passes."""
+        gene = StrategyGene("NATR", {"period": 14}, "greater_than", 1.0)
         chrom = StrategyChromosome(
             entry_genes=[gene],
             exit_genes=[StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)],

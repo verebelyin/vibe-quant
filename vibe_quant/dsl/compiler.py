@@ -412,6 +412,8 @@ class StrategyCompiler:
                 # NT-path indicators with computed_outputs need derived helpers.
                 for helper_name in info.spec.computed_outputs.values():
                     derived_helpers.add(helper_name)
+                if info.spec.primary_helper:
+                    derived_helpers.add(info.spec.primary_helper)
             elif info.spec.compute_fn is not None:
                 has_pta = True
                 fn = info.spec.compute_fn
@@ -1113,6 +1115,22 @@ class StrategyCompiler:
             return spec.output_names[0]
         return "value"
 
+    _TIMEFRAME_MINUTES: ClassVar[dict[str, int]] = {
+        "1m": 1,
+        "5m": 5,
+        "15m": 15,
+        "1h": 60,
+        "4h": 240,
+    }
+
+    def _primary_helper_call(self, info: IndicatorInfo) -> str:
+        """``helper(ind, last_close, bar_minutes)`` for ``spec.primary_helper``."""
+        minutes = self._TIMEFRAME_MINUTES.get(info.timeframe)
+        if minutes is None:
+            msg = f"No bar length for timeframe '{info.timeframe}' (indicator '{info.name}')"
+            raise CompilerError(msg)
+        return f"{info.spec.primary_helper}({info.indicator_var}, self._last_close, {minutes})"
+
     def _generate_get_indicator_value(self, indicators: list[IndicatorInfo]) -> list[str]:
         """Generate the ``_get_indicator_value`` lookup.
 
@@ -1148,13 +1166,16 @@ class StrategyCompiler:
             primary_attr = spec.nt_output_attrs.get(primary, "value")
             primary_scale = spec.nt_output_scale.get(primary, 1.0)
             lines.append(f'    if name == "{info.name}":')
-            lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
-            if primary_scale != 1.0:
-                lines.append(
-                    f"        return float(_v) * {primary_scale} if _v is not None else 0.0"
-                )
+            if spec.primary_helper:
+                lines.append(f"        return {self._primary_helper_call(info)}")
             else:
-                lines.append("        return float(_v) if _v is not None else 0.0")
+                lines.append(f"        _v = {info.indicator_var}.{primary_attr}")
+                if primary_scale != 1.0:
+                    lines.append(
+                        f"        return float(_v) * {primary_scale} if _v is not None else 0.0"
+                    )
+                else:
+                    lines.append("        return float(_v) if _v is not None else 0.0")
 
             if spec.output_names != ("value",):
                 for output_name in spec.output_names:
@@ -1243,10 +1264,16 @@ class StrategyCompiler:
                 primary_attr = spec.nt_output_attrs.get(primary, "value")
                 primary_scale = spec.nt_output_scale.get(primary, 1.0)
                 _scale_suffix = f" * {primary_scale}" if primary_scale != 1.0 else ""
-                lines.append(
-                    f'    self._prev_values["{info.name}"] = '
-                    f"float({info.indicator_var}.{primary_attr}){_scale_suffix}"
-                )
+                if spec.primary_helper:
+                    lines.append(
+                        f'    self._prev_values["{info.name}"] = '
+                        f"{self._primary_helper_call(info)}"
+                    )
+                else:
+                    lines.append(
+                        f'    self._prev_values["{info.name}"] = '
+                        f"float({info.indicator_var}.{primary_attr}){_scale_suffix}"
+                    )
                 if spec.output_names != ("value",):
                     for output_name in spec.output_names:
                         key = f"{info.name}_{output_name}"

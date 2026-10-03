@@ -174,6 +174,7 @@ class IndicatorConfig(BaseModel):
             "DEMA",
             "TEMA",
             "ATR",
+            "NATR",
             "CCI",
             "ROC",
             "MFI",
