@@ -17,15 +17,21 @@ import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from vibe_quant.dsl.conditions import Condition, Operator, parse_condition
-from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
+from vibe_quant.dsl.indicators import (
+    IndicatorSpec,
+    indicator_registry,
+    pta_buffer_cap,
+    pta_lookback,
+)
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
     ON_RESET_LINES,
     ON_STOP_LINES,
     ORDER_METHODS_LINES,
+    PTA_FEED_LINES,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,7 +227,7 @@ class StrategyCompiler:
 
         # Generate parts
         imports = self._generate_imports(dsl, indicators)
-        config_class = self._generate_config_class(dsl, indicator_names)
+        config_class = self._generate_config_class(dsl, indicator_names, indicators)
         strategy_class = self._generate_strategy_class(dsl, indicators, timeframes, indicator_names)
 
         # Combine
@@ -425,6 +431,7 @@ class StrategyCompiler:
             imports.append("import warnings")
             imports.append("warnings.filterwarnings('ignore', category=FutureWarning)")
             imports.append("import pandas as pd")
+            imports.append("from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback")
             for module_path in sorted(compute_fn_imports):
                 names = ", ".join(sorted(compute_fn_imports[module_path]))
                 imports.append(f"from {module_path} import {names}")
@@ -443,13 +450,18 @@ class StrategyCompiler:
         return "\n".join(imports)
 
     def _generate_config_class(
-        self, dsl: StrategyDSL, indicator_names: list[str] | None = None
+        self,
+        dsl: StrategyDSL,
+        indicator_names: list[str] | None = None,
+        indicators: list[IndicatorInfo] | None = None,
     ) -> str:
         """Generate the Strategy config dataclass.
 
         Args:
             dsl: Parsed DSL
             indicator_names: Expanded indicator names (includes sub-outputs)
+            indicators: Indicator infos (after compute_fn forcing); every
+                compute_fn-path param gets a config field so sweeps apply.
 
         Returns:
             Config class source code
@@ -503,6 +515,17 @@ class StrategyCompiler:
                 lines.append(f"    {name}_d_period: int = {config.d_period}")
             if config.atr_multiplier is not None:
                 lines.append(f"    {name}_atr_multiplier: float = {config.atr_multiplier}")
+
+        # compute_fn-path params not covered above (spec defaults such as
+        # WILLR period / ICHIMOKU tenkan, plugin extras such as alpha) also
+        # become config fields: the generated code reads every compute_fn
+        # param from self.config so sweep/WFA overrides take effect.
+        for info in indicators or []:
+            if not self._is_pta(info):
+                continue
+            for _key, field_name, type_name, default, native in self._pta_param_fields(info):
+                if not native:
+                    lines.append(f"    {field_name}: {type_name} = {default!r}")
 
         # Add stop loss parameters
         lines.append("")
@@ -651,31 +674,11 @@ class StrategyCompiler:
             "",
         ]
 
-        # Add pandas-ta bar buffer if any indicators need it
-        pta_infos = [
-            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
-        ]
-        has_pta = bool(pta_infos)
-        if has_pta:
-            buffer_cap = self._compute_pta_buffer_cap(pta_infos)
-            cap_comment = (
-                "0 = unbounded (cumulative indicator present)"
-                if buffer_cap == 0
-                else "bars kept for windowed compute_fn indicators"
-            )
-            lines.extend(
-                [
-                    "        # Bar data buffer for pandas-ta indicators",
-                    "        self._pta_close: list[float] = []",
-                    "        self._pta_high: list[float] = []",
-                    "        self._pta_low: list[float] = []",
-                    "        self._pta_open: list[float] = []",
-                    "        self._pta_volume: list[float] = []",
-                    "        self._pta_values: dict[str, float] = {}",
-                    f"        self._pta_buffer_cap: int = {buffer_cap}  # {cap_comment}",
-                    "",
-                ]
-            )
+        # compute_fn (pandas) path: per-timeframe bar buffers + params read
+        # from config (vibe-quant-e70tl.8).
+        pta_infos = [i for i in indicators if self._is_pta(i)]
+        if pta_infos:
+            lines.extend(self._generate_pta_init(pta_infos))
 
         # Add on_start method
         on_start = self._generate_on_start(dsl, indicators, timeframes)
@@ -857,44 +860,33 @@ class StrategyCompiler:
         Returns:
             on_bar method source code
         """
-        has_pta = any(
-            i.spec.nt_class is None and i.spec.compute_fn is not None for i in indicators
-        )
+        pta_tfs = sorted({i.timeframe for i in indicators if self._is_pta(i)})
 
         lines = [
             "def on_bar(self, bar: Bar) -> None:",
             '    """Handle bar updates."""',
-            "    # Only process primary timeframe bars",
-            "    if bar.bar_type != self.primary_bar_type:",
-            "        return",
-            "",
         ]
 
-        # Feed bar data to pandas-ta buffer before indicators_ready check.
-        # The buffer is trimmed to _pta_buffer_cap (with 25% slack so the
-        # trim amortizes) — recomputing indicators over full history every
-        # bar is O(n^2) across a backtest and dominates 1m-data runtime.
-        if has_pta:
-            lines.extend(
-                [
-                    "    # Feed bar data to pandas-ta buffer",
-                    "    self._pta_close.append(float(bar.close))",
-                    "    self._pta_high.append(float(bar.high))",
-                    "    self._pta_low.append(float(bar.low))",
-                    "    self._pta_open.append(float(bar.open))",
-                    "    self._pta_volume.append(float(bar.volume))",
-                    "    _cap = self._pta_buffer_cap",
-                    "    if _cap and len(self._pta_close) > _cap + (_cap // 4):",
-                    "        _trim = len(self._pta_close) - _cap",
-                    "        del self._pta_close[:_trim]",
-                    "        del self._pta_high[:_trim]",
-                    "        del self._pta_low[:_trim]",
-                    "        del self._pta_open[:_trim]",
-                    "        del self._pta_volume[:_trim]",
-                    "    self._update_pta_indicators()",
-                    "",
-                ]
-            )
+        # Feed compute_fn bar buffers BEFORE the primary-timeframe filter so an
+        # indicator declared on another timeframe (e.g. a 4h ADX on a 1h
+        # strategy) is computed from that timeframe's bars -- the same update
+        # semantics NT applies to register_indicator_for_bars indicators.
+        if pta_tfs:
+            lines.append("    # Feed compute_fn indicator buffers (per timeframe)")
+            for idx, tf in enumerate(pta_tfs):
+                kw = "if" if idx == 0 else "elif"
+                lines.append(f"    {kw} bar.bar_type == self.bar_type_{tf}:")
+                lines.append(f'        self._feed_pta_buffer("{tf}", bar)')
+            lines.append("")
+
+        lines.extend(
+            [
+                "    # Only process primary timeframe bars",
+                "    if bar.bar_type != self.primary_bar_type:",
+                "        return",
+                "",
+            ]
+        )
 
         lines.extend(
             [
@@ -1041,11 +1033,11 @@ class StrategyCompiler:
         )
         lines.append("")
 
-        # _update_pta_indicators (if any compute_fn indicators exist)
-        pta_indicators = [
-            i for i in indicators if i.spec.nt_class is None and i.spec.compute_fn is not None
-        ]
+        # _feed_pta_buffer + _update_pta_indicators (compute_fn indicators)
+        pta_indicators = [i for i in indicators if self._is_pta(i)]
         if pta_indicators:
+            lines.extend(PTA_FEED_LINES)
+            lines.append("")
             lines.extend(self._generate_update_pta_indicators(pta_indicators))
             lines.append("")
 
@@ -1288,59 +1280,121 @@ class StrategyCompiler:
 
         return lines
 
+    @staticmethod
+    def _is_pta(info: IndicatorInfo) -> bool:
+        """True when the indicator runs on the compute_fn (pandas) path."""
+        return info.spec.nt_class is None and info.spec.compute_fn is not None
+
+    def _generate_pta_init(self, pta_infos: list[IndicatorInfo]) -> list[str]:
+        """``__init__`` state for compute_fn-path indicators.
+
+        * one OHLCV buffer per timeframe used by a compute_fn indicator, so a
+          4h indicator on a 1h strategy is fed 4h bars;
+        * ``_pta_params``: every compute_fn param read from ``config`` (sweep /
+          WFA overrides of e.g. ``adx_period`` must change the computation);
+        * warmup gate and rolling-buffer cap derived from those params at
+          runtime via the same helpers the compiler uses.
+        """
+        tfs = sorted({i.timeframe for i in pta_infos})
+        lines = [
+            "        # compute_fn (pandas) indicators: one OHLCV bar buffer per timeframe",
+            "        self._pta_bufs: dict[str, dict[str, list[float]]] = {",
+        ]
+        for tf in tfs:
+            lines.append(
+                f'            "{tf}": {{"open": [], "high": [], "low": [], "close": [], "volume": []}},'
+            )
+        lines.append("        }")
+        lines.append("        self._pta_values: dict[str, float] = {}")
+        lines.append("        # compute_fn params come from config so sweep/WFA overrides apply")
+        lines.append("        self._pta_params: dict[str, dict[str, object]] = {")
+        for info in pta_infos:
+            pairs = ", ".join(
+                f'"{key}": config.{field}' for key, field, *_ in self._pta_param_fields(info)
+            )
+            lines.append(f'            "{info.name}": {{{pairs}}},')
+        lines.append("        }")
+        lines.append("        # Bars buffered before each compute_fn is first called")
+        lines.append("        self._pta_lookback: dict[str, int] = {")
+        for info in pta_infos:
+            lines.append(
+                f'            "{info.name}": pta_lookback("{info.spec.name}", '
+                f'self._pta_params["{info.name}"]),'
+            )
+        lines.append("        }")
+        lines.append(
+            "        # Rolling-buffer cap per timeframe (0 = unbounded: cumulative indicator)"
+        )
+        lines.append("        self._pta_buffer_cap: dict[str, int] = {")
+        for tf in tfs:
+            tf_infos = [i for i in pta_infos if i.timeframe == tf]
+            lbs = ", ".join(f'self._pta_lookback["{i.name}"]' for i in tf_infos)
+            full = any(i.spec.requires_full_history for i in tf_infos)
+            lines.append(f'            "{tf}": pta_buffer_cap([{lbs}], full_history={full}),')
+        lines.append("        }")
+        lines.append("")
+        return lines
+
     def _generate_update_pta_indicators(self, pta_indicators: list[IndicatorInfo]) -> list[str]:
-        """Generate ``_update_pta_indicators`` for compute_fn-path indicators.
+        """Generate ``_update_pta_indicators(tf)`` for compute_fn-path indicators.
 
-        Emits a generic dispatcher that builds a single OHLCV DataFrame per
-        bar, then for each compute_fn-path indicator imports the spec's
-        ``compute_fn`` by name and calls it with the merged params. Results
-        are unpacked into ``self._pta_values`` either as a single scalar
-        (single-output) or namespaced by sub-output key (multi-output).
-
-        This replaces the ~200-line per-type elif chain from the P4
-        refactor; new plugins with a ``compute_fn`` slot in without
-        touching the compiler.
+        Called by ``_feed_pta_buffer`` after a bar of timeframe ``tf`` lands in
+        its buffer. Builds one OHLCV DataFrame per call, then calls each of the
+        timeframe's ``compute_fn`` with its config-resolved params. Results are
+        unpacked into ``self._pta_values`` either as a single scalar
+        (single-output) or namespaced by sub-output key (multi-output). A NaN
+        result (warmup) is never stored, so the indicator stays not-ready.
         """
         lines = [
-            "def _update_pta_indicators(self) -> None:",
-            '    """Compute compute_fn-path indicators from bar buffer."""',
+            "def _update_pta_indicators(self, tf: str) -> None:",
+            '    """Compute the compute_fn indicators of timeframe ``tf`` from its buffer."""',
+            "    _buf = self._pta_bufs[tf]",
+            '    _n = len(_buf["close"])',
             "    _df = None",
         ]
 
-        for info in pta_indicators:
-            spec = info.spec
-            if spec.compute_fn is None:
-                continue
-            fn_name = spec.compute_fn.__name__
-            lookback = self._get_pta_lookback(info)
-            params_literal = self._compile_pta_params_literal(info)
-            primary = self._effective_primary(spec)
-
-            lines.append(f"    # {info.name} ({info.config.type}) via {fn_name} — lookback {lookback}")
-            lines.append(f"    if len(self._pta_close) >= {lookback}:")
-            lines.append("        if _df is None:")
-            lines.append('            _df = pd.DataFrame({"open": self._pta_open, "high": self._pta_high, "low": self._pta_low, "close": self._pta_close, "volume": self._pta_volume})')
-            lines.append(f"        _res = {fn_name}(_df, {params_literal})")
-
-            if len(spec.output_names) > 1:
-                lines.append("        if isinstance(_res, dict):")
-                lines.append(f'            _primary = _res.get("{primary}")')
-                lines.append("            if _primary is not None and len(_primary) > 0:")
-                lines.append("                _v = _primary.iloc[-1]")
-                lines.append("                if not pd.isna(_v):")
-                lines.append(f'                    self._pta_values["{info.name}"] = float(_v)')
-                lines.append("            for _k, _s in _res.items():")
-                lines.append("                if _s is not None and len(_s) > 0:")
-                lines.append("                    _v = _s.iloc[-1]")
-                lines.append("                    if not pd.isna(_v):")
+        tfs = sorted({i.timeframe for i in pta_indicators})
+        for idx, tf in enumerate(tfs):
+            kw = "if" if idx == 0 else "elif"
+            lines.append(f'    {kw} tf == "{tf}":')
+            for info in (i for i in pta_indicators if i.timeframe == tf):
+                spec = info.spec
+                if spec.compute_fn is None:
+                    continue
+                fn_name = spec.compute_fn.__name__
+                primary = self._effective_primary(spec)
+                ind = "        "
                 lines.append(
-                    f'                        self._pta_values["{info.name}_" + _k] = float(_v)'
+                    f"{ind}# {info.name} ({info.config.type}) via {fn_name}"
+                    f" — default lookback {self._get_pta_lookback(info)}"
                 )
-            else:
-                lines.append("        if _res is not None and len(_res) > 0:")
-                lines.append("            _v = _res.iloc[-1]")
-                lines.append("            if not pd.isna(_v):")
-                lines.append(f'                self._pta_values["{info.name}"] = float(_v)')
+                lines.append(f'{ind}if _n >= self._pta_lookback["{info.name}"]:')
+                lines.append(f"{ind}    if _df is None:")
+                lines.append(
+                    f'{ind}        _df = pd.DataFrame({{"open": _buf["open"], "high": _buf["high"], '
+                    '"low": _buf["low"], "close": _buf["close"], "volume": _buf["volume"]})'
+                )
+                lines.append(f'{ind}    _res = {fn_name}(_df, self._pta_params["{info.name}"])')
+
+                if len(spec.output_names) > 1:
+                    lines.append(f"{ind}    if isinstance(_res, dict):")
+                    lines.append(f'{ind}        _primary = _res.get("{primary}")')
+                    lines.append(f"{ind}        if _primary is not None and len(_primary) > 0:")
+                    lines.append(f"{ind}            _v = _primary.iloc[-1]")
+                    lines.append(f"{ind}            if not pd.isna(_v):")
+                    lines.append(f'{ind}                self._pta_values["{info.name}"] = float(_v)')
+                    lines.append(f"{ind}        for _k, _s in _res.items():")
+                    lines.append(f"{ind}            if _s is not None and len(_s) > 0:")
+                    lines.append(f"{ind}                _v = _s.iloc[-1]")
+                    lines.append(f"{ind}                if not pd.isna(_v):")
+                    lines.append(
+                        f'{ind}                    self._pta_values["{info.name}_" + _k] = float(_v)'
+                    )
+                else:
+                    lines.append(f"{ind}    if _res is not None and len(_res) > 0:")
+                    lines.append(f"{ind}        _v = _res.iloc[-1]")
+                    lines.append(f"{ind}        if not pd.isna(_v):")
+                    lines.append(f'{ind}            self._pta_values["{info.name}"] = float(_v)')
 
         return lines
 
@@ -1354,12 +1408,23 @@ class StrategyCompiler:
         "atr_multiplier",
     )
 
+    # Spec-default param names that alias a DSL-native field (STOCH declares
+    # ``period_k``/``period_d`` while the DSL field is ``period``/``d_period``).
+    # When the DSL field is set the alias is dropped so exactly one config
+    # field drives the value.
+    _PARAM_ALIASES: ClassVar[dict[str, str]] = {
+        "period_k": "period",
+        "k_period": "period",
+        "period_d": "d_period",
+    }
+
     @staticmethod
     def _merge_effective_params(info: IndicatorInfo) -> dict[str, object]:
         """Overlay DSL IndicatorConfig overrides on top of spec defaults.
 
-        Called by both ``_compile_pta_params_literal`` and
-        ``_get_pta_lookback`` so the merge logic lives in one place.
+        Single source for the compute_fn param set: config fields, the
+        runtime ``_pta_params`` dict and the compile-time lookback all derive
+        from it.
 
         Both schema-native fields (``period``, ``fast_period``, ...) and
         plugin-declared extras (ADAPTIVE_RSI's ``alpha``, etc.) are folded
@@ -1371,6 +1436,9 @@ class StrategyCompiler:
             val = getattr(info.config, dsl_field, None)
             if val is not None:
                 merged[dsl_field] = val
+                for alias, target in StrategyCompiler._PARAM_ALIASES.items():
+                    if target == dsl_field:
+                        merged.pop(alias, None)
         extras = getattr(info.config, "model_extra", None) or {}
         for key, val in extras.items():
             if val is not None and key in info.spec.param_schema:
@@ -1378,49 +1446,52 @@ class StrategyCompiler:
         return merged
 
     @staticmethod
-    def _compile_pta_params_literal(info: IndicatorInfo) -> str:
-        """Build a Python-literal dict string for the ``compute_fn`` call."""
-        merged = StrategyCompiler._merge_effective_params(info)
-        pairs = ", ".join(f'"{k}": {v!r}' for k, v in merged.items())
-        return "{" + pairs + "}"
+    def _pta_param_fields(
+        info: IndicatorInfo,
+    ) -> list[tuple[str, str, str, object, bool]]:
+        """Config fields backing a compute_fn indicator's params.
 
-    # Rolling-buffer cap policy for compute_fn-path indicators. Windowed
-    # indicators (RSI, MACD, STOCH, BBANDS, ...) converge to their full-history
-    # values well within 10x their lookback (EMA/Wilder smoothing weight decay
-    # is geometric: remaining weight after 10 periods-worth of bars ~ e^-20).
-    _PTA_BUFFER_LOOKBACK_MULTIPLE: int = 10
-    _PTA_BUFFER_MIN_CAP: int = 400
+        Returns ``(param_key, config_field, type_name, default, native)``
+        tuples. ``native`` marks DSL-native fields (``period`` etc.) that the
+        indicator-parameters block of the config class already emits.
+        """
+        out: list[tuple[str, str, str, object, bool]] = []
+        for key, val in StrategyCompiler._merge_effective_params(info).items():
+            field_name = f"{info.name}_{key}"
+            native = (
+                key in StrategyCompiler._DSL_CONFIG_FIELDS
+                and getattr(info.config, key, None) is not None
+            )
+            declared = info.spec.param_schema.get(key)
+            if declared in (int, float, bool, str):
+                type_name = declared.__name__
+            elif isinstance(val, (bool, int, float, str)):
+                type_name = type(val).__name__
+            else:
+                msg = (
+                    f"Indicator '{info.name}' ({info.config.type}) param '{key}' has "
+                    f"unsupported value type {type(val).__name__}"
+                )
+                raise CompilerError(msg)
+            out.append((key, field_name, type_name, val, native))
+        return out
 
     @classmethod
     def _compute_pta_buffer_cap(cls, pta_infos: list[IndicatorInfo]) -> int:
-        """Bar-buffer cap for the compute_fn path (0 = unbounded).
+        """Default-param bar-buffer cap for the compute_fn path (0 = unbounded).
 
-        Returns 0 when any indicator is cumulative (``requires_full_history``,
-        e.g. OBV/VWAP) since truncation would change its value. Otherwise
-        ``max(MIN_CAP, MULTIPLE x largest lookback)`` — enough warmup that
-        capped values match full-history values to float precision.
+        The generated strategy recomputes this at runtime from its config via
+        :func:`vibe_quant.dsl.indicators.pta_buffer_cap`.
         """
-        if any(i.spec.requires_full_history for i in pta_infos):
-            return 0
-        max_lookback = max((cls._get_pta_lookback(i) for i in pta_infos), default=14)
-        return max(cls._PTA_BUFFER_MIN_CAP, cls._PTA_BUFFER_LOOKBACK_MULTIPLE * max_lookback)
+        return pta_buffer_cap(
+            [cls._get_pta_lookback(i) for i in pta_infos],
+            full_history=any(i.spec.requires_full_history for i in pta_infos),
+        )
 
     @staticmethod
     def _get_pta_lookback(info: IndicatorInfo) -> int:
-        """Minimum lookback bars needed before a compute_fn is valid.
-
-        Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD,
-        ICHIMOKU have custom formulas). Default: read ``period`` from the
-        effective param dict.
-        """
-        spec = info.spec
-        merged = StrategyCompiler._merge_effective_params(info)
-        if spec.pta_lookback_fn is not None:
-            return int(spec.pta_lookback_fn(merged))
-        period = merged.get("period")
-        if isinstance(period, (int, float)):
-            return int(period)
-        return 14
+        """Default-param lookback (see :func:`vibe_quant.dsl.indicators.pta_lookback`)."""
+        return pta_lookback(info.spec, StrategyCompiler._merge_effective_params(info))
 
     def _generate_time_filter_method(self, time_filters: TimeFilterConfig) -> list[str]:
         """Generate _check_time_filters method.

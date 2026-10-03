@@ -179,9 +179,14 @@ def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Se
 
 
 def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
-    """Stochastic — ``{"k", "d"}`` keyed series."""
-    k_period = int_param(params, "period_k", int_param(params, "period", 14))
-    d_period = int_param(params, "period_d", 3)
+    """Stochastic — ``{"k", "d"}`` keyed series.
+
+    The DSL fields ``period``/``d_period`` win over the spec-default aliases
+    ``period_k``/``period_d`` (the compiler drops the aliases once the DSL
+    field is set, so a swept ``stoch_period`` is what gets computed).
+    """
+    k_period = int_param(params, "period", int_param(params, "period_k", 14))
+    d_period = int_param(params, "d_period", int_param(params, "period_d", 3))
     result = _ta().stoch(df["high"], df["low"], df["close"], k=k_period, d=d_period)
     if result is None:
         empty = df["close"] * 0

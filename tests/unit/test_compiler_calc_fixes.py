@@ -240,12 +240,24 @@ take_profit:
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
 
-        assert "self._pta_buffer_cap: int =" in source
+        # Cap computed at runtime from the config-resolved lookback
+        assert "self._pta_buffer_cap: dict[str, int] = {" in source
+        assert '"5m": pta_buffer_cap([self._pta_lookback["tema"]], full_history=False)' in source
         # TEMA lookback is 3*period = 60 -> cap = max(400, 600) = 600
-        assert "self._pta_buffer_cap: int = 600" in source
-        # Trim logic present in on_bar
-        assert "del self._pta_close[:_trim]" in source
-        assert "del self._pta_volume[:_trim]" in source
+        assert StrategyCompiler._compute_pta_buffer_cap(compiler._gather_indicator_info(dsl)) == 600
+        # Trim logic present in the buffer feed
+        assert "del _col[:_trim]" in source
+
+    def test_runtime_cap_follows_config_override(self) -> None:
+        """A swept period must move the warmup gate and the buffer cap."""
+        from vibe_quant.dsl import parse_strategy_string as _parse
+
+        module = StrategyCompiler().compile_to_module(_parse(self.TEMA_YAML))
+        strat = module.BufferCapTestStrategy(
+            module.BufferCapTestConfig(instrument_id="BTCUSDT-PERP.BINANCE", tema_period=50)
+        )
+        assert strat._pta_lookback["tema"] == 150
+        assert strat._pta_buffer_cap["5m"] == 1500
 
     def test_cumulative_indicator_disables_cap(self, compiler: StrategyCompiler) -> None:
         """OBV forced onto the compute_fn path must keep full history."""
@@ -278,8 +290,7 @@ take_profit:
   percent: 3.0
 """
         dsl = parse_strategy_string(yaml_content)
-        source = compiler.compile(dsl)
-        assert "self._pta_buffer_cap: int = 400" in source
+        assert StrategyCompiler._compute_pta_buffer_cap(compiler._gather_indicator_info(dsl)) == 400
 
 
 class TestCappedBufferNumericEquivalence:

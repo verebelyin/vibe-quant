@@ -50,6 +50,32 @@ ON_RESET_LINES: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# compute_fn (pandas) indicator buffers (static; emitted only when needed)
+# ---------------------------------------------------------------------------
+
+PTA_FEED_LINES: tuple[str, ...] = (
+    "def _feed_pta_buffer(self, tf: str, bar: Bar) -> None:",
+    '    """Append a bar to its timeframe buffer, trim, recompute that timeframe.',
+    "",
+    "    The buffer is trimmed to the cap (with 25% slack so the trim amortizes):",
+    "    recomputing indicators over full history every bar is O(n^2) across a",
+    "    backtest and dominates 1m-data runtime.",
+    '    """',
+    "    _buf = self._pta_bufs[tf]",
+    '    _buf["close"].append(float(bar.close))',
+    '    _buf["high"].append(float(bar.high))',
+    '    _buf["low"].append(float(bar.low))',
+    '    _buf["open"].append(float(bar.open))',
+    '    _buf["volume"].append(float(bar.volume))',
+    "    _cap = self._pta_buffer_cap[tf]",
+    '    if _cap and len(_buf["close"]) > _cap + (_cap // 4):',
+    '        _trim = len(_buf["close"]) - _cap',
+    "        for _col in _buf.values():",
+    "            del _col[:_trim]",
+    "    self._update_pta_indicators(tf)",
+)
+
+# ---------------------------------------------------------------------------
 # Order submission and position management (static)
 # ---------------------------------------------------------------------------
 

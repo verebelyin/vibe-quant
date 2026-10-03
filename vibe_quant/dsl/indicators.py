@@ -1166,6 +1166,53 @@ def invoke_compute_fn(
 
 
 # -----------------------------------------------------------------------------
+# compute_fn-path runtime helpers. Called by compiled strategies at __init__
+# with the params resolved from their config, so sweep/WFA overrides of an
+# indicator's period also move its warmup gate and rolling-buffer cap.
+# -----------------------------------------------------------------------------
+
+# Windowed indicators (RSI, MACD, STOCH, BBANDS, ...) converge to their
+# full-history values well within 10x their lookback (EMA/Wilder smoothing
+# weight decay is geometric: remaining weight after 10 periods ~ e^-20).
+PTA_BUFFER_LOOKBACK_MULTIPLE: int = 10
+PTA_BUFFER_MIN_CAP: int = 400
+
+
+def pta_lookback(spec_or_name: IndicatorSpec | str, params: dict[str, object]) -> int:
+    """Minimum buffered bars before a spec's ``compute_fn`` is called.
+
+    Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD, ICHIMOKU,
+    KAMA, ... have custom formulas); otherwise ``params["period"]`` (14 when
+    absent).
+    """
+    if isinstance(spec_or_name, str):
+        spec = indicator_registry.get(spec_or_name)
+        if spec is None:
+            msg = f"Unknown indicator type {spec_or_name!r} (plugin not loaded?)"
+            raise ValueError(msg)
+    else:
+        spec = spec_or_name
+    if spec.pta_lookback_fn is not None:
+        return int(spec.pta_lookback_fn(params))
+    period = params.get("period")
+    if isinstance(period, (int, float)):
+        return int(period)
+    return 14
+
+
+def pta_buffer_cap(lookbacks: list[int], *, full_history: bool) -> int:
+    """Rolling bar-buffer cap for compute_fn indicators (0 = unbounded).
+
+    Unbounded when any indicator is cumulative (``requires_full_history``,
+    e.g. OBV/VWAP) since truncation changes its value; otherwise
+    ``max(MIN_CAP, MULTIPLE x largest lookback)``.
+    """
+    if full_history:
+        return 0
+    return max(PTA_BUFFER_MIN_CAP, PTA_BUFFER_LOOKBACK_MULTIPLE * max(lookbacks, default=14))
+
+
+# -----------------------------------------------------------------------------
 # Public name-suggestion helper (ported from indicator_metadata.py in P7).
 # Pure name logic — uses only the registry for the period lookup.
 # -----------------------------------------------------------------------------

@@ -88,6 +88,32 @@ class IndicatorConfig(BaseModel):
         }
     )
 
+    # Alternate spellings of STOCH's DSL-native fields (NT / GA name them
+    # ``period_k``/``period_d``). Without normalization they were accepted as
+    # extras and silently ignored on the NT path.
+    _STOCH_PARAM_ALIASES: ClassVar[dict[str, str]] = {
+        "period_k": "period",
+        "k_period": "period",
+        "period_d": "d_period",
+    }
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_param_aliases(cls, data: object) -> object:
+        """STOCH: map ``period_k``/``k_period``/``period_d`` onto ``period``/``d_period``."""
+        if not isinstance(data, dict) or str(data.get("type", "")).upper() != "STOCH":
+            return data
+        out = dict(data)
+        for alias, target in cls._STOCH_PARAM_ALIASES.items():
+            if alias not in out:
+                continue
+            value = out.pop(alias)
+            if target in out and out[target] is not None and out[target] != value:
+                msg = f"Conflicting '{alias}'={value!r} and '{target}'={out[target]!r}"
+                raise ValueError(msg)
+            out[target] = value
+        return out
+
     @field_validator("type")
     @classmethod
     def validate_indicator_type(cls, v: str) -> str:

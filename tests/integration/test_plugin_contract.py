@@ -202,8 +202,9 @@ def test_contract_compiler(synthetic_plugin) -> None:
 
     # Plugin-declared param `gain` must be merged into the compute_fn
     # params dict. Per compiler._merge_effective_params, plugin extras
-    # appear in the params literal alongside period.
-    assert '"gain": 2.0' in src
+    # become config fields (sweepable) read into the params dict.
+    assert "ci_gain: float = 2.0" in src
+    assert '"gain": config.ci_gain' in src
 
     # Also verify compile_to_module produces classes.
     mod = StrategyCompiler().compile_to_module(dsl)

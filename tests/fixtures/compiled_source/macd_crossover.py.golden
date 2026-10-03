@@ -29,6 +29,7 @@ from nautilus_trader.indicators.averages import ExponentialMovingAverage
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 import pandas as pd
+from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.compute_builtins import compute_macd
 
 if TYPE_CHECKING:
@@ -97,14 +98,23 @@ class MacdCrossoverStrategy(Strategy):
         # Last close price for computed indicator outputs (percent_b, position)
         self._last_close: float = 0.0
 
-        # Bar data buffer for pandas-ta indicators
-        self._pta_close: list[float] = []
-        self._pta_high: list[float] = []
-        self._pta_low: list[float] = []
-        self._pta_open: list[float] = []
-        self._pta_volume: list[float] = []
+        # compute_fn (pandas) indicators: one OHLCV bar buffer per timeframe
+        self._pta_bufs: dict[str, dict[str, list[float]]] = {
+            "15m": {"open": [], "high": [], "low": [], "close": [], "volume": []},
+        }
         self._pta_values: dict[str, float] = {}
-        self._pta_buffer_cap: int = 400  # bars kept for windowed compute_fn indicators
+        # compute_fn params come from config so sweep/WFA overrides apply
+        self._pta_params: dict[str, dict[str, object]] = {
+            "macd": {"fast_period": config.macd_fast_period, "slow_period": config.macd_slow_period, "signal_period": config.macd_signal_period},
+        }
+        # Bars buffered before each compute_fn is first called
+        self._pta_lookback: dict[str, int] = {
+            "macd": pta_lookback("MACD", self._pta_params["macd"]),
+        }
+        # Rolling-buffer cap per timeframe (0 = unbounded: cumulative indicator)
+        self._pta_buffer_cap: dict[str, int] = {
+            "15m": pta_buffer_cap([self._pta_lookback["macd"]], full_history=False),
+        }
 
     def on_start(self) -> None:
         """Strategy startup: subscribe to bars and register indicators."""
@@ -136,25 +146,13 @@ class MacdCrossoverStrategy(Strategy):
 
     def on_bar(self, bar: Bar) -> None:
         """Handle bar updates."""
+        # Feed compute_fn indicator buffers (per timeframe)
+        if bar.bar_type == self.bar_type_15m:
+            self._feed_pta_buffer("15m", bar)
+
         # Only process primary timeframe bars
         if bar.bar_type != self.primary_bar_type:
             return
-
-        # Feed bar data to pandas-ta buffer
-        self._pta_close.append(float(bar.close))
-        self._pta_high.append(float(bar.high))
-        self._pta_low.append(float(bar.low))
-        self._pta_open.append(float(bar.open))
-        self._pta_volume.append(float(bar.volume))
-        _cap = self._pta_buffer_cap
-        if _cap and len(self._pta_close) > _cap + (_cap // 4):
-            _trim = len(self._pta_close) - _cap
-            del self._pta_close[:_trim]
-            del self._pta_high[:_trim]
-            del self._pta_low[:_trim]
-            del self._pta_open[:_trim]
-            del self._pta_volume[:_trim]
-        self._update_pta_indicators()
 
         # Track last close for computed indicator outputs
         self._last_close = float(bar.close)
@@ -278,25 +276,48 @@ class MacdCrossoverStrategy(Strategy):
         self._prev_values["ema_slow"] = float(self.ind_ema_slow.value)
         self._prev_values["atr"] = float(self.ind_atr.value)
 
-    def _update_pta_indicators(self) -> None:
-        """Compute compute_fn-path indicators from bar buffer."""
+    def _feed_pta_buffer(self, tf: str, bar: Bar) -> None:
+        """Append a bar to its timeframe buffer, trim, recompute that timeframe.
+
+        The buffer is trimmed to the cap (with 25% slack so the trim amortizes):
+        recomputing indicators over full history every bar is O(n^2) across a
+        backtest and dominates 1m-data runtime.
+        """
+        _buf = self._pta_bufs[tf]
+        _buf["close"].append(float(bar.close))
+        _buf["high"].append(float(bar.high))
+        _buf["low"].append(float(bar.low))
+        _buf["open"].append(float(bar.open))
+        _buf["volume"].append(float(bar.volume))
+        _cap = self._pta_buffer_cap[tf]
+        if _cap and len(_buf["close"]) > _cap + (_cap // 4):
+            _trim = len(_buf["close"]) - _cap
+            for _col in _buf.values():
+                del _col[:_trim]
+        self._update_pta_indicators(tf)
+
+    def _update_pta_indicators(self, tf: str) -> None:
+        """Compute the compute_fn indicators of timeframe ``tf`` from its buffer."""
+        _buf = self._pta_bufs[tf]
+        _n = len(_buf["close"])
         _df = None
-        # macd (MACD) via compute_macd — lookback 35
-        if len(self._pta_close) >= 35:
-            if _df is None:
-                _df = pd.DataFrame({"open": self._pta_open, "high": self._pta_high, "low": self._pta_low, "close": self._pta_close, "volume": self._pta_volume})
-            _res = compute_macd(_df, {"fast_period": 12, "slow_period": 26, "signal_period": 9})
-            if isinstance(_res, dict):
-                _primary = _res.get("macd")
-                if _primary is not None and len(_primary) > 0:
-                    _v = _primary.iloc[-1]
-                    if not pd.isna(_v):
-                        self._pta_values["macd"] = float(_v)
-                for _k, _s in _res.items():
-                    if _s is not None and len(_s) > 0:
-                        _v = _s.iloc[-1]
+        if tf == "15m":
+            # macd (MACD) via compute_macd — default lookback 35
+            if _n >= self._pta_lookback["macd"]:
+                if _df is None:
+                    _df = pd.DataFrame({"open": _buf["open"], "high": _buf["high"], "low": _buf["low"], "close": _buf["close"], "volume": _buf["volume"]})
+                _res = compute_macd(_df, self._pta_params["macd"])
+                if isinstance(_res, dict):
+                    _primary = _res.get("macd")
+                    if _primary is not None and len(_primary) > 0:
+                        _v = _primary.iloc[-1]
                         if not pd.isna(_v):
-                            self._pta_values["macd_" + _k] = float(_v)
+                            self._pta_values["macd"] = float(_v)
+                    for _k, _s in _res.items():
+                        if _s is not None and len(_s) > 0:
+                            _v = _s.iloc[-1]
+                            if not pd.isna(_v):
+                                self._pta_values["macd_" + _k] = float(_v)
 
     def _check_time_filters(self, ts_ns: int) -> bool:
         """Check if current time passes time filters."""
