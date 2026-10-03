@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -92,6 +94,284 @@ def daily_balance_returns(
             if math.isfinite(ret):
                 returns[(first_day + i) * _DAY_NS] = ret
     return returns
+
+
+# ---------------------------------------------------------------------------
+# Mark-to-market equity / max drawdown (bd vibe-quant-e70tl.11)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerEvent:
+    """One account event for a single instrument.
+
+    Attributes:
+        ts: Event timestamp (ns).
+        qty: Signed fill quantity (+buy / -sell); 0 for cash-only events.
+        price: Fill price (ignored for cash-only events).
+        cash: Realized cash delta besides trading PnL (``-commission``,
+            ``-funding``, ``-slippage``).
+        resting: True for resting-order fills (limit / triggered stop): they
+            happened while the bar was being processed, at the point of the
+            bar path where the price reached ``price``. False for market
+            fills and cash events, which are located by time: before the bar
+            if ``ts`` precedes the bar's ``ts_init``, after its close if equal.
+    """
+
+    ts: int
+    qty: float = 0.0
+    price: float = 0.0
+    cash: float = 0.0
+    resting: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BarSeries:
+    """OHLC arrays of the execution bars (sorted by ``ts`` = bar ``ts_init``)."""
+
+    ts: np.ndarray
+    open: np.ndarray
+    high: np.ndarray
+    low: np.ndarray
+    close: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.ts)
+
+    def window(self, start_ns: int | None, end_ns: int | None) -> BarSeries:
+        """Bars with ``start_ns <= ts <= end_ns`` (views, no copy)."""
+        lo = 0 if start_ns is None else int(np.searchsorted(self.ts, start_ns, side="left"))
+        hi = len(self.ts) if end_ns is None else int(np.searchsorted(self.ts, end_ns, side="right"))
+        return BarSeries(
+            self.ts[lo:hi], self.open[lo:hi], self.high[lo:hi], self.low[lo:hi], self.close[lo:hi]
+        )
+
+
+_QTY_EPS = 1e-12
+
+
+class _Book:
+    """Average-cost netting position + realized cash for one instrument."""
+
+    __slots__ = ("avg", "qty", "realized")
+
+    def __init__(self) -> None:
+        self.qty = 0.0
+        self.avg = 0.0
+        self.realized = 0.0
+
+    def apply(self, ev: LedgerEvent) -> None:
+        self.realized += ev.cash
+        if ev.qty == 0.0:
+            return
+        q, fill = self.qty, ev.qty
+        if q == 0.0 or (q > 0.0) == (fill > 0.0):
+            new_q = q + fill
+            self.avg = (abs(q) * self.avg + abs(fill) * ev.price) / abs(new_q)
+            self.qty = new_q
+            return
+        closed = min(abs(fill), abs(q))
+        self.realized += closed * (ev.price - self.avg) * (1.0 if q > 0.0 else -1.0)
+        new_q = q + fill
+        if abs(new_q) <= _QTY_EPS * max(1.0, abs(q)):
+            self.qty, self.avg = 0.0, 0.0
+        elif (new_q > 0.0) != (q > 0.0):  # flipped through flat
+            self.qty, self.avg = new_q, ev.price
+        else:
+            self.qty = new_q
+
+    def pnl_at(self, price: float) -> float:
+        return self.realized + self.qty * (price - self.avg)
+
+
+def _locate_on_path(points: list[float], start_seg: int, price: float) -> int:
+    """First path segment (>= start_seg) whose price range contains ``price``.
+
+    Falls back to the segment nearest to ``price`` (a fill slipped a tick
+    beyond the bar extreme, or a latency fill at the previous close).
+    """
+    best_seg, best_dist = start_seg, math.inf
+    for seg in range(start_seg, len(points) - 1):
+        lo = min(points[seg], points[seg + 1])
+        hi = max(points[seg], points[seg + 1])
+        dist = lo - price if price < lo else (price - hi if price > hi else 0.0)
+        if dist <= 1e-9 * max(1.0, abs(price)):
+            return seg
+        if dist < best_dist:
+            best_seg, best_dist = seg, dist
+    return best_seg
+
+
+def pnl_path(
+    bars: BarSeries,
+    events: list[LedgerEvent],
+    *,
+    adaptive: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-bar cumulative PnL of one instrument, at close and at its intrabar worst.
+
+    The intrabar path is the one NT's bar execution simulates:
+    O -> (H, L) -> C, high first unless ``adaptive`` and the low is nearer the
+    open (``bar_adaptive_high_low_ordering``). The position is marked at the
+    adverse extreme only while it is actually held: a stop exit stops the
+    marking at the stop price, a market fill at the close keeps the whole
+    bar, and so on.
+
+    Args:
+        bars: Execution bars (the finest timeframe the venue processed).
+        events: This instrument's events in occurrence order.
+        adaptive: Must match the venue's ``bar_adaptive_high_low_ordering``.
+
+    Returns:
+        ``(pnl_close, pnl_min)`` arrays aligned with ``bars``; PnL is
+        realized cash + unrealized, relative to the starting balance.
+    """
+    n = len(bars)
+    if n == 0:
+        return np.zeros(0), np.zeros(0)
+    ts, o, h, lo, c = bars.ts, bars.open, bars.high, bars.low, bars.close
+    ev_ts = np.fromiter((e.ts for e in events), dtype=np.int64, count=len(events))
+    ev_bar = np.minimum(np.searchsorted(ts, ev_ts, side="left"), n - 1)
+
+    book = _Book()
+    event_bars: list[int] = []
+    post_r: list[float] = []
+    post_q: list[float] = []
+    post_avg: list[float] = []
+    walk_close: list[float] = []
+    walk_min: list[float] = []
+
+    i = 0
+    n_events = len(events)
+    while i < n_events:
+        b = int(ev_bar[i])
+        j = i
+        while j < n_events and ev_bar[j] == b:
+            j += 1
+        bar_ts = int(ts[b])
+        start_evs = [e for e in events[i:j] if not e.resting and e.ts < bar_ts]
+        resting_evs = [e for e in events[i:j] if e.resting]
+        end_evs = [e for e in events[i:j] if not e.resting and e.ts >= bar_ts]
+        ob, hb, lb, cb = float(o[b]), float(h[b]), float(lo[b]), float(c[b])
+        high_first = (not adaptive) or abs(hb - ob) < abs(lb - ob)
+        points = [ob, hb, lb, cb] if high_first else [ob, lb, hb, cb]
+
+        worst = math.inf
+        for e in start_evs:
+            worst = min(worst, book.pnl_at(e.price if e.qty else ob))
+            book.apply(e)
+            worst = min(worst, book.pnl_at(e.price if e.qty else ob))
+        worst = min(worst, book.pnl_at(ob))
+        seg = 0
+        for e in resting_evs:
+            target = _locate_on_path(points, seg, e.price)
+            for k in range(seg + 1, target + 1):
+                worst = min(worst, book.pnl_at(points[k]))
+            worst = min(worst, book.pnl_at(e.price))
+            book.apply(e)
+            worst = min(worst, book.pnl_at(e.price))
+            seg = target
+        for k in range(seg + 1, len(points)):
+            worst = min(worst, book.pnl_at(points[k]))
+        for e in end_evs:
+            px = e.price if e.qty else cb
+            worst = min(worst, book.pnl_at(px))
+            book.apply(e)
+            worst = min(worst, book.pnl_at(px))
+
+        event_bars.append(b)
+        post_r.append(book.realized)
+        post_q.append(book.qty)
+        post_avg.append(book.avg)
+        walk_close.append(book.pnl_at(cb))
+        walk_min.append(min(worst, book.pnl_at(cb)))
+        i = j
+
+    if not event_bars:
+        return np.zeros(n), np.zeros(n)
+
+    eb = np.asarray(event_bars, dtype=np.int64)
+    # State during bar i = state after the last event bar strictly before i
+    last_event = np.searchsorted(eb, np.arange(n), side="left") - 1
+    has = last_event >= 0
+    kk = np.where(has, last_event, 0)
+    r_arr = np.where(has, np.asarray(post_r)[kk], 0.0)
+    q_arr = np.where(has, np.asarray(post_q)[kk], 0.0)
+    avg_arr = np.where(has, np.asarray(post_avg)[kk], 0.0)
+    adverse = np.where(q_arr > 0.0, lo, np.where(q_arr < 0.0, h, c))
+    pnl_close = r_arr + q_arr * (c - avg_arr)
+    pnl_min = r_arr + q_arr * (adverse - avg_arr)
+    pnl_close[eb] = walk_close
+    pnl_min[eb] = walk_min
+    return pnl_close, pnl_min
+
+
+def mark_to_market_max_drawdown(
+    starting_balance: float,
+    paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+) -> float:
+    """Max peak-to-trough decline of mark-to-market equity, as a fraction.
+
+    Peaks are taken at bar closes (and the starting balance); troughs at each
+    bar's intrabar worst (adverse extreme while a position is held). Multiple
+    instruments are combined on the union of their bar timestamps (forward
+    filled); summing per-instrument intrabar worsts is conservative.
+
+    Args:
+        starting_balance: Equity before the first bar.
+        paths: ``(ts, pnl_close, pnl_min)`` per instrument from :func:`pnl_path`.
+
+    Returns:
+        Drawdown in ``[0, 1]`` (1.0 = equity wiped out).
+    """
+    paths = [p for p in paths if len(p[0])]
+    if not paths or starting_balance <= 0:
+        return 0.0
+    if len(paths) == 1:
+        _, total_close, total_min = paths[0]
+    else:
+        grid = np.unique(np.concatenate([p[0] for p in paths]))
+        total_close = np.zeros(len(grid))
+        total_min = np.zeros(len(grid))
+        for ts, pc, pm in paths:
+            idx = np.searchsorted(ts, grid, side="right") - 1
+            valid = idx >= 0
+            ii = np.where(valid, idx, 0)
+            close_vals = np.where(valid, pc[ii], 0.0)
+            exact = valid & (ts[ii] == grid)
+            total_close += close_vals
+            total_min += np.where(exact, pm[ii], close_vals)
+    equity_close = starting_balance + total_close
+    equity_min = starting_balance + total_min
+    peak_prev = np.empty(len(equity_close))
+    peak_prev[0] = starting_balance
+    if len(equity_close) > 1:
+        peak_prev[1:] = np.maximum(
+            np.maximum.accumulate(equity_close[:-1]), starting_balance
+        )
+    drawdown = (peak_prev - equity_min) / peak_prev
+    worst = float(np.max(drawdown))
+    return min(max(worst, 0.0), 1.0)
+
+
+def closed_trade_drawdown(
+    starting_balance: float, closed_pnls: Iterable[tuple[int, float]]
+) -> float:
+    """Fallback max drawdown from realized trade PnLs ``(ts_closed, net_pnl)``.
+
+    Ignores open-trade (unrealized) losses — only used when the
+    mark-to-market curve cannot be built, and callers log that.
+    """
+    if starting_balance <= 0:
+        return 0.0
+    equity = peak = starting_balance
+    max_dd = 0.0
+    for _, pnl in sorted(closed_pnls, key=lambda x: x[0]):
+        equity += pnl
+        peak = max(peak, equity)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - equity) / peak)
+    return min(max_dd, 1.0)
 
 
 @dataclass

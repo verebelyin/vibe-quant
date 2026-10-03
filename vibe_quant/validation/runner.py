@@ -739,6 +739,7 @@ class ValidationRunner:
             CatalogManager,
             create_instrument,
         )
+        from vibe_quant.validation.extraction import finest_timeframe
 
         # Parse symbols from run config
         symbols = self._parse_symbols(run_config)
@@ -952,6 +953,10 @@ class ValidationRunner:
                 primary_timeframe=dsl.timeframe,
                 run_start_date=start_date,
                 run_end_date=end_date,
+                execution_timeframe=finest_timeframe(
+                    all_timeframes | ({detail_timeframe} if detail_timeframe else set())
+                ),
+                catalog_path=catalog_path,
             )
 
             # Log trade events
@@ -1206,6 +1211,8 @@ class ValidationRunner:
         primary_timeframe: str | None = None,
         run_start_date: str | None = None,
         run_end_date: str | None = None,
+        execution_timeframe: str | None = None,
+        catalog_path: Path | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1221,6 +1228,8 @@ class ValidationRunner:
             primary_timeframe: Strategy primary timeframe for market-stat
                 bar-group selection.
             run_start_date / run_end_date: Backtest window for CAGR.
+            execution_timeframe / catalog_path: Execution bars for the
+                mark-to-market drawdown.
 
         Returns:
             Populated ValidationResult.
@@ -1238,6 +1247,8 @@ class ValidationRunner:
             funding_calculator=FundingCalculator(),
             run_start_date=run_start_date,
             run_end_date=run_end_date,
+            execution_timeframe=execution_timeframe,
+            catalog_path=catalog_path,
         )
 
     def _write_start_event(

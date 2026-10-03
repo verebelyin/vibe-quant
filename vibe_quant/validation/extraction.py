@@ -13,12 +13,22 @@ import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from vibe_quant.metrics import daily_balance_returns, profit_factor
+import numpy as np
+
+from vibe_quant.metrics import (
+    BarSeries,
+    LedgerEvent,
+    daily_balance_returns,
+    mark_to_market_max_drawdown,
+    pnl_path,
+    profit_factor,
+)
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
 
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.backtest.results import BacktestResult
@@ -117,6 +127,230 @@ def daily_sharpe_sortino(
     )
 
 
+# --- Mark-to-market drawdown (bd vibe-quant-e70tl.11) ----------------------
+
+# Timeframe -> seconds, to pick the finest bar type the venue executed on
+_TIMEFRAME_SECONDS: dict[str, int] = {
+    "1s": 1,
+    "5s": 5,
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3_600,
+    "4h": 14_400,
+    "1d": 86_400,
+}
+
+# Process-level cache of decoded catalog bars: bar dir -> (signature, series)
+_BAR_CACHE: dict[str, tuple[tuple[tuple[str, int, int], ...], BarSeries]] = {}
+
+
+def finest_timeframe(timeframes: Iterable[str]) -> str | None:
+    """The finest known timeframe: NT's matching engine executes on it."""
+    known = [tf for tf in timeframes if tf in _TIMEFRAME_SECONDS]
+    return min(known, key=_TIMEFRAME_SECONDS.__getitem__) if known else None
+
+
+def _decode_price_column(column: Any) -> np.ndarray:
+    """NT fixed-point price column (fixed_size_binary 8/16) -> float64."""
+    from nautilus_trader.model.objects import FIXED_PRECISION
+
+    arr = column.combine_chunks() if hasattr(column, "combine_chunks") else column
+    width = arr.type.byte_width
+    buf = arr.buffers()[1]
+    raw = np.frombuffer(buf, dtype=np.uint8)[arr.offset * width : (arr.offset + len(arr)) * width]
+    if width == 16:
+        words = raw.view("<u8").reshape(-1, 2)
+        value = words[:, 1].view("<i8").astype(np.float64) * 18446744073709551616.0 + words[
+            :, 0
+        ].astype(np.float64)
+        return np.asarray(value / 10.0 ** int(FIXED_PRECISION), dtype=np.float64)
+    if width == 8:
+        return np.asarray(raw.view("<i8").astype(np.float64) / 1e9, dtype=np.float64)
+    raise ValueError(f"Unsupported NT price encoding: {width}-byte fixed binary")
+
+
+def load_catalog_bars(catalog_path: Path | str, bar_type: str) -> BarSeries | None:
+    """Decode a catalog bar type into numpy arrays (cached per process).
+
+    Reads the parquet files directly (no NT objects): discovery evaluates
+    thousands of genomes per worker over the same bars, so this is decoded
+    once per worker and sliced per evaluation.
+    """
+    from pathlib import Path as _Path
+
+    import pyarrow.parquet as pq
+
+    bar_dir = _Path(catalog_path) / "data" / "bar" / bar_type
+    files = sorted(bar_dir.glob("*.parquet")) if bar_dir.is_dir() else []
+    if not files:
+        return None
+    signature = tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in files)
+    cached = _BAR_CACHE.get(str(bar_dir))
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
+    parts: list[tuple[np.ndarray, ...]] = []
+    for f in files:
+        table = pq.read_table(  # type: ignore[no-untyped-call]
+            f, columns=["open", "high", "low", "close", "ts_init"]
+        )
+        # Not rounded to the instrument precision: raw / 10**FIXED_PRECISION
+        # is bit-identical to NT's float(Price) (aggregated bars carry raw
+        # values a hair off the tick grid, and fills use them as-is).
+        cols = [
+            _decode_price_column(table.column(name)) for name in ("open", "high", "low", "close")
+        ]
+        ts = table.column("ts_init").to_numpy().astype(np.int64)
+        parts.append((ts, *cols))
+    ts_all = np.concatenate([p[0] for p in parts])
+    order = np.argsort(ts_all, kind="stable")
+    ts_sorted = ts_all[order]
+    keep = np.concatenate(([True], ts_sorted[1:] != ts_sorted[:-1]))
+    sel = order[keep]
+    series = BarSeries(
+        ts=ts_all[sel],
+        open=np.concatenate([p[1] for p in parts])[sel],
+        high=np.concatenate([p[2] for p in parts])[sel],
+        low=np.concatenate([p[3] for p in parts])[sel],
+        close=np.concatenate([p[4] for p in parts])[sel],
+    )
+    _BAR_CACHE[str(bar_dir)] = (signature, series)
+    return series
+
+
+def cache_bars(engine: Any, bar_type: str) -> BarSeries | None:
+    """Execution bars from the engine cache (tests / no catalog).
+
+    The NT cache keeps only the most recent ``bar_capacity`` bars per type,
+    so this is only complete for short runs.
+    """
+    from nautilus_trader.model.data import BarType
+
+    try:
+        bars = list(engine.kernel.cache.bars(BarType.from_str(bar_type)))
+    except Exception:
+        return None
+    if not bars:
+        return None
+    bars.sort(key=lambda b: int(b.ts_init))
+    return BarSeries(
+        ts=np.array([int(b.ts_init) for b in bars], dtype=np.int64),
+        open=np.array([float(b.open) for b in bars]),
+        high=np.array([float(b.high) for b in bars]),
+        low=np.array([float(b.low) for b in bars]),
+        close=np.array([float(b.close) for b in bars]),
+    )
+
+
+def position_ledger_events(
+    positions: Iterable[Any],
+    extra_cash: dict[str, list[tuple[int, float]]] | None = None,
+) -> dict[str, list[LedgerEvent]]:
+    """Per-instrument account events from positions' fill events.
+
+    Positions are replayed in open order (DSL strategies hold one position
+    per instrument at a time); within a position NT keeps fills in order.
+    ``extra_cash`` adds modeled cash flows (funding, slippage) per
+    instrument; they are merged in by timestamp.
+
+    Raises:
+        AttributeError: if a position exposes no fill events (stub engines).
+    """
+    from nautilus_trader.model.enums import OrderSide, OrderType
+
+    by_instrument: dict[str, list[tuple[int, int, int, LedgerEvent]]] = {}
+    ordered = sorted(
+        positions,
+        key=lambda p: (int(p.ts_opened), int(p.ts_closed) or 2**63 - 1),
+    )
+    seq = 0
+    for pos in ordered:
+        fills = pos.events
+        if not fills:
+            raise AttributeError("position has no fill events")
+        bucket = by_instrument.setdefault(str(pos.instrument_id), [])
+        for fill in fills:
+            sign = 1.0 if fill.order_side == OrderSide.BUY else -1.0
+            bucket.append(
+                (
+                    int(fill.ts_event),
+                    0,
+                    seq,
+                    LedgerEvent(
+                        ts=int(fill.ts_event),
+                        qty=sign * float(fill.last_qty),
+                        price=float(fill.last_px),
+                        cash=-float(fill.commission),
+                        resting=fill.order_type != OrderType.MARKET,
+                    ),
+                )
+            )
+            seq += 1
+    for instrument_id, flows in (extra_cash or {}).items():
+        bucket = by_instrument.setdefault(instrument_id, [])
+        for ts, amount in flows:
+            # cash flows sort after fills at the same timestamp
+            bucket.append((int(ts), 1, seq, LedgerEvent(ts=int(ts), cash=amount)))
+            seq += 1
+    return {
+        iid: [item[3] for item in sorted(items, key=lambda x: (x[0], x[1], x[2]))]
+        for iid, items in by_instrument.items()
+    }
+
+
+def mark_to_market_drawdown(
+    engine: Any,
+    starting_balance: float,
+    *,
+    execution_timeframe: str | None,
+    catalog_path: Path | str | None = None,
+    start_ns: int | None = None,
+    end_ns: int | None = None,
+    extra_cash: dict[str, list[tuple[int, float]]] | None = None,
+    adaptive: bool = True,
+) -> float | None:
+    """Mark-to-market max drawdown of the run (intrabar adverse extremes).
+
+    Returns None when it cannot be computed (no fill events / no bars for a
+    traded instrument); callers then fall back to the closed-trade curve and
+    MUST say so in logs.
+    """
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+
+    positions = all_positions(engine)
+    if not positions:
+        return 0.0
+    try:
+        ledgers = position_ledger_events(positions, extra_cash)
+    except AttributeError:
+        return None
+    if execution_timeframe not in INTERVAL_TO_AGGREGATION:
+        return None
+    step, agg = INTERVAL_TO_AGGREGATION[execution_timeframe]
+
+    paths: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for instrument_id, events in ledgers.items():
+        bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+        series = load_catalog_bars(catalog_path, bar_type) if catalog_path else None
+        if series is None:
+            series = cache_bars(engine, bar_type)
+        if series is None:
+            logger.warning("No %s bars for mark-to-market drawdown", bar_type)
+            return None
+        series = series.window(start_ns, end_ns)
+        if len(series) == 0 or (events and events[0].ts < int(series.ts[0]) - 1):
+            logger.warning(
+                "%s bars do not cover %s's first fill — cannot mark to market",
+                bar_type,
+                instrument_id,
+            )
+            return None
+        pnl_close, pnl_min = pnl_path(series, events, adaptive=adaptive)
+        paths.append((series.ts, pnl_close, pnl_min))
+    return mark_to_market_max_drawdown(starting_balance, paths)
+
+
 def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
     """Convert a nanosecond Unix timestamp to ISO 8601 string.
 
@@ -177,6 +411,8 @@ def extract_results(
     funding_calculator: FundingCalculator | None = None,
     run_start_date: str | None = None,
     run_end_date: str | None = None,
+    execution_timeframe: str | None = None,
+    catalog_path: Path | str | None = None,
 ) -> ValidationResult:
     """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -186,6 +422,9 @@ def extract_results(
         run_start_date / run_end_date: Backtest window (YYYY-MM-DD) used
             for CAGR — measuring over first-trade..last-trade instead
             inflates CAGR for sparse traders.
+        execution_timeframe: Finest bar timeframe the venue executed on
+            (detail TF when loaded); drives the mark-to-market drawdown.
+        catalog_path: Catalog holding those bars (engine cache if None).
     """
     result = ValidationResult(
         run_id=run_id,
@@ -208,6 +447,8 @@ def extract_results(
         funding_calculator=funding_calculator,
         run_start_date=run_start_date,
         run_end_date=run_end_date,
+        execution_timeframe=execution_timeframe,
+        catalog_path=catalog_path,
     )
     _extract_return_moments(result, engine)
 
@@ -333,6 +574,8 @@ def extract_trades(
     funding_calculator: FundingCalculator | None = None,
     run_start_date: str | None = None,
     run_end_date: str | None = None,
+    execution_timeframe: str | None = None,
+    catalog_path: Path | str | None = None,
 ) -> None:
     """Extract individual trade records from the engine's closed positions.
 
@@ -352,7 +595,9 @@ def extract_trades(
         venue_config: Venue config for default leverage.
         primary_timeframe: Strategy timeframe for market-stat selection.
         funding_calculator: Optional post-hoc funding accrual.
-        run_start_date / run_end_date: Backtest window for CAGR.
+        run_start_date / run_end_date: Backtest window for CAGR / Sharpe.
+        execution_timeframe / catalog_path: Execution bars for the
+            mark-to-market max drawdown (bd vibe-quant-e70tl.11).
     """
     window_start_ns = date_to_ns(run_start_date)
     window_end_ns = date_to_ns(run_end_date)
@@ -373,6 +618,7 @@ def extract_trades(
 
     if not positions:
         result.profit_factor = 0.0
+        result.max_drawdown = 0.0
         if has_window:
             result.sharpe_ratio, result.sortino_ratio = 0.0, 0.0
         return
@@ -406,6 +652,8 @@ def extract_trades(
     funding_fallbacks = 0
     # Realized balance changes for the daily Sharpe series
     cash_events: list[tuple[int, float]] = []
+    # Modeled cash flows per instrument for the mark-to-market equity curve
+    modeled_cash: dict[str, list[tuple[int, float]]] = {}
 
     for pos in positions:
         realized_pnl = float(pos.realized_pnl)
@@ -445,6 +693,9 @@ def extract_trades(
             funding_fees = accrual.total
             funding_fallbacks += accrual.fallback_settlements
             cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
+            modeled_cash.setdefault(instrument_id, []).extend(
+                (ts, -amount) for ts, amount in accrual.payments
+            )
         else:
             funding_fees = 0.0
         total_funding += funding_fees
@@ -452,6 +703,10 @@ def extract_trades(
         # Net PnL: NT realized (fees included) minus modeled slippage/funding
         net_pnl = realized_pnl - slippage_cost - funding_fees
         cash_events.append((int(pos.ts_closed), realized_pnl - slippage_cost))
+        if slippage_cost:
+            modeled_cash.setdefault(instrument_id, []).append(
+                (int(pos.ts_closed), -slippage_cost)
+            )
 
         if net_pnl > 0:
             winning += 1
@@ -534,13 +789,26 @@ def extract_trades(
             result.starting_balance, cash_events, window_start_ns, window_end_ns
         )
 
-    # NT 1.222+ may not populate max_drawdown via stats_pnls/stats_returns
-    # (the old MaxDrawdown indicator was removed). Compute from equity curve
-    # built from trade PnLs as a robust fallback.
-    if result.max_drawdown == 0.0 and result.trades:
-        result.max_drawdown = _compute_max_drawdown_from_trades(
-            result.trades, result.starting_balance
+    # Mark-to-market max drawdown incl. open-trade intrabar losses, funding
+    # and slippage — same function as screening (bd vibe-quant-e70tl.11).
+    # NT's MaxDrawdown stat is a daily realized-balance figure: not used.
+    mtm_dd = mark_to_market_drawdown(
+        engine,
+        result.starting_balance,
+        execution_timeframe=execution_timeframe,
+        catalog_path=catalog_path,
+        start_ns=window_start_ns,
+        end_ns=window_end_ns,
+        extra_cash=modeled_cash,
+    )
+    if mtm_dd is None:
+        logger.warning(
+            "Mark-to-market drawdown unavailable (timeframe=%s) — using "
+            "closed-trade drawdown, which ignores open-trade losses",
+            execution_timeframe,
         )
+        mtm_dd = _compute_max_drawdown_from_trades(result.trades, result.starting_balance)
+    result.max_drawdown = mtm_dd
 
     compute_extended_metrics(result, run_start_date=run_start_date, run_end_date=run_end_date)
 
