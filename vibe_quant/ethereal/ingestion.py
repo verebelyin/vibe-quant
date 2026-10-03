@@ -7,6 +7,7 @@ import io
 import logging
 import zipfile
 from datetime import UTC, datetime  # noqa: TC003 - used at runtime
+from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -256,13 +257,29 @@ def klines_to_bars(
 ) -> list[Bar]:
     """Convert raw klines to NautilusTrader Bar objects.
 
+    Prices/volumes use the INSTRUMENT's precision (``ETHUSD`` price precision
+    2, size 4, ...). Parsing each value's own string precision produced bars
+    whose precision varied (``2500.0`` -> 1 dp) and got rounded to the first
+    bar's precision in the catalog.
+
     Args:
         klines: Sequence of kline rows from archive.
-        bar_type: NautilusTrader bar type.
+        bar_type: NautilusTrader bar type (``{SYMBOL}-PERP.ETHEREAL``).
 
     Returns:
         List of Bar objects.
     """
+    symbol = bar_type.instrument_id.symbol.value.removesuffix("-PERP")
+    instrument = create_ethereal_instrument(symbol)
+    price_q = Decimal(1).scaleb(-instrument.price_precision)
+    size_q = Decimal(1).scaleb(-instrument.size_precision)
+
+    def _price(value: object) -> Price:
+        return Price.from_str(str(Decimal(str(value)).quantize(price_q, rounding=ROUND_HALF_EVEN)))
+
+    def _qty(value: object) -> Quantity:
+        return Quantity.from_str(str(Decimal(str(value)).quantize(size_q, rounding=ROUND_HALF_EVEN)))
+
     bars = []
     for k in klines:
         # Convert ms timestamp to ns
@@ -271,11 +288,11 @@ def klines_to_bars(
 
         bar = Bar(
             bar_type=bar_type,
-            open=Price.from_str(str(k["open"])),
-            high=Price.from_str(str(k["high"])),
-            low=Price.from_str(str(k["low"])),
-            close=Price.from_str(str(k["close"])),
-            volume=Quantity.from_str(str(k["volume"])),
+            open=_price(k["open"]),
+            high=_price(k["high"]),
+            low=_price(k["low"]),
+            close=_price(k["close"]),
+            volume=_qty(k["volume"]),
             ts_event=ts_event,
             ts_init=ts_init,
         )
