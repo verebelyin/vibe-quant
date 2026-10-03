@@ -1,10 +1,14 @@
 """SQLite connection factory with WAL mode enabled by default."""
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Final
 
-DEFAULT_DB_PATH: Final = Path("data/state/vibe_quant.db")
+# Process-wide state DB. Override with VIBE_QUANT_DB when starting the backend:
+# the env var is inherited by every job subprocess, so the API, job rows and
+# results all use the same DB (a runtime switch could only ever swap part of it).
+DEFAULT_DB_PATH: Final = Path(os.environ.get("VIBE_QUANT_DB") or "data/state/vibe_quant.db")
 BUSY_TIMEOUT_MS: Final = 5000
 
 

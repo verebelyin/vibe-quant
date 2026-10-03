@@ -49,7 +49,8 @@ export default function PerformanceRadar({
 }: PerformanceRadarProps) {
   const normalized: NormalizedMetric[] = metrics.map((m) => ({
     label: m.label,
-    normalized: m.max !== 0 ? Math.min(m.value / m.max, 1) * 100 : 0,
+    // Clamp to [0, 1]: negative Sharpe/Calmar/Return would plot through the centre.
+    normalized: m.max !== 0 ? Math.max(0, Math.min(m.value / m.max, 1)) * 100 : 0,
     raw: m.value,
   }));
 

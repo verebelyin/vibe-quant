@@ -15,17 +15,17 @@ export function PaperTradingPage() {
   const status = statusQuery.data?.status === 200 ? statusQuery.data.data : null;
   const currentState = status?.state?.toLowerCase() ?? "unknown";
   const isActive =
-    currentState === "running" || currentState === "halted" || currentState === "starting";
+    currentState === "running" ||
+    currentState === "paused" ||
+    currentState === "halted" ||
+    currentState === "starting";
 
-  // Extract session metadata from status (untyped fields)
-  const statusRecord = status as Record<string, unknown> | null;
-  const traderId = String(statusRecord?.trader_id ?? statusRecord?.session_id ?? "");
-  const strategyName = String(statusRecord?.strategy_name ?? statusRecord?.strategy ?? "");
-  const startedAt = statusRecord?.started_at ? String(statusRecord.started_at) : null;
+  const traderId = status?.trader_id ?? "";
+  const strategyName = status?.run_id != null ? `paper run ${status.run_id}` : "";
+  const startedAt: string | null = null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
-
       {isActive && traderId && (
         <TraderInfo
           traderId={traderId}
@@ -51,10 +51,7 @@ export function PaperTradingPage() {
               <PositionsTable traderId={traderId || undefined} />
             </div>
             <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-              <CheckpointsList
-                traderId={traderId || undefined}
-                sessionActive={isActive}
-              />
+              <CheckpointsList traderId={traderId || undefined} sessionActive={isActive} />
             </div>
           </div>
         </TabsContent>

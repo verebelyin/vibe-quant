@@ -381,8 +381,8 @@ def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeyp
 
 
 def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch) -> None:
-    """WFA results on the best strategy should populate the
-    backtest_results.walk_forward_efficiency column (bd-2ur2).
+    """Walk-forward efficiency = holdout return/day over train return/day (Pardo),
+    length-normalized (vibe-quant-e70tl.10 / bd-2ur2).
     """
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import (
@@ -395,7 +395,6 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
         DiscoveryPipeline,
         DiscoveryResult,
         HoldoutResult,
-        WFARollingResult,
     )
 
     db_path = tmp_path / "state.db"
@@ -413,25 +412,16 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
         raw_score=1.0, adjusted_score=1.0,
         passed_filters=True, filter_results={},
     )
-    # Two OOS windows: returns 0.02 + -0.01 = 0.01 → efficiency = 0.01 / 0.10 = 0.10
-    oos = [
-        HoldoutResult(sharpe_ratio=0.8, max_drawdown=0.03, profit_factor=1.2,
-                      total_trades=30, total_return=0.02),
-        HoldoutResult(sharpe_ratio=-0.2, max_drawdown=0.02, profit_factor=0.9,
-                      total_trades=25, total_return=-0.01),
-    ]
-    wfa = WFARollingResult(
-        oos_windows=oos,
-        window_dates=[("2025-01-15", "2025-01-22"), ("2025-01-22", "2025-01-29")],
-        windows_profitable=1, windows_sharpe_positive=1, total_windows=2,
-        consistency=0.5, sharpe_consistency=0.5, passed=False,
-    )
+    holdout = HoldoutResult(sharpe_ratio=0.8, max_drawdown=0.03, profit_factor=1.2,
+                            total_trades=30, total_return=0.02)
 
     def fake_run(self) -> DiscoveryResult:
         return DiscoveryResult(
             generations=[], top_strategies=[(chrom, fit)],
             total_candidates_evaluated=10, converged=True, convergence_generation=1,
-            wfa_results=[wfa],
+            holdout_results=[holdout],
+            train_dates=("2025-01-01", "2025-01-25"),
+            holdout_dates=("2025-01-25", "2025-02-01"),
         )
 
     monkeypatch.setattr(DiscoveryPipeline, "run", fake_run)
@@ -442,6 +432,7 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
             "--population-size", "6", "--max-generations", "2", "--elite-count", "1",
             "--symbols", "BTCUSDT", "--timeframe", "1h",
             "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--eval-windows", "1",
             "--db", str(db_path), "--mock",
         ],
     )
@@ -452,7 +443,25 @@ def test_walk_forward_efficiency_persisted_to_column(tmp_path: Path, monkeypatch
     result = state.get_backtest_result(run_id)
     state.close()
     assert result is not None
-    assert result["walk_forward_efficiency"] == pytest.approx(0.10, abs=1e-6)
+    # (0.02 / 7 days) / (0.10 / 24 days) = 0.48 / 0.70
+    assert result["walk_forward_efficiency"] == pytest.approx(0.48 / 0.70, abs=1e-12)
+
+
+def test_walk_forward_efficiency_formula() -> None:
+    """Stationary edge -> 1.0 whatever the period lengths; IS<=0 -> undefined."""
+    from vibe_quant.discovery.__main__ import walk_forward_efficiency
+
+    # 0.05%/day in both periods: 270d IS (13.5%) vs 90d OOS (4.5%)
+    assert walk_forward_efficiency(
+        oos_return=0.045, oos_days=90, is_return=0.135, is_days=270,
+    ) == pytest.approx(1.0, abs=1e-12)
+    # Losing in-sample, winning out-of-sample is NOT "max efficiency"
+    assert walk_forward_efficiency(
+        oos_return=0.05, oos_days=90, is_return=-0.10, is_days=270,
+    ) is None
+    assert walk_forward_efficiency(
+        oos_return=0.05, oos_days=None, is_return=0.10, is_days=270,
+    ) is None
 
 
 def test_walk_forward_efficiency_none_when_no_wfa(tmp_path: Path, monkeypatch) -> None:
@@ -511,6 +520,9 @@ def test_multi_seed_preserves_validation_metadata_per_strategy(tmp_path: Path, m
             "0.5",
             "--num-seeds",
             "3",
+            # mock Sharpes over 1 month aren't DSR-significant; this test is
+            # about holdout metadata alignment, not DSR
+            "--no-dsr",
             "--db",
             str(db_path),
             "--mock",

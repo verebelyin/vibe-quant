@@ -16,6 +16,9 @@ class _FakeJobManager:
     def mark_completed(self, run_id: int, error: str | None = None) -> None:
         pass
 
+    def run_failure(self, run_id: int) -> str | None:
+        return None
+
     def close(self) -> None:
         pass
 
@@ -148,8 +151,9 @@ def test_cmd_validation_list_formats_fraction_as_percent(
         def close(self) -> None:
             return None
 
-    def fake_list_validation_runs(*, limit: int) -> list[dict[str, object]]:
+    def fake_list_validation_runs(*, limit: int, db_path: object = None) -> list[dict[str, object]]:
         assert limit == 5
+        assert db_path is None
         return [
             {
                 "run_id": 7,

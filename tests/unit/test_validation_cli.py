@@ -18,6 +18,9 @@ class _FakeManager:
     def mark_completed(self, run_id: int, error: str | None = None) -> None:
         self.completed_calls.append((run_id, error))
 
+    def run_failure(self, run_id: int) -> str | None:
+        return None
+
     def close(self) -> None:
         self.closed = True
 

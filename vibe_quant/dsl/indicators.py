@@ -128,6 +128,11 @@ class IndicatorSpec:
     # default to 1.0 when missing.
     nt_output_scale: dict[str, float] = field(default_factory=dict)
     computed_outputs: dict[str, str] = field(default_factory=dict)
+    # NT path only: name of a ``vibe_quant.dsl.derived`` helper that computes
+    # the primary value as ``helper(nt_indicator, last_close, bar_minutes)``
+    # instead of reading ``nt_output_attrs[primary]`` (NATR: ATR / close,
+    # timeframe-normalized). ``bar_minutes`` is the indicator's timeframe.
+    primary_helper: str = ""
     pta_lookback_fn: Callable[[dict[str, object]], int] | None = None
 
     # Code-generation metadata: maps each NT constructor kwarg name to the
@@ -137,6 +142,10 @@ class IndicatorSpec:
     # the spec declares ``period`` in ``default_params``. Specs that use
     # no NT kwargs (OBV/VWAP) keep the empty default.
     nt_codegen_kwargs: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # Extra NT constructor kwargs derived from a DSL field by a
+    # ``vibe_quant.dsl.derived`` helper: ``(nt_kwarg, helper, dsl_field)``
+    # emits ``nt_kwarg=helper(self.config.{name}_{dsl_field})`` (WMA weights).
+    nt_codegen_helper_kwargs: tuple[tuple[str, str, str], ...] = field(default_factory=tuple)
 
     # Name of the output returned when the indicator is referenced without
     # a sub-value. Defaults to ``output_names[0]``. Channel indicators
@@ -232,15 +241,18 @@ class IndicatorSpec:
             )
             raise ValueError(msg)
 
-        # computed_outputs helpers must resolve in vibe_quant.dsl.derived.
-        # Lazy-imported to avoid a cycle during module initialization.
-        if self.computed_outputs:
+        # computed_outputs / primary_helper helpers must resolve in
+        # vibe_quant.dsl.derived. Lazy-imported to avoid an init-time cycle.
+        if self.computed_outputs or self.primary_helper or self.nt_codegen_helper_kwargs:
             from vibe_quant.dsl import derived as _derived
 
+            helpers = dict(self.computed_outputs)
+            if self.primary_helper:
+                helpers["<primary>"] = self.primary_helper
+            for kwarg, helper, _field in self.nt_codegen_helper_kwargs:
+                helpers[f"<{kwarg}>"] = helper
             missing_helpers = [
-                (out, helper)
-                for out, helper in self.computed_outputs.items()
-                if not hasattr(_derived, helper)
+                (out, helper) for out, helper in helpers.items() if not hasattr(_derived, helper)
             ]
             if missing_helpers:
                 missing_str = ", ".join(
@@ -536,6 +548,13 @@ def _period_kwargs(params: dict[str, object]) -> dict[str, object]:
     return {"period": params.get("period", 14)}
 
 
+def _wma_kwargs(params: dict[str, object]) -> dict[str, object]:
+    from vibe_quant.dsl.derived import linear_weights
+
+    period = int_param(params, "period", 14)
+    return {"period": period, "weights": linear_weights(period)}
+
+
 def _macd_kwargs(params: dict[str, object]) -> dict[str, object]:
     return {
         "fast_period": params.get("fast_period", 12),
@@ -649,8 +668,10 @@ def _wma_spec() -> IndicatorSpec:
         pandas_ta_func="wma",
         default_params={"period": 14},
         param_schema={"period": int},
-        nt_kwargs_fn=_period_kwargs,
+        nt_kwargs_fn=_wma_kwargs,
         nt_codegen_kwargs=(("period", "period"),),
+        # NT's WeightedMovingAverage without weights is an equal-weight SMA.
+        nt_codegen_helper_kwargs=(("weights", "linear_weights", "period"),),
         compute_fn=compute_wma,
         display_name="Weighted Moving Average",
         description="Linearly-weighted moving average. Middle ground between SMA and EMA.",
@@ -866,7 +887,40 @@ def _atr_spec() -> IndicatorSpec:
         category="Volatility",
         popular=True,
         param_ranges={"period": (5.0, 30.0)},
-        threshold_range=(0.001, 0.15),
+        # ATR is in absolute price units (BTC 1m median ~40 USD, SOL ~0.1), so
+        # no fixed scalar range is meaningful: the old (0.001, 0.15) made every
+        # ATR gene constant true/false (vibe-quant-e70tl.14). Excluded from the
+        # GA threshold pool; use NATR for volatility-regime genes.
+        threshold_range=None,
+    )
+
+
+@indicator_registry.register("NATR")
+def _natr_spec() -> IndicatorSpec:
+    return IndicatorSpec(
+        name="NATR",
+        nt_class=_get_nt_class("nautilus_trader.indicators", "AverageTrueRange"),
+        pandas_ta_func=None,
+        default_params={"period": 14},
+        param_schema={"period": int},
+        nt_kwargs_fn=_period_kwargs,
+        nt_codegen_kwargs=(("period", "period"),),
+        # value = 100 * ATR / close * sqrt(60 / bar_minutes): scale-free across
+        # symbols AND timeframes (equals classic NATR on 1h bars).
+        primary_helper="compute_natr_hourly",
+        requires_high_low=True,
+        display_name="Normalized ATR (% of price, 1h-equivalent)",
+        description=(
+            "ATR as a percentage of price, rescaled to a 1-hour bar "
+            "(x sqrt(60 / bar minutes)) so one threshold means the same "
+            "volatility regime on every symbol and timeframe."
+        ),
+        category="Volatility",
+        param_ranges={"period": (5.0, 30.0)},
+        # Validated on BTC/ETH/SOL 1m/5m/15m/1h/4h (2024-01..2026-03, 1m:
+        # 2025-03..2026-03) for periods 5/14/30: `natr > thr` fires on
+        # 5-95% of bars for every thr in this range.
+        threshold_range=(0.9, 1.2),
     )
 
 
@@ -1163,6 +1217,53 @@ def invoke_compute_fn(
         )
         raise ValueError(msg)
     return result
+
+
+# -----------------------------------------------------------------------------
+# compute_fn-path runtime helpers. Called by compiled strategies at __init__
+# with the params resolved from their config, so sweep/WFA overrides of an
+# indicator's period also move its warmup gate and rolling-buffer cap.
+# -----------------------------------------------------------------------------
+
+# Windowed indicators (RSI, MACD, STOCH, BBANDS, ...) converge to their
+# full-history values well within 10x their lookback (EMA/Wilder smoothing
+# weight decay is geometric: remaining weight after 10 periods ~ e^-20).
+PTA_BUFFER_LOOKBACK_MULTIPLE: int = 10
+PTA_BUFFER_MIN_CAP: int = 400
+
+
+def pta_lookback(spec_or_name: IndicatorSpec | str, params: dict[str, object]) -> int:
+    """Minimum buffered bars before a spec's ``compute_fn`` is called.
+
+    Dispatches to ``spec.pta_lookback_fn`` when set (TEMA, MACD, ICHIMOKU,
+    KAMA, ... have custom formulas); otherwise ``params["period"]`` (14 when
+    absent).
+    """
+    if isinstance(spec_or_name, str):
+        spec = indicator_registry.get(spec_or_name)
+        if spec is None:
+            msg = f"Unknown indicator type {spec_or_name!r} (plugin not loaded?)"
+            raise ValueError(msg)
+    else:
+        spec = spec_or_name
+    if spec.pta_lookback_fn is not None:
+        return int(spec.pta_lookback_fn(params))
+    period = params.get("period")
+    if isinstance(period, (int, float)):
+        return int(period)
+    return 14
+
+
+def pta_buffer_cap(lookbacks: list[int], *, full_history: bool) -> int:
+    """Rolling bar-buffer cap for compute_fn indicators (0 = unbounded).
+
+    Unbounded when any indicator is cumulative (``requires_full_history``,
+    e.g. OBV/VWAP) since truncation changes its value; otherwise
+    ``max(MIN_CAP, MULTIPLE x largest lookback)``.
+    """
+    if full_history:
+        return 0
+    return max(PTA_BUFFER_MIN_CAP, PTA_BUFFER_LOOKBACK_MULTIPLE * max(lookbacks, default=14))
 
 
 # -----------------------------------------------------------------------------

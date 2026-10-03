@@ -18,11 +18,14 @@ from typing import TYPE_CHECKING
 
 from vibe_quant.jobs.manager import run_with_heartbeat
 from vibe_quant.paper.config import (
+    DEFAULT_MARGIN_TYPE,
+    DEFAULT_PAPER_LOGS_PATH,
     BinanceTestnetConfig,
     ConfigurationError,
     PaperTradingConfig,
     RiskModuleConfig,
     SizingModuleConfig,
+    credential_env_names,
 )
 from vibe_quant.paper.node import run_paper_trading
 
@@ -37,17 +40,24 @@ def _decimal_from_str(value: str | float | int) -> Decimal:
     return Decimal(str(value))
 
 
+def _optional_decimal(data: dict[str, object], key: str) -> Decimal | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float)):
+        return _decimal_from_str(value)
+    raise ConfigurationError(f"{key} must be a number, got {type(value).__name__}")
+
+
 def load_config_from_json(config_path: Path) -> PaperTradingConfig:
     """Load paper trading config from JSON file.
 
-    Args:
-        config_path: Path to JSON config file.
-
-    Returns:
-        PaperTradingConfig instance.
+    Credentials are never read from the file: testnet uses
+    ``BINANCE_TESTNET_API_KEY/SECRET``, live uses ``BINANCE_API_KEY/SECRET``.
+    ``binance.testnet`` defaults to True when absent.
 
     Raises:
-        ConfigurationError: If config file is invalid.
+        ConfigurationError: If config file is invalid or contains credentials.
     """
     if not config_path.exists():
         raise ConfigurationError(f"Config file not found: {config_path}")
@@ -55,29 +65,33 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
     with config_path.open() as f:
         data = json.load(f)
 
-    # Parse binance config -- credentials always come from env vars
     binance_data = data.get("binance", {})
-    api_key = binance_data.get("api_key") or os.getenv("BINANCE_TESTNET_API_KEY", "")
-    api_secret = binance_data.get("api_secret") or os.getenv("BINANCE_TESTNET_API_SECRET", "")
+    if "api_key" in binance_data or "api_secret" in binance_data:
+        raise ConfigurationError(
+            "Binance credentials must not be stored in config files; "
+            "set them in the environment instead"
+        )
+    testnet = binance_data.get("testnet", True)
+    if not isinstance(testnet, bool):
+        raise ConfigurationError("binance.testnet must be true or false")
+    key_var, secret_var = credential_env_names(testnet)
     binance = BinanceTestnetConfig(
-        api_key=api_key,
-        api_secret=api_secret,
-        testnet=binance_data.get("testnet", True),
+        api_key=os.getenv(key_var, ""),
+        api_secret=os.getenv(secret_var, ""),
+        testnet=testnet,
         account_type=binance_data.get("account_type", "USDT_FUTURES"),
     )
 
-    # Parse sizing config
     sizing_data = data.get("sizing", {})
     sizing = SizingModuleConfig(
         method=sizing_data.get("method", "fixed_fractional"),
         max_leverage=_decimal_from_str(sizing_data.get("max_leverage", 20)),
-        max_position_pct=_decimal_from_str(sizing_data.get("max_position_pct", 0.5)),
-        risk_per_trade=_decimal_from_str(sizing_data.get("risk_per_trade", 0.02)),
+        max_position_pct=_optional_decimal(sizing_data, "max_position_pct"),
+        risk_per_trade=_optional_decimal(sizing_data, "risk_per_trade"),
         kelly_fraction=_decimal_from_str(sizing_data.get("kelly_fraction", 0.5)),
         atr_multiplier=_decimal_from_str(sizing_data.get("atr_multiplier", 2.0)),
     )
 
-    # Parse risk config
     risk_data = data.get("risk", {})
     risk = RiskModuleConfig(
         max_drawdown_pct=_decimal_from_str(risk_data.get("max_drawdown_pct", 0.15)),
@@ -86,15 +100,19 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
         max_position_count=int(risk_data.get("max_position_count", 5)),
     )
 
-    # Build config
     db_path_str = data.get("db_path")
-    logs_path_str = data.get("logs_path", "logs/paper")
+    logs_path_str = data.get("logs_path", str(DEFAULT_PAPER_LOGS_PATH))
+    leverage = data.get("leverage")
+    validation_run_id = data.get("validation_run_id")
 
     return PaperTradingConfig(
         trader_id=data["trader_id"],
         binance=binance,
-        symbols=data.get("symbols", []),
+        symbols=list(data.get("symbols") or []),
         strategy_id=data.get("strategy_id"),
+        validation_run_id=int(validation_run_id) if validation_run_id is not None else None,
+        leverage=int(leverage) if leverage is not None else None,
+        margin_type=str(data.get("margin_type", DEFAULT_MARGIN_TYPE)),
         sizing=sizing,
         risk=risk,
         db_path=Path(db_path_str) if db_path_str else None,
@@ -119,11 +137,22 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
         },
         "symbols": config.symbols,
         "strategy_id": config.strategy_id,
+        "validation_run_id": config.validation_run_id,
+        "leverage": config.leverage,
+        "margin_type": config.margin_type,
         "sizing": {
             "method": config.sizing.method,
             "max_leverage": str(config.sizing.max_leverage),
-            "max_position_pct": str(config.sizing.max_position_pct),
-            "risk_per_trade": str(config.sizing.risk_per_trade),
+            "max_position_pct": (
+                str(config.sizing.max_position_pct)
+                if config.sizing.max_position_pct is not None
+                else None
+            ),
+            "risk_per_trade": (
+                str(config.sizing.risk_per_trade)
+                if config.sizing.risk_per_trade is not None
+                else None
+            ),
             "kelly_fraction": str(config.sizing.kelly_fraction),
             "atr_multiplier": str(config.sizing.atr_multiplier),
         },
@@ -143,12 +172,15 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
         json.dump(data, f, indent=2)
 
 
-async def run_with_config(config_path: Path, run_id: int | None = None) -> int:
+async def run_with_config(
+    config_path: Path, run_id: int | None = None, *, allow_live: bool = False
+) -> int:
     """Run paper trading with config file.
 
     Args:
         config_path: Path to JSON config file.
         run_id: Optional run ID for heartbeat registration.
+        allow_live: Must be True (``--live``) to run a config with testnet=false.
 
     Returns:
         Exit code (0 for success, 1 for error).
@@ -160,6 +192,14 @@ async def run_with_config(config_path: Path, run_id: int | None = None) -> int:
         return 1
     except json.JSONDecodeError as e:
         print(f"Invalid JSON in config file: {e}", file=sys.stderr)
+        return 1
+
+    if not config.binance.testnet and not allow_live:
+        print(
+            "Refusing to trade LIVE: config has binance.testnet=false; "
+            "re-run with --live to confirm real-money trading",
+            file=sys.stderr,
+        )
         return 1
 
     # Validate config
@@ -219,11 +259,16 @@ def main() -> int:
         default=None,
         help="Run ID for heartbeat registration",
     )
+    start_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Confirm LIVE (real-money) trading for configs with binance.testnet=false",
+    )
 
     args = parser.parse_args()
 
     if args.command == "start":
-        return asyncio.run(run_with_config(args.config, args.run_id))
+        return asyncio.run(run_with_config(args.config, args.run_id, allow_live=args.live))
 
     return 1
 

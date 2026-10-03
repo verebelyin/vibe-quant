@@ -42,6 +42,10 @@ def make_mock_instrument(size_precision: int = 3) -> MagicMock:
     """Create a mock CryptoPerpetual instrument."""
     instrument = MagicMock()
     instrument.size_precision = size_precision
+    # No lot rules on the mock; real-instrument rules: test_audit_paper_sizing.py
+    instrument.size_increment = None
+    instrument.min_quantity = None
+    instrument.min_notional = None
     return instrument
 
 

@@ -676,6 +676,7 @@
           "data"
         ],
         "summary": "Data Quality",
+        "description": "Verify the archived 1m klines: exact 1-minute continuity, OHLC sanity,\nflat zero-volume filler runs. Sync endpoint (threadpool): it streams ~1M rows.",
         "operationId": "data_quality_api_data_quality__symbol__get",
         "parameters": [
           {
@@ -1031,7 +1032,7 @@
           "discovery"
         ],
         "summary": "Promote Discovered Strategy",
-        "description": "Export genome as strategy and launch screening/validation backtest.",
+        "description": "Export genome as strategy and launch screening/validation backtest.\n\n``mode=validation`` validates on the discovery run's HOLDOUT (out-of-sample)\nrange by default; ``validation_range=full`` opts into the full discovery\nrange (mostly in-sample). Runs without a holdout always use the full range.\n``mode=screening`` is a like-for-like replay of the full discovery range\n(the replay-drift check compares it with the full-range headline). The\nrange used is recorded in the run's ``promote_source``.",
         "operationId": "promote_discovered_strategy_api_discovery_results__run_id__promote__strategy_index__post",
         "parameters": [
           {
@@ -1060,6 +1061,16 @@
               "type": "string",
               "default": "screening",
               "title": "Mode"
+            }
+          },
+          {
+            "name": "validation_range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "holdout",
+              "title": "Validation Range"
             }
           }
         ],
@@ -1494,7 +1505,7 @@
           "paper"
         ],
         "summary": "Restore Paper",
-        "description": "Restore a paper session for an existing trader_id.\n\nReuses the most-recent saved config (strategy + risk/sizing params) for\ntrader_id. The paper CLI auto-loads the latest checkpoint on startup, so\nthe new session resumes from wherever the prior one stopped.",
+        "description": "Restart a paper session for an existing trader_id.\n\nReuses the most-recent saved config (strategy, validation run, symbols,\nrisk/sizing) for trader_id. On startup the node loads that trader's latest\ncheckpoint and restores the risk bookkeeping (high water mark, UTC-day\nbaseline, consecutive losses) so limits survive the restart. Open positions\nand orders are NOT taken from the checkpoint: NautilusTrader reconciles them\nfrom the venue and the strategy claims them (``external_order_claims``), so\nthe restored session manages the existing position instead of opening a\nsecond one.",
         "operationId": "restore_paper_api_paper_restore_post",
         "requestBody": {
           "content": {
@@ -1536,18 +1547,43 @@
           "paper"
         ],
         "summary": "Halt Paper",
+        "description": "``halt``: flatten (reduce-only), cancel orders, stop strategies.\n``pause``: block new entries only; SL/TP and exits keep working.",
         "operationId": "halt_paper_api_paper_halt_post",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "halt",
+                "pause"
+              ],
+              "type": "string",
+              "default": "halt",
+              "title": "Mode"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Halt Paper Api Paper Halt Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1561,6 +1597,7 @@
           "paper"
         ],
         "summary": "Resume Paper",
+        "description": "Resume from pause or an operator-resumable halt (never while killed).",
         "operationId": "resume_paper_api_paper_resume_post",
         "responses": {
           "200": {
@@ -1568,9 +1605,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Resume Paper Api Paper Resume Post"
                 }
@@ -1611,7 +1646,7 @@
           "paper"
         ],
         "summary": "Close All Positions",
-        "description": "Signal the paper trading process to close all open positions.",
+        "description": "Close every open position with reduce-only market orders and wait until flat.\n\n502 with the node's error list when anything could not be closed.",
         "operationId": "close_all_positions_api_paper_close_all_positions_post",
         "responses": {
           "200": {
@@ -1619,9 +1654,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Close All Positions Api Paper Close All Positions Post"
                 }
@@ -1658,7 +1691,7 @@
           "paper"
         ],
         "summary": "Get Positions",
-        "description": "Return open positions from the latest checkpoint for trader_id.\n\nWebSocket /ws/trading streams real-time updates; this endpoint provides\na fallback snapshot when the UI first loads or the socket is down.",
+        "description": "Return open positions from the latest checkpoint for trader_id.\n\nCheckpoints store NautilusTrader ``Position.to_dict()`` (instrument_id,\nside, quantity, avg_px_open) enriched with unrealized_pnl and leverage.",
         "operationId": "get_positions_api_paper_positions_get",
         "parameters": [
           {
@@ -1712,7 +1745,7 @@
           "paper"
         ],
         "summary": "Get Orders",
-        "description": "Return open orders from the latest checkpoint for trader_id.",
+        "description": "Return open orders (``Order.to_dict()``) from the latest checkpoint.",
         "operationId": "get_orders_api_paper_orders_get",
         "parameters": [
           {
@@ -1880,7 +1913,7 @@
           "reconciliation"
         ],
         "summary": "Reconcile Paper Session",
-        "description": "Reconcile a stopped paper session against a validation run.\n\nV1: post-stop only. If the paper session is still running, returns 400.\n\nIf `validation_run_id` is omitted, we try to pick the most recent\nsuccessful validation run for the same strategy_id as the paper session.",
+        "description": "Reconcile a stopped paper session against a validation run.\n\nV1: post-stop only. If the paper session is still running, returns 400.\n\nIf `validation_run_id` is omitted, the validation run the session was\nstarted from is used, else the most recent completed validation run for\nthe same strategy_id.\n\nPaper trades come from the node's event log (``{logs_path}/{trader_id}.jsonl``),\nvalidation trades from the ``trades`` table. Zero trades -> parity ``null``.",
         "operationId": "reconcile_paper_session_api_reconciliation__paper_session_id__get",
         "parameters": [
           {
@@ -3418,6 +3451,7 @@
           "results"
         ],
         "summary": "Update Notes",
+        "description": "Save the user's free-text notes (``user_notes``).\n\nNever touches ``notes``, which holds machine JSON (discovery results,\nconsistency flags) that promote/export depend on.",
         "operationId": "update_notes_api_results_runs__run_id__notes_put",
         "parameters": [
           {
@@ -3934,6 +3968,7 @@
           "settings"
         ],
         "summary": "Get Database Info",
+        "description": "Active state DB (read-only).\n\nThere is deliberately no runtime switch: swapping the API's StateManager\nleft the job manager, every job subprocess and other workers on the old DB\n(runs and results split across two DBs). Choose the DB at backend start\nwith ``VIBE_QUANT_DB=path``.",
         "operationId": "get_database_info_api_settings_database_get",
         "responses": {
           "200": {
@@ -3942,45 +3977,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DatabaseInfoResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Switch Database",
-        "operationId": "switch_database_api_settings_database_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DatabaseSwitchRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatabaseInfoResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -4290,7 +4286,7 @@
           "system"
         ],
         "summary": "Kill",
-        "description": "Engage the system-wide kill switch.\n\n- Persists kill state to the DB so restarts stay halted.\n- Sends SIGUSR1 to any active paper-trading PID (best-effort).\n- Broadcasts `system_killed` over the trading WebSocket.",
+        "description": "Engage the system-wide kill switch.\n\n- Persists kill state to the DB so restarts stay halted (nodes poll it).\n- Queues a ``kill`` command for every active paper session (no signals:\n  a recycled PID can never receive it).\n- Broadcasts `system_killed` over the trading WebSocket.",
         "operationId": "kill_api_system_kill_post",
         "requestBody": {
           "content": {
@@ -4503,28 +4499,6 @@
             "type": "object",
             "title": "Parameters"
           },
-          "sizing_config_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sizing Config Id"
-          },
-          "risk_config_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Risk Config Id"
-          },
           "latency_preset": {
             "anyOf": [
               {
@@ -4535,22 +4509,9 @@
               }
             ],
             "title": "Latency Preset"
-          },
-          "overfitting_filters": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "boolean"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Overfitting Filters"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "strategy_id",
@@ -4902,6 +4863,17 @@
             ],
             "title": "Created At"
           },
+          "user_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Notes"
+          },
           "skewness": {
             "anyOf": [
               {
@@ -4957,6 +4929,17 @@
             ],
             "title": "Bootstrap Ci Level"
           },
+          "bootstrap_min_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bootstrap Min Sharpe"
+          },
           "wfa_sharpe_consistency": {
             "anyOf": [
               {
@@ -4967,6 +4950,39 @@
               }
             ],
             "title": "Wfa Sharpe Consistency"
+          },
+          "wfa_consistency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Consistency"
+          },
+          "wfa_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wfa Passed"
+          },
+          "cross_window_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Window Passed"
           },
           "cross_window_results": {
             "anyOf": [
@@ -5386,6 +5402,30 @@
             "type": "array",
             "title": "Gaps"
           },
+          "gap_count": {
+            "type": "integer",
+            "title": "Gap Count",
+            "default": 0
+          },
+          "missing_bars": {
+            "type": "integer",
+            "title": "Missing Bars",
+            "default": 0
+          },
+          "zero_volume_runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Zero Volume Runs",
+            "default": []
+          },
+          "zero_volume_bars": {
+            "type": "integer",
+            "title": "Zero Volume Bars",
+            "default": 0
+          },
           "quality_score": {
             "anyOf": [
               {
@@ -5408,6 +5448,11 @@
           "ohlc_error_count": {
             "type": "integer",
             "title": "Ohlc Error Count",
+            "default": 0
+          },
+          "kline_count": {
+            "type": "integer",
+            "title": "Kline Count",
             "default": 0
           },
           "error": {
@@ -5473,19 +5518,6 @@
           "tables"
         ],
         "title": "DatabaseInfoResponse"
-      },
-      "DatabaseSwitchRequest": {
-        "properties": {
-          "path": {
-            "type": "string",
-            "title": "Path"
-          }
-        },
-        "type": "object",
-        "required": [
-          "path"
-        ],
-        "title": "DatabaseSwitchRequest"
       },
       "DiscoveryJobResponse": {
         "properties": {
@@ -5801,7 +5833,7 @@
           "train_test_split": {
             "type": "number",
             "title": "Train Test Split",
-            "default": 0.0
+            "default": 0.8
           },
           "cross_window_months": {
             "anyOf": [
@@ -5941,7 +5973,14 @@
             "title": "Validation Only"
           },
           "parity_rate": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Parity Rate"
           },
           "side_disagreements": {
@@ -5949,11 +5988,25 @@
             "title": "Side Disagreements"
           },
           "mean_entry_slippage": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Mean Entry Slippage"
           },
           "mean_pnl_delta": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Mean Pnl Delta"
           }
         },
@@ -5967,7 +6020,8 @@
           "mean_entry_slippage",
           "mean_pnl_delta"
         ],
-        "title": "DivergenceSummary"
+        "title": "DivergenceSummary",
+        "description": "``None`` rates/means = no data (zero trades / zero matches), never 100%."
       },
       "DrawdownPoint": {
         "properties": {
@@ -7275,7 +7329,8 @@
         "required": [
           "notes"
         ],
-        "title": "NotesUpdateRequest"
+        "title": "NotesUpdateRequest",
+        "description": "User free-text notes (stored in ``backtest_results.user_notes``)."
       },
       "OhlcError": {
         "properties": {
@@ -7437,8 +7492,14 @@
           "trader_id": {
             "type": "string",
             "title": "Trader Id"
+          },
+          "confirm_live": {
+            "type": "boolean",
+            "title": "Confirm Live",
+            "default": false
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "trader_id"
@@ -7448,12 +7509,50 @@
       "PaperStartRequest": {
         "properties": {
           "strategy_id": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Strategy Id"
+          },
+          "validation_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Run Id"
+          },
+          "symbols": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbols"
           },
           "testnet": {
             "type": "boolean",
             "title": "Testnet",
+            "default": true
+          },
+          "confirm_live": {
+            "type": "boolean",
+            "title": "Confirm Live",
+            "description": "Must be true together with testnet=false to trade real funds.",
             "default": false
           },
           "trader_id": {
@@ -7470,7 +7569,8 @@
           "sizing_method": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "const": "fixed_fractional"
               },
               {
                 "type": "null"
@@ -7481,7 +7581,9 @@
           "max_leverage": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "maximum": 125.0,
+                "minimum": 1.0
               },
               {
                 "type": "null"
@@ -7492,7 +7594,9 @@
           "max_position_pct": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "maximum": 125.0,
+                "exclusiveMinimum": 0.0
               },
               {
                 "type": "null"
@@ -7503,7 +7607,9 @@
           "risk_per_trade": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "maximum": 0.5,
+                "exclusiveMinimum": 0.0
               },
               {
                 "type": "null"
@@ -7514,7 +7620,9 @@
           "max_drawdown_pct": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "maximum": 1.0,
+                "exclusiveMinimum": 0.0
               },
               {
                 "type": "null"
@@ -7525,7 +7633,9 @@
           "max_daily_loss_pct": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "maximum": 1.0,
+                "exclusiveMinimum": 0.0
               },
               {
                 "type": "null"
@@ -7536,7 +7646,8 @@
           "max_consecutive_losses": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 1.0
               },
               {
                 "type": "null"
@@ -7547,7 +7658,8 @@
           "max_position_count": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 1.0
               },
               {
                 "type": "null"
@@ -7556,11 +7668,10 @@
             "title": "Max Position Count"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "required": [
-          "strategy_id"
-        ],
-        "title": "PaperStartRequest"
+        "title": "PaperStartRequest",
+        "description": "Start a paper session.\n\nPrefer ``validation_run_id``: the session then trades that run's exact\nstrategy parameters, symbols and leverage. Without it, ``strategy_id`` and\n``symbols`` are required and the compiled DSL defaults are traded.\n\nFractions, not percent: ``risk_per_trade=0.02`` is 2%. Credentials are\nnever accepted here (env only); unknown fields are rejected."
       },
       "PaperStatusResponse": {
         "properties": {
@@ -7583,6 +7694,61 @@
           "trades_count": {
             "type": "integer",
             "title": "Trades Count"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "trader_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trader Id"
+          },
+          "testnet": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Testnet"
+          },
+          "halt_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Halt Reason"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
           }
         },
         "type": "object",
@@ -9497,6 +9663,33 @@
           "mode": {
             "type": "string",
             "title": "Mode"
+          },
+          "date_range": {
+            "type": "string",
+            "title": "Date Range",
+            "default": "full"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Date"
           }
         },
         "type": "object",

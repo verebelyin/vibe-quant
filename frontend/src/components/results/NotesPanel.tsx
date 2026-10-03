@@ -16,7 +16,10 @@ export function NotesPanel({ runId }: NotesPanelProps) {
   const summaryQuery = useGetRunSummaryApiResultsRunsRunIdGet(runId);
   const mutation = useUpdateNotesApiResultsRunsRunIdNotesPut();
 
-  const serverNotes = (summaryQuery.data?.data as Record<string, unknown> | undefined)?.notes as string ?? "";
+  // user_notes only — `notes` is machine JSON (discovery results) and must never
+  // be shown here or overwritten by the editor.
+  const summary = summaryQuery.data?.status === 200 ? summaryQuery.data.data : undefined;
+  const serverNotes = summary?.user_notes ?? "";
   const [text, setText] = useState(serverNotes);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [lastSaved, setLastSaved] = useState<Date | null>(null);

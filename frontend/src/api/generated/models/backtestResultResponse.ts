@@ -40,12 +40,17 @@ export interface BacktestResultResponse {
   starting_balance: number | null;
   notes: string | null;
   created_at: string | null;
+  user_notes?: string | null;
   skewness?: number | null;
   kurtosis?: number | null;
   bootstrap_sharpe_lower?: number | null;
   bootstrap_sharpe_upper?: number | null;
   bootstrap_ci_level?: number | null;
+  bootstrap_min_sharpe?: number | null;
   wfa_sharpe_consistency?: number | null;
+  wfa_consistency?: number | null;
+  wfa_passed?: boolean | null;
+  cross_window_passed?: boolean | null;
   cross_window_results?: BacktestResultResponseCrossWindowResults;
   cross_regime_results?: BacktestResultResponseCrossRegimeResults;
   random_short_baseline_pct?: number | null;

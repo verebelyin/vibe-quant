@@ -8,13 +8,12 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.api.schemas.settings import (
     DatabaseInfoResponse,
-    DatabaseSwitchRequest,
     LatencyPreset,
     RiskConfigCreate,
     RiskConfigResponse,
@@ -24,6 +23,7 @@ from vibe_quant.api.schemas.settings import (
     SizingConfigUpdate,
     SystemInfoResponse,
 )
+from vibe_quant.db.connection import DEFAULT_DB_PATH
 from vibe_quant.db.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
@@ -229,9 +229,13 @@ def _file_size(path: str | Path) -> int:
         return 0
 
 
+def _db_path(mgr: StateManager) -> Path:
+    return mgr._db_path or DEFAULT_DB_PATH  # noqa: SLF001
+
+
 @router.get("/system-info", response_model=SystemInfoResponse)
 async def get_system_info(mgr: StateMgr) -> SystemInfoResponse:
-    db_path = mgr._db_path or Path("data/state/vibe_quant.db")  # noqa: SLF001
+    db_path = _db_path(mgr)
     catalog_path = Path("data/catalog")
     catalog_size = 0
     if catalog_path.exists():
@@ -252,41 +256,13 @@ async def get_system_info(mgr: StateMgr) -> SystemInfoResponse:
 
 @router.get("/database", response_model=DatabaseInfoResponse)
 async def get_database_info(mgr: StateMgr) -> DatabaseInfoResponse:
-    db_path = mgr._db_path or Path("data/state/vibe_quant.db")  # noqa: SLF001
+    """Active state DB (read-only).
+
+    There is deliberately no runtime switch: swapping the API's StateManager
+    left the job manager, every job subprocess and other workers on the old DB
+    (runs and results split across two DBs). Choose the DB at backend start
+    with ``VIBE_QUANT_DB=path``.
+    """
     cursor = mgr.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = [row[0] for row in cursor]
-    return DatabaseInfoResponse(path=str(db_path), tables=tables)
-
-
-@router.put("/database", response_model=DatabaseInfoResponse)
-async def switch_database(body: DatabaseSwitchRequest, request: Request) -> DatabaseInfoResponse:
-    new_path = Path(body.path)
-    if not new_path.suffix == ".db":
-        raise HTTPException(status_code=400, detail="Database path must end in .db")
-
-    # Prevent path traversal — resolve to absolute and enforce allowed directory
-    allowed_dir = Path("data/state").resolve()
-    try:
-        resolved = new_path.resolve()
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
-    if not str(resolved).startswith(str(allowed_dir) + os.sep) and resolved != allowed_dir:
-        raise HTTPException(
-            status_code=400,
-            detail="Database path must be within data/state/ directory",
-        )
-
-    if not new_path.parent.exists():
-        raise HTTPException(status_code=400, detail="Parent directory does not exist")
-
-    old_mgr: StateManager = request.app.state.state_manager
-    old_mgr.close()
-
-    new_mgr = StateManager(db_path=new_path)
-    # Force connection init
-    _ = new_mgr.conn
-    request.app.state.state_manager = new_mgr
-
-    cursor = new_mgr.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = [row[0] for row in cursor]
-    return DatabaseInfoResponse(path=str(new_path), tables=tables)
+    return DatabaseInfoResponse(path=str(_db_path(mgr)), tables=tables)

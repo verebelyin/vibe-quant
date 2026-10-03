@@ -67,6 +67,3 @@ class DatabaseInfoResponse(BaseModel):
     path: str
     tables: list[str]
 
-
-class DatabaseSwitchRequest(BaseModel):
-    path: str

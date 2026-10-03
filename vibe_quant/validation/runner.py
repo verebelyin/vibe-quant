@@ -11,7 +11,6 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import date, timedelta
-from datetime import datetime as dt
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +19,8 @@ from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
+from vibe_quant.metrics import profit_factor
+from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 from vibe_quant.validation.venue import (
@@ -129,10 +130,19 @@ class ValidationRunner:
         # Validate strategy DSL (compilation happens in _run_backtest)
         dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
-        # Resolve detail timeframe: auto-detect 5s for 1m strategies
-        effective_detail = self._resolve_detail_timeframe(
-            run_config, dsl.timeframe, detail_timeframe
-        )
+        # Resolve fill-resolution detail data and clamp the run window to the
+        # data actually available (bd vibe-quant-e70tl.13). Missing detail data
+        # fails the run instead of silently degrading to strategy-TF fills.
+        try:
+            effective_detail = self._resolve_detail_timeframe(
+                run_config, dsl.timeframe, detail_timeframe
+            )
+            run_config, window_note = self._clamp_run_window(
+                run_config, effective_detail or dsl.timeframe
+            )
+        except ValidationRunnerError as exc:
+            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
+            raise
 
         # Determine latency preset — re-enable when detail data provides
         # sub-bar resolution for the matching engine
@@ -179,6 +189,7 @@ class ValidationRunner:
                         "end_date": run_config.get("end_date"),
                         "detail_timeframe": effective_detail,
                         "leverage": float(venue_config.default_leverage),
+                        "data_window": window_note,
                     },
                 )
 
@@ -195,8 +206,21 @@ class ValidationRunner:
                 self._write_completion_event(writer, run_id, strategy_name, result)
 
             result.execution_time_seconds = time.monotonic() - start_time
+            if window_note is not None:
+                result.notes["data_window"] = window_note
+            if result.funding_fallback_settlements:
+                result.notes["funding"] = {
+                    "fallback_settlements": result.funding_fallback_settlements,
+                    "fallback_rate_per_8h": FundingCalculator().default_rate,
+                }
             self._store_results(run_id, result)
-            self._check_screening_consistency(run_id, strategy_id, strategy_name, result)
+            consistency = self._check_screening_consistency(
+                run_id, strategy_id, strategy_name, result, run_config=run_config
+            )
+            if consistency is not None:
+                result.notes["consistency"] = consistency
+            if result.notes:
+                self._state.update_result_notes(run_id, json.dumps(result.notes))
 
             logger.info(
                 "Run %d result: trades=%d (%dW/%dL) return=%.2f%% sharpe=%.2f "
@@ -285,9 +309,16 @@ class ValidationRunner:
         dsl_config = strategy_data["dsl_config"]
         dsl = self._validate_dsl(dsl_config, strategy_name=strategy_name)
 
-        effective_detail = self._resolve_detail_timeframe(
-            run_config, dsl.timeframe, detail_timeframe
-        )
+        try:
+            effective_detail = self._resolve_detail_timeframe(
+                run_config, dsl.timeframe, detail_timeframe
+            )
+            run_config, _window_note = self._clamp_run_window(
+                run_config, effective_detail or dsl.timeframe
+            )
+        except ValidationRunnerError as exc:
+            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
+            raise
         effective_latency = self._resolve_latency(run_config, latency_preset)
         venue_config = self._create_venue_config(
             run_config,
@@ -505,7 +536,11 @@ class ValidationRunner:
             sharpe_ratio=_trade_weighted_avg("sharpe_ratio"),
             sortino_ratio=_trade_weighted_avg("sortino_ratio"),
             max_drawdown=max(r.max_drawdown for r in window_results),
-            profit_factor=_trade_weighted_avg("profit_factor"),
+            # Pooled trade PF over every window's trades (same definition
+            # as a single run), not a trade-weighted mean of window PFs.
+            profit_factor=profit_factor(
+                t.net_pnl for r in window_results for t in r.trades
+            ),
             win_rate=win_rate,
             total_trades=total_trades,
             total_fees=sum(r.total_fees for r in window_results),
@@ -734,6 +769,7 @@ class ValidationRunner:
             CatalogManager,
             create_instrument,
         )
+        from vibe_quant.validation.extraction import finest_timeframe
 
         # Parse symbols from run config
         symbols = self._parse_symbols(run_config)
@@ -760,7 +796,7 @@ class ValidationRunner:
         # Compile strategy to an importable module (registers in sys.modules)
         module = self._compiler.compile_to_module(dsl)
         class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        module_path = module.__name__  # content-addressed (vibe-quant-e70tl.1)
 
         # Verify generated classes exist in the module
         strategy_cls_name = f"{class_name}Strategy"
@@ -947,6 +983,10 @@ class ValidationRunner:
                 primary_timeframe=dsl.timeframe,
                 run_start_date=start_date,
                 run_end_date=end_date,
+                execution_timeframe=finest_timeframe(
+                    all_timeframes | ({detail_timeframe} if detail_timeframe else set())
+                ),
+                catalog_path=catalog_path,
             )
 
             # Log trade events
@@ -1051,17 +1091,34 @@ class ValidationRunner:
 
         When detail data provides sub-bar resolution, LatencyModel handles
         degradation so execution_delay_probability is not needed.
+
+        Without finer data (1m strategies have no 5s catalog data) latency
+        is skipped, so EVERY entry/exit is deferred one bar, exactly like
+        screening. The previous 30% deferral left 70% of fills at the signal
+        bar's own close -- same-bar look-ahead (bd vibe-quant-e70tl.13).
         """
         augmented = dict(params)
         if timeframe in self._SUB_BAR_TIMEFRAMES and not has_detail_data:
-            augmented.setdefault("execution_delay_probability", 0.3)
+            augmented.setdefault("execution_delay_probability", 1.0)
         return augmented
 
-    # Default detail timeframe for sub-5m strategies when detail data exists
-    _DEFAULT_DETAIL_TIMEFRAME = "5s"
-
-    # Default fill-resolution detail for supra-5m strategies (intrabar SL/TP)
+    # Detail data that gives a strategy timeframe intrabar fill resolution:
+    # 1m strategies look for 5s bars (optional, usually absent); every
+    # coarser strategy -- including 3m/5m, which used to ask for 5s and so
+    # never got detail -- uses 1m bars (bd vibe-quant-e70tl.13).
+    _SUB_MINUTE_DETAIL_TIMEFRAME = "5s"
     _DEFAULT_COARSE_DETAIL_TIMEFRAME = "1m"
+    _TIMEFRAME_SECONDS: dict[str, int] = {  # noqa: RUF012 — read-only table
+        "1s": 1,
+        "5s": 5,
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3_600,
+        "4h": 14_400,
+        "1d": 86_400,
+    }
 
     def _resolve_detail_timeframe(
         self,
@@ -1069,10 +1126,15 @@ class ValidationRunner:
         strategy_timeframe: str,
         override: str | None,
     ) -> str | None:
-        """Resolve the effective detail timeframe for sub-bar fill resolution.
+        """Resolve the detail (fill-resolution) timeframe for a run.
 
-        Auto-detects available detail data for sub-5m strategies. Returns
-        None if no detail data is needed or available.
+        Explicit overrides (argument or ``parameters.detail_timeframe``) win.
+        Otherwise strategies coarser than 1m use 1m detail -- whose presence
+        and coverage :meth:`_clamp_run_window` then enforces (missing 1m data
+        fails the run; it no longer silently falls back to strategy-TF
+        fills). 1m strategies use 5s detail only when every symbol has it;
+        without it they run with full one-bar deferral (see
+        :meth:`_augment_strategy_params_for_validation`).
 
         Args:
             run_config: Run configuration from database.
@@ -1080,7 +1142,7 @@ class ValidationRunner:
             override: Explicit detail timeframe override.
 
         Returns:
-            Detail timeframe string (e.g., '5s') or None.
+            Detail timeframe string (e.g., '1m') or None.
         """
         # Explicit override always wins
         if override is not None:
@@ -1091,10 +1153,6 @@ class ValidationRunner:
         if isinstance(params, dict) and params.get("detail_timeframe"):
             return str(params["detail_timeframe"])
 
-        # Auto-detect: check if default detail data covers the run window
-        # for ALL symbols. Venue config (latency on/off) and strategy params
-        # (execution_delay_probability) are run-wide, so partial coverage
-        # would remove degradation for symbols without sub-bar data.
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
             INTERVAL_TO_AGGREGATION,
@@ -1104,76 +1162,137 @@ class ValidationRunner:
         symbols = self._parse_symbols(run_config)
         if not symbols:
             return None
-
-        # Sub-5m strategies get 5s detail; coarser strategies default to 1m
-        # detail so the matching engine triggers stops/TPs intrabar. The
-        # latter preserves historical validation semantics: before the NT
-        # 1.230 data-targeting fix, untargeted catalog loading fed the venue
-        # the full 1m stream on every validation run.
-        detail_tf = (
-            self._DEFAULT_DETAIL_TIMEFRAME
-            if strategy_timeframe in self._SUB_BAR_TIMEFRAMES
-            else self._DEFAULT_COARSE_DETAIL_TIMEFRAME
-        )
-        if detail_tf == strategy_timeframe or detail_tf not in INTERVAL_TO_AGGREGATION:
+        if not isinstance(run_config.get("start_date"), str) or not isinstance(
+            run_config.get("end_date"), str
+        ):
             return None
 
-        # Parse run date window for coverage check
+        strategy_seconds = self._TIMEFRAME_SECONDS.get(strategy_timeframe)
+        if strategy_seconds is None:
+            return None
+        detail_tf = (
+            self._DEFAULT_COARSE_DETAIL_TIMEFRAME
+            if strategy_seconds > self._TIMEFRAME_SECONDS["1m"]
+            else self._SUB_MINUTE_DETAIL_TIMEFRAME
+        )
+        if (
+            detail_tf not in INTERVAL_TO_AGGREGATION
+            or self._TIMEFRAME_SECONDS[detail_tf] >= strategy_seconds
+        ):
+            return None
+
+        if detail_tf == self._SUB_MINUTE_DETAIL_TIMEFRAME:
+            # Sub-minute data is optional: use it only if every symbol has it
+            catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
+            for symbol in symbols:
+                if catalog_mgr.get_bar_date_range(symbol, detail_tf) is None:
+                    logger.info(
+                        "No %s detail data for %s — %s strategy runs with one-bar "
+                        "deferral instead of latency",
+                        detail_tf,
+                        symbol,
+                        strategy_timeframe,
+                    )
+                    return None
+
+        logger.info("Using %s detail data for %s strategy", detail_tf, strategy_timeframe)
+        return detail_tf
+
+    def _clamp_run_window(
+        self,
+        run_config: dict[str, object],
+        fill_timeframe: str,
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
+        """Clamp the run window to the span the fill-resolution data covers.
+
+        The window end used to be allowed past the last 1m bar, which made
+        the detail data silently drop out (fills at the next 4h close with
+        latency on). Now every symbol must have ``fill_timeframe`` bars;
+        the window is clamped to whole UTC days fully covered by all of
+        them, with a WARNING and a note persisted in the result notes.
+
+        Returns:
+            ``(run_config, note)`` -- a copy with effective dates when
+            clamped (note describes requested vs effective window), else the
+            original config and ``None``.
+
+        Raises:
+            ValidationRunnerError: a symbol has no ``fill_timeframe`` data,
+                or no full day of the window is covered.
+        """
+        from vibe_quant.data.catalog import (
+            DEFAULT_CATALOG_PATH,
+            INTERVAL_TO_AGGREGATION,
+            CatalogManager,
+        )
+
         run_start = run_config.get("start_date")
         run_end = run_config.get("end_date")
         if not isinstance(run_start, str) or not isinstance(run_end, str):
-            return None
-
-        try:
-            window_start = dt.fromisoformat(run_start)
-            window_end = dt.fromisoformat(run_end)
-        except ValueError:
-            return None
+            return run_config, None
+        if fill_timeframe not in INTERVAL_TO_AGGREGATION:
+            return run_config, None
+        start = self._parse_run_date(run_start, "start_date")
+        end = self._parse_run_date(run_end, "end_date")
 
         catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
-
-        # Require ALL symbols to have detail data covering the run window
-        for symbol in symbols:
-            date_range = catalog_mgr.get_bar_date_range(symbol, detail_tf)
+        bar_seconds = self._TIMEFRAME_SECONDS.get(fill_timeframe, 0)
+        covered_from: date | None = None
+        covered_to: date | None = None
+        for symbol in self._parse_symbols(run_config):
+            date_range = catalog_mgr.get_bar_date_range(symbol, fill_timeframe)
             if date_range is None:
-                logger.info(
-                    "No %s detail data for %s — skipping sub-bar resolution",
-                    detail_tf,
-                    symbol,
+                msg = (
+                    f"No {fill_timeframe} bars for {symbol} in the catalog. Validation "
+                    f"needs {fill_timeframe} data for intrabar fills/latency — download "
+                    f"it (Data Management) before validating."
                 )
-                return None
+                raise ValidationRunnerError(msg)
+            first_open, last_open = date_range
+            # Whole UTC days covered: from the first midnight at/after the first
+            # bar's open to the midnight at/before the last bar's close.
+            first_day = first_open.date()
+            if (first_open.hour, first_open.minute, first_open.second) != (0, 0, 0):
+                first_day += timedelta(days=1)
+            last_day = (last_open + timedelta(seconds=bar_seconds)).date()
+            covered_from = first_day if covered_from is None else max(covered_from, first_day)
+            covered_to = last_day if covered_to is None else min(covered_to, last_day)
 
-            data_start, data_end = date_range
-            # Compare timezone-naive to handle mixed tz/naive dates
-            data_s = data_start.replace(tzinfo=None)
-            data_e = data_end.replace(tzinfo=None)
-            win_s = window_start.replace(tzinfo=None)
-            win_e = window_end.replace(tzinfo=None)
-            if data_s > win_s:
-                logger.info(
-                    "Detail %s data for %s starts %s, after run start %s — skipping",
-                    detail_tf,
-                    symbol,
-                    data_start.isoformat(),
-                    run_start,
-                )
-                return None
-            if data_e < win_e:
-                logger.info(
-                    "Detail %s data for %s ends %s, before run end %s — skipping",
-                    detail_tf,
-                    symbol,
-                    data_end.isoformat(),
-                    run_end,
-                )
-                return None
+        if covered_from is None or covered_to is None:
+            return run_config, None
+        eff_start = max(start, covered_from)
+        eff_end = min(end, covered_to)
+        if eff_end <= eff_start:
+            msg = (
+                f"{fill_timeframe} data covers {covered_from}..{covered_to}, which does not "
+                f"overlap the run window {run_start}..{run_end}"
+            )
+            raise ValidationRunnerError(msg)
+        if eff_start == start and eff_end == end:
+            return run_config, None
 
-        logger.info(
-            "Auto-detected %s detail data covering run window for all %d symbols",
-            detail_tf,
-            len(symbols),
+        note: dict[str, object] = {
+            "requested_start": run_start,
+            "requested_end": run_end,
+            "effective_start": eff_start.isoformat(),
+            "effective_end": eff_end.isoformat(),
+            "coverage_timeframe": fill_timeframe,
+            "reason": f"{fill_timeframe} data covers {covered_from}..{covered_to}",
+        }
+        logger.warning(
+            "Run window %s..%s clamped to %s..%s: %s data only covers %s..%s",
+            run_start,
+            run_end,
+            eff_start,
+            eff_end,
+            fill_timeframe,
+            covered_from,
+            covered_to,
         )
-        return detail_tf
+        clamped = dict(run_config)
+        clamped["start_date"] = eff_start.isoformat()
+        clamped["end_date"] = eff_end.isoformat()
+        return clamped, note
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.
@@ -1201,6 +1320,8 @@ class ValidationRunner:
         primary_timeframe: str | None = None,
         run_start_date: str | None = None,
         run_end_date: str | None = None,
+        execution_timeframe: str | None = None,
+        catalog_path: Path | None = None,
     ) -> ValidationResult:
         """Extract ValidationResult from NautilusTrader backtest output.
 
@@ -1216,12 +1337,13 @@ class ValidationRunner:
             primary_timeframe: Strategy primary timeframe for market-stat
                 bar-group selection.
             run_start_date / run_end_date: Backtest window for CAGR.
+            execution_timeframe / catalog_path: Execution bars for the
+                mark-to-market drawdown.
 
         Returns:
             Populated ValidationResult.
         """
         from vibe_quant.validation.extraction import extract_results
-        from vibe_quant.validation.funding import FundingCalculator
 
         return extract_results(
             run_id,
@@ -1233,6 +1355,8 @@ class ValidationRunner:
             funding_calculator=FundingCalculator(),
             run_start_date=run_start_date,
             run_end_date=run_end_date,
+            execution_timeframe=execution_timeframe,
+            catalog_path=catalog_path,
         )
 
     def _write_start_event(
@@ -1335,12 +1459,10 @@ class ValidationRunner:
             run_id: Run ID.
             result: Validation result to store.
         """
-        # Save backtest results
-        self._state.save_backtest_result(run_id, result.to_metrics_dict())
-
-        # Save individual trades
-        trade_dicts = [t.to_dict() for t in result.trades]
-        self._state.save_trades_batch(run_id, trade_dicts)
+        # Result + trades replace any prior attempt of this run atomically.
+        self._state.save_backtest_result(
+            run_id, result.to_metrics_dict(), trades=[t.to_dict() for t in result.trades]
+        )
 
     def _check_screening_consistency(
         self,
@@ -1348,29 +1470,39 @@ class ValidationRunner:
         strategy_id: int,
         strategy_name: str,
         result: ValidationResult,
-    ) -> None:
+        run_config: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
         """Flag overfit promotions: validation collapsing vs screening.
 
         Compares this validation result against the strategy's screening
-        reference (standalone screening run or discovery champion metrics)
-        and persists any flags to the result notes (vibe-quant-o11tp).
-        Best-effort — never fails the run.
+        reference (the screening row for the validated params, else the best
+        finite-Sharpe row with trades, else the discovery champion's
+        full-range metrics) and returns the report for the result notes when
+        flagged (vibe-quant-o11tp). Best-effort — never fails the run.
         """
-        import json
-
         from vibe_quant.validation.consistency import (
             assess_consistency,
             find_screening_reference,
         )
 
         try:
-            reference = find_screening_reference(self._state, strategy_id, strategy_name)
+            cfg = run_config or {}
+            start, end = cfg.get("start_date"), cfg.get("end_date")
+            val_window = (str(start), str(end)) if start and end else None
+            reference = find_screening_reference(
+                self._state,
+                strategy_id,
+                strategy_name,
+                validated_params=self._build_strategy_params(cfg),
+                val_window=val_window,
+            )
             if reference is None:
-                return
+                return None
             report = assess_consistency(
                 reference,
                 val_sharpe=result.sharpe_ratio,
                 val_trades=result.total_trades,
+                val_window=val_window,
             )
             if not report.is_flagged:
                 logger.info(
@@ -1380,14 +1512,13 @@ class ValidationRunner:
                     reference.sharpe,
                     result.sharpe_ratio,
                 )
-                return
+                return None
             for flag in report.flags:
                 logger.warning("Run %d %s", run_id, flag)
-            self._state.update_result_notes(
-                run_id, json.dumps({"consistency": report.to_dict()})
-            )
+            return report.to_dict()
         except Exception:  # noqa: BLE001 — advisory check must not fail the run
             logger.exception("Run %d: consistency check failed", run_id)
+            return None
 
 
 def list_validation_runs(

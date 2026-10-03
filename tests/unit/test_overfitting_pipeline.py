@@ -663,7 +663,9 @@ class TestIntegration:
             assert c.passed_wfa is not None
             assert c.passed_cv is not None
 
-        # Database should be updated
+        # Database: the real DSR verdict is persisted; the MOCK WFA/CV
+        # verdicts are not (no provenance column -> a stored flag must mean
+        # "passed on real data")
         for c in result.candidates:
             row = pipeline.conn.execute(
                 "SELECT passed_deflated_sharpe, passed_walk_forward, passed_purged_kfold "
@@ -671,8 +673,8 @@ class TestIntegration:
                 (c.sweep_result_id,),
             ).fetchone()
             assert row[0] is not None
-            assert row[1] is not None
-            assert row[2] is not None
+            assert row[1] is None
+            assert row[2] is None
 
         # Report should be generated
         report = pipeline.generate_report(result)

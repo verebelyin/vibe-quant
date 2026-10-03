@@ -15,6 +15,7 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryPipeline,
     DiscoveryResult,
 )
+from vibe_quant.utils import compute_day_count
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,12 @@ if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
-    from vibe_quant.discovery.pipeline import GenerationResult
+    from vibe_quant.discovery.pipeline import (
+        CrossWindowResult,
+        GenerationResult,
+        HoldoutResult,
+        WFARollingResult,
+    )
 
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
@@ -97,9 +103,18 @@ def _make_nt_backtest_fn(
     start_date: str,
     end_date: str,
     windows: list[tuple[str, str]] | None = None,
+    min_trades: int = 0,
 ) -> NTBacktestFn:
     """Create a picklable backtest function using real NautilusTrader screening runner."""
-    return NTBacktestFn(symbols, timeframe, start_date, end_date, windows=windows)
+    return NTBacktestFn(
+        symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
+    )
+
+
+# Default TRAIN fraction: every discovery gets a 20% holdout that is used once,
+# as the final pass/fail gate (vibe-quant-e70tl.5). Pass --train-test-split 0
+# to opt out explicitly.
+DEFAULT_TRAIN_TEST_SPLIT = 0.8
 
 
 def _log_data_catalog_info(symbols: list[str], timeframe: str) -> None:
@@ -345,6 +360,24 @@ def _run_multi_seed(
             len(group), median_sr, best[0].uid,  # type: ignore[union-attr]
         )
 
+    # The pick is made across ALL seeds, so the multiple-testing burden is the
+    # POOLED trial count -- per-seed DSR (N = one seed's evaluations)
+    # undercounts it. Re-check the selected champions with pooled N; failures
+    # are dropped (fail closed) and recorded.
+    pooled_checker = DiscoveryPipeline(config=config, backtest_fn=backtest_fn)  # type: ignore[arg-type]
+    candidates = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
+    kept = pooled_checker._validate_top_strategies(candidates, total_evaluated)
+    kept_ids = {id(chrom) for chrom, _ in kept}
+    for rejection in pooled_checker._guardrail_rejections:
+        raw_reasons = rejection.get("reasons")
+        reasons = raw_reasons if isinstance(raw_reasons, list) else []
+        rejection["stage"] = "pooled_guardrails"
+        rejection["reasons"] = [
+            f"Multi-seed pooled N={total_evaluated}: {reason}" for reason in reasons
+        ]
+        all_rejections.append(rejection)
+    selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
+
     top_strategies = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
     holdout_results = [
         result.holdout_results[idx]
@@ -379,6 +412,7 @@ def _run_multi_seed(
         cross_window_results=cross_window_results,
         wfa_results=wfa_results,
         guardrail_rejections=all_rejections,
+        holdout_min_trades=result_metadata.holdout_min_trades if result_metadata else None,
     )
 
 
@@ -413,6 +447,135 @@ def _load_seed_chromosomes(
     except (json.JSONDecodeError, TypeError, KeyError, ValueError):
         logger.warning("Failed to load seed chromosomes from run %d", run_id, exc_info=True)
         return None
+
+
+def walk_forward_efficiency(
+    *,
+    oos_return: float,
+    oos_days: int | None,
+    is_return: float,
+    is_days: int | None,
+) -> float | None:
+    """Length-normalized walk-forward efficiency (Pardo).
+
+    ``(oos_return / oos_days) / (is_return / is_days)``. A stationary edge
+    scores ~1.0 regardless of how long each period is. ``None`` when the
+    in-sample return isn't positive (no edge to retain) or a length is
+    unknown -- a negative IS with a positive OOS is NOT "infinitely efficient".
+    """
+    if not oos_days or not is_days or is_days <= 0 or oos_days <= 0:
+        return None
+    is_per_day = is_return / is_days
+    if not is_per_day > 0:
+        return None
+    return (oos_return / oos_days) / is_per_day
+
+
+def _window_metrics(hr: HoldoutResult) -> dict[str, object]:
+    return {
+        "sharpe": hr.sharpe_ratio,
+        "max_dd": hr.max_drawdown,
+        "pf": hr.profit_factor,
+        "trades": hr.total_trades,
+        "return_pct": hr.total_return,
+    }
+
+
+def cross_window_entry(cwr: CrossWindowResult) -> dict[str, object]:
+    """Persisted cross-window payload: SHIFTED windows only, with offsets + dates.
+
+    ``windows[i]`` corresponds to ``cross_window_months[i]`` (the in-sample
+    window is not listed -- it never counts as a pass).
+    """
+    return {
+        "windows_passed": cwr.windows_passed,
+        "total_windows": cwr.total_windows,
+        "required": cwr.required,
+        "passed": cwr.passed,
+        "in_sample_excluded": True,
+        "windows": [
+            {
+                **_window_metrics(w),
+                "offset_months": cwr.offsets_months[i] if i < len(cwr.offsets_months) else None,
+                "dates": list(cwr.window_dates[i]) if i < len(cwr.window_dates) else None,
+            }
+            for i, w in enumerate(cwr.window_results)
+        ],
+    }
+
+
+def wfa_entry(wfa: WFARollingResult) -> dict[str, object]:
+    """Persisted rolling-window (train range) stability payload."""
+    return {
+        "scope": "train_range_rolling",
+        "windows_profitable": wfa.windows_profitable,
+        "windows_sharpe_positive": wfa.windows_sharpe_positive,
+        "total_windows": wfa.total_windows,
+        "consistency": wfa.consistency,
+        "sharpe_consistency": wfa.sharpe_consistency,
+        "passed": wfa.passed,
+        "windows": [
+            {
+                "dates": wfa.window_dates[j] if j < len(wfa.window_dates) else None,
+                "sharpe": w.sharpe_ratio,
+                "return_pct": w.total_return,
+                "trades": w.total_trades,
+            }
+            for j, w in enumerate(wfa.oos_windows)
+        ],
+    }
+
+
+def _run_provenance_notes(
+    result: DiscoveryResult,
+    *,
+    use_mock: bool,
+    eval_windows_count: int,
+    eval_windows: list[tuple[str, str]] | None,
+    split_ratio: float,
+    direction: str | None,
+    cross_window_months: list[int],
+    cross_window_min_sharpe: float,
+    wfa_oos_step_days: int,
+    wfa_min_consistency: float,
+    num_seeds: int,
+    bootstrap_min_sharpe: float,
+    holdout_min_sharpe: float,
+) -> dict[str, object]:
+    """Run-level notes shared by the champion and zero-champion outcomes."""
+    return {
+        "type": "discovery",
+        "generations": len(result.generations),
+        # Distinct strategies backtested == DSR trial count N (pooled across
+        # seeds for multi-seed runs).
+        "evaluated": result.total_candidates_evaluated,
+        "converged": result.converged,
+        "mock": use_mock,
+        "synthetic": use_mock,
+        "compiler_version": _get_compiler_version(),
+        "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
+        "eval_window_aggregation": "worst_of_n" if eval_windows_count > 1 else None,
+        "eval_window_ranges": eval_windows if eval_windows else None,
+        "train_test_split": split_ratio if split_ratio > 0 else None,
+        "train_dates": list(result.train_dates) if result.train_dates else None,
+        "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
+        "holdout_gate": (
+            {
+                "min_trades": result.holdout_min_trades,
+                "min_sharpe": holdout_min_sharpe,
+                "min_return": 0.0,
+            }
+            if result.holdout_dates
+            else None
+        ),
+        "direction": direction,
+        "cross_window_months": cross_window_months or None,
+        "cross_window_min_sharpe": cross_window_min_sharpe if cross_window_months else None,
+        "wfa_oos_step_days": wfa_oos_step_days if wfa_oos_step_days > 0 else None,
+        "wfa_min_consistency": wfa_min_consistency if wfa_oos_step_days > 0 else None,
+        "num_seeds": num_seeds if num_seeds > 1 else None,
+        "bootstrap_min_sharpe": bootstrap_min_sharpe,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -452,23 +615,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval-windows",
         type=int,
         default=3,
-        help="Split date range into N sub-windows, evaluate fitness on worst-case. "
-        "Forces GA to find regime-robust strategies (default: 3 — biases toward "
-        "PKFOLD-passing strategies; pass 1 to restore single-window behaviour).",
+        help="Split the train range into N sub-windows; fitness is the WORST "
+        "window (min Sharpe, min return, max drawdown, min PF; trades summed for "
+        "the min-trades gate) and every window needs >= max(1, min_trades // (2N)) "
+        "trades. Forces regime-robust strategies (default: 3; pass 1 for a "
+        "single window).",
     )
     parser.add_argument(
         "--train-test-split",
         type=float,
-        default=0.0,
-        help="Train/test split ratio (0=disabled, 0.5=50/50 split). "
-        "GA trains on first portion, validates on remainder.",
+        default=DEFAULT_TRAIN_TEST_SPLIT,
+        help="TRAIN fraction of the date range (default: 0.8 = last 20%% is a "
+        "holdout used once as the final pass/fail gate; 0 disables the holdout).",
     )
     parser.add_argument(
         "--cross-window-months",
         type=str,
         default=None,
         help="Comma-separated month offsets for cross-window validation (e.g. '1,2'). "
-        "Re-runs top strategies on shifted windows; must pass on 2/3 to be promoted.",
+        "Re-runs top strategies on sub-windows of the TRAIN range starting N months "
+        "later; every shifted window must pass (the in-sample window never counts).",
+    )
+    parser.add_argument(
+        "--holdout-min-sharpe",
+        type=float,
+        default=0.0,
+        help="Holdout gate: holdout Sharpe must exceed this (default 0.0).",
+    )
+    parser.add_argument(
+        "--holdout-min-trades",
+        type=int,
+        default=None,
+        help="Holdout gate trade floor (default: half the train-gate trade rate, "
+        "max(1, min_trades * holdout_days / (2 * train_days))).",
     )
     parser.add_argument(
         "--cross-window-min-sharpe",
@@ -486,14 +665,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--wfa-oos-step-days",
         type=int,
         default=0,
-        help="WFA rolling window step in days (0=disabled). "
-        "Requires --train-test-split. Splits holdout into rolling windows.",
+        help="Rolling-window stability check step in days (0=disabled). Tiles the "
+        "TRAIN range (never the holdout) with N-day windows.",
     )
     parser.add_argument(
         "--wfa-min-consistency",
         type=float,
         default=0.75,
-        help="Min fraction of profitable WFA windows (default: 0.75 = 3/4)",
+        help="Min fraction of profitable rolling windows (default: 0.75 = 3/4)",
     )
     parser.add_argument(
         "--num-seeds",
@@ -555,7 +734,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable deterministic crowding selection (falls back to classic tournament).",
     )
     parser.add_argument("--db", type=str, default=None, help="Database path")
-    parser.add_argument("--mock", action="store_true", help="Force mock backtest (no NT)")
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Synthetic mock backtests (no NT). Results are flagged mock=true. "
+        "Without --mock, missing catalog data is an error (never a silent mock).",
+    )
     return parser
 
 
@@ -665,6 +849,8 @@ def main() -> int:
             cross_window_min_sharpe=args.cross_window_min_sharpe,
             wfa_oos_step_days=args.wfa_oos_step_days,
             wfa_min_consistency=args.wfa_min_consistency,
+            holdout_min_sharpe=args.holdout_min_sharpe,
+            holdout_min_trades=args.holdout_min_trades,
             require_bootstrap_ci=args.require_bootstrap_ci,
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             bootstrap_ci_level=args.bootstrap_ci_level,
@@ -687,15 +873,20 @@ def main() -> int:
         )
         _log_data_catalog_info(symbols, args.timeframe)
 
-        # Choose backtest function: real NT if data available, else mock
-        use_mock = args.mock or not _check_data_available(symbols)
+        # Choose backtest function: real NT, or synthetic ONLY when explicitly
+        # requested. Missing catalog data used to silently fall back to mock
+        # metrics that then got persisted like real champions.
+        use_mock = bool(args.mock)
         if use_mock:
-            logger.warning(
-                "Using MOCK backtest — %s. Results are synthetic.",
-                "forced via --mock" if args.mock else "no catalog data for symbols",
-            )
+            logger.warning("Using MOCK backtest — forced via --mock. Results are synthetic.")
             backtest_fn = _mock_backtest
         else:
+            if not _check_data_available(symbols):
+                msg = (
+                    f"No catalog bar data for symbols={symbols} — download data first "
+                    "(Data Management) or pass --mock for a synthetic run"
+                )
+                raise RuntimeError(msg)
             logger.info("Using real NautilusTrader backtest for symbols=%s", symbols)
             backtest_fn = _make_nt_backtest_fn(
                 symbols=symbols,
@@ -703,6 +894,7 @@ def main() -> int:
                 start_date=train_start,
                 end_date=train_end,
                 windows=eval_windows,
+                min_trades=config.min_trades,
             )
 
         # Create holdout backtest function if train/test split enabled
@@ -717,6 +909,10 @@ def main() -> int:
                     start_date=holdout_start,
                     end_date=holdout_end,
                 )
+        elif split_ratio <= 0:
+            logger.warning(
+                "No holdout (--train-test-split 0): champions get NO out-of-sample gate"
+            )
 
         # Create backtest factory for cross-window and/or WFA validation
         backtest_fn_factory = None
@@ -776,40 +972,49 @@ def main() -> int:
                 seed_chromosomes=seed_chromosomes,
             )
 
-        if not result.top_strategies:
-            # No viable candidates — every top strategy failed a hard
-            # guardrail (bootstrap CI or min trades) or the population was
-            # empty. Persist a structured summary and complete cleanly
-            # rather than raising: this happens routinely with tight
-            # guardrails + bearish regimes + small populations and
-            # shouldn't look like a crash.
-            import json
+        import json
 
+        run_notes = _run_provenance_notes(
+            result,
+            use_mock=use_mock,
+            eval_windows_count=eval_windows_count,
+            eval_windows=eval_windows,
+            split_ratio=split_ratio,
+            direction=args.direction,
+            cross_window_months=cross_window_months,
+            cross_window_min_sharpe=args.cross_window_min_sharpe,
+            wfa_oos_step_days=args.wfa_oos_step_days,
+            wfa_min_consistency=args.wfa_min_consistency,
+            num_seeds=num_seeds,
+            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
+            holdout_min_sharpe=args.holdout_min_sharpe,
+        )
+
+        if not result.top_strategies:
+            # No champion passed every gate (guardrails / cross-window / WFA /
+            # holdout -- all fail closed). Persist a structured summary with
+            # the per-candidate rejection reasons and complete cleanly: with
+            # honest gates this is a routine outcome, not a crash.
             execution_time = time.perf_counter() - started_at
             best_gen_fitness = (
                 max((gr.best_fitness for gr in result.generations), default=0.0)
                 if result.generations
                 else 0.0
             )
+            stages = sorted({
+                str(r.get("stage", "guardrails")) for r in result.guardrail_rejections
+            })
             summary_notes = {
-                "type": "discovery",
+                **run_notes,
                 "outcome": "no_viable_strategies",
-                "generations": len(result.generations),
-                "evaluated": result.total_candidates_evaluated,
-                "converged": result.converged,
-                "mock": use_mock,
-                "compiler_version": _get_compiler_version(),
                 "best_raw_score": best_gen_fitness,
                 "reason": (
-                    "All top-K candidates rejected by hard guardrails "
-                    "(bootstrap CI and/or min trades). Consider: longer "
-                    "date range, larger population, or relaxed guardrails."
+                    "No candidate passed every gate"
+                    + (f" (rejected at: {', '.join(stages)})" if stages else
+                       " (no candidate scored above zero)")
+                    + ". See guardrail_rejections for per-candidate reasons. Consider: "
+                    "longer date range, larger population, or a different indicator pool."
                 ),
-                "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
-                "train_test_split": split_ratio if split_ratio > 0 else None,
-                "direction": args.direction,
-                "num_seeds": num_seeds if num_seeds > 1 else None,
-                "bootstrap_min_sharpe": args.bootstrap_min_sharpe,
                 "top_strategies": [],
                 "guardrail_rejections": result.guardrail_rejections,
             }
@@ -836,16 +1041,14 @@ def main() -> int:
             )
             return 0
 
-        _best_chrom, best_fitness = result.top_strategies[0]
+        best_chrom, best_fitness = result.top_strategies[0]
         execution_time = time.perf_counter() - started_at
 
         # Save top strategies as DSL dicts in notes
-        import json
-
         from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable
 
         # bd vibe-quant-rewru: the GA's stored sharpe/trades are the multi-window
-        # fitness aggregate (mean-of-windows / sum-of-windows) and, with a train/test
+        # fitness aggregate (worst-of-windows / sum-of-windows) and, with a train/test
         # split, cover only the training slice. Promotion replays ONE continuous
         # screening backtest over the full discovery range, so those numbers are a
         # different statistic and replay_drift flags the gap by construction. Re-run
@@ -912,53 +1115,35 @@ def main() -> int:
                 }
             # Attach cross-window results if available
             if idx < len(result.cross_window_results):
-                cwr = result.cross_window_results[idx]
-                entry["cross_window"] = {
-                    "windows_passed": cwr.windows_passed,
-                    "total_windows": cwr.total_windows,
-                    "passed": cwr.passed,
-                    "windows": [
-                        {
-                            "sharpe": w.sharpe_ratio,
-                            "max_dd": w.max_drawdown,
-                            "pf": w.profit_factor,
-                            "trades": w.total_trades,
-                            "return_pct": w.total_return,
-                        }
-                        for w in cwr.window_results
-                    ],
-                }
+                entry["cross_window"] = cross_window_entry(result.cross_window_results[idx])
             # Attach WFA rolling results if available
             if idx < len(result.wfa_results):
-                wfa = result.wfa_results[idx]
-                entry["wfa"] = {
-                    "windows_profitable": wfa.windows_profitable,
-                    "windows_sharpe_positive": wfa.windows_sharpe_positive,
-                    "total_windows": wfa.total_windows,
-                    "consistency": wfa.consistency,
-                    "sharpe_consistency": wfa.sharpe_consistency,
-                    "passed": wfa.passed,
-                    "windows": [
-                        {
-                            "dates": wfa.window_dates[j] if j < len(wfa.window_dates) else None,
-                            "sharpe": w.sharpe_ratio,
-                            "return_pct": w.total_return,
-                            "trades": w.total_trades,
-                        }
-                        for j, w in enumerate(wfa.oos_windows)
-                    ],
-                }
+                entry["wfa"] = wfa_entry(result.wfa_results[idx])
             top_dsls.append(entry)
 
-        # Compute walk-forward efficiency for the best strategy per SPEC.md:
-        # ratio of summed OOS-window returns to IS total return. Undefined
-        # when IS return is ~0 or no WFA windows ran.
+        # Walk-forward efficiency (Pardo): out-of-sample return per day over
+        # in-sample return per day, for the best champion. OOS = the holdout,
+        # IS = one continuous backtest over the train range (the worst-of-N
+        # fitness return is not a train-range return). Undefined without a
+        # holdout or with a non-positive IS return.
         wfa_efficiency: float | None = None
-        if result.wfa_results and result.wfa_results[0].oos_windows:
-            is_return = best_fitness.total_return
-            if abs(is_return) > 1e-9:
-                oos_total = sum(w.total_return for w in result.wfa_results[0].oos_windows)
-                wfa_efficiency = oos_total / is_return
+        if result.holdout_results and result.train_dates and result.holdout_dates:
+            if eval_windows_count >= 2 and not use_mock:
+                train_metrics = _make_nt_backtest_fn(
+                    symbols=symbols,
+                    timeframe=args.timeframe,
+                    start_date=result.train_dates[0],
+                    end_date=result.train_dates[1],
+                )(best_chrom)
+                train_return = float(train_metrics.get("total_return", 0.0))
+            else:
+                train_return = best_fitness.total_return
+            wfa_efficiency = walk_forward_efficiency(
+                oos_return=result.holdout_results[0].total_return,
+                oos_days=compute_day_count(*result.holdout_dates),
+                is_return=train_return,
+                is_days=compute_day_count(*result.train_dates),
+            )
 
         state.save_backtest_result(
             args.run_id,
@@ -974,25 +1159,7 @@ def main() -> int:
                 "walk_forward_efficiency": wfa_efficiency,
                 "notes": json.dumps(
                     {
-                        "type": "discovery",
-                        "generations": len(result.generations),
-                        "evaluated": result.total_candidates_evaluated,
-                        "converged": result.converged,
-                        "mock": use_mock,
-                        "compiler_version": _get_compiler_version(),
-                        "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
-                        "eval_window_ranges": eval_windows if eval_windows else None,
-                        "train_test_split": split_ratio if split_ratio > 0 else None,
-                        "train_dates": list(result.train_dates) if result.train_dates else None,
-                        "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
-                        "direction": args.direction,
-                        "cross_window_months": cross_window_months or None,
-                        "cross_window_min_sharpe": (
-                            args.cross_window_min_sharpe if cross_window_months else None
-                        ),
-                        "wfa_oos_step_days": args.wfa_oos_step_days if args.wfa_oos_step_days > 0 else None,
-                        "num_seeds": num_seeds if num_seeds > 1 else None,
-                        "bootstrap_min_sharpe": args.bootstrap_min_sharpe,
+                        **run_notes,
                         "top_strategies": top_dsls,
                         "guardrail_rejections": result.guardrail_rejections or None,
                     }

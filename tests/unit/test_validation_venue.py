@@ -1,12 +1,14 @@
 """Tests for validation venue configuration."""
 
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.config import (
     BacktestVenueConfig,
     LatencyModelConfig,
 )
+from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.objects import Price
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
 
@@ -190,7 +192,7 @@ class TestFillModels:
 
         book = model.get_orderbook_for_fill_simulation(
             instrument,
-            object(),
+            SimpleNamespace(order_type=OrderType.MARKET),
             Price(100_000.00, precision=2),
             Price(100_000.10, precision=2),
         )
@@ -209,13 +211,33 @@ class TestFillModels:
 
         book = model.get_orderbook_for_fill_simulation(
             instrument,
-            object(),
+            SimpleNamespace(order_type=OrderType.MARKET),
             Price(100_000.00, precision=2),
             Price(100_000.10, precision=2),
         )
 
         assert book.best_bid_price().as_double() == pytest.approx(99_999.98)
         assert book.best_ask_price().as_double() == pytest.approx(100_000.12)
+
+    @pytest.mark.parametrize(
+        "order_type",
+        [OrderType.LIMIT, OrderType.STOP_MARKET, OrderType.STOP_LIMIT],
+    )
+    def test_volume_slippage_fill_model_defers_non_market_orders(
+        self, order_type: OrderType
+    ) -> None:
+        """Resting limits / triggered stops use NT's default fill logic (e70tl.2)."""
+        instrument = TestInstrumentProvider.btcusdt_binance()
+        model = create_validation_fill_model(
+            VolumeSlippageFillModelConfig(prob_best_price_fill=0.0, max_adverse_ticks=2)
+        )
+        book = model.get_orderbook_for_fill_simulation(
+            instrument,
+            SimpleNamespace(order_type=order_type),
+            Price(100_000.00, precision=2),
+            Price(100_000.10, precision=2),
+        )
+        assert book is None
 
     def test_volume_slippage_fill_model_seeded_determinism(self) -> None:
         """Same seed -> identical draw sequences; validation replays reproduce."""

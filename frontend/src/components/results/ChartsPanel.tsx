@@ -56,7 +56,8 @@ export function ChartsPanel({ runId }: ChartsPanelProps) {
       { label: "Win Rate", value: (summary.win_rate ?? 0) * 100, max: 100 },
       { label: "Profit Factor", value: summary.profit_factor ?? 0, max: 5 },
       { label: "Calmar", value: summary.calmar_ratio ?? 0, max: 5 },
-      { label: "Return", value: Math.min(summary.total_return ?? 0, 200), max: 200 },
+      // total_return is a fraction → percent for the 0-200% axis
+      { label: "Return", value: Math.min((summary.total_return ?? 0) * 100, 200), max: 200 },
     ];
   }, [summary]);
 

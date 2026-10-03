@@ -887,6 +887,7 @@ Custom fill model loaded via `ImportableFillModelConfig` (specifying `fill_model
 - Stop orders: Fill at stop price + 1-tick slippage (pessimistic)
 - Limit orders: Fill at limit price if price touches (probabilistic fill for queue position)
 - OCO handling: When both SL and TP could trigger on same bar, SL triggers first (pessimistic)
+  - **Implementation deviation (2026-10-03, vibe-quant-e70tl.12):** NautilusTrader picks the intrabar high/low order once per bar inside its compiled matching engine, so per-order SL-first is not expressible. Both tiers use NT `bar_adaptive_high_low_ordering=True` (extreme nearer the open first) — symmetric for longs/shorts. Validation uses 1m detail bars, where both-levels-in-one-bar is rare.
 
 **Funding rate simulation:**
 - Subscribe to `FundingRateUpdate` data (stored in catalog)

@@ -16,8 +16,9 @@ interface DirectionStats {
   avgPnl: number;
 }
 
-function computeDirectionStats(trades: TradeResponse[], direction: string): DirectionStats {
-  const filtered = trades.filter((t) => t.direction === direction);
+export function computeDirectionStats(trades: TradeResponse[], direction: string): DirectionStats {
+  // Backend stores "LONG"/"SHORT".
+  const filtered = trades.filter((t) => t.direction.toLowerCase() === direction);
   const count = filtered.length;
   if (count === 0) return { count: 0, winRate: 0, totalPnl: 0, avgPnl: 0 };
 

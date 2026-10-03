@@ -42,6 +42,14 @@ class TestGeneDistance:
         g = _gene("RSI", 14, ConditionType.GT, 50.0)
         assert gene_distance(g, g) == pytest.approx(0.0)
 
+    def test_identical_out_of_pool_genes_zero_distance(self) -> None:
+        # ATR left the GA pool (NATR replaced it); legacy warm-start genes
+        # must still compare as identical to themselves.
+        a = _gene("ATR", 14, ConditionType.GT, 40.0)
+        b = _gene("ATR", 14, ConditionType.GT, 40.0)
+        assert gene_distance(a, b) == pytest.approx(0.0)
+        assert gene_distance(a, _gene("ATR", 20, ConditionType.GT, 40.0)) > 0.0
+
     def test_different_indicator_high_distance(self) -> None:
         a = _gene("RSI", 14, ConditionType.GT, 50.0)
         b = _gene("MACD", 12, ConditionType.GT, 0.001)
@@ -77,7 +85,8 @@ class TestChromosomeDistance:
     """Tests for full chromosome distance."""
 
     def test_identical_chromosomes_zero(self) -> None:
-        c = _chrom([_gene()], [_gene("ATR", 14, ConditionType.LT, 0.01)])
+        # NATR replaced ATR in the GA pool (vibe-quant-e70tl.14)
+        c = _chrom([_gene()], [_gene("NATR", 14, ConditionType.LT, 1.0)])
         assert chromosome_distance(c, c) == pytest.approx(0.0)
 
     def test_completely_different_chromosomes(self) -> None:

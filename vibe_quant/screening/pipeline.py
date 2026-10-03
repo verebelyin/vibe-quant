@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
@@ -84,6 +85,29 @@ def _run_mock_backtest(params: dict[str, float | int]) -> BacktestMetrics:
         total_funding=n_trades * 0.0005,
         execution_time_seconds=0.01,
     )
+
+
+#: Sharpe assigned to combos whose backtest crashed / stalled (not a measurement)
+FAILED_BACKTEST_SHARPE = -999.0
+
+
+def _trial_sharpe_variance(results: list[BacktestMetrics]) -> float | None:
+    """Sample variance of trial Sharpes (daily units) for DSR.
+
+    Only real measurements enter the variance: NaN / +-inf Sharpes (0-trade or
+    degenerate combos) and the crash sentinel ``FAILED_BACKTEST_SHARPE`` are
+    excluded -- a single NaN made the variance NaN and failed every candidate.
+    They still count toward the trial count N (they were tried).
+    """
+    sharpes = [
+        deannualize_sharpe(r.sharpe_ratio)
+        for r in results
+        if math.isfinite(r.sharpe_ratio) and r.sharpe_ratio != FAILED_BACKTEST_SHARPE
+    ]
+    if len(sharpes) < 2:
+        return None
+    mean_sr = sum(sharpes) / len(sharpes)
+    return sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
 
 
 def _kill_pool_workers(executor: ProcessPoolExecutor) -> None:
@@ -211,23 +235,19 @@ class ScreeningPipeline:
             len(all_results),
         )
 
-        # Apply DSR overfitting filter
-        if apply_dsr and len(filtered) > 1:
+        # Apply DSR overfitting filter -- also when exactly ONE combo survives:
+        # a lone survivor of a 1000-combo grid is the most selection-biased
+        # result there is.
+        if apply_dsr and filtered:
             dsr = DeflatedSharpeRatio(significance_level=dsr_significance)
+            # Every combo tried counts as a trial, including failed/NaN ones.
             num_trials = len(all_results)
             # NT reports Sharpe annualized from daily returns ("252 days").
             # DSR needs the statistic and T in the same sampling frequency,
             # so de-annualize to daily units and use the window's day count
             # as the observation count (not the bar count).
             day_count = compute_day_count(self._start_date, self._end_date)
-            # Empirical variance of trial Sharpes (same daily units as SR)
-            trials_sharpe_variance: float | None = None
-            if len(all_results) >= 2:
-                sharpes = [deannualize_sharpe(r.sharpe_ratio) for r in all_results]
-                mean_sr = sum(sharpes) / len(sharpes)
-                trials_sharpe_variance = (
-                    sum((s - mean_sr) ** 2 for s in sharpes) / (len(sharpes) - 1)
-                )
+            trials_sharpe_variance = _trial_sharpe_variance(all_results)
             dsr_passed = []
             for r in filtered:
                 num_obs = day_count if day_count else max(r.total_trades, 30)
@@ -288,7 +308,7 @@ class ScreeningPipeline:
                 results.append(result)
             except Exception as e:
                 logger.warning("Backtest failed for params %s: %s", params, e)
-                results.append(BacktestMetrics(parameters=params, sharpe_ratio=-999.0))
+                results.append(BacktestMetrics(parameters=params, sharpe_ratio=FAILED_BACKTEST_SHARPE))
             if progress_callback:
                 progress_callback(i + 1, total)
         return results
@@ -344,7 +364,7 @@ class ScreeningPipeline:
                         results.append(
                             BacktestMetrics(
                                 parameters=future_to_params[future],
-                                sharpe_ratio=-999.0,
+                                sharpe_ratio=FAILED_BACKTEST_SHARPE,
                             )
                         )
                         completed += 1
@@ -362,7 +382,7 @@ class ScreeningPipeline:
                         # Pareto / ranking arithmetic.
                         logger.warning("Backtest failed for params %s: %s", params, e)
                         results.append(
-                            BacktestMetrics(parameters=params, sharpe_ratio=-999.0)
+                            BacktestMetrics(parameters=params, sharpe_ratio=FAILED_BACKTEST_SHARPE)
                         )
                     completed += 1
                     if progress_callback:

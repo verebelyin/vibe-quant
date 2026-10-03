@@ -7,6 +7,7 @@ initialization for evolving trading strategy chromosomes.
 from __future__ import annotations
 
 import heapq
+import math
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -51,6 +52,10 @@ def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
 INDICATOR_POOL: dict[str, dict[str, tuple[float, float]]] = {}
 _INDICATOR_NAMES: list[str] = []
 _MA_NAMES: list[str] = []
+# indicator -> params consumed as integers / spec defaults (scalar + MA genes).
+# Kept separate from INDICATOR_POOL so the pool filter can't drop type info.
+_INT_PARAMS: dict[str, frozenset[str]] = {}
+_PARAM_DEFAULTS: dict[str, dict[str, float]] = {}
 
 
 def _ensure_pool() -> None:
@@ -63,6 +68,15 @@ def _ensure_pool() -> None:
     if not _MA_NAMES:
         from vibe_quant.discovery.genome import MA_POOL
         _MA_NAMES.extend(MA_POOL.keys())
+    if not _INT_PARAMS:
+        from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
+        from vibe_quant.discovery.genome import MA_POOL as _MA_POOL
+
+        for name, ind_def in _GENOME_POOL.items():
+            _INT_PARAMS[name] = ind_def.int_params
+            _PARAM_DEFAULTS[name] = dict(ind_def.default_params)
+        for name, ma_def in _MA_POOL.items():
+            _INT_PARAMS.setdefault(name, ma_def.int_params)
 
 
 class ConditionType(Enum):
@@ -215,10 +229,17 @@ class StrategyChromosome:
     # scalar-threshold mutation/crossover paths stay type-homogeneous.
     ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
-    uid: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    uid: str = field(default_factory=lambda: _new_uid())
 
     def clone(self) -> StrategyChromosome:
-        """Deep-copy this chromosome."""
+        """Deep-copy this chromosome, KEEPING its uid.
+
+        Only use for an unchanged copy (elites, bookkeeping). Any operator that
+        can change the genome must give the result a fresh uid (see
+        ``mutate``): the uid becomes the DSL/strategy name, and two different
+        genomes sharing a name made the compile cache / promote path run one
+        genome's code under the other's name (vibe-quant-e70tl.1).
+        """
         return StrategyChromosome(
             entry_genes=[g.clone() for g in self.entry_genes],
             exit_genes=[g.clone() for g in self.exit_genes],
@@ -241,18 +262,105 @@ class StrategyChromosome:
 # ---------------------------------------------------------------------------
 
 
+def _new_uid() -> str:
+    """Fresh 12-hex-char chromosome uid."""
+    return uuid.uuid4().hex[:12]
+
+
+def _random_int_in(lo: float, hi: float) -> float:
+    """Uniform random whole number in [lo, hi] (as float, genes store floats)."""
+    ilo, ihi = math.ceil(lo), math.floor(hi)
+    if ilo > ihi:  # degenerate range narrower than one integer
+        return float(round(lo))
+    return float(random.randint(ilo, ihi))
+
+
 def _random_params(indicator_type: str) -> dict[str, float]:
-    """Generate random parameters for an indicator type."""
+    """Generate random parameters for an indicator type.
+
+    Integer-typed params (per the registry ``param_schema``) are sampled as
+    whole numbers: the compiler consumes them as ints, so a fractional part
+    would be a dead gene (14.2 and 14.9 compile to the same strategy).
+    """
     _ensure_pool()
     ranges = INDICATOR_POOL[indicator_type]
+    int_params = _INT_PARAMS.get(indicator_type, frozenset())
     params: dict[str, float] = {}
     for name, (lo, hi) in ranges.items():
-        if isinstance(lo, float):
-            params[name] = round(random.uniform(lo, hi), 4)
+        if name in int_params:
+            params[name] = _random_int_in(lo, hi)
         else:
-            params[name] = float(random.randint(int(lo), int(hi)))
+            params[name] = round(random.uniform(lo, hi), 4)
     _enforce_param_constraints(indicator_type, params)
     return params
+
+
+def _dead_params(indicator_type: str, sub_value: str | None) -> frozenset[str]:
+    """Params that cannot change the value a gene's condition reads.
+
+    - STOCH genes read %K (fast, unsmoothed); ``period_d`` only shapes %D.
+    - MACD genes without a sub-value read the MACD line; ``signal_period``
+      only shapes the signal line / histogram.
+    """
+    if indicator_type == "STOCH" and sub_value != "d":
+        return frozenset({"period_d", "d_period"})
+    if indicator_type == "MACD" and sub_value is None:
+        return frozenset({"signal_period"})
+    return frozenset()
+
+
+def _round_int_params(
+    params: dict[str, float],
+    int_params: frozenset[str],
+    ranges: dict[str, tuple[float, float]],
+) -> None:
+    """Round integer-typed params to whole numbers, kept inside their range."""
+    for pname in int_params:
+        if pname not in params:
+            continue
+        val = float(round(params[pname]))
+        if pname in ranges:
+            lo, hi = ranges[pname]
+            if val < lo:
+                val = float(math.ceil(lo))
+            elif val > hi:
+                val = float(math.floor(hi))
+        params[pname] = val
+
+
+def canonicalize_gene(gene: StrategyGene) -> StrategyGene:
+    """Make a gene's params match exactly what gets evaluated (in place).
+
+    Integer params are rounded and dead params (see ``_dead_params``) are
+    pinned to the spec default, so genes that compile to the same strategy
+    are also identical as genes -- no fake diversity, no duplicate DSR trials.
+    """
+    _ensure_pool()
+    ranges = INDICATOR_POOL.get(gene.indicator_type, {})
+    _round_int_params(
+        gene.parameters, _INT_PARAMS.get(gene.indicator_type, frozenset()), ranges
+    )
+    defaults = _PARAM_DEFAULTS.get(gene.indicator_type, {})
+    for pname in _dead_params(gene.indicator_type, gene.sub_value):
+        if pname in gene.parameters and pname in defaults:
+            gene.parameters[pname] = defaults[pname]
+    return gene
+
+
+def canonicalize_ma_gene(gene: PriceVsMAConditionGene) -> PriceVsMAConditionGene:
+    """Round integer-typed MA params (both legs) in place."""
+    _ensure_pool()
+    from vibe_quant.discovery.genome import MA_POOL
+
+    ma_def = MA_POOL.get(gene.indicator_type)
+    if ma_def is None:
+        return gene
+    int_params = _INT_PARAMS.get(gene.indicator_type, ma_def.int_params)
+    _round_int_params(gene.parameters, int_params, ma_def.param_ranges)
+    if gene.parameters_slow is not None:
+        _round_int_params(gene.parameters_slow, int_params, ma_def.param_ranges)
+    _enforce_ma_cross_invariant(gene)
+    return gene
 
 
 def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) -> None:
@@ -330,12 +438,14 @@ def _random_gene() -> StrategyGene:
     elif ind == "DONCHIAN":
         sub_value = "position"
 
-    return StrategyGene(
-        indicator_type=ind,
-        parameters=_random_params(ind),
-        condition=condition,
-        threshold=threshold,
-        sub_value=sub_value,
+    return canonicalize_gene(
+        StrategyGene(
+            indicator_type=ind,
+            parameters=_random_params(ind),
+            condition=condition,
+            threshold=threshold,
+            sub_value=sub_value,
+        )
     )
 
 
@@ -343,11 +453,13 @@ def _random_ma_params(indicator_type: str) -> dict[str, float]:
     """Sample random params for an MA from ``MA_POOL``."""
     from vibe_quant.discovery.genome import MA_POOL
 
-    ranges = MA_POOL[indicator_type].param_ranges
+    _ensure_pool()
+    ma_def = MA_POOL[indicator_type]
+    int_params = _INT_PARAMS.get(indicator_type, ma_def.int_params)
     params: dict[str, float] = {}
-    for name, (lo, hi) in ranges.items():
-        if lo == int(lo) and hi == int(hi) and lo >= 1:
-            params[name] = float(random.randint(int(lo), int(hi)))
+    for name, (lo, hi) in ma_def.param_ranges.items():
+        if name in int_params:
+            params[name] = _random_int_in(lo, hi)
         else:
             params[name] = round(random.uniform(lo, hi), 4)
     return params
@@ -557,6 +669,7 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
                 gene.threshold = round(random.uniform(tlo, thi), 4)
         if gene.indicator_type == "MACD":
             _enforce_param_constraints(gene.indicator_type, gene.parameters)
+        canonicalize_gene(gene)
     chrom.stop_loss_pct = max(SL_RANGE[0], min(SL_RANGE[1], chrom.stop_loss_pct))
     chrom.take_profit_pct = max(TP_RANGE[0], min(TP_RANGE[1], chrom.take_profit_pct))
     # Per-direction SL/TP
@@ -585,6 +698,7 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
             if g.parameters_slow is not None:
                 _clamp_params_to_ranges(g.parameters_slow, ranges)
                 _enforce_ma_cross_invariant(g)
+            canonicalize_ma_gene(g)
             if g.op not in _MA_CONDITION_TYPES:
                 g.op = random.choice(_MA_CONDITION_TYPES)
         if len(genes) > cap:
@@ -772,9 +886,12 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
         mutation_rate: Per-gene mutation probability [0, 1].
 
     Returns:
-        New mutated chromosome.
+        New mutated chromosome with a FRESH uid (a mutant is a different
+        genome; sharing the parent's uid/DSL name let an elite and its mutant
+        collide in the compile cache and on promote -- vibe-quant-e70tl.1).
     """
     chrom = chromosome.clone()
+    chrom.uid = _new_uid()
 
     # Mutate entry genes
     chrom.entry_genes = _mutate_genes(
@@ -885,6 +1002,8 @@ def _mutate_single_gene(gene: StrategyGene) -> None:
         else:
             gene.threshold = _perturb(gene.threshold, 0.2)
 
+    canonicalize_gene(gene)
+
 
 def _mutate_ma_genes(
     genes: list[PriceVsMAConditionGene],
@@ -959,6 +1078,7 @@ def _mutate_single_ma_gene(gene: PriceVsMAConditionGene) -> None:
             # No slow leg to perturb — fall through to a fast-leg perturb
             # so the mutation step isn't wasted.
             _perturb_params_in_ranges(gene.parameters, ranges)
+    canonicalize_ma_gene(gene)
 
 
 def tournament_select(
@@ -1052,12 +1172,40 @@ def initialize_population(
 
         _logger = logging.getLogger(__name__)
         # Clone seeds into population (cap at half the population to preserve exploration)
+        _ensure_pool()
         max_seeds = min(len(seed_chromosomes), size // 2)
-        for chrom in seed_chromosomes[:max_seeds]:
+        skipped = 0
+        for chrom in seed_chromosomes:
+            if len(population) >= max_seeds:
+                break
             clone = chrom.clone()
+            clone.uid = _new_uid()  # may be re-directioned below: new genome
+            # Genes whose indicator left the GA pool (e.g. legacy ATR genes with
+            # absolute-price thresholds) must not re-enter via warm-start.
+            clone.entry_genes = [g for g in clone.entry_genes if g.indicator_type in INDICATOR_POOL]
+            clone.exit_genes = [g for g in clone.exit_genes if g.indicator_type in INDICATOR_POOL]
+            # Seeds from older runs may carry fractional int params / dead params
+            for gene in clone.entry_genes + clone.exit_genes:
+                canonicalize_gene(gene)
+            for ma_gene in clone.ma_entry_genes + clone.ma_exit_genes:
+                canonicalize_ma_gene(ma_gene)
             if direction_constraint is not None:
                 clone.direction = direction_constraint
+            if not is_valid_chromosome(clone):
+                skipped += 1
+                continue
             population.append(clone)
+        if not population:
+            msg = (
+                f"warm-start: none of {len(seed_chromosomes)} seed chromosome(s) is valid "
+                "after dropping genes outside the current GA pool"
+            )
+            raise ValueError(msg)
+        if skipped:
+            _logger.warning(
+                "Warm-start: skipped %d seed(s) invalid after dropping out-of-pool genes",
+                skipped,
+            )
         _logger.info(
             "Warm-start: seeded %d/%d slots from prior chromosomes",
             len(population), size,

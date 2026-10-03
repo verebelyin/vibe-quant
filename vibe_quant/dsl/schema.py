@@ -88,6 +88,32 @@ class IndicatorConfig(BaseModel):
         }
     )
 
+    # Alternate spellings of STOCH's DSL-native fields (NT / GA name them
+    # ``period_k``/``period_d``). Without normalization they were accepted as
+    # extras and silently ignored on the NT path.
+    _STOCH_PARAM_ALIASES: ClassVar[dict[str, str]] = {
+        "period_k": "period",
+        "k_period": "period",
+        "period_d": "d_period",
+    }
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_param_aliases(cls, data: object) -> object:
+        """STOCH: map ``period_k``/``k_period``/``period_d`` onto ``period``/``d_period``."""
+        if not isinstance(data, dict) or str(data.get("type", "")).upper() != "STOCH":
+            return data
+        out = dict(data)
+        for alias, target in cls._STOCH_PARAM_ALIASES.items():
+            if alias not in out:
+                continue
+            value = out.pop(alias)
+            if target in out and out[target] is not None and out[target] != value:
+                msg = f"Conflicting '{alias}'={value!r} and '{target}'={out[target]!r}"
+                raise ValueError(msg)
+            out[target] = value
+        return out
+
     @field_validator("type")
     @classmethod
     def validate_indicator_type(cls, v: str) -> str:
@@ -131,6 +157,29 @@ class IndicatorConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def validate_source_supported(self) -> IndicatorConfig:
+        """Reject a ``source`` the runtime would silently ignore.
+
+        Compiled indicators are always computed on close (OHLC/volume for
+        range/volume indicators); ``source: hl2`` etc. used to compile to the
+        exact same code as ``close``. ``volume`` is accepted only as a
+        description of volume-based indicators (VOLSMA, OBV, MFI, VWAP).
+        """
+        if self.source == "close":
+            return self
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        spec = indicator_registry.get(self.type)
+        if self.source == "volume" and spec is not None and spec.requires_volume:
+            return self
+        msg = (
+            f"Indicator '{self.type}' source '{self.source}' is not supported: "
+            "indicators are computed on close (OHLC for range indicators); "
+            "omit 'source' or use 'close'"
+        )
+        raise ValueError(msg)
+
+    @model_validator(mode="after")
     def validate_indicator_params(self) -> IndicatorConfig:
         """Validate indicator-specific parameters."""
         if self.type == "MACD":
@@ -148,6 +197,7 @@ class IndicatorConfig(BaseModel):
             "DEMA",
             "TEMA",
             "ATR",
+            "NATR",
             "CCI",
             "ROC",
             "MFI",

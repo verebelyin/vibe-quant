@@ -62,11 +62,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     state = StateManager(db_path)
     manager, stop_heartbeat = run_with_heartbeat(args.run_id, db_path)
 
+    def fail(message: str) -> int:
+        """Early exit: record the failure so the run doesn't stay 'running' forever."""
+        print(message)
+        manager.mark_completed(args.run_id, error=message)
+        return 1
+
     try:
         run_config = state.get_backtest_run(args.run_id)
         if run_config is None:
-            print(f"Run {args.run_id} not found")
-            return 1
+            return fail(f"Run {args.run_id} not found")
 
         from vibe_quant.dsl.schema import StrategyDSL
         from vibe_quant.dsl.translator import translate_dsl_config
@@ -80,12 +85,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         else:
             strategy_id = run_config["strategy_id"]
             if strategy_id is None or str(strategy_id) == "None":
-                print(f"Run {args.run_id} has no strategy_id (mode: {run_config.get('run_mode', '?')})")
-                return 1
+                return fail(
+                    f"Run {args.run_id} has no strategy_id "
+                    f"(mode: {run_config.get('run_mode', '?')})"
+                )
             strategy = state.get_strategy(int(str(strategy_id)))
             if strategy is None:
-                print(f"Strategy {strategy_id} not found")
-                return 1
+                return fail(f"Strategy {strategy_id} not found")
             raw_config = translate_dsl_config(
                 strategy["dsl_config"], strategy_name=str(strategy["name"])
             )

@@ -5,4 +5,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type BacktestLaunchRequestOverfittingFilters = {[key: string]: boolean} | null;
+export type DataQualityResponseZeroVolumeRunsItem = { [key: string]: unknown };

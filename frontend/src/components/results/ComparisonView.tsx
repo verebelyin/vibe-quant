@@ -36,7 +36,7 @@ interface MetricDef {
   key: keyof BacktestResultResponse;
   label: string;
   format: (v: number) => string;
-  /** true = higher is better, false = lower (less negative) is better */
+  /** true = higher is better, false = lower is better (max_drawdown is a positive fraction) */
   higherIsBetter: boolean;
 }
 
@@ -44,17 +44,22 @@ const METRICS: MetricDef[] = [
   {
     key: "total_return",
     label: "Total Return",
-    format: (v) => `${v.toFixed(2)}%`,
+    format: (v) => `${(v * 100).toFixed(2)}%`,
     higherIsBetter: true,
   },
   { key: "sharpe_ratio", label: "Sharpe Ratio", format: (v) => v.toFixed(2), higherIsBetter: true },
   {
     key: "max_drawdown",
     label: "Max Drawdown",
-    format: (v) => `${v.toFixed(2)}%`,
+    format: (v) => `${(v * 100).toFixed(2)}%`,
     higherIsBetter: false,
   },
-  { key: "win_rate", label: "Win Rate", format: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  {
+    key: "win_rate",
+    label: "Win Rate",
+    format: (v) => `${(v * 100).toFixed(1)}%`,
+    higherIsBetter: true,
+  },
   {
     key: "profit_factor",
     label: "Profit Factor",
@@ -157,7 +162,7 @@ function RunPicker({
   );
 }
 
-function getBestWorst(
+export function getBestWorst(
   runs: BacktestResultResponse[],
   key: keyof BacktestResultResponse,
   higherIsBetter: boolean,
@@ -181,12 +186,12 @@ function getBestWorst(
         worstId = run.run_id;
       }
     } else {
-      // For max_drawdown: less negative is better
-      if (val > bestVal) {
+      // e.g. max_drawdown (positive fraction): smaller is better
+      if (val < bestVal) {
         bestVal = val;
         bestId = run.run_id;
       }
-      if (val < worstVal) {
+      if (val > worstVal) {
         worstVal = val;
         worstId = run.run_id;
       }

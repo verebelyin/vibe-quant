@@ -239,11 +239,11 @@ class TestJobManagerAtomicStart:
         jm.close()
         sm.close()
 
-    def test_start_lock_exists(self) -> None:
+    def test_start_lock_exists(self, tmp_path: Path) -> None:
         """BacktestJobManager has _start_lock attribute (threading.Lock)."""
         from vibe_quant.jobs.manager import BacktestJobManager
 
-        mgr = BacktestJobManager()
+        mgr = BacktestJobManager(db_path=tmp_path / "jobs.db")
         assert hasattr(mgr, "_start_lock")
         assert isinstance(mgr._start_lock, type(threading.Lock()))
         mgr.close()
@@ -416,13 +416,14 @@ class TestPaperTradingImportError:
     """Paper trading router catches only ImportError, not broad Exception."""
 
     def test_except_clause_is_import_error(self) -> None:
-        """get_session catches ImportError specifically (not Exception)."""
+        """get_session never swallows broad exceptions.
+
+        (Persistence is now a hard top-level import, so there is no except
+        clause at all; any broad handler would be a regression.)
+        """
         from vibe_quant.api.routers import paper_trading
 
         source = inspect.getsource(paper_trading.get_session)
-        assert "except ImportError" in source, (
-            "get_session should catch ImportError, not a broader exception"
-        )
         # Ensure it's not "except Exception"
         lines = source.split("\n")
         except_lines = [line.strip() for line in lines if line.strip().startswith("except ")]

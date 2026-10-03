@@ -6,7 +6,6 @@
  */
 
 export * from './backtestLaunchRequest';
-export * from './backtestLaunchRequestOverfittingFilters';
 export * from './backtestLaunchRequestParameters';
 export * from './backtestResultResponse';
 export * from './backtestResultResponseCrossRegimeResults';
@@ -27,11 +26,11 @@ export * from './coverageCheckResponse';
 export * from './coverageCheckResponseCoverage';
 export * from './credentialsStatusResponse';
 export * from './databaseInfoResponse';
-export * from './databaseSwitchRequest';
 export * from './dataCoverageItem';
 export * from './dataCoverageResponse';
 export * from './dataQualityResponse';
 export * from './dataQualityResponseGapsItem';
+export * from './dataQualityResponseZeroVolumeRunsItem';
 export * from './dataStatusResponse';
 export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';
@@ -62,6 +61,8 @@ export * from './getPositionsApiPaperPositionsGetParams';
 export * from './getSweepsApiResultsRunsRunIdSweepsGetParams';
 export * from './getTradesApiResultsRunsRunIdTradesGetParams';
 export * from './haltPaperApiPaperHaltPost200';
+export * from './haltPaperApiPaperHaltPostMode';
+export * from './haltPaperApiPaperHaltPostParams';
 export * from './healthHealthGet200';
 export * from './heartbeatApiBacktestJobsRunIdHeartbeatPost200';
 export * from './hTTPValidationError';

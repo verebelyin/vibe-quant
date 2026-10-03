@@ -31,6 +31,7 @@ import type {
   GetPositionsApiPaperPositionsGetParams,
   HTTPValidationError,
   HaltPaperApiPaperHaltPost200,
+  HaltPaperApiPaperHaltPostParams,
   PaperOrderResponse,
   PaperPositionResponse,
   PaperRestoreRequest,
@@ -137,11 +138,16 @@ export const useStartPaperApiPaperStartPost = <TError = HTTPValidationError,
       return useMutation(getStartPaperApiPaperStartPostMutationOptions(options), queryClient);
     }
     /**
- * Restore a paper session for an existing trader_id.
+ * Restart a paper session for an existing trader_id.
 
-Reuses the most-recent saved config (strategy + risk/sizing params) for
-trader_id. The paper CLI auto-loads the latest checkpoint on startup, so
-the new session resumes from wherever the prior one stopped.
+Reuses the most-recent saved config (strategy, validation run, symbols,
+risk/sizing) for trader_id. On startup the node loads that trader's latest
+checkpoint and restores the risk bookkeeping (high water mark, UTC-day
+baseline, consecutive losses) so limits survive the restart. Open positions
+and orders are NOT taken from the checkpoint: NautilusTrader reconciles them
+from the venue and the strategy claims them (``external_order_claims``), so
+the restored session manages the existing position instead of opening a
+second one.
  * @summary Restore Paper
  */
 export type restorePaperApiPaperRestorePostResponse201 = {
@@ -231,6 +237,8 @@ export const useRestorePaperApiPaperRestorePost = <TError = HTTPValidationError,
       return useMutation(getRestorePaperApiPaperRestorePostMutationOptions(options), queryClient);
     }
     /**
+ * ``halt``: flatten (reduce-only), cancel orders, stop strategies.
+``pause``: block new entries only; SL/TP and exits keep working.
  * @summary Halt Paper
  */
 export type haltPaperApiPaperHaltPostResponse200 = {
@@ -238,24 +246,38 @@ export type haltPaperApiPaperHaltPostResponse200 = {
   status: 200
 }
 
+export type haltPaperApiPaperHaltPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
 export type haltPaperApiPaperHaltPostResponseSuccess = (haltPaperApiPaperHaltPostResponse200) & {
   headers: Headers;
 };
-;
+export type haltPaperApiPaperHaltPostResponseError = (haltPaperApiPaperHaltPostResponse422) & {
+  headers: Headers;
+};
 
-export type haltPaperApiPaperHaltPostResponse = (haltPaperApiPaperHaltPostResponseSuccess)
+export type haltPaperApiPaperHaltPostResponse = (haltPaperApiPaperHaltPostResponseSuccess | haltPaperApiPaperHaltPostResponseError)
 
-export const getHaltPaperApiPaperHaltPostUrl = () => {
+export const getHaltPaperApiPaperHaltPostUrl = (params?: HaltPaperApiPaperHaltPostParams,) => {
+  const normalizedParams = new URLSearchParams();
 
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
 
-  
+  const stringifiedParams = normalizedParams.toString();
 
-  return `/api/paper/halt`
+  return stringifiedParams.length > 0 ? `/api/paper/halt?${stringifiedParams}` : `/api/paper/halt`
 }
 
-export const haltPaperApiPaperHaltPost = async ( options?: RequestInit): Promise<haltPaperApiPaperHaltPostResponse> => {
+export const haltPaperApiPaperHaltPost = async (params?: HaltPaperApiPaperHaltPostParams, options?: RequestInit): Promise<haltPaperApiPaperHaltPostResponse> => {
   
-  return customInstance<haltPaperApiPaperHaltPostResponse>(getHaltPaperApiPaperHaltPostUrl(),
+  return customInstance<haltPaperApiPaperHaltPostResponse>(getHaltPaperApiPaperHaltPostUrl(params),
   {      
     ...options,
     method: 'POST'
@@ -267,9 +289,9 @@ export const haltPaperApiPaperHaltPost = async ( options?: RequestInit): Promise
 
 
 
-export const getHaltPaperApiPaperHaltPostMutationOptions = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext> => {
+export const getHaltPaperApiPaperHaltPostMutationOptions = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,{params?: HaltPaperApiPaperHaltPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,{params?: HaltPaperApiPaperHaltPostParams}, TContext> => {
 
 const mutationKey = ['haltPaperApiPaperHaltPost'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -281,10 +303,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
       
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, void> = () => {
-          
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, {params?: HaltPaperApiPaperHaltPostParams}> = (props) => {
+          const {params} = props ?? {};
 
-          return  haltPaperApiPaperHaltPost(requestOptions)
+          return  haltPaperApiPaperHaltPost(params,requestOptions)
         }
 
 
@@ -296,22 +318,23 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type HaltPaperApiPaperHaltPostMutationResult = NonNullable<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>>
     
-    export type HaltPaperApiPaperHaltPostMutationError = unknown
+    export type HaltPaperApiPaperHaltPostMutationError = HTTPValidationError
 
     /**
  * @summary Halt Paper
  */
-export const useHaltPaperApiPaperHaltPost = <TError = unknown,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+export const useHaltPaperApiPaperHaltPost = <TError = HTTPValidationError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>, TError,{params?: HaltPaperApiPaperHaltPostParams}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof haltPaperApiPaperHaltPost>>,
         TError,
-        void,
+        {params?: HaltPaperApiPaperHaltPostParams},
         TContext
       > => {
       return useMutation(getHaltPaperApiPaperHaltPostMutationOptions(options), queryClient);
     }
     /**
+ * Resume from pause or an operator-resumable halt (never while killed).
  * @summary Resume Paper
  */
 export type resumePaperApiPaperResumePostResponse200 = {
@@ -474,7 +497,9 @@ export const useStopPaperApiPaperStopPost = <TError = unknown,
       return useMutation(getStopPaperApiPaperStopPostMutationOptions(options), queryClient);
     }
     /**
- * Signal the paper trading process to close all open positions.
+ * Close every open position with reduce-only market orders and wait until flat.
+
+502 with the node's error list when anything could not be closed.
  * @summary Close All Positions
  */
 export type closeAllPositionsApiPaperCloseAllPositionsPostResponse200 = {
@@ -668,8 +693,8 @@ export function useGetStatusApiPaperStatusGet<TData = Awaited<ReturnType<typeof 
 /**
  * Return open positions from the latest checkpoint for trader_id.
 
-WebSocket /ws/trading streams real-time updates; this endpoint provides
-a fallback snapshot when the UI first loads or the socket is down.
+Checkpoints store NautilusTrader ``Position.to_dict()`` (instrument_id,
+side, quantity, avg_px_open) enriched with unrealized_pnl and leverage.
  * @summary Get Positions
  */
 export type getPositionsApiPaperPositionsGetResponse200 = {
@@ -794,7 +819,7 @@ export function useGetPositionsApiPaperPositionsGet<TData = Awaited<ReturnType<t
 
 
 /**
- * Return open orders from the latest checkpoint for trader_id.
+ * Return open orders (``Order.to_dict()``) from the latest checkpoint.
  * @summary Get Orders
  */
 export type getOrdersApiPaperOrdersGetResponse200 = {

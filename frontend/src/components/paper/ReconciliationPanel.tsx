@@ -1,10 +1,12 @@
 import { useState } from "react";
+import type { ReconciliationResponse } from "@/api/generated/models";
+import { useReconcilePaperSessionApiReconciliationPaperSessionIdGet } from "@/api/generated/reconciliation/reconciliation";
+import { LoadingSpinner, MetricCard } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LoadingSpinner, MetricCard } from "@/components/ui";
 import {
   Table,
   TableBody,
@@ -13,8 +15,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useReconcilePaperSessionApiReconciliationPaperSessionIdGet } from "@/api/generated/reconciliation/reconciliation";
-import type { ReconciliationResponse } from "@/api/generated/models";
+
+/** Backend sends null when there are no trades/matches: show "no data", never 100%. */
+function formatOrNoData(value: number | null, fmt: (v: number) => string): string {
+  return value == null ? "no data" : fmt(value);
+}
 
 export function ReconciliationPanel() {
   const [runIdInput, setRunIdInput] = useState<string>("");
@@ -104,22 +109,30 @@ export function ReconciliationPanel() {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <MetricCard
                 label="Parity rate"
-                value={`${(data.divergence_summary.parity_rate * 100).toFixed(1)}%`}
+                value={formatOrNoData(
+                  data.divergence_summary.parity_rate,
+                  (v) => `${(v * 100).toFixed(1)}%`,
+                )}
               />
               <MetricCard label="Matched" value={data.divergence_summary.matched} />
               <MetricCard label="Paper only" value={data.divergence_summary.paper_only} />
-              <MetricCard
-                label="Validation only"
-                value={data.divergence_summary.validation_only}
-              />
+              <MetricCard label="Validation only" value={data.divergence_summary.validation_only} />
               <MetricCard
                 label="Mean PnL Δ"
-                value={data.divergence_summary.mean_pnl_delta.toFixed(4)}
-                trend={data.divergence_summary.mean_pnl_delta >= 0 ? "up" : "down"}
+                value={formatOrNoData(data.divergence_summary.mean_pnl_delta, (v) => v.toFixed(4))}
+                trend={
+                  data.divergence_summary.mean_pnl_delta == null
+                    ? undefined
+                    : data.divergence_summary.mean_pnl_delta >= 0
+                      ? "up"
+                      : "down"
+                }
               />
               <MetricCard
-                label="Mean entry slippage"
-                value={data.divergence_summary.mean_entry_slippage.toFixed(6)}
+                label="Mean entry slippage (+ = paper worse)"
+                value={formatOrNoData(data.divergence_summary.mean_entry_slippage, (v) =>
+                  v.toFixed(6),
+                )}
               />
               <MetricCard
                 label="Side disagreements"
@@ -181,4 +194,3 @@ export function ReconciliationPanel() {
     </Card>
   );
 }
-

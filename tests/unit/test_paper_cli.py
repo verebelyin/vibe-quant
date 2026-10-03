@@ -47,16 +47,23 @@ class TestDecimalFromStr:
         assert result == Decimal("10.5")
 
 
+@pytest.fixture(autouse=True)
+def _binance_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Testnet and live credentials live in DIFFERENT env vars."""
+    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "test_key")
+    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "test_secret")
+    monkeypatch.setenv("BINANCE_API_KEY", "live_key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "live_secret")
+
+
 class TestLoadConfigFromJson:
     """Tests for load_config_from_json."""
 
     def test_load_minimal_config(self, tmp_path: Path) -> None:
-        """Load minimal valid config."""
+        """Load minimal valid config; testnet creds come from BINANCE_TESTNET_*."""
         config_data = {
             "trader_id": "PAPER-001",
             "binance": {
-                "api_key": "test_key",
-                "api_secret": "test_secret",
                 "testnet": True,
             },
             "symbols": ["BTCUSDT"],
@@ -80,8 +87,6 @@ class TestLoadConfigFromJson:
         config_data = {
             "trader_id": "PAPER-002",
             "binance": {
-                "api_key": "key",
-                "api_secret": "secret",
                 "testnet": False,
                 "account_type": "COIN_FUTURES",
             },
@@ -113,6 +118,9 @@ class TestLoadConfigFromJson:
 
         assert config.trader_id == "PAPER-002"
         assert config.binance.testnet is False
+        # Live reads BINANCE_* (never the testnet vars).
+        assert config.binance.api_key == "live_key"
+        assert config.binance.api_secret == "live_secret"
         assert config.binance.account_type == "COIN_FUTURES"
         assert config.symbols == ["BTCUSDT", "ETHUSDT"]
         assert config.sizing.method == "kelly"
@@ -132,10 +140,7 @@ class TestLoadConfigFromJson:
         """Missing optional fields use defaults."""
         config_data = {
             "trader_id": "PAPER-001",
-            "binance": {
-                "api_key": "key",
-                "api_secret": "secret",
-            },
+            "binance": {},
         }
         config_path = tmp_path / "config.json"
         with config_path.open("w") as f:
@@ -148,6 +153,32 @@ class TestLoadConfigFromJson:
         assert config.binance.account_type == "USDT_FUTURES"
         assert config.sizing.method == "fixed_fractional"
         assert config.state_persistence_interval == 60
+        # Sizing overrides default to None = keep the validated strategy values.
+        assert config.sizing.risk_per_trade is None
+        assert config.sizing.max_position_pct is None
+        assert config.binance.api_key == "test_key"
+
+    def test_rejects_credentials_in_file(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps({"trader_id": "PAPER-001", "binance": {"api_key": "K", "api_secret": "S"}})
+        )
+        with pytest.raises(ConfigurationError, match="environment"):
+            load_config_from_json(config_path)
+
+    def test_missing_testnet_env_fails_validation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Testnet never silently falls back to the live BINANCE_* keys."""
+        monkeypatch.delenv("BINANCE_TESTNET_API_KEY")
+        monkeypatch.delenv("BINANCE_TESTNET_API_SECRET")
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps({"trader_id": "PAPER-001", "symbols": ["BTCUSDT"], "strategy_id": 1})
+        )
+        config = load_config_from_json(config_path)
+        assert config.binance.api_key == ""
+        assert any("BINANCE_TESTNET_API_KEY" in e for e in config.validate())
 
 
 class TestSaveConfigToJson:
@@ -243,8 +274,6 @@ class TestRunWithConfig:
         data = {
             "trader_id": "PAPER-001",
             "binance": {
-                "api_key": "test_key",
-                "api_secret": "test_secret",
                 "testnet": True,
             },
             "symbols": ["BTCUSDT"],
@@ -252,6 +281,33 @@ class TestRunWithConfig:
         }
         with path.open("w") as f:
             json.dump(data, f)
+
+    @pytest.mark.asyncio
+    async def test_live_config_requires_live_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "live.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "LIVE-001",
+                    "binance": {"testnet": False},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                }
+            )
+        )
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+        assert await run_with_config(config_path) == 1
+        assert started == []
+        assert await run_with_config(config_path, allow_live=True) == 0
+        assert started[0].binance.testnet is False
+        assert started[0].binance.api_key == "live_key"
 
     @pytest.mark.asyncio
     async def test_run_with_config_cleans_up_heartbeat_on_success(

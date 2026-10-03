@@ -7,4 +7,5 @@
 
 export interface PaperRestoreRequest {
   trader_id: string;
+  confirm_live?: boolean;
 }

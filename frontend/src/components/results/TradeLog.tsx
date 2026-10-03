@@ -270,7 +270,9 @@ export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId
                     <span
                       className={cn(
                         "text-xs font-medium uppercase",
-                        trade.direction === "long" ? "text-green-500" : "text-red-500",
+                        trade.direction.toLowerCase() === "long"
+                          ? "text-green-500"
+                          : "text-red-500",
                       )}
                     >
                       {trade.direction}

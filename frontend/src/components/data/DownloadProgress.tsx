@@ -4,13 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-interface ProgressEvent {
-  progress?: number;
-  message?: string;
-  status?: string;
-  error?: string;
-}
-
 interface DownloadProgressProps {
   jobId: string;
   onComplete: () => void;
@@ -38,55 +31,49 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
   }, []);
 
   useEffect(() => {
+    // The backend streams NAMED SSE events (sse/progress.py): "log" (one log line),
+    // "complete" (final job status: completed | failed | killed) and "error".
+    // `onmessage` only receives unnamed events, so it never fired.
     const es = new EventSource(`/api/data/ingest/${jobId}/progress`);
     esRef.current = es;
 
     es.onopen = () => {
       setStatus("running");
-      addLog("Connected to progress stream.");
     };
 
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data) as ProgressEvent;
+    es.addEventListener("log", (ev) => {
+      const line = (ev as MessageEvent<string>).data;
+      if (line) addLog(line);
+    });
 
-        if (data.progress !== undefined) {
-          setProgress(Math.min(100, Math.max(0, data.progress)));
-        }
-
-        if (data.message) {
-          addLog(data.message);
-        }
-
-        if (data.status === "complete" || data.status === "done") {
-          setStatus("complete");
-          setProgress(100);
-          addLog("Download complete.");
-          es.close();
-        }
-
-        if (data.status === "error" || data.error) {
-          setStatus("error");
-          setErrorMsg(data.error ?? "Unknown error");
-          addLog(`Error: ${data.error ?? "Unknown"}`);
-          es.close();
-        }
-      } catch {
-        // Non-JSON message, treat as log line
-        if (ev.data) addLog(ev.data);
+    es.addEventListener("complete", (ev) => {
+      const final = (ev as MessageEvent<string>).data;
+      es.close();
+      if (final === "completed") {
+        setStatus("complete");
+        setProgress(100);
+        addLog("Download complete.");
+      } else {
+        setStatus("error");
+        setErrorMsg(`Job ${final}`);
+        addLog(`Job ended: ${final}`);
       }
-    };
+    });
 
-    es.onerror = () => {
-      // EventSource auto-reconnects on error, but if readyState is CLOSED it won't
-      if (es.readyState === EventSource.CLOSED) {
-        if (statusRef.current !== "complete") {
-          setStatus("error");
-          setErrorMsg("Connection lost");
-          addLog("Connection to progress stream lost.");
-        }
+    es.addEventListener("error", (ev) => {
+      // Server-sent "error" events carry data; transport errors don't.
+      const msg = (ev as MessageEvent<string>).data;
+      if (msg) {
+        es.close();
+        setStatus("error");
+        setErrorMsg(msg);
+        addLog(`Error: ${msg}`);
+      } else if (es.readyState === EventSource.CLOSED && statusRef.current !== "complete") {
+        setStatus("error");
+        setErrorMsg("Connection lost");
+        addLog("Connection to progress stream lost.");
       }
-    };
+    });
 
     return () => {
       es.close();
@@ -118,7 +105,7 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
             }
           >
             {status === "connecting" && "Connecting..."}
-            {status === "running" && `${progress.toFixed(0)}%`}
+            {status === "running" && "Running..."}
             {status === "complete" && "Complete"}
             {status === "error" && "Failed"}
           </Badge>
@@ -139,9 +126,10 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
                 ? "bg-destructive"
                 : status === "complete"
                   ? "bg-green-500"
-                  : "bg-primary",
+                  : "animate-pulse bg-primary",
             )}
-            style={{ width: `${progress}%` }}
+            // No percentage is streamed: full-width pulse while running.
+            style={{ width: status === "running" ? "100%" : `${progress}%` }}
           />
         </div>
 

@@ -1,22 +1,22 @@
 """Paper-vs-validation trade reconciliation.
 
-Reconstructs round-trip trades from ``POSITION_OPEN``/``POSITION_CLOSE``
-event pairs in a run's ``logs/events/{run_id}.jsonl`` and diffs two runs
-against each other. Used to answer "did paper trading behave like the
-validation backtest on the same window?" before promoting to live.
-
-Both paper and validation emit the same event schema
-(``vibe_quant.logging.events``) so we can compare them without
-touching paper persistence.
+Paper trades are reconstructed from ``POSITION_OPEN``/``POSITION_CLOSE``
+event pairs in the paper node's event log (``logs/paper/{trader_id}.jsonl``;
+the node writes position ids and venue timestamps). Validation trades come
+from the state DB ``trades`` table: the validation runner's event log has no
+position ids and wall-clock timestamps, so it cannot be paired.
 
 Typical usage::
 
-    from vibe_quant.reconciliation import reconcile, load_trades
+    from vibe_quant.reconciliation import load_trades, load_validation_trades, reconcile
 
-    paper = load_trades("paper_42")            # trader_id as run_id
-    validation = load_trades("42")             # backtest_runs.id
+    paper = load_trades("PAPER-042", base_path="logs/paper")
+    validation = load_validation_trades(state_manager, 870)
     report = reconcile(paper, validation, tolerance_seconds=120)
     print(report.summary())
+
+With zero trades on both sides every rate/mean is ``None`` ("no data"),
+never a perfect score.
 """
 
 from __future__ import annotations
@@ -31,6 +31,10 @@ from vibe_quant.logging.query import _DEFAULT_BASE_PATH, _validate_run_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from vibe_quant.db.state_manager import StateManager
+
+_SHORT_SIDES = frozenset({"SHORT", "SELL"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +77,13 @@ class TradeMatch:
 
     @property
     def entry_slippage(self) -> float:
-        """Paper entry − validation entry. Positive = paper paid more."""
-        return self.paper.entry_price - self.validation.entry_price
+        """Adverse entry slippage of paper vs validation (price units).
+
+        Positive = paper got the worse fill: paid more on a LONG, received
+        less on a SHORT. Sign follows the paper trade's side.
+        """
+        diff = self.paper.entry_price - self.validation.entry_price
+        return -diff if self.paper.side.upper() in _SHORT_SIDES else diff
 
     @property
     def pnl_delta(self) -> float:
@@ -106,23 +115,23 @@ class ReconciliationReport:
     validation_run: str = ""
     tolerance_seconds: int = 0
 
-    def parity_rate(self) -> float:
-        """Fraction of trades that matched (0..1). 1.0 means perfect parity."""
+    def parity_rate(self) -> float | None:
+        """Fraction of trades that matched (0..1); None when there are no trades."""
         total = len(self.matches) + len(self.paper_only) + len(self.validation_only)
         if total == 0:
-            return 1.0
+            return None
         return len(self.matches) / total
 
-    def mean_pnl_delta(self) -> float:
-        """Mean P&L delta across matched trades (paper − validation)."""
+    def mean_pnl_delta(self) -> float | None:
+        """Mean P&L delta across matched trades (paper − validation); None if none."""
         if not self.matches:
-            return 0.0
+            return None
         return sum(m.pnl_delta for m in self.matches) / len(self.matches)
 
-    def mean_entry_slippage(self) -> float:
-        """Mean entry slippage across matched trades (paper − validation)."""
+    def mean_entry_slippage(self) -> float | None:
+        """Mean adverse entry slippage across matched trades; None if none."""
         if not self.matches:
-            return 0.0
+            return None
         return sum(m.entry_slippage for m in self.matches) / len(self.matches)
 
     def side_disagreements(self) -> int:
@@ -131,15 +140,19 @@ class ReconciliationReport:
 
     def summary(self) -> str:
         """Human-readable summary."""
+        parity = self.parity_rate()
+        slip = self.mean_entry_slippage()
+        pnl = self.mean_pnl_delta()
+        no_data = "n/a (no data)"
         return (
             f"Reconciliation: paper={self.paper_run} vs validation={self.validation_run}\n"
             f"  Matched:              {len(self.matches)}\n"
             f"  Paper-only (phantom): {len(self.paper_only)}\n"
             f"  Validation-only (missed): {len(self.validation_only)}\n"
-            f"  Parity rate:          {self.parity_rate():.1%}\n"
+            f"  Parity rate:          {no_data if parity is None else f'{parity:.1%}'}\n"
             f"  Side disagreements:   {self.side_disagreements()}\n"
-            f"  Mean entry slippage:  {self.mean_entry_slippage():+.6f}\n"
-            f"  Mean PnL delta:       {self.mean_pnl_delta():+.4f}\n"
+            f"  Mean entry slippage:  {no_data if slip is None else f'{slip:+.6f}'}\n"
+            f"  Mean PnL delta:       {no_data if pnl is None else f'{pnl:+.4f}'}\n"
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -224,6 +237,37 @@ def load_trades(
                 if trade is not None:
                     trades.append(trade)
 
+    trades.sort(key=lambda t: t.entry_time)
+    return trades
+
+
+def load_validation_trades(state: StateManager, run_id: int) -> list[Trade]:
+    """Closed trades of a validation run from the ``trades`` table.
+
+    Trades still open at the end of the backtest (no exit) are dropped, like
+    orphan opens in :func:`load_trades`.
+    """
+    trades: list[Trade] = []
+    for row in state.get_trades(run_id):
+        entry_ts = _parse_ts(row.get("entry_time"))
+        exit_ts = _parse_ts(row.get("exit_time"))
+        if entry_ts is None or exit_ts is None:
+            continue
+        trades.append(
+            Trade(
+                position_id=f"{run_id}:{row.get('id')}",
+                symbol=str(row.get("symbol", "")),
+                side=str(row.get("direction", "")).upper(),
+                entry_time=entry_ts,
+                exit_time=exit_ts,
+                entry_price=_num(row.get("entry_price")),
+                exit_price=_num(row.get("exit_price")),
+                quantity=_num(row.get("quantity")),
+                net_pnl=_num(row.get("net_pnl")),
+                gross_pnl=_num(row.get("gross_pnl")),
+                exit_reason=str(row.get("exit_reason") or ""),
+            )
+        )
     trades.sort(key=lambda t: t.entry_time)
     return trades
 
@@ -355,5 +399,6 @@ __all__ = [
     "Trade",
     "TradeMatch",
     "load_trades",
+    "load_validation_trades",
     "reconcile",
 ]

@@ -24,6 +24,75 @@ logger = logging.getLogger(__name__)
 _COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str]]] = {}
 
 
+class UnknownStrategyParamError(ValueError):
+    """A sweep/override key matches no field of the compiled strategy config.
+
+    Raised instead of silently dropping the key: a silently ignored override
+    makes every combination of a sweep identical (vibe-quant-e70tl.8).
+    """
+
+
+# Known spelling mismatches between sweep keys and compiled config fields
+# (suffix -> replacement), applied only when the key itself is not a field.
+_PARAM_KEY_ALIASES: tuple[tuple[str, str], ...] = (
+    # take_profit[_long|_short].risk_reward_ratio -> ..._risk_reward
+    ("_risk_reward_ratio", "_risk_reward"),
+    # STOCH: NT/GA spell k/d as period_k/period_d; the DSL fields are period/d_period
+    ("_period_k", "_period"),
+    ("_k_period", "_period"),
+    ("_period_d", "_d_period"),
+)
+
+
+def resolve_strategy_params(
+    params: dict[str, Any], config_fields: tuple[str, ...] | list[str]
+) -> dict[str, Any]:
+    """Map sweep/override keys onto compiled strategy-config field names.
+
+    Dot notation (``ema_fast.period``) becomes underscore notation
+    (``ema_fast_period``); known aliases (``take_profit.risk_reward_ratio``,
+    STOCH ``period_k``/``period_d``) are mapped to their real fields.
+
+    Raises:
+        UnknownStrategyParamError: if any key matches no config field, or two
+            keys resolve to the same field.
+    """
+    fields = set(config_fields)
+    if not fields:
+        msg = "Compiled strategy config exposes no fields; cannot apply overrides"
+        raise UnknownStrategyParamError(msg)
+    resolved: dict[str, Any] = {}
+    source_key: dict[str, str] = {}
+    unknown: list[str] = []
+    for key, value in params.items():
+        cfg_key = key.replace(".", "_")
+        if cfg_key not in fields:
+            for suffix, repl in _PARAM_KEY_ALIASES:
+                candidate = cfg_key[: -len(suffix)] + repl
+                if cfg_key.endswith(suffix) and candidate in fields:
+                    cfg_key = candidate
+                    break
+        if cfg_key not in fields:
+            unknown.append(key)
+            continue
+        if cfg_key in resolved:
+            msg = f"Override keys {source_key[cfg_key]!r} and {key!r} both map to {cfg_key!r}"
+            raise UnknownStrategyParamError(msg)
+        resolved[cfg_key] = value
+        source_key[cfg_key] = key
+    if unknown:
+        from nautilus_trader.trading.config import StrategyConfig
+
+        base_fields = set(getattr(StrategyConfig, "__struct_fields__", ()))
+        valid = sorted(fields - base_fields - {"instrument_id"})
+        msg = (
+            f"Unknown strategy parameter(s) {sorted(unknown)}: no matching field in the "
+            f"compiled strategy config. Valid keys (dot or underscore notation): {valid}"
+        )
+        raise UnknownStrategyParamError(msg)
+    return resolved
+
+
 class NTScreeningRunner:
     """Real NautilusTrader backtest runner for screening mode.
 
@@ -42,6 +111,7 @@ class NTScreeningRunner:
         start_date: str,
         end_date: str,
         catalog_path: str | None = None,
+        funding_archive_path: str | None = None,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -51,18 +121,39 @@ class NTScreeningRunner:
             start_date: Start date string (YYYY-MM-DD).
             end_date: End date string (YYYY-MM-DD).
             catalog_path: Path to ParquetDataCatalog. Uses default if None.
+            funding_archive_path: Raw-data archive holding funding rates.
+                Uses the default archive if None. Funding series are cached
+                per worker process (see validation.funding).
         """
         self._dsl_dict = dsl_dict
         self._symbols = symbols
         self._start_date = start_date
         self._end_date = end_date
         self._catalog_path = catalog_path
+        self._funding_archive_path = funding_archive_path
 
         # Cached per-process compilation results (populated on first __call__)
         self._compiled = False
         self._module_path: str = ""
         self._strategy_cls_name: str = ""
         self._config_cls_name: str = ""
+
+        # Fail fast on sweep keys that match no config field (they used to be
+        # silently dropped, making every grid point identical).
+        sweep = dsl_dict.get("sweep") or {}
+        if sweep:
+            self.validate_param_keys(list(sweep))
+
+    def validate_param_keys(self, keys: list[str]) -> None:
+        """Raise :class:`UnknownStrategyParamError` if any key is not overridable."""
+        self._ensure_compiled()
+        resolve_strategy_params(dict.fromkeys(keys), self._config_fields())
+
+    def _config_fields(self) -> tuple[str, ...]:
+        import sys
+
+        config_cls = getattr(sys.modules[self._module_path], self._config_cls_name, None)
+        return tuple(getattr(config_cls, "__struct_fields__", ()))
 
     def __call__(self, params: dict[str, float | int]) -> BacktestMetrics:
         """Run a single screening backtest with the given parameters.
@@ -78,6 +169,10 @@ class NTScreeningRunner:
         start_time = time.time()
         try:
             return self._run_backtest(params, start_time)
+        except UnknownStrategyParamError:
+            # Configuration error, not a backtest failure: never mask it as a
+            # -inf result (vibe-quant-e70tl.8).
+            raise
         except Exception as e:
             logger.warning(
                 "NT screening backtest failed: params=%s strategy=%s error=%s",
@@ -97,7 +192,11 @@ class NTScreeningRunner:
         Results are cached in instance attributes so subsequent calls
         to _run_backtest skip recompilation.
         """
-        if self._compiled:
+        import sys
+
+        # A runner pickled into a fresh worker process keeps ``_compiled`` but
+        # not the dynamically registered module -- recompile in that case.
+        if self._compiled and self._module_path in sys.modules:
             return
 
         import json
@@ -114,7 +213,7 @@ class NTScreeningRunner:
 
         cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
         cached = _COMPILE_CACHE.get(cache_key)
-        if cached is not None:
+        if cached is not None and cached[0] in sys.modules:
             self._module_path, self._strategy_cls_name, self._config_cls_name, tfs = cached
             self._all_timeframes: set[str] = set(tfs)
             self._compiled = True
@@ -125,10 +224,12 @@ class NTScreeningRunner:
 
         dsl = validate_strategy_dict(self._dsl_dict)
         compiler = StrategyCompiler()
-        compiler.compile_to_module(dsl)  # registers in sys.modules
+        # Content-addressed module name (vibe-quant-e70tl.1): two DSLs sharing
+        # a name (GA elite + mutant) must never resolve to each other's code.
+        module = compiler.compile_to_module(dsl)  # registers in sys.modules
 
         class_name = "".join(word.capitalize() for word in dsl.name.split("_"))
-        self._module_path = f"vibe_quant.dsl.generated.{dsl.name}"
+        self._module_path = module.__name__
         self._strategy_cls_name = f"{class_name}Strategy"
         self._config_cls_name = f"{class_name}Config"
 
@@ -181,25 +282,16 @@ class NTScreeningRunner:
         config_cls_name = self._config_cls_name
         catalog_path = self._resolved_catalog_path
 
-        # NT 1.226+ rejects unknown config fields (fast-fail decoding), so
-        # forward only params the generated StrategyConfig actually declares.
-        import sys
-
-        config_cls = getattr(sys.modules[module_path], config_cls_name, None)
-        config_fields: tuple[str, ...] = getattr(config_cls, "__struct_fields__", ())
+        # Map sweep keys (dot notation, known aliases) onto the generated
+        # StrategyConfig's fields; an unknown key raises instead of being
+        # silently dropped (NT 1.226+ would also reject it at decode time).
+        strategy_params = resolve_strategy_params(params, self._config_fields())
 
         # Strategy configs (with parameter overrides)
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in self._symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
-            config_dict: dict[str, Any] = {"instrument_id": instrument_id}
-            # Convert sweep dot-notation (e.g. "ema_fast.period") to
-            # config underscore-notation (e.g. "ema_fast_period")
-            for k, v in params.items():
-                config_key = k.replace(".", "_")
-                if config_fields and config_key not in config_fields:
-                    continue
-                config_dict[config_key] = v
+            config_dict: dict[str, Any] = {"instrument_id": instrument_id, **strategy_params}
             # Always defer entries/exits one bar. NT (bar_execution, no latency)
             # fills a market order from on_bar(t) at close[t] -- the signal bar's
             # own close -- which is same-bar look-ahead. Deferring makes the fill
@@ -347,12 +439,21 @@ class NTScreeningRunner:
         """Extract BacktestMetrics from NT BacktestResult.
 
         Args:
-            starting_balance: Venue starting balance (quote currency). Used only
-                by the fallback drawdown computation when NT does not populate
-                ``stats_pnls["max drawdown"]`` (NT >= 1.222). Defaults to 1000
-                to preserve legacy behaviour.
+            starting_balance: Venue starting balance (quote currency). Must
+                match the venue config: it scales the funding charge in
+                total_return, the daily-balance Sharpe and the drawdown.
         """
+        from vibe_quant.metrics import closed_trade_drawdown, profit_factor
         from vibe_quant.screening.types import BacktestMetrics
+        from vibe_quant.validation.extraction import (
+            accrue_position_funding,
+            all_positions,
+            daily_sharpe_sortino,
+            date_to_ns,
+            finest_timeframe,
+            mark_to_market_drawdown,
+        )
+        from vibe_quant.validation.funding import FundingCalculator
 
         metrics = BacktestMetrics(
             parameters=params,
@@ -407,9 +508,6 @@ class NTScreeningRunner:
                 elif key_lower == "win rate":
                     metrics.win_rate = fval
                     _populated.add("win_rate")
-                elif key_lower == "profit factor":
-                    metrics.profit_factor = fval
-                    _populated.add("profit_factor")
                 elif not any(k in key_lower for k in _known_pnl_keys):
                     logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
@@ -433,8 +531,6 @@ class NTScreeningRunner:
                 metrics.max_drawdown = abs(fval)
             elif key_lower == "win rate" and "win_rate" not in _populated:
                 metrics.win_rate = fval
-            elif key_lower == "profit factor" and "profit_factor" not in _populated:
-                metrics.profit_factor = fval
             elif not any(k in key_lower for k in _known_returns_keys):
                 logger.debug("Unmatched returns stats key: %s = %s", key, value)
 
@@ -452,32 +548,91 @@ class NTScreeningRunner:
                 list(stats_returns.keys()) if stats_returns else "empty",
             )
 
-        # Extract fees from closed positions
+        # Fees, funding and net trade PnLs from closed positions.
         # NT netting mode removes closed positions from the main index;
         # combine positions() + position_snapshots() to capture all.
+        trade_pnls: list[float] = []
+        closed_net: list[tuple[int, float]] = []
+        cash_events: list[tuple[int, float]] = []
+        funding_cash: dict[str, list[tuple[int, float]]] = {}
+        total_funding = 0.0
+        funding_fallbacks = 0
         try:
-            cache = engine.kernel.cache
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            total_fees = 0.0
-            for pos in all_positions:
-                if pos.is_closed:
-                    total_fees += sum(abs(float(c)) for c in pos.commissions())
-            metrics.total_fees = total_fees
+            closed = [p for p in all_positions(engine) if p.is_closed]
         except Exception:
-            logger.warning("Could not extract fees from engine cache", exc_info=True)
+            logger.warning("Could not read positions from engine cache", exc_info=True)
+            closed = []
+        funding_calc = FundingCalculator(self._funding_archive_path)
+        total_fees = 0.0
+        for pos in closed:
+            total_fees += sum(abs(float(c)) for c in pos.commissions())
+            # Funding is modeled post-hoc (NT's engine applies none) with
+            # the same calculator validation uses (bd vibe-quant-e70tl.20).
+            accrual = accrue_position_funding(funding_calc, pos)
+            total_funding += accrual.total
+            funding_fallbacks += accrual.fallback_settlements
+            # NT realized_pnl is net of commissions
+            realized = float(pos.realized_pnl)
+            trade_pnls.append(realized - accrual.total)
+            closed_net.append((int(pos.ts_closed), realized - accrual.total))
+            cash_events.append((int(pos.ts_closed), realized))
+            cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
+            funding_cash.setdefault(str(pos.instrument_id), []).extend(
+                (ts, -amount) for ts, amount in accrual.payments
+            )
+        metrics.total_fees = total_fees
+        metrics.total_funding = total_funding
+        metrics.funding_fallback_settlements = funding_fallbacks
+        if funding_fallbacks:
+            logger.warning(
+                "Screening funding for params %s: %d settlement(s) charged at the "
+                "fallback rate (no archived rate)",
+                params or "{}",
+                funding_fallbacks,
+            )
+        if total_funding != 0.0 and starting_balance > 0:
+            metrics.total_return -= total_funding / starting_balance
+
+        # Trade-based profit factor on net PnL (shared definition with
+        # validation). NT's realized-PnL PF is unimplemented, and its
+        # returns-based PF is a daily-return statistic (bd vibe-quant-e70tl.7).
+        metrics.profit_factor = profit_factor(trade_pnls)
+
+        # Sharpe/Sortino from the daily realized balance INCLUDING funding,
+        # over the whole backtest window (NT's series stops at the last fill
+        # and knows nothing of funding). Same function as validation.
+        start_ns = date_to_ns(self._start_date)
+        end_ns = date_to_ns(self._end_date)
+        if start_ns is not None and end_ns is not None and end_ns > start_ns:
+            metrics.sharpe_ratio, metrics.sortino_ratio = daily_sharpe_sortino(
+                starting_balance, cash_events, start_ns, end_ns
+            )
 
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)
 
-        # Screening mode doesn't model funding; set explicitly for DB storage
-        metrics.total_funding = 0.0
-
-        # NT 1.222+ removed MaxDrawdown indicator, so stats may not contain it.
-        # Compute from trade PnLs as fallback (same approach as validation).
-        if metrics.max_drawdown == 0.0 and metrics.total_trades > 0:
-            metrics.max_drawdown = self._compute_max_drawdown(
-                engine, start_time, starting_balance=starting_balance
+        # Mark-to-market max drawdown incl. open-trade intrabar losses and
+        # funding (bd vibe-quant-e70tl.11). NT's own DD stats are daily
+        # realized-balance figures and are not used.
+        execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
+        mtm_dd = mark_to_market_drawdown(
+            engine,
+            starting_balance,
+            execution_timeframe=execution_tf,
+            catalog_path=getattr(self, "_resolved_catalog_path", None),
+            start_ns=start_ns,
+            end_ns=end_ns,
+            extra_cash=funding_cash,
+        )
+        if mtm_dd is None:
+            logger.warning(
+                "Mark-to-market drawdown unavailable for params %s (timeframe=%s) — "
+                "using closed-trade drawdown, which ignores open-trade losses",
+                params or "{}",
+                execution_tf,
             )
+            mtm_dd = closed_trade_drawdown(starting_balance, closed_net)
+        metrics.max_drawdown = mtm_dd
 
         return metrics
 
@@ -543,52 +698,3 @@ class NTScreeningRunner:
         except Exception:
             logger.warning("Could not compute return moments", exc_info=True)
             return 0.0, 3.0, ()
-
-    def _compute_max_drawdown(
-        self,
-        engine: Any,
-        start_time: float,
-        starting_balance: float = 1000.0,
-    ) -> float:
-        """Compute max drawdown from closed positions' realized PnL.
-
-        Reconstructs equity curve from cumulative PnL and finds the
-        maximum peak-to-trough decline as a fraction of peak equity.
-
-        Args:
-            engine: BacktestEngine after run.
-            start_time: Backtest start time (unused, kept for signature compat).
-            starting_balance: Initial account equity in the venue's quote
-                currency. Must match the venue config used for the backtest
-                or the DD fraction will be mis-scaled.
-
-        Returns:
-            Max drawdown as positive fraction (e.g. 0.12 for 12%).
-        """
-        try:
-            cache = engine.kernel.cache
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            closed = [p for p in all_positions if p.is_closed]
-            if not closed:
-                return 0.0
-
-            # Sort by close time for correct equity curve
-            closed.sort(key=lambda p: int(p.ts_closed))
-
-            equity = float(starting_balance)
-            peak = equity
-            max_dd = 0.0
-
-            for pos in closed:
-                equity += float(pos.realized_pnl)
-                if equity > peak:
-                    peak = equity
-                if peak > 0:
-                    dd = (peak - equity) / peak
-                    if dd > max_dd:
-                        max_dd = dd
-
-            return max_dd
-        except Exception:
-            logger.warning("Could not compute max drawdown from positions", exc_info=True)
-            return 0.0

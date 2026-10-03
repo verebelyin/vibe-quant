@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 from vibe_quant.validation.extraction import compute_extended_metrics, extract_trades
 from vibe_quant.validation.funding import (
     DEFAULT_FUNDING_RATE_PER_PERIOD,
+    FundingAccrual,
     FundingCalculator,
 )
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -193,8 +194,9 @@ class TestCostsInNetPnl:
         """A trade pushed negative by costs must count as a loss."""
 
         class _BigCostCalc(FundingCalculator):
-            def compute_funding(self, *args: object, **kwargs: object) -> float:
-                return 500.0  # exceeds the 100.0 realized PnL
+            def accrue(self, *args: object, **kwargs: object) -> FundingAccrual:
+                # exceeds the 100.0 realized PnL
+                return FundingAccrual(total=500.0, payments=[(0, 500.0)])
 
         result = ValidationResult(starting_balance=100_000.0)
         engine = _make_engine_with_closed_position()

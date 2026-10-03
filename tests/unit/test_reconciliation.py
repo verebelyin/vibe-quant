@@ -153,13 +153,24 @@ def test_load_trades_ignores_malformed_lines(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fp:
         fp.write("not valid json\n")
-        fp.write(json.dumps(_make_event(
-            "POSITION_OPEN", entry, position_id="p1", symbol="X", side="LONG"
-        )) + "\n")
-        fp.write(json.dumps(_make_event(
-            "POSITION_CLOSE", entry + timedelta(minutes=1),
-            position_id="p1", exit_price=101.0, net_pnl=1.0,
-        )) + "\n")
+        fp.write(
+            json.dumps(
+                _make_event("POSITION_OPEN", entry, position_id="p1", symbol="X", side="LONG")
+            )
+            + "\n"
+        )
+        fp.write(
+            json.dumps(
+                _make_event(
+                    "POSITION_CLOSE",
+                    entry + timedelta(minutes=1),
+                    position_id="p1",
+                    exit_price=101.0,
+                    net_pnl=1.0,
+                )
+            )
+            + "\n"
+        )
         fp.write("\n")  # blank line
 
     trades = load_trades("r1", base_path=tmp_path)
@@ -265,11 +276,97 @@ def test_to_dict_is_json_serializable() -> None:
     parsed = json.loads(blob)
     assert parsed["paper_run"] == "paper_1"
     assert parsed["counts"]["matched"] == 0
-    assert parsed["metrics"]["parity_rate"] == 1.0
+    assert parsed["metrics"]["parity_rate"] is None
 
 
-def test_empty_inputs_give_full_parity() -> None:
+def test_empty_inputs_give_no_data_not_full_parity() -> None:
+    """Audit: zero trades reported 100% parity."""
     report = reconcile([], [])
+    assert report.parity_rate() is None
+    assert report.mean_pnl_delta() is None
+    assert report.mean_entry_slippage() is None
+    assert "n/a (no data)" in report.summary()
+
+
+def test_short_entry_slippage_sign_is_adverse_positive() -> None:
+    """Audit: shorts had the slippage sign inverted.
+
+    Paper sold @101 vs validation @100 -> better fill -> slippage -1.
+    Paper bought @101 vs validation @100 -> worse fill -> slippage +1.
+    """
+    t = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    short = reconcile(
+        [_trade("p", "SHORT", t, entry_price=101.0)], [_trade("v", "SHORT", t, entry_price=100.0)]
+    )
+    assert short.matches[0].entry_slippage == pytest.approx(-1.0)
+    long_ = reconcile(
+        [_trade("p", "LONG", t, entry_price=101.0)], [_trade("v", "LONG", t, entry_price=100.0)]
+    )
+    assert long_.matches[0].entry_slippage == pytest.approx(1.0)
+    both = reconcile(
+        [
+            _trade("p1", "SHORT", t, entry_price=99.0),
+            _trade("p2", "LONG", t + timedelta(minutes=5), entry_price=101.0),
+        ],
+        [
+            _trade("v1", "SHORT", t, entry_price=100.0),
+            _trade("v2", "LONG", t + timedelta(minutes=5), entry_price=100.0),
+        ],
+    )
+    # Both fills were 1.0 worse than validation.
+    assert both.mean_entry_slippage() == pytest.approx(1.0)
+
+
+def test_validation_trades_load_from_db(tmp_path: Path) -> None:
+    """Audit: validation POSITION_* events have position_id='' -> all dropped.
+
+    Validation trades now come from the trades table (with venue timestamps)."""
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.reconciliation import load_validation_trades
+
+    sm = StateManager(tmp_path / "s.db")
+    sid = sm.create_strategy("s", {"name": "s"})
+    rid = sm.create_backtest_run(
+        sid, "validation", ["BTCUSDT"], "4h", "2024-01-01", "2024-12-31", {}
+    )
+    sm.save_trades_batch(
+        rid,
+        [
+            {
+                "symbol": "BTCUSDT-PERP.BINANCE",
+                "direction": "SHORT",
+                "leverage": 10,
+                "entry_time": "2024-02-07T00:00:59.999000+00:00",
+                "exit_time": "2024-02-07T04:00:59.999000+00:00",
+                "entry_price": 43078.3,
+                "exit_price": 42793.3,
+                "quantity": 0.007,
+                "gross_pnl": 1.995,
+                "net_pnl": 1.6778,
+                "exit_reason": "signal",
+            },
+            {
+                "symbol": "BTCUSDT-PERP.BINANCE",
+                "direction": "LONG",
+                "leverage": 10,
+                "entry_time": "2024-03-01T00:00:59.999000+00:00",
+                "exit_time": None,
+                "entry_price": 60000.0,
+                "exit_price": None,
+                "quantity": 0.005,
+                "gross_pnl": None,
+                "net_pnl": None,
+                "exit_reason": None,
+            },
+        ],
+    )
+    trades = load_validation_trades(sm, rid)
+    sm.close()
+    assert len(trades) == 1, "open-at-end trade is not comparable"
+    t = trades[0]
+    assert t.side == "SHORT" and t.symbol == "BTCUSDT-PERP.BINANCE"
+    assert t.entry_time == datetime(2024, 2, 7, 0, 0, 59, 999000, tzinfo=UTC)
+    assert t.net_pnl == pytest.approx(1.6778)
+    paper = _trade("p", "SHORT", t.entry_time + timedelta(seconds=30), symbol=t.symbol)
+    report = reconcile([paper], trades)
     assert report.parity_rate() == 1.0
-    assert report.mean_pnl_delta() == 0.0
-    assert report.mean_entry_slippage() == 0.0

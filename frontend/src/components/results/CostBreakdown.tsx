@@ -2,6 +2,7 @@ import type { BacktestResultResponse } from "@/api/generated/models";
 import { useGetRunSummaryApiResultsRunsRunIdGet } from "@/api/generated/results/results";
 import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatSignedUsd, grossPnlUsd, netPnlUsd } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 
 interface CostBreakdownProps {
@@ -40,13 +41,9 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
   const funding = data.total_funding ?? 0;
   const totalCosts = fees + slippage + funding;
 
-  // total_return from backend is NET (after fees)
-  const netPnl =
-    data.total_return != null && data.starting_balance != null
-      ? (data.total_return / 100) * data.starting_balance
-      : null;
-
-  const grossPnl = netPnl != null ? netPnl + totalCosts : null;
+  // total_return is a NET fraction (after fees, slippage, funding).
+  const netPnl = netPnlUsd(data.total_return, data.starting_balance);
+  const grossPnl = grossPnlUsd(netPnl, fees, slippage, funding);
 
   const costs: CostRow[] = [
     { label: "Fees / Commission", value: fees, barClass: "bg-red-500" },
@@ -92,7 +89,7 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
                   grossPnl != null && grossPnl >= 0 ? "text-green-500" : "text-red-500",
                 )}
               >
-                {grossPnl != null ? `$${grossPnl.toFixed(2)}` : "N/A"}
+                {formatSignedUsd(grossPnl)}
               </p>
             </div>
             <div>
@@ -107,7 +104,7 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
                   netPnl != null && netPnl >= 0 ? "text-green-500" : "text-red-500",
                 )}
               >
-                {netPnl != null ? `$${netPnl.toFixed(2)}` : "N/A"}
+                {formatSignedUsd(netPnl)}
               </p>
             </div>
           </div>

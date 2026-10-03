@@ -32,14 +32,14 @@ function formatMonthDay(date: Date): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function computeYearlyReturns(data: EquityCurvePoint[]): YearReturn[] {
+export function computeYearlyReturns(data: EquityCurvePoint[]): YearReturn[] {
   if (data.length < 2) return [];
 
   const byYear = new Map<number, { first: number; last: number; firstDate: Date; lastDate: Date }>();
 
   for (const point of data) {
     const d = new Date(point.timestamp);
-    const year = d.getFullYear();
+    const year = d.getUTCFullYear();
     const existing = byYear.get(year);
     if (!existing) {
       byYear.set(year, { first: point.equity, last: point.equity, firstDate: d, lastDate: d });
@@ -50,24 +50,28 @@ function computeYearlyReturns(data: EquityCurvePoint[]): YearReturn[] {
   }
 
   const result: YearReturn[] = [];
-  for (const [year, { first, last, firstDate, lastDate }] of byYear) {
-    if (first !== 0) {
-      // Partial if first data point is after Jan 7 or last data point is before Dec 24
-      const startsLate = firstDate.getMonth() > 0 || firstDate.getDate() > 7;
-      const endsEarly = lastDate.getMonth() < 11 || lastDate.getDate() < 24;
-      const partial = startsLate || endsEarly;
-      const dateRange = `${formatMonthDay(firstDate)} – ${formatMonthDay(lastDate)}`;
-
-      result.push({
-        year: String(year),
-        returnPct: Number.parseFloat((((last - first) / first) * 100).toFixed(2)),
-        partial,
-        dateRange,
-      });
-    }
+  // Each year's base is the previous year's closing equity: the first point of a
+  // year is equity AFTER that year's first closed trade, so using it as the base
+  // dropped that trade's PnL from every year but the first.
+  let prevLast: number | null = null;
+  for (const year of [...byYear.keys()].sort((a, b) => a - b)) {
+    const { first, last, firstDate, lastDate } = byYear.get(year)!;
+    const base = prevLast ?? first;
+    prevLast = last;
+    if (base === 0) continue;
+    // Partial if first data point is after Jan 7 or last data point is before Dec 24
+    const startsLate = firstDate.getUTCMonth() > 0 || firstDate.getUTCDate() > 7;
+    const endsEarly = lastDate.getUTCMonth() < 11 || lastDate.getUTCDate() < 24;
+    const dateRange = `${formatMonthDay(firstDate)} – ${formatMonthDay(lastDate)}`;
+    result.push({
+      year: String(year),
+      returnPct: Number.parseFloat((((last - base) / base) * 100).toFixed(2)),
+      partial: startsLate || endsEarly,
+      dateRange,
+    });
   }
 
-  return result.sort((a, b) => Number(a.year) - Number(b.year));
+  return result;
 }
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: TooltipPayloadEntry[] }) {

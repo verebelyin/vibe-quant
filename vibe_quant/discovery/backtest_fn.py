@@ -24,8 +24,11 @@ class NTBacktestFn:
     Top-level class with a stable importable path so multiprocessing
     workers can unpickle it. Supports multi-window evaluation: when
     ``windows`` has 2+ entries, runs the backtest on each window and
-    returns worst-case metrics across all windows, forcing the GA to
-    find regime-robust strategies.
+    returns WORST-of-N metrics (min Sharpe, min return, max drawdown, min
+    profit factor; trades summed), with a per-window trade gate -- see
+    :meth:`_aggregate_multi_window`. This forces the GA to find
+    regime-robust strategies instead of one great window averaging out
+    two losing ones (vibe-quant-e70tl.6).
     """
 
     def __init__(
@@ -35,12 +38,15 @@ class NTBacktestFn:
         start_date: str,
         end_date: str,
         windows: list[tuple[str, str]] | None = None,
+        min_trades: int = 0,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
         self.start_date = start_date
         self.end_date = end_date
         self.windows = windows
+        # Global min-trades gate of the run; drives the per-window gate.
+        self.min_trades = min_trades
 
     def _run_single(
         self,
@@ -76,51 +82,74 @@ class NTBacktestFn:
         }
 
     @staticmethod
+    def per_window_min_trades(min_trades: int, n_windows: int) -> int:
+        """Trades each sub-window must have: ``max(1, min_trades // (2*N))``.
+
+        Half the per-window share of the global gate -- a window that barely
+        trades has no Sharpe worth taking the minimum of.
+        """
+        return max(1, int(min_trades) // (2 * max(1, n_windows)))
+
+    @staticmethod
     def _aggregate_multi_window(
         results: list[dict[str, float | int]],
+        min_trades: int = 0,
     ) -> dict[str, float | int]:
-        """Aggregate metrics across multiple window results.
+        """Aggregate per-window metrics as WORST-of-N.
 
-        Strategy: require ALL windows to produce trades. If any window
-        has 0 trades, return failure metrics. Otherwise:
-        - total_trades: sum (statistical significance across all data)
-        - sharpe_ratio: mean (consistent performance)
-        - max_drawdown: max (worst case)
-        - profit_factor: trade-weighted mean
-        - total_return: mean per-window return
+        - every window must have ``per_window_min_trades(min_trades, N)``
+          trades, else failure metrics (the strategy doesn't cover that regime)
+        - sharpe_ratio: min across windows
+        - total_return: min across windows
+        - max_drawdown: max across windows
+        - profit_factor: min across windows (NaN = no losing period in that
+          window; ignored unless every window is NaN)
+        - total_trades: sum (feeds the run's global min-trades gate)
+        - skewness: mean, kurtosis: max (conservative for DSR);
+          trade_returns: concatenated (bootstrap CI over all trades)
+
+        Failure metrics keep the summed trade count (honest logging) but have
+        sharpe -1 / return 0, which the fitness hard gate scores as 0.
         """
+        import math
+
         n = len(results)
         per_window_trades = [int(r["total_trades"]) for r in results]
+        total_trades_sum = sum(per_window_trades)
+        window_min = NTBacktestFn.per_window_min_trades(min_trades, n)
 
-        # If any window has 0 trades, strategy doesn't cover that regime
-        if any(t == 0 for t in per_window_trades):
+        if any(t < window_min for t in per_window_trades):
             return {
                 "sharpe_ratio": -1.0,
                 "max_drawdown": 1.0,
                 "profit_factor": 0.0,
-                "total_trades": 0,
+                "total_trades": total_trades_sum,
                 "total_return": 0.0,
+                "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
             }
 
-        total_trades_sum = sum(per_window_trades)
+        def _finite_or(value: float, fallback: float) -> float:
+            return fallback if math.isnan(value) else value
 
-        # Trade-weighted profit factor
-        pf_weighted = sum(
-            float(r["profit_factor"]) * t
-            for r, t in zip(results, per_window_trades, strict=False)
-        ) / total_trades_sum
+        sharpes = [_finite_or(float(r["sharpe_ratio"]), 0.0) for r in results]
+        returns = [_finite_or(float(r.get("total_return", 0.0)), 0.0) for r in results]
+        dds = [_finite_or(float(r["max_drawdown"]), 1.0) for r in results]
+        pfs = [float(r["profit_factor"]) for r in results]
+        finite_pfs = [p for p in pfs if not math.isnan(p)]
+        pf_worst = min(finite_pfs) if finite_pfs else float("nan")
 
         return {
-            "sharpe_ratio": sum(float(r["sharpe_ratio"]) for r in results) / n,
-            "max_drawdown": max(float(r["max_drawdown"]) for r in results),
-            "profit_factor": pf_weighted,
+            "sharpe_ratio": min(sharpes),
+            "max_drawdown": max(dds),
+            "profit_factor": pf_worst,
             "total_trades": total_trades_sum,
-            "total_return": sum(float(r["total_return"]) for r in results) / n,
+            "total_return": min(returns),
             "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
             "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
             "trade_returns": sum(  # type: ignore[dict-item]
                 (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
             ),
+            "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
         }
 
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
@@ -130,7 +159,7 @@ class NTBacktestFn:
                     self._run_single(chromosome, ws, we)
                     for ws, we in self.windows
                 ]
-                return self._aggregate_multi_window(results)
+                return self._aggregate_multi_window(results, self.min_trades)
             return self._run_single(chromosome, self.start_date, self.end_date)
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
@@ -153,7 +182,7 @@ def full_range_headline(
 ) -> dict[str, float | int]:
     """Champion headline metrics measured on ONE continuous backtest over the full range.
 
-    Discovery's multi-window fitness reports mean(per-window Sharpe) and
+    Discovery's multi-window fitness reports min(per-window Sharpe) and
     sum(per-window trades) over ``--eval-windows`` sub-windows; a train/test split
     further restricts fitness to the training slice. Promotion, by contrast,
     replays a single continuous backtest over the whole discovery range, so the

@@ -768,6 +768,13 @@ export const useExportDiscoveredStrategyApiDiscoveryResultsRunIdExportStrategyIn
     }
     /**
  * Export genome as strategy and launch screening/validation backtest.
+
+``mode=validation`` validates on the discovery run's HOLDOUT (out-of-sample)
+range by default; ``validation_range=full`` opts into the full discovery
+range (mostly in-sample). Runs without a holdout always use the full range.
+``mode=screening`` is a like-for-like replay of the full discovery range
+(the replay-drift check compares it with the full-range headline). The
+range used is recorded in the run's ``promote_source``.
  * @summary Promote Discovered Strategy
  */
 export type promoteDiscoveredStrategyApiDiscoveryResultsRunIdPromoteStrategyIndexPostResponse201 = {

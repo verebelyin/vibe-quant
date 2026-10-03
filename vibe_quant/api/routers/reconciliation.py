@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,7 +18,8 @@ from vibe_quant.api.schemas.reconciliation import (
 )
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
-from vibe_quant.reconciliation import Trade, load_trades, reconcile
+from vibe_quant.paper.config import DEFAULT_PAPER_LOGS_PATH, default_paper_trader_id
+from vibe_quant.reconciliation import Trade, load_trades, load_validation_trades, reconcile
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +56,12 @@ async def reconcile_paper_session(
 
     V1: post-stop only. If the paper session is still running, returns 400.
 
-    If `validation_run_id` is omitted, we try to pick the most recent
-    successful validation run for the same strategy_id as the paper session.
+    If `validation_run_id` is omitted, the validation run the session was
+    started from is used, else the most recent completed validation run for
+    the same strategy_id.
+
+    Paper trades come from the node's event log (``{logs_path}/{trader_id}.jsonl``),
+    validation trades from the ``trades`` table. Zero trades -> parity ``null``.
     """
     info = jobs.get_job_info(paper_session_id)
     if info is None:
@@ -70,6 +76,11 @@ async def reconcile_paper_session(
     if paper_run is None:
         raise HTTPException(status_code=404, detail=f"Paper run {paper_session_id} not found")
 
+    raw_params = paper_run.get("parameters")
+    params: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
+    started_from = params.get("validation_run_id")
+    if validation_run_id is None and isinstance(started_from, int):
+        validation_run_id = started_from
     if validation_run_id is None:
         strategy_id = paper_run.get("strategy_id")
         if strategy_id is None:
@@ -92,21 +103,27 @@ async def reconcile_paper_session(
             )
         validation_run_id = int(candidates[0]["run_id"])
 
-    try:
-        paper_trades, validation_trades = await asyncio.gather(
-            asyncio.to_thread(load_trades, f"paper_{paper_session_id}"),
-            asyncio.to_thread(load_trades, str(validation_run_id)),
+    validation_run = state.get_backtest_run(validation_run_id)
+    if validation_run is None or validation_run.get("run_mode") != "validation":
+        raise HTTPException(
+            status_code=404, detail=f"Validation run {validation_run_id} not found"
         )
+
+    trader_id = str(params.get("trader_id") or default_paper_trader_id(paper_session_id))
+    logs_path = Path(str(params.get("logs_path") or DEFAULT_PAPER_LOGS_PATH))
+    try:
+        paper_trades = await asyncio.to_thread(load_trades, trader_id, logs_path)
     except (FileNotFoundError, OSError) as exc:
         raise HTTPException(
-            status_code=404, detail=f"Event log not found: {exc}"
+            status_code=404, detail=f"Paper event log not found: {exc}"
         ) from exc
+    validation_trades = load_validation_trades(state, validation_run_id)
 
     report = reconcile(
         paper_trades,
         validation_trades,
         tolerance_seconds=tolerance_seconds,
-        paper_run=f"paper_{paper_session_id}",
+        paper_run=trader_id,
         validation_run=str(validation_run_id),
     )
 

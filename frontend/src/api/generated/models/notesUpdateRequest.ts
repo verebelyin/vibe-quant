@@ -5,6 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * User free-text notes (stored in ``backtest_results.user_notes``).
+ */
 export interface NotesUpdateRequest {
   notes: string;
 }

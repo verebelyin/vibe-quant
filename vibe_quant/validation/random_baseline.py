@@ -31,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from vibe_quant.metrics import profit_factor
+
 logger = logging.getLogger(__name__)
 
 # Taker fee per side (Binance perp default)
@@ -232,8 +234,21 @@ class SimulationMetrics:
     total_fees_pct: float
 
 
-def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationMetrics:
-    """Compute performance metrics from a list of trades."""
+_MS_TO_NS = 1_000_000
+_BAR_SPAN_FALLBACK_MS = 60_000
+
+
+def _compute_metrics(
+    trades: list[TradeResult], taker_fee: float, bars: list[OHLCBar]
+) -> SimulationMetrics:
+    """Compute performance metrics from a list of trades.
+
+    Sharpe/Sortino are the SAME annualized daily-return statistics reported
+    for champions (NT's 252-day Sharpe/Sortino on the daily balance, via
+    :func:`vibe_quant.validation.extraction.daily_sharpe_sortino`) over the
+    whole bar window -- previously a per-trade t-stat ``mean/std*sqrt(n)``,
+    which is not comparable (bd vibe-quant-e70tl.23).
+    """
     if not trades:
         return SimulationMetrics(
             sharpe=0.0,
@@ -251,7 +266,6 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
 
     # Basic stats
     wins = pnls[pnls > 0]
-    losses = pnls[pnls < 0]
     win_rate = len(wins) / n if n > 0 else 0.0
 
     # Total return (compounded)
@@ -263,22 +277,25 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
     drawdowns = (running_max - equity_curve) / running_max
     max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
 
-    # Sharpe (annualized, assuming ~365*24*60 1m bars per year but
-    # we use trade-level returns, so annualize by sqrt(trades_per_year))
-    mean_pnl = float(np.mean(pnls))
-    std_pnl = float(np.std(pnls, ddof=1)) if n > 1 else 1.0
-    # Annualization: assume ~252 trading days, scale by trades per day
-    sharpe = mean_pnl / std_pnl * np.sqrt(n) if std_pnl > 1e-10 else 0.0
+    # Daily-balance Sharpe/Sortino (same statistic as champions): each trade's
+    # compounded PnL is booked on its exit bar's day; the series spans all bars.
+    from vibe_quant.validation.extraction import daily_sharpe_sortino
 
-    # Sortino
-    downside = pnls[pnls < 0]
-    downside_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 1.0
-    sortino = mean_pnl / downside_std * np.sqrt(n) if downside_std > 1e-10 else 0.0
+    cash_events: list[tuple[int, float]] = []
+    equity_before = np.concatenate(([1.0], equity_curve[:-1]))
+    for trade, eq, pnl in zip(trades, equity_before, pnls, strict=True):
+        exit_ts_ms = bars[min(trade.exit_idx, len(bars) - 1)].ts
+        cash_events.append((exit_ts_ms * _MS_TO_NS, float(eq) * float(pnl) / 100.0))
+    span_ms = bars[1].ts - bars[0].ts if len(bars) > 1 else _BAR_SPAN_FALLBACK_MS
+    sharpe, sortino = daily_sharpe_sortino(
+        1.0,
+        cash_events,
+        bars[0].ts * _MS_TO_NS,
+        (bars[-1].ts + span_ms) * _MS_TO_NS,
+    )
 
-    # Profit factor
-    gross_profit = float(np.sum(wins)) if len(wins) > 0 else 0.0
-    gross_loss = float(np.abs(np.sum(losses))) if len(losses) > 0 else 0.0
-    profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else float("inf")
+    # Profit factor (shared, capped definition — never inf)
+    pf = profit_factor(float(x) for x in pnls)
 
     # Total fees
     total_fees_pct = taker_fee * 100.0 * 2.0 * n
@@ -288,7 +305,7 @@ def _compute_metrics(trades: list[TradeResult], taker_fee: float) -> SimulationM
         sortino=float(sortino),
         max_drawdown=max_dd,
         total_return=total_return,
-        profit_factor=profit_factor,
+        profit_factor=pf,
         win_rate=win_rate,
         total_trades=n,
         total_fees_pct=total_fees_pct,
@@ -327,8 +344,18 @@ class BaselineResult:
     pct_sharpe_above_2: float
     pct_sharpe_above_3: float
 
-    def summary(self) -> str:
-        """Human-readable summary."""
+    def p_value(self, champion_sharpe: float) -> float:
+        """One-sided Monte Carlo p-value of a champion's Sharpe.
+
+        Fraction of random-entry simulations whose Sharpe (same annualized
+        daily statistic) is at least the champion's, with the +1 correction:
+        ``(1 + #{sim >= champion}) / (n + 1)``.
+        """
+        sharpes = np.array([m.sharpe for m in self.metrics])
+        return float((1 + int(np.sum(sharpes >= champion_sharpe))) / (len(sharpes) + 1))
+
+    def summary(self, champion_sharpe: float | None = None) -> str:
+        """Human-readable summary (verdict by p-value when a champion Sharpe is given)."""
         lines = [
             f"=== Random Short Baseline ({self.n_simulations} simulations) ===",
             f"Config: SL={self.config.sl_pct}% TP={self.config.tp_pct}% "
@@ -351,7 +378,21 @@ class BaselineResult:
         ]
 
         # Verdict
-        if self.pct_sharpe_above_2 > 0.10:
+        if champion_sharpe is not None:
+            p = self.p_value(champion_sharpe)
+            lines.append(f"Champion Sharpe {champion_sharpe:.2f}: p-value vs random = {p:.4f}")
+            if p < 0.05:
+                lines.append(
+                    "VERDICT: champion Sharpe beats random entries with the same SL/TP "
+                    "(p < 0.05) -- entry timing adds value beyond SL/TP geometry."
+                )
+            else:
+                lines.append(
+                    "VERDICT: champion Sharpe is not distinguishable from random entries "
+                    "with the same SL/TP (p >= 0.05) -- the 'alpha' may be SL/TP geometry "
+                    "plus drift."
+                )
+        elif self.pct_sharpe_above_2 > 0.10:
             lines.append(
                 "VERDICT: >10% of random entries achieve Sharpe >= 2.0. "
                 "The SL/TP geometry alone explains much of the 'alpha'. "
@@ -416,7 +457,7 @@ def run_random_short_baseline(
         trades = _simulate_single_run(
             bars, entry_indices, config.sl_pct, config.tp_pct, config.taker_fee
         )
-        metrics = _compute_metrics(trades, config.taker_fee)
+        metrics = _compute_metrics(trades, config.taker_fee, bars)
         all_metrics.append(metrics)
 
         if (i + 1) % 200 == 0:
@@ -536,6 +577,12 @@ def main() -> None:
     parser.add_argument("--interval", type=str, default="1m", help="Bar interval")
     parser.add_argument("--monte-carlo", type=int, default=1000, help="Number of simulations")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument(
+        "--champion-sharpe",
+        type=float,
+        default=None,
+        help="Champion's (annualized daily) Sharpe: report its Monte Carlo p-value",
+    )
     parser.add_argument("--archive", type=str, default=str(DEFAULT_ARCHIVE_PATH), help="Archive DB path")
     parser.add_argument(
         "--all-champions", action="store_true",
@@ -562,7 +609,7 @@ def main() -> None:
             target_trades=args.target_trades,
         )
         result = run_random_short_baseline(bars, config, args.monte_carlo, args.seed)
-        print(result.summary())
+        print(result.summary(champion_sharpe=args.champion_sharpe))
 
 
 if __name__ == "__main__":

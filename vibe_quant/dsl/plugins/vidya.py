@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from vibe_quant.dsl.compute_builtins import int_param
+from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ def compute_vidya(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     period = int_param(params, "period", 14)
     result = ta.vidya(df["close"], length=period)
     if result is None:
-        return cast("pd.Series", df["close"] * 0)
+        return nan_like(df)  # insufficient data: not ready (NaN), never 0
     return cast("pd.Series", result)
 
 

@@ -46,7 +46,6 @@ from vibe_quant.api.schemas.result import (
 )
 from vibe_quant.api.schemas.settings import (
     DatabaseInfoResponse,
-    DatabaseSwitchRequest,
     LatencyPreset,
     RiskConfigCreate,
     RiskConfigResponse,
@@ -118,5 +117,4 @@ __all__ = [
     "LatencyPreset",
     "SystemInfoResponse",
     "DatabaseInfoResponse",
-    "DatabaseSwitchRequest",
 ]

@@ -52,6 +52,16 @@ async def get_strategy(strategy_id: int, mgr: StateMgr) -> StrategyResponse:
 
 @router.post("", response_model=StrategyResponse, status_code=201)
 async def create_strategy(body: StrategyCreate, mgr: StateMgr) -> StrategyResponse:
+    existing = mgr.get_strategy_by_name(body.name)
+    if existing is not None:
+        # Names stay reserved after a (soft) delete: is_active=0 rows keep the
+        # UNIQUE name and their runs/results reference them.
+        state = "a deleted strategy" if not existing.get("is_active") else "a strategy"
+        raise HTTPException(
+            status_code=409,
+            detail=f"Name '{body.name}' is already used by {state} (id={existing['id']}); "
+            "choose another name",
+        )
     strategy_id = mgr.create_strategy(
         name=body.name,
         dsl_config=body.dsl_config,
@@ -73,6 +83,13 @@ async def update_strategy(
     existing = mgr.get_strategy(strategy_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    if body.name is not None and body.name != existing["name"]:
+        clash = mgr.get_strategy_by_name(body.name)
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Name '{body.name}' is already used by strategy id={clash['id']}",
+            )
     mgr.update_strategy(
         strategy_id,
         name=body.name,

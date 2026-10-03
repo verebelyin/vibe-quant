@@ -17,6 +17,7 @@ interface CrossWindowPanelProps {
 
 interface WindowRow {
   offset: number | null;
+  in_sample?: boolean;
   sharpe: number | null;
   return_pct: number | null;
   max_dd: number | null;
@@ -54,7 +55,7 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
             {rows.map((r, i) => (
               <TableRow key={`${r.offset ?? i}-${i}`}>
                 <TableCell className="font-mono text-xs">
-                  {r.offset != null ? `+${r.offset}` : "--"}
+                  {r.in_sample ? "0 (in-sample)" : r.offset != null ? `+${r.offset}` : "--"}
                 </TableCell>
                 <TableCell className="text-right font-mono text-xs">
                   {r.sharpe != null ? r.sharpe.toFixed(2) : "--"}

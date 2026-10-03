@@ -39,6 +39,9 @@ The rule of this file is to describe common mistakes and confusion points that a
    Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings. E2E flow:
    Data Management (download) → Strategy Management (create) → Backtest Launch (screen) →
    Results Analysis (verify).
+7. **Git worktrees import the MAIN repo's code.** The editable install (`.pth`) points at
+   `/Users/verebelyin/projects/vibe-quant`, so `python script.py` inside a worktree runs main's
+   `vibe_quant`. Use `PYTHONPATH=$PWD .venv/bin/python -m ...` from the worktree.
 
 ## Shell Preferences
 
@@ -49,7 +52,11 @@ The rule of this file is to describe common mistakes and confusion points that a
 
 ## SQLite Queries (state DB)
 
-DB path: `data/state/vibe_quant.db`. Always use WAL mode.
+DB path: `data/state/vibe_quant.db` (override with `VIBE_QUANT_DB` at backend start — inherited by every job subprocess; there is no runtime DB switch). Always use WAL mode.
+
+**Opening the DB runs schema migrations.** `tests/conftest.py` pins `VIBE_QUANT_DB` to a temp file so a test that forgets its tmp DB can't migrate the real one — keep that guard; scratch scripts against the real DB should use `?mode=ro` URIs.
+
+`backtest_results` has ONE row per run (re-runs replace result + trades). `notes` is machine JSON (discovery payload, data_window, funding, consistency); user text lives in `user_notes`.
 
 **Common mistakes to avoid:**
 1. **Don't use `.format()` or f-strings with values** — use `?` placeholders for ALL query values
@@ -81,7 +88,7 @@ Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting Filt
 
 Single engine (NautilusTrader) with two modes:
 
-- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- models leverage but NOT funding (`total_funding = 0.0`) or liquidation (bead vibe-quant-e70tl.20)
+- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- models leverage + funding (from the archive; holes charged a flagged fallback rate), NOT liquidation. Fills land at the NEXT strategy-timeframe bar close (validation: ~1 min after signal via 1m detail) — fast-cycling strategies trade noticeably less in screening.
 - **Validation mode**: custom FillModel, LatencyModel (co-located 1ms → retail 200ms), full cost modeling
 
 ## Key Specifications
@@ -155,18 +162,18 @@ SPEC.md              # Authoritative implementation spec
 
 ## Discovery Pipeline Notes
 
-- **Open audit (2026-10-02):** `docs/reviews/2026-10-02-deep-audit.md`, epic `vibe-quant-e70tl`. Read it before trusting champion/validation metrics or touching paper/live — fill model, PF, max DD, overfitting gates and paper risk controls have confirmed bugs.
+- **Audit 2026-10-02 (`docs/reviews/2026-10-02-deep-audit.md`, epic `vibe-quant-e70tl`) — critical/high fixed 2026-10-03 = SEMANTICS BREAK.** Screening/validation metrics changed (trade-based PF capped at 100, mark-to-market max DD, funding in screening, adaptive same-bar ordering, TP/SL fills at limit/trigger, sizing rounds down), discovery changed (worst-of-N eval windows, default 20% holdout used once as final gate, every gate fails closed → 0 champions + `guardrail_rejections`). Champions/journal scores before this are NOT comparable. Medium/low leftovers: bead `vibe-quant-e70tl.23`.
 
 - **Research diary:** `docs/discovery-journal.md` — experiment log with GA configs, metrics, and findings
 - Discovery and screening use **identical** code path (`NTScreeningRunner` → `StrategyCompiler`). Results match exactly *within one run* (champion → replay).
-- Validation uses custom fill model + latency → fewer trades and worse metrics (expected)
+- Validation uses custom fill model + latency + 1m detail. It clamps the run window to 1m coverage (recorded in `notes.data_window`) and FAILS without 1m data. Its consistency check flags screening→validation collapse/trade divergence against the same window (holdout-validated champions use the champion's holdout metrics).
 - **Bug fix `2944ad3`:** `pos.entry→pos.side` enum mismatch caused 155:1 trade ratio. All runs before this fix are invalid.
 - **Semantics break `11c5f00` (2026-07-09):** screening now feeds ONLY the strategy timeframe (an NT data-loading bug previously fed ALL timeframes incl. 1m, giving screening accidental intrabar fills). Discovery scores ≤ run 854 are not comparable with newer runs. **Validation is unchanged** — it loads 1m detail explicitly and reproduces historical results bit-for-bit.
 - **Compiler version hash:** stored in discovery notes for staleness detection. Changes when the indicator registry changes — check `bd recall discovery:compiler-hash` for the current value; recompute with `compiler_version_hash()`.
 - Champion rankings live in `bd recall discovery:champions` (journal has full history). Batch-13 STOCH+CCI headline numbers are historical only (pre-`11c5f00`).
 - **1m data is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) ~10x faster than pandas-path ones (ADX/MACD/BBANDS/KAMA). Budget accordingly.
 - **Fitness function:** 35% Sharpe + 25% (1-MaxDD) + 20% PF + 20% Return. Hard gate: 0 if <50 trades.
-- **`eval_windows` (default 3) stores the MEAN of N sub-window metrics** (`backtest_fn._aggregate_multi_window`), despite docstrings saying worst-of-N (bead vibe-quant-e70tl.6) — a full-window replay legitimately shows different Sharpe/return (`ReplayResponse.metrics_note` explains this). Not a bug.
+- **`eval_windows` (default 3) stores WORST-of-N sub-window metrics** (min Sharpe/return/PF, max DD; each window needs ≥ max(1, min_trades // (2N)) trades) — a full-window replay legitimately shows different Sharpe/return (`ReplayResponse.metrics_note` explains this). Not a bug.
 - **Single-seed discovery is unseeded** — identical configs produce different populations across runs. Never compare two discovery runs to validate a code change (see Verification Rules below).
 - **Bootstrap-CI gate keeps being vindicated:** every champion forced past it with `no_bootstrap_ci=true` and then validated has collapsed (Batch 41: 5.40→−2.78; Batch 43 RAMS: 0.59→−0.36). The validation runner auto-flags collapses (`validation/consistency.py`); treat a flagged strategy as overfit, not as a validation bug.
 - 4h/1d discovery uses bootstrap floor 0.0 by default (1.0 is structurally unpassable at ~50-180 trades/yr); 1m uses 0.5.
@@ -178,6 +185,10 @@ SPEC.md              # Authoritative implementation spec
 - **NT 1.226+ config decoding rejects unknown fields** (fast-fail). Forward only params the generated `StrategyConfig` declares (`__struct_fields__` filter in both runners). Run-level knobs like `initial_balance`/`leverage` belong on the venue, not the strategy config.
 - **`node.build()` swallows engine-build exceptions** — `get_engine()` returns `None` and you see only "engine not found". Validation sets `BacktestRunConfig(raise_exception=True)`; keep it that way, and set it when writing new runner code.
 - **NT `BacktestResult.elapsed_time` is the simulated window in seconds**, not wall time. `Iterations` ≈ bars processed — if it's far above the expected bar count, you have a data-loading bug (see Performance Playbook).
+- **Invalid `TraderId` (e.g. `paper_1`, no `-`) aborts the whole process from Rust** — no Python exception. Validate with `paper/config.py`'s regex first.
+- **`TradingState.REDUCING` does NOT stop a flat account from opening a position** — paper uses its own `TradingGuard` order gate (`paper/guard.py`).
+- `BacktestEngine.run()` stops all strategies when it ends — assert mid-run strategy state from a scheduled actor, not after `run()`.
+- Generated strategy modules are content-addressed (`{name}_{hash}`) — always use `module.__name__`, never rebuild the path from `dsl.name`.
 - ADX stays on the pandas path deliberately (NT has no true ADX — `DirectionalMovement.value` is always 0). Don't "optimize" it to `nt_class` without checking values.
 
 ## Performance Profiling
@@ -190,9 +201,10 @@ change ships with an exactness proof (see Verification Rules).
 
 Valid proofs that a change preserved correctness:
 - **Fixed-strategy eval before/after**: one `NTScreeningRunner` call on a saved strategy must
-  return bit-identical metrics (e.g. strategy 239: sharpe `1.3420101065837169`, 68 trades).
-- **Validation repeatability**: the same validation run twice is bit-identical (proven:
-  runs 868 == 870 to full float precision). Any drift = regression.
+  return bit-identical metrics (strategy 239, BTCUSDT 2024-01-01..2026-03-17: sharpe
+  `1.3165049716553048`, 68 trades since the 2026-10-03 audit fixes; was `1.3420101065837169`).
+- **Validation repeatability**: the same validation run twice is bit-identical (strategy 239
+  since 2026-10-03: sharpe `0.7802305953007851`, 67 trades; runs 868 == 870 before). Any drift = regression.
 - **Within-run replay**: discovery champion → `/replay` matches exactly when the run used
   `eval_windows=1`.
 - Zero-tolerance unit tests against the reference implementation for ported math.
@@ -202,7 +214,7 @@ INVALID proofs (these wasted time):
   (vibe-quant-8t7nv), and ANY code change shifts the RNG draw sequence.
 - Comparing an `eval_windows>1` champion's stored fitness to a full-window replay
   (mean-of-N sub-windows vs full window — differs by design).
-- Comparing screening metrics across the `11c5f00` semantics break.
+- Comparing screening metrics across the `11c5f00` or 2026-10-03 audit-fix semantics breaks.
 
 ## Historical Documentation
 

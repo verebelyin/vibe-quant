@@ -31,8 +31,16 @@ from vibe_quant.overfitting.types import (
     PipelineResult,
 )
 from vibe_quant.overfitting.wfa import WalkForwardAnalysis, WFAConfig, WFAResult
+from vibe_quant.utils import compute_day_count
 
 logger = logging.getLogger(__name__)
+
+
+class _Unset:
+    """Sentinel: leave a sweep_results flag column untouched."""
+
+
+_UNSET = _Unset()
 
 
 class OverfittingPipeline:
@@ -89,7 +97,7 @@ class OverfittingPipeline:
         self,
         run_id: int,
         config: FilterConfig | None = None,
-        num_observations: int = 252,
+        num_observations: int | None = None,
         data_start: date | None = None,
         data_end: date | None = None,
         n_samples: int = 1000,
@@ -102,15 +110,19 @@ class OverfittingPipeline:
         Args:
             run_id: Backtest run ID to filter candidates for.
             config: Filter configuration. Uses default if None.
-            num_observations: Number of DAILY observations for DSR (default 252 = 1 year). Sharpes are de-annualized internally to match.
-            data_start: Start date for WFA windows (optional).
-            data_end: End date for WFA windows (optional).
+            num_observations: Number of DAILY observations for DSR. ``None``
+                (default) = day count of the window the Sharpe was measured on
+                (a discovery run's train range, else the run's date range).
+                Sharpes are de-annualized internally to match.
+            data_start: Start date for WFA windows. ``None`` = run start date.
+            data_end: End date for WFA windows. ``None`` = run end date.
             n_samples: Number of samples for Purged K-Fold (default 1000).
             allow_mock: If True, allow MockBacktestRunner fallback for WFA/CV.
-                If False (default), raise ValueError when no real runner is injected.
-            total_trials: Total number of strategies evaluated (for DSR). When
-                provided, overrides len(candidates) as the multiple-testing
-                correction factor. Use this when candidates are pre-filtered.
+                If False (default), raise ValueError when no real runner is
+                injected. Mock-derived verdicts are NEVER persisted to the DB.
+            total_trials: Total number of strategies evaluated (DSR N). When
+                ``None``: a discovery candidate uses its run's ``evaluated``
+                count (every GA evaluation is a trial), else len(candidates).
             trials_sharpe_variance: Empirical variance of Sharpe ratios across
                 all evaluated trials (for DSR).
 
@@ -119,9 +131,10 @@ class OverfittingPipeline:
 
         Raises:
             ValueError: If WFA or CV is enabled, no runner is injected, and
-                allow_mock is False.
+                allow_mock is False; or WFA dates can't be resolved.
         """
         config = config or FilterConfig.default()
+        run_dates = self._run_dates(run_id)
 
         # Load candidates from database
         candidates = self._load_candidates(run_id)
@@ -144,18 +157,17 @@ class OverfittingPipeline:
             config.enable_purged_kfold,
         )
 
-        # Count number of trials for DSR — use total_trials if provided
-        # (candidates may be pre-filtered, understating the testing burden)
-        num_trials = total_trials if total_trials is not None else len(candidates)
-
         # Initialize filters
         dsr = DeflatedSharpeRatio(significance_level=config.dsr_significance)
 
         wfa_config = config.wfa_config or WFAConfig.default()
         wfa = WalkForwardAnalysis(config=wfa_config)
+        wfa_is_mock = False
+        cv_is_mock = config.enable_purged_kfold and self._cv_runner is None
         if self._wfa_runner:
             wfa.runner = self._wfa_runner
         elif config.enable_wfa:
+            wfa_is_mock = True
             if not allow_mock:
                 raise ValueError(
                     "WFA enabled but no backtest runner injected. "
@@ -200,12 +212,18 @@ class OverfittingPipeline:
                     kurtosis = float(raw_kurt) if raw_kurt is not None else 3.0
                     # Guard against invalid stored values (theoretical min is 1)
                     kurtosis = max(kurtosis, 1.0)
+                    num_trials = self._resolve_num_trials(
+                        candidate, total_trials, len(candidates)
+                    )
+                    num_obs = self._resolve_num_observations(
+                        candidate, num_observations, run_dates
+                    )
                     # Stored Sharpes are NT-annualized (252-day); DSR needs
                     # per-period units matching num_observations (days).
                     dsr_result = dsr.calculate(
                         observed_sharpe=deannualize_sharpe(float(sharpe)),
                         num_trials=num_trials,
-                        num_observations=num_observations,
+                        num_observations=num_obs,
                         skewness=skewness,
                         kurtosis=kurtosis,
                         trials_sharpe_variance=(
@@ -223,22 +241,22 @@ class OverfittingPipeline:
             passed_wfa: bool | None = None
 
             if config.enable_wfa:
-                # Use provided dates or defaults
-                start = data_start or date(2024, 1, 1)
-                end = data_end or date(2025, 12, 31)
-
-                # Parse parameters for param_grid (may be JSON string or dict)
-                raw_params = candidate.get("parameters", "{}")
-                try:
-                    params = (
-                        json.loads(raw_params)
-                        if isinstance(raw_params, str)
-                        else (raw_params or {})
+                # The run's own window -- never a hardcoded calendar range
+                start = data_start or (run_dates[0] if run_dates else None)
+                end = data_end or (run_dates[1] if run_dates else None)
+                if start is None or end is None:
+                    msg = (
+                        f"WFA needs a date range: run {run_id} has no start/end dates "
+                        "and none were passed (--start-date/--end-date)"
                     )
-                except json.JSONDecodeError:
-                    logger.warning("Invalid JSON in parameters for candidate %d", candidate["id"])
-                    params = {}
-                param_grid = {k: [v] for k, v in params.items()}
+                    raise ValueError(msg)
+
+                # WALK-FORWARD STABILITY TEST: the candidate's own parameter
+                # combo is held fixed across windows (single-combo grid), so
+                # "optimize" on IS is just a backtest of that combo. This tests
+                # whether one fixed parameter set keeps working out of sample;
+                # it is NOT a re-optimizing walk-forward of the search procedure.
+                param_grid = {k: [v] for k, v in self._candidate_params(candidate).items()}
 
                 try:
                     wfa_result = wfa.run(
@@ -261,7 +279,15 @@ class OverfittingPipeline:
 
             if config.enable_purged_kfold:
                 if self._cv_runner:
-                    runner = self._cv_runner
+                    # Each candidate is CV'd with ITS params (the runner used
+                    # to run the DSL defaults for every candidate -> identical
+                    # verdicts across the whole sweep).
+                    bind = getattr(self._cv_runner, "bind_params", None)
+                    runner = (
+                        bind(self._candidate_params(candidate))
+                        if callable(bind)
+                        else self._cv_runner
+                    )
                 elif not allow_mock:
                     raise ValueError(
                         "Purged K-Fold CV enabled but no backtest runner injected. "
@@ -317,8 +343,16 @@ class OverfittingPipeline:
             )
             results.append(result)
 
-            # Update database
-            self._update_candidate(candidate["id"], passed_dsr, passed_wfa, passed_cv)
+            # Update database -- only verdicts from REAL backtests. Synthetic
+            # (MockBacktestRunner) verdicts are reported but never persisted:
+            # sweep_results has no provenance column, so a stored passed_* flag
+            # must always mean "passed on real data".
+            self._update_candidate(
+                candidate["id"],
+                passed_dsr,
+                _UNSET if wfa_is_mock else passed_wfa,
+                _UNSET if cv_is_mock else passed_cv,
+            )
 
         passed_all_count = sum(1 for r in results if r.passed_all)
 
@@ -473,34 +507,136 @@ class OverfittingPipeline:
     def _update_candidate(
         self,
         sweep_result_id: int,
-        passed_dsr: bool | None,
-        passed_wfa: bool | None,
-        passed_cv: bool | None,
+        passed_dsr: bool | None | _Unset,
+        passed_wfa: bool | None | _Unset,
+        passed_cv: bool | None | _Unset,
     ) -> None:
         """Update sweep_result with filter pass/fail flags.
 
         Args:
             sweep_result_id: ID in sweep_results table.
-            passed_dsr: DSR filter result (None if not run).
-            passed_wfa: WFA filter result (None if not run).
-            passed_cv: CV filter result (None if not run).
+            passed_dsr: DSR filter result (None if not run -> NULL).
+            passed_wfa: WFA filter result (None -> NULL; ``_UNSET`` -> column
+                left untouched, used for synthetic/mock verdicts).
+            passed_cv: CV filter result (same convention).
         """
+
+        def _flag(value: bool | None) -> int | None:
+            return 1 if value else (0 if value is not None else None)
+
+        columns = (
+            ("passed_deflated_sharpe", passed_dsr),
+            ("passed_walk_forward", passed_wfa),
+            ("passed_purged_kfold", passed_cv),
+        )
+        sets: list[str] = []
+        values: list[int | None] = []
+        for column, value in columns:
+            if isinstance(value, _Unset):
+                continue
+            sets.append(f"{column} = ?")
+            values.append(_flag(value))
+        if not sets:
+            return
+        # Column names come from the fixed tuple above, values are bound
         self.conn.execute(
-            """
-            UPDATE sweep_results
-            SET passed_deflated_sharpe = ?,
-                passed_walk_forward = ?,
-                passed_purged_kfold = ?
-            WHERE id = ?
-            """,
-            (
-                1 if passed_dsr else (0 if passed_dsr is not None else None),
-                1 if passed_wfa else (0 if passed_wfa is not None else None),
-                1 if passed_cv else (0 if passed_cv is not None else None),
-                sweep_result_id,
-            ),
+            f"UPDATE sweep_results SET {', '.join(sets)} WHERE id = ?",  # noqa: S608
+            (*values, sweep_result_id),
         )
         self.conn.commit()
+
+    def _run_dates(self, run_id: int) -> tuple[date, date] | None:
+        """(start_date, end_date) of the run, or None when unset/unparseable."""
+        row = self.conn.execute(
+            "SELECT start_date, end_date FROM backtest_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None or not row["start_date"] or not row["end_date"]:
+            return None
+        try:
+            return (
+                date.fromisoformat(str(row["start_date"])[:10]),
+                date.fromisoformat(str(row["end_date"])[:10]),
+            )
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _discovery_payload(candidate: dict[str, Any]) -> dict[str, Any] | None:
+        """Discovery notes when the candidate was promoted from a discovery run."""
+        raw = candidate.get("parameters")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(raw, dict) and raw.get("type") == "discovery":
+            return raw
+        return None
+
+    def _candidate_params(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Strategy parameter overrides of a candidate ({} for discovery runs).
+
+        A discovery candidate's ``parameters`` column holds the run's notes
+        JSON, not strategy params -- its params are baked into the DSL.
+        """
+        if self._discovery_payload(candidate) is not None:
+            return {}
+        raw = candidate.get("parameters", "{}")
+        try:
+            params = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        except json.JSONDecodeError:
+            logger.warning("Invalid JSON in parameters for candidate %s", candidate.get("id"))
+            return {}
+        return params if isinstance(params, dict) else {}
+
+    def _resolve_num_trials(
+        self,
+        candidate: dict[str, Any],
+        total_trials: int | None,
+        num_candidates: int,
+    ) -> int:
+        """DSR trial count N for one candidate.
+
+        Explicit ``total_trials`` wins. A discovery champion was picked from
+        ``evaluated`` GA trials (6000 evals != 1 trial); a sweep candidate from
+        the full grid (every sweep row is loaded as a candidate).
+        """
+        if total_trials is not None:
+            return max(1, total_trials)
+        payload = self._discovery_payload(candidate)
+        if payload is not None:
+            evaluated = payload.get("evaluated")
+            if isinstance(evaluated, int) and not isinstance(evaluated, bool) and evaluated > 0:
+                return max(evaluated, num_candidates)
+            logger.warning(
+                "Discovery candidate %s has no 'evaluated' trial count — DSR N falls "
+                "back to %d (understates the search)", candidate.get("id"), num_candidates,
+            )
+        return max(1, num_candidates)
+
+    @staticmethod
+    def _resolve_num_observations(
+        candidate: dict[str, Any],
+        num_observations: int | None,
+        run_dates: tuple[date, date] | None,
+    ) -> int:
+        """DSR observation count T (days) of the window the Sharpe was measured on."""
+        if num_observations is not None:
+            return num_observations
+        payload = OverfittingPipeline._discovery_payload(candidate)
+        if payload is not None:
+            train = payload.get("train_dates")
+            if isinstance(train, list) and len(train) == 2:
+                days = compute_day_count(str(train[0]), str(train[1]))
+                if days:
+                    return days
+        if run_dates is not None:
+            return max(1, (run_dates[1] - run_dates[0]).days)
+        logger.warning(
+            "No date range for candidate %s — DSR assumes %d daily observations",
+            candidate.get("id"), TRADING_DAYS_PER_YEAR,
+        )
+        return int(TRADING_DAYS_PER_YEAR)
 
     def get_filtered_candidates(
         self,
@@ -582,6 +718,9 @@ class OverfittingPipeline:
             lines.append(
                 f"  WFA (Walk-Forward):      {result.passed_wfa}/{result.total_candidates} ({pct:.1f}%)"
             )
+            lines.append(
+                "    (stability test: params held fixed per window, no re-optimization)"
+            )
         else:
             lines.append("  WFA (Walk-Forward):      DISABLED")
 
@@ -634,7 +773,7 @@ def run_overfitting_pipeline(
     run_id: int,
     db_path: str | Path | None = None,
     config: FilterConfig | None = None,
-    num_observations: int = 252,
+    num_observations: int | None = None,
 ) -> PipelineResult:
     """Convenience function to run overfitting pipeline.
 
@@ -642,7 +781,7 @@ def run_overfitting_pipeline(
         run_id: Backtest run ID to filter candidates for.
         db_path: Optional database path.
         config: Filter configuration. Uses default if None.
-        num_observations: Number of observations for DSR.
+        num_observations: Daily observations for DSR (None = run's day count).
 
     Returns:
         PipelineResult with all candidate results.
