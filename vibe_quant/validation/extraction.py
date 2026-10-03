@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -297,6 +298,81 @@ def position_ledger_events(
         iid: [item[3] for item in sorted(items, key=lambda x: (x[0], x[1], x[2]))]
         for iid, items in by_instrument.items()
     }
+
+
+@dataclass(frozen=True)
+class OpenPositionMark:
+    """A position still open at the end of the run, marked to market."""
+
+    position: Any
+    ts: int
+    price: float
+    unrealized: float
+    exit_fee: float
+
+
+def mark_open_positions(
+    engine: Any,
+    positions: Iterable[Any],
+    *,
+    execution_timeframe: str | None,
+    catalog_path: Path | str | None = None,
+    start_ns: int | None = None,
+    end_ns: int | None = None,
+) -> list[OpenPositionMark]:
+    """Mark open positions at the last execution-bar close in the window.
+
+    The exit fee is estimated at the instrument's taker rate (the flatten
+    would be a market order). Positions that cannot be priced are skipped
+    with a WARNING.
+    """
+    from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+
+    marks: list[OpenPositionMark] = []
+    for pos in positions:
+        instrument_id = str(pos.instrument_id)
+        series = None
+        if execution_timeframe in INTERVAL_TO_AGGREGATION:
+            step, agg = INTERVAL_TO_AGGREGATION[execution_timeframe]
+            bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+            series = load_catalog_bars(catalog_path, bar_type) if catalog_path else None
+            if series is None:
+                series = cache_bars(engine, bar_type)
+        if series is not None:
+            series = series.window(start_ns, end_ns)
+        if series is None or len(series) == 0:
+            logger.warning(
+                "Position %s still open at end of run but no %s bars to mark it -- "
+                "excluded from trades and return",
+                instrument_id,
+                execution_timeframe,
+            )
+            continue
+        price = float(series.close[-1])
+        qty = float(pos.signed_qty)
+        try:
+            taker = float(engine.kernel.cache.instrument(pos.instrument_id).taker_fee)
+        except Exception:
+            taker = 0.0005
+        mark = OpenPositionMark(
+            position=pos,
+            ts=int(series.ts[-1]),
+            price=price,
+            unrealized=qty * (price - float(pos.avg_px_open)),
+            exit_fee=abs(qty) * price * taker,
+        )
+        logger.warning(
+            "Position %s (qty %s @ %s) still open at end of run -- marked at %s "
+            "(unrealized %.2f, est. exit fee %.4f)",
+            instrument_id,
+            qty,
+            float(pos.avg_px_open),
+            price,
+            mark.unrealized,
+            mark.exit_fee,
+        )
+        marks.append(mark)
+    return marks
 
 
 def mark_to_market_drawdown(
@@ -611,12 +687,27 @@ def extract_trades(
         # it's removed from _index_positions_closed. The closed state is preserved
         # as a "snapshot". We must combine positions() + position_snapshots() and
         # filter by is_closed, exactly as NT's own "Total positions" log does.
-        positions = [p for p in all_positions(engine) if p.is_closed]
+        everything = all_positions(engine)
+        positions = [p for p in everything if p.is_closed]
+        still_open = [p for p in everything if not p.is_closed and getattr(p, "is_open", False)]
     except Exception:
         logger.warning("Could not read positions from engine cache", exc_info=True)
-        positions = []
+        positions, still_open = [], []
 
-    if not positions:
+    # Positions still open when the engine stopped (with latency the on_stop
+    # flatten order is still in flight) used to vanish from trades and
+    # return. Mark them at the last execution-bar close instead, charging an
+    # estimated taker exit fee.
+    open_marks = mark_open_positions(
+        engine,
+        still_open,
+        execution_timeframe=execution_timeframe,
+        catalog_path=catalog_path,
+        start_ns=window_start_ns,
+        end_ns=window_end_ns,
+    )
+
+    if not positions and not open_marks:
         result.profit_factor = 0.0
         result.max_drawdown = 0.0
         if has_window:
@@ -655,14 +746,30 @@ def extract_trades(
     # Modeled cash flows per instrument for the mark-to-market equity curve
     modeled_cash: dict[str, list[tuple[int, float]]] = {}
 
-    for pos in positions:
-        realized_pnl = float(pos.realized_pnl)
+    unrealized_at_end = 0.0
+    trade_inputs: list[tuple[Any, OpenPositionMark | None]] = [(p, None) for p in positions]
+    trade_inputs.extend((mark.position, mark) for mark in open_marks)
+    for pos, mark in trade_inputs:
         entry_price = float(pos.avg_px_open)
-        exit_price = float(pos.avg_px_close)
         # pos.quantity is 0 for closed positions; use peak_qty for trade size
         quantity = float(pos.peak_qty)
-
         pos_fees = sum(float(c) for c in pos.commissions())
+        if mark is None:
+            realized_pnl = float(pos.realized_pnl)
+            exit_price = float(pos.avg_px_close)
+            exit_ns = int(pos.ts_closed)
+            exit_reason = "signal"
+        else:
+            # NT's open-position realized_pnl is minus the entry commission
+            realized_pnl = float(pos.realized_pnl) + mark.unrealized - mark.exit_fee
+            exit_price = mark.price
+            exit_ns = mark.ts
+            exit_reason = "end_of_data"
+            pos_fees += mark.exit_fee
+            unrealized_at_end += mark.unrealized - mark.exit_fee
+            modeled_cash.setdefault(str(pos.instrument_id), []).append(
+                (mark.ts, -mark.exit_fee)
+            )
         total_fees += abs(pos_fees)
 
         avg_bar_volume, bar_volatility = market_stats.get(
@@ -670,26 +777,31 @@ def extract_trades(
             (DEFAULT_AVG_BAR_VOLUME, DEFAULT_BAR_VOLATILITY),
         )
         if slippage_estimator is not None:
-            slippage_cost = slippage_estimator.estimate_cost(
-                entry_price=entry_price,
-                order_size=quantity,
-                avg_volume=avg_bar_volume,
-                volatility=bar_volatility,
-                spread=0.0001,
+            # SPEC slippage on BOTH legs (entry and exit fill); it used to be
+            # charged on the entry notional only.
+            slippage_cost = sum(
+                slippage_estimator.estimate_cost(
+                    entry_price=leg_price,
+                    order_size=quantity,
+                    avg_volume=avg_bar_volume,
+                    volatility=bar_volatility,
+                    spread=0.0001,
+                )
+                for leg_price in (entry_price, exit_price)
             )
         else:
             slippage_cost = 0.0
         total_slippage += slippage_cost
 
         entry_time = _ns_to_isoformat(pos.ts_opened)
-        exit_time = _ns_to_isoformat(pos.ts_closed) if pos.ts_closed else None
+        exit_time = _ns_to_isoformat(exit_ns) if exit_ns else None
 
         direction = position_direction(pos)
         instrument_id = str(pos.instrument_id)
 
         # Post-hoc funding accrual from archived rates (positive = paid)
         if funding_calculator is not None:
-            accrual = accrue_position_funding(funding_calculator, pos)
+            accrual = accrue_position_funding(funding_calculator, pos, exit_ns=exit_ns)
             funding_fees = accrual.total
             funding_fallbacks += accrual.fallback_settlements
             cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
@@ -702,11 +814,9 @@ def extract_trades(
 
         # Net PnL: NT realized (fees included) minus modeled slippage/funding
         net_pnl = realized_pnl - slippage_cost - funding_fees
-        cash_events.append((int(pos.ts_closed), realized_pnl - slippage_cost))
+        cash_events.append((exit_ns, realized_pnl - slippage_cost))
         if slippage_cost:
-            modeled_cash.setdefault(instrument_id, []).append(
-                (int(pos.ts_closed), -slippage_cost)
-            )
+            modeled_cash.setdefault(instrument_id, []).append((exit_ns, -slippage_cost))
 
         if net_pnl > 0:
             winning += 1
@@ -731,9 +841,8 @@ def extract_trades(
         # TODO: NT Position does not expose which child order (SL/TP/signal)
         # triggered the close. Detecting exit_reason from price vs SL/TP
         # levels requires correlating with OrderFilled events, which is not
-        # readily available from the Position object alone. Defaulting to
-        # "signal" for now.
-        exit_reason = "signal"
+        # readily available from the Position object alone. Closed trades
+        # default to "signal"; open-at-end trades are "end_of_data".
 
         trade = TradeRecord(
             symbol=instrument_id,
@@ -778,7 +887,7 @@ def extract_trades(
     # Charge modeled slippage + funding into the headline return so it is
     # consistent with the per-trade net PnL (NT's stats know nothing of
     # either post-fill cost).
-    extra_costs = total_slippage + total_funding
+    extra_costs = total_slippage + total_funding - unrealized_at_end
     if extra_costs != 0.0 and result.starting_balance > 0:
         result.total_return -= extra_costs / result.starting_balance
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from decimal import Decimal
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -230,7 +231,8 @@ def test_screening_and_validation_drawdown_agree(excursion_engine: BacktestEngin
     runner._all_timeframes = {"1m"}
     screening = runner._extract_metrics({}, bt_result, excursion_engine, time.time(), 1000.0)
     venue = create_venue_config_for_validation(latency_preset=None)
-    venue.fill_config = None  # no post-fill slippage: same costs as screening
+    # engine slippage "on" disables post-fill SPEC slippage: same costs as screening
+    venue.fill_config = SimpleNamespace(impact_coefficient=0.1, prob_slippage=1.0)  # type: ignore[assignment]
     validation = extract_results(
         1, "x", bt_result, excursion_engine, venue, primary_timeframe="1m",
         execution_timeframe="1m",
