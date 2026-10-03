@@ -79,6 +79,11 @@ def _run_to_response(row: dict[str, object]) -> BacktestRunResponse:
     )
 
 
+def _ensure_strategy(state: StateManager, strategy_id: int) -> None:
+    if state.get_strategy(strategy_id) is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+
 # --- Launch endpoints ---
 
 
@@ -89,6 +94,7 @@ async def launch_screening(
     jobs: JobMgr,
     ws: WsMgr,
 ) -> BacktestRunResponse:
+    _ensure_strategy(state, body.strategy_id)
     run_id = state.create_backtest_run(
         strategy_id=body.strategy_id,
         run_mode="screening",
@@ -97,8 +103,6 @@ async def launch_screening(
         start_date=body.start_date,
         end_date=body.end_date,
         parameters=body.parameters,
-        sizing_config_id=body.sizing_config_id,
-        risk_config_id=body.risk_config_id,
         latency_preset=body.latency_preset,
     )
 
@@ -115,6 +119,8 @@ async def launch_screening(
         "run",
         "--run-id",
         str(run_id),
+        "--db",
+        str(jobs.db_path),
     ]
 
     try:
@@ -140,6 +146,7 @@ async def launch_validation(
     jobs: JobMgr,
     ws: WsMgr,
 ) -> BacktestRunResponse:
+    _ensure_strategy(state, body.strategy_id)
     run_id = state.create_backtest_run(
         strategy_id=body.strategy_id,
         run_mode="validation",
@@ -148,8 +155,6 @@ async def launch_validation(
         start_date=body.start_date,
         end_date=body.end_date,
         parameters=body.parameters,
-        sizing_config_id=body.sizing_config_id,
-        risk_config_id=body.risk_config_id,
         latency_preset=body.latency_preset,
     )
 
@@ -166,6 +171,8 @@ async def launch_validation(
         "run",
         "--run-id",
         str(run_id),
+        "--db",
+        str(jobs.db_path),
     ]
 
     try:
