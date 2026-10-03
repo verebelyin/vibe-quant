@@ -10,4 +10,9 @@ export interface PaperStatusResponse {
   state: string;
   pnl_metrics?: PaperStatusResponsePnlMetrics;
   trades_count: number;
+  run_id?: number | null;
+  trader_id?: string | null;
+  testnet?: boolean | null;
+  halt_reason?: string | null;
+  message?: string | null;
 }

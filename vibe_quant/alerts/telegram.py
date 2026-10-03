@@ -2,12 +2,21 @@
 
 Provides async alerts for errors, circuit breakers, trades, and daily summaries
 with rate limiting to prevent notification spam.
+
+Secrets: the Bot API puts the token in the URL path
+(``https://api.telegram.org/bot<TOKEN>/sendMessage``) and httpx logs every
+request URL at INFO. A redaction filter on the ``httpx`` logger and on this
+module's logger replaces ``bot<TOKEN>`` with ``bot<redacted>``, and failure
+messages are sanitized before logging, so the token never reaches a log.
 """
 
 from __future__ import annotations
 
+import asyncio
+import html
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -27,6 +36,66 @@ TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 
 # Rate limit: 1 alert per type per minute
 RATE_LIMIT_SECONDS = 60
+
+_TOKEN_IN_URL = re.compile(r"(/bot)[^/\s\"'<>]+")
+
+
+def redact_token(text: str) -> str:
+    """Replace any ``/bot<token>`` URL segment with ``/bot<redacted>``."""
+    return _TOKEN_IN_URL.sub(r"\1<redacted>", text)
+
+
+class TelegramTokenFilter(logging.Filter):
+    """Logging filter that strips Telegram bot tokens from records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = redact_token(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+_TOKEN_FILTER = TelegramTokenFilter()
+
+
+def install_token_redaction() -> None:
+    """Attach the redaction filter to httpx/httpcore and this module (idempotent)."""
+    for name in ("httpx", "httpcore", __name__):
+        target = logging.getLogger(name)
+        if _TOKEN_FILTER not in target.filters:
+            target.addFilter(_TOKEN_FILTER)
+
+
+install_token_redaction()
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Transport errors, 429 and 5xx are retryable; other 4xx are permanent."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = getattr(exc.response, "status_code", None)
+        if isinstance(status, int):
+            return status == 429 or status >= 500
+    return True
+
+
+def _describe_failure(exc: Exception) -> str:
+    """Token-free description of a failed send (status + Telegram description)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = getattr(exc.response, "status_code", "?")
+        description = ""
+        try:
+            body = exc.response.json()
+            if isinstance(body, dict):
+                description = str(body.get("description", ""))
+        except Exception:
+            description = ""
+        return redact_token(f"HTTP {status} {description}".strip())
+    return redact_token(f"{type(exc).__name__}: {exc}")
 
 
 class ConfigurationError(Exception):
@@ -53,7 +122,7 @@ class TelegramConfig:
         chat_id: Target chat ID for alerts.
     """
 
-    bot_token: str
+    bot_token: str = field(repr=False)
     chat_id: str
 
     @classmethod
@@ -209,6 +278,9 @@ class TelegramBot:
             Formatted message string.
         """
         timestamp = datetime.now(UTC).strftime("%H:%M:%S UTC")
+        # parse_mode=HTML: dynamic text (exception messages like "<Response
+        # [503]>") must be escaped or Telegram rejects the whole message.
+        message = html.escape(message, quote=False)
         prefix_map = {
             AlertType.ERROR: "[ERROR]",
             AlertType.CIRCUIT_BREAKER: "[CIRCUIT BREAKER]",
@@ -259,20 +331,24 @@ class TelegramBot:
                 # Reset client on transport/protocol failures so next send
                 # starts from a known-good connection state.
                 await self.close()
+                reason = _describe_failure(exc)
+                if not _is_retryable(exc):
+                    # 400/401/403/404: retrying cannot help (bad token, bad
+                    # chat id, unparseable text) -- fail once, loudly.
+                    logger.warning("Alert send rejected by Telegram (%s); not retrying", reason)
+                    return False
                 if attempt < max_attempts - 1:
                     delay = 1.0 * (2**attempt)  # 1s, 2s
                     logger.warning(
                         "Alert send attempt %d/%d failed: %s, retrying in %.0fs",
                         attempt + 1,
                         max_attempts,
-                        exc,
+                        reason,
                         delay,
                     )
-                    import asyncio
-
                     await asyncio.sleep(delay)
                 else:
-                    logger.warning("Alert send failed after %d attempts: %s", max_attempts, exc)
+                    logger.warning("Alert send failed after %d attempts: %s", max_attempts, reason)
                     return False
         return False
 

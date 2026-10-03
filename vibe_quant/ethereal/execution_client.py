@@ -6,6 +6,7 @@ Uses EIP-712 typed data signatures for non-custodial order submission.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import time
@@ -21,6 +22,8 @@ from eth_account.messages import encode_typed_data
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+logger = logging.getLogger(__name__)
 
 # Environment variable for private key
 ENV_ETHEREAL_PRIVATE_KEY = "ETHEREAL_PRIVATE_KEY"
@@ -75,6 +78,40 @@ class OrderStatus(StrEnum):
     PARTIALLY_FILLED = "partially_filled"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+    # Venue reported a status we don't model. The order EXISTS at the venue;
+    # callers must reconcile via get_order(), never re-submit.
+    UNKNOWN = "unknown"
+
+
+_STATUS_ALIASES: dict[str, OrderStatus] = {
+    "pending": OrderStatus.PENDING,
+    "submitted": OrderStatus.PENDING,
+    "new": OrderStatus.OPEN,
+    "open": OrderStatus.OPEN,
+    "accepted": OrderStatus.OPEN,
+    "filled": OrderStatus.FILLED,
+    "partially_filled": OrderStatus.PARTIALLY_FILLED,
+    "partiallyfilled": OrderStatus.PARTIALLY_FILLED,
+    "partial_fill": OrderStatus.PARTIALLY_FILLED,
+    "cancelled": OrderStatus.CANCELLED,
+    "canceled": OrderStatus.CANCELLED,
+    "expired": OrderStatus.CANCELLED,
+    "rejected": OrderStatus.REJECTED,
+}
+
+
+def parse_order_status(raw: object) -> OrderStatus:
+    """Map a venue status string to OrderStatus without ever raising.
+
+    Raising here after the venue accepted an order made callers retry and
+    submit duplicates; unrecognised values map to ``UNKNOWN`` (logged).
+    """
+    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    status = _STATUS_ALIASES.get(key)
+    if status is None:
+        logger.warning("Ethereal returned unrecognised order status %r; mapped to UNKNOWN", raw)
+        return OrderStatus.UNKNOWN
+    return status
 
 
 @dataclass(frozen=True)
@@ -411,7 +448,7 @@ class EtherealExecutionClient:
             return OrderResult(
                 order_id=str(data["orderId"]),
                 client_order_id=order.client_order_id,
-                status=OrderStatus(str(data.get("status", "pending"))),
+                status=parse_order_status(data.get("status", "pending")),
             )
         except httpx.HTTPStatusError as e:
             msg = f"Order placement failed: {e.response.text}"

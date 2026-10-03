@@ -7,6 +7,7 @@ Supports halt-and-alert for fatal errors and strategy state management.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -146,6 +147,10 @@ class RetryConfig:
     base_delay_ms: int = 1000
     max_delay_ms: int = 30000
     exponential_base: float = 2.0
+    # Transient errors only escalate when they repeat within this window; an
+    # error after a quiet period starts a fresh count (a reconnect a day
+    # must never add up to a halt).
+    reset_after_secs: float = 600.0
 
     def get_delay_ms(self, attempt: int) -> int:
         """Calculate delay for given attempt number.
@@ -191,6 +196,7 @@ class ErrorHandler:
         self._on_halt = on_halt
         self._on_alert = on_alert
         self._transient_counts: dict[str, int] = {}
+        self._transient_last: dict[str, float] = {}
 
     @property
     def retry_config(self) -> RetryConfig:
@@ -240,9 +246,19 @@ class ErrorHandler:
             context: Error context.
         """
         key = f"{context.operation}:{context.symbol}"
+        now = time.monotonic()
+        last = self._transient_last.get(key)
+        if last is not None and now - last > self._retry_config.reset_after_secs:
+            self._transient_counts.pop(key, None)
+        self._transient_last[key] = now
         current_count = self._transient_counts.get(key, 0) + 1
         self._transient_counts[key] = current_count
         context.retry_count = current_count
+
+        # Operators hear about the first occurrence (e.g. a venue disconnect);
+        # repeats in the same burst stay in the logs until escalation.
+        if current_count == 1 and self._on_alert is not None:
+            self._on_alert("transient_error", context)
 
         delay_ms = self._retry_config.get_delay_ms(current_count - 1)
 
@@ -332,8 +348,8 @@ class ErrorHandler:
             symbol: Symbol identifier.
         """
         key = f"{operation}:{symbol}"
-        if key in self._transient_counts:
-            del self._transient_counts[key]
+        self._transient_counts.pop(key, None)
+        self._transient_last.pop(key, None)
 
     def should_retry(self, context: ErrorContext) -> bool:
         """Check if error should be retried.

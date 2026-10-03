@@ -5,11 +5,25 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * Start a paper session.
+
+Prefer ``validation_run_id``: the session then trades that run's exact
+strategy parameters, symbols and leverage. Without it, ``strategy_id`` and
+``symbols`` are required and the compiled DSL defaults are traded.
+
+Fractions, not percent: ``risk_per_trade=0.02`` is 2%. Credentials are
+never accepted here (env only); unknown fields are rejected.
+ */
 export interface PaperStartRequest {
-  strategy_id: number;
+  strategy_id?: number | null;
+  validation_run_id?: number | null;
+  symbols?: string[] | null;
   testnet?: boolean;
+  /** Must be true together with testnet=false to trade real funds. */
+  confirm_live?: boolean;
   trader_id?: string | null;
-  sizing_method?: string | null;
+  sizing_method?: 'fixed_fractional' | null;
   max_leverage?: number | null;
   max_position_pct?: number | null;
   risk_per_trade?: number | null;

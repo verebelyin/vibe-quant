@@ -27,13 +27,15 @@ class PairedTrade(BaseModel):
 
 
 class DivergenceSummary(BaseModel):
+    """``None`` rates/means = no data (zero trades / zero matches), never 100%."""
+
     matched: int
     paper_only: int
     validation_only: int
-    parity_rate: float
+    parity_rate: float | None
     side_disagreements: int
-    mean_entry_slippage: float
-    mean_pnl_delta: float
+    mean_entry_slippage: float | None
+    mean_pnl_delta: float | None
 
 
 class ReconciliationResponse(BaseModel):

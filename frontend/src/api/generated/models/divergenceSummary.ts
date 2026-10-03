@@ -5,12 +5,15 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * ``None`` rates/means = no data (zero trades / zero matches), never 100%.
+ */
 export interface DivergenceSummary {
   matched: number;
   paper_only: number;
   validation_only: number;
-  parity_rate: number;
+  parity_rate: number | null;
   side_disagreements: number;
-  mean_entry_slippage: number;
-  mean_pnl_delta: number;
+  mean_entry_slippage: number | null;
+  mean_pnl_delta: number | null;
 }
