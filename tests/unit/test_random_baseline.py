@@ -30,6 +30,15 @@ def _make_bars(prices: list[float], spread: float = 0.5) -> list[OHLCBar]:
     return bars
 
 
+def _daily_bars(n: int, price: float = 100.0) -> list[OHLCBar]:
+    """One bar per UTC day (ts in ms) so daily-return Sharpe has a series."""
+    return [
+        OHLCBar(ts=1_735_689_600_000 + i * 86_400_000, open=price, high=price, low=price,
+                close=price)
+        for i in range(n)
+    ]
+
+
 class TestSimulateSingleRun:
     def test_tp_hit(self):
         """SHORT trade hits TP when price drops enough."""
@@ -80,7 +89,7 @@ class TestSimulateSingleRun:
 
 class TestComputeMetrics:
     def test_empty_trades(self):
-        metrics = _compute_metrics([], taker_fee=0.0005)
+        metrics = _compute_metrics([], taker_fee=0.0005, bars=_daily_bars(5))
         assert metrics.total_trades == 0
         assert metrics.sharpe == 0.0
 
@@ -95,7 +104,7 @@ class TestComputeMetrics:
             TradeResult(entry_idx=18, exit_idx=19, entry_price=100, exit_price=101, pnl_pct=-1.1, hit_tp=False, hit_sl=True),
             TradeResult(entry_idx=20, exit_idx=21, entry_price=100, exit_price=101, pnl_pct=-1.1, hit_tp=False, hit_sl=True),
         ]
-        metrics = _compute_metrics(trades, taker_fee=0.0005)
+        metrics = _compute_metrics(trades, taker_fee=0.0005, bars=_daily_bars(30))
         assert metrics.win_rate == 0.9
         assert metrics.total_return > 0
         assert metrics.sharpe > 0
@@ -112,7 +121,7 @@ class TestComputeMetrics:
             TradeResult(entry_idx=i, exit_idx=i + 1, entry_price=100, exit_price=95, pnl_pct=5.0, hit_tp=True, hit_sl=False)
             for i in range(10)
         ]
-        metrics = _compute_metrics(trades, taker_fee=0.0)
+        metrics = _compute_metrics(trades, taker_fee=0.0, bars=_daily_bars(15))
         assert isfinite(metrics.profit_factor)
         assert metrics.profit_factor == PROFIT_FACTOR_CAP
 
@@ -124,7 +133,11 @@ class TestRunRandomShortBaseline:
         rng = np.random.default_rng(123)
         prices = 100.0 + np.cumsum(rng.normal(-0.01, 0.1, 500))
         prices = np.maximum(prices, 50.0)  # Floor at 50
-        bars = _make_bars(prices.tolist(), spread=0.2)
+        # Hourly bars (~21 days): the daily-return Sharpe needs several days
+        bars = [
+            OHLCBar(ts=i * 3_600_000, open=p, high=p + 0.2, low=p - 0.2, close=p)
+            for i, p in enumerate(prices.tolist())
+        ]
 
         config = BaselineConfig(sl_pct=2.0, tp_pct=3.0, target_trades=20)
         result = run_random_short_baseline(bars, config, n_simulations=50, seed=99)
@@ -148,3 +161,47 @@ class TestRunRandomShortBaseline:
         summary = result.summary()
         assert len(summary) > 100
         assert "VERDICT" in summary
+
+
+class TestAnnualizedSharpeAndPValue:
+    """Baseline Sharpe = champion's annualized daily Sharpe, not a t-stat (e70tl.23)."""
+
+    def test_sharpe_matches_daily_balance_statistic(self):
+        from vibe_quant.validation.extraction import daily_sharpe_sortino
+        from vibe_quant.validation.random_baseline import TradeResult
+
+        bars = _daily_bars(10)
+        pnls = [2.0, -1.0, 3.0, -0.5]
+        trades = [
+            TradeResult(entry_idx=2 * i, exit_idx=2 * i + 1, entry_price=100, exit_price=100,
+                        pnl_pct=p, hit_tp=p > 0, hit_sl=p < 0)
+            for i, p in enumerate(pnls)
+        ]
+        metrics = _compute_metrics(trades, taker_fee=0.0, bars=bars)
+        equity, events = 1.0, []
+        for i, p in enumerate(pnls):
+            events.append((bars[2 * i + 1].ts * 1_000_000, equity * p / 100.0))
+            equity *= 1 + p / 100.0
+        expected = daily_sharpe_sortino(
+            1.0, events, bars[0].ts * 1_000_000, (bars[-1].ts + 86_400_000) * 1_000_000
+        )
+        assert metrics.sharpe == pytest.approx(expected[0], rel=1e-12)
+        assert metrics.sortino == pytest.approx(expected[1], rel=1e-12)
+        # old t-stat: mean/std*sqrt(n) over trades
+        t_stat = np.mean(pnls) / np.std(pnls, ddof=1) * np.sqrt(len(pnls))
+        assert metrics.sharpe != pytest.approx(t_stat)
+
+    def test_p_value(self):
+        rng = np.random.default_rng(1)
+        prices = 100.0 + np.cumsum(rng.normal(-0.01, 0.1, 3000))
+        bars = [OHLCBar(ts=i * 3_600_000, open=p, high=p + 0.2, low=p - 0.2, close=p)
+                for i, p in enumerate(np.maximum(prices, 50.0))]
+        result = run_random_short_baseline(
+            bars, BaselineConfig(sl_pct=1.0, tp_pct=2.0, target_trades=30), n_simulations=40,
+            seed=3,
+        )
+        sharpes = sorted(m.sharpe for m in result.metrics)
+        assert result.p_value(float("inf")) == pytest.approx(1 / 41)
+        assert result.p_value(float("-inf")) == 1.0
+        assert result.p_value(sharpes[-5]) == pytest.approx((1 + 5) / 41)
+        assert "p-value" in result.summary(champion_sharpe=sharpes[-1])
