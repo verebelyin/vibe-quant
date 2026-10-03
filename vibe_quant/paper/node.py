@@ -24,7 +24,7 @@ import json
 import logging
 import signal
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -276,6 +276,7 @@ class PaperTradingNode:
         self._connected: bool | None = None
         self._kill_reason_seen: str | None = None
         self._previous_state: NodeState | None = None  # pre-start halt fallback
+        self._trades_day: date | None = None
 
         # Optional Telegram alerts (if env vars configured)
         self._telegram: TelegramBot | None = None
@@ -943,16 +944,17 @@ class PaperTradingNode:
         )
 
     def _on_position_closed(self, event: Any) -> None:
-        net = float(event.realized_pnl) if event.realized_pnl is not None else 0.0
+        pnl = event.realized_pnl
+        net = float(pnl) if pnl is not None else 0.0
         commissions = 0.0
         exit_reason = "unknown"
+        self._count_closed_trade()
         cache = self._guard.cache if self._guard is not None else None
         if cache is not None:
             pos = cache.position(event.position_id)
-            if pos is not None:
-                commissions = sum(
-                    float(c) for c in pos.commissions() if c.currency == event.realized_pnl.currency
-                )
+            if pos is not None and pnl is not None:
+                # NT realized_pnl is net of commissions; gross adds them back.
+                commissions = sum(float(c) for c in pos.commissions() if c.currency == pnl.currency)
             closing = cache.order(event.closing_order_id) if event.closing_order_id else None
             exit_reason = self._exit_reason(closing)
         self._write_event(
@@ -967,6 +969,13 @@ class PaperTradingNode:
             },
             timestamp=_ns_to_dt(event.ts_event),
         )
+
+    def _count_closed_trade(self) -> None:
+        today = datetime.now(UTC).date()
+        if self._trades_day != today:
+            self._trades_day = today
+            self._status.trades_today = 0
+        self._status.trades_today += 1
 
     @staticmethod
     def _exit_reason(order: Any) -> str:
@@ -1017,6 +1026,7 @@ class PaperTradingNode:
             with contextlib.suppress(Exception):
                 for account in cache.accounts():
                     balance[account.id.value] = self._serialize_account_balance(account)
+            self._status.positions = len(positions)
 
         node_status: dict[str, object] = dict(self._status.to_dict())
         node_status["trader_id"] = self._config.trader_id
