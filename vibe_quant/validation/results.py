@@ -101,6 +101,10 @@ class ValidationResult(PerformanceMetrics):
     trades: list[TradeRecord] = field(default_factory=list)
 
     starting_balance: float = 1000.0
+    # Provenance persisted as backtest_results.notes JSON (not a metric
+    # column): "data_window" when the run window was clamped to the data,
+    # "funding" when fallback rates were charged, "consistency" flags.
+    notes: dict[str, object] = field(default_factory=dict)
 
     def to_metrics_dict(self) -> dict[str, object]:
         """Convert to metrics dictionary for database storage."""
