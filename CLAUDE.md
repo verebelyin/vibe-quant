@@ -197,10 +197,17 @@ Use the `perf-profiling` skill (`.claude/skills/perf-profiling/SKILL.md`) when i
 slow runs or indicators — it documents how the 300× and 4.4× wins were found. Every perf
 change ships with an exactness proof (see Verification Rules).
 
+## Multi-Agent Orchestration
+
+Large jobs (many beads, research campaigns): `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md)
+(roster in `.claude/agents/`, handoff contract, research lane). Mechanical bulk work goes to the cheap
+`cmd` CLI (DeepSeek/Qwen/GLM/Kimi) via `scripts/agents/cmd-task.sh` — read `docs/orchestration/cheap-agents.md`
+before delegating; `cmd` runs `--yolo`, so writes go in a disposable worktree.
+
 ## Verification Rules (what counts as "results are the same")
 
 Valid proofs that a change preserved correctness:
-- **Fixed-strategy eval before/after**: one `NTScreeningRunner` call on a saved strategy must
+- **Fixed-strategy eval before/after** (`scripts/agents/exactness_239.py`): one `NTScreeningRunner` call on a saved strategy must
   return bit-identical metrics (strategy 239, BTCUSDT 2024-01-01..2026-03-17: sharpe
   `1.3165049716553048`, 68 trades since the 2026-10-03 audit fixes; was `1.3420101065837169`).
 - **Validation repeatability**: the same validation run twice is bit-identical (strategy 239

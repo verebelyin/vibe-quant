@@ -94,3 +94,6 @@ uv.lock
 
 # beads 1.3+ cooperative gate flock files
 *.gate.lock*
+
+# Multi-agent orchestration job workspaces (docs/orchestration)
+data/swarm/
