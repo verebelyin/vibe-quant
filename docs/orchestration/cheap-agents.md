@@ -25,7 +25,7 @@ Verified with `cmd --list-models` and a smoke run on 2026-10-04. Re-run `cmd --l
 |---|---|---|---|
 | `fast` | `deepseek/deepseek-v4.1-flash-fast` | `qwen/qwen3.8-flash`, `z-ai/glm-5.3-flash` | single-file mechanical edits, bulk classification/extraction to JSON, log summarisation |
 | `code` | `deepseek/deepseek-v4.1-flash` at `--effort max` (script default for this tier; user pick 2026-10-08, replaced `zai-org/glm-5.3`) | `zai-org/glm-5.3`, `qwen/qwen3.8-max-0902`, `minimaxai/minimax-m3` | multi-file but fully specified changes, tests from a written spec, boilerplate |
-| `pro` | `xiaomi/mimo-v2.6-pro` (user 2026-10-08: "better than DeepSeek, ~Sonnet 5.5 level") | `xiaomi/mimo-v2.6-pro-ultraspeed` | harder multi-file / judgement-light coding a Claude implementer would otherwise do; fix rounds that need care |
+| `pro` | `xiaomi/mimo-v2.6-pro` at `--effort max` (script default; user 2026-10-08: "better than DeepSeek, ~Sonnet 5.5 level") | `xiaomi/mimo-v2.6-pro-ultraspeed` | harder multi-file / judgement-light coding a Claude implementer would otherwise do; fix rounds that need care |
 | `long` | `moonshotai/kimi-k3` (1M ctx) | `z-ai/glm-5.3-flash` (1M), `xiaomi/mimo-v2.6-pro` | reading a lot to produce a short structured output |
 
 ## Routing
