@@ -3,7 +3,7 @@
 # Prints the agent's final text on stdout; full NDJSON transcript goes to the log dir.
 # Exit code: cmd's own (0 ok, 8 = hit --max-turns), 2 = usage error.
 #
-#   scripts/agents/cmd-task.sh [--tier fast|code|long | --model ID] [--max-turns N]
+#   scripts/agents/cmd-task.sh [--tier fast|code|pro|long | --model ID] [--max-turns N]
 #                              [--cwd DIR] [--log-dir DIR] [--effort LEVEL] BRIEF.md
 #
 # BRIEF.md may be "-" to read the brief from stdin.
@@ -32,8 +32,9 @@ if [[ -z "$model" ]]; then
   case "$tier" in
     fast) model="deepseek/deepseek-v4.1-flash-fast" ;;
     code) model="deepseek/deepseek-v4.1-flash"; effort="${effort:-max}" ;;
+    pro) model="xiaomi/mimo-v2.6-pro" ;;
     long) model="moonshotai/kimi-k3" ;;
-    *) echo "unknown tier: $tier (fast|code|long)" >&2; exit 2 ;;
+    *) echo "unknown tier: $tier (fast|code|pro|long)" >&2; exit 2 ;;
   esac
 fi
 
