@@ -20,6 +20,11 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
    - validation repeatability: same validation run twice must be bit-identical (239: sharpe `0.7802305953007851`, 67 trades).
    Comparing two discovery runs proves nothing. Reject it as evidence if a handoff offers it.
 6. **Scope check**: `git diff --stat <base>...HEAD` contains only the paths in the brief's SCOPE.
+7. **UI check** (if `frontend/src` changed, or the API changed something the UI shows): exercise each UI acceptance criterion in a real browser.
+   - `scripts/agents/ui-check.sh up <worktree>` starts the worktree's backend on :8001 and Vite on :5188 against a copy of the state DB (path printed). Seed the rows a criterion needs into that copy, never into `data/state`.
+   - Drive it with the `agent-browser` CLI (Bash with `dangerouslyDisableSandbox: true`): open the page, confirm the title is `vibe-quant`, `scrollIntoView` before each click, re-snapshot after each DOM change, and save a screenshot per criterion under the job's `handoffs/`.
+   - Pass = the criterion is visible or behaves as specified on screen. Code that typechecks but never renders is a fail.
+   - Always finish with `scripts/agents/ui-check.sh down <worktree>`, pass or fail.
 
 ## Rules
 

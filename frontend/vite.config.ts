@@ -2,6 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+// Override for side-by-side stacks (scripts/agents/ui-check.sh): VQ_API_PORT=8001.
+const apiPort = process.env.VQ_API_PORT ?? "8000";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -41,8 +44,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:8000",
-      "/ws": { target: "ws://localhost:8000", ws: true },
+      "/api": `http://localhost:${apiPort}`,
+      "/ws": { target: `ws://localhost:${apiPort}`, ws: true },
     },
   },
 });

@@ -66,6 +66,7 @@ ROLE: <agent name>
 GOAL: <one sentence>
 CONTEXT: <bead id, files, run ids, prior handoff paths; paste the decisive facts instead of saying "see above">
 SCOPE: may touch <paths>; leave everything else unchanged
+LIVE: for each path in SCOPE, the importer/caller that makes it reachable (file:line), checked by the orchestrator with `rg`
 DONE WHEN: <checkable criterion: command + expected result, or an exhaustive list to produce>
 BUDGET: <max turns / time; what to do when exhausted>
 RETURN: handoff contract (docs/orchestration/README.md#handoff-contract)

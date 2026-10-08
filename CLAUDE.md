@@ -34,7 +34,7 @@ The rule of this file is to describe common mistakes and confusion points that a
    containers.** `scrollIntoView({block:'center'})` via `eval` first, then click;
    re-snapshot after every DOM change (refs go stale).
 5. Long test suites / servers: use `run_in_background`, never `sleep`-polling.
-6. **UI testing:** use the `agent-browser` skill — **always with `dangerouslyDisableSandbox: true`**
+6. **UI testing:** to check a worktree/branch next to the user's servers, `scripts/agents/ui-check.sh up|down <worktree>` (backend :8001 + Vite :5188 on a DB copy; Vite reads `VQ_API_PORT`). Use the `agent-browser` skill — **always with `dangerouslyDisableSandbox: true`**
    (it needs the `~/.agent-browser` socket dir). Sidebar pages: Strategy Management, Discovery,
    Backtest Launch, Results Analysis, Paper Trading, Data Management, Settings. E2E flow:
    Data Management (download) → Strategy Management (create) → Backtest Launch (screen) →
