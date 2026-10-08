@@ -284,7 +284,9 @@ def _reference_from_discovery_notes(
             name = dsl.get("name") if isinstance(dsl, dict) else None
             if name != strategy_name:
                 continue
-            if wanted_body is not None and _dsl_body(dsl) != wanted_body:
+            if wanted_body is not None and (
+                not isinstance(dsl, dict) or _dsl_body(dsl) != wanted_body
+            ):
                 continue
             # Validated on the holdout window → compare like for like.
             holdout = entry.get("holdout")
