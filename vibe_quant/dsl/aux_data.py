@@ -63,6 +63,14 @@ def configure(archive_path: Path | str | None, catalog_path: Path | str | None =
     global _archive_path, _catalog_path
     _archive_path = Path(archive_path) if archive_path else None
     _catalog_path = Path(catalog_path) if catalog_path else None
+    # Reference bars are resolved once per run (preflight / first use), not per bar.
+    _REF.clear()
+    _REF_DERIVED.clear()
+
+
+def archive_path() -> Path | None:
+    """The configured funding archive path (None = default)."""
+    return _archive_path
 
 
 def _resolved_archive() -> Path:
@@ -124,12 +132,15 @@ def preflight(
     from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.validation.funding import _FUNDING_PERIOD_NS
 
+    start_ns, end_ns = _date_ns(start_date), _date_ns(end_date)
+    _preflight_regime(indicator_types, symbols, start_ns, end_ns, start_date, end_date)
     if not any(
-        (spec := indicator_registry.get(t)) is not None and spec.needs_context
+        (spec := indicator_registry.get(t)) is not None
+        and spec.needs_context
+        and t not in REGIME_TYPES
         for t in indicator_types
     ):
         return
-    start_ns, end_ns = _date_ns(start_date), _date_ns(end_date)
     for symbol in symbols:
         snapped, _ = settlement_series(symbol)
         if int(snapped[0]) > start_ns + PREFLIGHT_START_MARGIN_NS:
@@ -222,6 +233,176 @@ def funding_z_asof(symbol: str, bar_close_ns: np.ndarray, period: int) -> np.nda
                 z[period - 1 :] = np.where(std > 1e-15, (rates[period - 1 :] - mean) / std, np.nan)
         z = _store(symbol, "z", period, z)
     return _asof(snapped, z, bar_close_ns)
+
+
+# -- cross-asset regime references (BTC_TREND / BTC_ROC / OWN_TREND) -------------------
+
+REGIME_TYPES = frozenset({"BTC_TREND", "BTC_ROC", "OWN_TREND"})
+REF_SYMBOL = "BTCUSDT"
+_MS_NS = 1_000_000
+_REF_STALE_NS = 2 * 86_400 * 1_000_000_000
+_TF_NS = {"1h": 3_600 * 10**9, "4h": 14_400 * 10**9, "1d": 86_400 * 10**9}
+
+# (catalog path, symbol, tf) -> (BarSeries identity, rounded close ts, close)
+_REF: dict[tuple[str, str, str], tuple[object, np.ndarray, np.ndarray]] = {}
+# (catalog path, symbol, tf, kind, period) -> (BarSeries identity, derived series)
+_REF_DERIVED: dict[tuple[str, str, str, str, int], tuple[object, np.ndarray]] = {}
+
+
+def _resolved_catalog() -> Path:
+    from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
+
+    return _catalog_path or DEFAULT_CATALOG_PATH
+
+
+def _ref_bar_type(symbol: str, tf: str) -> str:
+    unit = {"1h": "1-HOUR", "4h": "4-HOUR", "1d": "1-DAY"}.get(tf)
+    if unit is None:
+        msg = f"Unsupported reference timeframe {tf!r}"
+        raise AuxDataUnavailableError(msg)
+    return f"{symbol}-PERP.BINANCE-{unit}-LAST-EXTERNAL"
+
+
+def _ref_bars(symbol: str, tf: str, refresh: bool = False) -> tuple[object, np.ndarray, np.ndarray]:
+    """Resolved reference bars; per-call path is a dict lookup unless ``refresh``.
+
+    ``refresh`` (preflight) re-reads the catalog (itself signature-cached) and
+    swaps the entry if the files changed; :func:`configure` clears the cache.
+    """
+    catalog = _resolved_catalog()
+    key = (str(catalog), symbol, tf)
+    if not refresh:
+        fast = _REF.get(key)
+        if fast is not None:
+            return fast
+    from vibe_quant.validation.extraction import load_catalog_bars
+
+    bar_type = _ref_bar_type(symbol, tf)
+    bars = load_catalog_bars(catalog, bar_type)
+    if bars is None or bars.ts.size == 0:
+        msg = (
+            f"Regime indicators need {tf} bars for {symbol}, but none found in {catalog} "
+            f"({bar_type}) — download {symbol} {tf} data first"
+        )
+        raise AuxDataUnavailableError(msg)
+    hit = _REF.get(key)
+    if hit is not None and hit[0] is bars:
+        return hit
+    step = _TF_NS[tf]
+    raw = bars.ts.astype(np.int64)
+    # A complete bar's ts_init is its close (boundary) or 1 ms before it. Anything
+    # else is an in-progress bar (the current day is archived as a partial 1d bar):
+    # never a valid close, so it is dropped rather than rounded onto a boundary.
+    complete = (raw % step == 0) | ((raw + _MS_NS) % step == 0)
+    ts = ((raw[complete] + step - 1) // step) * step  # ceil to the close boundary
+    close = np.asarray(bars.close, dtype=np.float64)[complete]
+    if ts.size == 0:
+        msg = f"No complete {tf} bars for {symbol} in {catalog}"
+        raise AuxDataUnavailableError(msg)
+    entry = (bars, ts, close)
+    _REF[key] = entry
+    return entry
+
+
+def ref_close_series(symbol: str, tf: str = "1d") -> tuple[np.ndarray, np.ndarray]:
+    """(close time ns, close) of ``symbol``'s ``tf`` catalog bars; cached per process.
+
+    Close time is ``ts_init`` rounded to the timeframe boundary (a daily bar's
+    23:59:59.999 becomes the next midnight).
+
+    Raises:
+        AuxDataUnavailableError: bar type missing or empty in the catalog.
+    """
+    _, ts, close = _ref_bars(symbol, tf)
+    return ts, close
+
+
+def _ref_derived(symbol: str, tf: str, kind: str, period: int) -> tuple[np.ndarray, np.ndarray]:
+    """(close ts, derived series) computed once on the FULL reference history."""
+    import pandas as pd
+
+    bars, ts, close = _ref_bars(symbol, tf)
+    key = (str(_resolved_catalog()), symbol, tf, kind, period)
+    hit = _REF_DERIVED.get(key)
+    if hit is not None and hit[0] is bars:
+        return ts, hit[1]
+    if kind == "trend":
+        ema = pd.Series(close).ewm(span=period, adjust=False).mean().to_numpy()
+        out = close / ema - 1.0
+        out[: max(period - 1, 0)] = np.nan  # EMA warmup is not a trend value
+    else:  # roc
+        out = np.full(close.size, np.nan)
+        if 0 < period < close.size:
+            out[period:] = close[period:] / close[:-period] - 1.0
+    _REF_DERIVED[key] = (bars, out)
+    return ts, out
+
+
+def _ref_lookup(
+    ts: np.ndarray, series: np.ndarray, close_ns: np.ndarray
+) -> np.ndarray:
+    """As-of: latest ref bar whose close <= t; NaN if none or > 2 days stale."""
+    t = np.asarray(close_ns, dtype=np.int64)
+    idx = np.searchsorted(ts, t, side="right") - 1
+    safe = np.clip(idx, 0, None)
+    ok = (idx >= 0) & (t - ts[safe] <= _REF_STALE_NS)
+    return np.where(ok, series[safe], np.nan)
+
+
+def ref_close_asof(symbol: str, close_ns_array: np.ndarray, tf: str = "1d") -> np.ndarray:
+    """Close of the latest ``tf`` bar closed at or before each time (NaN if none/stale)."""
+    ts, close = ref_close_series(symbol, tf)
+    return _ref_lookup(ts, close, close_ns_array)
+
+
+def ref_trend_asof(
+    symbol: str, close_ns_array: np.ndarray, period: int, tf: str = "1d"
+) -> np.ndarray:
+    """close / EMA(close, span=period) - 1 on the reference series, as of each time."""
+    ts, series = _ref_derived(symbol, tf, "trend", period)
+    return _ref_lookup(ts, series, close_ns_array)
+
+
+def ref_roc_asof(
+    symbol: str, close_ns_array: np.ndarray, period: int, tf: str = "1d"
+) -> np.ndarray:
+    """close[i] / close[i-period] - 1 on the reference series, as of each time."""
+    ts, series = _ref_derived(symbol, tf, "roc", period)
+    return _ref_lookup(ts, series, close_ns_array)
+
+
+def _preflight_regime(
+    indicator_types: list[str],
+    symbols: list[str],
+    start_ns: int,
+    end_ns: int,
+    start_date: str,
+    end_date: str,
+) -> None:
+    used = REGIME_TYPES.intersection(indicator_types)
+    if not used:
+        return
+    refs: list[str] = []
+    if used & {"BTC_TREND", "BTC_ROC"}:
+        refs.append(REF_SYMBOL)
+    if "OWN_TREND" in used:
+        refs.extend(s for s in symbols if s not in refs)
+    for symbol in refs:
+        _, ts, _ = _ref_bars(symbol, "1d", refresh=True)
+        if int(ts[0]) > start_ns - PREFLIGHT_START_MARGIN_NS:
+            msg = (
+                f"{symbol} daily bars start after the requested window "
+                f"(first close {_iso(int(ts[0]))}, needed from "
+                f"{_iso(start_ns - PREFLIGHT_START_MARGIN_NS)} for window start {start_date}) "
+                f"— download {symbol} 1d data"
+            )
+            raise AuxDataUnavailableError(msg)
+        if int(ts[-1]) < end_ns - 2 * 86_400 * 10**9:
+            msg = (
+                f"{symbol} daily bars end before the requested window "
+                f"(last close {_iso(int(ts[-1]))}, window end {end_date}) — download {symbol} 1d data"
+            )
+            raise AuxDataUnavailableError(msg)
 
 
 def context_of(df: pd.DataFrame) -> tuple[str, np.ndarray]:

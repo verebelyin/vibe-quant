@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-08: Edge-hunt wave 2 — H-7 BTC regime gate on alts (rejected) + first worst-of-symbols discovery (run 877)
+
+**H-7** (ticket: BTC 1d trend filter beats the alt's own 1d trend filter by ≥0.2 Sharpe). Base = H-2 TREND_ENSEMBLE(250) 4h; gates BTC_TREND(200) / OWN_TREND(200) on daily closes (new aux-context plugins, no look-ahead, partial current-day bar dropped). Screening 2022-09-01..2026-09-30:
+
+| symbol | ungated H-2 | BTC gate | own gate | BTC − own |
+|---|---|---|---|---|
+| ETHUSDT | 0.4277484189122244 | 0.2627855567255 | 0.4011432655310319 | −0.14 |
+| SOLUSDT | 0.5118861174467871 | 0.7628510239485123 | 0.6290151513894515 | +0.13 |
+| BNBUSDT | 0.5587404600837207 | 0.35534891667753055 | 0.16441401727012392 | +0.19 |
+
+**REJECT** (no symbol ≥ +0.2). Neither gate improves ungated H-2 consistently (only SOL). OWN gate on BTC: −0.1384.
+
+**Run 877** (discovery, pool TREND_ENSEMBLE/ADX/DONCHIAN, BTC/ETH/SOL/BNB 4h 2022-06..2026-09, `--symbol-agg worst`, eval_windows 3, pop 16 × 6, seed 20261008, compiler c25d7eb90237): zero_score 16/16 in every generation → 0 champions. Worst-of-4-symbols × worst-of-3-windows needs 12 positive sub-windows, so fitness is identically 0 and the GA has no gradient (bead vibe-quant-ox73t, P1).
+
+**Lessons:** (1) Regime gating (own or BTC) is not a robust improvement for the trend family on 2022-2026 alts. (2) Do not combine `--symbol-agg worst` with eval_windows>1 until ox73t lands. (3) Best untuned family remains H-2 (ETH 0.43 / SOL 0.51 / BNB 0.56) — below its own 0.7 bar; no strategy from this job proceeds to validation or paper.
+
+---
+
 ## 2026-10-08: Edge-hunt wave 1 — four hypotheses screened, all rejected by pre-stated falsifiers (job 20261008-edge-hunt)
 
 Data refreshed first: BTC/ETH/SOL/BNB perps 1m..1d + funding, 2022-01-01 → 2026-10-08 (BNB new). The refresh filled a BTC funding hole (2026-02-23..03-10) → exactness_239 baseline moved to sharpe 1.3169239785208688 / 68 trades (bars unchanged), validation repeatability 0.780452281957465 / 67. Screening via NTScreeningRunner (job-branch code, no DB rows), 4h, one symbol per run; artifacts in `data/swarm/20261008-edge-hunt/results/`.

@@ -1515,8 +1515,13 @@ class StrategyCompiler:
                 else:
                     lines.append(f"{ind}    if _res is not None and len(_res) > 0:")
                     lines.append(f"{ind}        _v = _res.iloc[-1]")
-                    lines.append(f"{ind}        if not pd.isna(_v):")
-                    lines.append(f'{ind}            self._pta_values["{info.name}"] = float(_v)')
+                    if spec.needs_context:
+                        # NaN is a real answer for aux data (hole / before coverage):
+                        # keeping the last valid value would trade on stale context.
+                        lines.append(f'{ind}        self._pta_values["{info.name}"] = float(_v)')
+                    else:
+                        lines.append(f"{ind}        if not pd.isna(_v):")
+                        lines.append(f'{ind}            self._pta_values["{info.name}"] = float(_v)')
 
         return lines
 

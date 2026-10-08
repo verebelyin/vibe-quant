@@ -530,11 +530,14 @@ class DiscoveryPipeline:
         Covers the full range incl. holdout. Without this, only the context
         chromosomes would fail and the GA would quietly breed them out.
         """
+        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
         from vibe_quant.discovery.operators import INDICATOR_POOL
         from vibe_quant.dsl import aux_data
 
         cfg = self.config
         end = cfg.holdout_end_date if cfg.has_holdout else cfg.end_date
+        # Workers run NTScreeningRunner with default paths; check the same ones.
+        aux_data.configure(aux_data.archive_path(), DEFAULT_CATALOG_PATH)
         aux_data.preflight(list(INDICATOR_POOL), cfg.symbols, cfg.start_date, end or cfg.end_date)
 
     # -- evaluation ---------------------------------------------------------
