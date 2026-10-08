@@ -53,6 +53,7 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.13"
+files = ["vibe_quant"]  # bare `mypy` = the zero-baseline gate; tests/ is not at zero
 strict = true
 warn_return_any = true
 warn_unused_ignores = false

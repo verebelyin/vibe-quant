@@ -42,8 +42,8 @@ The rule of this file is to describe common mistakes and confusion points that a
 7. **Git worktrees import the MAIN repo's code.** The editable install (`.pth`) points at
    `/Users/verebelyin/projects/vibe-quant`, so `python script.py` inside a worktree runs main's
    `vibe_quant`. Use `PYTHONPATH=$PWD .venv/bin/python -m ...` from the worktree.
-   Worktrees also have no `data/catalog`, so 8 research/rescreen tests fail there — re-run them
-   from the main checkout cwd with `PYTHONPATH=<worktree>` before calling it a regression.
+   Bare `git worktree add` also lacks `data/catalog` (8 research tests fail); create worktrees with
+   `scripts/agents/worktree.sh <slug> [base]`, which links the market data and prints the run line.
 
 ## Shell Preferences
 

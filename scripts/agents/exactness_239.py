@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import sys
+from pathlib import Path
 
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -23,7 +25,13 @@ EXPECTED_TRADES = 68
 
 
 def main() -> int:
-    conn = sqlite3.connect("file:data/state/vibe_quant.db?mode=ro", uri=True)
+    # Worktrees have no data/state (single-writer DB): read the main checkout's, read-only.
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    db = Path(common).parent / "data/state/vibe_quant.db"
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     row = conn.execute("SELECT dsl_config FROM strategies WHERE id = ?", (239,)).fetchone()
     conn.close()
     if row is None:

@@ -13,7 +13,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
 
 1. **Tests**: `.venv/bin/pytest <scope or full suite> -q`. For the full suite, run it in the background and wait for completion; never sleep-poll.
 2. **Lint**: `.venv/bin/ruff check <scope>`. Baseline is zero.
-3. **Types**: `.venv/bin/mypy <scope>`. Baseline is zero.
+3. **Types**: bare `.venv/bin/mypy` (pyproject pins `files = ["vibe_quant"]`). Baseline is zero. `tests/` is not at zero; report new test-file errors as non-blocking.
 4. **Frontend** (if `frontend/` changed): `cd frontend && pnpm build`.
 5. **Exactness proofs** (if the brief or the diff touches screening/validation/discovery/indicators), per CLAUDE.md § Verification Rules:
    - fixed-strategy eval: `.venv/bin/python scripts/agents/exactness_239.py` (exit 0 = bit-identical to the CLAUDE.md baseline);

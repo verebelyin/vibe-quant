@@ -39,14 +39,23 @@ Model choice follows maker-checker: the agents that write run on sonnet or cheap
 
 | Runtime | When | How |
 |---|---|---|
-| Claude subagent | default for judgement work | Agent tool, `subagent_type: "<name>"`. Writers get `isolation: "worktree"`. |
+| Claude subagent | default for judgement work | Agent tool, `subagent_type: "<name>"`. Writers work in a worktree from `scripts/agents/worktree.sh` (not `isolation: "worktree"`, which can only branch from `main` and lacks market data). |
 | `cmd` worker | mechanical / bulk / well-specified | `scripts/agents/cmd-task.sh` (see [`cheap-agents.md`](cheap-agents.md)) |
 | T3 `delegate_task` | other providers (Codex, …) or a long-running background child | `orchestrator_capabilities` → `delegate_task`; paste the agent file's body as the task prompt |
 
-- **Worktree gotcha (CLAUDE.md #7):** the editable install points at the main checkout, so Python inside a worktree imports main's `vibe_quant`. Every brief for a worktree agent must say to run Python as `PYTHONPATH=$PWD .venv/bin/python -m ...` (and `PYTHONPATH=$PWD .venv/bin/pytest`).
+- **Worktrees:** `scripts/agents/worktree.sh <slug> [base-ref]` creates `../vq-<slug>` on `swarm/<slug>`, links the main checkout's `data/catalog` + `data/archive` (so catalog-backed tests and `exactness_239.py` run there) and prints the `run as` line. Paste that line into every worktree brief: the editable install points at the main checkout, so Python run without `PYTHONPATH=$PWD` tests main's code (CLAUDE.md #7).
 - **Shared state is single-writer.** `data/state/vibe_quant.db`, the backend on :8000 and the beads Dolt store each have one owner at a time. Only `backtest-operator` launches jobs, only the orchestrator mutates beads, and only one agent at a time restarts servers.
 - **WIP limit:** at most 3–5 parallel writers, which is about as many diffs as can be reviewed properly. Readers (scouts, reviewers) can fan out wider.
 - New or edited files in `.claude/agents/` load when a session starts. After changing them, restart the session (or use `/agents`) before dispatching.
+
+## Profiles
+
+| Profile | Use when | Design | Build + check |
+|---|---|---|---|
+| **lean** (default) | ≤ ~500 changed lines, one package, no NT engine lifecycle, fill/metric semantics or DB schema change | orchestrator writes the plan from the bead AC | implementer(s) → `reviewer` → `verifier` |
+| **full** | anything bigger, cross-package, or touching the areas above | `architect` → `reviewer` (design mode) → user gate | same as lean |
+
+Measured on job `20261008-discovery-robustness` (2 beads, +~330 lines, full profile): ~335k Claude subagent tokens + ~604k cmd tokens, ~1 h wall. The Opus review found 3 real defects; the architect step added little the bead AC didn't already say, and one design choice (seeded uids) caused a defect only a design review would have caught cheaply.
 
 ## Brief format
 
@@ -109,11 +118,11 @@ The ledger is the orchestrator's memory. If the context gets compacted, re-read 
 Six gated phases:
 
 1. **Brief.** The orchestrator restates the goal and constraints in `brief.md`. Ambiguity goes to the user now, not mid-build.
-2. **Design.** `architect` reads the code and returns a design + a task plan (tasks with acceptance criteria, file paths, dependencies, parallel-safe groups). **User gate:** approve before any code.
+2. **Design.** Lean profile: the orchestrator writes the task plan. Full profile: `architect` reads the code and returns a design + a task plan (tasks with acceptance criteria, file paths, dependencies, parallel-safe groups), then `reviewer` checks it in design mode. **User gate:** approve before any code.
 3. **Plan → beads.** The orchestrator files one bead per task (`bd create`) with the acceptance criteria as user-testable checks.
 4. **Build.** One `implementer` per bead, each in its own worktree, test-first. Parallelise only tasks the plan marks as disjoint. Mechanical sub-steps (renames, fixture tables, boilerplate tests) go to `cmd` workers.
 5. **Check.** `reviewer` (spec + quality verdicts) and `verifier` (gates + exactness proofs) run on each diff. A blocking finding sends the task back to an implementer with the finding pasted into the brief. After 3 rounds on the same task, escalate: switch model, re-scope, or ask the user.
-6. **Land.** The orchestrator merges worktrees one at a time, runs the full gate set on the merged result, closes beads, commits and pushes (CLAUDE.md § Session Completion).
+6. **Land.** The orchestrator merges worktrees one at a time onto the job branch, runs the full gate set on the merged result, squash-merges it to `main` (one commit per job), closes beads and pushes (CLAUDE.md § Session Completion).
 
 ### Research lane
 
