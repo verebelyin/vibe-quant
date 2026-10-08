@@ -42,6 +42,8 @@ The rule of this file is to describe common mistakes and confusion points that a
 7. **Git worktrees import the MAIN repo's code.** The editable install (`.pth`) points at
    `/Users/verebelyin/projects/vibe-quant`, so `python script.py` inside a worktree runs main's
    `vibe_quant`. Use `PYTHONPATH=$PWD .venv/bin/python -m ...` from the worktree.
+   Worktrees also have no `data/catalog`, so 8 research/rescreen tests fail there — re-run them
+   from the main checkout cwd with `PYTHONPATH=<worktree>` before calling it a regression.
 
 ## Shell Preferences
 
@@ -174,7 +176,8 @@ SPEC.md              # Authoritative implementation spec
 - **1m data is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) ~10x faster than pandas-path ones (ADX/MACD/BBANDS/KAMA). Budget accordingly.
 - **Fitness function:** 35% Sharpe + 25% (1-MaxDD) + 20% PF + 20% Return. Hard gate: 0 if <50 trades.
 - **`eval_windows` (default 3) stores WORST-of-N sub-window metrics** (min Sharpe/return/PF, max DD; each window needs ≥ max(1, min_trades // (2N)) trades) — a full-window replay legitimately shows different Sharpe/return (`ReplayResponse.metrics_note` explains this). Not a bug.
-- **Single-seed discovery is unseeded** — identical configs produce different populations across runs. Never compare two discovery runs to validate a code change (see Verification Rules below).
+- **Discovery seed:** `--seed N` (CLI only; auto-drawn when absent, always persisted in `notes.seed`) replays a run exactly — same seed + same config + same code. Runs without a recorded seed (pre-2026-10-08) can't be replayed. Still never compare discovery runs ACROSS code changes (any change shifts the RNG draw sequence).
+- **Discovery fails loudly:** an all-errored eval batch (before any success, or ≥ max(2, pop//4) after) raises `DiscoveryEvaluationError` → run `failed`, not "0 champions".
 - **Bootstrap-CI gate keeps being vindicated:** every champion forced past it with `no_bootstrap_ci=true` and then validated has collapsed (Batch 41: 5.40→−2.78; Batch 43 RAMS: 0.59→−0.36). The validation runner auto-flags collapses (`validation/consistency.py`); treat a flagged strategy as overfit, not as a validation bug.
 - 4h/1d discovery uses bootstrap floor 0.0 by default (1.0 is structurally unpassable at ~50-180 trades/yr); 1m uses 0.5.
 
@@ -218,7 +221,7 @@ Valid proofs that a change preserved correctness:
 
 INVALID proofs (these wasted time):
 - Comparing two discovery runs — single-seed runs are unseeded and nondeterministic
-  (vibe-quant-8t7nv), and ANY code change shifts the RNG draw sequence.
+  unless both used the same `--seed`, and ANY code change shifts the RNG draw sequence.
 - Comparing an `eval_windows>1` champion's stored fitness to a full-window replay
   (mean-of-N sub-windows vs full window — differs by design).
 - Comparing screening metrics across the `11c5f00` or 2026-10-03 audit-fix semantics breaks.
