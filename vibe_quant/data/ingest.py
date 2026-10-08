@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path  # noqa: TC003 (used at runtime in rebuild_from_archive)
 from typing import Any
+
+import httpx
 
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
@@ -27,6 +30,11 @@ from vibe_quant.data.downloader import (
     get_years_months_to_download,
 )
 from vibe_quant.data.verify import verify_symbol
+
+logger = logging.getLogger(__name__)
+
+# Timeframes aggregated from 1m bars (1d = UTC-midnight aligned; ts_event=open, ts_init=close).
+AGGREGATION_INTERVALS = ["5m", "15m", "1h", "4h", "1d"]
 
 
 def _interval_to_minutes(interval: str) -> int:
@@ -148,6 +156,33 @@ def get_download_preview(
     return preview
 
 
+def _update_funding_rates(symbol: str, archive: RawDataArchive, verbose: bool) -> int:
+    """Fetch funding rates after the last archived funding_time (+1 ms).
+
+    Skipped when the archive has no funding yet (use ``ingest`` for backfill).
+    """
+    last = archive.conn.execute(
+        "SELECT MAX(funding_time) FROM raw_funding_rates WHERE symbol = ?", (symbol,)
+    ).fetchone()[0]
+    if last is None:
+        if verbose:
+            print(f"{symbol}: no archived funding, use 'ingest' to backfill")
+        return 0
+    start_time = int(last) + 1
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    if start_time >= now_ms:
+        return 0
+    rates = download_funding_rates(symbol, start_time, now_ms)
+    if not rates:
+        if verbose:
+            print("  No new funding rates")
+        return 0
+    inserted = archive.insert_funding_rates(symbol, rates, "binance_api")
+    if verbose:
+        print(f"  Archived {inserted} new funding rates")
+    return inserted
+
+
 def update_symbol(
     symbol: str,
     archive: RawDataArchive | None = None,
@@ -181,6 +216,14 @@ def update_symbol(
         catalog = CatalogManager()
 
     counts: dict[str, int] = {"new_klines": 0}
+
+    # Funding is independent of kline freshness: refresh it first so an
+    # "already up to date" klines archive never leaves funding stale.
+    try:
+        counts["new_funding_rates"] = _update_funding_rates(symbol, archive, verbose)
+    except httpx.HTTPError as e:
+        logger.warning("%s: funding refresh failed (%s); continuing with klines", symbol, e)
+        counts["new_funding_rates"] = 0
 
     # Get last timestamp from archive
     date_range = archive.get_date_range(symbol, "1m")
@@ -226,7 +269,7 @@ def update_symbol(
         return counts
 
     # Clear existing catalog data to avoid disjoint interval errors
-    for interval in ["1m", "5m", "15m", "1h", "4h"]:
+    for interval in ["1m", *AGGREGATION_INTERVALS]:
         catalog.clear_bar_data(symbol, interval)
 
     # Convert to 1m bars
@@ -240,7 +283,7 @@ def update_symbol(
         print(f"  Wrote {len(bars_1m)} 1m bars to catalog")
 
     # Aggregate to higher timeframes
-    for interval in ["5m", "15m", "1h", "4h"]:
+    for interval in AGGREGATION_INTERVALS:
         minutes = _interval_to_minutes(interval)
 
         bar_type = get_bar_type(symbol, interval)
@@ -278,6 +321,7 @@ def update_all(
         source="binance_api",
     )
     total_new = 0
+    total_funding = 0
 
     try:
         for symbol in symbols:
@@ -289,11 +333,13 @@ def update_all(
             counts = update_symbol(symbol, archive=archive, catalog=catalog, verbose=verbose)
             results[symbol] = counts
             total_new += counts.get("new_klines", 0)
+            total_funding += counts.get("new_funding_rates", 0)
 
         archive.complete_download_session(
             session_id,
             klines_fetched=total_new,
             klines_inserted=total_new,
+            funding_rates_fetched=total_funding,
         )
     except Exception as e:
         archive.complete_download_session(
@@ -310,7 +356,10 @@ def update_all(
         print("UPDATE SUMMARY")
         print(f"{'=' * 50}")
         for sym, cnts in results.items():
-            print(f"{sym}: {cnts.get('new_klines', 0)} new klines")
+            print(
+                f"{sym}: {cnts.get('new_klines', 0)} new klines, "
+                f"{cnts.get('new_funding_rates', 0)} new funding rates"
+            )
 
     return results
 
@@ -437,7 +486,7 @@ def ingest_symbol(
 
     # Clear existing catalog data to avoid disjoint interval errors
     # (archive is source of truth; catalog rebuilt from full archive each time)
-    for interval in ["1m", "5m", "15m", "1h", "4h"]:
+    for interval in ["1m", *AGGREGATION_INTERVALS]:
         catalog.clear_bar_data(symbol, interval)
 
     # Convert to 1m bars and write
@@ -451,7 +500,7 @@ def ingest_symbol(
         print(f"Wrote {len(bars_1m)} 1m bars")
 
     # Aggregate to higher timeframes
-    for interval in ["5m", "15m", "1h", "4h"]:
+    for interval in AGGREGATION_INTERVALS:
         bar_type = get_bar_type(symbol, interval)
         minutes = _interval_to_minutes(interval)
 
@@ -750,7 +799,7 @@ def _print_summary(
 
         # Higher timeframes
         htf = []
-        for tf in ["5m", "15m", "1h", "4h"]:
+        for tf in AGGREGATION_INTERVALS:
             key = f"bars_{tf}"
             if key in cnts:
                 htf.append(f"{cnts[key]:,} {tf}")
@@ -920,7 +969,7 @@ def rebuild_from_archive(
             print(f"Wrote {len(bars_1m)} 1m bars")
 
         # Aggregate to higher timeframes (same logic as ingest_symbol)
-        for interval in ["5m", "15m", "1h", "4h"]:
+        for interval in AGGREGATION_INTERVALS:
             bar_type = get_bar_type(symbol, interval)
             minutes = _interval_to_minutes(interval)
 

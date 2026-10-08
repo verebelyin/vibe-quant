@@ -188,6 +188,13 @@ class IndicatorSpec:
     # ``MA_POOL`` for future price-vs-MA gene variants.
     ma_kind: bool = False
 
+    # True when ``compute_fn`` reads non-OHLCV context (e.g. funding rates)
+    # through ``vibe_quant.dsl.aux_data``. The compiler then attaches
+    # ``df.attrs["bar_close_ns"]`` (int64 close time of every row) and
+    # ``df.attrs["symbol"]`` (instrument id) to the DataFrame. Such specs are
+    # excluded from the default GA pool and cannot run in paper/live trading.
+    needs_context: bool = False
+
     def __post_init__(self) -> None:
         """Validate indicator spec.
 
@@ -1161,6 +1168,12 @@ def invoke_compute_fn(
 
     if spec.compute_fn is None:
         msg = f"Indicator {spec.name!r} has no compute_fn"
+        raise ValueError(msg)
+    if spec.needs_context and "bar_close_ns" not in df.attrs:
+        msg = (
+            f"Indicator {spec.name!r} needs context: set df.attrs['bar_close_ns'] "
+            "(int64 bar close times) and df.attrs['symbol'] before calling it"
+        )
         raise ValueError(msg)
 
     n = len(df.index)

@@ -93,6 +93,9 @@ class DiscoveryConfig:
         end_date: TRAIN range end (ISO format) == holdout start when split.
         eval_windows: Worst-of-N sub-window fitness (see
             ``NTBacktestFn._aggregate_multi_window``); 1 = single window.
+        symbol_agg: ``portfolio`` (one shared-account run) or ``worst`` (per-symbol
+            runs, worst symbol scored); informational here -- the backtest fns
+            are built with the same mode by the CLI.
         train_test_split: TRAIN fraction of the full range (0 = no holdout).
             The CLI/API default is 0.8 (20% holdout).
         cross_window_min_pass: Shifted cross-windows that must pass. ``None``
@@ -126,6 +129,7 @@ class DiscoveryConfig:
     entropy_threshold: float = 0.4  # Entropy below this triggers immigrant injection
     min_diversity_distance: float = 0.15  # Min Gower distance for top-K dedup
     eval_windows: int = 3  # worst-of-N sub-window fitness; 1 = single-window
+    symbol_agg: str = "portfolio"  # "worst" = score by worst symbol (NTBacktestFn)
     train_test_split: float = 0.0  # 0 = no holdout; >0 = TRAIN fraction (e.g. 0.8)
     holdout_start_date: str = ""  # Pre-computed holdout start (set by CLI, not re-split)
     holdout_end_date: str = ""  # Pre-computed holdout end
@@ -237,6 +241,10 @@ class HoldoutResult:
     profit_factor: float
     total_trades: int
     total_return: float
+    # symbol_agg="worst" only: portfolio-comparable trade sum and per-symbol
+    # {sharpe, trades, return} (total_trades above is the MIN symbol).
+    trades_sum: int | None = None
+    symbol_metrics: dict[str, dict[str, float | int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +380,8 @@ def _metrics_to_holdout_result(bt: dict[str, float | int]) -> HoldoutResult:
         profit_factor=0.0 if math.isnan(pf) else pf,
         total_trades=trades,
         total_return=0.0 if math.isnan(ret) else ret,
+        trades_sum=int(bt["trades_sum"]) if "trades_sum" in bt else None,
+        symbol_metrics=bt.get("symbol_metrics"),  # type: ignore[arg-type]
     )
 
 
@@ -477,8 +487,6 @@ class DiscoveryPipeline:
 
         Safe to mutate module globals since discovery runs as a subprocess.
         """
-        if self.config.indicator_pool is None:
-            return
         from vibe_quant.discovery.operators import (
             _INDICATOR_NAMES,
             INDICATOR_POOL,
@@ -486,7 +494,18 @@ class DiscoveryPipeline:
         )
 
         _ensure_pool()
-        allowed = set(self.config.indicator_pool)
+        if self.config.indicator_pool is None:
+            # Default (all) excludes needs_context specs (FUNDING, ...): they
+            # run only when named explicitly.
+            from vibe_quant.dsl.indicators import indicator_registry
+
+            allowed = {
+                n
+                for n in INDICATOR_POOL
+                if (sp := indicator_registry.get(n)) is None or not sp.needs_context
+            }
+        else:
+            allowed = set(self.config.indicator_pool)
         available = set(INDICATOR_POOL.keys())
         unknown = sorted(allowed - available)
         if unknown:
@@ -504,6 +523,19 @@ class DiscoveryPipeline:
         _INDICATOR_NAMES.clear()
         _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
         logger.info("Indicator pool filtered to: %s", list(INDICATOR_POOL.keys()))
+
+    def _preflight_aux_data(self) -> None:
+        """Fail before the GA starts if a context indicator in the pool lacks aux data.
+
+        Covers the full range incl. holdout. Without this, only the context
+        chromosomes would fail and the GA would quietly breed them out.
+        """
+        from vibe_quant.discovery.operators import INDICATOR_POOL
+        from vibe_quant.dsl import aux_data
+
+        cfg = self.config
+        end = cfg.holdout_end_date if cfg.has_holdout else cfg.end_date
+        aux_data.preflight(list(INDICATOR_POOL), cfg.symbols, cfg.start_date, end or cfg.end_date)
 
     # -- evaluation ---------------------------------------------------------
 
@@ -588,6 +620,7 @@ class DiscoveryPipeline:
     def _run(self) -> DiscoveryResult:
         cfg = self.config
         self._apply_indicator_pool_filter()
+        self._preflight_aux_data()
 
         # Parse direction constraint
         from vibe_quant.discovery.operators import Direction

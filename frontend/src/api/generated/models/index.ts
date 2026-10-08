@@ -35,6 +35,7 @@ export * from './dataStatusResponse';
 export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';
 export * from './discoveryLaunchRequest';
+export * from './discoveryLaunchRequestSymbolAgg';
 export * from './discoveryResultResponse';
 export * from './discoveryResultResponseGuardrailRejections';
 export * from './discoveryResultResponseStrategiesItem';

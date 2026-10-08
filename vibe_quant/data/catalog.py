@@ -68,6 +68,19 @@ INSTRUMENT_CONFIGS = {
         "maker_fee": Decimal("0.0002"),
         "taker_fee": Decimal("0.0005"),
     },
+    "BNBUSDT": {
+        "base": "BNB",
+        "quote": "USDT",
+        "price_precision": 2,
+        "size_precision": 2,
+        "price_increment": "0.01",
+        "size_increment": "0.01",
+        "max_leverage": Decimal("50"),
+        "margin_init": Decimal("0.02"),
+        "margin_maint": Decimal("0.01"),
+        "maker_fee": Decimal("0.0002"),
+        "taker_fee": Decimal("0.0005"),
+    },
 }
 
 # Bar aggregation mapping

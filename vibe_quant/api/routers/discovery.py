@@ -215,6 +215,7 @@ async def launch_discovery(
         params["direction"] = body.direction
     if body.eval_windows >= 1:
         params["eval_windows"] = body.eval_windows
+    params["symbol_agg"] = body.symbol_agg
     # Always recorded: 0 is an explicit opt-out of the default holdout
     params["train_test_split"] = body.train_test_split
     if body.cross_window_months:
@@ -295,6 +296,8 @@ async def launch_discovery(
         command.extend(["--direction", body.direction])
     if body.eval_windows >= 1:
         command.extend(["--eval-windows", str(body.eval_windows)])
+    if body.symbol_agg != "portfolio":
+        command.extend(["--symbol-agg", body.symbol_agg])
     # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
     # reach the subprocess to disable it.
     command.extend(["--train-test-split", str(body.train_test_split)])
@@ -944,15 +947,40 @@ async def replay_discovered_strategy(
     else:
         run_params = {}
     eval_windows = run_params.get("eval_windows")
-    if isinstance(eval_windows, int) and eval_windows > 1:
-        metrics_note = (
+    # CLI-launched runs carry symbol_agg only in the result notes.
+    symbol_agg = run_params.get("symbol_agg")
+    if symbol_agg is None:
+        symbol_agg = _load_discovery_payload(state, run_id).get("symbol_agg")
+    worst = symbol_agg == "worst" and len(symbols_list) > 1
+    multi_window = isinstance(eval_windows, int) and eval_windows > 1
+    parts: list[str] = []
+    if multi_window:
+        parts.append(
             f"Discovery run {run_id} scored fitness as worst-of-{eval_windows} "
             "eval windows (min Sharpe, min return, max drawdown, min PF across "
-            "the train sub-windows; trades summed); this replay runs one "
-            "continuous backtest over the full range, so Sharpe/return will "
-            "differ from the stored champion fitness by design. Compare against "
-            "the champion's full_range_* headline instead."
+            "the train sub-windows; trades summed)"
         )
+    if worst:
+        parts.append(
+            ("Each genome was" if not multi_window else "and each genome was")
+            + f" scored by its WORST symbol in run {run_id} (symbol_agg=worst: "
+            "per-symbol backtests; min Sharpe/return/PF, max drawdown, MIN trades "
+            "across symbols)"
+        )
+    if parts:
+        metrics_note = (
+            "; ".join(parts)
+            + "; this replay is one continuous shared-account portfolio backtest "
+            "over the full range, so metrics differ from the stored champion "
+            "fitness by design."
+        )
+        if not worst:
+            metrics_note += " Compare against the champion's full_range_* headline instead."
+        else:
+            metrics_note += (
+                " The full_range_* headline is also worst-of-symbols, so compare "
+                "trades against full_range_trades_sum and read Sharpe as the worst symbol."
+            )
 
     replay_run_id = state.create_backtest_run(
         strategy_id=None,

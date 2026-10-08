@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.errors import DataUnavailableError
+
 if TYPE_CHECKING:
     from vibe_quant.screening.types import BacktestMetrics
 
@@ -42,6 +44,48 @@ _PARAM_KEY_ALIASES: tuple[tuple[str, str], ...] = (
     ("_k_period", "_period"),
     ("_period_d", "_d_period"),
 )
+
+
+class MissingBarDataError(DataUnavailableError):
+    """A requested bar type has no catalog data in the run window.
+
+    Re-raised by ``NTScreeningRunner.__call__`` (never masked as a -inf result).
+    """
+
+
+_HAS_DATA_CACHE: set[tuple[str, str, int | None, int | None]] = set()
+
+
+def _bar_type_has_data(catalog_path: str, bar_type: str, start_ns: int | None, end_ns: int | None) -> bool:
+    key = (catalog_path, bar_type, start_ns, end_ns)
+    if key in _HAS_DATA_CACHE:
+        return True
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog import ParquetDataCatalog
+
+    for lo, hi in ParquetDataCatalog(catalog_path).get_intervals(Bar, bar_type):
+        if (end_ns is None or lo <= end_ns) and (start_ns is None or hi >= start_ns):
+            _HAS_DATA_CACHE.add(key)
+            return True
+    return False
+
+
+def require_bars_in_window(catalog_path: str, bar_type: str, start: str, end: str) -> None:
+    """Raise MissingBarDataError if the catalog has no bars for ``bar_type`` in [start, end].
+
+    Cheap: reads only the parquet file-name intervals (no data load), cached
+    in-process per (catalog, bar type, window) -- only positive results are
+    cached, so ingesting data mid-process is picked up. File intervals only:
+    internal gaps are NOT detected.
+    """
+    from vibe_quant.validation.extraction import date_to_ns
+
+    if _bar_type_has_data(catalog_path, bar_type, date_to_ns(start), date_to_ns(end)):
+        return
+    raise MissingBarDataError(
+        f"No catalog bars for {bar_type} in window {start}..{end} (catalog: {catalog_path}). "
+        "Ingest/rebuild that timeframe (e.g. `python -m vibe_quant.data rebuild --from-archive`)."
+    )
 
 
 def resolve_strategy_params(
@@ -169,7 +213,7 @@ class NTScreeningRunner:
         start_time = time.time()
         try:
             return self._run_backtest(params, start_time)
-        except UnknownStrategyParamError:
+        except (UnknownStrategyParamError, DataUnavailableError):
             # Configuration error, not a backtest failure: never mask it as a
             # -inf result (vibe-quant-e70tl.8).
             raise
@@ -194,6 +238,23 @@ class NTScreeningRunner:
         """
         import sys
 
+        # needs_context indicators (FUNDING, ...) read the run's archive in-process;
+        # configure on EVERY call (another runner in this process may have changed it)
+        # and fail before the engine if the archive does not cover the window.
+        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH as _default_catalog
+        from vibe_quant.dsl import aux_data
+
+        aux_data.configure(
+            self._funding_archive_path,
+            Path(self._catalog_path) if self._catalog_path else _default_catalog,
+        )
+        aux_data.preflight(
+            [str(c.get("type", "")) for c in (self._dsl_dict.get("indicators") or {}).values()],
+            self._symbols,
+            self._start_date,
+            self._end_date,
+        )
+
         # A runner pickled into a fresh worker process keeps ``_compiled`` but
         # not the dynamically registered module -- recompile in that case.
         if self._compiled and self._module_path in sys.modules:
@@ -210,7 +271,6 @@ class NTScreeningRunner:
         self._resolved_catalog_path = (
             Path(self._catalog_path) if self._catalog_path else DEFAULT_CATALOG_PATH
         )
-
         cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
         cached = _COMPILE_CACHE.get(cache_key)
         if cached is not None and cached[0] in sys.modules:
@@ -314,6 +374,10 @@ class NTScreeningRunner:
                 if tf not in INTERVAL_TO_AGGREGATION:
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
+                bar_type_str = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                require_bars_in_window(
+                    str(catalog_path.resolve()), bar_type_str, self._start_date, self._end_date
+                )
                 # NT 1.226+: pass data_cls as the CLASS, not the import
                 # string — BacktestDataConfig.query compares `data_cls is Bar`
                 # so a string silently disables bar-type narrowing and loads
@@ -322,7 +386,7 @@ class NTScreeningRunner:
                     BacktestDataConfig(
                         catalog_path=str(catalog_path.resolve()),
                         data_cls=Bar,
-                        bar_types=[f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"],
+                        bar_types=[bar_type_str],
                         start_time=self._start_date,
                         end_time=self._end_date,
                     )

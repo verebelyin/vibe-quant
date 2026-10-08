@@ -108,7 +108,7 @@ def _spec_default_params(spec: object) -> dict[str, float]:
     }
 
 
-def build_indicator_pool() -> dict[str, IndicatorDef]:
+def build_indicator_pool(*, include_context: bool = False) -> dict[str, IndicatorDef]:
     """Assemble the GA indicator pool from the live ``indicator_registry``.
 
     Rules:
@@ -128,6 +128,9 @@ def build_indicator_pool() -> dict[str, IndicatorDef]:
     plugin is registered AFTER module import (unit tests), call
     ``build_indicator_pool()`` again to pick it up.
 
+    - ``needs_context`` specs (FUNDING, ...) need non-OHLCV aux data and are
+      excluded unless ``include_context=True``.
+
     Returns:
         Dict keyed by indicator name → ``IndicatorDef``.
     """
@@ -138,6 +141,8 @@ def build_indicator_pool() -> dict[str, IndicatorDef]:
     pool: dict[str, IndicatorDef] = {}
     for spec in indicator_registry.all_specs():
         if spec.threshold_range is None or not spec.param_ranges:
+            continue
+        if spec.needs_context and not include_context:
             continue
         pool[spec.name] = IndicatorDef(
             name=spec.name,

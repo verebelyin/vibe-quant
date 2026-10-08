@@ -788,6 +788,13 @@ class ValidationRunner:
         # Ensure instruments exist in catalog
         catalog_path = DEFAULT_CATALOG_PATH
         catalog_mgr = CatalogManager(catalog_path)
+        from vibe_quant.dsl import aux_data
+
+        aux_data.configure(None, catalog_path)  # needs_context indicators (default archive)
+        # run_config window is already clamped to data coverage here
+        aux_data.preflight(
+            [c.type for c in dsl.indicators.values()], symbols, start_date, end_date
+        )
         for symbol in symbols:
             if symbol in INSTRUMENT_CONFIGS:
                 instrument = create_instrument(symbol)

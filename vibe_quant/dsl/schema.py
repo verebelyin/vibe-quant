@@ -11,7 +11,7 @@ from typing import Annotated, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Valid timeframes supported by the system
-VALID_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h"})
+VALID_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
 # Valid price sources for indicators
 VALID_SOURCES = frozenset({"open", "high", "low", "close", "volume", "hl2", "hlc3", "ohlc4"})

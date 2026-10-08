@@ -49,6 +49,42 @@ class ScreeningReference:
     # Window the reference metrics cover (ISO dates); None if unknown.
     start_date: str | None = None
     end_date: str | None = None
+    # symbol_agg="worst" champions: trades are not portfolio-comparable unless
+    # the persisted trades_sum was used -- then the comparison is skipped.
+    skip_trades: bool = False
+    notes: list[str] = field(default_factory=list)
+
+
+def _worst_mode_trades(
+    payload: dict[str, object],
+    symbols: object,
+    block: dict[str, object],
+    sum_key: str,
+    trades: int,
+) -> tuple[int, bool, list[str]]:
+    """(trades, skip_trades, notes) for a discovery reference.
+
+    In ``symbol_agg=worst`` multi-symbol runs the persisted ``trades`` is the
+    MIN symbol while validation is a portfolio run, so compare ``trades_sum``;
+    legacy notes without it skip the trade comparison.
+    """
+    if payload.get("symbol_agg") != "worst":
+        return trades, False, []
+    try:
+        n_symbols = len(json.loads(symbols) if isinstance(symbols, str) else symbols)  # type: ignore[arg-type]
+    except (TypeError, json.JSONDecodeError):
+        n_symbols = 2
+    if n_symbols < 2:
+        return trades, False, []
+    notes = ["reference Sharpe = worst symbol (discovery symbol_agg=worst)"]
+    total = block.get(sum_key)
+    if isinstance(total, (int, float)):
+        return int(total), False, notes
+    notes.append(
+        "trade comparison skipped: reference trades are the MIN per symbol "
+        "(no trades_sum persisted) while validation is a portfolio run"
+    )
+    return trades, True, notes
 
 
 def _window_days(start: str | None, end: str | None) -> int | None:
@@ -69,6 +105,7 @@ class ConsistencyReport:
     val_sharpe: float
     val_trades: int
     flags: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
     def is_flagged(self) -> bool:
@@ -82,6 +119,7 @@ class ConsistencyReport:
             "screen_source": self.reference.source,
             "val_sharpe": self.val_sharpe,
             "val_trades": self.val_trades,
+            "notes": self.notes,
         }
 
 
@@ -98,7 +136,8 @@ def assess_consistency(
     holdout-only validation), trades are compared as per-day rates.
     """
     report = ConsistencyReport(
-        reference=reference, val_sharpe=val_sharpe, val_trades=val_trades
+        reference=reference, val_sharpe=val_sharpe, val_trades=val_trades,
+        notes=list(reference.notes),
     )
 
     if reference.sharpe > 0 and val_sharpe < 0:
@@ -114,7 +153,9 @@ def assess_consistency(
 
     ref_days = _window_days(reference.start_date, reference.end_date)
     val_days = _window_days(*val_window) if val_window else None
-    if reference.trades > 0 and ref_days and val_days and ref_days != val_days:
+    if reference.skip_trades:
+        pass
+    elif reference.trades > 0 and ref_days and val_days and ref_days != val_days:
         ref_rate = reference.trades / ref_days
         val_rate = val_trades / val_days
         divergence = abs(val_rate - ref_rate) / ref_rate
@@ -262,7 +303,7 @@ def _reference_from_discovery_notes(
     """
     wanted_body = _dsl_body(strategy_dsl) if strategy_dsl else None
     sql = """
-        SELECT br.id, res.notes, br.start_date, br.end_date
+        SELECT br.id, res.notes, br.start_date, br.end_date, br.symbols
         FROM backtest_runs br
         JOIN backtest_results res ON res.run_id = br.id
         WHERE br.run_mode = 'discovery' AND br.status = 'completed'
@@ -274,7 +315,7 @@ def _reference_from_discovery_notes(
     # DSL-known path scans every completed run: no sound SQL prefilter exists
     # for a renamed strategy (hundreds of runs; JSON parse stops at first hit).
     rows = state.conn.execute(sql + " ORDER BY br.id DESC", params)
-    for run_id, notes, run_start, run_end in rows:
+    for run_id, notes, run_start, run_end, run_symbols in rows:
         try:
             payload = json.loads(notes)
         except (TypeError, json.JSONDecodeError):
@@ -305,23 +346,33 @@ def _reference_from_discovery_notes(
                 and isinstance(holdout.get("sharpe"), (int, float))
                 and isinstance(holdout.get("trades"), (int, float))
             ):
+                h_trades, h_skip, h_notes = _worst_mode_trades(
+                    payload, run_symbols, holdout, "trades_sum", int(holdout["trades"])
+                )
                 return ScreeningReference(
                     sharpe=float(holdout["sharpe"]),
-                    trades=int(holdout["trades"]),
+                    trades=h_trades,
                     source=f"discovery_run:{run_id}:holdout",
                     start_date=str(holdout_dates[0]),
                     end_date=str(holdout_dates[1]),
+                    skip_trades=h_skip,
+                    notes=h_notes,
                 )
             # Continuous full-range headline when persisted (bd rewru); the
             # GA aggregate is a mean over sub-windows.
             sharpe = entry.get("full_range_sharpe", entry.get("sharpe"))
             trades = entry.get("full_range_trades", entry.get("trades"))
             if isinstance(sharpe, (int, float)) and isinstance(trades, (int, float)):
+                f_trades, f_skip, f_notes = _worst_mode_trades(
+                    payload, run_symbols, entry, "full_range_trades_sum", int(trades)
+                )
                 return ScreeningReference(
                     sharpe=float(sharpe),
-                    trades=int(trades),
+                    trades=f_trades,
                     source=f"discovery_run:{run_id}",
                     start_date=run_start,
                     end_date=run_end,
+                    skip_trades=f_skip,
+                    notes=f_notes,
                 )
     return None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -20,6 +22,8 @@ class DiscoveryLaunchRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     eval_windows: int = 3  # worst-of-N sub-window fitness + per-window trade gate; 1=single
+    # "worst": each symbol backtested alone, genome scored by its worst symbol
+    symbol_agg: Literal["portfolio", "worst"] = "portfolio"
     # TRAIN fraction; default 0.8 = last 20% is a holdout used once as the final
     # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
     train_test_split: float = 0.8

@@ -60,8 +60,14 @@ def _get_promote_source(parameters: object) -> dict[str, object] | None:
 
 def _load_discovery_metrics(
     state: StateManager, discovery_run_id: int, strategy_index: int
-) -> tuple[float | None, int | None] | None:
-    """Return (discovery_sharpe, discovery_trades) for a genome, or None if unavailable."""
+) -> tuple[float | None, int | None, str | None] | None:
+    """Return (discovery_sharpe, discovery_trades, note) for a genome, or None if unavailable.
+
+    For ``symbol_agg=worst`` multi-symbol runs the stored trades are the MIN
+    symbol while the replay is a portfolio run: ``full_range_trades_sum`` is
+    used when persisted, otherwise trades are None (comparison skipped) and
+    ``note`` says so.
+    """
     result = state.get_backtest_result(discovery_run_id)
     if result is None:
         return None
@@ -90,7 +96,30 @@ def _load_discovery_metrics(
     trades_raw = entry.get("full_range_trades", entry.get("trades"))
     sharpe = float(sharpe_raw) if isinstance(sharpe_raw, (int, float)) else None
     trades = int(trades_raw) if isinstance(trades_raw, (int, float)) else None
-    return sharpe, trades
+    note: str | None = None
+    if notes.get("symbol_agg") == "worst" and _run_symbol_count(state, discovery_run_id) > 1:
+        note = "discovery reference Sharpe = worst symbol (symbol_agg=worst)."
+        total = entry.get("full_range_trades_sum")
+        if isinstance(total, (int, float)):
+            trades = int(total)
+        else:
+            trades = None
+            note += (
+                " trade comparison skipped: stored trades are the MIN per symbol "
+                "(no trades_sum persisted) while the replay is a portfolio run."
+            )
+    return sharpe, trades, note
+
+
+def _run_symbol_count(state: StateManager, run_id: int) -> int:
+    run = state.get_backtest_run(run_id)
+    syms = run.get("symbols") if run else None
+    if isinstance(syms, str):
+        try:
+            syms = json.loads(syms)
+        except json.JSONDecodeError:
+            return 2
+    return len(syms) if isinstance(syms, list) else 2
 
 
 def _load_screening_metrics(
@@ -113,6 +142,7 @@ def _build_drift_payload(
     discovery_trades: int | None,
     screening_sharpe: float | None,
     screening_trades: int | None,
+    worst_reference: bool = False,
 ) -> dict[str, object]:
     """Compute drift ratios + flagged verdict from the four metric values.
 
@@ -126,7 +156,12 @@ def _build_drift_payload(
     trade_ratio = _safe_ratio(screening_trades, discovery_trades)
     sharpe_ratio = _safe_ratio(screening_sharpe, discovery_sharpe)
     trade_flagged = _outside_band(trade_ratio, TRADE_DRIFT_THRESHOLD)
-    sharpe_flagged = _outside_band(sharpe_ratio, SHARPE_DRIFT_THRESHOLD)
+    if worst_reference:
+        # Reference Sharpe is the worst symbol; a healthy portfolio replay is
+        # legitimately ABOVE it, so only flag the downside (incl. sign flips).
+        sharpe_flagged = sharpe_ratio is not None and sharpe_ratio < SHARPE_DRIFT_THRESHOLD
+    else:
+        sharpe_flagged = _outside_band(sharpe_ratio, SHARPE_DRIFT_THRESHOLD)
     return {
         "discovery_sharpe": discovery_sharpe,
         "discovery_trades": discovery_trades,
@@ -213,12 +248,15 @@ def check_replay_drift(state: StateManager, run_id: int) -> dict[str, object] | 
                 discovery_run_id, strategy_index,
             )
             return None
-        discovery_sharpe, discovery_trades = disc_metrics
+        discovery_sharpe, discovery_trades, drift_note = disc_metrics
         screening_sharpe, screening_trades = _load_screening_metrics(state, run_id)
 
         payload = _build_drift_payload(
-            discovery_sharpe, discovery_trades, screening_sharpe, screening_trades
+            discovery_sharpe, discovery_trades, screening_sharpe, screening_trades,
+            worst_reference=drift_note is not None,
         )
+        if drift_note:
+            payload["note"] = drift_note
         _store_drift_payload(state, run_id, payload)
         if payload["flagged"]:
             logger.warning(

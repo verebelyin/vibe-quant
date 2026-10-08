@@ -145,6 +145,7 @@ def compiler_version_hash() -> str:
             "conditions.py",
             "indicators.py",
             "compute_builtins.py",
+            "aux_data.py",
             "derived.py",
             "schema.py",
         )
@@ -799,6 +800,7 @@ class StrategyCompiler:
             "15m": "15-MINUTE",
             "1h": "1-HOUR",
             "4h": "4-HOUR",
+            "1d": "1-DAY",
         }
 
         for tf in sorted(timeframes):
@@ -1072,7 +1074,7 @@ class StrategyCompiler:
         # _feed_pta_buffer + _update_pta_indicators (compute_fn indicators)
         pta_indicators = [i for i in indicators if self._is_pta(i)]
         if pta_indicators:
-            lines.extend(PTA_FEED_LINES)
+            lines.extend(self._feed_lines(pta_indicators))
             lines.append("")
             lines.extend(self._generate_update_pta_indicators(pta_indicators))
             lines.append("")
@@ -1173,6 +1175,7 @@ class StrategyCompiler:
         "15m": 15,
         "1h": 60,
         "4h": 240,
+        "1d": 1440,
     }
 
     def _primary_helper_call(self, info: IndicatorInfo) -> str:
@@ -1364,6 +1367,29 @@ class StrategyCompiler:
         """True when the indicator runs on the compute_fn (pandas) path."""
         return info.spec.nt_class is None and info.spec.compute_fn is not None
 
+    @staticmethod
+    def _has_context(infos: list[IndicatorInfo]) -> bool:
+        """True when any compute_fn indicator needs aux context (FUNDING, ...)."""
+        return any(i.spec.needs_context for i in infos)
+
+    def _feed_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
+        """``_feed_pta_buffer`` source; context strategies also buffer bar close times."""
+        if not self._has_context(pta_infos):
+            return list(PTA_FEED_LINES)
+        out: list[str] = []
+        for line in PTA_FEED_LINES:
+            out.append(line)
+            if line.startswith("    _buf[\"volume\"]"):
+                out.extend(
+                    [
+                        "    # Bar close time (ts_init rounded to the timeframe boundary) for",
+                        "    # needs_context indicators (aux data is looked up as-of close).",
+                        "    _step = self._pta_step_ns[tf]",
+                        '    _buf["close_ns"].append(((bar.ts_init + _step // 2) // _step) * _step)',
+                    ]
+                )
+        return out
+
     def _generate_pta_init(self, pta_infos: list[IndicatorInfo]) -> list[str]:
         """``__init__`` state for compute_fn-path indicators.
 
@@ -1375,15 +1401,28 @@ class StrategyCompiler:
           runtime via the same helpers the compiler uses.
         """
         tfs = sorted({i.timeframe for i in pta_infos})
+        ctx = self._has_context(pta_infos)
         lines = [
             "        # compute_fn (pandas) indicators: one OHLCV bar buffer per timeframe",
-            "        self._pta_bufs: dict[str, dict[str, list[float]]] = {",
+            "        self._pta_bufs: dict[str, dict[str, list[float]]] = {"
+            if not ctx
+            else "        self._pta_bufs: dict[str, dict[str, list]] = {",
         ]
         for tf in tfs:
+            extra = ', "close_ns": []' if ctx else ""
             lines.append(
-                f'            "{tf}": {{"open": [], "high": [], "low": [], "close": [], "volume": []}},'
+                f'            "{tf}": {{"open": [], "high": [], "low": [], "close": [], "volume": []{extra}}},'
             )
         lines.append("        }")
+        if ctx:
+            lines.append("        self._pta_step_ns: dict[str, int] = {")
+            for tf in tfs:
+                minutes = self._TIMEFRAME_MINUTES.get(tf)
+                if minutes is None:
+                    msg = f"No bar length for timeframe '{tf}' (context indicator buffer)"
+                    raise CompilerError(msg)
+                lines.append(f'            "{tf}": {minutes * 60_000_000_000},')
+            lines.append("        }")
         lines.append("        self._pta_values: dict[str, float] = {}")
         lines.append("        # compute_fn params come from config so sweep/WFA overrides apply")
         lines.append("        self._pta_params: dict[str, dict[str, object]] = {")
@@ -1433,6 +1472,7 @@ class StrategyCompiler:
         ]
 
         tfs = sorted({i.timeframe for i in pta_indicators})
+        has_ctx = self._has_context(pta_indicators)
         for idx, tf in enumerate(tfs):
             kw = "if" if idx == 0 else "elif"
             lines.append(f'    {kw} tf == "{tf}":')
@@ -1453,6 +1493,9 @@ class StrategyCompiler:
                     f'{ind}        _df = pd.DataFrame({{"open": _buf["open"], "high": _buf["high"], '
                     '"low": _buf["low"], "close": _buf["close"], "volume": _buf["volume"]})'
                 )
+                if has_ctx:
+                    lines.append(f'{ind}        _df.attrs["bar_close_ns"] = _buf["close_ns"]')
+                    lines.append(f'{ind}        _df.attrs["symbol"] = self.config.instrument_id')
                 lines.append(f'{ind}    _res = {fn_name}(_df, self._pta_params["{info.name}"])')
 
                 if len(spec.output_names) > 1:

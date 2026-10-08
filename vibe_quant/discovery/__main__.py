@@ -59,7 +59,11 @@ def _get_compiler_version() -> str:
 # processes can unpickle it. When this file is loaded as ``__main__``
 # (via ``python -m vibe_quant.discovery``), classes defined here would
 # pickle with ``__module__='__main__'`` — workers can't resolve that.
-from vibe_quant.discovery.backtest_fn import NTBacktestFn, full_range_headline  # noqa: E402
+from vibe_quant.discovery.backtest_fn import (  # noqa: E402
+    NTBacktestFn,
+    SymbolAgg,
+    full_range_headline,
+)
 
 
 def _make_nt_backtest_fn(
@@ -69,10 +73,13 @@ def _make_nt_backtest_fn(
     end_date: str,
     windows: list[tuple[str, str]] | None = None,
     min_trades: int = 0,
+    symbol_agg: SymbolAgg = "portfolio",
+    symbol_early_exit: bool = False,
 ) -> NTBacktestFn:
     """Create a picklable backtest function using real NautilusTrader screening runner."""
     return NTBacktestFn(
         symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
+        symbol_agg=symbol_agg, symbol_early_exit=symbol_early_exit,
     )
 
 
@@ -503,6 +510,7 @@ def _run_provenance_notes(
     use_mock: bool,
     eval_windows_count: int,
     eval_windows: list[tuple[str, str]] | None,
+    symbol_agg: str,
     split_ratio: float,
     direction: str | None,
     cross_window_months: list[int],
@@ -528,6 +536,8 @@ def _run_provenance_notes(
         "eval_windows": eval_windows_count if eval_windows_count > 1 else None,
         "eval_window_aggregation": "worst_of_n" if eval_windows_count > 1 else None,
         "eval_window_ranges": eval_windows if eval_windows else None,
+        # "worst": each symbol scored alone, genome keeps its worst symbol.
+        "symbol_agg": symbol_agg,
         "train_test_split": split_ratio if split_ratio > 0 else None,
         "train_dates": list(result.train_dates) if result.train_dates else None,
         "holdout_dates": list(result.holdout_dates) if result.holdout_dates else None,
@@ -594,6 +604,15 @@ def build_parser() -> argparse.ArgumentParser:
         "the min-trades gate) and every window needs >= max(1, min_trades // (2N)) "
         "trades. Forces regime-robust strategies (default: 3; pass 1 for a "
         "single window).",
+    )
+    parser.add_argument(
+        "--symbol-agg",
+        choices=["portfolio", "worst"],
+        default="portfolio",
+        help="Multi-symbol scoring: 'portfolio' = one shared-account backtest "
+        "over all symbols (default); 'worst' = each symbol backtested alone and "
+        "the genome scored by its worst symbol (min Sharpe/return/PF, max DD, "
+        "MIN trades per symbol) so no single symbol can carry the rest.",
     )
     parser.add_argument(
         "--train-test-split",
@@ -824,6 +843,7 @@ def main() -> int:
             indicator_pool=ind_pool,
             direction=args.direction,
             eval_windows=eval_windows_count,
+            symbol_agg=args.symbol_agg,
             train_test_split=split_ratio,
             holdout_start_date=holdout_start or "",
             holdout_end_date=holdout_end or "",
@@ -877,6 +897,8 @@ def main() -> int:
                 end_date=train_end,
                 windows=eval_windows,
                 min_trades=config.min_trades,
+                symbol_agg=args.symbol_agg,
+                symbol_early_exit=True,  # GA fn only; see NTBacktestFn
             )
 
         # Create holdout backtest function if train/test split enabled
@@ -890,6 +912,7 @@ def main() -> int:
                     timeframe=args.timeframe,
                     start_date=holdout_start,
                     end_date=holdout_end,
+                    symbol_agg=args.symbol_agg,
                 )
         elif split_ratio <= 0:
             logger.warning(
@@ -905,9 +928,10 @@ def main() -> int:
             else:
                 _syms = symbols
                 _tf = args.timeframe
+                _agg: SymbolAgg = args.symbol_agg
 
                 def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
-                    return NTBacktestFn(_syms, _tf, s, e)
+                    return NTBacktestFn(_syms, _tf, s, e, symbol_agg=_agg)
 
         # Load seed chromosomes from prior run if requested
         seed_chromosomes = None
@@ -966,6 +990,7 @@ def main() -> int:
             use_mock=use_mock,
             eval_windows_count=eval_windows_count,
             eval_windows=eval_windows,
+            symbol_agg=args.symbol_agg,
             split_ratio=split_ratio,
             direction=args.direction,
             cross_window_months=cross_window_months,
@@ -1045,13 +1070,18 @@ def main() -> int:
         # check compares like-for-like. Skip the extra backtest only when fitness
         # already IS that continuous full-range metric (single window, no split) or
         # in mock mode. Bounded cost: top-K champions, once each, at save time.
-        needs_full_range = not use_mock and (eval_windows_count >= 2 or split_ratio > 0)
+        worst_multi = args.symbol_agg == "worst" and len(symbols) > 1
+        # worst mode always needs the run: it carries trades_sum/symbol_metrics
+        needs_full_range = not use_mock and (
+            eval_windows_count >= 2 or split_ratio > 0 or worst_multi
+        )
         full_range_fn = (
             _make_nt_backtest_fn(
                 symbols=symbols,
                 timeframe=args.timeframe,
                 start_date=args.start_date,
                 end_date=args.end_date,
+                symbol_agg=args.symbol_agg,
             )
             if needs_full_range
             else None
@@ -1101,6 +1131,9 @@ def main() -> int:
                     "trades": hr.total_trades,
                     "return_pct": hr.total_return,
                 }
+                if hr.trades_sum is not None:
+                    entry["holdout"]["trades_sum"] = hr.trades_sum  # type: ignore[index]
+                    entry["holdout"]["symbol_metrics"] = hr.symbol_metrics  # type: ignore[index]
             # Attach cross-window results if available
             if idx < len(result.cross_window_results):
                 entry["cross_window"] = cross_window_entry(result.cross_window_results[idx])
@@ -1122,6 +1155,7 @@ def main() -> int:
                     timeframe=args.timeframe,
                     start_date=result.train_dates[0],
                     end_date=result.train_dates[1],
+                    symbol_agg=args.symbol_agg,
                 )(best_chrom)
                 train_return = float(train_metrics.get("total_return", 0.0))
             else:

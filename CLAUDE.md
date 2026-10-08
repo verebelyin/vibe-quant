@@ -212,9 +212,11 @@ before delegating; `cmd` runs `--yolo`, so writes go in a disposable worktree.
 Valid proofs that a change preserved correctness:
 - **Fixed-strategy eval before/after** (`scripts/agents/exactness_239.py`): one `NTScreeningRunner` call on a saved strategy must
   return bit-identical metrics (strategy 239, BTCUSDT 2024-01-01..2026-03-17: sharpe
-  `1.3165049716553048`, 68 trades since the 2026-10-03 audit fixes; was `1.3420101065837169`).
+  `1.3169239785208688`, 68 trades since the 2026-10-08 data refresh filled a BTC funding hole —
+  bars unchanged, funding only; `1.3165049716553048` after the 2026-10-03 audit fixes).
 - **Validation repeatability**: the same validation run twice is bit-identical (strategy 239
-  since 2026-10-03: sharpe `0.7802305953007851`, 67 trades; runs 868 == 870 before). Any drift = regression.
+  since the 2026-10-08 data refresh: sharpe `0.780452281957465`, 67 trades; `0.7802305953007851` after
+  the 2026-10-03 audit fixes; runs 868 == 870 before). Any drift = regression.
 - **Within-run replay**: discovery champion → `/replay` matches exactly when the run used
   `eval_windows=1`.
 - Zero-tolerance unit tests against the reference implementation for ported math.

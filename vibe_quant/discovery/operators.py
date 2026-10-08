@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from vibe_quant.discovery.genome import IndicatorDef
+
 # ---------------------------------------------------------------------------
 # Indicator pool -- canonical source is genome.INDICATOR_POOL (IndicatorDef).
 # This flat dict is derived at import time for operators that only need
@@ -23,10 +25,21 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _full_genome_pool() -> dict[str, IndicatorDef]:
+    """Genome pool incl. needs_context specs (FUNDING, ...).
+
+    The pipeline's indicator_pool filter drops context specs unless they are
+    requested by name, so the default (None = all) still excludes them.
+    """
+    from vibe_quant.discovery.genome import build_indicator_pool
+
+    return dict(build_indicator_pool(include_context=True))
+
+
 def _build_indicator_pool() -> dict[str, dict[str, tuple[float, float]]]:
     """Build flat indicator pool from genome's IndicatorDef objects + extras."""
     # Lazy import to avoid circular dependency (genome imports from operators)
-    from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
+    _GENOME_POOL = _full_genome_pool()
 
     pool: dict[str, dict[str, tuple[float, float]]] = {
         name: dict(ind_def.param_ranges) for name, ind_def in _GENOME_POOL.items()
@@ -68,10 +81,9 @@ def _ensure_pool() -> None:
         from vibe_quant.discovery.genome import MA_POOL
         _MA_NAMES.extend(MA_POOL.keys())
     if not _INT_PARAMS:
-        from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
         from vibe_quant.discovery.genome import MA_POOL as _MA_POOL
 
-        for name, ind_def in _GENOME_POOL.items():
+        for name, ind_def in _full_genome_pool().items():
             _INT_PARAMS[name] = ind_def.int_params
             _PARAM_DEFAULTS[name] = dict(ind_def.default_params)
         for name, ma_def in _MA_POOL.items():
@@ -379,9 +391,7 @@ def _enforce_param_constraints(indicator_type: str, params: dict[str, float]) ->
 # extras (CCI, WILLR, etc.) are defined here directly.
 def _build_threshold_ranges() -> dict[str, tuple[float, float]]:
     """Build threshold ranges: derive from INDICATOR_POOL + manual extras."""
-    from vibe_quant.discovery.genome import INDICATOR_POOL as _GENOME_POOL
-
-    ranges = {name: defn.default_threshold_range for name, defn in _GENOME_POOL.items()}
+    ranges = {name: defn.default_threshold_range for name, defn in _full_genome_pool().items()}
     return ranges
 
 

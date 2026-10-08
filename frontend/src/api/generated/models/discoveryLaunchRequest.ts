@@ -4,6 +4,7 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { DiscoveryLaunchRequestSymbolAgg } from './discoveryLaunchRequestSymbolAgg';
 
 export interface DiscoveryLaunchRequest {
   population?: number;
@@ -20,6 +21,7 @@ export interface DiscoveryLaunchRequest {
   start_date?: string | null;
   end_date?: string | null;
   eval_windows?: number;
+  symbol_agg?: DiscoveryLaunchRequestSymbolAgg;
   train_test_split?: number;
   cross_window_months?: number[] | null;
   cross_window_min_sharpe?: number;

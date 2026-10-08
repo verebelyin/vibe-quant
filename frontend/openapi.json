@@ -5841,6 +5841,15 @@
             "title": "Eval Windows",
             "default": 3
           },
+          "symbol_agg": {
+            "type": "string",
+            "enum": [
+              "portfolio",
+              "worst"
+            ],
+            "title": "Symbol Agg",
+            "default": "portfolio"
+          },
           "train_test_split": {
             "type": "number",
             "title": "Train Test Split",

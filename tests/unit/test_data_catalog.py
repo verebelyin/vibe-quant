@@ -16,10 +16,13 @@ from nautilus_trader.model.objects import Price, Quantity
 
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.data.catalog import (
+    INSTRUMENT_CONFIGS,
     aggregate_bars,
+    create_instrument,
     get_bar_type,
     klines_to_bars,
 )
+from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 
 
 @pytest.fixture
@@ -435,3 +438,37 @@ class TestGetBarType:
         bar_type = get_bar_type("ETHUSDT", "5m")
         assert str(bar_type.instrument_id.symbol) == "ETHUSDT-PERP"
         assert str(bar_type.instrument_id.venue) == "BINANCE"
+
+
+def _decimal_places(increment: str) -> int:
+    """Decimals of a normalised increment string ('0.01' -> 2, '1' -> 0)."""
+    return len(increment.partition(".")[2])
+
+
+class TestInstrumentConfigs:
+    """Every configured symbol must build a valid instrument with consistent precisions."""
+
+    def test_all_instrument_configs_build(self) -> None:
+        """Each INSTRUMENT_CONFIGS entry builds an instrument whose precisions match its increments."""
+        assert "BNBUSDT" in INSTRUMENT_CONFIGS
+        assert "BNBUSDT" in SUPPORTED_SYMBOLS
+
+        for symbol, config in INSTRUMENT_CONFIGS.items():
+            instrument = create_instrument(symbol)
+
+            assert str(instrument.id.symbol) == f"{symbol}-PERP"
+            assert instrument.price_precision == config["price_precision"]
+            assert instrument.size_precision == config["size_precision"]
+            assert _decimal_places(config["price_increment"]) == config["price_precision"]
+            assert _decimal_places(config["size_increment"]) == config["size_precision"]
+
+    def test_bnbusdt_matches_binance_filters(self) -> None:
+        """BNBUSDT tick/step mirror fapi/v1/exchangeInfo (tickSize 0.010, stepSize 0.01)."""
+        config = INSTRUMENT_CONFIGS["BNBUSDT"]
+
+        assert config["base"] == "BNB"
+        assert config["quote"] == "USDT"
+        assert config["price_increment"] == "0.01"
+        assert config["price_precision"] == 2
+        assert config["size_increment"] == "0.01"
+        assert config["size_precision"] == 2

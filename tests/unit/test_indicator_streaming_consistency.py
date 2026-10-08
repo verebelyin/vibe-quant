@@ -37,9 +37,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 # Indicators that ship a pure-Python compute path. nt_class-only specs stream
-# natively through NT and have no compute_fn to exercise here.
+# natively through NT and have no compute_fn to exercise here. needs_context
+# specs (FUNDING, ...) take aux data via df.attrs, not bare OHLCV; their
+# as-of causality is covered in test_aux_context.py.
 _COMPUTE_FN_NAMES = sorted(
-    spec.name for spec in indicator_registry.all_specs() if spec.compute_fn is not None
+    spec.name
+    for spec in indicator_registry.all_specs()
+    if spec.compute_fn is not None and not spec.needs_context
 )
 
 # Sampled bar labels + look-ahead horizons. Labels sit well past every built-in

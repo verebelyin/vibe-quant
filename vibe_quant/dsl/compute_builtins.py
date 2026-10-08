@@ -158,12 +158,162 @@ def compute_volsma(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     return cast("pd.Series", _ta().sma(df["volume"], length=int_param(params, "period", 20)))
 
 
-def compute_adx(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
-    """ADX — pandas-ta returns a DataFrame with ADX/DMP/DMN; surface just ADX."""
-    result = _ta().adx(df["high"], df["low"], df["close"], length=int_param(params, "period", 14))
+def _rma_np(x: Any, length: int) -> Any:
+    """Port of ``pandas_ta_classic.rma`` (SMA-seeded Wilder smoothing).
+
+    Operation-for-operation with pandas: NaN-skipping seed mean (sum of
+    NaN->0 slots / non-NaN count), then ``ewm(alpha, adjust=False)`` with
+    ``ignore_na=False`` as in pandas' cython ``ewm`` (alpha re-derived via
+    com, interior NaN decays the old weight). Requires ``len(x) >= length``.
+
+    The blend uses a fused multiply-add: pandas' arm64 wheel compiles
+    ``old_wt * weighted + new_wt * cur`` with FMA contraction (verified bitwise
+    on this platform). x86 wheels may not contract; the exactness test would
+    flag it there.
+    """
+    from math import fma
+
+    import numpy as np
+
+    n = len(x)
+    seed_win = x[:length]
+    nan_mask = np.isnan(seed_win)
+    count = length - int(nan_mask.sum())
+    seed = float(np.where(nan_mask, 0.0, seed_win).sum() / count) if count else float("nan")
+    vals = x.tolist()
+    for i in range(length - 1):
+        vals[i] = float("nan")
+    vals[length - 1] = seed
+    base = 1.0 / length
+    com = (1.0 - base) / base  # pandas get_center_of_mass(alpha)
+    alpha = 1.0 / (1.0 + com)
+    factor = 1.0 - alpha
+    s = length - 1
+    if seed == seed and not np.isnan(x[length:]).any():
+        # Fast path (no NaN after the seed): every step is an observation with
+        # old_wt == factor, so the general loop below reduces to this recurrence.
+        denom = factor + alpha
+        w = seed
+        out = [float("nan")] * s
+        out.append(w)
+        append = out.append
+        for c in vals[length:]:
+            if w != c:
+                w = fma(factor, w, alpha * c) / denom
+            append(w)
+        return np.array(out, dtype=np.float64)
+    out = [float("nan")] * n
+    weighted = vals[0]
+    old_wt = 1.0
+    out[0] = weighted
+    for i in range(1, n):
+        cur = vals[i]
+        obs = cur == cur
+        if weighted == weighted:
+            old_wt *= factor
+            if obs:
+                if weighted != cur:
+                    weighted = fma(old_wt, weighted, alpha * cur)
+                    weighted /= old_wt + alpha
+                old_wt = 1.0
+        elif obs:
+            weighted = cur
+        out[i] = weighted
+    return np.array(out, dtype=np.float64)
+
+
+def _adx_pandas(df: pd.DataFrame, length: int) -> pd.Series:
+    """Reference path: the pandas-ta-classic ADX column (the pre-port code)."""
+    result = _ta().adx(df["high"], df["low"], df["close"], length=length)
     if result is None:
         return nan_like(df)
     return cast("pd.Series", result.iloc[:, 0])
+
+
+@cache
+def _adx_port_ok() -> bool:
+    """One-shot runtime check that the numpy port is bit-identical here.
+
+    The port relies on pandas' compiled ``ewm`` contracting the blend into an
+    FMA (true on pandas 3.0.3 arm64 wheels). Other platforms or pandas versions
+    may differ by ~1 ulp per step, so verify once per process and fall back to
+    the pandas path (with a warning) on any mismatch.
+    """
+    import logging
+
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.RandomState(12345)
+    close = 100.0 + np.cumsum(rng.randn(120) * 0.5)
+    high = close + np.abs(rng.randn(120)) * 0.4
+    low = close - np.abs(rng.randn(120)) * 0.4
+    high[40:60] = low[40:60] = close[40:60] = close[40]  # flat stretch
+    high[80] = np.nan
+    df = pd.DataFrame({"high": high, "low": low, "close": close})
+    ref = _adx_pandas(df, 14).to_numpy()
+    ok = bool(np.array_equal(_adx_port(df, 14).to_numpy(), ref, equal_nan=True))
+    if not ok:
+        logging.getLogger(__name__).warning(
+            "numpy ADX port differs from pandas-ta here (FMA/pandas version); "
+            "falling back to the slower pandas path"
+        )
+    return ok
+
+
+def compute_adx(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+    """ADX — bit-identical numpy port of ``pandas_ta_classic.adx`` (ADX column).
+
+    Falls back to pandas-ta for non-float64 input or if the one-shot
+    self-check (``_adx_port_ok``) fails on this platform.
+    """
+    length = int_param(params, "period", 14)
+    if any(df[c].dtype != "float64" for c in ("high", "low", "close")) or not _adx_port_ok():
+        return _adx_pandas(df, length)
+    return _adx_port(df, length if length > 0 else 14)
+
+
+def _adx_port(df: pd.DataFrame, length: int) -> pd.Series:
+    """Numpy port: true_range -> rma ATR, +DM/-DM via rma, dx, rma(dx); see
+    ``tests/unit/test_plugins/test_adx_exactness.py``. Any arithmetic change
+    must keep that test (zero tolerance) green.
+    """
+    import numpy as np
+    import pandas as pd
+
+    n = len(df)
+    name = f"ADX_{length}"
+    if n < length:
+        return nan_like(df)
+    eps = float(np.finfo(np.float64).eps)
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+    nan = np.full(1, np.nan)
+    with np.errstate(all="ignore"):
+        hl = high - low
+        if (hl == 0).any():
+            hl = hl + eps
+        prev_close = np.concatenate((nan, close[:-1]))
+        tr = np.fmax(np.fmax(np.abs(hl), np.abs(high - prev_close)), np.abs(prev_close - low))
+        tr[0] = np.nan
+        atr = _rma_np(tr, length)
+
+        prev_high = np.concatenate((nan, high[:-1]))
+        prev_low = np.concatenate((nan, low[:-1]))
+        up = high - prev_high
+        dn = prev_low - low
+        pos = ((up > dn) & (up > 0)).astype(np.float64) * up
+        neg = ((dn > up) & (dn > 0)).astype(np.float64) * dn
+        pos = np.where(np.abs(pos) < eps, 0.0, pos)
+        neg = np.where(np.abs(neg) < eps, 0.0, neg)
+
+        k = 100.0 / atr
+        dmp = k * _rma_np(pos, length)
+        dmn = k * _rma_np(neg, length)
+        dx = 100.0 * np.abs(dmp - dmn) / (dmp + dmn)
+        adx = _rma_np(dx, length)
+    return pd.Series(adx, index=df.index, name=name)
 
 
 # ---------------------------------------------------------------------------

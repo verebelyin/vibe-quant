@@ -61,6 +61,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables it.
   const [trainTestSplit, setTrainTestSplit] = useState(0.8);
   const [numSeeds, setNumSeeds] = useState(1);
+  const [symbolAgg, setSymbolAgg] = useState<"portfolio" | "worst">("portfolio");
   const [wfaOosStepDays, setWfaOosStepDays] = useState(0);
   const [wfaMinConsistency, setWfaMinConsistency] = useState(0.75);
   const [crossWindowMonths, setCrossWindowMonths] = useState("");
@@ -180,6 +181,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           eval_windows: evalWindows,
           train_test_split: trainTestSplit,
           num_seeds: numSeeds,
+          ...(symbolAgg === "worst" && { symbol_agg: symbolAgg }),
           wfa_oos_step_days: wfaOosStepDays,
           wfa_min_consistency: wfaMinConsistency,
           ...(parsedCrossWindowMonths.length > 0 && {
@@ -471,6 +473,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               evalWindows !== 3 ||
               trainTestSplit !== 0.8 ||
               numSeeds !== 1 ||
+              symbolAgg !== "portfolio" ||
               wfaOosStepDays !== 0 ||
               parsedCrossWindowMonths.length > 0 ||
               immigrantFraction !== 0.15 ||
@@ -551,6 +554,26 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 />
                 <p className="text-[10px] text-muted-foreground">
                   Replay a run: paste its seed (multi-seed: base seed; also match num_seeds).
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="symbol-agg">Symbol scoring</Label>
+                <Select
+                  value={symbolAgg}
+                  onValueChange={(v) =>
+                    setSymbolAgg(v as "portfolio" | "worst")
+                  }
+                >
+                  <SelectTrigger id="symbol-agg" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="portfolio">Portfolio (default)</SelectItem>
+                    <SelectItem value="worst">Worst symbol</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Worst symbol: each coin backtested alone, scored by the weakest — stricter, costs ×N symbols.
                 </p>
               </div>
               <div className="space-y-2">

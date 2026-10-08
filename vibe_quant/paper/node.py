@@ -171,6 +171,27 @@ class OrderDeniedError(Exception):
     """NT RiskEngine denied an order."""
 
 
+def reject_context_indicators(dsl: StrategyDSL) -> None:
+    """Refuse strategies using ``needs_context`` indicators (FUNDING, ...).
+
+    Their aux data comes from the historical archive; there is no live feed.
+    """
+    from vibe_quant.dsl.indicators import indicator_registry
+
+    bad = sorted(
+        {
+            cfg.type
+            for cfg in dsl.indicators.values()
+            if (spec := indicator_registry.get(cfg.type)) is not None and spec.needs_context
+        }
+    )
+    if bad:
+        raise ConfigurationError(
+            f"Paper trading does not support context indicators ({', '.join(bad)}): "
+            "they read archived data with no live feed"
+        )
+
+
 def _ns_to_dt(ns: int) -> datetime:
     return datetime.fromtimestamp(ns / 1_000_000_000, tz=UTC)
 
@@ -395,6 +416,7 @@ class PaperTradingNode:
         except Exception as e:
             raise ConfigurationError(f"Invalid strategy DSL: {e}") from e
 
+        reject_context_indicators(dsl)
         return dsl
 
     def _compile_strategy(self, dsl: StrategyDSL) -> ModuleType:

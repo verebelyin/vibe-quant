@@ -610,6 +610,12 @@ sweep:
 
 **Plugin extension**: Custom indicators can be added by dropping a `.py` file in `vibe_quant/dsl/plugins/`. Each plugin registers an `IndicatorSpec` declaring its `compute_fn`, parameter metadata, and GA enrollment fields. The compiler, schema validator, GA pool, and frontend catalog all read from the live `indicator_registry` — no per-indicator edits required. See `vibe_quant/dsl/plugins/README.md` for the full API.
 
+**Context indicators (`needs_context`)**: a spec with `needs_context=True` reads non-OHLCV data instead of only the bar buffer. The compiler then also buffers each bar's close time (`ts_init` rounded to the timeframe boundary) and hands `compute_fn` a DataFrame with `attrs["bar_close_ns"]` and `attrs["symbol"]`; strategies without such an indicator compile to byte-identical source. Data is looked up as-of the bar close through `vibe_quant/dsl/aux_data.py`, which screening/validation configure in-process (archive path, no StrategyConfig fields). Built-ins:
+- `FUNDING` (`period`, default 1): last settled perpetual funding rate in bps (mean of the last `period` settlements if > 1).
+- `FUNDING_Z` (`period`, default 30): z-score of the rate over the last `period` 8h settlements, computed on the full settlement series (not the bar buffer).
+
+Archived settlement times are snapped to the 8h boundary (ms jitter) before the as-of lookup: the 08:00 bar sees the 08:00 settlement, a bar closing 07:59:59.999 sees 00:00. Coverage is enforced by a run-level preflight (screening and validation, with the run window) that raises `AuxDataUnavailableError` (a `DataUnavailableError`, never masked as a -inf result) when the archive is missing, has no funding for the symbol, starts more than 3 days after the window start (warmup allowance) or ends before `end - 16h`. Inside the run, per-bar lookups return NaN (never raise, since NT swallows `on_bar` errors) before the first settlement and when the last settlement is more than two funding periods old (archive holes are not forward-filled). Context indicators are excluded from the default GA pool, and paper/live trading refuses strategies using them (no live feed).
+
 ### Condition Operators
 
 ```
@@ -1838,6 +1844,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
    - Complexity penalty prevents bloated strategies
    - DSR applied to entire discovery run (accounts for total candidates tested)
    - Walk-Forward required for final candidates before promotion
+   - Multi-symbol scoring (`--symbol-agg`, API `symbol_agg`): `portfolio` (default) runs ONE shared-account backtest over all symbols, so one symbol can carry the rest; `worst` (opt-in) backtests each symbol alone (all eval windows per symbol) and scores the genome by its worst symbol: min Sharpe / return / PF, max drawdown, MIN trades across symbols (so `min_trades` applies per symbol), bootstrap trade returns concatenated. Evaluation stops early once one symbol already guarantees fitness 0. The same mode is used by every backtest fn of the run (GA, holdout, full-range headline, cross-window, WFA) and is recorded in the run notes as `symbol_agg`; a replay of such a run is a portfolio backtest and carries a `metrics_note`. Single-symbol runs are identical in both modes. In worst mode the overtrade penalty and `min_trades` use the min-symbol trade count; the across-symbol early exit applies only to the GA fitness fn (holdout, full-range, cross-window and WFA fns compute every symbol). Worst-mode `full_range`/`holdout` entries also persist `*trades_sum` and per-symbol `symbol_metrics`; validation consistency and replay-drift compare trades against `trades_sum` (skipped, with a note, for legacy notes without it) because validation/replay are portfolio runs, and read the reference Sharpe as the worst symbol.
 
 ### Acceptance Criteria
 

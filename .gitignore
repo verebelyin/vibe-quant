@@ -97,3 +97,4 @@ uv.lock
 
 # Multi-agent orchestration job workspaces (docs/orchestration)
 data/swarm/
+data/*.bak-*/

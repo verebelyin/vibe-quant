@@ -22,7 +22,7 @@ BINANCE_VISION_BASE = "https://data.binance.vision/data/futures/um/monthly/kline
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
 # Supported symbols (USDT-M perpetuals)
-SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
 
 
 def download_monthly_klines(
@@ -101,6 +101,18 @@ def download_monthly_klines(
             client.close()
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    """Parse an API numeric field, falling back to *default* when blank.
+
+    Binance returns "" for missing numeric fields on older records.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str) and not value.strip():
+        return default
+    return float(value)
+
+
 def download_funding_rates(
     symbol: str,
     start_time: int,
@@ -120,6 +132,8 @@ def download_funding_rates(
     """
     url = f"{BINANCE_FUTURES_API}/fapi/v1/fundingRate"
     all_rates: list[tuple[Any, ...]] = []
+    skipped = 0
+    limit = 1000  # Max limit
 
     with httpx.Client(timeout=timeout) as client:
         current_start = start_time
@@ -129,7 +143,7 @@ def download_funding_rates(
                 "symbol": symbol,
                 "startTime": current_start,
                 "endTime": end_time,
-                "limit": 1000,  # Max limit
+                "limit": limit,
             }
 
             try:
@@ -149,16 +163,27 @@ def download_funding_rates(
                 break
 
             for item in data:
+                raw_rate = item.get("fundingRate")
+                if raw_rate is None or (isinstance(raw_rate, str) and not raw_rate.strip()):
+                    skipped += 1
+                    continue
                 all_rates.append(
                     (
                         item["fundingTime"],
-                        float(item["fundingRate"]),
-                        float(item.get("markPrice", 0)),
+                        float(raw_rate),
+                        _to_float(item.get("markPrice")),
                     )
                 )
 
+            # A short page means there are no more records in the window
+            if len(data) < limit:
+                break
+
             # Move start time past the last received rate
             current_start = data[-1]["fundingTime"] + 1
+
+    if skipped:
+        logger.warning("skipped %d funding records with empty fundingRate", skipped)
 
     return all_rates
 

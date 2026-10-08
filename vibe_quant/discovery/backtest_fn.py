@@ -10,12 +10,22 @@ multiprocessing worker entrypoint, not the discovery CLI).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
+from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 logger = logging.getLogger(__name__)
+
+SymbolAgg = Literal["portfolio", "worst"]
+
+
+def _finite_or_none(value: float | int) -> float | None:
+    """NaN/inf -> None so persisted JSON stays valid."""
+    v = float(value)
+    return v if v == v and v not in (float("inf"), float("-inf")) else None
 
 
 class NTBacktestFn:
@@ -29,6 +39,13 @@ class NTBacktestFn:
     :meth:`_aggregate_multi_window`. This forces the GA to find
     regime-robust strategies instead of one great window averaging out
     two losing ones (vibe-quant-e70tl.6).
+
+    ``symbol_agg="worst"`` (opt-in, vibe-quant-kzowb) evaluates each symbol
+    as its own single-symbol backtest (all windows per symbol) and scores the
+    genome by its worst symbol; the default ``"portfolio"`` runs one
+    shared-account backtest over all symbols. One symbol cannot carry the rest
+    in worst mode, and ``total_trades`` is the MIN across symbols so the
+    min-trades gate applies per symbol.
     """
 
     def __init__(
@@ -39,6 +56,8 @@ class NTBacktestFn:
         end_date: str,
         windows: list[tuple[str, str]] | None = None,
         min_trades: int = 0,
+        symbol_agg: SymbolAgg = "portfolio",
+        symbol_early_exit: bool = False,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
@@ -47,12 +66,18 @@ class NTBacktestFn:
         self.windows = windows
         # Global min-trades gate of the run; drives the per-window gate.
         self.min_trades = min_trades
+        self.symbol_agg = symbol_agg
+        # Stop across symbols once fitness is certain 0. Only the GA fn sets
+        # this: every other fn (holdout, full-range, train-return, cross-window,
+        # WFA) persists/compares its metrics, so it must compute real values.
+        self.symbol_early_exit = symbol_early_exit
 
     def _run_single(
         self,
         chromosome: StrategyChromosome,
         start_date: str,
         end_date: str,
+        symbols: list[str] | None = None,
     ) -> dict[str, float | int]:
         from vibe_quant.discovery.genome import chromosome_to_dsl
         from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -62,7 +87,7 @@ class NTBacktestFn:
 
         runner = NTScreeningRunner(
             dsl_dict=dsl_dict,
-            symbols=self.symbols,
+            symbols=self.symbols if symbols is None else symbols,
             start_date=start_date,
             end_date=end_date,
         )
@@ -152,15 +177,137 @@ class NTBacktestFn:
             "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
         }
 
+    @staticmethod
+    def _early_exit_result(
+        results: list[dict[str, float | int]], window_idx: int, low_trades: bool
+    ) -> dict[str, float | int]:
+        """Failure metrics (fitness 0) after stopping at window ``window_idx``.
+
+        ``total_trades``/``window_trades`` cover only the windows actually run;
+        ``early_exit`` marks the stopping window. For a return <= 0 stop the
+        window's real return/Sharpe are kept (progress display; the fitness
+        gate zeroes the score); for a trade-gate stop return stays 0 as in
+        :meth:`_aggregate_multi_window`.
+        """
+        per_window_trades = [int(r["total_trades"]) for r in results]
+        last = results[window_idx]
+        keep = not low_trades
+        return {
+            "sharpe_ratio": float(last["sharpe_ratio"]) if keep else -1.0,
+            "max_drawdown": 1.0,
+            "profit_factor": 0.0,
+            "total_trades": sum(per_window_trades),
+            "total_return": float(last.get("total_return", 0.0)) if keep else 0.0,
+            "window_trades": tuple(per_window_trades),  # type: ignore[dict-item]
+            "early_exit": window_idx,
+        }
+
+    def _eval_symbols(
+        self, chromosome: StrategyChromosome, symbols: list[str] | None
+    ) -> dict[str, float | int]:
+        """Windows-aware evaluation of ``symbols`` (None = all, one portfolio run)."""
+        # Portfolio mode keeps the original 3-arg _run_single call shape.
+        kw: dict[str, list[str]] = {} if symbols is None else {"symbols": symbols}
+        if self.windows and len(self.windows) >= 2:
+            n_windows = len(self.windows)
+            window_min = self.per_window_min_trades(self.min_trades, n_windows)
+            results: list[dict[str, float | int]] = []
+            for idx, (ws, we) in enumerate(self.windows):
+                res = self._run_single(chromosome, ws, we, **kw)
+                results.append(res)
+                # Worst-of-N: a window with non-positive (or NaN) return or
+                # too few trades pins the aggregate return <= 0 / fails the
+                # trade gate, so fitness is exactly 0 whatever the rest do.
+                ret = float(res.get("total_return", 0.0))
+                low_trades = int(res["total_trades"]) < window_min
+                if (low_trades or not (ret > 0)) and idx < n_windows - 1:
+                    logger.debug(
+                        "Early exit %s at window %d/%d: %s",
+                        chromosome.uid,
+                        idx,
+                        n_windows,
+                        "trades below per-window gate" if low_trades else "return <= 0",
+                    )
+                    return self._early_exit_result(results, idx, low_trades)
+            return self._aggregate_multi_window(results, self.min_trades)
+        return self._run_single(chromosome, self.start_date, self.end_date, **kw)
+
+    @staticmethod
+    def _aggregate_symbols(
+        results: list[dict[str, float | int]],
+        symbols: list[str],
+    ) -> dict[str, float | int]:
+        """Worst-of-symbols: min sharpe/return/PF (NaN PF ignored), max DD.
+
+        ``total_trades`` is the MIN across symbols (the min-trades gate then
+        applies per symbol); trade_returns are concatenated for the bootstrap CI.
+        """
+        import math
+
+        n = len(results)
+        pfs = [float(r["profit_factor"]) for r in results]
+        finite_pfs = [p for p in pfs if not math.isnan(p)]
+        sharpes = [float(r["sharpe_ratio"]) for r in results]
+        rets = [float(r.get("total_return", 0.0)) for r in results]
+        dds = [float(r["max_drawdown"]) for r in results]
+        trades = tuple(int(r["total_trades"]) for r in results)
+        return {
+            "sharpe_ratio": min(0.0 if math.isnan(x) else x for x in sharpes),
+            "max_drawdown": max(1.0 if math.isnan(x) else x for x in dds),
+            "profit_factor": min(finite_pfs) if finite_pfs else float("nan"),
+            "total_trades": min(trades),
+            "total_return": min(0.0 if math.isnan(x) else x for x in rets),
+            "skewness": sum(float(r.get("skewness", 0.0)) for r in results) / n,  # type: ignore[arg-type]
+            "kurtosis": max(float(r.get("kurtosis", 3.0)) for r in results),  # type: ignore[arg-type]
+            "trade_returns": sum(  # type: ignore[dict-item]
+                (r.get("trade_returns", ()) for r in results), ()  # type: ignore[arg-type]
+            ),
+            "symbol_trades": trades,  # type: ignore[dict-item]
+            # Per-symbol breakdown + portfolio-comparable trade count: validation
+            # and replay are portfolio runs, so they compare against trades_sum.
+            "trades_sum": sum(trades),
+            "symbol_metrics": {  # type: ignore[dict-item]
+                sym: {
+                    "sharpe": _finite_or_none(r["sharpe_ratio"]),
+                    "trades": int(r["total_trades"]),
+                    "return": _finite_or_none(r.get("total_return", 0.0)),
+                }
+                for sym, r in zip(symbols, results, strict=True)
+            },
+        }
+
+    def _eval_worst_of_symbols(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
+        results: list[dict[str, float | int]] = []
+        n = len(self.symbols)
+        for idx, sym in enumerate(self.symbols):
+            res = self._eval_symbols(chromosome, [sym])
+            results.append(res)
+            # Worst-of: this symbol alone pins return <= 0 or fails the
+            # (per-symbol) trade gate -> fitness is exactly 0 whatever the rest do.
+            if not self.symbol_early_exit or idx >= n - 1:
+                continue
+            low_trades = int(res["total_trades"]) < self.min_trades
+            if low_trades or not (float(res.get("total_return", 0.0)) > 0):
+                trades = [int(r["total_trades"]) for r in results]
+                keep = not low_trades  # return stop: keep the real values (display)
+                return {
+                    "sharpe_ratio": float(res["sharpe_ratio"]) if keep else -1.0,
+                    "max_drawdown": 1.0,
+                    "profit_factor": 0.0,
+                    "total_trades": min(trades),
+                    "total_return": float(res.get("total_return", 0.0)) if keep else 0.0,
+                    "symbol_trades": tuple(trades),  # type: ignore[dict-item]
+                    "early_exit_symbol": idx,
+                }
+        return self._aggregate_symbols(results, self.symbols)
+
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         try:
-            if self.windows and len(self.windows) >= 2:
-                results = [
-                    self._run_single(chromosome, ws, we)
-                    for ws, we in self.windows
-                ]
-                return self._aggregate_multi_window(results, self.min_trades)
-            return self._run_single(chromosome, self.start_date, self.end_date)
+            if self.symbol_agg == "worst" and len(self.symbols) >= 2:
+                return self._eval_worst_of_symbols(chromosome)
+            return self._eval_symbols(chromosome, None)
+        except DataUnavailableError:
+            raise  # missing data fails the run loudly, never an 'error' result
         except Exception as exc:
             logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
             return {
@@ -213,13 +360,19 @@ def full_range_headline(
         full_range_pf, full_range_return_pct}``.
     """
     if full_range_metrics is not None:
-        return {
+        head: dict[str, float | int] = {
             "full_range_sharpe": float(full_range_metrics["sharpe_ratio"]),
             "full_range_trades": int(full_range_metrics["total_trades"]),
             "full_range_max_dd": float(full_range_metrics["max_drawdown"]),
             "full_range_pf": float(full_range_metrics["profit_factor"]),
             "full_range_return_pct": float(full_range_metrics.get("total_return", 0.0)),
         }
+        # symbol_agg="worst": trades above is the MIN symbol; keep the sum
+        # (portfolio-comparable) and the per-symbol breakdown.
+        if "trades_sum" in full_range_metrics:
+            head["full_range_trades_sum"] = int(full_range_metrics["trades_sum"])
+            head["full_range_symbol_metrics"] = full_range_metrics["symbol_metrics"]  # type: ignore[assignment]
+        return head
     return {
         "full_range_sharpe": float(fallback_sharpe),
         "full_range_trades": int(fallback_trades),

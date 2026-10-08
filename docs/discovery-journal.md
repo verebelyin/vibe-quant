@@ -4,6 +4,22 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-08: Edge-hunt wave 1 — four hypotheses screened, all rejected by pre-stated falsifiers (job 20261008-edge-hunt)
+
+Data refreshed first: BTC/ETH/SOL/BNB perps 1m..1d + funding, 2022-01-01 → 2026-10-08 (BNB new). The refresh filled a BTC funding hole (2026-02-23..03-10) → exactness_239 baseline moved to sharpe 1.3169239785208688 / 68 trades (bars unchanged), validation repeatability 0.780452281957465 / 67. Screening via NTScreeningRunner (job-branch code, no DB rows), 4h, one symbol per run; artifacts in `data/swarm/20261008-edge-hunt/results/`.
+
+| Hypothesis | Falsifier (stated before testing) | Result | Verdict |
+|---|---|---|---|
+| baseline: sid 82 STOCH+CCI 4h champion | — | W 2022-06..2026-09 Sharpe BTC −0.7135, ETH −0.4688, SOL −0.4353, BNB −0.4401 | historical champion does not survive post-2026-10-03 semantics |
+| H-1: sid 82 + 1d EMA200 regime gate | gated ≥ ungated +0.3 on BTC 2024-01..2026-09 | gated −1.6610 vs ungated −1.1296 (BTC); W_full gated BTC −1.4939, BNB −1.4859 | REJECT |
+| H-2: TREND_ENSEMBLE(250) 4h (Zarattini/Pagani/Barbon ensemble Donchian, symmetric) | Sharpe < 0.7 on 2 of 3 assets | BTC −0.2314, ETH 0.2816, SOL 0.4806, BNB 0.5157 | REJECT as stated (untuned; positive on 3/4 — candidate for a seeded discovery, not a claim) |
+| H-5: squeeze (BB-in-KC) release breakout 4h | Sharpe < 0.6 | BTC 0.2271, ETH −0.0265, SOL 0.4494, BNB 0.0511 | REJECT |
+| H-3: fade extreme funding (z over 90 settlements) | event study: mean fwd 24h return after z>2 not negative at p<0.1 | z>2 → BTC r24 +0.62% (p=0.026), r72 +1.83% (p=0.0005); ETH r72 +1.10% (p=0.018); SOL n.s. | REJECT at event-study gate (sign opposite: crowded longs continued). The inverted "continuation" reading was found in-sample — needs fresh data before any test |
+
+**Lessons:** (1) The STOCH+CCI champion line is dead under current semantics — stop seeding from it. (2) Trend-following on alts (H-2) is the only family with positive untuned Sharpe across most symbols; next step is a light discovery seeded with TREND_ENSEMBLE using `--symbol-agg worst`. (3) Funding extremes on 2022-2026 BTC/ETH did not mean-revert. Remaining ticket H-7 (BTC regime on alts) awaits the BTC_TREND plugin.
+
+---
+
 ## 2026-07-11: Reddit research pipeline first catch — EMA/ADX crossover (extraction-sourced, screened negative)
 
 First strategy sourced end-to-end through the upgraded Reddit research pipeline

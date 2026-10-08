@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from vibe_quant.errors import DataUnavailableError
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -429,6 +431,8 @@ def _evaluate_single(
             indicators,
             bt.get("total_trades", "?"),
         )
+    except DataUnavailableError:
+        raise
     except Exception as e:
         logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
         return replace(_zero, error=f"{type(e).__name__}: {e}")
@@ -587,6 +591,8 @@ def evaluate_population(
     if max_workers is not None and max_workers != 1 and not _parallel_broken:
         try:
             return _evaluate_parallel(chromosomes, backtest_fn, filter_fn, max_workers, executor, min_trades=min_trades, timeframe=timeframe)
+        except DataUnavailableError:
+            raise
         except Exception:
             _parallel_broken = True
             logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
@@ -640,6 +646,8 @@ def _evaluate_parallel(
             idx = future_to_idx[future]
             try:
                 results[idx] = future.result()
+            except DataUnavailableError:
+                raise
             except Exception as e:
                 logger.warning("Parallel eval failed for chromosome %d", idx, exc_info=True)
                 results[idx] = replace(_zero, error=f"{type(e).__name__}: {e}")

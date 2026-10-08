@@ -77,6 +77,7 @@ def stub_catalog_layer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ingest, "klines_to_bars", lambda *a, **k: [])
     monkeypatch.setattr(ingest, "aggregate_bars", lambda *a, **k: [])
     monkeypatch.setattr(ingest, "get_bar_type", lambda *a, **k: None)
+    monkeypatch.setattr(ingest, "download_funding_rates", lambda *a, **k: [])
 
 
 def test_incremental_update_excludes_in_progress_candle(

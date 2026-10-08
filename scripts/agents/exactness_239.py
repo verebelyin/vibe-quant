@@ -19,8 +19,9 @@ from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.screening.pipeline import _dsl_to_dict
 
-# Baseline since the 2026-10-03 audit fixes; update together with CLAUDE.md.
-EXPECTED_SHARPE = 1.3165049716553048
+# Baseline since the 2026-10-08 data refresh (BTC funding hole 2026-02-23..03-10 filled with
+# real rates; was 1.3165049716553048 since the 2026-10-03 audit fixes). Update together with CLAUDE.md.
+EXPECTED_SHARPE = 1.3169239785208688
 EXPECTED_TRADES = 68
 
 

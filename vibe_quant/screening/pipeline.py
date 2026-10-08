@@ -21,6 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.errors import DataUnavailableError
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio, deannualize_sharpe
 from vibe_quant.screening.grid import (
     build_parameter_grid,
@@ -306,6 +307,8 @@ class ScreeningPipeline:
             try:
                 result = self._runner(params)
                 results.append(result)
+            except DataUnavailableError:
+                raise
             except Exception as e:
                 logger.warning("Backtest failed for params %s: %s", params, e)
                 results.append(BacktestMetrics(parameters=params, sharpe_ratio=FAILED_BACKTEST_SHARPE))
@@ -376,6 +379,8 @@ class ScreeningPipeline:
                     params = future_to_params[future]
                     try:
                         results.append(future.result())
+                    except DataUnavailableError:
+                        raise
                     except Exception as e:
                         # Log error but continue with other backtests.
                         # Sentinel -999 avoids -inf propagation through
