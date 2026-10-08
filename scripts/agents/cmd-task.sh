@@ -31,7 +31,7 @@ done
 if [[ -z "$model" ]]; then
   case "$tier" in
     fast) model="deepseek/deepseek-v4.1-flash-fast" ;;
-    code) model="zai-org/glm-5.3" ;;
+    code) model="deepseek/deepseek-v4.1-flash"; effort="${effort:-max}" ;;
     long) model="moonshotai/kimi-k3" ;;
     *) echo "unknown tier: $tier (fast|code|long)" >&2; exit 2 ;;
   esac

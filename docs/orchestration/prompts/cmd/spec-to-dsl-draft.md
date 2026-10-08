@@ -1,6 +1,6 @@
 <!--
 cmd brief: first-draft DSL YAML from one triaged, dsl_feasible spec.
-Tier: code (glm-5.3). Run with --cwd <disposable worktree>.
+Tier: code (deepseek-v4.1-flash, effort max). Run with --cwd <disposable worktree>.
 Orchestrator fills: <SPEC PATH>, <TRIAGE JSON LINE>, <TEMPLATE PATHS>, <OUT YAML>, <INDICATORS>.
 Checker: the parser command below (deterministic) + strategy-author reviews rule fidelity before any backtest.
 -->
