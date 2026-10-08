@@ -4,7 +4,6 @@ import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { RouteErrorComponent } from "@/components/RouteErrorComponent";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
-import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "./api/query-client";
 import { rootRoute } from "./routes/__root";
@@ -300,7 +299,6 @@ export function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <RouterProvider router={router} />
-          <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

@@ -239,9 +239,19 @@ def aggregate_bars(
         else:
             current_group.append(bar)
 
-    # Don't forget the last group
-    if current_group:
-        aggregated.append(_aggregate_group(current_group, target_bar_type, size_precision, price_precision))
+    # Trailing group: emit only if the period is complete. An in-progress
+    # period (e.g. today's 1d bar) would carry ts_init = last 1m close, which
+    # as-of/rounding logic can misread as a completed close (look-ahead).
+    # Complete iff the last 1m close_time == period end (ts_init convention:
+    # period start + period length - 1 ms). Interior groups with holes are
+    # kept as-is; only the trailing one is judged. A later update, once the
+    # period finishes, writes the completed bar (no permanent gap).
+    if current_group and group_key is not None:
+        period_end_ns = (group_key + 1) * ns_per_target_period - 1_000_000
+        if current_group[-1].ts_init >= period_end_ns:
+            aggregated.append(
+                _aggregate_group(current_group, target_bar_type, size_precision, price_precision)
+            )
 
     return aggregated
 

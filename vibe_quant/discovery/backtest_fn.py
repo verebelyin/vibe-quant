@@ -45,7 +45,11 @@ class NTBacktestFn:
     genome by its worst symbol; the default ``"portfolio"`` runs one
     shared-account backtest over all symbols. One symbol cannot carry the rest
     in worst mode, and ``total_trades`` is the MIN across symbols so the
-    min-trades gate applies per symbol.
+    min-trades gate applies per symbol. The result also carries
+    ``symbol_results`` (each symbol's own window-aggregated metrics) so the
+    GA can rank by a soft per-symbol score (vibe-quant-ox73t, see
+    ``fitness.soft_worst_score``); there is no across-symbol early exit
+    because a losing symbol no longer pins the score to 0.
     """
 
     def __init__(
@@ -57,7 +61,6 @@ class NTBacktestFn:
         windows: list[tuple[str, str]] | None = None,
         min_trades: int = 0,
         symbol_agg: SymbolAgg = "portfolio",
-        symbol_early_exit: bool = False,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
@@ -67,10 +70,6 @@ class NTBacktestFn:
         # Global min-trades gate of the run; drives the per-window gate.
         self.min_trades = min_trades
         self.symbol_agg = symbol_agg
-        # Stop across symbols once fitness is certain 0. Only the GA fn sets
-        # this: every other fn (holdout, full-range, train-return, cross-window,
-        # WFA) persists/compares its metrics, so it must compute real values.
-        self.symbol_early_exit = symbol_early_exit
 
     def _run_single(
         self,
@@ -251,7 +250,7 @@ class NTBacktestFn:
         rets = [float(r.get("total_return", 0.0)) for r in results]
         dds = [float(r["max_drawdown"]) for r in results]
         trades = tuple(int(r["total_trades"]) for r in results)
-        return {
+        out: dict[str, float | int] = {
             "sharpe_ratio": min(0.0 if math.isnan(x) else x for x in sharpes),
             "max_drawdown": max(1.0 if math.isnan(x) else x for x in dds),
             "profit_factor": min(finite_pfs) if finite_pfs else float("nan"),
@@ -266,6 +265,8 @@ class NTBacktestFn:
             # Per-symbol breakdown + portfolio-comparable trade count: validation
             # and replay are portfolio runs, so they compare against trades_sum.
             "trades_sum": sum(trades),
+            # Each symbol's own aggregate: input of the soft GA score.
+            "symbol_results": dict(zip(symbols, results, strict=True)),  # type: ignore[dict-item]
             "symbol_metrics": {  # type: ignore[dict-item]
                 sym: {
                     "sharpe": _finite_or_none(r["sharpe_ratio"]),
@@ -275,30 +276,19 @@ class NTBacktestFn:
                 for sym, r in zip(symbols, results, strict=True)
             },
         }
+        synthetic = [
+            sym
+            for sym, r in zip(symbols, results, strict=True)
+            if "early_exit" in r or "error" in r
+        ]
+        if synthetic:
+            # Worst-of metrics inherit forced values from these symbols -> mark
+            # the aggregate synthetic so the fitness sanity check skips it.
+            out["synthetic_symbols"] = synthetic  # type: ignore[assignment]
+        return out
 
     def _eval_worst_of_symbols(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
-        results: list[dict[str, float | int]] = []
-        n = len(self.symbols)
-        for idx, sym in enumerate(self.symbols):
-            res = self._eval_symbols(chromosome, [sym])
-            results.append(res)
-            # Worst-of: this symbol alone pins return <= 0 or fails the
-            # (per-symbol) trade gate -> fitness is exactly 0 whatever the rest do.
-            if not self.symbol_early_exit or idx >= n - 1:
-                continue
-            low_trades = int(res["total_trades"]) < self.min_trades
-            if low_trades or not (float(res.get("total_return", 0.0)) > 0):
-                trades = [int(r["total_trades"]) for r in results]
-                keep = not low_trades  # return stop: keep the real values (display)
-                return {
-                    "sharpe_ratio": float(res["sharpe_ratio"]) if keep else -1.0,
-                    "max_drawdown": 1.0,
-                    "profit_factor": 0.0,
-                    "total_trades": min(trades),
-                    "total_return": float(res.get("total_return", 0.0)) if keep else 0.0,
-                    "symbol_trades": tuple(trades),  # type: ignore[dict-item]
-                    "early_exit_symbol": idx,
-                }
+        results = [self._eval_symbols(chromosome, [sym]) for sym in self.symbols]
         return self._aggregate_symbols(results, self.symbols)
 
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:

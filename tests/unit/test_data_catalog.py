@@ -139,7 +139,7 @@ class TestAggregateBars:
     def test_aggregate_bars_partial_period(
         self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
     ) -> None:
-        """Partial period still gets aggregated."""
+        """Trailing in-progress period is dropped (iz66w); a later complete one is kept."""
         # Only 3 bars (partial 5m period)
         bars_1m = [
             make_bar(btc_bar_type_1m, 100.0, 105.0, 95.0, 102.0, 10.0, 0, 59999),
@@ -147,6 +147,13 @@ class TestAggregateBars:
             make_bar(btc_bar_type_1m, 106.0, 110.0, 104.0, 108.0, 12.0, 120000, 179999),
         ]
 
+        assert aggregate_bars(bars_1m, btc_bar_type_5m, 5) == []
+
+        # Once the period completes (last 1m closes at 299999) it is emitted.
+        bars_1m += [
+            make_bar(btc_bar_type_1m, 108.0, 109.0, 107.0, 108.5, 5.0, 180000, 239999),
+            make_bar(btc_bar_type_1m, 108.5, 109.0, 107.0, 108.0, 5.0, 240000, 299999),
+        ]
         result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
 
         assert len(result) == 1
@@ -163,7 +170,7 @@ class TestAggregateBars:
             make_bar(btc_bar_type_1m, 100.0, 105.0, 95.0, 102.0, 10.0, 0, 59999),
         ]
 
-        result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
+        result = aggregate_bars(bars_1m, btc_bar_type_1m, 1)
 
         assert len(result) == 1
         assert float(result[0].open) == 100.0
@@ -238,7 +245,7 @@ class TestAggregateBarsAlignment:
         minute-5 value can't be pulled into the [0,5) window."""
         bars_1m = [
             self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
-            for m in range(2, 9)  # minutes 2..8
+            for m in range(2, 10)  # minutes 2..9
         ]
 
         result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
@@ -249,7 +256,7 @@ class TestAggregateBarsAlignment:
         assert result[0].ts_init == (4 * 60_000 + 59_999) * 1_000_000
         assert float(result[0].open) == 102.0  # minute 2 open
         assert float(result[0].close) == 106.0  # minute 4 close
-        # Window [5,10): minutes 5..8 — minute 5 did NOT leak into window 0.
+        # Window [5,10): minutes 5..9 — minute 5 did NOT leak into window 0.
         assert result[1].ts_event == 5 * 60_000 * 1_000_000
         assert float(result[1].open) == 105.0  # minute 5 open
 
@@ -259,7 +266,7 @@ class TestAggregateBarsAlignment:
         """A missing minute inside a window must not shift later bars across the
         edge: minutes 0,1,3,4 still all land in window [0,5); minute 5 opens the
         next window regardless of the gap."""
-        minutes = [0, 1, 3, 4, 5, 6]
+        minutes = [0, 1, 3, 4, 5, 6, 7, 8, 9]
         bars_1m = [
             self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
             for m in minutes
@@ -271,30 +278,19 @@ class TestAggregateBarsAlignment:
         assert float(result[0].close) == 106.0  # minute 4, not minute 5
         assert result[1].ts_event == 5 * 60_000 * 1_000_000
 
-    def test_partial_trailing_window_is_bounded_not_extrapolated(
+    def test_partial_trailing_window_is_dropped(
         self, btc_bar_type_1m: BarType, btc_bar_type_5m: BarType
     ) -> None:
-        """5 + 2 bars -> one full window then a 2-bar trailing window. The
-        partial window is bounded to its present bars (ts_init = its last 1m
-        bar's close edge), never mislabeled as a full-window close edge."""
+        """5 + 2 bars -> one full window; the in-progress 2-bar trailing window
+        is dropped (its ts_init would read as a completed close: look-ahead)."""
         bars_1m = [
             self._minute_bar(btc_bar_type_1m, m, 100.0 + m, 105.0 + m, 95.0 + m, 102.0 + m, 10.0)
             for m in range(7)
         ]
 
         result = aggregate_bars(bars_1m, btc_bar_type_5m, 5)
-        assert len(result) == 2
-
-        tail = result[1]
-        exp_o, exp_h, exp_l, exp_c, exp_v, exp_te, exp_ti = self._expect(bars_1m[5:7])
-        assert float(tail.open) == exp_o
-        assert float(tail.high) == exp_h
-        assert float(tail.low) == exp_l
-        assert float(tail.close) == exp_c
-        assert float(tail.volume) == pytest.approx(exp_v)
-        assert tail.ts_event == 5 * 60_000 * 1_000_000
-        # Bounded to minute 6, NOT extrapolated to the full-window edge (minute 9).
-        assert tail.ts_init == (6 * 60_000 + 59_999) * 1_000_000
+        assert len(result) == 1
+        assert result[0].ts_init == (4 * 60_000 + 59_999) * 1_000_000
 
     def test_15m_window_timestamps_use_open_and_close_edges(
         self, btc_bar_type_1m: BarType

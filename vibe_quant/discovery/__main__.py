@@ -74,12 +74,11 @@ def _make_nt_backtest_fn(
     windows: list[tuple[str, str]] | None = None,
     min_trades: int = 0,
     symbol_agg: SymbolAgg = "portfolio",
-    symbol_early_exit: bool = False,
 ) -> NTBacktestFn:
     """Create a picklable backtest function using real NautilusTrader screening runner."""
     return NTBacktestFn(
         symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
-        symbol_agg=symbol_agg, symbol_early_exit=symbol_early_exit,
+        symbol_agg=symbol_agg,
     )
 
 
@@ -523,7 +522,7 @@ def _run_provenance_notes(
     holdout_min_sharpe: float,
 ) -> dict[str, object]:
     """Run-level notes shared by the champion and zero-champion outcomes."""
-    return {
+    notes: dict[str, object] = {
         "type": "discovery",
         "generations": len(result.generations),
         # Distinct strategies backtested == DSR trial count N (pooled across
@@ -560,6 +559,11 @@ def _run_provenance_notes(
         "seed": seed,
         "bootstrap_min_sharpe": bootstrap_min_sharpe,
     }
+    if symbol_agg == "worst":
+        # GA rank score over the per-symbol adjusted fitness; champions still
+        # need every symbol's train return > 0 and trades >= min (hard gate).
+        notes["worst_mode_score"] = "0.5*min+0.5*median"
+    return notes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -898,7 +902,6 @@ def main() -> int:
                 windows=eval_windows,
                 min_trades=config.min_trades,
                 symbol_agg=args.symbol_agg,
-                symbol_early_exit=True,  # GA fn only; see NTBacktestFn
             )
 
         # Create holdout backtest function if train/test split enabled
@@ -1107,6 +1110,10 @@ def main() -> int:
                 "trades": fitness.total_trades,
                 "return_pct": fitness.total_return,
             }
+            if fitness.symbol_scores is not None:
+                entry["symbol_scores"] = {
+                    sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()
+                }
             # Full-range headline (single continuous backtest) for like-for-like
             # promotion/replay_drift; sharpe/trades above stay as the multi-window
             # robustness aggregate. full_range_fn(chrom) never raises (NTBacktestFn

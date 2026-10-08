@@ -46,6 +46,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
+from vibe_quant.errors import DataUnavailableError
 from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
@@ -365,6 +366,24 @@ def _select_diverse_top_k(
             selected.append((chrom, fitness))
 
     return selected
+
+
+def worst_symbol_gate_reasons(fitness: FitnessResult, min_trades: int) -> list[str]:
+    """Hard train gate for ``symbol_agg="worst"`` champions (vibe-quant-ox73t).
+
+    The soft GA score lets a genome with a losing symbol rank; a champion must
+    still have EVERY symbol profitable (train, worst-of-windows) with at least
+    ``min_trades`` trades. Empty list = pass (also for portfolio mode).
+    """
+    if fitness.symbol_stats is None:
+        return []
+    reasons: list[str] = []
+    for sym, (ret, trades) in fitness.symbol_stats.items():
+        if not ret > 0:
+            reasons.append(f"worst-symbol train return <= 0 ({sym})")
+        if trades < min_trades:
+            reasons.append(f"worst-symbol train trades < {min_trades} ({sym})")
+    return reasons
 
 
 def _metrics_to_holdout_result(bt: dict[str, float | int]) -> HoldoutResult:
@@ -781,6 +800,10 @@ class DiscoveryPipeline:
 
         # Select top-K with structural diversity enforcement
         all_scored.sort(key=lambda t: t[1].adjusted_score, reverse=True)
+        # Worst mode scores softly, so a high scorer may still fail the hard
+        # worst-symbol gate: rank gate-passers first (stable) so rejected
+        # candidates don't eat top-K slots that real champions could fill.
+        all_scored.sort(key=lambda t: bool(worst_symbol_gate_reasons(t[1], cfg.min_trades)))
         top_strategies_raw = _select_diverse_top_k(
             all_scored,
             top_k=cfg.top_k,
@@ -1068,6 +1091,8 @@ class DiscoveryPipeline:
         for rank, (chrom, train_fit) in enumerate(top_strategies, 1):
             try:
                 hr = _metrics_to_holdout_result(holdout_fn(chrom))
+            except DataUnavailableError:
+                raise
             except Exception:
                 logger.warning("Holdout eval failed for %s", chrom.uid, exc_info=True)
                 hr = _FAILED_WINDOW
@@ -1173,6 +1198,8 @@ class DiscoveryPipeline:
             for months, ws, we in windows:
                 try:
                     hr = _metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
+                except DataUnavailableError:
+                    raise
                 except Exception:
                     logger.warning(
                         "Cross-window eval failed: %s window +%dmo", chrom.uid, months,
@@ -1274,6 +1301,8 @@ class DiscoveryPipeline:
             for ws, we in windows:
                 try:
                     hr = _metrics_to_holdout_result(self._backtest_fn_factory(ws, we)(chrom))
+                except DataUnavailableError:
+                    raise
                 except Exception:
                     logger.warning("WFA eval failed: %s", chrom.uid, exc_info=True)
                     hr = _FAILED_WINDOW
@@ -1401,11 +1430,18 @@ class DiscoveryPipeline:
             best_fr.sharpe_ratio, best_fr.profit_factor,
             best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
         )
-        logger.info(
-            "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
-            best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
-            best_fr.adjusted_score,
-        )
+        if best_fr.symbol_scores is not None:
+            logger.info(
+                "  Score breakdown: soft=0.5*min+0.5*median of %s = %.4f",
+                {sym: round(sc, 4) for sym, sc in best_fr.symbol_scores.items()},
+                best_fr.adjusted_score,
+            )
+        else:
+            logger.info(
+                "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
+                best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
+                best_fr.adjusted_score,
+            )
         if all_sharpes:
             logger.info(
                 "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "
@@ -1765,6 +1801,10 @@ class DiscoveryPipeline:
 
         validated: list[tuple[StrategyChromosome, FitnessResult]] = []
         for chrom, fitness in top_strategies:
+            gate_reasons = worst_symbol_gate_reasons(fitness, self.config.min_trades)
+            if gate_reasons:
+                self._reject(chrom, fitness, "worst_symbol_train", gate_reasons)
+                continue
             num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
 

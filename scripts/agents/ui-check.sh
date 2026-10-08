@@ -11,7 +11,8 @@ set -euo pipefail
 
 [[ $# -eq 2 && ( "$1" == up || "$1" == down ) ]] || { sed -n '4,5p' "$0" >&2; exit 2; }
 cmd="$1"; wt="$(cd "$2" && pwd)"
-main="$(cd "$(dirname "$0")/../.." && pwd)"
+# Main checkout (holds data/state + .venv) even when this script runs from a worktree copy.
+main="$(cd "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
 name="$(basename "$wt")"
 db="/tmp/vq-ui-$name.db"; pids="/tmp/vq-ui-$name.pids"
 api=8001; web=5188

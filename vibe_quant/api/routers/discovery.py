@@ -19,6 +19,7 @@ from vibe_quant.api.schemas.discovery import (
 )
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.jobs.manager import BacktestJobManager
 
 if TYPE_CHECKING:
@@ -667,21 +668,13 @@ async def export_discovered_strategy(
     }
 
 
-def _dsl_body_key(dsl: dict[str, object]) -> str:
-    """Canonical JSON of a DSL minus its ``name`` (the strategy's identity)."""
-    import json
-
-    body = {k: v for k, v in dsl.items() if k != "name"}
-    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
-
-
 def _find_strategy_by_dsl(
     state: StateManager, dsl: dict[str, object]
 ) -> tuple[int, str] | None:
     """Active strategy whose DSL equals ``dsl`` (ignoring name), else None."""
     import json
 
-    key = _dsl_body_key(dsl)
+    key = dsl_body_key(dsl)
     rows = state.conn.execute(
         "SELECT id, name, dsl_config FROM strategies "
         "WHERE is_active IS NULL OR is_active = 1 ORDER BY id"
@@ -691,7 +684,7 @@ def _find_strategy_by_dsl(
             stored = json.loads(row[2]) if isinstance(row[2], str) else row[2]
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(stored, dict) and _dsl_body_key(stored) == key:
+        if isinstance(stored, dict) and dsl_body_key(stored) == key:
             return int(row[0]), str(row[1])
     return None
 

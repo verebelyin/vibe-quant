@@ -7,8 +7,9 @@ overtrading penalty, complexity penalty, and Pareto ranking for selection.
 from __future__ import annotations
 
 import logging
+import statistics
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from vibe_quant.errors import DataUnavailableError
 
@@ -117,6 +118,11 @@ class FitnessResult:
     kurtosis: float = 3.0
     trade_returns: tuple[float, ...] = ()
     error: str | None = None
+    # symbol_agg="worst" only (vibe-quant-ox73t): per-symbol adjusted fitness
+    # behind the soft GA score, and per-symbol (total_return, trades) for the
+    # hard worst-symbol champion gate. None in portfolio mode.
+    symbol_scores: dict[str, float] | None = None
+    symbol_stats: dict[str, tuple[float, int]] | None = None
 
 
 # Pre-compute inverse ranges for normalization to avoid repeated division
@@ -394,6 +400,25 @@ def pareto_rank(population_fitness: Sequence[FitnessResult]) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
+def _const_backtest(
+    metrics: dict[str, float | int],
+) -> Callable[[StrategyChromosome], dict[str, float | int]]:
+    return lambda _chrom: metrics
+
+
+def soft_worst_score(symbol_scores: Sequence[float]) -> float:
+    """Worst-mode GA rank score: ``0.5*min + 0.5*median`` of per-symbol fitness.
+
+    A hard worst-of score is exactly 0 whenever any one symbol loses, which
+    leaves the GA without a gradient; this keeps a pull toward the worst symbol
+    while still rewarding strength elsewhere. Champions are NOT picked by this
+    alone (see the worst-symbol train gate in the pipeline).
+    """
+    if not symbol_scores:
+        return 0.0
+    return 0.5 * min(symbol_scores) + 0.5 * statistics.median(symbol_scores)
+
+
 def _evaluate_single(
     chrom: StrategyChromosome,
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
@@ -457,8 +482,11 @@ def _evaluate_single(
         # that is the BEST case -> score at the PF cap, not as PF=0.
         pf = PF_MAX if trades > 0 and total_return > 0 else 0.0
 
-    # Sanity checks on backtest output — flag impossible metric combinations
-    _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
+    # Sanity checks on backtest output — flag impossible metric combinations.
+    # Skipped for synthetic results (early exits / failed backtests): their
+    # metrics are deliberately forced and always look inconsistent.
+    if not {"early_exit", "early_exit_symbol", "error", "synthetic_symbols"} & bt.keys():
+        _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
 
     num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
     complexity_pen = compute_complexity_penalty(num_genes)
@@ -478,15 +506,36 @@ def _evaluate_single(
     else:
         adjusted = max(0.0, raw - complexity_pen - overtrade_pen - sl_tp_pen)
 
+    symbol_scores: dict[str, float] | None = None
+    symbol_stats: dict[str, tuple[float, int]] | None = None
+    sym_results = cast("dict[str, dict[str, float | int]] | None", bt.get("symbol_results"))
+    if sym_results:
+        # symbol_agg="worst": rank by the soft per-symbol score. Each symbol is
+        # scored exactly like a standalone run (own hard gates and penalties);
+        # the reported metrics above stay worst-of.
+        symbol_scores = {}
+        symbol_stats = {}
+        for sym, sbt in sym_results.items():
+            sres = _evaluate_single(chrom, _const_backtest(sbt), None, min_trades, timeframe)
+            symbol_scores[sym] = sres.adjusted_score
+            symbol_stats[sym] = (sres.total_return, sres.total_trades)
+        adjusted = soft_worst_score(list(symbol_scores.values()))
+
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
-        logger.debug(
-            "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
-            "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d sl=%.2f%% tp=%.2f%%)",
-            chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
-            sharpe, max_dd, pf, total_return, trades, num_genes,
-            chrom.stop_loss_pct, chrom.take_profit_pct,
-        )
+        if symbol_scores is not None:
+            logger.debug(
+                "Score %s: soft=0.5*min+0.5*median of %s = %.4f",
+                chrom.uid, {sym: round(sc, 4) for sym, sc in symbol_scores.items()}, adjusted,
+            )
+        else:
+            logger.debug(
+                "Score %s: raw=%.4f - complexity=%.4f - overtrade=%.4f - sl_tp=%.4f = adjusted=%.4f "
+                "(sharpe=%.2f dd=%.3f pf=%.2f ret=%.3f trades=%d genes=%d sl=%.2f%% tp=%.2f%%)",
+                chrom.uid, raw, complexity_pen, overtrade_pen, sl_tp_pen, adjusted,
+                sharpe, max_dd, pf, total_return, trades, num_genes,
+                chrom.stop_loss_pct, chrom.take_profit_pct,
+            )
 
     return FitnessResult(
         sharpe_ratio=sharpe,
@@ -505,6 +554,8 @@ def _evaluate_single(
         kurtosis=float(bt.get("kurtosis", 3.0)),
         trade_returns=tuple(bt.get("trade_returns", ())),  # type: ignore[arg-type]
         error=str(bt["error"]) if bt.get("error") else None,
+        symbol_scores=symbol_scores,
+        symbol_stats=symbol_stats,
     )
 
 

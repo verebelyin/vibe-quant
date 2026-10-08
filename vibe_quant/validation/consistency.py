@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING
 
+from vibe_quant.dsl.identity import dsl_body_key
+
 if TYPE_CHECKING:
     from vibe_quant.db.state_manager import StateManager
 
@@ -268,12 +270,6 @@ def find_screening_reference(
     )
 
 
-def _dsl_body(dsl: dict[str, object]) -> str:
-    """Canonical JSON of a DSL minus ``name`` (same rule as discovery promote)."""
-    body = {k: v for k, v in dsl.items() if k != "name"}
-    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
-
-
 def _strategy_dsl(state: StateManager, strategy_id: int) -> dict[str, object] | None:
     row = state.conn.execute(
         "SELECT dsl_config FROM strategies WHERE id = ?", (strategy_id,)
@@ -301,7 +297,7 @@ def _reference_from_discovery_notes(
     back to name equality. Runs are scanned newest-first with no cutoff; the
     first match wins.
     """
-    wanted_body = _dsl_body(strategy_dsl) if strategy_dsl else None
+    wanted_body = dsl_body_key(strategy_dsl) if strategy_dsl else None
     sql = """
         SELECT br.id, res.notes, br.start_date, br.end_date, br.symbols
         FROM backtest_runs br
@@ -330,7 +326,7 @@ def _reference_from_discovery_notes(
             if not isinstance(dsl, dict):
                 continue
             if wanted_body is not None:
-                if _dsl_body(dsl) != wanted_body:
+                if dsl_body_key(dsl) != wanted_body:
                     continue
             elif dsl.get("name") != strategy_name:
                 continue
