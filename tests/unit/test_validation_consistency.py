@@ -116,6 +116,36 @@ class TestFindScreeningReference:
         assert ref.source == f"discovery_run:{disc_id}"
         state.close()
 
+    def test_discovery_reference_requires_dsl_match(self, tmp_path: Path) -> None:
+        """Seeded runs repeat genome names; the run whose DSL matches wins, not the newest."""
+        state = StateManager(db_path=tmp_path / "t.db")
+        mine = {"name": "genome_abc123", "entry": "rsi<30", "description": "x"}
+        other = {"name": "genome_abc123", "entry": "rsi<20"}
+        sid = state.create_strategy("genome_abc123", mine)
+        ids = []
+        for dsl, sharpe in ((mine, 1.8), (other, 9.9)):  # newest run holds the other DSL
+            rid = state.create_backtest_run(
+                strategy_id=None,
+                run_mode="discovery",
+                symbols=["BTCUSDT"],
+                timeframe="4h",
+                start_date="2024-01-01",
+                end_date="2025-01-01",
+                parameters={},
+            )
+            state.update_backtest_run_status(rid, "completed")
+            notes = json.dumps(
+                {"top_strategies": [{"dsl": dsl, "sharpe": sharpe, "trades": 64}]}
+            )
+            state.save_backtest_result(rid, {"sharpe_ratio": sharpe, "notes": notes})
+            ids.append(rid)
+
+        ref = find_screening_reference(state, sid, "genome_abc123")
+        assert ref is not None
+        assert ref.sharpe == 1.8
+        assert ref.source == f"discovery_run:{ids[0]}"
+        state.close()
+
     def test_no_reference_returns_none(self, tmp_path: Path) -> None:
         state = StateManager(db_path=tmp_path / "t.db")
         sid = state.create_strategy("lonely", {"name": "lonely"})

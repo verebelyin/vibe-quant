@@ -543,12 +543,23 @@ class DiscoveryPipeline:
                 timeframe=cfg.timeframe,
             )
             n_failed = sum(1 for fr in fresh if fr.error)
+            ok_before = self._ok_evals
             self._ok_evals += len(fresh) - n_failed
             # Systemic failure (pickling, catalog, NT crash) must not end as
-            # "completed, 0 champions". A lone crash in a run that has already
-            # evaluated fine is just a zero-scored genome.
-            if fresh and n_failed == len(fresh) and (len(fresh) >= 2 or self._ok_evals == 0):
-                msg = f"all {len(fresh)} evaluations failed; first: {fresh[0].error}"
+            # "completed, 0 champions". Before any success, any all-failed
+            # batch aborts. After successes, only a large all-failed batch does:
+            # a small late batch (e.g. crowding replacements) can fail on
+            # genome-specific errors without dooming a healthy run.
+            min_abort = max(2, cfg.population_size // 4)
+            if (
+                fresh
+                and n_failed == len(fresh)
+                and (ok_before == 0 or len(fresh) >= min_abort)
+            ):
+                msg = (
+                    f"all {len(fresh)} evaluations failed (ok_evals={ok_before}); "
+                    f"first: {fresh[0].error}"
+                )
                 raise DiscoveryEvaluationError(msg)
             for (key, idx), fr in zip(todo.items(), fresh, strict=True):
                 self._fitness_cache[key] = fr

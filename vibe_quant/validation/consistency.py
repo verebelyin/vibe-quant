@@ -222,13 +222,42 @@ def find_screening_reference(
                 end_date=run_row[2],
             )
 
-    return _reference_from_discovery_notes(state, strategy_name, val_window)
+    return _reference_from_discovery_notes(
+        state, strategy_name, val_window, _strategy_dsl(state, strategy_id)
+    )
+
+
+def _dsl_body(dsl: dict[str, object]) -> str:
+    """Canonical JSON of a DSL minus ``name`` (same rule as discovery promote)."""
+    body = {k: v for k, v in dsl.items() if k != "name"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _strategy_dsl(state: StateManager, strategy_id: int) -> dict[str, object] | None:
+    row = state.conn.execute(
+        "SELECT dsl_config FROM strategies WHERE id = ?", (strategy_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        dsl = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return dsl if isinstance(dsl, dict) else None
 
 
 def _reference_from_discovery_notes(
-    state: StateManager, strategy_name: str, val_window: tuple[str, str] | None = None
+    state: StateManager,
+    strategy_name: str,
+    val_window: tuple[str, str] | None = None,
+    strategy_dsl: dict[str, object] | None = None,
 ) -> ScreeningReference | None:
-    """Match a discovery-exported strategy back to its champion metrics."""
+    """Match a discovery-exported strategy back to its champion metrics.
+
+    Seeded runs reproduce identical genome names, so when the validated
+    strategy's DSL is known the champion's DSL (minus name) must match too.
+    """
+    wanted_body = _dsl_body(strategy_dsl) if strategy_dsl else None
     rows = state.conn.execute(
         """
         SELECT br.id, res.notes, br.start_date, br.end_date
@@ -254,6 +283,8 @@ def _reference_from_discovery_notes(
             dsl = entry.get("dsl")
             name = dsl.get("name") if isinstance(dsl, dict) else None
             if name != strategy_name:
+                continue
+            if wanted_body is not None and _dsl_body(dsl) != wanted_body:
                 continue
             # Validated on the holdout window → compare like for like.
             holdout = entry.get("holdout")

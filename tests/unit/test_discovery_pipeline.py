@@ -854,3 +854,44 @@ class TestEvaluationFailure:
         assert len(errored) == 1
         assert errored[0].adjusted_score == 0.0
         assert "one bad genome" in (errored[0].error or "")
+
+
+class TestAbortThreshold:
+    """Batch-abort rule: any all-failed batch before a success; only a large one after."""
+
+    @staticmethod
+    def _pipe(fail: dict[str, bool]) -> DiscoveryPipeline:
+        def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+            if fail["on"]:
+                raise RuntimeError("genome-specific")
+            return _mock_backtest(chrom)
+
+        return DiscoveryPipeline(_make_config(population_size=20, max_workers=1), bt)
+
+    @staticmethod
+    def _fresh(n: int, offset: int) -> list[StrategyChromosome]:
+        return initialize_population(offset + n)[offset:]
+
+    def test_small_failed_batch_after_success_does_not_abort(self) -> None:
+        fail = {"on": False}
+        pipe = self._pipe(fail)
+        pipe._evaluate_new(self._fresh(5, 0))
+        assert pipe._ok_evals == 5
+        fail["on"] = True
+        # threshold = max(2, 20 // 4) = 5; a batch of 4 stays below it
+        out = pipe._evaluate_new(self._fresh(4, 5))
+        assert all(fr.error for fr in out)
+
+    def test_large_failed_batch_after_success_aborts(self) -> None:
+        fail = {"on": False}
+        pipe = self._pipe(fail)
+        pipe._evaluate_new(self._fresh(5, 0))
+        fail["on"] = True
+        with pytest.raises(DiscoveryEvaluationError, match=r"ok_evals=5"):
+            pipe._evaluate_new(self._fresh(5, 5))
+
+    def test_single_failed_batch_before_any_success_aborts(self) -> None:
+        fail = {"on": True}
+        pipe = self._pipe(fail)
+        with pytest.raises(DiscoveryEvaluationError, match=r"ok_evals=0"):
+            pipe._evaluate_new(self._fresh(1, 0))
