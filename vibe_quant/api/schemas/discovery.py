@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DiscoveryLaunchRequest(BaseModel):
@@ -34,6 +34,7 @@ class DiscoveryLaunchRequest(BaseModel):
     seed_run_id: int | None = None  # warm-start GA from top chromosomes of prior run
     no_bootstrap_ci: bool = False  # True disables bootstrap-CI hard gate (low-budget regimes)
     bootstrap_min_sharpe: float | None = None  # override timeframe-aware default (0.5 for 1m, 1.0 otherwise)
+    seed: int | None = Field(default=None, ge=0, lt=2**32)  # RNG seed to replay a run; None = random
 
 
 class DiscoveryJobResponse(BaseModel):
@@ -57,6 +58,7 @@ class DiscoveryJobResponse(BaseModel):
     direction: str | None = None
     best_sharpe: float | None = None
     best_return: float | None = None
+    seed: int | None = None  # RNG seed from the run's result notes (None while running / old runs)
 
 
 class DiscoveryResultResponse(BaseModel):

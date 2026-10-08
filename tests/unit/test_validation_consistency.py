@@ -146,6 +146,77 @@ class TestFindScreeningReference:
         assert ref.source == f"discovery_run:{ids[0]}"
         state.close()
 
+    @staticmethod
+    def _disc_run(state: StateManager, dsl: dict[str, object], sharpe: float) -> int:
+        rid = state.create_backtest_run(
+            strategy_id=None,
+            run_mode="discovery",
+            symbols=["BTCUSDT"],
+            timeframe="4h",
+            start_date="2024-01-01",
+            end_date="2025-01-01",
+            parameters={},
+        )
+        state.update_backtest_run_status(rid, "completed")
+        notes = json.dumps({"top_strategies": [{"dsl": dsl, "sharpe": sharpe, "trades": 64}]})
+        state.save_backtest_result(rid, {"sharpe_ratio": sharpe, "notes": notes})
+        return rid
+
+    def test_dsl_match_beyond_five_newer_runs(self, tmp_path: Path) -> None:
+        state = StateManager(db_path=tmp_path / "t.db")
+        mine = {"name": "genome_abc123", "entry": "rsi<30"}
+        sid = state.create_strategy("genome_abc123", mine)
+        old = self._disc_run(state, mine, 1.8)
+        for i in range(6):
+            self._disc_run(state, {"name": "genome_abc123", "entry": f"rsi<{i}"}, 9.9)
+        ref = find_screening_reference(state, sid, "genome_abc123")
+        assert ref is not None
+        assert ref.sharpe == 1.8
+        assert ref.source == f"discovery_run:{old}"
+        state.close()
+
+    def test_renamed_strategy_matches_by_dsl(self, tmp_path: Path) -> None:
+        state = StateManager(db_path=tmp_path / "t.db")
+        sid = state.create_strategy("genome_x_2", {"name": "genome_x_2", "entry": "rsi<30"})
+        rid = self._disc_run(state, {"name": "genome_x", "entry": "rsi<30"}, 1.8)
+        self._disc_run(state, {"name": "genome_x", "entry": "rsi<20"}, 9.9)
+        ref = find_screening_reference(state, sid, "genome_x_2")
+        assert ref is not None
+        assert ref.sharpe == 1.8
+        assert ref.source == f"discovery_run:{rid}"
+        state.close()
+
+    def test_unknown_dsl_name_match_beyond_five_runs(self, tmp_path: Path) -> None:
+        state = StateManager(db_path=tmp_path / "t.db")
+        old = self._disc_run(state, {"name": "genome_abc123", "entry": "a"}, 1.8)
+        for i in range(6):
+            self._disc_run(state, {"name": "genome_abc123", "entry": f"b{i}"}, 9.9)
+        # strategy 9999 has no row -> DSL unknown; newest name match wins
+        ref = find_screening_reference(state, 9999, "genome_abc123")
+        assert ref is not None
+        assert ref.sharpe == 9.9
+        # an old-only name still found past 5 newer LIKE hits
+        only_old = self._disc_run(state, {"name": "genome_zzz", "entry": "z"}, 2.2)
+        for i in range(6):
+            self._disc_run(state, {"name": "genome_zzz_other", "entry": f"c{i}"}, 5.0)
+        ref2 = find_screening_reference(state, 9999, "genome_zzz")
+        assert ref2 is not None
+        assert ref2.source == f"discovery_run:{only_old}"
+        assert old < only_old
+        state.close()
+
+    def test_newest_dsl_match_wins(self, tmp_path: Path) -> None:
+        state = StateManager(db_path=tmp_path / "t.db")
+        mine = {"name": "genome_abc123", "entry": "rsi<30"}
+        sid = state.create_strategy("genome_abc123", mine)
+        self._disc_run(state, mine, 1.8)
+        newest = self._disc_run(state, mine, 2.4)
+        ref = find_screening_reference(state, sid, "genome_abc123")
+        assert ref is not None
+        assert ref.sharpe == 2.4
+        assert ref.source == f"discovery_run:{newest}"
+        state.close()
+
     def test_no_reference_returns_none(self, tmp_path: Path) -> None:
         state = StateManager(db_path=tmp_path / "t.db")
         sid = state.create_strategy("lonely", {"name": "lonely"})

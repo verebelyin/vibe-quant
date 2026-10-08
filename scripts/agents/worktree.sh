@@ -6,7 +6,7 @@
 # Creates ../vq-<slug> on branch swarm/<slug> from base-ref (pass a sibling task's
 # branch to stack work), symlinks the main checkout's read-only market data
 # (data/catalog, data/archive) so catalog-backed tests and exactness_239.py run
-# there, and prints the env line every brief must paste. data/state is NOT linked:
+# there, links frontend/node_modules, and prints the env line every brief must paste. data/state is NOT linked:
 # the state DB stays single-writer (exactness_239.py opens main's DB read-only).
 set -euo pipefail
 
@@ -20,6 +20,8 @@ mkdir -p "$wt/data"
 for d in catalog archive; do
   [[ -e "$main/data/$d" ]] && ln -s "$main/data/$d" "$wt/data/$d"
 done
+# Shared deps so `pnpm build` works without a reinstall (re-install in the worktree if package.json changes).
+[[ -d "$main/frontend/node_modules" ]] && ln -s "$main/frontend/node_modules" "$wt/frontend/node_modules"
 
 cat <<EOF
 worktree: $wt

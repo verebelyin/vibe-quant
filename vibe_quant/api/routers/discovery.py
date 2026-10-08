@@ -81,7 +81,11 @@ def _job_info_to_discovery_response(
             resp.eval_windows = params.get("eval_windows")
             resp.direction = params.get("direction")
             resp.error_message = run.get("error_message")
-            strategies = _load_discovery_strategies(state, info.run_id)
+            payload = _load_discovery_payload(state, info.run_id)
+            run_seed = payload.get("seed")
+            if isinstance(run_seed, int) and not isinstance(run_seed, bool):
+                resp.seed = run_seed
+            strategies = _strategies_from_payload(payload)
             resp.strategies_found = len(strategies) if strategies else None
             if strategies:
                 top = strategies[0]
@@ -310,6 +314,8 @@ async def launch_discovery(
         command.append("--no-crowding")
     if body.seed_run_id is not None:
         command.extend(["--seed-from-run", str(body.seed_run_id)])
+    if body.seed is not None:
+        command.extend(["--seed", str(body.seed)])
     if body.no_bootstrap_ci:
         command.append("--no-bootstrap-ci")
     if body.bootstrap_min_sharpe is not None:
@@ -374,7 +380,10 @@ async def kill_discovery_job(run_id: int, jobs: JobMgr, state: StateMgr, ws: WsM
 
 def _load_discovery_strategies(state: StateManager, run_id: int) -> list[dict[str, object]]:
     """Load discovered strategies from backtest_results notes JSON."""
-    data = _load_discovery_payload(state, run_id)
+    return _strategies_from_payload(_load_discovery_payload(state, run_id))
+
+
+def _strategies_from_payload(data: dict[str, object]) -> list[dict[str, object]]:
     strategies = data.get("top_strategies")
     if isinstance(strategies, list):
         return strategies  # type narrowed to list

@@ -25,4 +25,5 @@ export interface DiscoveryJobResponse {
   direction?: string | null;
   best_sharpe?: number | null;
   best_return?: number | null;
+  seed?: number | null;
 }

@@ -254,21 +254,26 @@ def _reference_from_discovery_notes(
 ) -> ScreeningReference | None:
     """Match a discovery-exported strategy back to its champion metrics.
 
-    Seeded runs reproduce identical genome names, so when the validated
-    strategy's DSL is known the champion's DSL (minus name) must match too.
+    Seeded runs reproduce identical genome names and promote renames a clashing
+    strategy (``genome_x_2``), so when the validated strategy's DSL is known the
+    champion is matched purely by DSL body (name ignored). With no DSL, falls
+    back to name equality. Runs are scanned newest-first with no cutoff; the
+    first match wins.
     """
     wanted_body = _dsl_body(strategy_dsl) if strategy_dsl else None
-    rows = state.conn.execute(
-        """
+    sql = """
         SELECT br.id, res.notes, br.start_date, br.end_date
         FROM backtest_runs br
         JOIN backtest_results res ON res.run_id = br.id
         WHERE br.run_mode = 'discovery' AND br.status = 'completed'
-              AND res.notes LIKE ?
-        ORDER BY br.id DESC LIMIT 5
-        """,
-        (f'%{strategy_name.removeprefix("genome_")}%',),
-    ).fetchall()
+    """
+    params: tuple[str, ...] = ()
+    if wanted_body is None:
+        sql += " AND res.notes LIKE ?"
+        params = (f'%{strategy_name.removeprefix("genome_")}%',)
+    # DSL-known path scans every completed run: no sound SQL prefilter exists
+    # for a renamed strategy (hundreds of runs; JSON parse stops at first hit).
+    rows = state.conn.execute(sql + " ORDER BY br.id DESC", params)
     for run_id, notes, run_start, run_end in rows:
         try:
             payload = json.loads(notes)
@@ -281,12 +286,12 @@ def _reference_from_discovery_notes(
             if not isinstance(entry, dict):
                 continue
             dsl = entry.get("dsl")
-            name = dsl.get("name") if isinstance(dsl, dict) else None
-            if name != strategy_name:
+            if not isinstance(dsl, dict):
                 continue
-            if wanted_body is not None and (
-                not isinstance(dsl, dict) or _dsl_body(dsl) != wanted_body
-            ):
+            if wanted_body is not None:
+                if _dsl_body(dsl) != wanted_body:
+                    continue
+            elif dsl.get("name") != strategy_name:
                 continue
             # Validated on the holdout window → compare like for like.
             holdout = entry.get("holdout")

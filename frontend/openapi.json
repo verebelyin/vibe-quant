@@ -5711,6 +5711,17 @@
               }
             ],
             "title": "Best Return"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
           }
         },
         "type": "object",
@@ -5910,6 +5921,19 @@
               }
             ],
             "title": "Bootstrap Min Sharpe"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMaximum": 4294967296.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
           }
         },
         "type": "object",

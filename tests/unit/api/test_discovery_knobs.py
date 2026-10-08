@@ -240,3 +240,66 @@ async def test_warm_start_passes_through_when_compiler_matches(
     args = mock_popen.call_args.args[0]
     assert "--seed-from-run" in args
     assert args[args.index("--seed-from-run") + 1] == str(seed_id)
+
+
+async def test_seed_passes_through_to_command(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """vibe-quant-s8d9y: seed=123 → `--seed 123`; absent → no flag."""
+    ac, _state, job_mgr = client
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        r = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "seed": 123})
+    assert r.status_code == 201, r.text
+    args = mock_popen.call_args.args[0]
+    assert args[args.index("--seed") + 1] == "123"
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12346
+        r = await ac.post("/api/discovery/launch", json=_BASE_BODY)
+    assert r.status_code == 201, r.text
+    assert "--seed" not in mock_popen.call_args.args[0]
+
+
+@pytest.mark.parametrize("bad", [-1, 2**32])
+async def test_seed_out_of_range_422(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager], bad: int
+) -> None:
+    ac, _state, job_mgr = client
+    with patch.object(job_mgr, "is_process_alive", return_value=True):
+        r = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "seed": bad})
+    assert r.status_code == 422
+
+
+async def test_job_response_exposes_notes_seed(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """Completed run with notes seed → response.seed; run without notes → None."""
+    import json
+
+    ac, state, job_mgr = client
+    ids = []
+    for pid in (12345, 12346):
+        with (
+            patch.object(job_mgr, "is_process_alive", return_value=True),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value.pid = pid
+            r = await ac.post("/api/discovery/launch", json=_BASE_BODY)
+        assert r.status_code == 201, r.text
+        ids.append(r.json()["run_id"])
+    state.save_backtest_result(ids[0], {"notes": json.dumps({"seed": 7, "strategies": []})})
+
+    with patch.object(job_mgr, "is_process_alive", return_value=True):
+        r = await ac.get("/api/discovery/jobs")
+    assert r.status_code == 200, r.text
+    by_id = {j["run_id"]: j for j in r.json()}
+    assert by_id[ids[0]]["seed"] == 7
+    assert by_id[ids[1]]["seed"] is None

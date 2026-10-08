@@ -50,8 +50,8 @@ htmlcov/
 *.swo
 
 # Data directories (contain large files)
-data/catalog/
-data/archive/
+data/catalog
+data/archive
 data/state/
 data/logs/
 data/research/

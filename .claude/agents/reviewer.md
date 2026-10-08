@@ -24,6 +24,7 @@ Hunt for these, in priority order:
 - **Correctness**: off-by-one in bar/window indexing, look-ahead (using bar t+1 data at t), timezone/UTC slips, None handling, float equality, silent exception swallowing.
 - **Repo traps** (CLAUDE.md): `data_cls` as a string, engine reuse without `retain_log_guard`, unknown fields forwarded to NT StrategyConfig, SQL built with f-strings, a SQLite connection without WAL, `pandas-ta` instead of `pandas-ta-classic`, edits under `api/generated/`.
 - **Semantics drift**: any change that can move screening/validation/discovery numbers without an exactness proof or an explicit semantics-break note.
+- **Reachability**: every changed UI component is actually mounted (`rg` for its import up to a route); every changed function has a live caller. A criterion met in dead code is NOT MET.
 - **Tests**: does each test fail if the feature is removed? Tests that only assert "no exception" don't count.
 - **Simplicity**: duplication of existing helpers (`rg` for them), dead code, needless abstraction.
 

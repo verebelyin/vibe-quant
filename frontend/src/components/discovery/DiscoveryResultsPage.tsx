@@ -111,7 +111,17 @@ const columns: ColumnDef<DiscoveryJobResponse>[] = [
     accessorKey: "run_id",
     header: ({ column }) => <SortHeader column={column}>Run</SortHeader>,
     cell: ({ row }) => (
-      <span className="font-mono text-xs">#{row.original.run_id}</span>
+      <div className="flex flex-col">
+        <span className="font-mono text-xs">#{row.original.run_id}</span>
+        {row.original.seed != null && (
+          <span
+            className="select-all font-mono text-[10px] text-muted-foreground"
+            onClick={(e) => e.stopPropagation()}
+          >
+            seed {row.original.seed}
+          </span>
+        )}
+      </div>
     ),
   },
   {

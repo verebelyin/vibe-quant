@@ -73,6 +73,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
 
   // Warm-start (E5)
   const [seedRunId, setSeedRunId] = useState<string>("");
+  const [rngSeed, setRngSeed] = useState<string>("");
 
   // Bootstrap CI gate (bd-l8ka): low-budget regimes (4h/pop=12/gens=8) rarely
   // reach the 100-trade threshold; operators bypass via these footgun flags.
@@ -155,6 +156,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       return;
     }
 
+    if (rngSeed.trim() !== "" && !Number.isInteger(Number(rngSeed))) {
+      toast.error("Seed must be an integer");
+      return;
+    }
+
     launchMutation.mutate(
       {
         data: {
@@ -187,6 +193,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             Number.isFinite(Number(seedRunId)) && {
               seed_run_id: Number(seedRunId),
             }),
+          ...(rngSeed.trim() !== "" &&
+            Number.isInteger(Number(rngSeed)) && { seed: Number(rngSeed) }),
           ...(noBootstrapCi && { no_bootstrap_ci: true }),
           ...(bootstrapMinSharpe.trim() !== "" &&
             Number.isFinite(Number(bootstrapMinSharpe)) && {
@@ -468,7 +476,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               immigrantFraction !== 0.15 ||
               entropyThreshold !== 0.4 ||
               !crowdingEnabled ||
-              seedRunId.trim() !== "") && (
+              seedRunId.trim() !== "" ||
+              rngSeed.trim() !== "") && (
               <Badge variant="outline" className="text-[10px]">
                 modified
               </Badge>
@@ -526,6 +535,22 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 />
                 <p className="text-[10px] text-muted-foreground">
                   Multi-seed ensemble — median Sharpe across runs.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rng-seed">Seed</Label>
+                <Input
+                  id="rng-seed"
+                  type="number"
+                  min={0}
+                  max={4294967295}
+                  step={1}
+                  placeholder="random"
+                  value={rngSeed}
+                  onChange={(e) => setRngSeed(e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Replay a run: paste its seed (multi-seed: base seed; also match num_seeds).
                 </p>
               </div>
               <div className="space-y-2">
