@@ -30,6 +30,13 @@ Verified with `cmd --list-models` and a smoke run on 2026-10-04. Re-run `cmd --l
 
 ## Routing
 
+**Default implementer for well-specified work = `cmd --tier pro` (MiMo V2.6 Pro)**, not a Claude implementer: multi-file changes with named files, a written design, and deterministic tests (user, 2026-10-08). Track record (job 20261008-edge-hunt): UI selector + client regen, 3 strategy YAMLs, a funding event study — all clean first pass; one stall (37 min thinking, 0 edits) on an open-ended framework-design task → escalated to Sonnet. Watch for that failure mode: if a pro task shows no file edits after ~15 min (check the NDJSON log), stop it and escalate.
+
+Claude implementers remain the default for: semantics-critical changes (fitness/metric math, fill/data correctness, look-ahead-sensitive code), open-ended design, NT engine lifecycle, and fix rounds on those.
+
+Detached `cmd` runs don't notify the orchestrator — pair them with a background wait loop on their output files.
+
+
 Send a task to `cmd` only when **all** of these hold:
 
 1. The brief can name the exact files to touch or read and the exact output format.
