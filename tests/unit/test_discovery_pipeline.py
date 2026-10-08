@@ -14,6 +14,7 @@ from vibe_quant.discovery.operators import (
 )
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
+    DiscoveryEvaluationError,
     DiscoveryPipeline,
     DiscoveryResult,
     GenerationResult,
@@ -308,6 +309,7 @@ class TestPipelineRun:
             max_generations=50,
             convergence_generations=3,
             elite_count=1,
+            max_workers=1,  # local closure is unpicklable; pool path used to fail silently
         )
         pipe = DiscoveryPipeline(cfg, constant_backtest)
         result = pipe.run()
@@ -822,3 +824,33 @@ class TestElitePreservation:
         assert known[1] is fitness[ranked[1]]
         # Elites are cloned into first positions
         assert new_slp == elite_slp
+
+
+class TestEvaluationFailure:
+    def test_all_evaluations_raise_aborts_run(self) -> None:
+        def bt(_: StrategyChromosome) -> dict[str, Any]:
+            raise RuntimeError("boom")
+
+        pipe = DiscoveryPipeline(_make_config(population_size=6, max_generations=3, max_workers=1), bt)
+        with pytest.raises(DiscoveryEvaluationError, match="boom"):
+            pipe.run()
+
+    def test_single_crashing_genome_scores_zero_run_continues(self) -> None:
+        calls = {"n": 0}
+
+        def bt(chrom: StrategyChromosome) -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("one bad genome")
+            return _mock_backtest(chrom)
+
+        pipe = DiscoveryPipeline(
+            _make_config(population_size=6, max_generations=2, elite_count=1, max_workers=1), bt
+        )
+        result = pipe.run()
+        assert isinstance(result, DiscoveryResult)
+        assert result.total_candidates_evaluated >= 6
+        errored = [fr for fr in pipe._fitness_cache.values() if fr.error]
+        assert len(errored) == 1
+        assert errored[0].adjusted_score == 0.0
+        assert "one bad genome" in (errored[0].error or "")

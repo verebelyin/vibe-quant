@@ -608,3 +608,50 @@ class TestSlTpPenalty:
         r = _make_result()
         with pytest.raises(AttributeError):
             r.sharpe_ratio = 999.0  # type: ignore[misc]
+
+
+class TestEvaluationErrorMarker:
+    def test_evaluate_single_records_error_on_raise(self) -> None:
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            raise ValueError("boom")
+
+        r = evaluate_population([_make_chromosome()], bt_fn)[0]
+        assert r.error is not None
+        assert "ValueError" in r.error
+        assert "boom" in r.error
+        assert r.adjusted_score == 0.0
+
+    def test_parallel_future_failure_records_error(self) -> None:
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:  # local closure: unpicklable
+            return {}
+
+        chroms = [_make_chromosome() for _ in range(3)]
+        results = evaluate_population(chroms, bt_fn, max_workers=2)
+        assert len(results) == 3
+        assert all(r.error for r in results)
+        assert all(r.adjusted_score == 0.0 for r in results)
+
+    def test_backtest_error_key_is_copied(self) -> None:
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {
+                "sharpe_ratio": -1.0,
+                "max_drawdown": 1.0,
+                "profit_factor": 0.0,
+                "total_trades": 0,
+                "error": "RuntimeError: nt died",
+            }
+
+        r = evaluate_population([_make_chromosome()], bt_fn)[0]
+        assert r.error == "RuntimeError: nt died"
+
+    def test_success_has_no_error(self) -> None:
+        def bt_fn(_: StrategyChromosome) -> dict[str, Any]:
+            return {
+                "sharpe_ratio": 2.0,
+                "max_drawdown": 0.2,
+                "profit_factor": 2.5,
+                "total_trades": 100,
+                "total_return": 0.5,
+            }
+
+        assert evaluate_population([_make_chromosome()], bt_fn)[0].error is None

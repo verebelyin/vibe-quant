@@ -168,6 +168,9 @@ class NTBacktestFn:
                 "max_drawdown": 1.0,
                 "profit_factor": 0.0,
                 "total_trades": 0,
+                # Marker only (numbers unchanged): lets the pipeline tell a
+                # crashed evaluation from a genuinely bad strategy.
+                "error": f"{type(exc).__name__}: {exc}",  # type: ignore[dict-item]
             }
 
 

@@ -62,6 +62,10 @@ _MAX_OFFSPRING_RETRIES: int = 10
 _MIN_CROSS_WINDOW_DAYS: int = 7
 
 
+class DiscoveryEvaluationError(RuntimeError):
+    """Every evaluation in a batch raised: systemic failure, not bad strategies."""
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -442,6 +446,7 @@ class DiscoveryPipeline:
         self._total_evaluated: int = 0
         self._all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
         self._executor: ProcessPoolExecutor | None = None
+        self._ok_evals: int = 0  # evaluations without `error` this run
 
     # -- public API ---------------------------------------------------------
 
@@ -537,6 +542,14 @@ class DiscoveryPipeline:
                 min_trades=cfg.min_trades,
                 timeframe=cfg.timeframe,
             )
+            n_failed = sum(1 for fr in fresh if fr.error)
+            self._ok_evals += len(fresh) - n_failed
+            # Systemic failure (pickling, catalog, NT crash) must not end as
+            # "completed, 0 champions". A lone crash in a run that has already
+            # evaluated fine is just a zero-scored genome.
+            if fresh and n_failed == len(fresh) and (len(fresh) >= 2 or self._ok_evals == 0):
+                msg = f"all {len(fresh)} evaluations failed; first: {fresh[0].error}"
+                raise DiscoveryEvaluationError(msg)
             for (key, idx), fr in zip(todo.items(), fresh, strict=True):
                 self._fitness_cache[key] = fr
                 self._total_evaluated += 1
@@ -549,7 +562,19 @@ class DiscoveryPipeline:
 
         Returns:
             DiscoveryResult containing generation history and top strategies.
+
+        Raises:
+            DiscoveryEvaluationError: a whole evaluation batch raised.
         """
+        try:
+            return self._run()
+        finally:
+            # Also on abort: never leak the worker pool.
+            if self._executor is not None:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                self._executor = None
+
+    def _run(self) -> DiscoveryResult:
         cfg = self.config
         self._apply_indicator_pool_filter()
 
@@ -571,6 +596,7 @@ class DiscoveryPipeline:
 
         self._fitness_cache = {}
         self._total_evaluated = 0
+        self._ok_evals = 0
         self._all_scored = []
         self._guardrail_rejections = []
 

@@ -7,7 +7,7 @@ overtrading penalty, complexity penalty, and Pareto ranking for selection.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,8 @@ class FitnessResult:
         adjusted_score: Final score after all penalties.
         passed_filters: Whether candidate passed overfitting filters.
         filter_results: Per-filter pass/fail results.
+        error: "ExcType: msg" when the evaluation raised (zero-fitness
+            stand-in); None for a normal result. Marker only.
     """
 
     sharpe_ratio: float
@@ -112,6 +114,7 @@ class FitnessResult:
     skewness: float = 0.0
     kurtosis: float = 3.0
     trade_returns: tuple[float, ...] = ()
+    error: str | None = None
 
 
 # Pre-compute inverse ranges for normalization to avoid repeated division
@@ -426,9 +429,9 @@ def _evaluate_single(
             indicators,
             bt.get("total_trades", "?"),
         )
-    except Exception:
+    except Exception as e:
         logger.warning("Backtest failed for chromosome %s, assigning zero fitness", chrom.uid, exc_info=True)
-        return _zero
+        return replace(_zero, error=f"{type(e).__name__}: {e}")
 
     import math as _math
 
@@ -497,6 +500,7 @@ def _evaluate_single(
         skewness=float(bt.get("skewness", 0.0)),
         kurtosis=float(bt.get("kurtosis", 3.0)),
         trade_returns=tuple(bt.get("trade_returns", ())),  # type: ignore[arg-type]
+        error=str(bt["error"]) if bt.get("error") else None,
     )
 
 
@@ -636,9 +640,9 @@ def _evaluate_parallel(
             idx = future_to_idx[future]
             try:
                 results[idx] = future.result()
-            except Exception:
+            except Exception as e:
                 logger.warning("Parallel eval failed for chromosome %d", idx, exc_info=True)
-                results[idx] = _zero
+                results[idx] = replace(_zero, error=f"{type(e).__name__}: {e}")
 
     if executor is not None and isinstance(executor, Executor):
         _run_with(executor)
