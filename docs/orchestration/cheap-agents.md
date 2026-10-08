@@ -26,6 +26,7 @@ Verified with `cmd --list-models` and a smoke run on 2026-10-04. Re-run `cmd --l
 | `fast` | `deepseek/deepseek-v4.1-flash-fast` | `qwen/qwen3.8-flash`, `z-ai/glm-5.3-flash` | single-file mechanical edits, bulk classification/extraction to JSON, log summarisation |
 | `code` | `deepseek/deepseek-v4.1-flash` at `--effort max` (script default for this tier; user pick 2026-10-08, replaced `zai-org/glm-5.3`) | `zai-org/glm-5.3`, `qwen/qwen3.8-max-0902`, `minimaxai/minimax-m3` | multi-file but fully specified changes, tests from a written spec, boilerplate |
 | `pro` | `xiaomi/mimo-v2.6-pro` (fixed reasoning effort — passing `--effort` makes cmd fail; user 2026-10-08: "better than DeepSeek, ~Sonnet 5.5 level") | `xiaomi/mimo-v2.6-pro-ultraspeed` | harder multi-file / judgement-light coding a Claude implementer would otherwise do; fix rounds that need care |
+| (trial) | `qwen/qwen3.8-max-0902` at `--effort xhigh` (supported: low, medium, xhigh — NOT max) | — | A/B vs MiMo 2026-10-08 (same brief): equivalent correct diff, 329s/702k in vs MiMo 315s/509k; small UI task 165s/232k, clean but kept the wrong (light-theme) Toaster variant → 1 fix round. Peer of MiMo; MiMo stays default (cheaper) |
 | `long` | `moonshotai/kimi-k3` (1M ctx) | `z-ai/glm-5.3-flash` (1M), `xiaomi/mimo-v2.6-pro` | reading a lot to produce a short structured output |
 
 ## Routing
