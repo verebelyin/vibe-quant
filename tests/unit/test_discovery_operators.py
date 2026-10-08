@@ -233,3 +233,21 @@ class TestThresholdRanges:
         assert "ATR" not in THRESHOLD_RANGES
         lo, hi = THRESHOLD_RANGES["NATR"]
         assert hi - lo >= 0.25, f"NATR range too narrow: ({lo}, {hi})"
+
+
+def test_new_uid_deterministic_under_seed() -> None:
+    """_new_uid must draw from the global RNG so random.seed() makes uids reproducible."""
+    import random
+    import re
+
+    from vibe_quant.discovery.operators import _new_uid
+
+    random.seed(1)
+    a = [_new_uid() for _ in range(3)]
+    random.seed(1)
+    b = [_new_uid() for _ in range(3)]
+    assert a == b
+    for uid in a:
+        assert re.fullmatch(r"[0-9a-f]{12}", uid)
+    random.seed(2)
+    assert len({_new_uid() for _ in range(1000)}) == 1000

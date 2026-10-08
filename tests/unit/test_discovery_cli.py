@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 from typing import TYPE_CHECKING
 
 import pytest
@@ -645,3 +646,11 @@ def test_guardrail_flags_propagate_to_pipeline_config(tmp_path: Path, monkeypatc
     assert cfg.require_dsr is False
     assert cfg.bootstrap_min_sharpe == 0.3
     assert cfg.bootstrap_ci_level == 0.8
+
+
+def test_mock_backtest_is_picklable_by_module() -> None:
+    """_mock_backtest must live in an importable module so workers can unpickle it."""
+    from vibe_quant.discovery.__main__ import _mock_backtest
+
+    assert _mock_backtest.__module__ == "vibe_quant.discovery.mock_backtest"
+    assert pickle.loads(pickle.dumps(_mock_backtest)) is _mock_backtest

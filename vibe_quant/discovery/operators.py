@@ -9,7 +9,6 @@ from __future__ import annotations
 import heapq
 import math
 import random
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -264,7 +263,7 @@ class StrategyChromosome:
 
 def _new_uid() -> str:
     """Fresh 12-hex-char chromosome uid."""
-    return uuid.uuid4().hex[:12]
+    return f"{random.getrandbits(48):012x}"
 
 
 def _random_int_in(lo: float, hi: float) -> float:
