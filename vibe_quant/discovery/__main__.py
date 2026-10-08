@@ -152,6 +152,7 @@ def _run_multi_seed(
     holdout_backtest_fn: object = None,
     backtest_fn_factory: object = None,
     seed_chromosomes: list[StrategyChromosome] | None = None,
+    base_seed: int = 42,
 ) -> DiscoveryResult:
     """Run the discovery pipeline multiple times with different random seeds.
 
@@ -191,7 +192,7 @@ def _run_multi_seed(
     result_metadata: DiscoveryResult | None = None
 
     for seed_idx in range(num_seeds):
-        seed_val = seed_idx * 7919 + 42  # Deterministic but varied seeds
+        seed_val = base_seed + seed_idx * 7919  # Deterministic but varied seeds
         random.seed(seed_val)
 
         logger.info(
@@ -491,6 +492,11 @@ def wfa_entry(wfa: WFARollingResult) -> dict[str, object]:
     }
 
 
+def _resolve_seed(arg: int | None) -> int:
+    """Explicit --seed, else a fresh OS-entropy seed (recorded so runs can be replayed)."""
+    return arg if arg is not None else random.SystemRandom().randrange(2**32)
+
+
 def _run_provenance_notes(
     result: DiscoveryResult,
     *,
@@ -504,6 +510,7 @@ def _run_provenance_notes(
     wfa_oos_step_days: int,
     wfa_min_consistency: float,
     num_seeds: int,
+    seed: int,
     bootstrap_min_sharpe: float,
     holdout_min_sharpe: float,
 ) -> dict[str, object]:
@@ -539,6 +546,8 @@ def _run_provenance_notes(
         "wfa_oos_step_days": wfa_oos_step_days if wfa_oos_step_days > 0 else None,
         "wfa_min_consistency": wfa_min_consistency if wfa_oos_step_days > 0 else None,
         "num_seeds": num_seeds if num_seeds > 1 else None,
+        # Single-seed: the GA seed. Multi-seed: base; seed i = base + i * 7919.
+        "seed": seed,
         "bootstrap_min_sharpe": bootstrap_min_sharpe,
     }
 
@@ -645,6 +654,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of random seeds to run. >1 enables multi-seed ensemble: "
         "runs GA N times, ranks by median Sharpe (default: 1)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RNG seed for reproducible GA runs. Default: random (recorded in "
+        "notes). With --num-seeds >1 it is the base: seed i = base + i*7919 "
+        "(default base 42).",
     )
     parser.add_argument(
         "--bootstrap-min-sharpe",
@@ -916,6 +933,9 @@ def main() -> int:
 
         if num_seeds == 1:
             # Single-seed run (default)
+            seed = _resolve_seed(args.seed)
+            logger.info("Discovery seed: %d", seed)
+            random.seed(seed)
             pipeline = DiscoveryPipeline(
                 config=config,
                 backtest_fn=backtest_fn,
@@ -927,6 +947,7 @@ def main() -> int:
             result = pipeline.run()
         else:
             # Multi-seed ensemble: run N times with different seeds
+            seed = args.seed if args.seed is not None else 42
             result = _run_multi_seed(
                 num_seeds=num_seeds,
                 config=config,
@@ -935,6 +956,7 @@ def main() -> int:
                 holdout_backtest_fn=holdout_backtest_fn,
                 backtest_fn_factory=backtest_fn_factory,
                 seed_chromosomes=seed_chromosomes,
+                base_seed=seed,
             )
 
         import json
@@ -951,6 +973,7 @@ def main() -> int:
             wfa_oos_step_days=args.wfa_oos_step_days,
             wfa_min_consistency=args.wfa_min_consistency,
             num_seeds=num_seeds,
+            seed=seed,
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             holdout_min_sharpe=args.holdout_min_sharpe,
         )
