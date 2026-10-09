@@ -107,6 +107,10 @@ open:
 - **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board read --global --recent 30` (the protocol makes every worker do this first); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
 - **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
 
+## Self-improving prompts
+
+Agent definitions (`.claude/agents/*.md`), the orchestrate skill and the worker protocol are living documents. Writing roles may edit their **own** definition; read-only roles and `cmd` workers propose exact changes on `#self-improvement` (persistent); the chief reviews every proposal/self-edit at each Land step and keeps, adjusts or reverts it, logging a line in the file's `## Changelog`. Nobody weakens gates, maker-checker, verification rules or hard rules without the user's approval.
+
 ## Workspace
 
 Each orchestrated job gets `data/swarm/<job-id>/` (gitignored), where `<job-id>` = `YYYYMMDD-<slug>`:

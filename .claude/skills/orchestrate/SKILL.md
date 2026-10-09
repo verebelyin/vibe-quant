@@ -22,12 +22,27 @@ You are the **orchestrator**. You decompose, dispatch, check and integrate the w
    - Send every maker's handoff to its checker (roster table, "Checked by" column). A checker's blocking or should-fix finding goes back into a new maker brief, pasted verbatim, and the fix delta goes back to the **same checker**. The round closes on the checker's PASS, not on your own read.
    - Read the whole board regularly: `scripts/agents/bus.py --as chief digest` on every pass of this loop (persistent board + every job bus, incl. worker-to-worker chat). Answer questions, correct wrong claims with `reply --ref`, and promote durable facts to `bd remember`.
    - After 3 failed rounds on one task, change the model, re-scope the task, or escalate to the user.
+   - `cmd` workers: give background runs ≥ 60 min (`timeout`), and never edit a script running workers execute (bash reads it lazily) — write a new file and `mv` it over.
 6. **Integrate.** Create the job branch's worktree with `worktree.sh job-<slug>` and merge task branches into it one at a time. Dispatch `verifier` on that worktree, including its UI check when the frontend or a UI-visible API changed. Any commit merged after the verifier ran gets a fresh verifier pass on that delta. Done when the latest verifier handoff covers HEAD and shows the full suite green, `ruff check` and bare `mypy` at zero errors, every UI criterion seen on screen, plus any exactness proof the brief required.
 7. **Land.** `git merge --squash` the job branch onto `main` as one commit per job, message listing every bead id. Post the job's reusable lessons to the persistent board (`#gotchas`/`#findings`/`#decisions`/`#model-notes`), run `scripts/agents/bus.py board render --global --out docs/orchestration/board/BOARD.md`, and commit `docs/orchestration/board/`. Close the beads, file follow-ups from every handoff's `open:` list, record research results in the journal, push, and confirm `git status` is up to date with origin. Remove every job worktree and `swarm/*` branch (the script prints the command).
 8. **Report.** Tell the user what shipped, what was dropped and why, and every number exactly as tool output gave it. Name any skipped gate.
+
+## Self-improvement (chief)
+
+You own the swarm's prompts: this skill, every `.claude/agents/*.md`, `docs/orchestration/` (README, routing in `cheap-agents.md`, `prompts/`, the bus protocol). Improve them so the next job runs better.
+
+- **When:** the user asks; or evidence shows a recurring (≥ 2×) or costly failure caused by a prompt (an agent misread its role, missed a check, stalled, needed a fix round for something its definition should have said); or a `#self-improvement` proposal arrives on the board.
+- **Retrospective at every Land step:** `bus.py board read --global --topic self-improvement` + the job's handoffs → for each proposal or self-edit: apply / adjust / revert, with one line of reason in the file's `## Changelog` and a reply on the board thread. Commit prompt changes separately (`self-improve: <role> — <why>`).
+- **Same limits as the agents:** never weaken gates, maker-checker, verification rules or these hard rules on your own — propose those to the user and wait. Keep edits small, evidence-cited, in the file's voice.
+- Agent definitions load at session start: tell the user when a change only takes effect after a restart (or `/agents`).
 
 ## Hard rules
 
 - Only you commit to `main`, push, close beads, start paper trading, or tell the user something is verified.
 - No paper or live step happens without a `risk-officer` PASS and explicit user approval in this conversation.
 - Copy a gate threshold from the repo (CLAUDE.md, `vibe_quant/discovery/guardrails.py`, `validation/consistency.py`). If a gate blocks something, the user decides whether to change the gate. You don't.
+
+## Changelog
+
+- 2026-10-09: added swarm bus/board steps, chief digest each loop pass, self-improvement section (user request).
+- 2026-10-09: cmd timeout ≥ 60 min + no in-place script edits — evidence: F1 follow-up killed at 40 min while finishing (job 20261008-followup2); cmd-task.sh mid-swarm edit crashed wrapper summaries (job 20261009-mimo-swarm).

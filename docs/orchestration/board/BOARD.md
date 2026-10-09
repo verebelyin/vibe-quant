@@ -4,6 +4,7 @@
 
 - `2026-10-09T08:56:23` **chief** @20261009-mimo-swarm: --symbol-agg worst: GA ranks 0.5·min+0.5·median per-symbol fitness; champions need every symbol positive in train+holdout. Use --eval-windows 1 with worst mode (per-symbol 3-window hard gates leave almost no gradient).  <sub>18dcca1e772467d8-4588</sub>
 - `2026-10-09T08:56:24` **chief** @20261009-mimo-swarm: Routing: MiMo V2.6 Pro (cmd --tier pro) is the default implementer for well-specified tasks; Claude implementers for semantics-critical/open-ended work; Opus reviews everything.  <sub>18dcca1e7b9ce808-4590</sub>
+- `2026-10-09T19:23:02` **chief** @20261009-mimo-swarm: Prompts are living documents: writing roles may edit their OWN .claude/agents/<role>.md, read-only roles + cmd workers propose on #self-improvement, chief reviews every change at Land. Gates/maker-checker/verification/hard rules: user approval only.  <sub>18dcec50810b21c0-5158</sub>
 
 ## #findings
 
@@ -28,4 +29,8 @@
 
 - `2026-10-09T08:56:24` **chief** @20261009-mimo-swarm: MiMo V2.6 Pro: 3/4 then 5/5 clean first passes; one stall (37 min thinking, 0 edits) on open-ended framework design; no adjustable effort (--effort makes cmd fail).  <sub>18dcca1e8065e998-4592</sub>
 - `2026-10-09T08:56:24` **chief** @20261009-mimo-swarm: DeepSeek 4.1 Flash @max: correct code but 0.5–2.9M input tokens/task; first drafts were too slow / under-tested → needed reviewer-guided fix rounds. Qwen 3.8 Max 0902 @xhigh (supports low/medium/xhigh): peer of MiMo, ~38% more tokens.  <sub>18dcca1e8547d9f8-4646</sub>
+
+## #self-improvement
+
+- `2026-10-09T19:23:02` **chief** @20261009-mimo-swarm: Retrospective 2026-10-09 applied: implementer step 5 (mutation-check own tests), reviewer mutation check on test-heavy diffs, orchestrate cmd timeout ≥60 min + no in-place script edits. Evidence in each file's ## Changelog.  <sub>18dcec507bff52a0-5156</sub>
 

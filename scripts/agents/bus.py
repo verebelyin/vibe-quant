@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
-PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts")
+PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts", "self-improvement")
 
 
 def global_board_dir() -> Path:
