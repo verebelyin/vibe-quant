@@ -1,3 +1,4 @@
+// orval pinned to 8.4.0 (exact): 8.39 generates GET endpoints as mutations with this config and breaks callers — upgrade deliberately (bead vibe-quant-4sagi).
 import { defineConfig } from "orval";
 
 export default defineConfig({

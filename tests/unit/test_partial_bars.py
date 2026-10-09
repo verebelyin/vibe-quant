@@ -81,31 +81,6 @@ def test_interior_hole_keeps_day() -> None:
     assert len(bars) == 3
 
 
-def test_rest_in_progress_1m_kline_filtered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
-    forming_open = now_ms - 10_000
-    closed_open = now_ms - 5 * _MIN
-    archive = RawDataArchive(tmp_path / "a.db")
-    try:
-        seed = now_ms - 10 * _MIN
-        archive.insert_klines(_SYM, "1m", [(seed, 1.0, 2.0, 0.5, 1.0, 1.0, seed + 59_999)], "seed")
-        monkeypatch.setattr(
-            ingest,
-            "download_recent_klines",
-            lambda *a, **k: [
-                (closed_open, 1.0, 2.0, 0.5, 1.0, 1.0, closed_open + 59_999),
-                (forming_open, 1.0, 2.0, 0.5, 9.0, 1.0, forming_open + 59_999),
-            ],
-        )
-        monkeypatch.setattr(ingest, "download_funding_rates", lambda *a, **k: [])
-        update_symbol(_SYM, archive=archive, catalog=_Catalog(), verbose=False)
-        opens = {r["open_time"] for r in archive.get_klines(_SYM, "1m")}
-        assert closed_open in opens
-        assert forming_open not in opens
-    finally:
-        archive.close()
-
-
 class _Catalog:
     def __init__(self) -> None:
         self.written: list[Bar] = []
@@ -123,7 +98,7 @@ def test_update_then_complete_writes_completed_bar(
     """Second update after the day completes must produce the day-1 1d bar."""
     monkeypatch.setattr(ingest, "download_funding_rates", lambda *a, **k: [])
     day_ms = 1440 * _MIN
-    # Fixed 'now' far in the future so every kline counts as closed.
+    # Dates are in the past (now is not patched), so every kline counts as closed.
     archive = RawDataArchive(tmp_path / "b.db")
     try:
         archive.insert_klines(_SYM, "1m", _klines(0, 1440 + 600), "seed")

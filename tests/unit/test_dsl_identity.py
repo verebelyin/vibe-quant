@@ -63,8 +63,7 @@ def test_both_modules_use_the_shared_function_object(monkeypatch) -> None:
     # (b) the old private duplicates are gone
     assert not hasattr(consistency, "_dsl_body")
     assert not hasattr(discovery, "_dsl_body_key")
-    # (c) the real call paths route through the shared name (robust to either
-    #     from-import or module-attribute call style)
+    # (c) the real call paths route through each module's dsl_body_key name
     calls: list[dict[str, object]] = []
 
     def record(dsl: dict[str, object]) -> str:
@@ -84,7 +83,6 @@ def test_both_modules_use_the_shared_function_object(monkeypatch) -> None:
     class _StubState:
         conn = _StubConn()
 
-    monkeypatch.setattr(identity, "dsl_body_key", record)
     monkeypatch.setattr(consistency, "dsl_body_key", record)
     monkeypatch.setattr(discovery, "dsl_body_key", record)
 

@@ -1,19 +1,27 @@
 """compute_kama must be bit-identical to pandas_ta_classic.kama.
 
-The plugin ports the library's recurrence to numpy for speed (the library
-loops with ``.iloc`` per element — ~60x slower per call). Any arithmetic
-divergence would silently change screening/validation results, so equality
-is asserted exactly (not approximately).
+The plugin ports the library's math to numpy for speed (the library loops with
+``.iloc`` per element and the pandas prep is rebuilt on every call). Any
+arithmetic divergence would silently change screening/validation results, so
+equality is asserted exactly (not approximately) for every period in the
+registry's param range across buffer sizes, flat bars, and NaN gaps, and the
+fast path's one-shot self-check fallback is exercised with a perturbed port.
 """
 
 from __future__ import annotations
+
+import logging
 
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
 import pytest
 
+from vibe_quant.dsl.indicators import indicator_registry
+from vibe_quant.dsl.plugins import kama as kama_mod
 from vibe_quant.dsl.plugins.kama import compute_kama
+
+FAST, SLOW = 2, 30  # the plugin's fixed fast/slow (Kaufman canonical)
 
 
 def _df(seed: int, n: int) -> pd.DataFrame:
@@ -28,6 +36,54 @@ def _df(seed: int, n: int) -> pd.DataFrame:
             "volume": pd.Series(np.full(n, 100.0)),
         }
     )
+
+
+def _flat_df(n: int) -> pd.DataFrame:
+    """Constant price: every diff is exactly 0, exercising non_zero_range's
+    zero-guard epsilon add."""
+    close = pd.Series(np.full(n, 100.0))
+    return pd.DataFrame(
+        {"open": close, "high": close, "low": close, "close": close,
+         "volume": pd.Series(np.full(n, 1.0))}
+    )
+
+
+def _gap_df(seed: int, n: int) -> pd.DataFrame:
+    """Random walk with NaN gaps in close."""
+    df = _df(seed, n)
+    close = df["close"].to_numpy(copy=True)
+    close[:: 7] = np.nan
+    df["close"] = pd.Series(close)
+    return df
+
+
+def _walk_with_zero_diff(seed: int, n: int) -> pd.DataFrame:
+    """Random walk with one exactly-equal consecutive pair (epsilon path)."""
+    df = _df(seed, n)
+    if n >= 3:
+        close = df["close"].to_numpy(copy=True)
+        close[2] = close[1]
+        df["close"] = pd.Series(close)
+    return df
+
+
+def _shapes(seed: int, n: int) -> list[tuple[str, pd.DataFrame]]:
+    return [
+        ("walk", _df(seed, n)),
+        ("zerodiff", _walk_with_zero_diff(seed, n)),
+        ("flat", _flat_df(n)),
+        ("gaps", _gap_df(seed, n)),
+    ]
+
+
+def _periods() -> list[int]:
+    spec = indicator_registry.get("KAMA")
+    assert spec is not None
+    lo, hi = spec.param_ranges["period"]
+    return list(range(int(lo), int(hi) + 1))
+
+
+PERIODS = _periods()
 
 
 @pytest.mark.parametrize("seed", [0, 1, 42])
@@ -58,12 +114,77 @@ def test_too_short_series_returns_nan() -> None:
 def test_flat_series_exact() -> None:
     """Constant price exercises non_zero_range's zero-guard epsilon."""
     n = 100
-    close = pd.Series(np.full(n, 100.0))
-    df = pd.DataFrame(
-        {"open": close, "high": close, "low": close, "close": close,
-         "volume": pd.Series(np.full(n, 1.0))}
-    )
+    df = _flat_df(n)
     expected = ta.kama(df["close"], length=10)
     actual = compute_kama(df, {"period": 10})
     assert expected is not None
     np.testing.assert_array_equal(actual.to_numpy(), expected.to_numpy())
+
+
+def test_fast_slow_params_match_library() -> None:
+    """The plugin fixes fast/slow at Kaufman's canonical 2/30 — the output must
+    match the library with those params made explicit."""
+    df = _df(3, 300)
+    expected = ta.kama(df["close"], length=10, fast=FAST, slow=SLOW)
+    actual = compute_kama(df, {"period": 10})
+    assert expected is not None
+    np.testing.assert_array_equal(actual.to_numpy(), expected.to_numpy())
+    assert actual.name == f"KAMA_10_{FAST}_{SLOW}" == expected.name
+
+
+@pytest.mark.parametrize("period", PERIODS)
+def test_new_equals_old_all_periods_and_shapes(period: int) -> None:
+    """Zero-tolerance new-vs-old sweep: every period in the registry's param
+    range at buffer sizes {15, 40, 400, period-1, period+1, 2*period} over
+    random walks, flat bars, and NaN gaps. Both the raw port and the public
+    entry point must equal the pre-port pandas implementation exactly."""
+    sizes = sorted({15, 40, 400, period - 1, period + 1, 2 * period})
+    for n in sizes:
+        for shape, df in _shapes(period * 31 + n, n):
+            expected = kama_mod._kama_pandas(df, period)
+            np.testing.assert_array_equal(
+                kama_mod._kama_port(df, period).to_numpy(),
+                expected.to_numpy(),
+                err_msg=f"port != old: period={period} n={n} shape={shape}",
+            )
+            np.testing.assert_array_equal(
+                compute_kama(df, {"period": period}).to_numpy(),
+                expected.to_numpy(),
+                err_msg=f"compute_kama != old: period={period} n={n} shape={shape}",
+            )
+
+
+def test_selfcheck_passes_on_this_platform() -> None:
+    """On this platform the fast path must verify clean — otherwise the port is
+    dead code and every compute_kama call silently takes the slow fallback."""
+    assert kama_mod._kama_port_ok() is True
+
+
+def test_selfcheck_fallback_on_perturbed_fast_path(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If the fast path disagrees with the old path the self-check must fall
+    back to the old output and warn exactly once (one-shot cached check)."""
+    real_port = kama_mod._kama_port
+
+    def perturbed(df: pd.DataFrame, period: int) -> pd.Series:
+        out = real_port(df, period)
+        out.iloc[period + 5] = out.iloc[period + 5] + 1e-9
+        return out
+
+    monkeypatch.setattr(kama_mod, "_kama_port", perturbed)
+    kama_mod._kama_port_ok.cache_clear()
+    df = _df(11, 300)
+    try:
+        with caplog.at_level(logging.WARNING, logger=kama_mod.__name__):
+            first = compute_kama(df, {"period": 10})
+            second = compute_kama(df, {"period": 15})
+        expected_10 = kama_mod._kama_pandas(df, 10)
+        expected_15 = kama_mod._kama_pandas(df, 15)
+        np.testing.assert_array_equal(first.to_numpy(), expected_10.to_numpy())
+        np.testing.assert_array_equal(second.to_numpy(), expected_15.to_numpy())
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "falling back" in warnings[0].getMessage()
+    finally:
+        kama_mod._kama_port_ok.cache_clear()

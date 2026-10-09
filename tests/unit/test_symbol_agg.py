@@ -645,3 +645,4 @@ def test_portfolio_pin_nonzero_penalties() -> None:
     assert r.sl_tp_penalty == 0.0
     assert r.symbol_scores is None
     assert r.adjusted_score == pytest.approx(r.raw_score - r.complexity_penalty - r.overtrade_penalty)
+    assert r.adjusted_score == 0.22833333333333344

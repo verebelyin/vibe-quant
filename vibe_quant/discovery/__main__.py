@@ -1116,8 +1116,10 @@ def main() -> int:
                 }
             # Full-range headline (single continuous backtest) for like-for-like
             # promotion/replay_drift; sharpe/trades above stay as the multi-window
-            # robustness aggregate. full_range_fn(chrom) never raises (NTBacktestFn
-            # swallows backtest errors into failure metrics). bd vibe-quant-rewru.
+            # robustness aggregate. full_range_fn(chrom) raises
+            # DataUnavailableError on missing data (the run fails); other
+            # backtest errors are swallowed into failure metrics. bd
+            # vibe-quant-rewru.
             entry.update(
                 full_range_headline(
                     full_range_fn(chrom) if full_range_fn is not None else None,

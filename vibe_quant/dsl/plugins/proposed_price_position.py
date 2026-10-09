@@ -16,7 +16,8 @@ import pandas as pd  # noqa: TC002
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 
-def compute_price_position(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+def _price_position_pandas(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+    """Reference implementation (pandas rolling) — kept for equivalence tests."""
     period_raw = params.get('period', 14)
     period = int(period_raw) if isinstance(period_raw, (int, float)) else 14
     if period < 1:
@@ -32,6 +33,42 @@ def compute_price_position(df: pd.DataFrame, params: dict[str, object]) -> pd.Se
     result = result.where(range_span.notna(), other=np.nan)
     result.index = df.index
     return result
+
+
+def compute_price_position(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+    period_raw = params.get('period', 14)
+    period = int(period_raw) if isinstance(period_raw, (int, float)) else 14
+    if period < 1:
+        period = 1
+    close = df['close'].to_numpy(dtype=np.float64)
+    high = df['high'].to_numpy(dtype=np.float64)
+    low = df['low'].to_numpy(dtype=np.float64)
+    n = low.shape[0]
+    lowest_low = np.full(n, np.nan, dtype=np.float64)
+    highest_high = np.full(n, np.nan, dtype=np.float64)
+    if n >= period:
+        if np.isnan(high).any() or np.isnan(low).any():
+            # pandas rolling with min_periods=period makes any NaN-containing
+            # window NaN; scipy min/max filters propagate NaN inconsistently.
+            # NaN close needs no guard: it only poisons its own row's numerator
+            # on both paths.
+            return _price_position_pandas(df, params)
+
+        from scipy.ndimage import maximum_filter1d, minimum_filter1d
+
+        # Rolling min/max are exact selections (no floating summation), so the
+        # scipy windows are bit-identical to pandas rolling.
+        mn = minimum_filter1d(low, size=period, origin=(period - 1) // 2)
+        mx = maximum_filter1d(high, size=period, origin=(period - 1) // 2)
+        # Outputs >= period - 1 have full in-bounds windows; the first
+        # period - 1 values stay NaN exactly as min_periods=period does.
+        lowest_low[period - 1 :] = mn[period - 1 :]
+        highest_high[period - 1 :] = mx[period - 1 :]
+    range_span = highest_high - lowest_low
+    numerator = close - lowest_low
+    result = numerator / np.where(range_span != 0, range_span, np.nan)
+    result = np.where(np.isnan(range_span), np.nan, result)
+    return pd.Series(result, index=df.index)
 
 
 indicator_registry.register_spec(

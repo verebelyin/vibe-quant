@@ -46,6 +46,7 @@ from vibe_quant.discovery.operators import (
     mutate,
     tournament_select,
 )
+from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.utils import compute_day_count
 
@@ -559,6 +560,84 @@ class DiscoveryPipeline:
         aux_data.configure(aux_data.archive_path(), DEFAULT_CATALOG_PATH)
         aux_data.preflight(list(INDICATOR_POOL), cfg.symbols, cfg.start_date, end or cfg.end_date)
 
+    def _preflight_bars(self) -> None:
+        """Fail before the GA starts if the catalog lacks bars for a run window.
+
+        Mirrors the GA workers' data setup (NTBacktestFn -> NTScreeningRunner):
+        every window a worker will actually run must have catalog bars for
+        every run symbol at the strategy timeframe -- the train fn's eval
+        sub-windows (``fn.windows``, worst-of-N), the holdout fn's window, and
+        the cross-window / WFA gate windows. ``require_bars_in_window`` only
+        checks interval OVERLAP, so a covered full-span window can hide empty
+        sub-windows; checking the exact worker windows catches that before the
+        GA instead of raising MissingBarDataError inside a worker.
+
+        MissingBarDataError (a DataUnavailableError) propagates so the run
+        aborts before any evaluation instead of breeding around missing data.
+        An unknown timeframe does too (never a silent skip). A plain ValueError
+        from the cross-window / WFA range helpers is a CONFIG problem, not data
+        coverage: those windows are skipped here and the gates fail closed on
+        the same error after the GA exactly as before (chief, 2026-10-09); a
+        DataUnavailableError from them re-raises (it is missing data, never
+        config).
+
+        Only the real NT backtest path is checked: pipelines built with an
+        injected fake backtest_fn (tests, --mock) never read the default
+        catalog, so validating it would fail their run() on machines without
+        the data.
+        """
+        from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH, INTERVAL_TO_AGGREGATION
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+        from vibe_quant.screening import nt_runner
+
+        fn = self._backtest_fn
+        if not isinstance(fn, NTBacktestFn):
+            return
+        cfg = self.config
+
+        def _fn_windows(f: NTBacktestFn) -> list[tuple[str, str]]:
+            # Eval sub-windows only with 2+ entries: backtest_fn runs
+            # multi-window only then (len>=2); 0/1 entries = full-span run.
+            return (
+                list(f.windows)
+                if f.windows and len(f.windows) >= 2
+                else [(f.start_date, f.end_date)]
+            )
+
+        windows = _fn_windows(fn)
+        holdout_fn = self._holdout_backtest_fn
+        if isinstance(holdout_fn, NTBacktestFn):
+            windows += _fn_windows(holdout_fn)
+        elif cfg.has_holdout:
+            windows.append((cfg.holdout_start_date, cfg.holdout_end_date))
+        if self._backtest_fn_factory is not None:
+            try:
+                windows += [(ws, we) for _, ws, we in self.cross_window_ranges()]
+            except DataUnavailableError:
+                raise  # subclasses ValueError: missing data must never be swallowed
+            except ValueError as exc:
+                logger.debug("Cross-window ranges not checkable in bar preflight: %s", exc)
+            if cfg.wfa_oos_step_days > 0:
+                try:
+                    windows += self.wfa_window_ranges(cfg.start_date, cfg.end_date)
+                except DataUnavailableError:
+                    raise  # subclasses ValueError: missing data must never be swallowed
+                except ValueError as exc:
+                    logger.debug("WFA ranges not checkable in bar preflight: %s", exc)
+        windows = list(dict.fromkeys(windows))
+
+        tf = fn.timeframe
+        if tf not in INTERVAL_TO_AGGREGATION:
+            raise ValueError(f"unknown timeframe {tf!r}")
+        # DiscoveryConfig has a single timeframe (no additional-timeframes
+        # field) and discovery chromosomes compile to single-timeframe DSLs.
+        step, agg = INTERVAL_TO_AGGREGATION[tf]
+        catalog = str(Path(DEFAULT_CATALOG_PATH).resolve())
+        for symbol in fn.symbols:
+            bar_type = f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL"
+            for start, end in windows:
+                nt_runner.require_bars_in_window(catalog, bar_type, start, end)
+
     # -- evaluation ---------------------------------------------------------
 
     @staticmethod
@@ -568,8 +647,7 @@ class DiscoveryPipeline:
             dsl = chromosome_to_dsl(chrom)
         except Exception:
             return f"uid:{chrom.uid}"  # unconvertible: never shares a cache slot
-        dsl.pop("name", None)
-        return json.dumps(dsl, sort_keys=True, default=str)
+        return dsl_body_key(dsl)
 
     def _evaluate_new(self, chroms: list[StrategyChromosome]) -> list[FitnessResult]:
         """Evaluate chromosomes; each distinct strategy is backtested once per run.
@@ -643,6 +721,7 @@ class DiscoveryPipeline:
         cfg = self.config
         self._apply_indicator_pool_filter()
         self._preflight_aux_data()
+        self._preflight_bars()
 
         # Parse direction constraint
         from vibe_quant.discovery.operators import Direction
