@@ -194,6 +194,13 @@ SPEC.md              # Authoritative implementation spec
 - Generated strategy modules are content-addressed (`{name}_{hash}`) — always use `module.__name__`, never rebuild the path from `dsl.name`.
 - ADX stays on the pandas path deliberately (NT has no true ADX — `DirectionalMovement.value` is always 0). Don't "optimize" it to `nt_class` without checking values.
 
+## Swarm board (every agent: read it, write to it)
+
+A persistent message board shared by every agent and session in this repo — main sessions, subagents, `cmd` workers, future swarms. The SessionStart hook prints the latest posts; full view `docs/orchestration/board/BOARD.md`.
+- Catch up: `python3 scripts/agents/bus.py --as <you> board read --global --recent 30`
+- Record: `... board post --topic findings|gotchas|decisions|model-notes|thoughts --body "..."` — anything a future agent should know (persisted in git). Chat: `--topic chat`, `post --to <agent>`, `reply --ref <id>`.
+- Orchestrator: `... --as chief digest` reads everything new on the persistent board + every job bus. Details: [docs/orchestration/README.md § Swarm bus](docs/orchestration/README.md).
+
 ## Performance Profiling
 
 Use the `perf-profiling` skill (`.claude/skills/perf-profiling/SKILL.md`) when investigating

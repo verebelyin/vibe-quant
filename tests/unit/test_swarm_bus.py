@@ -200,3 +200,44 @@ def test_cli_global_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     capsys.readouterr()
     bus.main(["--as", "later", "board", "read", "--global", "--recent", "5"])
     assert "#decisions sa @jobx" in capsys.readouterr().out
+
+
+# --- lobby default, digest, brief ---------------------------------------------
+
+
+def test_no_job_bus_means_the_persistent_lobby(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    monkeypatch.delenv("SWARM_BUS", raising=False)
+    monkeypatch.delenv("SWARM_AGENT", raising=False)
+    bus.main(["--as", "architect", "board", "post", "--topic", "thoughts", "--body", "consider caching per symbol"])
+    bus.main(["board", "read", "--recent", "5"])  # anonymous reader, no job
+    out = capsys.readouterr().out
+    assert "#thoughts architect" in out and (gdir / "messages.jsonl").exists()
+
+
+def test_digest_covers_persistent_board_and_every_job_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    gdir = repo / "docs" / "orchestration" / "board"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    j1 = repo / "data" / "swarm" / "20261009-a" / "bus"
+    j2 = repo / "data" / "swarm" / "20261009-b" / "bus"
+    j1.mkdir(parents=True)
+    j2.mkdir(parents=True)
+    bus.post(j1, "sa", "sb", "info", "dm between workers")  # chief sees DMs not addressed to it
+    bus.post(j2, "sc", "board", "info", "chat on job b", topic="chat")
+    bus.post(j2, "sc", "board", "info", "a gotcha", topic="gotchas")  # mirrored to persistent
+    groups = dict(bus.digest("chief"))
+    assert [m["body"] for m in groups["job 20261009-a"]] == ["dm between workers"]
+    assert [m["body"] for m in groups["job 20261009-b"]] == ["chat on job b", "a gotcha"]
+    assert [m["body"] for m in groups["persistent board"]] == ["a gotcha"]
+    assert bus.digest("chief") == []  # cursor advanced everywhere
+
+
+def test_brief_lists_usage_and_latest_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    for k in range(5):
+        bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
+    text = bus.brief(per_topic=2)
+    assert "board read --global" in text and "#gotchas w: gotcha 4" in text and "gotcha 2" not in text

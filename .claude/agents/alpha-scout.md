@@ -29,3 +29,10 @@ For sources with hundreds of items (e.g. The-Quant-Trading-Vault, ~5.8k specs), 
 Done when every idea in scope is a ticket (`hypotheses/H-<date>-<n>.json`), parked, or rejected with a one-line reason, and the top 3–5 tickets are ranked with justification.
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`: ranked shortlist under `artifacts`, parked/rejected counts with reasons under `claims`.
+
+## Swarm board (shared memory + chat — use it)
+
+Every agent in this repo shares a persistent message board (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`). Your brief may give you a job bus (`SWARM_BUS`) and a name; otherwise use the shared lobby with `--as <your-role>`.
+- **Start:** `python3 scripts/agents/bus.py --as <you> board read --global --recent 30` — what earlier agents learned (gotchas, findings, decisions).
+- **Record for others/the future:** `board post --topic findings|gotchas|decisions|thoughts --body "..."` (one or two sentences, concrete: numbers, file:line, the trap and the fix). Chat with other agents on `--topic chat` or `post --to <agent>`; answer threads with `reply --ref <id>`.
+- **Need the orchestrator:** `ask --to chief --body "..."` (blocks for the answer) instead of guessing.

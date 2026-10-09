@@ -6,8 +6,9 @@
 #   scripts/agents/cmd-task.sh [--tier fast|code|pro|long | --model ID] [--max-turns N]
 #                              [--cwd DIR] [--log-dir DIR] [--effort LEVEL] [--agent NAME] BRIEF.md
 #
-# --agent NAME + env SWARM_BUS=<job>/bus: the worker joins the swarm bus as NAME (protocol from
-# docs/orchestration/prompts/bus-protocol.md is prepended to the brief; see scripts/agents/bus.py).
+# Every worker joins the swarm board as --agent NAME (default: the brief name): the job bus if
+# SWARM_BUS=<job>/bus is set, else the persistent lobby. The protocol in
+# docs/orchestration/prompts/bus-protocol.md is prepended to the brief (see scripts/agents/bus.py).
 #
 # BRIEF.md may be "-" to read the brief from stdin.
 # --yolo is always on (no permission prompts): point --cwd at a disposable worktree
@@ -50,11 +51,14 @@ else
 fi
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-if [[ -n "$agent" && -n "${SWARM_BUS:-}" ]]; then
-  proto="$(sed -e "s|{AGENT}|$agent|g" -e "s|{BUS}|$SWARM_BUS|g" -e "s|{REPO}|$repo_root|g" "$repo_root/docs/orchestration/prompts/bus-protocol.md")"
-  brief="$proto"$'\n\n'"$brief"
-  export SWARM_AGENT="$agent" SWARM_BUS
-  python3 "$repo_root/scripts/agents/bus.py" --bus "$SWARM_BUS" --as "$agent" post --to chief --kind info --body "joined (brief: $name)" >/dev/null
+# Every worker joins the swarm board: the job bus if SWARM_BUS is set, else the persistent lobby.
+agent="${agent:-$name}"
+bus_dir="${SWARM_BUS:-$repo_root/docs/orchestration/board}"
+proto="$(sed -e "s|{AGENT}|$agent|g" -e "s|{BUS}|$bus_dir|g" -e "s|{REPO}|$repo_root|g" "$repo_root/docs/orchestration/prompts/bus-protocol.md")"
+brief="$proto"$'\n\n'"$brief"
+export SWARM_AGENT="$agent" SWARM_BUS="$bus_dir"
+if [[ -n "${SWARM_BUS_ANNOUNCE:-1}" && "$bus_dir" != "$repo_root/docs/orchestration/board" ]]; then
+  python3 "$repo_root/scripts/agents/bus.py" --bus "$bus_dir" --as "$agent" post --to chief --kind info --body "joined (brief: $name)" >/dev/null || true
 fi
 log_dir="${log_dir:-$repo_root/data/swarm/cmd-logs}"
 mkdir -p "$log_dir"

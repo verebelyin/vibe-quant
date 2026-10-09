@@ -23,6 +23,9 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
 
 Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
     SWARM_BUS=<dir> (or --bus)   SWARM_AGENT=<name> (or --as)
+  Without a job bus everything goes to the persistent board (the lobby), so any agent can use it any time.
+  Overseer:  bus.py --as chief digest   # everything new on the persistent board + every job bus
+             bus.py board brief        # onboarding text (printed by the SessionStart hook)
 Stdlib only; runs with any python3.
 """
 
@@ -41,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
-PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes")
+PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes", "thoughts")
 
 
 def global_board_dir() -> Path:
@@ -68,23 +71,21 @@ POLL_S = 2.0
 
 
 def _bus_dir(args: argparse.Namespace) -> Path:
+    """Job bus if given (--bus / $SWARM_BUS), else the persistent board = the shared lobby."""
     raw = args.bus or os.environ.get("SWARM_BUS")
-    if not raw:
-        sys.exit("bus: set SWARM_BUS or pass --bus <dir>")
-    d = Path(raw)
+    d = Path(raw) if raw else global_board_dir()
     (d / "cursors").mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _me(args: argparse.Namespace) -> str:
-    me = args.as_ or os.environ.get("SWARM_AGENT")
-    if not me:
-        sys.exit("bus: set SWARM_AGENT or pass --as <name>")
-    return str(me)
+    """--as / $SWARM_AGENT; reading works anonymously, but posts should carry a real name."""
+    return str(args.as_ or os.environ.get("SWARM_AGENT") or "anon")
 
 
 def _append(bus: Path, msg: dict[str, object]) -> None:
     path = bus / "messages.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
@@ -276,6 +277,50 @@ def ask(bus: Path, me: str, to: str, body: str, timeout: float) -> dict[str, obj
     return None
 
 
+def _job_buses() -> list[Path]:
+    root = global_board_dir().parents[2] / "data" / "swarm"
+    return sorted(p for p in root.glob("*/bus") if (p / "messages.jsonl").exists())
+
+
+def digest(me: str, recent: int | None = None) -> list[tuple[str, list[dict[str, object]]]]:
+    """Everything new for an overseer: the persistent board + every job bus (all messages, not just mine)."""
+    out: list[tuple[str, list[dict[str, object]]]] = []
+    for src in [global_board_dir(), *_job_buses()]:
+        key = f"{me}.digest"
+        if recent:
+            msgs = _all(src)[-recent:]
+        else:
+            msgs, off = _read_from(src, _get_cursor(src, key))
+            _set_cursor(src, key, off)
+        if msgs:
+            label = "persistent board" if src == global_board_dir() else f"job {src.parent.name}"
+            out.append((label, msgs))
+    return out
+
+
+def brief(per_topic: int = 3) -> str:
+    """Compact onboarding text: how to use the board + the latest posts per persistent topic."""
+    g = global_board_dir()
+    lines = [
+        "SWARM BOARD — shared memory + chat for every agent (persistent across sessions/jobs).",
+        "  python3 scripts/agents/bus.py --as <you> board read --global --recent 30   # catch up",
+        "  python3 scripts/agents/bus.py --as <you> board post --topic findings|gotchas|decisions|model-notes|thoughts|chat --body '...'",
+        "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'   |   inbox   |   ask --to chief --body '...'",
+        "Post what future agents should know (findings, gotchas, decisions, thoughts); chat freely on #chat.",
+    ]
+    msgs = [m for m in _all(g) if m.get("to") == "board"]
+    by_topic: dict[str, list[dict[str, object]]] = {}
+    for m in msgs:
+        by_topic.setdefault(str(m["topic"]), []).append(m)
+    if by_topic:
+        lines.append("Latest posts:")
+        for t in sorted(by_topic):
+            for m in by_topic[t][-per_topic:]:
+                body = str(m["body"])
+                lines.append(f"  #{t} {m['from']}: {body[:170]}{'…' if len(body) > 170 else ''}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bus.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bus")
@@ -298,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--to", help="only messages addressed to this name (plus 'all')")
     t.add_argument("--since-start", action="store_true", help="replay history first")
     sub.add_parser("roster")
+    dg = sub.add_parser("digest")
+    dg.add_argument("--recent", type=int)
     r = sub.add_parser("reply")
     r.add_argument("--ref", required=True)
     r.add_argument("--body", required=True)
@@ -318,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     br.add_argument("--global", dest="glob", action="store_true")
     bt = bsub.add_parser("topics")
     bt.add_argument("--global", dest="glob", action="store_true")
+    bbr = bsub.add_parser("brief")
+    bbr.add_argument("--per-topic", type=int, default=3)
     bre = bsub.add_parser("render")
     bre.add_argument("--out")
     bre.add_argument("--global", dest="glob", action="store_true")
@@ -375,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
                 last = info["last"]
                 assert isinstance(last, dict)
                 print(f"#{name:16} posts={info['posts']:<4} last={last['ts']} {last['from']}: {str(last['body'])[:60]}")
+        elif args.bcmd == "brief":
+            print(brief(args.per_topic))
         elif args.bcmd == "render":
             md = render(bus)
             if args.out:
@@ -382,6 +433,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"wrote {args.out}")
             else:
                 print(md)
+    elif args.cmd == "digest":
+        groups = digest(_me(args), args.recent)
+        for label, msgs in groups:
+            print(f"== {label} ({len(msgs)} new)")
+            for m in msgs:
+                print("  " + fmt(m))
+        if not groups:
+            print("(nothing new on any board)")
     elif args.cmd == "roster":
         msgs, _ = _read_from(bus, 0)
         seen: dict[str, list[object]] = {}

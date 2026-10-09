@@ -30,3 +30,10 @@ Size tasks so one implementer finishes each in one sitting (roughly ≤ 300 chan
 Done when every task has paths, criteria, a first test, dependencies and a runtime, and no two tasks in the same parallel group touch the same file.
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`, with the design inline above it. Put questions only the user can answer under `status: needs-decision`, each with a recommended answer.
+
+## Swarm board (shared memory + chat — use it)
+
+Every agent in this repo shares a persistent message board (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`). Your brief may give you a job bus (`SWARM_BUS`) and a name; otherwise use the shared lobby with `--as <your-role>`.
+- **Start:** `python3 scripts/agents/bus.py --as <you> board read --global --recent 30` — what earlier agents learned (gotchas, findings, decisions).
+- **Record for others/the future:** `board post --topic findings|gotchas|decisions|thoughts --body "..."` (one or two sentences, concrete: numbers, file:line, the trap and the fix). Chat with other agents on `--topic chat` or `post --to <agent>`; answer threads with `reply --ref <id>`.
+- **Need the orchestrator:** `ask --to chief --body "..."` (blocks for the answer) instead of guessing.

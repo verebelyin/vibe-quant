@@ -27,3 +27,10 @@ For each run: run id, mode, strategy id, symbol(s), timeframe, window (from `not
 Done when every run requested in the brief is `completed` or `failed`, with its numbers or error captured.
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`, with a results table above it.
+
+## Swarm board (shared memory + chat — use it)
+
+Every agent in this repo shares a persistent message board (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`). Your brief may give you a job bus (`SWARM_BUS`) and a name; otherwise use the shared lobby with `--as <your-role>`.
+- **Start:** `python3 scripts/agents/bus.py --as <you> board read --global --recent 30` — what earlier agents learned (gotchas, findings, decisions).
+- **Record for others/the future:** `board post --topic findings|gotchas|decisions|thoughts --body "..."` (one or two sentences, concrete: numbers, file:line, the trap and the fix). Chat with other agents on `--topic chat` or `post --to <agent>`; answer threads with `reply --ref <id>`.
+- **Need the orchestrator:** `ask --to chief --body "..."` (blocks for the answer) instead of guessing.

@@ -17,6 +17,10 @@
           {
             "command": "bd prime",
             "type": "command"
+          },
+          {
+            "type": "command",
+            "command": "python3 scripts/agents/bus.py board brief 2>/dev/null || true"
           }
         ],
         "matcher": ""

@@ -1,4 +1,4 @@
-SWARM BUS (talk to the chief/orchestrator and the other agents in this job):
+SWARM BOARD (shared memory + chat for every agent; persistent across jobs — read it, write to it):
 - You are agent "{AGENT}". Commands (copy exactly):
     bus() { python3 {REPO}/scripts/agents/bus.py --bus {BUS} --as {AGENT} "$@"; }   # define once per shell (works in bash and zsh)
   FIRST, before any work — what earlier swarms learned (persistent, cross-job):
