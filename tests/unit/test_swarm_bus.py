@@ -32,8 +32,10 @@ bus = _load()
 
 
 @pytest.fixture(autouse=True)
-def _fast_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     monkeypatch.setattr(bus, "POLL_S", 0.05)
+    # never let a test write the real committed board
+    monkeypatch.setenv("SWARM_BOARD", str(tmp_path_factory.mktemp("global_board")))
 
 
 def test_direct_and_broadcast_routing(tmp_path: Path) -> None:
@@ -159,3 +161,42 @@ def test_topics_and_render(tmp_path: Path) -> None:
     assert "## #design" in md and "## #blockers" in md
     assert "- `" in md and "  - `" in md  # reply indented under its root
     assert "**blocker**" in md
+
+
+# --- persistent (cross-job) board --------------------------------------------
+
+
+def test_persistent_topics_mirror_to_global_board_with_job_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    job1 = tmp_path / "20261009-job-a" / "bus"
+    job1.mkdir(parents=True)
+    bus.post(job1, "sd", "board", "info", "pandas rolling sum is not bit-exact vs numpy cumsum", topic="gotchas")
+    bus.post(job1, "sa", "board", "claim", "editing pipeline.py", topic="design")  # job-only topic
+    g = bus.board_read(gdir, "anyone", everything=True)
+    assert [(m["topic"], m["job"]) for m in g] == [("gotchas", "20261009-job-a")]
+    assert "@20261009-job-a" in bus.fmt(g[0])
+
+
+def test_future_job_sees_previous_jobs_knowledge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    for k in range(5):
+        jb = tmp_path / f"job{k}" / "bus"
+        jb.mkdir(parents=True)
+        bus.post(jb, f"w{k}", "board", "info", f"finding {k}", topic="findings")
+    # a brand-new agent in a later job reads the last N cross-job posts
+    recent = bus.board_read(gdir, "newcomer", topic="findings", recent=3)
+    assert [m["body"] for m in recent] == ["finding 2", "finding 3", "finding 4"]
+    assert "## #findings" in bus.render(gdir)
+
+
+def test_cli_global_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    jb = tmp_path / "jobx" / "bus"
+    jb.mkdir(parents=True)
+    bus.main(["--bus", str(jb), "--as", "sa", "board", "post", "--topic", "decisions", "--body", "MiMo default implementer"])
+    capsys.readouterr()
+    bus.main(["--as", "later", "board", "read", "--global", "--recent", "5"])
+    assert "#decisions sa @jobx" in capsys.readouterr().out

@@ -104,6 +104,7 @@ open:
 - **Direct messages:** `post --to <agent>|chief|all`, `inbox`, `ask` (blocks for the answer), `wait`, `reply --ref`.
 - **Message board:** `board post --topic <t>`, `board read` (per-agent, per-topic cursors), `board topics`, `thread <id>`, `board render --out <job>/board.md` (human view). Conventions: `#design` (claims on shared files, design questions), `#findings` (reusable facts and numbers), `#blockers`.
 - **Workers:** `cmd-task.sh --agent <name>` with `SWARM_BUS=<job>/bus` prepends [`prompts/bus-protocol.md`](prompts/bus-protocol.md) to the brief and announces the worker. For Claude subagents, paste the same block (placeholders filled) into the brief.
+- **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board read --global --recent 30` (the protocol makes every worker do this first); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
 - **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
 
 ## Workspace

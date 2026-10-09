@@ -17,6 +17,9 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
     bus.py reply  --ref MSG_ID --body TEXT          # threads under a board post, or answers a DM
     bus.py thread MSG_ID                            # a post and all replies, indented
     bus.py board render [--out board.md]            # Markdown view of the whole board (for humans)
+  Persistent board (survives jobs; committed at docs/orchestration/board/, override with SWARM_BOARD):
+    posts on PERSISTENT_TOPICS (findings, gotchas, decisions, model-notes) are mirrored there automatically,
+    tagged with the job; add --global to board read/topics/render/thread (and --recent N to board read).
 
 Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
     SWARM_BUS=<dir> (or --bus)   SWARM_AGENT=<name> (or --as)
@@ -38,6 +41,29 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 KINDS = ("info", "question", "blocker", "answer", "claim", "done")
+PERSISTENT_TOPICS = ("findings", "gotchas", "decisions", "model-notes")
+
+
+def global_board_dir() -> Path:
+    """The cross-job board: $SWARM_BOARD, else <main checkout>/docs/orchestration/board.
+
+    Resolved through git's common dir so agents running in worktrees all write the
+    main checkout's copy (one file, committed by the orchestrator at landing).
+    """
+    raw = os.environ.get("SWARM_BOARD")
+    if raw:
+        d = Path(raw)
+    else:
+        import subprocess
+
+        here = Path(__file__).resolve().parent
+        common = subprocess.run(
+            ["git", "-C", str(here), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        d = Path(common).parent / "docs" / "orchestration" / "board"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 POLL_S = 2.0
 
 
@@ -112,7 +138,8 @@ def _set_cursor(bus: Path, me: str, off: int) -> None:
 def fmt(msg: dict[str, object]) -> str:
     ref = f" re:{msg['ref']}" if msg.get("ref") else ""
     if msg.get("to") == "board":
-        return f"[{msg['id']}] #{msg.get('topic')} {msg['from']} ({msg['kind']}{ref}): {msg['body']}"
+        job = f" @{msg['job']}" if msg.get("job") else ""
+        return f"[{msg['id']}] #{msg.get('topic')} {msg['from']}{job} ({msg['kind']}{ref}): {msg['body']}"
     return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {msg['body']}"
 
 
@@ -136,6 +163,10 @@ def post(
             sys.exit("bus: board posts need --topic")
         msg["topic"] = topic.lstrip("#").lower()
     _append(bus, msg)
+    if to == "board" and msg["topic"] in PERSISTENT_TOPICS:
+        gdir = global_board_dir()
+        if gdir.resolve() != bus.resolve():
+            _append(gdir, {**msg, "job": bus.resolve().parent.name})
     return msg
 
 
@@ -152,15 +183,18 @@ def inbox(bus: Path, me: str, peek: bool = False) -> list[dict[str, object]]:
     return [m for m in msgs if _for_me(m, me) or (m.get("from") != me and m.get("ref") in mine)]
 
 
-def board_read(bus: Path, me: str, topic: str | None = None, everything: bool = False) -> list[dict[str, object]]:
+def board_read(
+    bus: Path, me: str, topic: str | None = None, everything: bool = False, recent: int | None = None
+) -> list[dict[str, object]]:
     key = f"{me}.board.{(topic or '_all').lstrip('#').lower()}"
-    msgs, off = _read_from(bus, 0 if everything else _get_cursor(bus, key))
+    full = everything or recent is not None
+    msgs, off = _read_from(bus, 0 if full else _get_cursor(bus, key))
     if not everything:
         _set_cursor(bus, key, off)
     out = [m for m in msgs if m.get("to") == "board"]
     if topic:
         out = [m for m in out if m.get("topic") == topic.lstrip("#").lower()]
-    return out
+    return out[-recent:] if recent else out
 
 
 def topics(bus: Path) -> dict[str, dict[str, object]]:
@@ -219,7 +253,8 @@ def render(bus: Path) -> str:
         for root in (m for m in msgs if m.get("topic") == t and m.get("ref") not in ids):
             for depth, m in thread(bus, str(root["id"])):
                 tag = "" if m["kind"] == "info" else f" **{m['kind']}**"
-                lines.append(f"{'  ' * depth}- `{m['ts']}` **{m['from']}**{tag}: {m['body']}  <sub>{m['id']}</sub>")
+                job = f" @{m['job']}" if m.get("job") else ""
+                lines.append(f"{'  ' * depth}- `{m['ts']}` **{m['from']}**{job}{tag}: {m['body']}  <sub>{m['id']}</sub>")
         lines.append("")
     return "\n".join(lines)
 
@@ -269,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--kind", default="info", choices=KINDS)
     th = sub.add_parser("thread")
     th.add_argument("msg_id")
+    th.add_argument("--global", dest="glob", action="store_true")
     bd = sub.add_parser("board")
     bsub = bd.add_subparsers(dest="bcmd", required=True)
     bp = bsub.add_parser("post")
@@ -278,10 +314,16 @@ def main(argv: list[str] | None = None) -> int:
     br = bsub.add_parser("read")
     br.add_argument("--topic")
     br.add_argument("--all", action="store_true")
-    bsub.add_parser("topics")
+    br.add_argument("--recent", type=int)
+    br.add_argument("--global", dest="glob", action="store_true")
+    bt = bsub.add_parser("topics")
+    bt.add_argument("--global", dest="glob", action="store_true")
     bre = bsub.add_parser("render")
     bre.add_argument("--out")
+    bre.add_argument("--global", dest="glob", action="store_true")
     args = ap.parse_args(argv)
+    if getattr(args, "glob", False):
+        args.bus = str(global_board_dir())
     bus = _bus_dir(args)
 
     if args.cmd == "post":
@@ -323,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.bcmd == "post":
             print(fmt(post(bus, _me(args), "board", args.kind, args.body, topic=args.topic)))
         elif args.bcmd == "read":
-            msgs = board_read(bus, _me(args), args.topic, args.all)
+            msgs = board_read(bus, _me(args), args.topic, args.all, args.recent)
             for m in msgs:
                 print(fmt(m))
             if not msgs:
