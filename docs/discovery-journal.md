@@ -4,6 +4,27 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-09: Run 878 — first discovery with the worst-mode soft GA score (0 champions, statistically insignificant)
+
+Config: ETH/SOL/BNB 4h, 2022-06-01..2026-09-30 (train → 2025-11-17, holdout 20% after), `--symbol-agg worst --eval-windows 1 --seed 20261009`, pool TREND_ENSEMBLE/DONCHIAN/ADX/SQUEEZE_RATIO/SQUEEZE_MOM/ROC, pop 16 × 6, all default gates. compiler 2e14137b8370 + vibe-quant-ox73t soft score. Catalog rebuilt without partial bars first (exactness 239 IDENTICAL).
+
+| gen | best | mean | zero_score |
+|---|---|---|---|
+| 1 | 0.3446 | 0.0427 | 14/16 |
+| 2 | 0.3446 | 0.0546 | 13/16 |
+| 3 | 0.3839 | 0.1038 | 11/16 |
+| 4 | 0.3839 | 0.1275 | 10/16 |
+| 5 | 0.4091 | 0.1495 | 9/16 |
+| 6 | 0.4091 | 0.1495 | 9/16 |
+
+Best: SQUEEZE_RATIO entry / DONCHIAN exit, both directions, SL 2.1% TP 15.8%; per-symbol scores ETH 0.425, SOL 0.393, BNB 0.531; worst-of: sharpe 0.10, return 2.4%, DD 17.4%, 56 trades.
+
+All 5 top candidates passed the worst-symbol train gate and then FAILED guardrails on both DSR (p 0.9733–0.9895, 79 trials) and bootstrap CI (lower bounds −0.36 … −1.71). 0 champions, 1560s compute.
+
+**Lessons:** (1) The soft score fixed the zero-gradient problem (run 877: 16/16 zero every gen → here mean rose 3.5× and zero_score fell 14→9). (2) Gradient ≠ edge: the best genomes are marginal on their weakest coin and nowhere near statistical significance — the gates did their job. (3) Squeeze-family entries + Donchian exits dominate the top of a cross-symbol robust search; a larger budget would be the next step only if a pre-registered hypothesis motivates it.
+
+---
+
 ## 2026-10-08: Edge-hunt wave 2 — H-7 BTC regime gate on alts (rejected) + first worst-of-symbols discovery (run 877)
 
 **H-7** (ticket: BTC 1d trend filter beats the alt's own 1d trend filter by ≥0.2 Sharpe). Base = H-2 TREND_ENSEMBLE(250) 4h; gates BTC_TREND(200) / OWN_TREND(200) on daily closes (new aux-context plugins, no look-ahead, partial current-day bar dropped). Screening 2022-09-01..2026-09-30:
