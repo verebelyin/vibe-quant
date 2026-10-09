@@ -25,6 +25,7 @@ How one **orchestrator** (a Claude Code session running the [`orchestrate`](../.
 | `architect` | eng | opus | design doc only | spec → design → task plan with acceptance criteria | user gate |
 | `implementer` | eng | sonnet | code + tests, in a worktree | one task, test-first | `reviewer` + `verifier` |
 | `reviewer` | eng | opus | nothing | two verdicts: matches spec? well built? | orchestrator |
+| `reviewer-lite` | eng | haiku (5.5), effort high (user rule: Haiku only at high/xhigh — never lower, never max) | nothing | fast first-pass review of mechanical diffs; escalates semantics to `reviewer` | orchestrator |
 | `verifier` | eng | sonnet | nothing | runs quality gates + exactness proofs | orchestrator |
 | `alpha-scout` | research | sonnet | hypothesis tickets | external sources → falsifiable hypotheses | `strategy-author` (feasibility), `overfit-auditor` |
 | `strategy-author` | research | sonnet | DSL YAML, indicator plugins | hypothesis → parser-valid strategy | `overfit-auditor` |
@@ -106,6 +107,27 @@ open:
 - **Workers:** `cmd-task.sh --agent <name>` with `SWARM_BUS=<job>/bus` prepends [`prompts/bus-protocol.md`](prompts/bus-protocol.md) to the brief and announces the worker. For Claude subagents, paste the same block (placeholders filled) into the brief.
 - **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board read --global --recent 30` (the protocol makes every worker do this first); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
 - **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
+
+## Swarm tools
+
+| Tool | What | Used by |
+|---|---|---|
+| `scripts/agents/swarm-check.sh <wt> [--scope globs] [--base main]` | automated pre-review gate: scope, clean tree, ruff, mypy, targeted tests, exactness (any `vibe_quant/` change outside UI/IO dirs), frontend; fails closed (bad base, empty diff, git errors) | chief, before every review |
+| `scripts/agents/stall_watch.py watch --job <job_dir> [--kill]` | flags cmd workers with no log growth / no edits; `--kill` only signals a registered worker's own session after re-verifying pid + start time | chief, under a Monitor |
+| `scripts/agents/telemetry.py record/ingest-cmd-log/review/report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` (committed): rounds-to-done, pass-1 rate, tokens, wall time by model/runtime/agent | cmd-task.sh (auto), chief (reviews, report) |
+| `scripts/agents/bus.py needs-user ask/open/answer --user` | queue of decisions only the user makes; shown first in `digest` and the SessionStart brief | any agent asks; only the user closes |
+
+## Tiered review
+
+Route each diff to the cheapest checker that can judge it (user, 2026-10-09). **Haiku runs only at effort `high` or `xhigh` — never lower, never `max`** (user rule; `reviewer-lite.md` pins `effort: high`; pass `effort: "xhigh"` explicitly for harder lite reviews).
+
+| Diff | Checker |
+|---|---|
+| test-only nits, docs/config, dependency pins, renames, small UI tweaks, fix-round deltas that only apply a reviewer's exact spec | `reviewer-lite` (Haiku 5.5) — escalates on its own when a hunk touches semantics |
+| fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control (signals, kill, locks), risk/paper/live, design reviews, NEW scripts/modules, anything > ~150 hand-written non-test lines | `reviewer` (Opus) |
+| a `reviewer-lite` escalation, or a later Opus finding that lite missed | `reviewer` (Opus); post the miss to `#self-improvement` |
+
+Every diff still passes `scripts/agents/swarm-check.sh <worktree>` (the automated pre-review gate) before any reviewer sees it.
 
 ## Self-improving prompts
 
