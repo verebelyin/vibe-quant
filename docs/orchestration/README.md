@@ -97,6 +97,15 @@ open:
 - `needs-decision` means the agent found a fork that is the user's call. Give options and a recommendation.
 - Numbers are copied verbatim from tool output, never paraphrased or rounded.
 
+## Swarm bus (agent ↔ agent ↔ chief)
+
+`scripts/agents/bus.py` gives every job a shared mailbox + message board at `data/swarm/<job>/bus/` (append-only JSONL, flock-guarded; stdlib python3, so Claude subagents and `cmd` workers can both use it).
+
+- **Direct messages:** `post --to <agent>|chief|all`, `inbox`, `ask` (blocks for the answer), `wait`, `reply --ref`.
+- **Message board:** `board post --topic <t>`, `board read` (per-agent, per-topic cursors), `board topics`, `thread <id>`, `board render --out <job>/board.md` (human view). Conventions: `#design` (claims on shared files, design questions), `#findings` (reusable facts and numbers), `#blockers`.
+- **Workers:** `cmd-task.sh --agent <name>` with `SWARM_BUS=<job>/bus` prepends [`prompts/bus-protocol.md`](prompts/bus-protocol.md) to the brief and announces the worker. For Claude subagents, paste the same block (placeholders filled) into the brief.
+- **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
+
 ## Workspace
 
 Each orchestrated job gets `data/swarm/<job-id>/` (gitignored), where `<job-id>` = `YYYYMMDD-<slug>`:
@@ -108,6 +117,8 @@ handoffs/NN-<agent>-<slug>.md   each handoff, verbatim
 prompts/          briefs sent to cmd workers
 cmd-logs/         NDJSON transcripts from cmd-task.sh
 hypotheses/       research lane: H-*.json tickets
+bus/              swarm bus: messages.jsonl + cursors/ (scripts/agents/bus.py)
+board.md          rendered message board (bus.py board render)
 ```
 
 The ledger is the orchestrator's memory. If the context gets compacted, re-read `brief.md` + `ledger.md` + the latest handoffs and continue. Durable outcomes go to their permanent homes: beads (tasks, follow-ups), `bd remember` (project facts), `docs/discovery-journal.md` (research results), git (code).

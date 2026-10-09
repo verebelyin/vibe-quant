@@ -4,14 +4,17 @@
 # Exit code: cmd's own (0 ok, 8 = hit --max-turns), 2 = usage error.
 #
 #   scripts/agents/cmd-task.sh [--tier fast|code|pro|long | --model ID] [--max-turns N]
-#                              [--cwd DIR] [--log-dir DIR] [--effort LEVEL] BRIEF.md
+#                              [--cwd DIR] [--log-dir DIR] [--effort LEVEL] [--agent NAME] BRIEF.md
+#
+# --agent NAME + env SWARM_BUS=<job>/bus: the worker joins the swarm bus as NAME (protocol from
+# docs/orchestration/prompts/bus-protocol.md is prepended to the brief; see scripts/agents/bus.py).
 #
 # BRIEF.md may be "-" to read the brief from stdin.
 # --yolo is always on (no permission prompts): point --cwd at a disposable worktree
 # for any task that writes files. See docs/orchestration/cheap-agents.md.
 set -uo pipefail
 
-tier="fast"; model=""; turns=30; cwd="$PWD"; log_dir=""; effort=""
+tier="fast"; model=""; turns=30; cwd="$PWD"; log_dir=""; effort=""; agent=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tier) tier="$2"; shift 2 ;;
@@ -20,6 +23,7 @@ while [[ $# -gt 0 ]]; do
     --cwd) cwd="$2"; shift 2 ;;
     --log-dir) log_dir="$2"; shift 2 ;;
     --effort) effort="$2"; shift 2 ;;
+    --agent) agent="$2"; shift 2 ;;
     -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     -) break ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
@@ -46,6 +50,12 @@ else
 fi
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ -n "$agent" && -n "${SWARM_BUS:-}" ]]; then
+  proto="$(sed -e "s|{AGENT}|$agent|g" -e "s|{BUS}|$SWARM_BUS|g" -e "s|{REPO}|$repo_root|g" "$repo_root/docs/orchestration/prompts/bus-protocol.md")"
+  brief="$proto"$'\n\n'"$brief"
+  export SWARM_AGENT="$agent" SWARM_BUS
+  python3 "$repo_root/scripts/agents/bus.py" --bus "$SWARM_BUS" --as "$agent" post --to chief --kind info --body "joined (brief: $name)" >/dev/null
+fi
 log_dir="${log_dir:-$repo_root/data/swarm/cmd-logs}"
 mkdir -p "$log_dir"
 log="$log_dir/$(date +%Y%m%d-%H%M%S)-$name-${model//\//_}.ndjson"

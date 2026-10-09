@@ -9,12 +9,13 @@ You are the **orchestrator**. You decompose, dispatch, check and integrate the w
 
 ## Steps
 
-1. **Open the job.** Create `data/swarm/<YYYYMMDD-slug>/` with `brief.md` (goal, constraints, what "finished" means) and an empty `ledger.md`. Pick the lane: engineering, research ([`research-swarm.md`](../../../docs/orchestration/research-swarm.md)), or both. Pick the **profile** (README § Profiles): **lean** by default, **full** only when its trigger holds. Done when `brief.md` states the profile and a finish condition the user could check.
+1. **Open the job.** Create `data/swarm/<YYYYMMDD-slug>/` (with its `bus/`: export `SWARM_BUS` to it and start a Monitor on `scripts/agents/bus.py tail --to chief`) with `brief.md` (goal, constraints, what "finished" means) and an empty `ledger.md`. Pick the lane: engineering, research ([`research-swarm.md`](../../../docs/orchestration/research-swarm.md)), or both. Pick the **profile** (README § Profiles): **lean** by default, **full** only when its trigger holds. Done when `brief.md` states the profile and a finish condition the user could check.
 2. **Clarify once.** Send open questions to the user in one batch, before any dispatch. Record the answers in `brief.md`.
 3. **Design.** Lean: write the task plan into `brief.md` yourself from the bead's acceptance criteria. Full: dispatch `architect`, then `reviewer` in design mode on the architect's handoff. Research: `alpha-scout`. **User gate:** show the plan (plus any design-review findings) and wait for approval. Done when the user has approved and every task in the plan has a done-when criterion.
 4. **Ledger.** One row per task: id, agent, runtime (claude / cmd), dependencies, parallel group, bead id. File the beads (`bd create`). Route each task to the cheapest capable tier using [`cheap-agents.md`](../../../docs/orchestration/cheap-agents.md) § Routing.
 5. **Dispatch loop.** Repeat until every ledger row is `done` or `dropped`:
    - Dispatch every unblocked task in the current parallel group (WIP ≤ 5 writers), each with a full brief. Each writer gets a worktree from `scripts/agents/worktree.sh <slug> [base]`; paste its printed `run as` line into the brief. Stacked tasks use the parent task's branch as `base`.
+   - Every writer joins the bus (`cmd-task.sh --agent <id>`, or the protocol block from `docs/orchestration/prompts/bus-protocol.md` in Claude briefs). Answer bus questions promptly with `reply --ref`; a worker blocked on you is wasted spend.
    - Save each handoff verbatim to `handoffs/` and update the ledger row.
    - Return any implementer handoff whose `evidence` lacks the red test run; red-before-green is the proof the test has teeth.
    - Before dispatching, fill each brief's LIVE line: `rg` that every SCOPE path is imported or called from a live entry point. A brief that names dead code ships dead features.
