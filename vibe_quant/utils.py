@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime as _datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -129,6 +131,21 @@ def split_into_windows(
         )
         windows.append((w_start.strftime("%Y-%m-%d"), w_end.strftime("%Y-%m-%d")))
     return windows
+
+
+def log_dir(*, create: bool = True) -> Path:
+    """Directory for job log files.
+
+    Returns ``VIBE_QUANT_LOG_DIR`` when set (tests pin it to a temp dir so
+    launched jobs never write into the repo's ``logs/``), else ``Path("logs")``.
+    An empty value is treated as unset. The directory is created if missing by
+    default (writers need it); pass ``create=False`` to resolve the path
+    without touching the filesystem — a reader must not create directories.
+    """
+    path = Path(os.environ.get("VIBE_QUANT_LOG_DIR") or "logs")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def generate_month_range(start_date: datetime, end_date: datetime) -> Generator[tuple[int, int]]:

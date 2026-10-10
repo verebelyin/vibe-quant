@@ -206,7 +206,7 @@ async def test_promote_blocks_1m_short_without_opposing_regime_pass(
         timeframe="1m",
         symbols=["BTCUSDT"],
         top_strategies=[short_entry],
-        notes_extra={"cross_window_months": [-15], "cross_window_min_sharpe": 0.5},
+        notes_extra={"cross_window_months": [1, 3], "cross_window_min_sharpe": 0.5},
     )
 
     monkeypatch.setattr(
@@ -250,7 +250,7 @@ async def test_promote_allows_1m_short_with_opposing_regime_pass(
         timeframe="1m",
         symbols=["BTCUSDT"],
         top_strategies=[short_entry],
-        notes_extra={"cross_window_months": [-15], "cross_window_min_sharpe": 0.5},
+        notes_extra={"cross_window_months": [1, 3], "cross_window_min_sharpe": 0.5},
     )
 
     monkeypatch.setattr(

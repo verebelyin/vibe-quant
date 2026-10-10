@@ -7,14 +7,29 @@ Supports context manager protocol for automatic resource cleanup.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
+
+from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from vibe_quant.logging.events import Event
+
+
+def _default_base_path() -> Path:
+    """Default event-log dir for the writer.
+
+    Resolves ``VIBE_QUANT_LOG_DIR/events`` when that env var is set (matches
+    ``ValidationRunner``); otherwise the historical absolute project-root
+    ``logs/events`` so the unset-env default is unchanged.
+    """
+    if os.environ.get("VIBE_QUANT_LOG_DIR"):
+        return log_dir(create=False) / "events"
+    return EventWriter._DEFAULT_BASE_PATH
 
 
 class EventWriter:
@@ -44,10 +59,12 @@ class EventWriter:
 
         Args:
             run_id: Unique backtest run identifier.
-            base_path: Directory for event log files. Defaults to project-root/logs/events.
+            base_path: Directory for event log files. Defaults to
+                ``log_dir()/events`` (``VIBE_QUANT_LOG_DIR`` when set, else the
+                project-root ``logs/events``).
         """
         self.run_id = run_id
-        self.base_path = Path(base_path) if base_path is not None else self._DEFAULT_BASE_PATH
+        self.base_path = Path(base_path) if base_path is not None else _default_base_path()
         self._lock = threading.Lock()
         self._file: TextIO | None = None
         self._closed = False

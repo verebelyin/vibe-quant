@@ -6,9 +6,12 @@ by event type and returns results as dicts or pandas DataFrames.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -18,6 +21,18 @@ if TYPE_CHECKING:
 _SAFE_RUN_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_BASE_PATH = _PROJECT_ROOT / "logs" / "events"
+
+
+def _default_base_path() -> Path:
+    """Default event-log dir for the reader.
+
+    Resolves ``VIBE_QUANT_LOG_DIR/events`` when that env var is set (matches
+    the writer and ``ValidationRunner``); otherwise ``_DEFAULT_BASE_PATH`` so
+    the unset-env default is unchanged.
+    """
+    if os.environ.get("VIBE_QUANT_LOG_DIR"):
+        return log_dir(create=False) / "events"
+    return _DEFAULT_BASE_PATH
 
 
 def _validate_run_id(run_id: str) -> None:
@@ -37,7 +52,7 @@ def _get_log_path(run_id: str, base_path: Path | str | None = None) -> Path:
     Returns:
         Path to the JSONL file.
     """
-    resolved = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
+    resolved = Path(base_path) if base_path is not None else _default_base_path()
     return resolved / f"{run_id}.jsonl"
 
 
@@ -245,7 +260,7 @@ def list_runs(base_path: Path | str | None = None) -> list[str]:
     Returns:
         List of run IDs.
     """
-    base = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
+    base = Path(base_path) if base_path is not None else _default_base_path()
     if not base.exists():
         return []
 

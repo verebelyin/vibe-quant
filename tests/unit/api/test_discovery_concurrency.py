@@ -152,7 +152,7 @@ async def test_launch_persists_gate_related_metadata(
         "symbols": ["BTCUSDT"],
         "timeframes": ["1m"],
         "direction": "short",
-        "cross_window_months": [-15],
+        "cross_window_months": [1, 3],
         "cross_window_min_sharpe": 0.8,
         "num_seeds": 3,
         "wfa_oos_step_days": 30,
@@ -171,7 +171,7 @@ async def test_launch_persists_gate_related_metadata(
     assert run is not None
     params = run["parameters"]
     assert params["direction"] == "short"
-    assert params["cross_window_months"] == [-15]
+    assert params["cross_window_months"] == [1, 3]
     assert params["cross_window_min_sharpe"] == 0.8
     assert params["num_seeds"] == 3
     assert params["wfa_oos_step_days"] == 30

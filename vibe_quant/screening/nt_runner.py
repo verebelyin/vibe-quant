@@ -10,20 +10,32 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from nautilus_trader.config import BacktestRunConfig
+
+    from vibe_quant.data.fill_ticks import FillTickSet
+    from vibe_quant.metrics import DailyReturns
     from vibe_quant.screening.types import BacktestMetrics
+    from vibe_quant.validation.venue import VenueConfig
 
 logger = logging.getLogger(__name__)
 
 # Process-level compile cache: DSL-content key -> (module_path, strategy_cls,
-# config_cls, timeframes). Multi-window evals (eval_windows > 1) construct a
-# fresh runner per window for the SAME chromosome; without this cache each
-# window recompiled the identical DSL (~1s per compile).
-_COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str]]] = {}
+# config_cls, timeframes, strategy timeframe). Multi-window evals
+# (eval_windows > 1) construct a fresh runner per window for the SAME
+# chromosome; without this cache each window recompiled the identical DSL
+# (~1s per compile).
+_COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str], str]] = {}
+
+# Generated-config fields the runner sets itself (screening fill mode); a
+# sweep/override may never set them.
+_RUNNER_OWNED_FIELDS = frozenset({"command_release", "command_release_bar_type"})
 
 
 class UnknownStrategyParamError(ValueError):
@@ -51,6 +63,62 @@ class MissingBarDataError(DataUnavailableError):
 
     Re-raised by ``NTScreeningRunner.__call__`` (never masked as a -inf result).
     """
+
+
+class FillTickCatalogModifiedError(RuntimeError):
+    """A fill-tick dir changed during a run (NT writes epoch parquet on dispose).
+
+    Tick dirs are immutable and shared by every run; a modified one would feed
+    later runs different data. Re-raised by ``NTScreeningRunner.__call__``.
+    """
+
+
+class ScreeningFillMode(NamedTuple):
+    """How screening releases a strategy's orders (see :func:`screening_fill_mode`)."""
+
+    command_release: str
+    execution_delay_probability: float
+    tick_timeframe: str | None
+
+
+def screening_fill_mode(timeframe: str, loaded_timeframes: Iterable[str]) -> ScreeningFillMode:
+    """Screening fill mode, keyed on the finest LOADED timeframe.
+
+    - 1m strategy: no outbox; orders defer one bar (delay 1.0) and fill at the
+      next 1m close, like validation.
+    - coarser strategy that loads 1m bars (indicator / additional timeframe):
+      outbox released on its own 1m bars.
+    - coarser: outbox released on fill ticks (1m closes at each boundary of the
+      finest loaded timeframe), so fills land where validation's 1m detail
+      fills them. Outbox modes need delay 0 (and no LatencyModel).
+    """
+    from vibe_quant.validation.extraction import finest_timeframe
+
+    if timeframe == "1m":
+        return ScreeningFillMode("", 1.0, None)
+    finest = finest_timeframe({timeframe, *loaded_timeframes}) or timeframe
+    if finest == "1m":
+        return ScreeningFillMode("bar", 0.0, None)
+    return ScreeningFillMode("trade_tick", 0.0, finest)
+
+
+def loaded_timeframes(dsl_dict: dict[str, Any]) -> set[str]:
+    """Every bar timeframe a DSL loads: primary + ``additional_timeframes`` + indicator ones.
+
+    The fill mode's tick timeframe is the FINEST loaded timeframe
+    (:func:`screening_fill_mode`), so ``NTScreeningRunner._compile`` and the
+    parent-side resolvers (``screening.pipeline.resolve_parent_fill_ticks``)
+    must derive this set the same way. If they diverge, the parent resolves
+    ticks for a coarser timeframe and the runner rejects the set
+    (``MissingBarDataError``) at run time (vibe-quant-yul7u.12).
+    """
+    loaded = {str(dsl_dict["timeframe"])}
+    loaded.update(dsl_dict.get("additional_timeframes") or [])
+    for ind in (dsl_dict.get("indicators") or {}).values():
+        tf = ind.get("timeframe") if isinstance(ind, dict) else getattr(ind, "timeframe", None)
+        if tf:
+            loaded.add(str(tf))
+    return loaded
 
 
 _HAS_DATA_CACHE: set[tuple[str, str, int | None, int | None]] = set()
@@ -97,11 +165,14 @@ def resolve_strategy_params(
     (``ema_fast_period``); known aliases (``take_profit.risk_reward_ratio``,
     STOCH ``period_k``/``period_d``) are mapped to their real fields.
 
+    The runner-owned outbox fields (``command_release``,
+    ``command_release_bar_type``) are never overridable.
+
     Raises:
         UnknownStrategyParamError: if any key matches no config field, or two
             keys resolve to the same field.
     """
-    fields = set(config_fields)
+    fields = set(config_fields) - _RUNNER_OWNED_FIELDS
     if not fields:
         msg = "Compiled strategy config exposes no fields; cannot apply overrides"
         raise UnknownStrategyParamError(msg)
@@ -156,21 +227,33 @@ class NTScreeningRunner:
         end_date: str,
         catalog_path: str | None = None,
         funding_archive_path: str | None = None,
+        fill_ticks: FillTickSet | None = None,
+        collect_daily_returns: bool = False,
     ) -> None:
         """Initialize NTScreeningRunner.
 
         Args:
             dsl_dict: Strategy DSL as dict (picklable, unlike StrategyDSL).
-            symbols: List of symbols to screen.
+            symbols: List of symbols to screen (run in sorted order: the
+                seeded screening FillModel RNG is shared across instruments,
+                so the order used to change results).
             start_date: Start date string (YYYY-MM-DD).
             end_date: End date string (YYYY-MM-DD).
             catalog_path: Path to ParquetDataCatalog. Uses default if None.
             funding_archive_path: Raw-data archive holding funding rates.
                 Uses the default archive if None. Funding series are cached
                 per worker process (see validation.funding).
+            fill_ticks: Fill-tick set resolved by the parent (trade_tick
+                mode). None resolves it in-process when the mode needs it.
+            collect_daily_returns: Opt-in (discovery DSR, bd vibe-quant-yul7u.24):
+                keep the run's dense daily balance returns in
+                ``last_daily_returns`` (never in BacktestMetrics).
         """
+        self._collect_daily_returns = collect_daily_returns
+        self.last_daily_returns: DailyReturns | None = None
         self._dsl_dict = dsl_dict
-        self._symbols = symbols
+        self._symbols = sorted(symbols)
+        self._fill_ticks = fill_ticks
         self._start_date = start_date
         self._end_date = end_date
         self._catalog_path = catalog_path
@@ -213,7 +296,7 @@ class NTScreeningRunner:
         start_time = time.time()
         try:
             return self._run_backtest(params, start_time)
-        except (UnknownStrategyParamError, DataUnavailableError):
+        except (UnknownStrategyParamError, DataUnavailableError, FillTickCatalogModifiedError):
             # Configuration error, not a backtest failure: never mask it as a
             # -inf result (vibe-quant-e70tl.8).
             raise
@@ -274,8 +357,9 @@ class NTScreeningRunner:
         cache_key = json.dumps(self._dsl_dict, sort_keys=True, default=str)
         cached = _COMPILE_CACHE.get(cache_key)
         if cached is not None and cached[0] in sys.modules:
-            self._module_path, self._strategy_cls_name, self._config_cls_name, tfs = cached
+            self._module_path, self._strategy_cls_name, self._config_cls_name, tfs, tf = cached
             self._all_timeframes: set[str] = set(tfs)
+            self._timeframe = tf
             self._compiled = True
             return
 
@@ -293,46 +377,95 @@ class NTScreeningRunner:
         self._strategy_cls_name = f"{class_name}Strategy"
         self._config_cls_name = f"{class_name}Config"
 
-        # Cache parsed DSL fields needed for data config
-        self._all_timeframes = {dsl.timeframe}
-        self._all_timeframes.update(dsl.additional_timeframes)
-        for ind_config in dsl.indicators.values():
-            if ind_config.timeframe:
-                self._all_timeframes.add(ind_config.timeframe)
+        # Cache parsed DSL fields needed for data config. The loaded set comes
+        # from the SHARED helper the parents use too (yul7u.12): both must
+        # agree on the finest loaded tf the fill mode keys on.
+        self._timeframe = dsl.timeframe
+        self._all_timeframes = loaded_timeframes(self._dsl_dict)
 
         _COMPILE_CACHE[cache_key] = (
             self._module_path,
             self._strategy_cls_name,
             self._config_cls_name,
             frozenset(self._all_timeframes),
+            self._timeframe,
         )
         self._compiled = True
 
-    def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
-        """Execute the NautilusTrader backtest."""
-        from nautilus_trader.backtest.node import BacktestNode
+    def _resolve_fill_ticks(self, tick_timeframe: str, catalog_path: Path) -> FillTickSet:
+        """The run's fill-tick set: the parent's, or resolved in-process.
+
+        Raises:
+            MissingBarDataError: no/partial 1m data, or the given set does not
+                match the run (timeframe, symbols).
+        """
+        if self._fill_ticks is None:
+            from vibe_quant.data.fill_ticks import resolve_fill_ticks
+
+            ticks = resolve_fill_ticks(
+                self._symbols, tick_timeframe, self._start_date, self._end_date, catalog_path
+            )
+        else:
+            from vibe_quant.validation.extraction import date_to_ns
+
+            ticks = self._fill_ticks
+            missing = [s for s in self._symbols if s not in ticks.paths]
+            if ticks.timeframe != tick_timeframe or missing:
+                raise MissingBarDataError(
+                    f"Fill-tick set ({ticks.timeframe}, symbols {sorted(ticks.paths)}) does not "
+                    f"match the run ({tick_timeframe}, missing {missing})"
+                )
+            # A set checked for another window would silently score 0 trades
+            run_start, run_end = date_to_ns(self._start_date), date_to_ns(self._end_date)
+            if (
+                ticks.start_ns is None
+                or ticks.end_ns is None
+                or run_start is None
+                or run_end is None
+                or run_start < ticks.start_ns
+                or run_end > ticks.end_ns
+            ):
+                raise MissingBarDataError(
+                    f"Fill-tick set window [{ticks.start_ns}, {ticks.end_ns}] does not cover "
+                    f"the run window {self._start_date}..{self._end_date}"
+                )
+        for symbol in self._symbols:
+            gaps = ticks.missing_boundaries.get(symbol, 0)
+            if gaps:
+                logger.warning(
+                    "Fill ticks %s %s: %d boundar%s without 1m data in %s..%s -- orders "
+                    "queued there wait for the next tick",
+                    symbol,
+                    tick_timeframe,
+                    gaps,
+                    "y" if gaps == 1 else "ies",
+                    self._start_date,
+                    self._end_date,
+                )
+        return ticks
+
+    def _build_run_config(
+        self, params: dict[str, float | int]
+    ) -> tuple[BacktestRunConfig | None, list[str]]:
+        """Run config for ``params`` plus the fill-tick dirs it reads.
+
+        Returns (None, []) when no bar timeframe is loadable. Missing bars or
+        fill ticks raise :class:`MissingBarDataError` before any NT config is
+        built.
+        """
+        import os
+
         from nautilus_trader.config import (
             BacktestDataConfig,
             BacktestEngineConfig,
             BacktestRunConfig,
             ImportableStrategyConfig,
+            LoggingConfig,
         )
-        from nautilus_trader.core.nautilus_pyo3 import (
-            ProfitFactor,
-            SharpeRatio,
-            SortinoRatio,
-            WinRate,
-        )
-        from nautilus_trader.model.data import Bar
+        from nautilus_trader.model.data import Bar, TradeTick
 
-        from vibe_quant.data.catalog import (
-            INTERVAL_TO_AGGREGATION,
-        )
-        from vibe_quant.screening.types import BacktestMetrics
-        from vibe_quant.validation.venue import (
-            create_backtest_venue_config,
-            create_venue_config_for_screening,
-        )
+        from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+        from vibe_quant.validation.venue import create_backtest_venue_config
 
         # Compile DSL once per worker process
         self._ensure_compiled()
@@ -341,30 +474,12 @@ class NTScreeningRunner:
         strategy_cls_name = self._strategy_cls_name
         config_cls_name = self._config_cls_name
         catalog_path = self._resolved_catalog_path
+        catalog_str = str(catalog_path.resolve())
 
         # Map sweep keys (dot notation, known aliases) onto the generated
         # StrategyConfig's fields; an unknown key raises instead of being
         # silently dropped (NT 1.226+ would also reject it at decode time).
         strategy_params = resolve_strategy_params(params, self._config_fields())
-
-        # Strategy configs (with parameter overrides)
-        strategy_configs: list[ImportableStrategyConfig] = []
-        for symbol in self._symbols:
-            instrument_id = f"{symbol}-PERP.BINANCE"
-            config_dict: dict[str, Any] = {"instrument_id": instrument_id, **strategy_params}
-            # Always defer entries/exits one bar. NT (bar_execution, no latency)
-            # fills a market order from on_bar(t) at close[t] -- the signal bar's
-            # own close -- which is same-bar look-ahead. Deferring makes the fill
-            # land at close[t+1], matching the validation tier. This governs the
-            # screening, discovery, WFA and purged-k-fold paths (all share this runner).
-            config_dict["execution_delay_probability"] = 1.0
-            strategy_configs.append(
-                ImportableStrategyConfig(
-                    strategy_path=f"{module_path}:{strategy_cls_name}",
-                    config_path=f"{module_path}:{config_cls_name}",
-                    config=config_dict,
-                )
-            )
 
         # Data configs
         data_configs: list[BacktestDataConfig] = []
@@ -375,16 +490,14 @@ class NTScreeningRunner:
                     continue
                 step, agg = INTERVAL_TO_AGGREGATION[tf]
                 bar_type_str = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
-                require_bars_in_window(
-                    str(catalog_path.resolve()), bar_type_str, self._start_date, self._end_date
-                )
+                require_bars_in_window(catalog_str, bar_type_str, self._start_date, self._end_date)
                 # NT 1.226+: pass data_cls as the CLASS, not the import
                 # string — BacktestDataConfig.query compares `data_cls is Bar`
                 # so a string silently disables bar-type narrowing and loads
                 # every bar timeframe in the catalog (~300x the needed data).
                 data_configs.append(
                     BacktestDataConfig(
-                        catalog_path=str(catalog_path.resolve()),
+                        catalog_path=catalog_str,
                         data_cls=Bar,
                         bar_types=[bar_type_str],
                         start_time=self._start_date,
@@ -393,25 +506,59 @@ class NTScreeningRunner:
                 )
 
         if not data_configs:
-            return BacktestMetrics(
-                parameters=params,
-                sharpe_ratio=float("-inf"),
-                execution_time_seconds=time.time() - start_time,
+            return None, []
+
+        # Fill mode (vibe-quant-yul7u.10). NT (bar_execution, no latency) fills
+        # a market order from on_bar(t) at close[t] -- the signal bar's own
+        # close, a same-bar look-ahead. 1m strategies defer one bar (fill at
+        # the next 1m close); coarser ones queue every venue command in the
+        # strategy's per-instrument outbox and release it on the next own 1m
+        # bar / fill tick, so fills land at validation's price and time.
+        mode = screening_fill_mode(self._timeframe, self._all_timeframes)
+        tick_dirs: list[str] = []
+        if mode.tick_timeframe is not None:
+            ticks = self._resolve_fill_ticks(mode.tick_timeframe, catalog_path)
+            for symbol in self._symbols:
+                tick_dirs.append(ticks.paths[symbol])
+                # TradeTick CLASS, never the import string (see Bar above)
+                data_configs.append(
+                    BacktestDataConfig(
+                        catalog_path=ticks.paths[symbol],
+                        data_cls=TradeTick,
+                        instrument_id=f"{symbol}-PERP.BINANCE",
+                        start_time=self._start_date,
+                        end_time=self._end_date,
+                    )
+                )
+
+        # Strategy configs (with parameter overrides)
+        strategy_configs: list[ImportableStrategyConfig] = []
+        for symbol in self._symbols:
+            instrument_id = f"{symbol}-PERP.BINANCE"
+            config_dict: dict[str, Any] = {"instrument_id": instrument_id, **strategy_params}
+            config_dict["execution_delay_probability"] = mode.execution_delay_probability
+            if mode.command_release:
+                config_dict["command_release"] = mode.command_release
+            if mode.command_release == "bar":
+                config_dict["command_release_bar_type"] = (
+                    f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"
+                )
+            strategy_configs.append(
+                ImportableStrategyConfig(
+                    strategy_path=f"{module_path}:{strategy_cls_name}",
+                    config_path=f"{module_path}:{config_cls_name}",
+                    config=config_dict,
+                )
             )
 
-        # Screening venue config: no latency, simple fills
-        venue_config = create_venue_config_for_screening()
-        bt_venue_config = create_backtest_venue_config(venue_config)
+        # Screening venue config: no latency (the outbox needs none), simple fills
+        bt_venue_config = create_backtest_venue_config(self._venue_config())
 
         # Suppress NT's verbose INFO logging in discovery/screening mode
         # (every order/fill/position logs at INFO, generating 100s of MB)
         # Screening runs in parallel workers, so NT engine output defaults to
         # WARNING to keep sweep logs readable. Override per run via
         # VIBE_QUANT_NT_LOG_LEVEL_SCREENING (TRACE/DEBUG/INFO/WARNING/ERROR).
-        import os
-
-        from nautilus_trader.config import LoggingConfig
-
         engine_config = BacktestEngineConfig(
             strategies=strategy_configs,
             run_analysis=True,
@@ -420,14 +567,52 @@ class NTScreeningRunner:
             ),
         )
 
-        bt_run_config = BacktestRunConfig(
+        # raise_exception: node.build() otherwise swallows engine-build errors
+        # (get_engine() -> None, "engine not found").
+        run_config = BacktestRunConfig(
             engine=engine_config,
             venues=[bt_venue_config],
             data=data_configs,
             start=self._start_date,
             end=self._end_date,
             dispose_on_completion=False,
+            raise_exception=True,
         )
+        return run_config, tick_dirs
+
+    @staticmethod
+    def _venue_config() -> VenueConfig:
+        from vibe_quant.validation.venue import create_venue_config_for_screening
+
+        return create_venue_config_for_screening()
+
+    def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
+        """Execute the NautilusTrader backtest."""
+        import contextlib
+
+        from nautilus_trader.backtest.node import BacktestNode
+        from nautilus_trader.core.nautilus_pyo3 import (
+            ProfitFactor,
+            SharpeRatio,
+            SortinoRatio,
+            WinRate,
+        )
+
+        from vibe_quant.data.catalog import cleanup_epoch_parquet
+        from vibe_quant.data.fill_ticks import fill_tick_dir_signature
+        from vibe_quant.nt_compat import retain_log_guard
+        from vibe_quant.screening.types import BacktestMetrics
+
+        bt_run_config, tick_dirs = self._build_run_config(params)
+        if bt_run_config is None:
+            return BacktestMetrics(
+                parameters=params,
+                sharpe_ratio=float("-inf"),
+                execution_time_seconds=time.time() - start_time,
+            )
+        catalog_path = self._resolved_catalog_path
+        starting_balance = float(self._venue_config().starting_balance_usdt)
+        tick_signatures = {d: fill_tick_dir_signature(d) for d in tick_dirs}
 
         # Run the backtest
         node = BacktestNode(configs=[bt_run_config])
@@ -446,51 +631,56 @@ class NTScreeningRunner:
 
             engine = node.get_engine(bt_run_config.id)
             if engine is None:
-                return BacktestMetrics(
+                metrics = BacktestMetrics(
                     parameters=params,
                     sharpe_ratio=float("-inf"),
                     execution_time_seconds=time.time() - start_time,
                 )
-            bt_result = engine.get_result()
-
-            metrics = self._extract_metrics(
-                params,
-                bt_result,
-                engine,
-                start_time,
-                starting_balance=float(venue_config.starting_balance_usdt),
-            )
-            # One line per grid point so sweep logs are analyzable
-            logger.info(
-                "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
-                "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
-                params or "{}",
-                metrics.sharpe_ratio,
-                metrics.total_trades,
-                metrics.total_return * 100,
-                metrics.max_drawdown * 100,
-                bt_result.total_orders,
-                bt_result.total_events,
-                metrics.execution_time_seconds,
-            )
-            return metrics
+            else:
+                bt_result = engine.get_result()
+                metrics = self._extract_metrics(
+                    params,
+                    bt_result,
+                    engine,
+                    start_time,
+                    starting_balance=starting_balance,
+                )
+                # One line per grid point so sweep logs are analyzable
+                logger.info(
+                    "Screening backtest: params=%s sharpe=%.2f trades=%d return=%.2f%% "
+                    "maxDD=%.2f%% (%d orders, %d events, %.1fs)",
+                    params or "{}",
+                    metrics.sharpe_ratio,
+                    metrics.total_trades,
+                    metrics.total_return * 100,
+                    metrics.max_drawdown * 100,
+                    bt_result.total_orders,
+                    bt_result.total_events,
+                    metrics.execution_time_seconds,
+                )
         finally:
             # Reset engines before dispose to avoid
             # InvalidStateTrigger('RUNNING -> DISPOSE')
-            import contextlib
-
-            from vibe_quant.nt_compat import retain_log_guard
-
             for eng in node.get_engines():
                 retain_log_guard(eng)
                 with contextlib.suppress(Exception):
                     eng.reset()
             node.dispose()  # type: ignore[no-untyped-call]
 
-            # NT writes corrupt epoch-timestamp instrument parquet on dispose()
-            from vibe_quant.data.catalog import cleanup_epoch_parquet
-
+            # NT writes corrupt epoch-timestamp parquet on dispose(), into
+            # every catalog the run read -- the fill-tick catalogs included
             cleanup_epoch_parquet(catalog_path)
+            for tick_dir in tick_dirs:
+                cleanup_epoch_parquet(Path(tick_dir))
+
+        changed = [d for d, sig in tick_signatures.items() if fill_tick_dir_signature(d) != sig]
+        if changed:
+            logger.error("Fill-tick dir(s) modified by the engine run: %s", changed)
+            raise FillTickCatalogModifiedError(
+                f"Fill-tick dir(s) modified by the engine run: {changed}. Tick sets are "
+                "immutable; delete the dir(s) so they are rebuilt."
+            )
+        return metrics
 
     def _extract_metrics(
         self,
@@ -510,11 +700,13 @@ class NTScreeningRunner:
         from vibe_quant.metrics import closed_trade_drawdown, profit_factor
         from vibe_quant.screening.types import BacktestMetrics
         from vibe_quant.validation.extraction import (
+            OpenPositionMark,
             accrue_position_funding,
             all_positions,
             daily_sharpe_sortino,
             date_to_ns,
             finest_timeframe,
+            mark_open_positions,
             mark_to_market_drawdown,
         )
         from vibe_quant.validation.funding import FundingCalculator
@@ -612,9 +804,16 @@ class NTScreeningRunner:
                 list(stats_returns.keys()) if stats_returns else "empty",
             )
 
-        # Fees, funding and net trade PnLs from closed positions.
+        # Fees, funding and net trade PnLs from closed positions, plus
+        # positions still open at the end of the run marked to market at the
+        # last execution-bar close with an estimated taker exit fee -- the
+        # outbox never releases on_stop closes (same as validation).
         # NT netting mode removes closed positions from the main index;
         # combine positions() + position_snapshots() to capture all.
+        start_ns = date_to_ns(self._start_date)
+        end_ns = date_to_ns(self._end_date)
+        execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
+        catalog_path = getattr(self, "_resolved_catalog_path", None)
         trade_pnls: list[float] = []
         closed_net: list[tuple[int, float]] = []
         cash_events: list[tuple[int, float]] = []
@@ -622,28 +821,50 @@ class NTScreeningRunner:
         total_funding = 0.0
         funding_fallbacks = 0
         try:
-            closed = [p for p in all_positions(engine) if p.is_closed]
+            everything = all_positions(engine)
+            closed = [p for p in everything if p.is_closed]
+            still_open = [
+                p for p in everything if not p.is_closed and getattr(p, "is_open", False)
+            ]
         except Exception:
             logger.warning("Could not read positions from engine cache", exc_info=True)
-            closed = []
+            closed, still_open = [], []
+        open_marks = mark_open_positions(
+            engine,
+            still_open,
+            execution_timeframe=execution_tf,
+            catalog_path=catalog_path,
+            start_ns=start_ns,
+            end_ns=end_ns,
+        )
+        trade_inputs: list[tuple[Any, OpenPositionMark | None]] = [(p, None) for p in closed]
+        trade_inputs.extend((mark.position, mark) for mark in open_marks)
         funding_calc = FundingCalculator(self._funding_archive_path)
         total_fees = 0.0
-        for pos in closed:
+        unrealized_at_end = 0.0
+        for pos, mark in trade_inputs:
+            instrument_cash = funding_cash.setdefault(str(pos.instrument_id), [])
             total_fees += sum(abs(float(c)) for c in pos.commissions())
-            # Funding is modeled post-hoc (NT's engine applies none) with
-            # the same calculator validation uses (bd vibe-quant-e70tl.20).
-            accrual = accrue_position_funding(funding_calc, pos)
-            total_funding += accrual.total
-            funding_fallbacks += accrual.fallback_settlements
             # NT realized_pnl is net of commissions
             realized = float(pos.realized_pnl)
+            if mark is None:
+                exit_ns = int(pos.ts_closed)
+            else:
+                exit_ns = mark.ts
+                total_fees += mark.exit_fee
+                realized += mark.unrealized - mark.exit_fee
+                unrealized_at_end += mark.unrealized - mark.exit_fee
+                instrument_cash.append((mark.ts, -mark.exit_fee))
+            # Funding is modeled post-hoc (NT's engine applies none) with
+            # the same calculator validation uses (bd vibe-quant-e70tl.20).
+            accrual = accrue_position_funding(funding_calc, pos, exit_ns=exit_ns)
+            total_funding += accrual.total
+            funding_fallbacks += accrual.fallback_settlements
             trade_pnls.append(realized - accrual.total)
-            closed_net.append((int(pos.ts_closed), realized - accrual.total))
-            cash_events.append((int(pos.ts_closed), realized))
+            closed_net.append((exit_ns, realized - accrual.total))
+            cash_events.append((exit_ns, realized))
             cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
-            funding_cash.setdefault(str(pos.instrument_id), []).extend(
-                (ts, -amount) for ts, amount in accrual.payments
-            )
+            instrument_cash.extend((ts, -amount) for ts, amount in accrual.payments)
         metrics.total_fees = total_fees
         metrics.total_funding = total_funding
         metrics.funding_fallback_settlements = funding_fallbacks
@@ -654,8 +875,10 @@ class NTScreeningRunner:
                 params or "{}",
                 funding_fallbacks,
             )
-        if total_funding != 0.0 and starting_balance > 0:
-            metrics.total_return -= total_funding / starting_balance
+        # NT's total return covers realized PnL only: add the open marks
+        extra_costs = total_funding - unrealized_at_end
+        if extra_costs != 0.0 and starting_balance > 0:
+            metrics.total_return -= extra_costs / starting_balance
 
         # Trade-based profit factor on net PnL (shared definition with
         # validation). NT's realized-PnL PF is unimplemented, and its
@@ -665,12 +888,16 @@ class NTScreeningRunner:
         # Sharpe/Sortino from the daily realized balance INCLUDING funding,
         # over the whole backtest window (NT's series stops at the last fill
         # and knows nothing of funding). Same function as validation.
-        start_ns = date_to_ns(self._start_date)
-        end_ns = date_to_ns(self._end_date)
         if start_ns is not None and end_ns is not None and end_ns > start_ns:
             metrics.sharpe_ratio, metrics.sortino_ratio = daily_sharpe_sortino(
                 starting_balance, cash_events, start_ns, end_ns
             )
+            if self._collect_daily_returns:
+                from vibe_quant.metrics import dense_daily_returns
+
+                self.last_daily_returns = dense_daily_returns(
+                    starting_balance, cash_events, start_ns, end_ns
+                )
 
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         metrics.skewness, metrics.kurtosis, metrics.trade_returns = self._compute_return_moments(engine)
@@ -678,12 +905,11 @@ class NTScreeningRunner:
         # Mark-to-market max drawdown incl. open-trade intrabar losses and
         # funding (bd vibe-quant-e70tl.11). NT's own DD stats are daily
         # realized-balance figures and are not used.
-        execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
         mtm_dd = mark_to_market_drawdown(
             engine,
             starting_balance,
             execution_timeframe=execution_tf,
-            catalog_path=getattr(self, "_resolved_catalog_path", None),
+            catalog_path=catalog_path,
             start_ns=start_ns,
             end_ns=end_ns,
             extra_cash=funding_cash,

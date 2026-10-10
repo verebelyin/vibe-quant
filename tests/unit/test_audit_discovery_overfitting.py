@@ -245,6 +245,22 @@ def _seed_screening_run(tmp_path: Path, start: str, end: str) -> tuple[Path, int
     return db, rid
 
 
+def _stub_tick_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parents resolve fill ticks (yul7u.12); these tests have no 1m data."""
+    from vibe_quant.data.fill_ticks import FillTickSet
+    from vibe_quant.validation.extraction import date_to_ns
+
+    def _resolve(symbols: Any, tf: str, start: str, end: str, cat: Any) -> FillTickSet:
+        # A real resolve stamps the window it covered; the runner rejects a set
+        # whose [start_ns, end_ns] does not cover the run window (yul7u.10).
+        return FillTickSet(
+            tf, {s: f"/ticks/{s}" for s in symbols}, {},
+            start_ns=date_to_ns(start), end_ns=date_to_ns(end),
+        )
+
+    monkeypatch.setattr("vibe_quant.data.fill_ticks.resolve_fill_ticks", _resolve)
+
+
 def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import vibe_quant.screening.nt_runner as ntr
     from vibe_quant.overfitting.__main__ import main
@@ -253,13 +269,14 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
 
     class _Rec:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
-                     catalog_path: Any = None) -> None:
+                     catalog_path: Any = None, fill_ticks: Any = None) -> None:
             seen.append((start_date, end_date))
 
         def __call__(self, params: Any) -> Any:
             return type("M", (), {"sharpe_ratio": 1.0, "total_return": 0.01})()
 
     monkeypatch.setattr(ntr, "NTScreeningRunner", _Rec)
+    _stub_tick_resolve(monkeypatch)
     db, rid = _seed_screening_run(tmp_path, "2022-01-01", "2022-12-31")
     assert main([
         "run", "--run-id", str(rid), "--db", str(db), "--filters", "wfa", "--real-wfa",
@@ -283,7 +300,7 @@ def test_cv_runner_forwards_each_candidates_params(
 
     class _Fake:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
-                     catalog_path: Any = None) -> None:
+                     catalog_path: Any = None, fill_ticks: Any = None) -> None:
             pass
 
         def __call__(self, params: dict[str, Any]) -> Any:
@@ -293,6 +310,7 @@ def test_cv_runner_forwards_each_candidates_params(
                                   "total_return": 0.1 if good else -0.1})()
 
     monkeypatch.setattr(ntr, "NTScreeningRunner", _Fake)
+    _stub_tick_resolve(monkeypatch)
     db, rid = _seed_screening_run(tmp_path, "2024-01-01", "2025-12-31")
     cat = tmp_path / "catalog"
     bar = cat / "data" / "bar" / "BTCUSDT-PERP.BINANCE-4-HOUR-LAST-EXTERNAL"

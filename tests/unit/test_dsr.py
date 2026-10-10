@@ -593,3 +593,44 @@ class TestConvenienceFunctionTrialsVariance:
             trials_sharpe_variance=0.01,
         )
         assert result.expected_max_sharpe > 0
+
+
+# ---------------------------------------------------------------------------
+# yul7u.24 T1: DSR inputs from the daily series NT's Sharpe uses
+# ---------------------------------------------------------------------------
+
+
+def test_daily_sharpe_inputs_matches_nt_sharpe() -> None:
+    import numpy as np
+    from nautilus_trader.core.nautilus_pyo3 import SharpeRatio
+    from scipy import stats
+
+    from vibe_quant.metrics import daily_balance_returns, dense_daily_returns
+    from vibe_quant.overfitting.dsr import daily_sharpe_inputs
+
+    day = 86_400 * 1_000_000_000
+    rng = np.random.default_rng(7)
+    start, end = 19_000 * day, 19_400 * day
+    events = [
+        (int(start + rng.integers(0, 400) * day + 3600), float(rng.normal(2.0, 30.0)))
+        for _ in range(150)
+    ]
+    nt_dict = daily_balance_returns(1000.0, events, start, end)
+    dense = dense_daily_returns(1000.0, events, start, end)
+    assert dense is not None
+    series = dense.without_first_day()
+    # Same days and bit-identical values as the dict NT's Sharpe is computed on
+    assert [(series.first_day + i) * day for i in range(len(series))] == sorted(nt_dict)
+    assert list(series.values) == [nt_dict[k] for k in sorted(nt_dict)]
+
+    sr, skew, kurt = daily_sharpe_inputs(series.values)
+    nt_sr = SharpeRatio().calculate_from_returns(nt_dict)
+    assert nt_sr is not None
+    assert sr * math.sqrt(252.0) == pytest.approx(nt_sr, rel=1e-12)
+    x = np.asarray(series.values)
+    assert skew == pytest.approx(float(stats.skew(x, bias=False)), rel=1e-12)
+    assert kurt == pytest.approx(float(stats.kurtosis(x, bias=False)) + 3.0, rel=1e-12)
+    # flat / too short -> neutral inputs
+    assert daily_sharpe_inputs([0.0] * 50) == (0.0, 0.0, 3.0)
+    assert daily_sharpe_inputs([0.01]) == (0.0, 0.0, 3.0)
+    assert daily_sharpe_inputs([0.01, -0.02, 0.03]) == (0.0, 0.0, 3.0)

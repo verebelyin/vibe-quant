@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import build_parser, main
+from vibe_quant.discovery.__main__ import build_parser, main, plan_from_args
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -171,10 +171,10 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
             "--start-date",
             "2025-01-01",
             "--end-date",
-            "2025-02-01",
+            "2025-03-01",
             "--direction",
             "short",
-            "--cross-window-months=-1",
+            "--cross-window-months=1",
             "--cross-window-min-sharpe",
             "0.8",
             "--db",
@@ -195,7 +195,7 @@ def test_cross_window_metadata_persisted_to_notes(tmp_path: Path, monkeypatch) -
 
     notes = json.loads(result["notes"])
     assert notes["direction"] == "short"
-    assert notes["cross_window_months"] == [-1]
+    assert notes["cross_window_months"] == [1]
     assert notes["cross_window_min_sharpe"] == 0.8
 
 def test_no_viable_strategies_completes_cleanly(tmp_path: Path, monkeypatch) -> None:
@@ -795,3 +795,107 @@ def test_multi_seed_explicit_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert main() == 0
     assert seen[:2] == [100, 8019]
     assert _run_notes(db_path, run_id)["seed"] == 100
+
+
+def _legacy_windows(
+    start: str, end: str, split: float, n_eval: int
+) -> tuple[str, str, str | None, str | None, list[tuple[str, str]] | None]:
+    """The inline split main() used before plan_from_args (reference)."""
+    from vibe_quant.utils import split_date_range, split_into_windows
+
+    train_start, train_end = start, end
+    holdout_start: str | None = None
+    holdout_end: str | None = None
+    if split > 0:
+        train_start, train_end, holdout_start, holdout_end = split_date_range(start, end, split)
+    n = max(1, n_eval)
+    eval_windows = split_into_windows(train_start, train_end, n) if n >= 2 else None
+    return train_start, train_end, holdout_start, holdout_end, eval_windows
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("2024-01-01", "2026-02-24"),
+        ("2025-01-01", "2025-06-01"),
+        ("2024-02-03", "2025-01-30"),  # odd day count, leap year
+        ("2023-05-17", "2025-11-18"),
+    ],
+)
+@pytest.mark.parametrize("split", [0.8, 0.25, 0.75, 0])
+@pytest.mark.parametrize("n_eval", [1, 2, 3, 4])
+def test_plan_windows_matches_legacy_split(start: str, end: str, split: float, n_eval: int) -> None:
+    args = build_parser().parse_args(
+        [
+            "--run-id", "0", "--start-date", start, "--end-date", end,
+            "--train-test-split", str(split), "--eval-windows", str(n_eval),
+        ]
+    )
+    plan = plan_from_args(args)
+    expected = _legacy_windows(start, end, split, n_eval)
+    assert (
+        plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end, plan.eval_windows
+    ) == expected
+
+
+def test_bad_window_config_fails_run_fast(tmp_path: Path, monkeypatch) -> None:
+    """--cross-window-months 6 on a 3-month range: run failed, DiscoveryConfigError."""
+    import time
+
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id), "--population-size", "6",
+            "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
+            "--start-date", "2025-01-01", "--end-date", "2025-04-01",
+            "--cross-window-months", "6", "--mock", "--db", str(db_path),
+        ],
+    )
+    t0 = time.perf_counter()
+    assert main() == 1
+    assert time.perf_counter() - t0 < 10
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    state.close()
+    assert run is not None
+    assert run["status"] == "failed"
+    assert run["error_message"].startswith("DiscoveryConfigError:")
+
+
+def test_main_derives_windows_via_plan_from_args(tmp_path: Path, monkeypatch) -> None:
+    """main() must call plan_from_args (a bypass would be masked by the pipeline gate)."""
+
+    class _Sentinel(Exception):
+        pass
+
+    def _boom(_args: object) -> None:
+        raise _Sentinel("plan_from_args reached")
+
+    monkeypatch.setattr("vibe_quant.discovery.__main__.plan_from_args", _boom)
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog", "--run-id", str(run_id), "--population-size", "6",
+            "--max-generations", "2", "--elite-count", "1", "--timeframe", "1h",
+            "--start-date", "2025-01-01", "--end-date", "2025-02-01",
+            "--mock", "--db", str(db_path),
+        ],
+    )
+    assert main() == 1
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    state.close()
+    assert run is not None
+    assert run["status"] == "failed"
+    assert "plan_from_args reached" in run["error_message"]
+
+
+def test_cross_window_months_equals_form_parses_negative() -> None:
+    from vibe_quant.discovery.config_check import parse_cross_window_months
+
+    args = build_parser().parse_args(["--run-id", "0", "--cross-window-months=-15,3"])
+    assert parse_cross_window_months(args.cross_window_months) == [-15, 3]

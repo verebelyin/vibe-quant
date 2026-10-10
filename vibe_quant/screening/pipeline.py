@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
@@ -38,8 +39,10 @@ from vibe_quant.screening.types import (
 from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Sequence
+    from pathlib import Path
 
+    from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.dsl.schema import StrategyDSL
 
@@ -483,12 +486,17 @@ def create_screening_pipeline(
         effective_symbols = symbols or ["BTCUSDT"]
         # Convert DSL to dict for pickling across process boundaries
         dsl_dict = _dsl_to_dict(dsl)
+        # Resolve the fill ticks ONCE here, before the worker pool; missing
+        # 1m data aborts now, workers never build ticks (vibe-quant-yul7u.12).
         runner = NTScreeningRunner(
             dsl_dict=dsl_dict,
             symbols=effective_symbols,
             start_date=start_date,
             end_date=end_date,
             catalog_path=catalog_path,
+            fill_ticks=resolve_parent_fill_ticks(
+                dsl_dict, effective_symbols, start_date, end_date, catalog_path
+            ),
         )
     return ScreeningPipeline(
         dsl=dsl,
@@ -527,3 +535,97 @@ def _dsl_to_dict(dsl: StrategyDSL) -> dict[str, Any]:
         return obj
 
     return dict(_to_dict(dsl))  # type: ignore[arg-type]
+
+
+def resolve_fill_ticks_for(
+    timeframe: str,
+    loaded_timeframes: Iterable[str],
+    symbols: Sequence[str],
+    start: str,
+    end: str,
+    catalog_path: str | Path | None = None,
+) -> FillTickSet | None:
+    """Parent-side fill-tick resolve for a run (vibe-quant-yul7u.12).
+
+    The tick timeframe comes from ``screening_fill_mode`` (the finest LOADED
+    timeframe), the same call the runner makes; ``NTScreeningRunner`` raises
+    on a mismatching set. 1m strategies and the "bar" release mode use no
+    ticks -> None.
+
+    Raises:
+        MissingBarDataError: no/partial 1m data for ``[start, end]``.
+    """
+    from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
+    from vibe_quant.data.fill_ticks import resolve_fill_ticks
+    from vibe_quant.screening.nt_runner import screening_fill_mode
+
+    tick_tf = screening_fill_mode(timeframe, loaded_timeframes).tick_timeframe
+    if tick_tf is None:
+        return None
+    cat = DEFAULT_CATALOG_PATH if catalog_path is None else catalog_path
+    ticks = resolve_fill_ticks(symbols, tick_tf, start, end, cat)
+    logger.info(
+        "Fill ticks resolved in parent (pid %d): tf=%s symbols=%s window=%s..%s",
+        os.getpid(), tick_tf, sorted(symbols), start, end,
+    )
+    return ticks
+
+
+def resolve_parent_fill_ticks(
+    dsl_dict: dict[str, Any],
+    symbols: Sequence[str],
+    start: str,
+    end: str,
+    catalog_path: str | Path | None = None,
+) -> FillTickSet | None:
+    """:func:`resolve_fill_ticks_for` for a DSL dict.
+
+    Loaded timeframes come from the SAME helper ``NTScreeningRunner._compile``
+    uses (``loaded_timeframes``), so parent and runner always agree on the
+    finest loaded timeframe the tick set is resolved for (vibe-quant-yul7u.12).
+    """
+    from vibe_quant.screening.nt_runner import loaded_timeframes
+
+    return resolve_fill_ticks_for(
+        str(dsl_dict["timeframe"]),
+        loaded_timeframes(dsl_dict),
+        symbols,
+        start,
+        end,
+        catalog_path,
+    )
+
+
+class ParentFillTicks:
+    """Lazy parent-side resolve for runners that backtest many windows.
+
+    The set's directories do not depend on the window; only the coverage check
+    does. So one set is reused for every window inside the span resolved so
+    far, and the span is widened (re-resolved over the union) when a window
+    falls outside it.
+    """
+
+    def __init__(
+        self,
+        dsl_dict: dict[str, Any],
+        symbols: Sequence[str],
+        catalog_path: str | Path | None = None,
+    ) -> None:
+        self._dsl_dict = dsl_dict
+        self._symbols = list(symbols)
+        self._catalog_path = catalog_path
+        self._span: tuple[str, str] | None = None
+        self._ticks: FillTickSet | None = None
+
+    def get(self, start: str, end: str) -> FillTickSet | None:
+        """The tick set covering ``[start, end]`` (None when the mode has no ticks)."""
+        if self._span is not None and self._span[0] <= start and end <= self._span[1]:
+            return self._ticks
+        lo, hi = (start, end) if self._span is None else (
+            min(start, self._span[0]), max(end, self._span[1])
+        )
+        self._ticks = resolve_parent_fill_ticks(
+            self._dsl_dict, self._symbols, lo, hi, self._catalog_path
+        )
+        self._span = (lo, hi)
+        return self._ticks

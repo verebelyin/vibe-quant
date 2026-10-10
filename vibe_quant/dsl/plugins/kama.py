@@ -33,13 +33,16 @@ Usage::
 from __future__ import annotations
 
 from functools import cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from vibe_quant.dsl.compute_builtins import int_param, nan_like
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+_EPS = 2.220446049250313e-16  # np.finfo(np.float64).eps == pandas_ta sflt.epsilon
 
 
 def compute_kama(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
@@ -111,14 +114,15 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
 
     c = close.to_numpy(dtype=np.float64)
     m = c.size
-    eps = float(np.finfo(np.float64).eps)  # == pandas_ta sflt.epsilon
+    eps = _EPS
     fr = 2 / (fast + 1)
     sr = 2 / (slow + 1)
     with np.errstate(all="ignore"):
         # non_zero_range(close, close.shift(period)).abs() on arrays:
         # epsilon added to every diff iff any diff is exactly zero (pre-abs).
-        abs_diff = np.full(m, np.nan, dtype=np.float64)
-        abs_diff[period:] = c[period:] - c[:-period]
+        abs_diff = np.empty(m, dtype=np.float64)
+        abs_diff[:period] = np.nan
+        np.subtract(c[period:], c[:-period], out=abs_diff[period:])
         if (abs_diff == 0).any():
             abs_diff += eps
         np.abs(abs_diff, out=abs_diff)
@@ -134,28 +138,52 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
         # Kept on pandas: its compensated running sum is not reproducible
         # bit-exactly by any numpy reduction order.
         peer_sum = pd.Series(peer).rolling(period).sum().to_numpy(dtype=np.float64)
-        er = abs_diff / peer_sum
-        x = er * (fr - sr) + sr
-        sc = x * x
+        # In place, same IEEE ops in the same order as `x = er*(fr-sr)+sr; sc = x*x`.
+        sc = abs_diff
+        np.divide(sc, peer_sum, out=sc)
+        np.multiply(sc, fr - sr, out=sc)
+        np.add(sc, sr, out=sc)
+        np.multiply(sc, sc, out=sc)
 
-    # Recurrence on float64 scalars — op-for-op with the reference loop
-    # (`s*c + (1-s)*prev`, no fused multiply-add) but on Python floats and
-    # list indexing, which is ~4x faster than per-element numpy scalars.
-    cl = c.tolist()
-    sl = sc.tolist()
-    out = [float("nan")] * m
-    prev = cl[period - 1]
-    out[period - 1] = prev
-    for i in range(period, m):
-        si = sl[i]
-        prev = si * cl[i] + (1.0 - si) * prev
-        out[i] = prev
+    # The recurrence is pure in (sc, c), so it is memoized on those arrays
+    # (computed AFTER the eps guards and the rolling sum above: those are
+    # window-wide and NOT prefix-stable, so nothing upstream of sc may be keyed).
+    from vibe_quant.dsl.prefix_memo import memo_run
+
+    def full(inputs: Any) -> tuple[Any, float]:
+        # Python floats + list indexing: ~4x faster than per-element numpy scalars.
+        cl = inputs[1].tolist()
+        sl = inputs[0].tolist()
+        out = [float("nan")] * len(cl)
+        prev = cl[period - 1]
+        out[period - 1] = prev
+        for i in range(period, len(cl)):
+            si = sl[i]
+            prev = si * cl[i] + (1.0 - si) * prev
+            out[i] = prev
+        return np.array(out, dtype=np.float64), prev
+
+    # m <= period: no recurrence step yet, nothing to extend
+    res = (
+        full((sc, c))[0]
+        if m <= period
+        else memo_run(("kama", period), (sc, c), full, _kama_step)
+    )
 
     return pd.Series(
-        np.array(out, dtype=np.float64),
+        res,
         index=close.index,
         name=f"KAMA_{period}_{fast}_{slow}",
     )
+
+
+def _kama_step(prev: float, inputs: Any, i: int) -> tuple[float, float]:
+    """One recurrence step, `s*c + (1-s)*prev` (no FMA, op-for-op with the
+    reference loop). The state is the previous output. The full path inlines
+    the same expression on Python floats; both must stay in lockstep."""
+    si = float(inputs[0][i])
+    v = si * float(inputs[1][i]) + (1.0 - si) * prev
+    return v, v
 
 
 @cache

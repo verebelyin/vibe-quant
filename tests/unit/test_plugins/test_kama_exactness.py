@@ -11,15 +11,27 @@ fast path's one-shot self-check fallback is exercised with a perturbed port.
 from __future__ import annotations
 
 import logging
+import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
 import pytest
 
-from vibe_quant.dsl.indicators import indicator_registry
-from vibe_quant.dsl.plugins import kama as kama_mod
-from vibe_quant.dsl.plugins.kama import compute_kama
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pta_stream_harness import (  # noqa: E402
+    compile_indicators,
+    memo_env,
+    random_walk_bars,
+    run_stream,
+)
+
+from vibe_quant.dsl.indicators import indicator_registry  # noqa: E402
+from vibe_quant.dsl.plugins import kama as kama_mod  # noqa: E402
+from vibe_quant.dsl.plugins.kama import compute_kama  # noqa: E402
+from vibe_quant.dsl.prefix_memo import MEMO  # noqa: E402
 
 FAST, SLOW = 2, 30  # the plugin's fixed fast/slow (Kaufman canonical)
 
@@ -188,3 +200,90 @@ def test_selfcheck_fallback_on_perturbed_fast_path(
         assert "falling back" in warnings[0].getMessage()
     finally:
         kama_mod._kama_port_ok.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clean_memo() -> object:
+    MEMO.clear()
+    yield
+    MEMO.clear()
+
+
+def _bits(a: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(a, dtype=np.float64).view(np.uint64)
+
+
+def _stress_closes(n: int, period: int) -> np.ndarray:
+    """Walk with the hostile appends: an equal close (diff==0 flips the whole
+    window's eps guard, so prior outputs change), a close equal to the one
+    `period` bars back (abs_diff zero, lag period), and a NaN gap."""
+    rng = np.random.RandomState(5)
+    c = 100.0 + np.cumsum(rng.randn(n) * 0.5)
+    for i in (150, 301, 470):
+        c[i] = c[i - 1]
+    for i in (220, 520):
+        c[i] = c[i - period]
+    c[390] = np.nan
+    return c
+
+
+def test_kama_memo_stream_bitwise() -> None:
+    period = 10
+    spec = {"kama": ("KAMA", {"period": period}, "1h")}
+    _, cls = compile_indicators({"kama": {"type": "KAMA", "period": period}})
+    close = _stress_closes(700, period)  # > buffer cap: several 25%-slack trims
+    events = [("1h", c, c + 0.5, c - 0.5, c, 1.0) for c in close.tolist()]
+    on = run_stream(cls, events, True, specs=spec)
+    hits = MEMO.hits
+    off = run_stream(cls, events, False, specs=spec)
+    assert hits > len(events) // 2  # memo really engaged, not always-miss
+    assert len(on) == len(off) == len(events)
+    for a, b in zip(on, off, strict=True):
+        assert a.keys() == b.keys()
+        for k in a:
+            assert _bits(np.array([a[k]]))[0] == _bits(np.array([b[k]]))[0]
+
+    # Full arrays over a trimmed sliding window vs the unmemoized pandas reference.
+    MEMO.clear()
+    buf: list[float] = []
+    for i, v in enumerate(close.tolist()):
+        buf.append(v)
+        if len(buf) > 60:  # compiler-style trim: drop the oldest slack at once
+            del buf[:15]
+        if len(buf) <= period:
+            continue
+        df = pd.DataFrame({"close": buf})
+        got = compute_kama(df, {"period": period}).to_numpy()
+        ref = kama_mod._kama_pandas(df, period).to_numpy()
+        assert np.array_equal(_bits(got), _bits(ref)), i
+    assert MEMO.hits > 400
+
+
+def test_kama_flip_append_changes_prefix_but_matches_reference() -> None:
+    """An appended equal close rewrites 290/400 prior outputs; the memo must
+    not extend its stale prefix."""
+    rng = np.random.RandomState(7)
+    c = 100.0 + np.cumsum(rng.randn(400) * 0.5)
+    with memo_env(True):
+        a = compute_kama(pd.DataFrame({"close": c}), {"period": 10}).to_numpy()
+        c2 = np.append(c, c[-1])
+        b = compute_kama(pd.DataFrame({"close": c2}), {"period": 10}).to_numpy()
+        ref = kama_mod._kama_pandas(pd.DataFrame({"close": c2}), 10).to_numpy()
+        assert (a != b[:-1]).sum() > 100  # the flip really rewrote history
+        assert np.array_equal(_bits(b), _bits(ref))
+        assert MEMO.hits == 0  # sc prefix changed -> bitwise check rejected it
+
+
+def test_kama_random_walk_stream_hits_every_bar() -> None:
+    """Steady state with no flips: every bar after the first is a hit."""
+    cl = [e[4] for e in random_walk_bars(300, seed=2)]
+    with memo_env(True):
+        for end in range(40, len(cl) + 1):
+            compute_kama(pd.DataFrame({"close": cl[:end]}), {"period": 10})
+        assert MEMO.hits == len(cl) - 40
+
+
+def test_eps_constant_matches_pandas_ta() -> None:
+    from pandas_ta_classic.utils import sflt
+
+    assert kama_mod._EPS == float(np.finfo(np.float64).eps) == sflt.epsilon

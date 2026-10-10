@@ -12,6 +12,13 @@ os.environ.setdefault(
     "VIBE_QUANT_DB", os.path.join(tempfile.mkdtemp(prefix="vq_test_db_"), "default.db")
 )
 
+# Job log paths resolve through vibe_quant.utils.log_dir(); pin them to a temp
+# dir so a launched job (or a test calling a launch endpoint) never writes into
+# the repo's logs/ tree.
+os.environ.setdefault(
+    "VIBE_QUANT_LOG_DIR", os.path.join(tempfile.mkdtemp(prefix="vq_test_logs_"), "logs")
+)
+
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING

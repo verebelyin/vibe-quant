@@ -8,16 +8,20 @@ promoting candidates.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
     DeflatedSharpeRatio,
+    daily_sharpe_inputs,
     deannualize_sharpe,
+    lag1_autocorrelation,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
     from datetime import date
 
     import numpy as np
@@ -35,6 +39,20 @@ if TYPE_CHECKING:
     from vibe_quant.overfitting.wfa import WalkForwardAnalysis, WFAResult
 
 logger = logging.getLogger(__name__)
+
+#: Worst-mode per-symbol significance floor (bd vibe-quant-yul7u.24, review
+#: SF1): besides the pooled DSR, every symbol's own UNDEFLATED probabilistic
+#: Sharpe PSR(SR > 0) must reach this, so one strong symbol cannot carry
+#: null ones through the pooled test (~annualized SR >= 0.38 at T=1264).
+SYMBOL_PSR_FLOOR: float = 0.8
+
+#: How the dense daily series handles each (sub-)window's first day; recorded
+#: in every DSR record so the observation count T is reproducible.
+DAY0_CONVENTION = (
+    "returns for the days after the train start (NT Sharpe convention); "
+    "eval sub-windows 2..N contribute their first-day return vs a fresh balance, "
+    "so T = train days - 1 for any eval_windows"
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -102,6 +120,8 @@ class GuardrailResult:
     wfa_result: WFAResult | None = None
     kfold_result: CVResult | None = None
     bootstrap_result: BootstrapResult | None = None
+    # JSON-safe record of the DSR inputs/outputs (persisted with the run).
+    dsr_record: dict[str, object] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +222,128 @@ def apply_discovery_dsr(
     return result
 
 
+def _clamped_dsr(
+    dsr: DeflatedSharpeRatio, sharpe: float, num_trials: int, t: int, skew: float, kurt: float
+) -> DSRResult:
+    """DSR with conservative moments (review SF3): skew <= 0, kurtosis >= 3.
+
+    A positively skewed / thin-tailed sample LOWERS the Sharpe estimator's
+    variance and so the bar to pass; those moments are not trusted.
+    """
+    return dsr.calculate(sharpe, num_trials, t, min(skew, 0.0), max(kurt, 3.0))
+
+
+def apply_discovery_dsr_returns(
+    daily_returns: Sequence[float] | None,
+    num_trials: int,
+    significance_level: float = 0.05,
+    symbol_daily: Mapping[str, Mapping[str, float] | None] | None = None,
+    symbol_psr_floor: float = SYMBOL_PSR_FLOOR,
+) -> tuple[DSRResult | None, dict[str, object], list[str]]:
+    """DSR on a dense DAILY return series (bd vibe-quant-yul7u.24).
+
+    The tested series is the champion candidate's daily balance returns over
+    the whole train range (portfolio mode: the shared account; worst mode:
+    the equal-weight pool of the symbols' own runs). Sharpe, skewness,
+    kurtosis and T (= series length) all come from that one series, at the
+    raw trial count N. Moments are clamped (skew <= 0, kurt >= 3).
+
+    Worst mode (``symbol_daily`` given, 2+ symbols): each symbol must also
+    reach ``symbol_psr_floor`` undeflated PSR(SR > 0). With one symbol the
+    pooled series IS that symbol and no extra floor applies.
+
+    Fails closed: a missing/short/non-finite series, or a symbol without one,
+    is rejected with a ``DSR input missing`` reason.
+
+    Returns:
+        ``(result_or_None, record, reasons)`` -- empty ``reasons`` = pass.
+    """
+    record: dict[str, object] = {
+        "input": "pooled_daily_returns",
+        "trials": num_trials,
+        "significance_level": significance_level,
+        "day0_convention": DAY0_CONVENTION,
+    }
+    values = list(daily_returns) if daily_returns is not None else []
+    if len(values) < 2 or not all(math.isfinite(v) for v in values):
+        record["missing"] = True
+        reason = (
+            "DSR input missing: no usable daily return series "
+            f"(length {len(values)}{', non-finite values' if values else ''})"
+        )
+        logger.info("Guardrail reject: %s", reason)
+        return None, record, [reason]
+    missing_syms = sorted(s for s, v in (symbol_daily or {}).items() if v is None)
+    if missing_syms:
+        record["missing"] = True
+        reason = f"DSR input missing: no daily return series for {', '.join(missing_syms)}"
+        logger.info("Guardrail reject: %s", reason)
+        return None, record, [reason]
+
+    dsr = DeflatedSharpeRatio(significance_level=significance_level)
+    sharpe, skew, kurt = daily_sharpe_inputs(values)
+    t = len(values)
+    result = _clamped_dsr(dsr, sharpe, num_trials, t, skew, kurt)
+    unclamped = dsr.calculate(sharpe, num_trials, t, skew, kurt)
+    ann = math.sqrt(TRADING_DAYS_PER_YEAR)
+    record.update(
+        observations=t,
+        sharpe_daily=sharpe,
+        sharpe_annualized=sharpe * ann,
+        skewness=skew,
+        kurtosis=kurt,
+        skewness_used=min(skew, 0.0),
+        kurtosis_used=max(kurt, 3.0),
+        expected_max_sharpe_daily=result.expected_max_sharpe,
+        p_value=result.p_value,
+        p_value_unclamped=unclamped.p_value,
+        significant=result.is_significant,
+        lag1_autocorrelation=lag1_autocorrelation(values),
+    )
+    reasons: list[str] = []
+    if not result.is_significant:
+        reasons.append(
+            f"DSR not significant: p={result.p_value:.4f} >= {significance_level} "
+            f"(pooled daily SR={sharpe * ann:.3f} ann, T={t}, N={num_trials})"
+        )
+
+    if symbol_daily is not None and len(symbol_daily) >= 2:
+        stats = {s: v for s, v in symbol_daily.items() if v is not None}
+        mean_total = sum(float(v["mean"]) for v in stats.values())
+        per_symbol: dict[str, dict[str, float | int | None]] = {}
+        for sym, st in stats.items():
+            psr = 1.0 - _clamped_dsr(
+                dsr,
+                float(st["sharpe"]),
+                1,
+                max(2, int(st["observations"])),
+                float(st["skewness"]),
+                float(st["kurtosis"]),
+            ).p_value
+            per_symbol[sym] = {
+                "sharpe_annualized": float(st["sharpe"]) * ann,
+                "psr": psr,
+                # Share of the pooled mean daily return this symbol supplies.
+                "contribution_share": float(st["mean"]) / mean_total if mean_total else None,
+                "observations": int(st["observations"]),
+            }
+            if not psr >= symbol_psr_floor:
+                reasons.append(
+                    f"DSR per-symbol floor: {sym} PSR(SR>0)={psr:.3f} < {symbol_psr_floor:.2f} "
+                    f"(SR={float(st['sharpe']) * ann:.3f} ann)"
+                )
+        record["symbol_psr_floor"] = symbol_psr_floor
+        record["symbols"] = per_symbol
+
+    logger.info(
+        "DSR(pooled daily): sharpe=%.3f ann T=%d trials=%d p=%.4f (unclamped %.4f) reasons=%s",
+        sharpe * ann, t, num_trials, result.p_value, unclamped.p_value, reasons,
+    )
+    for reason in reasons:
+        logger.info("Guardrail reject: %s", reason)
+    return result, record, reasons
+
+
 def check_walk_forward(
     wfa: WalkForwardAnalysis,
     strategy_id: str,
@@ -292,6 +434,9 @@ def apply_guardrails(
     kfold_n_samples: int = 0,
     kfold_runner: KFoldRunner | None = None,
     trade_returns: np.ndarray | None = None,
+    daily_returns: Sequence[float] | None = None,
+    symbol_daily: Mapping[str, Mapping[str, float] | None] | None = None,
+    dsr_requires_returns: bool = False,
 ) -> GuardrailResult:
     """Run all enabled guard rails on a candidate.
 
@@ -313,6 +458,13 @@ def apply_guardrails(
         kfold_cv: PurgedKFoldCV instance (required if require_purged_kfold).
         kfold_n_samples: Number of samples for K-Fold.
         kfold_runner: Backtest runner for K-Fold.
+        daily_returns: Dense daily return series of the candidate. When given
+            (or when ``dsr_requires_returns``), DSR tests THIS series -- see
+            :func:`apply_discovery_dsr_returns` -- instead of
+            ``fitness.sharpe_ratio`` with ``num_observations``/moments.
+        symbol_daily: Worst mode per-symbol daily Sharpe inputs (floor).
+        dsr_requires_returns: Real backtests always produce the series; a
+            missing one then fails DSR closed instead of falling back.
 
     Returns:
         GuardrailResult with per-check verdicts and overall pass/fail.
@@ -339,7 +491,18 @@ def apply_guardrails(
     # 3. DSR
     dsr_passed: bool | None = None
     dsr_result: DSRResult | None = None
-    if config.require_dsr:
+    dsr_record: dict[str, object] | None = None
+    if config.require_dsr and (daily_returns is not None or dsr_requires_returns):
+        dsr_result, dsr_record, dsr_reasons = apply_discovery_dsr_returns(
+            daily_returns,
+            num_trials=num_trials,
+            significance_level=config.dsr_significance_level,
+            symbol_daily=symbol_daily,
+        )
+        dsr_passed = not dsr_reasons
+        reasons.extend(dsr_reasons)
+    elif config.require_dsr:
+        # Synthetic/mock backtests carry no daily series: legacy input.
         dsr_result = apply_discovery_dsr(
             observed_sharpe=fitness.sharpe_ratio,
             num_trials=num_trials,
@@ -350,6 +513,13 @@ def apply_guardrails(
             trials_sharpe_variance=trials_sharpe_variance,
         )
         dsr_passed = dsr_result.is_significant
+        dsr_record = {
+            "input": "fitness_sharpe",
+            "trials": num_trials,
+            "observations": num_observations,
+            "p_value": dsr_result.p_value,
+            "significant": dsr_passed,
+        }
         if not dsr_passed:
             reasons.append(
                 f"DSR not significant: p={dsr_result.p_value:.4f} "
@@ -452,6 +622,7 @@ def apply_guardrails(
         bootstrap_passed=bootstrap_passed,
         reasons=reasons,
         dsr_result=dsr_result,
+        dsr_record=dsr_record,
         wfa_result=wfa_result,
         kfold_result=kfold_result,
         bootstrap_result=bootstrap_result,

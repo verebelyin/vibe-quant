@@ -788,10 +788,11 @@ class TestDetailTimeframe:
         assert result is None
         runner.close()
 
-    def test_venue_config_with_detail_data_enables_latency(
+    def test_venue_config_with_detail_data_drops_latency_keeps_preset_fill(
         self, temp_db: Path, temp_logs: Path, state_with_strategy: StateManager
     ) -> None:
-        """When has_detail_data=True, latency is NOT skipped for 1m strategies."""
+        """With detail data the preset picks the fill model but no LatencyModel
+        runs: orders release on each strategy's own detail bar (yul7u.11)."""
         state_with_strategy.close()
 
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
@@ -802,18 +803,25 @@ class TestDetailTimeframe:
         )
         assert config_no_detail.latency_preset is None
 
-        # With detail data: latency should be set
+        # With detail data: no latency model, fill model of the latency path
         config_with_detail = runner._create_venue_config(
             {"starting_balance": 1000}, "cloud", timeframe="1m", has_detail_data=True
         )
-        assert config_with_detail.latency_preset is not None
+        assert config_with_detail.latency_preset is None
+        assert config_with_detail.latency_config is None
+        from vibe_quant.validation.fill_model import VolumeSlippageFillModelConfig
+
+        assert isinstance(config_with_detail.fill_config, VolumeSlippageFillModelConfig)
+        assert config_with_detail.fill_config.prob_best_price_fill == 1.0
+        assert isinstance(config_no_detail.fill_config, VolumeSlippageFillModelConfig)
+        assert config_no_detail.fill_config.prob_best_price_fill == 0.7
 
         runner.close()
 
     def test_augment_params_no_delay_with_detail(
         self, temp_db: Path, temp_logs: Path
     ) -> None:
-        """execution_delay_probability not injected when detail data available."""
+        """Detail data forces execution_delay_probability=0 (own-bar release)."""
         runner = ValidationRunner(db_path=temp_db, logs_path=temp_logs)
 
         # Without detail: delay probability is injected
@@ -822,11 +830,11 @@ class TestDetailTimeframe:
         )
         assert "execution_delay_probability" in params_no_detail
 
-        # With detail: no delay probability
+        # With detail: delay forced to 0, even over an explicit value
         params_with_detail = runner._augment_strategy_params_for_validation(
-            {}, timeframe="1m", has_detail_data=True
+            {"execution_delay_probability": 0.45}, timeframe="1m", has_detail_data=True
         )
-        assert "execution_delay_probability" not in params_with_detail
+        assert params_with_detail["execution_delay_probability"] == 0.0
 
         runner.close()
 

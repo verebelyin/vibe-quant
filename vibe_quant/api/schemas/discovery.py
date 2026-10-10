@@ -4,34 +4,34 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DiscoveryLaunchRequest(BaseModel):
-    population: int = 20
-    generations: int = 15
-    mutation_rate: float = 0.1
-    crossover_rate: float = 0.8
-    elite_count: int = 2
-    tournament_size: int = 3
-    convergence_generations: int = 10
+    population: int = Field(default=20, ge=2)
+    generations: int = Field(default=15, ge=1)
+    mutation_rate: float = Field(default=0.1, ge=0, le=1)
+    crossover_rate: float = Field(default=0.8, ge=0, le=1)
+    elite_count: int = Field(default=2, ge=0)
+    tournament_size: int = Field(default=3, ge=1)
+    convergence_generations: int = Field(default=10, ge=1)
     symbols: list[str] = ["BTCUSDT"]
     timeframes: list[str] = ["4h"]
     indicator_pool: list[str] | None = None
     direction: str | None = None  # "long", "short", "both", or None (random)
     start_date: str | None = None
     end_date: str | None = None
-    eval_windows: int = 3  # worst-of-N sub-window fitness + per-window trade gate; 1=single
+    eval_windows: int = Field(default=3, ge=0)  # worst-of-N sub-windows; 1=single, 0=not sent (CLI default 3)
     # "worst": each symbol backtested alone, genome scored by its worst symbol
     symbol_agg: Literal["portfolio", "worst"] = "portfolio"
     # TRAIN fraction; default 0.8 = last 20% is a holdout used once as the final
     # pass/fail gate (vibe-quant-e70tl.5). 0 explicitly disables the holdout.
-    train_test_split: float = 0.8
+    train_test_split: float = Field(default=0.8, ge=0, lt=1)
     cross_window_months: list[int] | None = None  # e.g. [1, 2]: train sub-windows starting +1mo/+2mo
     cross_window_min_sharpe: float = 0.5  # min Sharpe on each shifted window (all must pass)
-    num_seeds: int = 1  # >1 enables multi-seed ensemble
-    wfa_oos_step_days: int = 0  # >0 enables rolling-window stability check over the TRAIN range
-    wfa_min_consistency: float = 0.75  # min profitable fraction for WFA
+    num_seeds: int = Field(default=1, ge=1)  # >1 enables multi-seed ensemble
+    wfa_oos_step_days: int = Field(default=0, ge=0)  # >0 enables rolling-window stability check over the TRAIN range
+    wfa_min_consistency: float = Field(default=0.75, ge=0, le=1)  # min profitable fraction for WFA
     immigrant_fraction: float = 0.15  # fraction of pop replaced when entropy low; 0 disables
     entropy_threshold: float = 0.4  # population entropy below this triggers immigrant injection
     crowding_enabled: bool = True  # deterministic crowding selection (vs classic tournament)
@@ -39,6 +39,13 @@ class DiscoveryLaunchRequest(BaseModel):
     no_bootstrap_ci: bool = False  # True disables bootstrap-CI hard gate (low-budget regimes)
     bootstrap_min_sharpe: float | None = None  # override timeframe-aware default (0.5 for 1m, 1.0 otherwise)
     seed: int | None = Field(default=None, ge=0, lt=2**32)  # RNG seed to replay a run; None = random
+
+    @model_validator(mode="after")
+    def _elite_below_population(self) -> DiscoveryLaunchRequest:
+        if self.elite_count >= self.population:
+            msg = "elite_count must be < population"
+            raise ValueError(msg)
+        return self
 
 
 class DiscoveryJobResponse(BaseModel):

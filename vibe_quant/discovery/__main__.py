@@ -9,13 +9,18 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from vibe_quant.discovery.config_check import (
+    WindowPlan,
+    parse_cross_window_months,
+    plan_windows,
+)
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
     DiscoveryResult,
 )
-from vibe_quant.utils import compute_day_count
+from vibe_quant.utils import compute_day_count, log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -520,6 +525,7 @@ def _run_provenance_notes(
     seed: int,
     bootstrap_min_sharpe: float,
     holdout_min_sharpe: float,
+    prior_trials: int | None = None,
 ) -> dict[str, object]:
     """Run-level notes shared by the champion and zero-champion outcomes."""
     notes: dict[str, object] = {
@@ -563,7 +569,65 @@ def _run_provenance_notes(
         # GA rank score over the per-symbol adjusted fitness; champions still
         # need every symbol's train return > 0 and trades >= min (hard gate).
         notes["worst_mode_score"] = "0.5*min+0.5*median"
+    if result.dsr_trials is not None:
+        notes["dsr_trials"] = _dsr_trials_note(result, prior_trials)
     return notes
+
+
+def _dsr_trials_note(result: DiscoveryResult, prior_trials: int | None) -> dict[str, object]:
+    """``notes.dsr_trials``: N used (raw) + informational N_eff and cumulative N.
+
+    Cumulative N = this run's trials + every earlier discovery run's. The gate
+    uses the run's raw N only; the p-value each candidate WOULD get at the
+    cumulative N is logged alongside (review SF4; gating on it is a separate
+    bead).
+    """
+    from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
+
+    note: dict[str, object] = dict(result.dsr_trials or {})
+    if prior_trials is None:
+        note["cumulative_n"] = None
+        return note
+    cumulative = prior_trials + result.total_candidates_evaluated
+    note["cumulative_n"] = cumulative
+    dsr = DeflatedSharpeRatio()
+    p_at_cum: dict[str, float] = {}
+    for uid, rec in result.dsr_records.items():
+        if rec.get("input") != "pooled_daily_returns" or "p_value" not in rec:
+            continue
+        p_at_cum[uid] = dsr.calculate(
+            float(rec["sharpe_daily"]),  # type: ignore[arg-type]
+            max(1, cumulative),
+            int(rec["observations"]),  # type: ignore[call-overload]
+            float(rec["skewness_used"]),  # type: ignore[arg-type]
+            float(rec["kurtosis_used"]),  # type: ignore[arg-type]
+        ).p_value
+    note["p_value_at_cumulative_n"] = p_at_cum
+    return note
+
+
+def _prior_discovery_trials(state: StateManager, run_id: int) -> int | None:
+    """Sum of DSR trial counts (``notes.evaluated``) of earlier non-mock discovery runs."""
+    import json
+
+    try:
+        rows = state.conn.execute(
+            "SELECT r.notes FROM backtest_results r JOIN backtest_runs b ON b.id = r.run_id "
+            "WHERE b.run_mode = ? AND b.id < ?",
+            ("discovery", run_id),
+        ).fetchall()
+    except Exception:
+        logger.warning("Could not count prior discovery trials", exc_info=True)
+        return None
+    total = 0
+    for (raw,) in rows:
+        try:
+            notes = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            continue
+        if isinstance(notes, dict) and not notes.get("mock") and notes.get("evaluated"):
+            total += int(notes["evaluated"])
+    return total
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -748,6 +812,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def plan_from_args(args: argparse.Namespace) -> WindowPlan:
+    """Derive the train/holdout/eval/cross/WFA windows from parsed CLI args.
+
+    Shared by ``main`` and the API launch precheck so a bad window config
+    fails in seconds (CLI: run marked failed; API: 422 before a run row).
+
+    Raises:
+        DiscoveryConfigError: The window config cannot produce valid windows.
+    """
+    return plan_windows(
+        args.start_date,
+        args.end_date,
+        train_test_split=args.train_test_split,
+        eval_windows=args.eval_windows,
+        cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
+        wfa_oos_step_days=args.wfa_oos_step_days,
+    )
+
+
 def main() -> int:
     """Run discovery pipeline and persist summary metrics for the run."""
     args = build_parser().parse_args()
@@ -785,19 +868,13 @@ def main() -> int:
             else None
         )
 
-        # Train/test split: split date range if requested
-        train_start = args.start_date
-        train_end = args.end_date
-        holdout_start: str | None = None
-        holdout_end: str | None = None
+        # Train/test split + eval/cross/WFA windows: one shared check (the API
+        # runs the same plan_from_args before creating a run row).
+        plan = plan_from_args(args)
+        train_start, train_end = plan.train_start, plan.train_end
+        holdout_start, holdout_end = plan.holdout_start, plan.holdout_end
         split_ratio = args.train_test_split
-
         if split_ratio > 0:
-            from vibe_quant.utils import split_date_range
-
-            train_start, train_end, holdout_start, holdout_end = split_date_range(
-                args.start_date, args.end_date, split_ratio,
-            )
             logger.info(
                 "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
                 split_ratio, train_start, train_end, holdout_start, holdout_end,
@@ -811,20 +888,12 @@ def main() -> int:
                 args.bootstrap_min_sharpe, args.timeframe,
             )
 
-        # Parse cross-window months
-        cross_window_months: list[int] = []
-        if args.cross_window_months:
-            cross_window_months = [
-                int(m.strip()) for m in args.cross_window_months.split(",") if m.strip()
-            ]
+        cross_window_months = parse_cross_window_months(args.cross_window_months or "")
 
-        # Multi-window evaluation: split date range into sub-windows
+        # Multi-window evaluation: sub-windows come from the plan
         eval_windows_count = max(1, args.eval_windows)
-        eval_windows: list[tuple[str, str]] | None = None
-        if eval_windows_count >= 2:
-            from vibe_quant.utils import split_into_windows
-
-            eval_windows = split_into_windows(train_start, train_end, eval_windows_count)
+        eval_windows = plan.eval_windows
+        if eval_windows is not None:
             logger.info(
                 "Multi-window fitness: %d windows — %s",
                 eval_windows_count,
@@ -956,7 +1025,7 @@ def main() -> int:
                 )
 
         num_seeds = max(1, args.num_seeds)
-        progress_file = f"logs/discovery_{args.run_id}_progress.json"
+        progress_file = str(log_dir() / f"discovery_{args.run_id}_progress.json")
 
         if num_seeds == 1:
             # Single-seed run (default)
@@ -1004,6 +1073,7 @@ def main() -> int:
             seed=seed,
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             holdout_min_sharpe=args.holdout_min_sharpe,
+            prior_trials=None if use_mock else _prior_discovery_trials(state, args.run_id),
         )
 
         if not result.top_strategies:
@@ -1110,6 +1180,8 @@ def main() -> int:
                 "trades": fitness.total_trades,
                 "return_pct": fitness.total_return,
             }
+            if chrom.uid in result.dsr_records:
+                entry["dsr"] = result.dsr_records[chrom.uid]
             if fitness.symbol_scores is not None:
                 entry["symbol_scores"] = {
                     sym: round(sc, 6) for sym, sc in fitness.symbol_scores.items()

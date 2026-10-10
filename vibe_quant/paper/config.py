@@ -19,6 +19,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.utils import log_dir
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -28,8 +30,10 @@ ENV_BINANCE_API_SECRET = "BINANCE_API_SECRET"
 ENV_BINANCE_TESTNET_API_KEY = "BINANCE_TESTNET_API_KEY"
 ENV_BINANCE_TESTNET_API_SECRET = "BINANCE_TESTNET_API_SECRET"
 
-#: Default directory for paper event logs (``{trader_id}.jsonl``).
-DEFAULT_PAPER_LOGS_PATH = Path("logs/paper")
+#: Default directory for paper event logs (``{trader_id}.jsonl``). Resolved
+#: through ``log_dir()`` so ``VIBE_QUANT_LOG_DIR`` (tests) reroutes it; unset env
+#: keeps the historical ``logs/paper``.
+DEFAULT_PAPER_LOGS_PATH = Path(log_dir(create=False), "paper")
 
 #: Leverage validation runs use when the run does not specify one
 #: (``ValidationRunner._create_venue_config``).

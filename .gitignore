@@ -99,6 +99,7 @@ uv.lock
 data/swarm/
 data/*.bak-*/
 docs/orchestration/board/cursors/
+data/fill_ticks/
 
 # Command Code CLI per-workspace learned "taste" (written by T3 Command Code children)
 .commandcode/

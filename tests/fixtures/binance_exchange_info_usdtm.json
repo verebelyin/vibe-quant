@@ -1,0 +1,114 @@
+{
+ "fetched": "2026-10-10",
+ "source": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+ "symbols": [
+  {
+   "symbol": "BTCUSDT",
+   "filters": [
+    {
+     "tickSize": "0.10",
+     "filterType": "PRICE_FILTER",
+     "minPrice": "556.80",
+     "maxPrice": "4529764"
+    },
+    {
+     "minQty": "0.001",
+     "maxQty": "1000",
+     "filterType": "LOT_SIZE",
+     "stepSize": "0.001"
+    },
+    {
+     "minQty": "0.001",
+     "stepSize": "0.001",
+     "maxQty": "120",
+     "filterType": "MARKET_LOT_SIZE"
+    },
+    {
+     "filterType": "MIN_NOTIONAL",
+     "notional": "50"
+    }
+   ]
+  },
+  {
+   "symbol": "ETHUSDT",
+   "filters": [
+    {
+     "filterType": "PRICE_FILTER",
+     "minPrice": "39.86",
+     "maxPrice": "306177",
+     "tickSize": "0.01"
+    },
+    {
+     "filterType": "LOT_SIZE",
+     "minQty": "0.001",
+     "stepSize": "0.001",
+     "maxQty": "10000"
+    },
+    {
+     "maxQty": "2000",
+     "filterType": "MARKET_LOT_SIZE",
+     "stepSize": "0.001",
+     "minQty": "0.001"
+    },
+    {
+     "notional": "20",
+     "filterType": "MIN_NOTIONAL"
+    }
+   ]
+  },
+  {
+   "symbol": "BNBUSDT",
+   "filters": [
+    {
+     "minPrice": "6.600",
+     "maxPrice": "100000",
+     "filterType": "PRICE_FILTER",
+     "tickSize": "0.010"
+    },
+    {
+     "minQty": "0.01",
+     "maxQty": "100000",
+     "stepSize": "0.01",
+     "filterType": "LOT_SIZE"
+    },
+    {
+     "stepSize": "0.01",
+     "filterType": "MARKET_LOT_SIZE",
+     "minQty": "0.01",
+     "maxQty": "2000"
+    },
+    {
+     "filterType": "MIN_NOTIONAL",
+     "notional": "5"
+    }
+   ]
+  },
+  {
+   "symbol": "SOLUSDT",
+   "filters": [
+    {
+     "filterType": "PRICE_FILTER",
+     "maxPrice": "6857",
+     "tickSize": "0.0100",
+     "minPrice": "0.4200"
+    },
+    {
+     "filterType": "LOT_SIZE",
+     "minQty": "0.01",
+     "stepSize": "0.01",
+     "maxQty": "1000000"
+    },
+    {
+     "filterType": "MARKET_LOT_SIZE",
+     "minQty": "0.01",
+     "maxQty": "80000",
+     "stepSize": "0.01"
+    },
+    {
+     "notional": "5",
+     "filterType": "MIN_NOTIONAL"
+    }
+   ]
+  }
+ ]
+}

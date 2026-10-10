@@ -5,13 +5,18 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import time
 import zipfile
+import zlib
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from vibe_quant.utils import generate_month_range
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +28,71 @@ BINANCE_FUTURES_API = "https://fapi.binance.com"
 
 # Supported symbols (USDT-M perpetuals)
 SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+
+# Transient-failure retry policy: delays between attempts (s).
+MONTHLY_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+
+class DownloadError(Exception):
+    """A download failed after retries / with a non-retryable error."""
+
+
+class MonthlyDownloadError(DownloadError):
+    """A monthly archive could not be fetched (not a 404: the month may exist)."""
+
+
+class RestDownloadError(DownloadError):
+    """A REST klines page failed; ``partial`` holds what was fetched before it.
+
+    ``failed_from`` is the open_time (ms) the failed page started at.
+    """
+
+    def __init__(
+        self, message: str, partial: list[tuple[Any, ...]], failed_from: int
+    ) -> None:
+        super().__init__(message)
+        self.partial = partial
+        self.failed_from = failed_from
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Transient: transport errors, 5xx, 429 and truncated/corrupt zips."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code >= 500 or code == 429
+    return isinstance(
+        exc, (httpx.TransportError, zipfile.BadZipFile, zlib.error, EOFError)
+    )
+
+
+def _call_with_retry[T](fn: Callable[[], T], label: str) -> T:
+    """Run *fn*, retrying transient errors on MONTHLY_RETRY_DELAYS backoff.
+
+    Raises:
+        DownloadError: non-retryable error, or retries exhausted.
+    """
+    attempts = len(MONTHLY_RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_retryable(exc):
+                raise DownloadError(f"{label}: {exc!r}") from exc
+            if attempt == attempts - 1:
+                raise DownloadError(
+                    f"{label}: gave up after {attempts} attempts: {exc!r}"
+                ) from exc
+            delay = MONTHLY_RETRY_DELAYS[attempt]
+            logger.warning(
+                "%s: transient error %r, retry %d/%d in %.1fs",
+                label,
+                exc,
+                attempt + 1,
+                attempts - 1,
+                delay,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def download_monthly_klines(
@@ -44,7 +114,11 @@ def download_monthly_klines(
         client: Optional shared httpx.Client for connection reuse.
 
     Returns:
-        List of kline tuples or None if not available.
+        List of kline tuples, or None when the month is not published (404).
+
+    Raises:
+        MonthlyDownloadError: Transient failures persisted through the retry
+            schedule, or a non-retryable error (e.g. 403) occurred.
     """
     # Format: BTCUSDT-1m-2024-01.zip
     filename = f"{symbol}-{interval}-{year}-{month:02d}.zip"
@@ -55,50 +129,56 @@ def download_monthly_klines(
         client = httpx.Client(timeout=timeout)
     assert client is not None  # narrowing for mypy
     try:
-        response = client.get(url)
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-
-        # Extract CSV from ZIP
-        with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
-            csv_filename = filename.replace(".zip", ".csv")
-            with zf.open(csv_filename) as f:
-                reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
-                klines = []
-                for row in reader:
-                    # Skip header row if present
-                    if row[0] == "open_time":
-                        continue
-                    # Binance kline format:
-                    # open_time, open, high, low, close, volume, close_time,
-                    # quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore
-                    klines.append(
-                        (
-                            int(row[0]),  # open_time
-                            float(row[1]),  # open
-                            float(row[2]),  # high
-                            float(row[3]),  # low
-                            float(row[4]),  # close
-                            float(row[5]),  # volume
-                            int(row[6]),  # close_time
-                            float(row[7]),  # quote_volume
-                            int(row[8]),  # trade_count
-                            float(row[9]),  # taker_buy_volume
-                            float(row[10]),  # taker_buy_quote_volume
-                        )
-                    )
-                return klines
-    except httpx.HTTPStatusError:
-        return None
-    except Exception:
-        logger.exception(
-            "Unexpected error downloading %s %s/%s-%02d", symbol, interval, year, month
-        )
-        return None
+        try:
+            return _call_with_retry(
+                lambda: _fetch_monthly_zip(client, url, filename),
+                f"{symbol} {interval} {year}-{month:02d}",
+            )
+        except DownloadError as e:
+            raise MonthlyDownloadError(str(e)) from e.__cause__
     finally:
         if own_client:
             client.close()
+
+
+def _fetch_monthly_zip(
+    client: httpx.Client, url: str, filename: str
+) -> list[tuple[Any, ...]] | None:
+    """One attempt: GET + parse. None on 404."""
+    response = client.get(url)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+
+    # Extract CSV from ZIP
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        csv_filename = filename.replace(".zip", ".csv")
+        with zf.open(csv_filename) as f:
+            reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
+            klines: list[tuple[Any, ...]] = []
+            for row in reader:
+                # Skip header row if present
+                if row[0] == "open_time":
+                    continue
+                # Binance kline format:
+                # open_time, open, high, low, close, volume, close_time,
+                # quote_volume, count, taker_buy_volume, taker_buy_quote_volume, ignore
+                klines.append(
+                    (
+                        int(row[0]),  # open_time
+                        float(row[1]),  # open
+                        float(row[2]),  # high
+                        float(row[3]),  # low
+                        float(row[4]),  # close
+                        float(row[5]),  # volume
+                        int(row[6]),  # close_time
+                        float(row[7]),  # quote_volume
+                        int(row[8]),  # trade_count
+                        float(row[9]),  # taker_buy_volume
+                        float(row[10]),  # taker_buy_quote_volume
+                    )
+                )
+            return klines
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -208,6 +288,10 @@ def download_recent_klines(
 
     Returns:
         List of kline tuples.
+
+    Raises:
+        RestDownloadError: a page failed after retries (carries the partial
+            result and the start of the failed page).
     """
     url = f"{BINANCE_FUTURES_API}/fapi/v1/klines"
     all_klines: list[tuple[Any, ...]] = []
@@ -224,19 +308,17 @@ def download_recent_klines(
                 "limit": 1500,  # Max limit
             }
 
-            try:
+            def fetch_page(params: dict[str, str | int] = params) -> Any:
                 response = client.get(url, params=params)
                 response.raise_for_status()
-            except httpx.HTTPStatusError:
-                logger.warning(
-                    "Klines request failed for %s/%s at %d: %s",
-                    symbol,
-                    interval,
-                    current_start,
-                    response.status_code,
+                return response.json()
+
+            try:
+                data = _call_with_retry(
+                    fetch_page, f"{symbol}/{interval} klines from {current_start}"
                 )
-                break
-            data = response.json()
+            except DownloadError as e:
+                raise RestDownloadError(str(e), all_klines, current_start) from e.__cause__
 
             if not data:
                 break

@@ -28,10 +28,18 @@ import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from vibe_quant.discovery.config_check import (
+    DiscoveryConfigError,
+    cross_window_months_problems,
+    cross_window_ranges_for,
+    wfa_window_ranges_for,
+)
+from vibe_quant.discovery.config_check import (
+    assert_windows_outside_holdout as assert_windows_outside_holdout,  # re-export
+)
 from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.guardrails import GuardrailConfig, GuardrailResult, apply_guardrails
@@ -59,10 +67,6 @@ logger = logging.getLogger(__name__)
 
 # Max retries when generating valid offspring via crossover+mutation
 _MAX_OFFSPRING_RETRIES: int = 10
-
-# Shortest shifted cross-window (days) worth backtesting
-_MIN_CROSS_WINDOW_DAYS: int = 7
-
 
 class DiscoveryEvaluationError(RuntimeError):
     """Every evaluation in a batch raised: systemic failure, not bad strategies."""
@@ -329,6 +333,10 @@ class DiscoveryResult:
     wfa_results: list[WFARollingResult] = field(default_factory=list)
     guardrail_rejections: list[dict[str, object]] = field(default_factory=list)
     holdout_min_trades: int | None = None
+    # DSR bookkeeping (bd vibe-quant-yul7u.24): per-candidate DSR record by
+    # uid (champions and rejected alike) and run-level trial counts.
+    dsr_records: dict[str, dict[str, object]] = field(default_factory=dict)
+    dsr_trials: dict[str, object] | None = None
 
 
 def _select_diverse_top_k(
@@ -410,29 +418,6 @@ _FAILED_WINDOW = HoldoutResult(
 )
 
 
-def _parse_date(value: str) -> datetime:
-    return datetime.strptime(value, "%Y-%m-%d")
-
-
-def assert_windows_outside_holdout(
-    windows: Sequence[tuple[str, str]], holdout_start: str, label: str
-) -> None:
-    """Raise if any [start, end) window reaches past ``holdout_start``.
-
-    Windows are half-open: a window ending exactly at the holdout start (the
-    train end) does not overlap it.
-    """
-    if not holdout_start:
-        return
-    for ws, we in windows:
-        if we > holdout_start or ws >= holdout_start:
-            msg = (
-                f"{label} window {ws}..{we} overlaps the holdout starting "
-                f"{holdout_start} -- the holdout must stay unseen until the final gate"
-            )
-            raise ValueError(msg)
-
-
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -477,6 +462,17 @@ class DiscoveryPipeline:
         self._all_scored: list[tuple[StrategyChromosome, FitnessResult]] = []
         self._executor: ProcessPoolExecutor | None = None
         self._ok_evals: int = 0  # evaluations without `error` this run
+        self._dsr_records: dict[str, dict[str, object]] = {}
+        self._dsr_trials: dict[str, object] | None = None
+        # DSR tests the candidate's daily return series (bd vibe-quant-yul7u.24).
+        # A real NT backtest fn is told to collect it, and a candidate without
+        # one then fails DSR closed; mock/synthetic fns keep the legacy input.
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+        self._dsr_requires_returns = False
+        if config.require_dsr and isinstance(backtest_fn, NTBacktestFn):
+            backtest_fn.collect_daily_returns = True
+            self._dsr_requires_returns = True
 
     # -- public API ---------------------------------------------------------
 
@@ -589,6 +585,7 @@ class DiscoveryPipeline:
         from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH, INTERVAL_TO_AGGREGATION
         from vibe_quant.discovery.backtest_fn import NTBacktestFn
         from vibe_quant.screening import nt_runner
+        from vibe_quant.screening.pipeline import resolve_fill_ticks_for
 
         fn = self._backtest_fn
         if not isinstance(fn, NTBacktestFn):
@@ -637,6 +634,34 @@ class DiscoveryPipeline:
             bar_type = f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL"
             for start, end in windows:
                 nt_runner.require_bars_in_window(catalog, bar_type, start, end)
+
+        # Fill ticks (vibe-quant-yul7u.12): resolve ONCE, here in the parent,
+        # over the union of every worker window; workers get the set through
+        # the backtest fns and never build ticks. Missing 1m data raises
+        # (DataUnavailableError) before the GA. ISO dates sort as strings.
+        ticks = resolve_fill_ticks_for(
+            tf,
+            {tf},
+            fn.symbols,
+            min(s for s, _ in windows),
+            max(e for _, e in windows),
+            DEFAULT_CATALOG_PATH,
+        )
+        if ticks is None:
+            return
+        fn.fill_ticks = ticks
+        if isinstance(holdout_fn, NTBacktestFn):
+            holdout_fn.fill_ticks = ticks
+        factory = self._backtest_fn_factory
+        if factory is not None:
+
+            def _factory_with_ticks(s: str, e: str) -> Callable[[StrategyChromosome], dict[str, float | int]]:
+                gate_fn = factory(s, e)
+                if isinstance(gate_fn, NTBacktestFn):
+                    gate_fn.fill_ticks = ticks
+                return gate_fn
+
+            self._backtest_fn_factory = _factory_with_ticks
 
     # -- evaluation ---------------------------------------------------------
 
@@ -717,8 +742,43 @@ class DiscoveryPipeline:
                 self._executor.shutdown(wait=True, cancel_futures=True)
                 self._executor = None
 
+    def _check_gate_config(self) -> None:
+        """Abort before the GA when the cross-window / WFA config can't work.
+
+        Only when ``backtest_fn_factory`` is wired (the gates can run at all);
+        without one the gates keep failing closed after the GA. Missing data
+        (``DataUnavailableError``) re-raises unchanged; any other ValueError
+        is a config problem and becomes one ``DiscoveryConfigError`` listing
+        every problem.
+        """
+        if self._backtest_fn_factory is None:
+            return
+        cfg = self.config
+        problems = cross_window_months_problems(cfg.cross_window_months)
+        if cfg.cross_window_months:
+            try:
+                self.cross_window_ranges()
+            except DataUnavailableError:
+                raise  # subclasses ValueError: missing data must never be swallowed
+            except ValueError as exc:
+                problems.append(str(exc))
+        if cfg.wfa_oos_step_days > 0:
+            try:
+                if not self.wfa_window_ranges(cfg.start_date, cfg.end_date):
+                    problems.append(
+                        f"WFA: range {cfg.start_date}..{cfg.end_date} too short for "
+                        f"{cfg.wfa_oos_step_days}d windows"
+                    )
+            except DataUnavailableError:
+                raise
+            except ValueError as exc:
+                problems.append(str(exc))
+        if problems:
+            raise DiscoveryConfigError("; ".join(problems))
+
     def _run(self) -> DiscoveryResult:
         cfg = self.config
+        self._check_gate_config()
         self._apply_indicator_pool_filter()
         self._preflight_aux_data()
         self._preflight_bars()
@@ -744,6 +804,8 @@ class DiscoveryPipeline:
         self._ok_evals = 0
         self._all_scored = []
         self._guardrail_rejections = []
+        self._dsr_records = {}
+        self._dsr_trials = None
 
         converged = False
         convergence_gen: int | None = None
@@ -959,18 +1021,20 @@ class DiscoveryPipeline:
         fitness: FitnessResult,
         stage: str,
         reasons: list[str],
+        dsr: dict[str, object] | None = None,
     ) -> None:
         """Record a rejected candidate (persisted with the run, shown in the UI)."""
-        self._guardrail_rejections.append(
-            {
-                "uid": chrom.uid,
-                "stage": stage,
-                "score": round(fitness.adjusted_score, 4),
-                "sharpe": round(fitness.sharpe_ratio, 3),
-                "trades": fitness.total_trades,
-                "reasons": list(reasons),
-            }
-        )
+        entry: dict[str, object] = {
+            "uid": chrom.uid,
+            "stage": stage,
+            "score": round(fitness.adjusted_score, 4),
+            "sharpe": round(fitness.sharpe_ratio, 3),
+            "trades": fitness.total_trades,
+            "reasons": list(reasons),
+        }
+        if dsr is not None:
+            entry["dsr"] = dsr
+        self._guardrail_rejections.append(entry)
         logger.info("Gate FAIL [%s]: %s reasons=%s", stage, chrom.uid, reasons)
 
     def holdout_min_trades(self) -> int:
@@ -1150,6 +1214,8 @@ class DiscoveryPipeline:
             wfa_results=[wfa_by_uid[c.uid] for c, _ in survivors if c.uid in wfa_by_uid],
             guardrail_rejections=list(self._guardrail_rejections),
             holdout_min_trades=holdout_min_trades,
+            dsr_records=dict(self._dsr_records),
+            dsr_trials=self._dsr_trials,
         )
 
     def _evaluate_holdout(
@@ -1215,26 +1281,10 @@ class DiscoveryPipeline:
                 (defensively) overlaps the holdout.
         """
         cfg = self.config
-        from dateutil.relativedelta import relativedelta
-
-        base_start = _parse_date(cfg.start_date)
-        base_end = _parse_date(cfg.end_date)
-        windows: list[tuple[int, str, str]] = []
-        for months in cfg.cross_window_months:
-            ws_dt = base_start + relativedelta(months=months)
-            if base_end - ws_dt < timedelta(days=_MIN_CROSS_WINDOW_DAYS):
-                msg = (
-                    f"Cross-window: +{months}mo window {ws_dt:%Y-%m-%d}..{cfg.end_date} "
-                    f"shorter than {_MIN_CROSS_WINDOW_DAYS}d inside the train range "
-                    f"{cfg.start_date}..{cfg.end_date}"
-                )
-                raise ValueError(msg)
-            windows.append((months, ws_dt.strftime("%Y-%m-%d"), cfg.end_date))
-        if cfg.has_holdout:
-            assert_windows_outside_holdout(
-                [(ws, we) for _, ws, we in windows], cfg.holdout_start_date, "Cross-window",
-            )
-        return windows
+        return cross_window_ranges_for(
+            cfg.cross_window_months, cfg.start_date, cfg.end_date,
+            cfg.holdout_start_date if cfg.has_holdout else "",
+        )
 
     def _evaluate_cross_windows(
         self,
@@ -1323,18 +1373,11 @@ class DiscoveryPipeline:
 
     def wfa_window_ranges(self, range_start: str, range_end: str) -> list[tuple[str, str]]:
         """Rolling ``wfa_oos_step_days`` windows tiling [range_start, range_end]."""
-        step = self.config.wfa_oos_step_days
-        start = _parse_date(range_start)
-        end = _parse_date(range_end)
-        windows: list[tuple[str, str]] = []
-        current = start
-        while current + timedelta(days=step) <= end:
-            nxt = current + timedelta(days=step)
-            windows.append((current.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
-            current = nxt
-        if self.config.has_holdout:
-            assert_windows_outside_holdout(windows, self.config.holdout_start_date, "WFA")
-        return windows
+        cfg = self.config
+        return wfa_window_ranges_for(
+            cfg.wfa_oos_step_days, range_start, range_end,
+            cfg.holdout_start_date if cfg.has_holdout else "",
+        )
 
     def _evaluate_wfa_rolling(
         self,
@@ -1358,7 +1401,11 @@ class DiscoveryPipeline:
         step = cfg.wfa_oos_step_days
         min_consistency = cfg.wfa_min_consistency
 
-        windows = self.wfa_window_ranges(range_start, range_end)
+        try:
+            windows = self.wfa_window_ranges(range_start, range_end)
+        except ValueError as exc:
+            logger.warning("%s — failing closed", exc)
+            return [], str(exc)
         if not windows:
             error = f"WFA: range {range_start}..{range_end} too short for {step}d windows"
             logger.warning("%s — failing closed", error)
@@ -1888,6 +1935,7 @@ class DiscoveryPipeline:
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
 
             trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None
+            series = fitness.daily_returns
             result: GuardrailResult = apply_guardrails(
                 fitness=fitness,
                 num_genes=num_genes,
@@ -1897,10 +1945,15 @@ class DiscoveryPipeline:
                 skewness=fitness.skewness,
                 kurtosis=fitness.kurtosis,
                 trade_returns=trade_ret,
+                daily_returns=series.values if series is not None else None,
+                symbol_daily=fitness.symbol_daily,
+                dsr_requires_returns=self._dsr_requires_returns,
                 # trials_sharpe_variance intentionally omitted — use theoretical
                 # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
                 # the paper's V[{SR_n}] measures (see vibe-quant-fici).
             )
+            if result.dsr_record is not None:
+                self._dsr_records[chrom.uid] = result.dsr_record
             if result.passed:
                 validated.append((chrom, fitness))
                 logger.info(
@@ -1911,7 +1964,12 @@ class DiscoveryPipeline:
                     fitness.total_trades,
                 )
             else:
-                self._reject(chrom, fitness, "guardrails", list(result.reasons))
+                self._reject(
+                    chrom, fitness, "guardrails", list(result.reasons), dsr=result.dsr_record
+                )
+
+        if self.config.require_dsr:
+            self._dsr_trials = self._dsr_trial_counts(total_evaluated)
 
         if not validated and top_strategies:
             logger.warning(
@@ -1922,6 +1980,46 @@ class DiscoveryPipeline:
         else:
             logger.info("%d/%d top strategies passed guardrails", len(validated), len(top_strategies))
         return validated
+
+    def _dsr_trial_counts(self, total_evaluated: int) -> dict[str, object]:
+        """Run-level DSR trial counts: raw N (USED) + informational N_eff.
+
+        ``neff_mean_corr`` and ``neff_eig_pr`` are two effective-trial-count
+        estimates over the retained daily series (only train-gate-passing
+        genomes keep one), both scaling to N when the series are
+        uncorrelated: ``N / (1 + (m-1)*rho_bar)`` (mean off-diagonal
+        correlation) and ``PR * N / m`` (participation ratio of the
+        correlation eigenvalues). Recorded, never used by the gate (bd
+        yul7u.24).
+        """
+        import numpy as np
+
+        rows = [
+            np.frombuffer(fr.daily_returns.values, dtype=np.float64)
+            for fr in self._fitness_cache.values()
+            if fr.daily_returns is not None and len(fr.daily_returns) >= 2
+        ]
+        lengths = {len(r) for r in rows}
+        rows = [r for r in rows if r.std() > 0]
+        m = len(rows)
+        neff_mean_corr: float | None = None
+        neff_eig_pr: float | None = None
+        if m >= 2 and len(lengths) == 1:
+            corr = np.nan_to_num(np.corrcoef(np.vstack(rows)))
+            rho_bar = (float(corr.sum()) - float(np.trace(corr))) / (m * (m - 1))
+            denom = 1.0 + (m - 1) * rho_bar
+            if denom > 0:
+                neff_mean_corr = float(total_evaluated) / denom
+            ev = np.clip(np.linalg.eigvalsh(corr), 0.0, None)
+            sq = float((ev**2).sum())
+            if sq > 0:
+                neff_eig_pr = float(ev.sum() ** 2 / sq) * total_evaluated / m
+        return {
+            "raw": total_evaluated,
+            "non_flat": m,
+            "neff_mean_corr": neff_mean_corr,
+            "neff_eig_pr": neff_eig_pr,
+        }
 
     def _export_top_strategies(
         self,

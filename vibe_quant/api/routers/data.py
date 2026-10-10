@@ -30,6 +30,7 @@ from vibe_quant.api.schemas.data import (
 )
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.utils import log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def _start_data_job(
     keys the job row and the ``/api/data/ingest/{job_id}/progress`` stream.
     """
     job_id = _next_data_run_id()
-    log_file = f"logs/{log_prefix}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log"
+    log_file = str(log_dir() / f"{log_prefix}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.log")
     command = [
         sys.executable,
         "-m",

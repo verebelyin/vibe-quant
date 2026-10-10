@@ -23,26 +23,39 @@ Two layers are proven here:
 
 A controlled bar series with a large gap between ``close[t]`` and ``close[t+1]`` makes the
 source bar of each fill unambiguous. ``prob_slippage=0`` keeps the engine-level fills exact.
+
+3. **Own-datum release (yul7u.9-.11).** Coarser-than-1m screening and validation do not use a
+   venue-wide LatencyModel: the generated strategy queues every submit/cancel in a
+   per-instrument outbox and releases it on its OWN next fill tick (screening, 1m closes at
+   boundary T and T+1m) or its OWN 1m detail bar (validation). A venue-wide release let symbol
+   A's datum send symbol B's order at B's stale book, i.e. at B's signal-bar close. The
+   look-ahead / multi-symbol guards at the bottom use DISTINCT prices per minute (BTC
+   10000 + 100*minute, ETH 20000 + 100*minute) so every wrong fill is unambiguous.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
 
+import numpy as np
 import pytest
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.models import FillModel, LatencyModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
 from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, OrderType
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.objects import Currency, Money, Price, Quantity
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
 
 from vibe_quant.data.catalog import create_instrument, get_bar_type
+from vibe_quant.data.fill_ticks import build_fill_ticks
 from vibe_quant.dsl.compiler import StrategyCompiler, _to_class_name
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.nt_compat import retain_log_guard
+from vibe_quant.screening.nt_runner import screening_fill_mode
 
 # Signal fires on bar 0. The look-ahead fill is bar 0's close; the honest (deferred) fill is
 # bar 1's close. The ~1000 gap (>> 1 tick of 0.1) makes the source bar unambiguous.
@@ -78,7 +91,7 @@ def _build_bars(bar_type: BarType) -> list[Bar]:
     ]
 
 
-def _new_engine() -> BacktestEngine:
+def _new_engine(symbols: tuple[str, ...] = ("BTCUSDT",)) -> BacktestEngine:
     engine = BacktestEngine(
         config=BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR"))
     )
@@ -89,14 +102,15 @@ def _new_engine() -> BacktestEngine:
         venue=Venue("BINANCE"),
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
-        starting_balances=[Money(1_000, Currency.from_str("USDT"))],
+        starting_balances=[Money(10_000, Currency.from_str("USDT"))],
         default_leverage=Decimal("10"),
         # Screening fill model, but slippage off so fills land exactly on the touched price.
         fill_model=FillModel(prob_fill_on_limit=0.8, prob_slippage=0.0),
         latency_model=None,
         bar_execution=True,  # matches create_backtest_venue_config()
     )
-    engine.add_instrument(create_instrument("BTCUSDT"))
+    for sym in symbols:
+        engine.add_instrument(create_instrument(sym))
     return engine
 
 
@@ -161,7 +175,7 @@ def _run_raw(
             venue=Venue("BINANCE"),
             oms_type=OmsType.NETTING,
             account_type=AccountType.MARGIN,
-            starting_balances=[Money(1_000, Currency.from_str("USDT"))],
+            starting_balances=[Money(10_000, Currency.from_str("USDT"))],
             default_leverage=Decimal("10"),
             fill_model=FillModel(prob_fill_on_limit=0.8, prob_slippage=0.0),
             latency_model=latency_model,
@@ -291,3 +305,334 @@ def test_screening_deferral_moves_entry_off_the_signal_bar(long: bool) -> None:
         f"deferred fill {honest} still on the signal bar close {SIGNAL_BAR_CLOSE} "
         "-> screening look-ahead not fixed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 -- own-datum release: the outbox fills on the strategy's OWN fill tick / 1m bar.
+# ---------------------------------------------------------------------------
+
+_S = 1_000_000_000
+_M = 60 * _S
+_M5 = 5 * _M
+_MS = 1_000_000
+_TICK1_A, _TICK1_B = 10_500.0, 20_500.0  # close of the first 1m bar after the signal
+_SIGNAL_CLOSE = {"BTCUSDT": 10_000.0, "ETHUSDT": 20_000.0}
+_BASE = {"BTCUSDT": 10_000.0, "ETHUSDT": 20_000.0}
+_NEXT_BAR_CLOSE = {"BTCUSDT": 11_020.0, "ETHUSDT": 21_020.0}
+_PREC = {"BTCUSDT": 1, "ETHUSDT": 2}
+_N_BARS = 5
+
+
+def _iid(sym: str) -> str:
+    return f"{sym[:-4]}USDT-PERP.BINANCE"
+
+
+def _px(sym: str, v: float) -> Price:
+    return Price.from_str(f"{v:.{_PREC[sym]}f}")
+
+
+def _minute_close(sym: str, minute: int) -> float:
+    return _BASE[sym] + 100.0 * minute  # minute 5 -> tick1, minute 6 -> tick2
+
+
+def _bars_5m(
+    sym: str, *, bar1: tuple[float, float, float, float] | None = None
+) -> list[Bar]:
+    """5m strategy bars. Bar 0 (signal) closes at the signal close; bar 1 at NEXT_BAR_CLOSE.
+
+    ts_init = close - 1ms, like the catalog (the minute-4 1m bar shares the signal's ts_init).
+    """
+    bt = BarType.from_str(f"{_iid(sym)}-5-MINUTE-LAST-EXTERNAL")
+    base = _BASE[sym]
+    sig = _SIGNAL_CLOSE[sym]
+    nxt = _NEXT_BAR_CLOSE[sym]
+    ohlc = [
+        (sig, sig + 10, sig - 10, sig),
+        bar1 or (nxt - 20, nxt + 30, nxt - 30, nxt),
+        (base + 2000, base + 2050, base + 1990, base + 2000),
+        (base + 3000, base + 3050, base + 2990, base + 3000),
+        (base + 4000, base + 4050, base + 3990, base + 4000),
+    ]
+    return [
+        Bar(
+            bar_type=bt,
+            open=_px(sym, o),
+            high=_px(sym, h),
+            low=_px(sym, lo),
+            close=_px(sym, c),
+            volume=Quantity.from_str("100.000"),
+            ts_event=i * _M5,
+            ts_init=(i + 1) * _M5 - _MS,
+        )
+        for i, (o, h, lo, c) in enumerate(ohlc)
+    ]
+
+
+def _bars_1m(sym: str, minutes: list[int]) -> list[Bar]:
+    bt = BarType.from_str(f"{_iid(sym)}-1-MINUTE-LAST-EXTERNAL")
+    out = []
+    for m in minutes:
+        c = _px(sym, _minute_close(sym, m))
+        out.append(
+            Bar(
+                bar_type=bt,
+                open=c,
+                high=c,
+                low=c,
+                close=c,
+                volume=Quantity.from_str("100.000"),
+                ts_event=m * _M,
+                ts_init=(m + 1) * _M - _MS,
+            )
+        )
+    return out
+
+
+def _fill_ticks(sym: str, minutes: list[int]) -> list[Any]:
+    """Production build_fill_ticks on synthetic 1m closes (boundary + 1m ticks only)."""
+    series = SimpleNamespace(
+        ts=np.array([(m + 1) * _M - _MS for m in minutes], dtype=np.int64),
+        close=np.array([_minute_close(sym, m) for m in minutes]),
+    )
+    ticks, _gaps = build_fill_ticks(series, "5m", create_instrument(sym))
+    return ticks
+
+
+def _compile(*, long: bool, timeframe: str = "5m", sl_pct: float = 50.0) -> tuple[type, type]:
+    direction = "long" if long else "short"
+    d: dict[str, object] = {
+        "name": f"own_release_{direction}_{timeframe}_{int(sl_pct)}",
+        "timeframe": timeframe,
+        "indicators": {},
+        "entry_conditions": {direction: ["close > 1" if long else "close < 99999999"]},
+        "exit_conditions": {},
+        "stop_loss": {"type": "fixed_pct", "percent": sl_pct},
+        "take_profit": {"type": "fixed_pct", "percent": 50.0},
+    }
+    dsl = validate_strategy_dict(d)
+    module = StrategyCompiler().compile_to_module(dsl)
+    camel = _to_class_name(dsl.name)
+    return getattr(module, f"{camel}Strategy"), getattr(module, f"{camel}Config")
+
+
+def _cross_subscribing(strategy_cls: type, others: list[str], release: str) -> type:
+    """Strategy that ALSO receives the other symbols' ticks / 1m bars (the old shared-venue view).
+
+    NT only delivers subscribed data, so without this a handler that forgot its own-instrument
+    check could never be seen misbehaving. With it, a foreign datum reaches the handler and
+    must not release this strategy's queue.
+    """
+
+    class Cross(strategy_cls):  # type: ignore[misc, valid-type]
+        def on_start(self) -> None:
+            super().on_start()
+            for sym in others:
+                if release == "trade_tick":
+                    self.subscribe_trade_ticks(InstrumentId.from_str(_iid(sym)))
+                elif release == "bar":
+                    self.subscribe_bars(BarType.from_str(f"{_iid(sym)}-1-MINUTE-LAST-EXTERNAL"))
+
+    return Cross
+
+
+def _run_release(
+    symbols: tuple[str, ...],
+    data: list[Any],
+    *,
+    long: bool = True,
+    sl_pct: float = 50.0,
+    timeframe: str = "5m",
+    mode: tuple[str, float] | None = None,
+    detail_bar_type: str = "1-MINUTE",
+    cross: bool = True,
+) -> BacktestEngine:
+    """Run one compiled strategy per symbol with the screening-derived release knobs.
+
+    ``mode`` defaults to the runner's own policy (``screening_fill_mode``) for ``timeframe``
+    (``trade_tick`` unless 1m bars are loaded); pass ``("bar", 0.0)`` for validation.
+    """
+    strategy_cls, config_cls = _compile(long=long, timeframe=timeframe, sl_pct=sl_pct)
+    if mode is None:
+        fm = screening_fill_mode(timeframe, [])
+        mode = (fm.command_release, fm.execution_delay_probability)
+    release, delay = mode
+    engine = _new_engine(symbols)
+    engine.add_data(data)
+    for sym in symbols:
+        cls = (
+            _cross_subscribing(strategy_cls, [o for o in symbols if o != sym], release)
+            if cross
+            else strategy_cls
+        )
+        kw: dict[str, Any] = {
+            "instrument_id": _iid(sym),
+            "execution_delay_probability": delay,
+        }
+        if release:
+            kw["command_release"] = release
+        if release == "bar":
+            kw["command_release_bar_type"] = f"{_iid(sym)}-{detail_bar_type}-LAST-EXTERNAL"
+        engine.add_strategy(cls(config=config_cls(**kw)))
+    engine.run()
+    return engine
+
+
+def _entries(engine: BacktestEngine, sym: str) -> list[float]:
+    return [
+        float(o.avg_px)
+        for o in engine.cache.orders()
+        if str(o.instrument_id) == _iid(sym) and not o.is_reduce_only and o.filled_qty
+    ]
+
+
+def _dispose(engine: BacktestEngine) -> None:
+    engine.reset()
+    engine.dispose()
+
+
+@pytest.mark.parametrize("long", [True, False], ids=["long", "short"])
+def test_own_tick_fills_at_first_minute_close(long: bool) -> None:
+    """Coarse screening fills at the close of the first 1m bar after the signal, per side."""
+    minutes = list(range(0, _N_BARS * 5))
+    data = _bars_5m("BTCUSDT") + _fill_ticks("BTCUSDT", minutes)
+    engine = _run_release(("BTCUSDT",), data, long=long)
+    try:
+        fills = _entries(engine, "BTCUSDT")
+        assert fills == [pytest.approx(_TICK1_A)], fills
+        assert fills[0] != pytest.approx(SIGNAL_BAR_CLOSE)
+        assert fills[0] != pytest.approx(NEXT_BAR_CLOSE)
+        # on_stop sends nothing in outbox mode: the position stays open, its SL/TP stay live
+        # (an end-of-run close/cancel would fill/cancel them).
+        assert len(engine.cache.positions_open()) == 1
+        protective = [o for o in engine.cache.orders() if o.is_reduce_only]
+        assert len(protective) == 2 and all(o.is_open for o in protective), protective
+    finally:
+        _dispose(engine)
+
+
+@pytest.mark.parametrize("cross", [True, False], ids=["cross_subscribed", "plain"])
+@pytest.mark.parametrize("a_first", [True, False], ids=["btc_first", "eth_first"])
+@pytest.mark.parametrize("long", [True, False], ids=["long", "short"])
+def test_two_symbols_each_fill_on_own_tick1(a_first: bool, long: bool, cross: bool) -> None:
+    """Each symbol fills at ITS OWN tick1, whichever symbol's data/strategy comes first.
+
+    A venue-wide release lets one symbol's datum send the other's order at the other's
+    stale book (= its signal-bar close). Zero fills may land on a signal-bar close.
+    """
+    minutes = list(range(0, _N_BARS * 5))
+    a, b = ("BTCUSDT", "ETHUSDT") if a_first else ("ETHUSDT", "BTCUSDT")
+    data = (
+        _bars_5m(a) + _bars_5m(b) + _fill_ticks(a, minutes) + _fill_ticks(b, minutes)
+    )
+    engine = _run_release((a, b), data, long=long, cross=cross)
+    try:
+        assert _entries(engine, "BTCUSDT") == [pytest.approx(_TICK1_A)]
+        assert _entries(engine, "ETHUSDT") == [pytest.approx(_TICK1_B)]
+        every = _entries(engine, "BTCUSDT") + _entries(engine, "ETHUSDT")
+        assert not {round(f) for f in every} & {10_000, 20_000}, every
+    finally:
+        _dispose(engine)
+
+
+@pytest.mark.parametrize(
+    ("missing", "expected"),
+    [
+        ([5], 10_600.0),  # minute-0 tick gone -> tick2 (minute 6 close)
+        ([5, 6], 11_000.0),  # both gone -> next boundary's tick1 (minute 10 close)
+    ],
+    ids=["tick1_missing", "both_missing"],
+)
+def test_missing_own_tick_waits_never_signal_close(missing: list[int], expected: float) -> None:
+    """A gap in the boundary ticks makes the queue wait for the next OWN tick."""
+    minutes = [m for m in range(0, _N_BARS * 5) if m not in missing]
+    data = _bars_5m("BTCUSDT") + _fill_ticks("BTCUSDT", minutes)
+    engine = _run_release(("BTCUSDT",), data)
+    try:
+        fills = _entries(engine, "BTCUSDT")
+        assert fills == [pytest.approx(expected)], fills
+        assert fills[0] != pytest.approx(SIGNAL_BAR_CLOSE)
+    finally:
+        _dispose(engine)
+
+
+def test_missing_own_ticks_everywhere_never_fills() -> None:
+    """With no own ticks at all the order stays queued: no fill, certainly not at 10000."""
+    engine = _run_release(("BTCUSDT",), _bars_5m("BTCUSDT") + _fill_ticks("BTCUSDT", []))
+    try:
+        assert _entries(engine, "BTCUSDT") == []
+    finally:
+        _dispose(engine)
+
+
+def test_brackets_live_after_own_tick2() -> None:
+    """Entry fills on tick1; SL/TP are queued on the fill and live from tick2.
+
+    Bar t+1's low pierces the stop: the exit must fill AT the stop price (not at the bar close
+    and not never -- which is what a bracket released only at the next boundary would give).
+    """
+    stop_bar = (10_600.0, 10_700.0, 9_900.0, 10_050.0)  # low 9900 < stop 9975
+    minutes = list(range(0, _N_BARS * 5))
+    data = _bars_5m("BTCUSDT", bar1=stop_bar) + _fill_ticks("BTCUSDT", minutes)
+    engine = _run_release(("BTCUSDT",), data, sl_pct=5.0)
+    try:
+        # the always-true entry re-enters after the stop-out; only the first cycle matters
+        assert _entries(engine, "BTCUSDT")[0] == pytest.approx(_TICK1_A)
+        stops = [
+            o
+            for o in engine.cache.orders()
+            if o.is_reduce_only and o.order_type == OrderType.STOP_MARKET
+        ]
+        stops.sort(key=lambda o: o.ts_init)
+        assert float(stops[0].trigger_price) == pytest.approx(_TICK1_A * 0.95, abs=0.2)
+        assert stops[0].is_closed and stops[0].filled_qty > 0, "stop never filled"
+        # sent on tick2 (minute 6 close), NOT at the tick1 fill: events[0]=Initialized (creation
+        # = the tick1 fill), events[1]=Submitted (when the command actually left the outbox)
+        assert stops[0].events[1].ts_event == 7 * _M - _MS, stops[0].events
+        assert float(stops[0].avg_px) == pytest.approx(float(stops[0].trigger_price), abs=0.2)
+    finally:
+        _dispose(engine)
+
+
+@pytest.mark.parametrize("a_first", [True, False], ids=["btc_first", "eth_first"])
+def test_validation_mode_releases_on_own_1m_bar(a_first: bool) -> None:
+    """Validation (``bar`` release): each symbol fills at ITS OWN first 1m bar after the signal.
+
+    The minute-4 bar shares the signal's ts_init (must not release: strict >), so its distinct
+    close (10400/20400) is a trap for ``>=``.
+    """
+    minutes = list(range(0, _N_BARS * 5))
+    a, b = ("BTCUSDT", "ETHUSDT") if a_first else ("ETHUSDT", "BTCUSDT")
+    data = (
+        _bars_5m(a) + _bars_5m(b) + _bars_1m(a, minutes) + _bars_1m(b, minutes)
+    )
+    engine = _run_release((a, b), data, mode=("bar", 0.0))
+    try:
+        assert _entries(engine, "BTCUSDT") == [pytest.approx(_TICK1_A)]
+        assert _entries(engine, "ETHUSDT") == [pytest.approx(_TICK1_B)]
+    finally:
+        _dispose(engine)
+
+
+@pytest.mark.parametrize("long", [True, False], ids=["long", "short"])
+def test_one_minute_strategy_keeps_deferral(long: bool) -> None:
+    """A 1m strategy takes no outbox: screening defers one bar (delay 1.0) -> next 1m close."""
+    fm = screening_fill_mode("1m", [])
+    assert (fm.command_release, fm.execution_delay_probability, fm.tick_timeframe) == ("", 1.0, None)
+    bt = get_bar_type("BTCUSDT", "1m")
+    engine = _new_engine()
+    engine.add_data(_build_bars(bt))
+    strategy_cls, config_cls = _compile(long=long, timeframe="1m")
+    engine.add_strategy(
+        strategy_cls(
+            config=config_cls(
+                instrument_id=_INSTRUMENT_ID,
+                execution_delay_probability=fm.execution_delay_probability,
+            )
+        )
+    )
+    try:
+        engine.run()
+        fills = _entries(engine, "BTCUSDT")
+        assert fills == [pytest.approx(NEXT_BAR_CLOSE, abs=1.0)], fills
+    finally:
+        _dispose(engine)

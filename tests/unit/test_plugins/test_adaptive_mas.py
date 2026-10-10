@@ -8,14 +8,27 @@ enough to absorb float platform differences.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from vibe_quant.dsl.indicators import indicator_registry
-from vibe_quant.dsl.plugins.frama import compute_frama
-from vibe_quant.dsl.plugins.kama import compute_kama
-from vibe_quant.dsl.plugins.vidya import compute_vidya
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pta_stream_harness import (  # noqa: E402
+    compile_indicators,
+    memo_env,
+    random_walk_bars,
+    run_stream,
+)
+
+from vibe_quant.dsl.indicators import indicator_registry  # noqa: E402
+from vibe_quant.dsl.plugins.frama import compute_frama  # noqa: E402
+from vibe_quant.dsl.plugins.kama import compute_kama  # noqa: E402
+from vibe_quant.dsl.plugins.vidya import compute_vidya  # noqa: E402
+from vibe_quant.dsl.prefix_memo import MEMO  # noqa: E402
 
 
 @pytest.fixture
@@ -200,3 +213,142 @@ def test_frama_flat_market_converges() -> None:
     # After warmup, output should be flat at 100.
     tail = result.iloc[20:]
     assert (tail == 100.0).all(), f"non-flat output: {tail.unique()}"
+
+
+# ---------------------------------------------------------------------------
+# FRAMA memo (vibe-quant-yul7u.3): bitwise vs the original unmemoized loop
+# ---------------------------------------------------------------------------
+
+
+def _frama_reference(df: pd.DataFrame, period: int) -> np.ndarray:
+    """Verbatim copy of the pre-memo compute_frama loop (independent reference)."""
+    if period % 2 == 1:
+        period -= 1
+    period = max(period, 2)
+    half = period // 2
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+    n = len(close)
+    frama = np.full(n, np.nan, dtype=np.float64)
+    if n < period:
+        return frama
+    frama[period - 1] = close[period - 1]
+    for i in range(period, n):
+        h1 = high[i - period + 1 : i - half + 1].max()
+        l1 = low[i - period + 1 : i - half + 1].min()
+        h2 = high[i - half + 1 : i + 1].max()
+        l2 = low[i - half + 1 : i + 1].min()
+        h3 = high[i - period + 1 : i + 1].max()
+        l3 = low[i - period + 1 : i + 1].min()
+        n1 = (h1 - l1) / half if half > 0 else 0.0
+        n2 = (h2 - l2) / half if half > 0 else 0.0
+        n3 = (h3 - l3) / period
+        if n1 > 0 and n2 > 0 and n3 > 0:
+            d = (np.log(n1 + n2) - np.log(n3)) / np.log(2.0)
+            d = max(1.0, min(2.0, d))
+        else:
+            d = 1.0
+        alpha = np.exp(-4.6 * (d - 1.0))
+        if alpha < 0.01:
+            alpha = 0.01
+        elif alpha > 1.0:
+            alpha = 1.0
+        frama[i] = alpha * close[i] + (1.0 - alpha) * frama[i - 1]
+    return frama
+
+
+def _bits(a: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(a, dtype=np.float64).view(np.uint64)
+
+
+def _ohlc(n: int, seed: int = 5) -> pd.DataFrame:
+    rng = np.random.RandomState(seed)
+    close = 100.0 + np.cumsum(rng.randn(n) * 0.5)
+    high = close + np.abs(rng.randn(n)) * 0.4
+    low = close - np.abs(rng.randn(n)) * 0.4
+    # flat windows (zero range, D falls back to 1) and a clamped-alpha stretch
+    high[60:90] = low[60:90] = close[60:90] = close[59]
+    return pd.DataFrame({"open": close, "high": high, "low": low, "close": close})
+
+
+def _stream_frames(df: pd.DataFrame, cap: int, lookback: int) -> list[pd.DataFrame]:
+    """Rolling frames on the generated buffer schedule (grow to cap+cap//4, cut to cap)."""
+    frames = []
+    start = 0
+    for end in range(1, len(df) + 1):
+        if end - start > cap + cap // 4:
+            start = end - cap
+        if end - start >= lookback:
+            frames.append(df.iloc[start:end].reset_index(drop=True))
+    return frames
+
+
+@pytest.mark.parametrize(("period", "cap"), [(16, 120), (17, 120), (6, 40), (50, 300)])
+def test_frama_memo_full_array_bitwise_over_buffer_schedule(period: int, cap: int) -> None:
+
+    df = _ohlc(cap * 3)
+    df.loc[150, "high"] = np.nan  # NaN gap poisons max() -> NaN path
+    with memo_env(True):
+        for frame in _stream_frames(df, cap, 2 * period):
+            got = compute_frama(frame, {"period": period}).to_numpy()
+            assert np.array_equal(_bits(got), _bits(_frama_reference(frame, period)))
+        assert MEMO.hits > len(df) // 2  # memo really engaged (also across buffer trims)
+
+
+def test_frama_memo_key_is_even_rounded_period() -> None:
+    """period 17 and 16 compute the same series, so they share one memo key."""
+
+    df = _ohlc(200)
+    with memo_env(True):
+        compute_frama(df.iloc[:100], {"period": 16})
+        compute_frama(df.iloc[:101], {"period": 17})
+        assert MEMO.hits == 1
+        assert MEMO.n_slots(("frama", 16)) == 1
+        compute_frama(df.iloc[:102], {"period": 18})  # different series: miss, own key
+        assert MEMO.hits == 1
+        assert MEMO.n_slots(("frama", 18)) == 1
+
+
+def test_frama_memo_stream_bitwise() -> None:
+    """Compiled strategy stream (real _feed_pta_buffer, trims): memo on == memo off, bitwise."""
+
+    specs = {
+        "frama_a": ("FRAMA", {"period": 17}, "1h"),
+        "frama_b": ("FRAMA", {"period": 10}, "1h"),
+    }
+    _, cls = compile_indicators(
+        {
+            "frama_a": {"type": "FRAMA", "period": 17},
+            "frama_b": {"type": "FRAMA", "period": 10},
+        }
+    )
+    bars = list(random_walk_bars(1500, seed=13))
+    flat = bars[700][1:5]
+    for i in range(700, 740):  # flat windows
+        bars[i] = ("1h", *flat, 1.0)
+    bars[900] = ("1h", bars[900][1], float("nan"), bars[900][3], bars[900][4], 1.0)  # NaN high
+    on = run_stream(cls, bars, True, specs=specs)
+    hits = MEMO.hits
+    off = run_stream(cls, bars, False, specs=specs)
+    assert hits > len(bars)  # both indicators hit nearly every bar
+    assert len(on) == len(off) == len(bars)
+    assert any("frama_a" in d for d in on)
+    for a, b in zip(on, off, strict=True):
+        assert a.keys() == b.keys()
+        for k in a:
+            assert np.float64(a[k]).view(np.uint64) == np.float64(b[k]).view(np.uint64)
+
+
+def test_frama_memo_changed_prefix_misses() -> None:
+    """Same length, one early element differs (also -0.0 vs +0.0): must miss, not extend."""
+    df = _ohlc(120)
+    changed = df.copy()
+    changed.loc[5, "low"] -= 0.3  # early element, inside the recurrence history
+    with memo_env(True):
+        compute_frama(df.iloc[:100], {"period": 16})
+        got = compute_frama(changed.iloc[:101], {"period": 16}).to_numpy()
+        assert MEMO.hits == 0
+        assert np.array_equal(_bits(got), _bits(_frama_reference(changed.iloc[:101], 16)))
+        compute_frama(df.iloc[:101], {"period": 16})  # true extension of a stored prefix
+        assert MEMO.hits == 1

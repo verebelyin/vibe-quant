@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from vibe_quant.overfitting.purged_kfold import FoldResult
+    from vibe_quant.screening.pipeline import ParentFillTicks
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class NTPurgedKFoldRunner:
         self._bar_ts_ns: list[int] = []
         # Strategy param overrides of the candidate being CV'd (see bind_params)
         self._params: dict[str, float | int] = {}
+        self._ticks: ParentFillTicks | None = None
         self._resolve()
         self._load_bar_timestamps()
 
@@ -124,6 +126,9 @@ class NTPurgedKFoldRunner:
                 raise ValueError(msg)
             self._dsl_dict = json.loads(strat["dsl_config"])
             self._symbols = json.loads(run["symbols"])
+            from vibe_quant.screening.pipeline import ParentFillTicks
+
+            self._ticks = ParentFillTicks(self._dsl_dict, self._symbols, self._catalog_path)
             # backtest_runs.timeframe is the source of truth for the run's
             # primary timeframe; fall back to the DSL's timeframe field.
             self._timeframe = (
@@ -207,12 +212,14 @@ class NTPurgedKFoldRunner:
         """Run one NT screening backtest, return (sharpe, total_return)."""
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
+        assert self._ticks is not None
         runner = NTScreeningRunner(
             dsl_dict=self._dsl_dict,
             symbols=self._symbols,
             start_date=start_date,
             end_date=end_date,
             catalog_path=str(self._catalog_path) if self._catalog_path else None,
+            fill_ticks=self._ticks.get(start_date, end_date),
         )
         # The bound candidate's sweep params (empty for discovery champions,
         # whose params are baked into the DSL). Running ``{}`` for everyone

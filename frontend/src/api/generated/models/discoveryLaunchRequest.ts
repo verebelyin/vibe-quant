@@ -7,12 +7,25 @@
 import type { DiscoveryLaunchRequestSymbolAgg } from './discoveryLaunchRequestSymbolAgg';
 
 export interface DiscoveryLaunchRequest {
+  /** @minimum 2 */
   population?: number;
+  /** @minimum 1 */
   generations?: number;
+  /**
+   * @minimum 0
+   * @maximum 1
+   */
   mutation_rate?: number;
+  /**
+   * @minimum 0
+   * @maximum 1
+   */
   crossover_rate?: number;
+  /** @minimum 0 */
   elite_count?: number;
+  /** @minimum 1 */
   tournament_size?: number;
+  /** @minimum 1 */
   convergence_generations?: number;
   symbols?: string[];
   timeframes?: string[];
@@ -20,13 +33,24 @@ export interface DiscoveryLaunchRequest {
   direction?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  /** @minimum 0 */
   eval_windows?: number;
   symbol_agg?: DiscoveryLaunchRequestSymbolAgg;
+  /**
+   * @minimum 0
+   * @exclusiveMaximum 1
+   */
   train_test_split?: number;
   cross_window_months?: number[] | null;
   cross_window_min_sharpe?: number;
+  /** @minimum 1 */
   num_seeds?: number;
+  /** @minimum 0 */
   wfa_oos_step_days?: number;
+  /**
+   * @minimum 0
+   * @maximum 1
+   */
   wfa_min_consistency?: number;
   immigrant_fraction?: number;
   entropy_threshold?: number;

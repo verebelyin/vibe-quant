@@ -67,7 +67,14 @@ logger = logging.getLogger(__name__)
 # ValidationRunner._build_strategy_params skips these meta keys.
 _RUN_META_KEYS = frozenset({"sweep", "overfitting_filters"})
 # Backtest-only simulation knobs that must never reach a live strategy.
-_BACKTEST_ONLY_PARAMS = frozenset({"execution_delay_probability", "execution_delay_seed"})
+_BACKTEST_ONLY_PARAMS = frozenset(
+    {
+        "execution_delay_probability",
+        "execution_delay_seed",
+        "command_release",
+        "command_release_bar_type",
+    }
+)
 
 
 class _TradingNodeLifecycle(Protocol):

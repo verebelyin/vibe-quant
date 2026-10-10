@@ -27,7 +27,14 @@ DEFAULT_CATALOG_PATH = Path("data/catalog")
 # Venue identifier
 BINANCE_VENUE = Venue("BINANCE")
 
-# Instrument configurations for supported symbols
+# Instrument configurations for supported symbols.
+# Filters (price_increment=PRICE_FILTER.tickSize, size_increment/min_quantity=LOT_SIZE,
+# min_notional=MIN_NOTIONAL.notional) verified against Binance USDT-M
+# /fapi/v1/exchangeInfo on 2026-10-10; fixture in tests/fixtures/binance_exchange_info_usdtm.json.
+# Static on purpose (no runtime network). Catalog instrument files are refreshed by
+# CatalogManager.write_instrument (replaces on change), called by ingest/rebuild and by
+# the validation runner. Exception: SOL price tick stays 0.001 (history; today's is 0.01).
+# min_quantity: the sizing clamp (templates.py) may lift a tiny account above risk_per_trade.
 INSTRUMENT_CONFIGS = {
     "BTCUSDT": {
         "base": "BTC",
@@ -36,6 +43,8 @@ INSTRUMENT_CONFIGS = {
         "size_precision": 3,
         "price_increment": "0.1",
         "size_increment": "0.001",
+        "min_quantity": "0.001",
+        "min_notional": 50,
         "max_leverage": Decimal("125"),
         "margin_init": Decimal("0.008"),
         "margin_maint": Decimal("0.004"),
@@ -49,6 +58,8 @@ INSTRUMENT_CONFIGS = {
         "size_precision": 3,
         "price_increment": "0.01",
         "size_increment": "0.001",
+        "min_quantity": "0.001",
+        "min_notional": 20,
         "max_leverage": Decimal("100"),
         "margin_init": Decimal("0.01"),
         "margin_maint": Decimal("0.005"),
@@ -59,9 +70,11 @@ INSTRUMENT_CONFIGS = {
         "base": "SOL",
         "quote": "USDT",
         "price_precision": 3,
-        "size_precision": 0,
-        "price_increment": "0.001",
-        "size_increment": "1",
+        "size_precision": 2,
+        "price_increment": "0.001",  # deliberate: today's tick is 0.01, but history is 0.001 (see tests)
+        "size_increment": "0.01",
+        "min_quantity": "0.01",
+        "min_notional": 5,
         "max_leverage": Decimal("50"),
         "margin_init": Decimal("0.02"),
         "margin_maint": Decimal("0.01"),
@@ -75,6 +88,8 @@ INSTRUMENT_CONFIGS = {
         "size_precision": 2,
         "price_increment": "0.01",
         "size_increment": "0.01",
+        "min_quantity": "0.01",
+        "min_notional": 5,
         "max_leverage": Decimal("50"),
         "margin_init": Decimal("0.02"),
         "margin_maint": Decimal("0.01"),
@@ -120,9 +135,9 @@ def create_instrument(symbol: str) -> CryptoPerpetual:
         price_increment=Price.from_str(config["price_increment"]),
         size_increment=Quantity.from_str(config["size_increment"]),
         max_quantity=None,
-        min_quantity=None,
+        min_quantity=Quantity.from_str(config["min_quantity"]),
         max_notional=None,
-        min_notional=Money(5, quote),  # Binance minimum
+        min_notional=Money(config["min_notional"], quote),
         max_price=None,
         min_price=None,
         margin_init=config["margin_init"],
@@ -411,11 +426,27 @@ class CatalogManager:
         cleanup_epoch_parquet(self._catalog_path)
 
     def write_instrument(self, instrument: CryptoPerpetual) -> None:
-        """Write instrument to catalog.
+        """Write instrument to catalog, replacing a differing existing definition.
+
+        NT's write_data skips an existing instrument ("already exists, skipping
+        write"), so a changed spec would never reach disk. An identical existing
+        definition is left untouched (validation calls this on every run).
 
         Args:
             instrument: Instrument to write.
         """
+        import shutil
+
+        inst_dir = self._catalog_path / "data" / "crypto_perpetual" / str(instrument.id)
+        if inst_dir.exists():
+            try:
+                existing = {i.id: i for i in self.catalog.instruments()}.get(instrument.id)
+            except Exception:  # unreadable/corrupt parquet: rewrite below
+                existing = None
+            if existing is not None and type(existing).to_dict(existing) == type(instrument).to_dict(instrument):
+                return  # unchanged: no churn (validation runner calls this per run)
+            shutil.rmtree(inst_dir)
+            self._catalog = None  # re-read from disk
         self.catalog.write_data([instrument])
 
     def clear_bar_data(self, symbol: str, interval: str) -> None:

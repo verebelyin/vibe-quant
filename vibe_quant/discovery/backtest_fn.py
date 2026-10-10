@@ -10,12 +10,14 @@ multiprocessing worker entrypoint, not the discovery CLI).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
+    from vibe_quant.data.fill_ticks import FillTickSet
     from vibe_quant.discovery.operators import StrategyChromosome
+    from vibe_quant.metrics import DailyReturns
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,13 @@ class NTBacktestFn:
     GA can rank by a soft per-symbol score (vibe-quant-ox73t, see
     ``fitness.soft_worst_score``); there is no across-symbol early exit
     because a losing symbol no longer pins the score to 0.
+
+    ``collect_daily_returns`` (opt-in; the discovery pipeline turns it on for
+    its train fn when DSR is required, bd vibe-quant-yul7u.24) adds
+    ``daily_returns``: the run's dense daily return series (windows chained,
+    see :meth:`_chain_window_series`; worst mode: the equal-weight pool of
+    the symbols, plus ``symbol_daily`` per-symbol Sharpe inputs). It is the
+    DSR gate's input only -- fitness and ranking never read it.
     """
 
     def __init__(
@@ -61,6 +70,8 @@ class NTBacktestFn:
         windows: list[tuple[str, str]] | None = None,
         min_trades: int = 0,
         symbol_agg: SymbolAgg = "portfolio",
+        fill_ticks: FillTickSet | None = None,
+        collect_daily_returns: bool = False,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
@@ -70,6 +81,10 @@ class NTBacktestFn:
         # Global min-trades gate of the run; drives the per-window gate.
         self.min_trades = min_trades
         self.symbol_agg = symbol_agg
+        # Resolved once by the pipeline's parent-side preflight (a frozen
+        # dataclass of paths: cheap to pickle); workers never build ticks.
+        self.fill_ticks = fill_ticks
+        self.collect_daily_returns = collect_daily_returns
 
     def _run_single(
         self,
@@ -89,10 +104,12 @@ class NTBacktestFn:
             symbols=self.symbols if symbols is None else symbols,
             start_date=start_date,
             end_date=end_date,
+            fill_ticks=self.fill_ticks,
+            collect_daily_returns=self.collect_daily_returns,
         )
         result = runner({})
 
-        return {
+        out: dict[str, float | int] = {
             "sharpe_ratio": result.sharpe_ratio
             if result.sharpe_ratio != float("-inf")
             else -1.0,
@@ -104,6 +121,29 @@ class NTBacktestFn:
             "kurtosis": getattr(result, "kurtosis", 3.0),
             "trade_returns": getattr(result, "trade_returns", ()),  # type: ignore[arg-type,dict-item]
         }
+        if self.collect_daily_returns:
+            # Full dense series INCLUDING day 0; trimmed by _chain_window_series.
+            out["daily_returns"] = runner.last_daily_returns  # type: ignore[assignment]
+        return out
+
+    @staticmethod
+    def _chain_window_series(results: list[dict[str, float | int]]) -> DailyReturns | None:
+        """One daily series over consecutive windows, keyed like a continuous run.
+
+        A continuous run's series starts the day AFTER its first day (NT's
+        Sharpe convention), so the first window drops its day-0 return and
+        every later window keeps it (its return vs that window's fresh
+        balance): the chain covers exactly the days of one continuous
+        backtest -- ``compute_day_count(train) - 1`` values, no boundary day
+        lost or duplicated. ``None`` if any window has no series.
+        """
+        from vibe_quant.metrics import concat_daily_returns
+
+        parts = cast("list[DailyReturns | None]", [r.get("daily_returns") for r in results])
+        if not parts or parts[0] is None:
+            return None
+        parts[0] = parts[0].without_first_day()
+        return concat_daily_returns(parts)
 
     @staticmethod
     def per_window_min_trades(min_trades: int, n_windows: int) -> int:
@@ -228,8 +268,14 @@ class NTBacktestFn:
                         "trades below per-window gate" if low_trades else "return <= 0",
                     )
                     return self._early_exit_result(results, idx, low_trades)
-            return self._aggregate_multi_window(results, self.min_trades)
-        return self._run_single(chromosome, self.start_date, self.end_date, **kw)
+            agg = self._aggregate_multi_window(results, self.min_trades)
+            if self.collect_daily_returns:
+                agg["daily_returns"] = self._chain_window_series(results)  # type: ignore[assignment]
+            return agg
+        res = self._run_single(chromosome, self.start_date, self.end_date, **kw)
+        if self.collect_daily_returns:
+            res["daily_returns"] = self._chain_window_series([res])  # type: ignore[assignment]
+        return res
 
     @staticmethod
     def _aggregate_symbols(
@@ -250,6 +296,11 @@ class NTBacktestFn:
         rets = [float(r.get("total_return", 0.0)) for r in results]
         dds = [float(r["max_drawdown"]) for r in results]
         trades = tuple(int(r["total_trades"]) for r in results)
+        collected = any("daily_returns" in r for r in results)
+        series = [cast("DailyReturns | None", r.get("daily_returns")) for r in results]
+        # The per-symbol series feed only the pool + per-symbol stats below;
+        # they must not ride along in symbol_results (memory, bd yul7u.24).
+        results = [{k: v for k, v in r.items() if k != "daily_returns"} for r in results]
         out: dict[str, float | int] = {
             "sharpe_ratio": min(0.0 if math.isnan(x) else x for x in sharpes),
             "max_drawdown": max(1.0 if math.isnan(x) else x for x in dds),
@@ -285,30 +336,62 @@ class NTBacktestFn:
             # Worst-of metrics inherit forced values from these symbols -> mark
             # the aggregate synthetic so the fitness sanity check skips it.
             out["synthetic_symbols"] = synthetic  # type: ignore[assignment]
+        if collected:
+            from vibe_quant.metrics import pool_daily_returns
+            from vibe_quant.overfitting.dsr import daily_sharpe_inputs
+
+            out["daily_returns"] = pool_daily_returns(series)  # type: ignore[assignment]
+            symbol_daily: dict[str, dict[str, float] | None] = {}
+            for sym, sr in zip(symbols, series, strict=True):
+                if sr is None or len(sr) == 0:
+                    symbol_daily[sym] = None
+                    continue
+                sharpe, skew, kurt = daily_sharpe_inputs(sr.values)
+                symbol_daily[sym] = {
+                    "sharpe": sharpe,
+                    "skewness": skew,
+                    "kurtosis": kurt,
+                    "observations": len(sr),
+                    "mean": sum(sr.values) / len(sr),
+                }
+            out["symbol_daily"] = symbol_daily  # type: ignore[assignment]
         return out
 
     def _eval_worst_of_symbols(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         results = [self._eval_symbols(chromosome, [sym]) for sym in self.symbols]
         return self._aggregate_symbols(results, self.symbols)
 
+    @property
+    def splits_by_symbol(self) -> bool:
+        """True when each symbol of a chromosome can run as its own parallel task."""
+        return self.symbol_agg == "worst" and len(self.symbols) >= 2
+
+    @staticmethod
+    def error_result(
+        chromosome: StrategyChromosome, exc: Exception | str
+    ) -> dict[str, float | int]:
+        """Failure metrics of a crashed evaluation (what ``__call__`` returns)."""
+        logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
+        desc = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
+        return {
+            "sharpe_ratio": -1.0,
+            "max_drawdown": 1.0,
+            "profit_factor": 0.0,
+            "total_trades": 0,
+            # Marker only (numbers unchanged): lets the pipeline tell a
+            # crashed evaluation from a genuinely bad strategy.
+            "error": desc,  # type: ignore[dict-item]
+        }
+
     def __call__(self, chromosome: StrategyChromosome) -> dict[str, float | int]:
         try:
-            if self.symbol_agg == "worst" and len(self.symbols) >= 2:
+            if self.splits_by_symbol:
                 return self._eval_worst_of_symbols(chromosome)
             return self._eval_symbols(chromosome, None)
         except DataUnavailableError:
             raise  # missing data fails the run loudly, never an 'error' result
         except Exception as exc:
-            logger.warning("NT backtest failed for chromosome %s: %s", chromosome.uid, exc)
-            return {
-                "sharpe_ratio": -1.0,
-                "max_drawdown": 1.0,
-                "profit_factor": 0.0,
-                "total_trades": 0,
-                # Marker only (numbers unchanged): lets the pipeline tell a
-                # crashed evaluation from a genuinely bad strategy.
-                "error": f"{type(exc).__name__}: {exc}",  # type: ignore[dict-item]
-            }
+            return self.error_result(chromosome, exc)
 
 
 def full_range_headline(

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +20,7 @@ from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
+from vibe_quant.utils import log_dir
 from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.latency import LatencyPreset
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -69,16 +70,19 @@ class ValidationRunner:
     def __init__(
         self,
         db_path: Path | None = None,
-        logs_path: Path | str = "logs/events",
+        logs_path: Path | str | None = None,
     ) -> None:
         """Initialize ValidationRunner.
 
         Args:
             db_path: Path to state database. Uses default if None.
-            logs_path: Path for event log files.
+            logs_path: Path for event log files. Defaults to ``log_dir()/events``
+                (``VIBE_QUANT_LOG_DIR`` when set, else ``logs/events``).
         """
         self._state = StateManager(db_path)
-        self._logs_path = Path(logs_path)
+        self._logs_path = (
+            Path(logs_path) if logs_path is not None else log_dir(create=False) / "events"
+        )
         self._compiler = StrategyCompiler()
 
     def close(self) -> None:
@@ -144,12 +148,12 @@ class ValidationRunner:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
             raise
 
-        # Determine latency preset — re-enable when detail data provides
-        # sub-bar resolution for the matching engine
+        # Determine latency preset -- with detail data it only selects the fill
+        # model; orders are released on each strategy's own next detail bar
         effective_latency = self._resolve_latency(run_config, latency_preset)
 
-        # Configure venue (timeframe-aware: skips latency for sub-5m bars
-        # unless detail data provides sub-bar resolution)
+        # Configure venue (timeframe-aware: no latency model for sub-5m bars
+        # without detail data, nor with detail data -- own-bar release instead)
         venue_config = self._create_venue_config(
             run_config,
             effective_latency,
@@ -167,7 +171,9 @@ class ValidationRunner:
             strategy_name,
             strategy_id,
             dsl.timeframe,
-            effective_latency or "none",
+            venue_config.latency_preset or (
+                self._OWN_DETAIL_RELEASE if effective_detail else "none"
+            ),
             effective_detail or "none",
             venue_config.default_leverage,
             venue_config.starting_balance_usdt,
@@ -190,6 +196,9 @@ class ValidationRunner:
                         "detail_timeframe": effective_detail,
                         "leverage": float(venue_config.default_leverage),
                         "data_window": window_note,
+                        **self._execution_event_fields(
+                            venue_config, effective_latency, effective_detail
+                        ),
                     },
                 )
 
@@ -208,6 +217,7 @@ class ValidationRunner:
             result.execution_time_seconds = time.monotonic() - start_time
             if window_note is not None:
                 result.notes["data_window"] = window_note
+            result.notes.update(self._execution_notes(run_config, effective_detail))
             if result.funding_fallback_settlements:
                 result.notes["funding"] = {
                     "fallback_settlements": result.funding_fallback_settlements,
@@ -349,7 +359,15 @@ class ValidationRunner:
         try:
             window_results: list[ValidationResult] = []
             with EventWriter(run_id=str(run_id), base_path=self._logs_path) as writer:
-                self._write_start_event(writer, run_id, strategy_name, venue_config)
+                self._write_start_event(
+                    writer,
+                    run_id,
+                    strategy_name,
+                    venue_config,
+                    extra=self._execution_event_fields(
+                        venue_config, effective_latency, effective_detail
+                    ),
+                )
                 writer.write(
                     create_event(
                         event_type=EventType.LIFECYCLE,
@@ -410,6 +428,9 @@ class ValidationRunner:
 
             aggregate.execution_time_seconds = time.monotonic() - start_time
             self._store_results(run_id, aggregate)
+            aggregate.notes.update(self._execution_notes(run_config, effective_detail))
+            if aggregate.notes:
+                self._state.update_result_notes(run_id, json.dumps(aggregate.notes))
 
             if aggregate.total_trades == 0:
                 error_msg = "Walk-forward produced 0 trades — likely missing/empty data"
@@ -639,6 +660,44 @@ class ValidationRunner:
     # (bar data has no sub-bar timestamps, so any latency = full bar delay)
     _SUB_BAR_TIMEFRAMES = frozenset({"1s", "1m", "3m", "5m"})
 
+    # notes["execution_release"] when detail data is loaded: every strategy
+    # queues its commands and releases them on its OWN next detail bar
+    # (generated command outbox, command_release="bar"). NT's LatencyModel
+    # released venue-wide on the next datum of ANY instrument, so in a
+    # multi-symbol run the 2nd symbol filled at its signal-bar close
+    # (bd vibe-quant-yul7u.11).
+    _OWN_DETAIL_RELEASE = "own_detail_bar"
+
+    def _execution_event_fields(
+        self,
+        venue_config: VenueConfig,
+        latency_preset: LatencyPreset | str | None,
+        detail_timeframe: str | None,
+    ) -> dict[str, object]:
+        """BACKTEST_START fields: the preset that chose the fill model (the
+        venue itself runs no LatencyModel with detail data) + release mode."""
+        if detail_timeframe is not None:
+            preset: object = latency_preset or LatencyPreset.CLOUD
+        else:
+            preset = venue_config.latency_preset
+        return {
+            "latency_preset": str(preset) if preset else None,
+            "execution_release": self._OWN_DETAIL_RELEASE if detail_timeframe else None,
+        }
+
+    def _execution_notes(
+        self, run_config: dict[str, object], detail_timeframe: str | None
+    ) -> dict[str, object]:
+        """Result notes for own-bar release, incl. an overridden per-run delay
+        (see :meth:`_augment_strategy_params_for_validation`)."""
+        if detail_timeframe is None:
+            return {}
+        notes: dict[str, object] = {"execution_release": self._OWN_DETAIL_RELEASE}
+        requested = self._build_strategy_params(run_config).get("execution_delay_probability")
+        if requested:
+            notes["execution_delay_override"] = {"requested": requested, "applied": 0.0}
+        return notes
+
     def _create_venue_config(
         self,
         run_config: dict[str, object],
@@ -653,9 +712,11 @@ class ValidationRunner:
         NT's LatencyModel defers orders to the next bar (60s on 1m data)
         regardless of actual latency value. Slippage probability compensates.
 
-        When detail data IS available (e.g., 5s bars alongside 1m bars),
-        LatencyModel is re-enabled because the matching engine can process
-        orders at sub-bar resolution (next 5s bar instead of next 1m bar).
+        When detail data IS available (e.g., 1m bars under a 4h strategy),
+        the fill model is still chosen from the latency preset (identical to
+        the former latency path), but the LatencyModel itself is dropped:
+        each strategy releases its orders on its own next detail bar instead
+        (see ``_OWN_DETAIL_RELEASE``). The preset only matters for tick data.
 
         Args:
             run_config: Run configuration.
@@ -709,11 +770,17 @@ class ValidationRunner:
                 latency_preset=None,
             )
 
-        return create_venue_config_for_validation(
+        venue_config = create_venue_config_for_validation(
             starting_balance_usdt=int(balance),
             default_leverage=default_leverage,
             latency_preset=latency_preset or LatencyPreset.CLOUD,
         )
+        if has_detail_data:
+            # Fill model chosen above from the preset; release is own-bar.
+            venue_config = replace(
+                venue_config, latency_preset=None, latency_config=None
+            )
+        return venue_config
 
     def _run_backtest(
         self,
@@ -843,11 +910,24 @@ class ValidationRunner:
             strategy_params if strategy_params else "(compiled defaults)",
         )
 
-        # Build strategy configs (one per symbol)
+        if detail_timeframe and detail_timeframe not in INTERVAL_TO_AGGREGATION:
+            # Venue latency is off with detail data; without a release bar
+            # orders would fill at the signal bar's own close.
+            msg = f"Unknown detail timeframe {detail_timeframe!r}"
+            raise ValidationRunnerError(msg)
+
+        # Build strategy configs (one per symbol). With detail data each
+        # strategy releases its queued commands on its OWN detail bar.
         strategy_configs: list[ImportableStrategyConfig] = []
         for symbol in symbols:
             instrument_id = f"{symbol}-PERP.BINANCE"
             config_dict = {"instrument_id": instrument_id, **strategy_params}
+            if detail_timeframe:
+                release_step, release_agg = INTERVAL_TO_AGGREGATION[detail_timeframe]
+                config_dict["command_release"] = "bar"
+                config_dict["command_release_bar_type"] = (
+                    f"{instrument_id}-{release_step}-{release_agg.name}-LAST-EXTERNAL"
+                )
             strategy_configs.append(
                 ImportableStrategyConfig(
                     strategy_path=f"{module_path}:{strategy_cls_name}",
@@ -1096,8 +1176,10 @@ class ValidationRunner:
     ) -> dict[str, object]:
         """Inject validation-only runtime degradation knobs when appropriate.
 
-        When detail data provides sub-bar resolution, LatencyModel handles
-        degradation so execution_delay_probability is not needed.
+        When detail data provides sub-bar resolution, orders are released on
+        the strategy's own next detail bar (command outbox), which requires
+        execution_delay_probability=0 -- the generated on_start raises
+        otherwise, so an explicit per-run delay is overridden.
 
         Without finer data (1m strategies have no 5s catalog data) latency
         is skipped, so EVERY entry/exit is deferred one bar, exactly like
@@ -1105,7 +1187,15 @@ class ValidationRunner:
         bar's own close -- same-bar look-ahead (bd vibe-quant-e70tl.13).
         """
         augmented = dict(params)
-        if timeframe in self._SUB_BAR_TIMEFRAMES and not has_detail_data:
+        if has_detail_data:
+            if augmented.get("execution_delay_probability"):
+                logger.warning(
+                    "execution_delay_probability=%s ignored: detail data releases "
+                    "orders on each strategy's own next detail bar",
+                    augmented["execution_delay_probability"],
+                )
+            augmented["execution_delay_probability"] = 0.0
+        elif timeframe in self._SUB_BAR_TIMEFRAMES:
             augmented.setdefault("execution_delay_probability", 1.0)
         return augmented
 
@@ -1135,7 +1225,9 @@ class ValidationRunner:
     ) -> str | None:
         """Resolve the detail (fill-resolution) timeframe for a run.
 
-        Explicit overrides (argument or ``parameters.detail_timeframe``) win.
+        Explicit overrides (argument or ``parameters.detail_timeframe``) win;
+        they must be a loadable timeframe no coarser than the strategy's
+        (``ValidationRunnerError`` otherwise).
         Otherwise strategies coarser than 1m use 1m detail -- whose presence
         and coverage :meth:`_clamp_run_window` then enforces (missing 1m data
         fails the run; it no longer silently falls back to strategy-TF
@@ -1151,20 +1243,31 @@ class ValidationRunner:
         Returns:
             Detail timeframe string (e.g., '1m') or None.
         """
-        # Explicit override always wins
-        if override is not None:
-            return override
-
-        # Check run config for detail_timeframe parameter
-        params = run_config.get("parameters")
-        if isinstance(params, dict) and params.get("detail_timeframe"):
-            return str(params["detail_timeframe"])
-
         from vibe_quant.data.catalog import (
             DEFAULT_CATALOG_PATH,
             INTERVAL_TO_AGGREGATION,
             CatalogManager,
         )
+
+        # Explicit override always wins (argument, then run parameters)
+        params = run_config.get("parameters")
+        if override is None and isinstance(params, dict) and params.get("detail_timeframe"):
+            override = str(params["detail_timeframe"])
+        if override is not None:
+            # Orders release on the strategy's own next detail bar, so the
+            # detail bar must be loadable and not coarser than the strategy
+            # bar (1h detail under 15m bars = orders up to 1h late).
+            if override not in INTERVAL_TO_AGGREGATION:
+                msg = f"Unknown detail timeframe {override!r}"
+                raise ValidationRunnerError(msg)
+            strategy_secs = self._TIMEFRAME_SECONDS.get(strategy_timeframe)
+            if strategy_secs is not None and self._TIMEFRAME_SECONDS[override] > strategy_secs:
+                msg = (
+                    f"Detail timeframe {override!r} is coarser than the "
+                    f"{strategy_timeframe} strategy timeframe"
+                )
+                raise ValidationRunnerError(msg)
+            return override
 
         symbols = self._parse_symbols(run_config)
         if not symbols:

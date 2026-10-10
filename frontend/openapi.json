@@ -5736,36 +5736,45 @@
         "properties": {
           "population": {
             "type": "integer",
+            "minimum": 2.0,
             "title": "Population",
             "default": 20
           },
           "generations": {
             "type": "integer",
+            "minimum": 1.0,
             "title": "Generations",
             "default": 15
           },
           "mutation_rate": {
             "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
             "title": "Mutation Rate",
             "default": 0.1
           },
           "crossover_rate": {
             "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
             "title": "Crossover Rate",
             "default": 0.8
           },
           "elite_count": {
             "type": "integer",
+            "minimum": 0.0,
             "title": "Elite Count",
             "default": 2
           },
           "tournament_size": {
             "type": "integer",
+            "minimum": 1.0,
             "title": "Tournament Size",
             "default": 3
           },
           "convergence_generations": {
             "type": "integer",
+            "minimum": 1.0,
             "title": "Convergence Generations",
             "default": 10
           },
@@ -5838,6 +5847,7 @@
           },
           "eval_windows": {
             "type": "integer",
+            "minimum": 0.0,
             "title": "Eval Windows",
             "default": 3
           },
@@ -5852,6 +5862,8 @@
           },
           "train_test_split": {
             "type": "number",
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
             "title": "Train Test Split",
             "default": 0.8
           },
@@ -5876,16 +5888,20 @@
           },
           "num_seeds": {
             "type": "integer",
+            "minimum": 1.0,
             "title": "Num Seeds",
             "default": 1
           },
           "wfa_oos_step_days": {
             "type": "integer",
+            "minimum": 0.0,
             "title": "Wfa Oos Step Days",
             "default": 0
           },
           "wfa_min_consistency": {
             "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
             "title": "Wfa Min Consistency",
             "default": 0.75
           },

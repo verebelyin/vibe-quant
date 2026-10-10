@@ -29,8 +29,10 @@ from vibe_quant.dsl.indicators import (
 from vibe_quant.dsl.templates import (
     ON_EVENT_LINES,
     ON_RESET_LINES,
+    ON_START_OUTBOX_LINES,
     ON_START_RECOVERY_LINES,
     ON_STOP_LINES,
+    ON_TRADE_TICK_LINES,
     ORDER_METHODS_LINES,
     PTA_FEED_LINES,
 )
@@ -148,6 +150,8 @@ def compiler_version_hash() -> str:
             "aux_data.py",
             "derived.py",
             "schema.py",
+            "prefix_memo.py",
+            "pta_buffer.py",
         )
     ]
     sources += sorted((dsl_dir / "plugins").glob("*.py"))
@@ -406,7 +410,7 @@ class StrategyCompiler:
             "import zoneinfo",
             "",
             "from nautilus_trader.core.uuid import UUID4",
-            "from nautilus_trader.model.data import Bar, BarType",
+            "from nautilus_trader.model.data import Bar, BarType, TradeTick",
             "from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, TimeInForce",
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
@@ -516,6 +520,14 @@ class StrategyCompiler:
         lines.append(
             "    execution_delay_seed: int = 42  "
             "# Seed for probabilistic delay draws (reproducible replays)"
+        )
+        lines.append(
+            '    command_release: str = ""  '
+            '# Command outbox release: "" off (live/paper/1m), "trade_tick", "bar"'
+        )
+        lines.append(
+            '    command_release_bar_type: str = ""  '
+            '# Own detail bar type releasing the outbox when command_release="bar"'
         )
         lines.append("")
 
@@ -683,6 +695,9 @@ class StrategyCompiler:
             "        self._trailing_best_sl: float | None = None",
             "        # Set when on_start adopts an unprotected position before indicators are ready",
             "        self._rearm_protection = False",
+            "        # Command outbox: (queue ts, fn, args) awaiting this instrument's next datum",
+            "        self._outbox: list = []",
+            "        self._command_release_bar_type: BarType | None = None",
             "        # Seeded RNG for the probabilistic execution-delay path so",
             "        # identical validation replays are byte-reproducible.",
             "        self._delay_rng = random.Random(",
@@ -716,6 +731,10 @@ class StrategyCompiler:
         # Add on_event method for position tracking
         on_event = self._generate_on_event()
         lines.append(textwrap.indent(on_event, "    "))
+        lines.append("")
+
+        # Add on_trade_tick method (command outbox release)
+        lines.append(textwrap.indent("\n".join(ON_TRADE_TICK_LINES), "    "))
         lines.append("")
 
         # Add on_stop method for cleanup
@@ -823,6 +842,8 @@ class StrategyCompiler:
         lines.append("    # Subscribe to bars for all timeframes")
         for tf in sorted(timeframes):
             lines.append(f"    self.subscribe_bars(self.bar_type_{tf})")
+        lines.append("")
+        lines.extend(f"    {line}" if line else "" for line in ON_START_OUTBOX_LINES)
 
         lines.append("")
         lines.append("    # Initialize and register indicators")
@@ -910,8 +931,14 @@ class StrategyCompiler:
                 lines.append(f'        self._feed_pta_buffer("{tf}", bar)')
             lines.append("")
 
+        # Outbox release AFTER the buffer feed: an early return ahead of it
+        # would starve 1m compute_fn indicators on coarser strategies.
         lines.extend(
             [
+                "    # Command outbox: this instrument's own detail bar releases queued commands",
+                "    if self._command_release_bar_type is not None and bar.bar_type == self._command_release_bar_type:",
+                "        self._flush_outbox(bar.ts_init)",
+                "",
                 "    # Only process primary timeframe bars",
                 "    if bar.bar_type != self.primary_bar_type:",
                 "        return",

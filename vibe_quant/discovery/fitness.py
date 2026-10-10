@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.operators import StrategyChromosome
+    from vibe_quant.metrics import DailyReturns
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -123,6 +125,13 @@ class FitnessResult:
     # hard worst-symbol champion gate. None in portfolio mode.
     symbol_scores: dict[str, float] | None = None
     symbol_stats: dict[str, tuple[float, int]] | None = None
+    # DSR gate input (bd vibe-quant-yul7u.24), never read by fitness/ranking:
+    # the dense daily return series (worst mode: equal-weight pool of the
+    # symbols) and, in worst mode, each symbol's daily Sharpe inputs. Kept
+    # ONLY for genomes that pass the train hard gates (champion candidates);
+    # None otherwise, so the run-long fitness cache stays small.
+    daily_returns: DailyReturns | None = None
+    symbol_daily: dict[str, dict[str, float] | None] | None = None
 
 
 # Pre-compute inverse ranges for normalization to avoid repeated division
@@ -521,6 +530,13 @@ def _evaluate_single(
             symbol_stats[sym] = (sres.total_return, sres.total_trades)
         adjusted = soft_worst_score(list(symbol_scores.values()))
 
+    # Keep the DSR series only for a champion candidate: every symbol (worst
+    # mode) or the run (portfolio) clears the train hard gates.
+    if symbol_stats is not None:
+        keep_series = all(r > 0 and t >= min_trades for r, t in symbol_stats.values())
+    else:
+        keep_series = trades >= min_trades and total_return > 0
+
     # Log score decomposition for debugging fitness calculation correctness
     if adjusted > 0:
         if symbol_scores is not None:
@@ -556,6 +572,10 @@ def _evaluate_single(
         error=str(bt["error"]) if bt.get("error") else None,
         symbol_scores=symbol_scores,
         symbol_stats=symbol_stats,
+        daily_returns=cast("DailyReturns | None", bt.get("daily_returns")) if keep_series else None,
+        symbol_daily=cast("dict[str, dict[str, float] | None] | None", bt.get("symbol_daily"))
+        if keep_series
+        else None,
     )
 
 
@@ -651,6 +671,30 @@ def evaluate_population(
     return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe) for chrom in chromosomes]
 
 
+_TASK_ERROR = "__task_error__"
+_TASK_DATA_UNAVAILABLE = "__task_data_unavailable__"
+
+
+def _eval_symbol_task(
+    fn: NTBacktestFn, chrom: StrategyChromosome, symbol: str
+) -> dict[str, float | int]:
+    """Worker task: one chromosome on one symbol (all windows). Picklable.
+
+    Exceptions never cross the pool boundary raw: one that cannot be unpickled
+    in the parent marks the WHOLE pool broken (every chromosome of the
+    generation would error). Failures come back as tagged dicts and the parent
+    decides, in symbol order.
+    """
+    try:
+        return fn._eval_symbols(chrom, [symbol])
+    except Exception as e:
+        desc = f"{type(e).__name__}: {e}"
+        tagged: dict[str, float | int] = {_TASK_ERROR: desc}  # type: ignore[dict-item]
+        if isinstance(e, DataUnavailableError):
+            tagged[_TASK_DATA_UNAVAILABLE] = str(e)  # type: ignore[assignment]
+        return tagged
+
+
 def _evaluate_parallel(
     chromosomes: list[StrategyChromosome],
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
@@ -668,8 +712,11 @@ def _evaluate_parallel(
     import os
     from concurrent.futures import Executor, ProcessPoolExecutor, as_completed
 
+    from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
     workers = max_workers if max_workers and max_workers > 0 else os.cpu_count() or 4
-    workers = min(workers, len(chromosomes))
+    split_fn = backtest_fn if isinstance(backtest_fn, NTBacktestFn) and backtest_fn.splits_by_symbol else None
+    workers = min(workers, len(chromosomes) * (len(split_fn.symbols) if split_fn else 1))
 
     _zero = FitnessResult(
         sharpe_ratio=0.0,
@@ -688,7 +735,45 @@ def _evaluate_parallel(
 
     results: list[FitnessResult | None] = [None] * len(chromosomes)
 
+    def _run_split(pool: Executor, fn: NTBacktestFn) -> None:
+        # One task per (chromosome, symbol): a slow chromosome no longer pins
+        # a worker for all of its symbols. Failures are collected, then decided
+        # per chromosome in symbol order (the first failure is the one the
+        # sequential path would have hit): DataUnavailableError propagates,
+        # anything else gives the whole chromosome today's error result.
+        future_to_key = {
+            pool.submit(_eval_symbol_task, fn, chrom, sym): (i, j)
+            for i, chrom in enumerate(chromosomes)
+            for j, sym in enumerate(fn.symbols)
+        }
+        per_chrom: list[list[dict[str, float | int] | None]] = [
+            [None] * len(fn.symbols) for _ in chromosomes
+        ]
+        for future in as_completed(future_to_key):
+            i, j = future_to_key[future]
+            try:
+                per_chrom[i][j] = future.result()
+            except Exception as e:  # pool-level failure (e.g. broken worker)
+                per_chrom[i][j] = {_TASK_ERROR: f"{type(e).__name__}: {e}"}  # type: ignore[dict-item]
+        for i, chrom in enumerate(chromosomes):
+            outcomes = per_chrom[i]
+            failure = next((o for o in outcomes if o is not None and _TASK_ERROR in o), None)
+            if failure is not None:
+                if _TASK_DATA_UNAVAILABLE in failure:
+                    raise DataUnavailableError(str(failure[_TASK_DATA_UNAVAILABLE]))
+                agg = fn.error_result(chrom, str(failure[_TASK_ERROR]))
+            else:
+                agg = fn._aggregate_symbols(
+                    cast("list[dict[str, float | int]]", outcomes), fn.symbols
+                )
+            results[i] = _evaluate_single(
+                chrom, _const_backtest(agg), filter_fn, min_trades, timeframe
+            )
+
     def _run_with(pool: Executor) -> None:
+        if split_fn is not None:
+            _run_split(pool, split_fn)
+            return
         future_to_idx = {
             pool.submit(_evaluate_single, chrom, backtest_fn, filter_fn, min_trades, timeframe): i
             for i, chrom in enumerate(chromosomes)

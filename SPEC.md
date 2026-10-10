@@ -67,7 +67,7 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    NAUTILUSTRADER ENGINE (Validation Mode)               │
 │  Event-driven backtesting | Realistic execution simulation              │
-│  Custom FillModel | LatencyModel | Fees + Funding | Liquidation        │
+│  Custom FillModel | LatencyModel (ticks) | Fees + Funding | Liquidation │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  Position Sizing Module  │  Risk Management Module  │  Event Logger     │
 │  (Kelly/FF/ATR)          │  (Strategy + Portfolio)   │  (Structured JSON)│
@@ -86,7 +86,7 @@
 
 ### Core Design Principles
 
-1. **Single-engine, two-tier fidelity**: NautilusTrader for both screening (simplified execution, parallel parameter sweeps) and validation (realistic fills, latency, full cost modeling). One engine means leverage, funding rates, and liquidation are always modeled -- even during screening.
+1. **Single-engine, two-tier fidelity**: NautilusTrader for both screening (simplified execution, parallel parameter sweeps) and validation (realistic fills, own-1m-detail-bar order release, full cost modeling; latency presets apply to tick data only). One engine means leverage, funding rates, and liquidation are always modeled -- even during screening.
 2. **Single source of truth**: Strategy logic defined once in a declarative DSL, auto-translated to NautilusTrader Strategy subclasses. DSL supports multi-timeframe conditions, time-based filters, and position management.
 3. **Separation of concerns**: Strategy signals are decoupled from position sizing, risk management, and execution. Each is a pluggable module.
 4. **Incremental complexity**: Start with manual strategies and parameter sweeps. Build toward automated strategy discovery with genetic optimization.
@@ -698,9 +698,11 @@ The screening pipeline uses NautilusTrader in a **simplified execution mode** fo
 
 **Screening mode simplifications** (vs full validation):
 - Basic `FillModel` with simple probabilistic slippage (no custom volume-based model)
-- No `LatencyModel` (zero latency)
+- No `LatencyModel` (zero latency; latency presets apply only to tick data)
 - Standard fee model (not custom)
 - Bar-level data only (no order book)
+
+**Fill timing:** each compiled strategy queues its orders in a per-instrument outbox and releases them on that instrument's own next price update. Screening synthesizes two 1m "fill ticks" per strategy bar (`vibe_quant/data/fill_ticks.py`, `command_release="trade_tick"`), so an order fills at the close of the first 1m bar after the signal — the same release validation uses, not the next strategy-timeframe bar. Two caveats: drawdown is still marked on strategy-timeframe bars (so screening max DD can differ from 1m-detail/validation DD), and with gaps in the 1m data, release waits for the next own tick.
 
 **What screening mode still models** (the key advantage):
 - Leverage and margin mechanics
@@ -825,7 +827,7 @@ The dashboard visualizes the Pareto front as a scatter plot matrix (e.g., Sharpe
 
 ### Configuration
 
-Top candidates from screening are validated through NautilusTrader's full-fidelity execution simulation with realistic fills, latency, and cost modeling.
+Top candidates from screening are validated through NautilusTrader's full-fidelity execution simulation with realistic fills, own-1m-detail-bar order release, and cost modeling (latency presets apply to tick data only).
 
 **Venue configuration:**
 
@@ -840,13 +842,13 @@ venue_config = BacktestVenueConfig(
     leverages={"BTCUSDT-PERP.BINANCE": Decimal("20")},
     fill_model=custom_fill_model,          # Custom volume-based slippage
     fee_model=BinanceFeeModel(),           # Maker 0.02%, Taker 0.04% (note: verify current rates; Binance adjusts fees by VIP tier and promotions -- consider making configurable in DSL)
-    latency_model=latency_model,           # Network latency simulation
+    latency_model=latency_model,           # Network latency simulation (tick data only; bars release via the per-instrument outbox)
 )
 ```
 
 ### Latency Model Configuration
 
-NautilusTrader's `LatencyModelConfig` simulates realistic network delays for order operations. Configurable per venue with presets:
+NautilusTrader's `LatencyModelConfig` simulates realistic network delays for order operations. Configurable per venue with presets (presets apply only to tick data — bar backtests release orders through the per-instrument outbox described below instead):
 
 ```python
 # Latency presets
@@ -880,10 +882,12 @@ LATENCY_PRESETS = {
 
 The dashboard exposes latency preset selection as a dropdown, with a "custom" option for manual nanosecond configuration.
 
+**Order release (2026-10-10):** bar backtests do not use `LatencyModel` — it releases queued orders venue-wide, so in a multi-symbol run a later symbol filled at the signal bar close and inflated the result. Each compiled strategy instead queues orders in a per-instrument outbox and releases them on its own next price update: validation on the instrument's next 1m detail bar (`command_release="bar"`), screening on the instrument's own fill ticks (§6). With gaps in the 1m data, release waits for the next own tick.
+
 ### Execution Simulation
 
 **Order types used:**
-- **Entry**: Market orders (taker fee, filled at next bar open + slippage + latency delay)
+- **Entry**: Market orders (taker fee, filled on the instrument's next own fill tick -- validation's next 1m detail bar -- + slippage)
 - **Stop Loss**: Stop-market orders (triggered at mark price, filled with slippage)
 - **Take Profit**: Limit orders (maker fee, filled at limit price with queue position probability)
 
@@ -1539,14 +1543,14 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 
 ## Phase 3: Validation Backtesting & Risk
 
-**Goal:** Run full-fidelity NautilusTrader backtests with custom fills, latency simulation, position sizing, and risk management.
+**Goal:** Run full-fidelity NautilusTrader backtests with custom fills, own-1m-detail-bar order release (latency presets apply to tick data only), position sizing, and risk management.
 
 ### Deliverables
 
 1. **Validation venue configuration**
    - Custom `FillModel`: volume-based slippage with square-root market impact
    - Fee model: Binance maker 0.02% / taker 0.04%
-   - `LatencyModelConfig` with presets (co-located, domestic, international, retail, custom)
+   - `LatencyModelConfig` with presets, tick data only (co-located, domestic, international, retail, custom)
    - Venue config: BINANCE, NETTING, MARGIN, starting balance, leverage
    - Funding rate integration: subscribe to `FundingRateUpdate`, accrue per 8h period
 
@@ -1564,7 +1568,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 4. **Validation runner**
    - CLI: `python -m vibe_quant.validation run --run-id 42`
    - Loads strategy from SQLite, compiles to NautilusTrader Strategy
-   - Configures BacktestEngine with venue (including latency model), data, strategy
+   - Configures BacktestEngine with venue (including fill model; the latency preset applies to tick data only), data, strategy
    - Runs backtest, extracts results
    - Stores results in SQLite (backtest_results + trades tables)
    - Writes structured event log
@@ -1572,16 +1576,16 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 5. **Screening-to-validation consistency check**
    - Compare screening results vs validation results for same parameters
    - Report: which candidates improved/degraded when moving to full-fidelity execution
-   - Expected: validation results generally worse due to realistic fills, latency, and slippage
+   - Expected: validation results generally worse due to realistic fills, order-release timing, and slippage (latency preset applies to tick data only)
    - Flag candidates that degrade > 50% as "execution-sensitive"
 
 ### Acceptance Criteria
 
 - DSL compiles to valid NautilusTrader Strategy that runs without errors
-- Validation backtest produces realistic P&L including fees, slippage, funding, and latency effects
+- Validation backtest produces realistic P&L including fees, slippage, funding, and order-release timing effects
 - Position sizing correctly limits risk per trade and total exposure
 - Risk circuit breakers trigger at configured thresholds
-- Latency model visibly affects results (compare same strategy with zero vs retail latency)
+- Latency preset visibly affects tick-data results (bar validation releases orders on the instrument's own next 1m detail bar)
 - Structured event log captures all signals, orders, fills, latency, and risk checks
 
 ---

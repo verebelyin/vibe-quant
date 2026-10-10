@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
+from array import array
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 #: Finite stand-in for an infinite profit factor (profits but no losing trade).
 #: Every computed PF is clamped to this value so ``inf``/``NaN`` never reach the
@@ -52,6 +53,115 @@ def profit_factor(trade_pnls: Iterable[float]) -> float:
 _DAY_NS = 86_400 * 1_000_000_000
 
 
+def _daily_cash(
+    cash_events: Iterable[tuple[int, float]], start_ns: int, end_ns: int
+) -> tuple[int, list[float]]:
+    """``(first_day, per_day)``: balance deltas bucketed by UTC day over the window."""
+    first_day = start_ns // _DAY_NS
+    last_day = max(first_day, (end_ns - 1) // _DAY_NS)
+    n_days = last_day - first_day + 1
+    per_day = [0.0] * n_days
+    for ts, delta in cash_events:
+        idx = min(max(ts // _DAY_NS - first_day, 0), n_days - 1)
+        per_day[idx] += delta
+    return first_day, per_day
+
+
+@dataclass(frozen=True, slots=True)
+class DailyReturns:
+    """Dense daily return series: one value per consecutive UTC day.
+
+    ``values[i]`` is the return of day ``first_day + i`` (day index =
+    ``ts_ns // 86400e9``). Stored as ``array('d')`` (8 bytes/day, pickles as
+    raw bytes) because discovery ships it across the worker pool and keeps
+    one per gate-passing genome (bd vibe-quant-yul7u.24).
+    """
+
+    first_day: int
+    values: array[float]
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    @property
+    def end_day(self) -> int:
+        """Day index one past the last value."""
+        return self.first_day + len(self.values)
+
+    def without_first_day(self) -> DailyReturns:
+        """Drop day ``first_day`` (the return vs the starting balance)."""
+        return DailyReturns(self.first_day + 1, self.values[1:])
+
+
+def dense_daily_returns(
+    starting_balance: float,
+    cash_events: Iterable[tuple[int, float]],
+    start_ns: int,
+    end_ns: int,
+) -> DailyReturns | None:
+    """Every day's realized-balance return, INCLUDING the first day.
+
+    Same bucketing and arithmetic as :func:`daily_balance_returns`, so
+    ``dense_daily_returns(...).without_first_day()`` holds bit-identical values
+    to the dict NT's Sharpe is computed from -- plus day 0's return against
+    ``starting_balance`` (needed to concatenate sub-windows without losing the
+    boundary day). Returns ``None`` (fail closed) when the balance is ever
+    non-positive or a return is non-finite: such a series has no meaningful
+    Sharpe, and :func:`daily_balance_returns` would silently drop days.
+    """
+    if not starting_balance > 0:
+        return None
+    first_day, per_day = _daily_cash(cash_events, start_ns, end_ns)
+    out = array("d")
+    prev = starting_balance
+    balance = starting_balance
+    for i, delta in enumerate(per_day):
+        balance = starting_balance + delta if i == 0 else balance + delta
+        if not balance > 0:
+            return None
+        ret = balance / prev - 1.0
+        if not math.isfinite(ret):
+            return None
+        out.append(ret)
+        prev = balance
+    return DailyReturns(first_day, out)
+
+
+def concat_daily_returns(parts: Sequence[DailyReturns | None]) -> DailyReturns | None:
+    """Chain consecutive sub-window series; ``None`` unless they tile exactly.
+
+    Each part must start on the day after the previous part ends (no gap, no
+    duplicated boundary day); any missing part also gives ``None``.
+    """
+    if not parts or any(p is None for p in parts):
+        return None
+    chain = cast("list[DailyReturns]", list(parts))
+    out = array("d", chain[0].values)
+    for prev, nxt in zip(chain, chain[1:], strict=False):
+        if nxt.first_day != prev.end_day:
+            return None
+        out.extend(nxt.values)
+    return DailyReturns(chain[0].first_day, out)
+
+
+def pool_daily_returns(parts: Sequence[DailyReturns | None]) -> DailyReturns | None:
+    """Equal-weight mean of per-symbol series, aligned by DATE KEY.
+
+    Fails closed (``None``) on a missing/empty part, a part covering different
+    days (never truncated to a common length), or a non-finite value.
+    """
+    if not parts or any(p is None or len(p) == 0 for p in parts):
+        return None
+    chain = cast("list[DailyReturns]", list(parts))
+    first, n = chain[0].first_day, len(chain[0])
+    if any(p.first_day != first or len(p) != n for p in chain):
+        return None
+    pooled = np.mean(np.vstack([np.frombuffer(p.values, dtype=np.float64) for p in chain]), axis=0)
+    if not np.all(np.isfinite(pooled)):
+        return None
+    return DailyReturns(first, array("d", pooled.tobytes()))
+
+
 def daily_balance_returns(
     starting_balance: float,
     cash_events: Iterable[tuple[int, float]],
@@ -77,13 +187,8 @@ def daily_balance_returns(
         ``{day_start_ns: return}`` for every day after the first, the format
         NT's pyo3 ``SharpeRatio.calculate_from_returns`` expects.
     """
-    first_day = start_ns // _DAY_NS
-    last_day = max(first_day, (end_ns - 1) // _DAY_NS)
-    n_days = last_day - first_day + 1
-    per_day = [0.0] * n_days
-    for ts, delta in cash_events:
-        idx = min(max(ts // _DAY_NS - first_day, 0), n_days - 1)
-        per_day[idx] += delta
+    first_day, per_day = _daily_cash(cash_events, start_ns, end_ns)
+    n_days = len(per_day)
     returns: dict[int, float] = {}
     balance = starting_balance + per_day[0]
     for i in range(1, n_days):

@@ -384,7 +384,7 @@ export function BacktestLaunchForm() {
 
               {/* Latency preset */}
               <div className="space-y-2">
-                <Label htmlFor="latency-preset">Latency Preset</Label>
+                <Label htmlFor="latency-preset">Latency Preset (tick data only)</Label>
                 <Select value={latencyPreset} onValueChange={setLatencyPreset}>
                   <SelectTrigger id="latency-preset" className="w-full">
                     <SelectValue placeholder="None (no latency simulation)" />
@@ -398,6 +398,10 @@ export function BacktestLaunchForm() {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Validation releases orders on each symbol's next 1m bar; latency presets apply to
+                  tick data only.
+                </p>
               </div>
             </div>
           )}

@@ -23,6 +23,8 @@ from vibe_quant.data.catalog import (
 )
 from vibe_quant.data.downloader import (
     SUPPORTED_SYMBOLS,
+    MonthlyDownloadError,
+    RestDownloadError,
     download_funding_rates,
     download_monthly_klines,
     download_recent_klines,
@@ -183,12 +185,35 @@ def _update_funding_rates(symbol: str, archive: RawDataArchive, verbose: bool) -
     return inserted
 
 
+def _fetch_rest_klines(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+    failed_ranges: list[str],
+) -> list[tuple[Any, ...]]:
+    """REST klines; a page failing after retries is recorded, not swallowed.
+
+    Returns what was fetched before the failure (still worth archiving) and
+    appends "<from>..<to>" (UTC ISO) of the unfetched remainder to
+    *failed_ranges*.
+    """
+    try:
+        return download_recent_klines(symbol, interval, start_ms, end_ms)
+    except RestDownloadError as e:
+        lo = datetime.fromtimestamp(e.failed_from / 1000, tz=UTC).isoformat()
+        hi = datetime.fromtimestamp(end_ms / 1000, tz=UTC).isoformat()
+        failed_ranges.append(f"{lo}..{hi}")
+        logger.error("%s %s REST fetch FAILED from %s: %s", symbol, interval, lo, e)
+        return e.partial
+
+
 def update_symbol(
     symbol: str,
     archive: RawDataArchive | None = None,
     catalog: CatalogManager | None = None,
     verbose: bool = True,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Update data for a symbol by fetching missing candles.
 
     Detects last timestamp in archive, fetches gap via REST API,
@@ -215,7 +240,9 @@ def update_symbol(
     if catalog is None:
         catalog = CatalogManager()
 
-    counts: dict[str, int] = {"new_klines": 0}
+    counts: dict[str, Any] = {"new_klines": 0}
+    failed_ranges: list[str] = []
+    counts["failed_ranges"] = failed_ranges
 
     # Funding is independent of kline freshness: refresh it first so an
     # "already up to date" klines archive never leaves funding stale.
@@ -248,7 +275,7 @@ def update_symbol(
         print(f"{symbol}: fetching from {last_dt.isoformat()} to now...")
 
     # Download new klines via REST API
-    new_klines = download_recent_klines(symbol, "1m", start_time, now_ms)
+    new_klines = _fetch_rest_klines(symbol, "1m", start_time, now_ms, failed_ranges)
     new_klines = _drop_unclosed_klines(new_klines, now_ms)
     if new_klines:
         archive.insert_klines(symbol, "1m", new_klines, "binance_api")
@@ -299,7 +326,7 @@ def update_symbol(
 def update_all(
     symbols: list[str] | None = None,
     verbose: bool = True,
-) -> dict[str, dict[str, int]]:
+) -> dict[str, dict[str, Any]]:
     """Update data for all symbols.
 
     Args:
@@ -314,7 +341,7 @@ def update_all(
 
     archive = RawDataArchive()
     catalog = CatalogManager()
-    results: dict[str, dict[str, int]] = {}
+    results: dict[str, dict[str, Any]] = {}
 
     session_id = archive.create_download_session(
         symbols=symbols,
@@ -372,7 +399,7 @@ def ingest_symbol(
     archive: RawDataArchive | None = None,
     catalog: CatalogManager | None = None,
     verbose: bool = True,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Ingest historical data for a single symbol.
 
     Downloads data from Binance Vision, stores in archive, and writes to catalog.
@@ -387,7 +414,10 @@ def ingest_symbol(
         verbose: Print progress messages.
 
     Returns:
-        Dict with counts: {'klines': N, 'bars_1m': N, 'bars_5m': N, ...}
+        Dict with counts: {'klines': N, 'bars_1m': N, 'bars_5m': N, ...} plus
+        ``failed_months`` / ``unavailable_months`` (lists of "YYYY-MM"):
+        failed = download errored after retries (a hole to re-run), unavailable
+        = Binance Vision has no archive (404), not an error.
     """
     if symbol not in INSTRUMENT_CONFIGS:
         supported = sorted(INSTRUMENT_CONFIGS.keys())
@@ -398,7 +428,10 @@ def ingest_symbol(
     if catalog is None:
         catalog = CatalogManager()
 
-    counts: dict[str, int] = {"klines_fetched": 0, "klines_inserted": 0}
+    counts: dict[str, Any] = {"klines_fetched": 0, "klines_inserted": 0}
+    failed_months: list[str] = []
+    unavailable_months: list[str] = []
+    failed_ranges: list[str] = []
 
     if start_date is not None:
         effective_end = end_date or datetime.now(UTC)
@@ -424,7 +457,14 @@ def ingest_symbol(
 
     # Download and archive 1m klines (only missing/partial months)
     for year, month in to_download:
-        klines = download_monthly_klines(symbol, "1m", year, month)
+        try:
+            klines = download_monthly_klines(symbol, "1m", year, month)
+        except MonthlyDownloadError as e:
+            failed_months.append(f"{year}-{month:02d}")
+            logger.error("%s %d-%02d: monthly download FAILED: %s", symbol, year, month, e)
+            if verbose:
+                print(f"  {year}-{month:02d}: FAILED ({e})")
+            continue
         if klines:
             inserted = archive.insert_klines(symbol, "1m", klines, "binance_vision")
             counts["klines_fetched"] += len(klines)
@@ -432,11 +472,15 @@ def ingest_symbol(
             if verbose:
                 print(f"  {year}-{month:02d}: {len(klines)} klines ({inserted} new)")
         else:
+            unavailable_months.append(f"{year}-{month:02d}")
             if verbose:
-                print(f"  {year}-{month:02d}: no data available")
+                print(f"  {year}-{month:02d}: unavailable (not published)")
 
     counts["months_skipped"] = len(skipped)
-    counts["months_downloaded"] = len(to_download)
+    counts["months_downloaded"] = len(to_download) - len(failed_months)
+    counts["failed_months"] = failed_months
+    counts["unavailable_months"] = unavailable_months
+    counts["failed_ranges"] = failed_ranges
 
     if verbose:
         print(
@@ -445,6 +489,7 @@ def ingest_symbol(
         )
 
     # Fill current incomplete month via REST API
+    rest_start: datetime | None = None
     if months:
         last_year, last_month = months[-1]
         # Start of month after last complete month
@@ -452,7 +497,11 @@ def ingest_symbol(
             rest_start = datetime(last_year + 1, 1, 1, tzinfo=UTC)
         else:
             rest_start = datetime(last_year, last_month + 1, 1, tzinfo=UTC)
+    elif start_date is not None:
+        # Range lies inside one (incomplete) month: no monthly zips apply
+        rest_start = start_date
 
+    if rest_start is not None:
         rest_start_ms = int(rest_start.timestamp() * 1000)
         rest_end_ms = int(effective_end.timestamp() * 1000)
 
@@ -462,7 +511,9 @@ def ingest_symbol(
                     f"Fetching {rest_start.strftime('%Y-%m-%d')} to "
                     f"{effective_end.strftime('%Y-%m-%d')} via REST API..."
                 )
-            recent = download_recent_klines(symbol, "1m", rest_start_ms, rest_end_ms)
+            recent = _fetch_rest_klines(
+                symbol, "1m", rest_start_ms, rest_end_ms, failed_ranges
+            )
             recent = _drop_unclosed_klines(recent, int(datetime.now(UTC).timestamp() * 1000))
             if recent:
                 inserted = archive.insert_klines(symbol, "1m", recent, "binance_api")
@@ -567,7 +618,7 @@ def ingest_detail_data(
     archive: RawDataArchive | None = None,
     catalog: CatalogManager | None = None,
     verbose: bool = True,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Ingest sub-minute detail data for a symbol via REST API.
 
     Downloads 1s or 5s kline data from Binance REST API, archives it,
@@ -610,7 +661,7 @@ def ingest_detail_data(
     effective_end = end_date or datetime.now(UTC)
     start_ms = int(start_date.timestamp() * 1000)
     end_ms = int(effective_end.timestamp() * 1000)
-    counts: dict[str, int] = {"klines_fetched": 0, "klines_inserted": 0, "bars": 0}
+    counts: dict[str, Any] = {"klines_fetched": 0, "klines_inserted": 0, "bars": 0}
 
     if verbose:
         secs = _interval_to_seconds(interval)
@@ -622,7 +673,9 @@ def ingest_detail_data(
         )
 
     # Download via REST API (paginated)
-    klines = download_recent_klines(symbol, interval, start_ms, end_ms)
+    failed_ranges: list[str] = []
+    counts["failed_ranges"] = failed_ranges
+    klines = _fetch_rest_klines(symbol, interval, start_ms, end_ms, failed_ranges)
     klines = _drop_unclosed_klines(klines, int(datetime.now(UTC).timestamp() * 1000))
     if not klines:
         if verbose:
@@ -772,7 +825,7 @@ def _dir_size(path: Path) -> int:
 
 
 def _print_summary(
-    results: dict[str, dict[str, int]],
+    results: dict[str, dict[str, Any]],
     archive_path: Path | None,
     catalog_path: Path,
     total_fetched: int,
@@ -794,6 +847,12 @@ def _print_summary(
 
         print(f"\n  {sym}:")
         print(f"    Months: {downloaded} downloaded, {skipped} skipped")
+        if cnts.get("unavailable_months"):
+            print(f"    Unavailable (404): {', '.join(cnts['unavailable_months'])}")
+        if cnts.get("failed_months"):
+            print(f"    FAILED months (re-run ingest): {', '.join(cnts['failed_months'])}")
+        if cnts.get("failed_ranges"):
+            print(f"    FAILED REST ranges (re-run): {', '.join(cnts['failed_ranges'])}")
         print(f"    Klines: {fetched:,} fetched, {inserted:,} new")
         print(f"    Archive total: {bars_1m:,} 1m bars")
 
@@ -1117,13 +1176,23 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"Error: invalid date format (expected YYYY-MM-DD): {e}", file=sys.stderr)
             return 1
-        ingest_all(
+        ingest_results = ingest_all(
             symbols=symbols,
             years=args.years,
             start_date=start_date,
             end_date=end_date,
             verbose=True,
         )
+        failed = {
+            sym: [*cnts.get("failed_months", []), *cnts.get("failed_ranges", [])]
+            for sym, cnts in ingest_results.items()
+            if cnts.get("failed_months") or cnts.get("failed_ranges")
+        }
+        if failed:
+            print("\nERROR: downloads failed (holes in archive):", file=sys.stderr)
+            for sym, fm in failed.items():
+                print(f"  {sym}: {', '.join(fm)}", file=sys.stderr)
+            return 1
     elif args.command == "status":
         status = get_status()
         print("\nData Status:")
@@ -1153,11 +1222,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         archive = RawDataArchive()
         catalog = CatalogManager()
+        detail_failed: list[str] = []
         for symbol in symbols:
             print(f"\n{'=' * 50}")
             print(f"Detail data: {symbol} @ {args.interval}")
             print(f"{'=' * 50}")
-            ingest_detail_data(
+            detail_counts = ingest_detail_data(
                 symbol=symbol,
                 interval=args.interval,
                 start_date=start_date,
@@ -1166,10 +1236,24 @@ def main(argv: list[str] | None = None) -> int:
                 catalog=catalog,
                 verbose=True,
             )
+            detail_failed += [f"{symbol}: {r}" for r in detail_counts.get("failed_ranges", [])]
         archive.close()
+        if detail_failed:
+            print("\nERROR: downloads failed (holes in archive):", file=sys.stderr)
+            for line in detail_failed:
+                print(f"  {line}", file=sys.stderr)
+            return 1
     elif args.command == "update":
         symbols = [s.strip() for s in args.symbols.split(",")]
-        update_all(symbols=symbols, verbose=True)
+        update_results = update_all(symbols=symbols, verbose=True)
+        update_failed = [
+            f"{sym}: {r}" for sym, c in update_results.items() for r in c.get("failed_ranges", [])
+        ]
+        if update_failed:
+            print("\nERROR: downloads failed (holes in archive):", file=sys.stderr)
+            for line in update_failed:
+                print(f"  {line}", file=sys.stderr)
+            return 1
     elif args.command == "rebuild":
         rebuild_from_archive(verbose=True)
     elif args.command == "verify":

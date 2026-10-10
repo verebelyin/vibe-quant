@@ -38,6 +38,7 @@ from vibe_quant.paper.config import (
     is_valid_trader_id,
 )
 from vibe_quant.paper.persistence import COMMAND_FAILED, PaperCommandQueue, StatePersistence
+from vibe_quant.utils import log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ def _launch(
         json.dump(config_data, f, indent=2)
 
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/paper_{run_id}_{ts}.log"
+    log_file = str(log_dir() / f"paper_{run_id}_{ts}.log")
     command = [
         sys.executable,
         "-m",

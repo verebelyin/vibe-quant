@@ -197,12 +197,14 @@ def _run_single_metrics(
     DEFAULT_TIMEOUT_SECONDS, raises :class:`_ScreenTimeout`.
     """
     from vibe_quant.screening.nt_runner import NTScreeningRunner
+    from vibe_quant.screening.pipeline import resolve_parent_fill_ticks
 
     runner = NTScreeningRunner(
         dsl_dict=dsl_dict,
         symbols=DEFAULT_SYMBOLS,
         start_date=start_date,
         end_date=end_date,
+        fill_ticks=resolve_parent_fill_ticks(dsl_dict, DEFAULT_SYMBOLS, start_date, end_date),
     )
 
     with _alarm(DEFAULT_TIMEOUT_SECONDS):

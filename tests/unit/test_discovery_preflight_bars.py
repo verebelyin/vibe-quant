@@ -15,6 +15,7 @@ import pytest
 
 from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.discovery.config_check import DiscoveryConfigError
 from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.operators import _random_chromosome
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
@@ -258,14 +259,12 @@ def test_cross_window_missing_bars_fails_before_any_evaluation(
     assert holdout_fn.calls == 0
 
 
-def test_cross_window_range_error_does_not_abort_run(
+def test_cross_window_range_error_aborts_before_ga(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A config error in a gate-window helper is NOT missing data coverage.
-
-    The bar preflight skips the un-derivable windows and the gate fails closed
-    on the same error after the GA — preflight must not turn config problems
-    into early aborts (chief, 2026-10-09).
+    """A config error in a gate-window helper is NOT missing data coverage,
+    but it is still fatal: _check_gate_config aborts before any evaluation
+    (vibe-quant-zhcq7; was: fail closed after the GA).
     """
     fn = _RecordingBacktestFn()
     holdout_fn = _holdout_fn()
@@ -281,12 +280,11 @@ def test_cross_window_range_error_does_not_abort_run(
         holdout_backtest_fn=holdout_fn,
         backtest_fn_factory=lambda s, e: _RecordingBacktestFn(s, e),
     )
-    result = pipe.run()  # must NOT raise
-    assert fn.calls > 0  # the GA ran — no early abort
-    assert checked == [(_TRAIN[0], _TRAIN[1]), (_HOLDOUT[0], _HOLDOUT[1])]
-    # ...and the cross-window gate still fails closed after the GA.
-    assert result.top_strategies == []
-    assert any(r["stage"] == "cross_window" for r in result.guardrail_rejections)
+    with pytest.raises(DiscoveryConfigError, match="shorter than 7d"):
+        pipe.run()
+    assert fn.calls == 0
+    assert holdout_fn.calls == 0
+    assert checked == []  # aborted before the bar preflight too
 
 
 def test_wfa_window_missing_bars_fails_before_any_evaluation(
@@ -316,10 +314,11 @@ def test_wfa_window_missing_bars_fails_before_any_evaluation(
 
 
 def test_wfa_range_error_does_not_abort_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A config ValueError from the WFA range helper is NOT missing data.
+    """A config ValueError from the WFA range helper in the BAR PREFLIGHT is not data.
 
-    Same policy as the cross-window helper above: preflight skips the
-    un-derivable windows and the gate fails closed after the GA.
+    The preflight skips the un-derivable windows. (_check_gate_config runs
+    first and is the call that normally rejects a bad config; here it passes
+    and only the second call, the preflight's, raises.)
     """
     fn = _RecordingBacktestFn()
     holdout_fn = _holdout_fn()
@@ -332,7 +331,7 @@ def test_wfa_range_error_does_not_abort_run(monkeypatch: pytest.MonkeyPatch) -> 
     ) -> list[tuple[str, str]]:
         nonlocal calls
         calls += 1
-        if calls == 1:  # preflight only; the gate re-derives windows after the GA
+        if calls == 2:  # call 1 = _check_gate_config, 2 = preflight; gate re-derives later
             raise ValueError("WFA: config problem")
         return real_wfa(self, range_start, range_end)
 
@@ -366,7 +365,7 @@ def test_wfa_range_data_error_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     ) -> list[tuple[str, str]]:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:  # call 1 = _check_gate_config, 2 = bar preflight
             raise MissingBarDataError("WFA ranges hit missing bars")
         return real_wfa(self, range_start, range_end)
 
@@ -398,7 +397,7 @@ def test_cross_range_data_error_propagates(monkeypatch: pytest.MonkeyPatch) -> N
     def _raise_data_error_once(self: DiscoveryPipeline) -> list[tuple[int, str, str]]:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:  # call 1 = _check_gate_config, 2 = bar preflight
             raise MissingBarDataError("cross ranges hit missing bars")
         return real_cross(self)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -21,6 +21,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
     from vibe_quant.jobs.manager import JobInfo
@@ -43,9 +44,8 @@ WsMgr = Annotated[ConnectionManager, Depends(get_ws_manager)]
 def _read_progress_file(run_id: int) -> dict[str, object] | None:
     """Read progress JSON written by the discovery pipeline subprocess."""
     import json
-    from pathlib import Path
 
-    path = Path(f"logs/discovery_{run_id}_progress.json")
+    path = log_dir(create=False) / f"discovery_{run_id}_progress.json"
     if not path.exists():
         return None
     try:
@@ -155,6 +155,36 @@ def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
         )
 
 
+class _CliArgsError(Exception):
+    """Our own discovery argv failed to parse."""
+
+
+def _precheck_discovery_config(cli_args: list[str]) -> None:
+    """422 on a bad window/gate config; 500 if our own argv does not parse."""
+    from vibe_quant.discovery.__main__ import build_parser, plan_from_args
+    from vibe_quant.discovery.config_check import DiscoveryConfigError
+
+    parser = build_parser()
+
+    def _raise(message: str) -> NoReturn:
+        # argparse would print usage to the process-global stderr and exit
+        raise _CliArgsError(message)
+
+    parser.error = _raise  # type: ignore[method-assign]
+    try:
+        args = parser.parse_args(["--run-id", "0", *cli_args])
+    except (_CliArgsError, SystemExit) as exc:
+        # the API built a malformed command
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error building discovery command: {exc}",
+        ) from None
+    try:
+        plan_from_args(args)
+    except DiscoveryConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
     """Sync status for all running discovery jobs and return the still-running ones.
 
@@ -173,6 +203,78 @@ def _sync_discovery_statuses(jobs: BacktestJobManager) -> list[JobInfo]:
 
 
 # --- Launch ---
+
+
+def _discovery_cli_args(body: DiscoveryLaunchRequest, start_date: str, end_date: str) -> list[str]:
+    """CLI argv (everything after ``-m vibe_quant discovery``, minus ``--run-id``).
+
+    Single source for the real command AND the launch precheck, so the
+    precheck parses exactly what the subprocess will get.
+    """
+    symbols_str = ",".join(body.symbols)
+    timeframe = body.timeframes[0] if body.timeframes else "4h"
+    command = [
+        "--population-size",
+        str(body.population),
+        "--max-generations",
+        str(body.generations),
+        "--mutation-rate",
+        str(body.mutation_rate),
+        "--crossover-rate",
+        str(body.crossover_rate),
+        "--elite-count",
+        str(body.elite_count),
+        "--tournament-size",
+        str(body.tournament_size),
+        "--convergence-generations",
+        str(body.convergence_generations),
+        "--max-workers",
+        "4",
+        "--symbols",
+        symbols_str,
+        "--timeframe",
+        timeframe,
+        "--start-date",
+        start_date,
+        "--end-date",
+        end_date,
+    ]
+    if body.indicator_pool is not None:
+        command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
+    if body.direction is not None:
+        command.extend(["--direction", body.direction])
+    if body.eval_windows >= 1:
+        command.extend(["--eval-windows", str(body.eval_windows)])
+    if body.symbol_agg != "portfolio":
+        command.extend(["--symbol-agg", body.symbol_agg])
+    # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
+    # reach the subprocess to disable it.
+    command.extend(["--train-test-split", str(body.train_test_split)])
+    if body.cross_window_months:
+        # "=" form: a leading negative month ("-15,3") would parse as a flag
+        months = ",".join(str(m) for m in body.cross_window_months)
+        command.append(f"--cross-window-months={months}")
+        command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
+    if body.num_seeds > 1:
+        command.extend(["--num-seeds", str(body.num_seeds)])
+    if body.wfa_oos_step_days > 0:
+        command.extend(["--wfa-oos-step-days", str(body.wfa_oos_step_days)])
+        command.extend(["--wfa-min-consistency", str(body.wfa_min_consistency)])
+    if body.immigrant_fraction != 0.15:
+        command.extend(["--immigrant-fraction", str(body.immigrant_fraction)])
+    if body.entropy_threshold != 0.4:
+        command.extend(["--entropy-threshold", str(body.entropy_threshold)])
+    if not body.crowding_enabled:
+        command.append("--no-crowding")
+    if body.seed_run_id is not None:
+        command.extend(["--seed-from-run", str(body.seed_run_id)])
+    if body.seed is not None:
+        command.extend(["--seed", str(body.seed)])
+    if body.no_bootstrap_ci:
+        command.append("--no-bootstrap-ci")
+    if body.bootstrap_min_sharpe is not None:
+        command.extend(["--bootstrap-min-sharpe", str(body.bootstrap_min_sharpe)])
+    return command
 
 
 @router.post("/launch", response_model=DiscoveryJobResponse, status_code=201)
@@ -240,11 +342,15 @@ async def launch_discovery(
     if body.bootstrap_min_sharpe is not None:
         params["bootstrap_min_sharpe"] = body.bootstrap_min_sharpe
 
-    symbols_str = ",".join(body.symbols)
     timeframe = body.timeframes[0] if body.timeframes else "4h"
     today = datetime.now()
     start_date = body.start_date or (today - timedelta(days=365)).strftime("%Y-%m-%d")
     end_date = body.end_date or today.strftime("%Y-%m-%d")
+
+    # Precheck BEFORE any run row exists: parse the exact argv the subprocess
+    # will get and derive its windows (same code path as the CLI).
+    cli_args = _discovery_cli_args(body, start_date, end_date)
+    _precheck_discovery_config(cli_args)
 
     # Use strategy_id=None for discovery (no pre-existing strategy)
     run_id = state.create_backtest_run(
@@ -258,7 +364,7 @@ async def launch_discovery(
     )
 
     _ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/discovery_{run_id}_{_ts}.log"
+    log_file = str(log_dir() / f"discovery_{run_id}_{_ts}.log")
     command = [
         sys.executable,
         "-m",
@@ -266,64 +372,8 @@ async def launch_discovery(
         "discovery",
         "--run-id",
         str(run_id),
-        "--population-size",
-        str(body.population),
-        "--max-generations",
-        str(body.generations),
-        "--mutation-rate",
-        str(body.mutation_rate),
-        "--crossover-rate",
-        str(body.crossover_rate),
-        "--elite-count",
-        str(body.elite_count),
-        "--tournament-size",
-        str(body.tournament_size),
-        "--convergence-generations",
-        str(body.convergence_generations),
-        "--max-workers",
-        "4",
-        "--symbols",
-        symbols_str,
-        "--timeframe",
-        timeframe,
-        "--start-date",
-        start_date,
-        "--end-date",
-        end_date,
+        *cli_args,
     ]
-    if body.indicator_pool is not None:
-        command.extend(["--indicator-pool", ",".join(body.indicator_pool)])
-    if body.direction is not None:
-        command.extend(["--direction", body.direction])
-    if body.eval_windows >= 1:
-        command.extend(["--eval-windows", str(body.eval_windows)])
-    if body.symbol_agg != "portfolio":
-        command.extend(["--symbol-agg", body.symbol_agg])
-    # Always passed: the CLI default is a holdout (0.8), so an explicit 0 must
-    # reach the subprocess to disable it.
-    command.extend(["--train-test-split", str(body.train_test_split)])
-    if body.cross_window_months:
-        command.extend(["--cross-window-months", ",".join(str(m) for m in body.cross_window_months)])
-        command.extend(["--cross-window-min-sharpe", str(body.cross_window_min_sharpe)])
-    if body.num_seeds > 1:
-        command.extend(["--num-seeds", str(body.num_seeds)])
-    if body.wfa_oos_step_days > 0:
-        command.extend(["--wfa-oos-step-days", str(body.wfa_oos_step_days)])
-        command.extend(["--wfa-min-consistency", str(body.wfa_min_consistency)])
-    if body.immigrant_fraction != 0.15:
-        command.extend(["--immigrant-fraction", str(body.immigrant_fraction)])
-    if body.entropy_threshold != 0.4:
-        command.extend(["--entropy-threshold", str(body.entropy_threshold)])
-    if not body.crowding_enabled:
-        command.append("--no-crowding")
-    if body.seed_run_id is not None:
-        command.extend(["--seed-from-run", str(body.seed_run_id)])
-    if body.seed is not None:
-        command.extend(["--seed", str(body.seed)])
-    if body.no_bootstrap_ci:
-        command.append("--no-bootstrap-ci")
-    if body.bootstrap_min_sharpe is not None:
-        command.extend(["--bootstrap-min-sharpe", str(body.bootstrap_min_sharpe)])
 
     try:
         pid = jobs.start_job(run_id, "discovery", command, log_file=log_file)
@@ -784,7 +834,7 @@ def _launch_backtest_job(
 ) -> int:
     """Start a screening/validation subprocess for a backtest run."""
     _ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/{job_type}_{run_id}_{_ts}.log"
+    log_file = str(log_dir() / f"{job_type}_{run_id}_{_ts}.log")
     command = [
         sys.executable,
         "-m",

@@ -90,8 +90,8 @@ Strategy DSL (YAML) → Screening (NT simplified, parallel) → Overfitting Filt
 
 Single engine (NautilusTrader) with two modes:
 
-- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- models leverage + funding (from the archive; holes charged a flagged fallback rate), NOT liquidation. Fills land at the NEXT strategy-timeframe bar close (validation: ~1 min after signal via 1m detail) — fast-cycling strategies trade noticeably less in screening.
-- **Validation mode**: custom FillModel, LatencyModel (co-located 1ms → retail 200ms), full cost modeling
+- **Screening mode**: simplified fills, no latency, multiprocessing parallelism -- models leverage + funding (from the archive; holes charged a flagged fallback rate), NOT liquidation. Fills land at the close of the first 1m bar after the signal (the strategy's own fill tick), the same as validation; drawdown is still marked on strategy-timeframe bars.
+- **Validation mode**: custom FillModel, own-1m-detail-bar order release (latency presets apply to tick data only), full cost modeling
 
 ## Key Specifications
 
@@ -164,11 +164,13 @@ SPEC.md              # Authoritative implementation spec
 
 ## Discovery Pipeline Notes
 
+- **Semantics break 2026-10-10 (job 20261010-edge-engine):** screening fills on own-instrument fill ticks via the outbox (no more one-bar delay), open positions marked at end, Binance instrument specs (BTC min notional 50), multi-symbol validation no longer fills at the signal close. Screening/discovery scores and multi-symbol validation results before this are NOT comparable; single-symbol validation is unchanged.
+
 - **Audit 2026-10-02 (`docs/reviews/2026-10-02-deep-audit.md`, epic `vibe-quant-e70tl`) — critical/high fixed 2026-10-03 = SEMANTICS BREAK.** Screening/validation metrics changed (trade-based PF capped at 100, mark-to-market max DD, funding in screening, adaptive same-bar ordering, TP/SL fills at limit/trigger, sizing rounds down), discovery changed (worst-of-N eval windows, default 20% holdout used once as final gate, every gate fails closed → 0 champions + `guardrail_rejections`). Champions/journal scores before this are NOT comparable. Medium/low leftovers: bead `vibe-quant-e70tl.23`.
 
 - **Research diary:** `docs/discovery-journal.md` — experiment log with GA configs, metrics, and findings
 - Discovery and screening use **identical** code path (`NTScreeningRunner` → `StrategyCompiler`). Results match exactly *within one run* (champion → replay).
-- Validation uses custom fill model + latency + 1m detail. It clamps the run window to 1m coverage (recorded in `notes.data_window`) and FAILS without 1m data. Its consistency check flags screening→validation collapse/trade divergence against the same window (holdout-validated champions use the champion's holdout metrics).
+- Validation uses custom fill model + own-1m-detail-bar order release + 1m detail (the latency preset only selects the fill model on bar data). It clamps the run window to 1m coverage (recorded in `notes.data_window`) and FAILS without 1m data. Its consistency check flags screening→validation collapse/trade divergence against the same window (holdout-validated champions use the champion's holdout metrics).
 - **Bug fix `2944ad3`:** `pos.entry→pos.side` enum mismatch caused 155:1 trade ratio. All runs before this fix are invalid.
 - **Semantics break `11c5f00` (2026-07-09):** screening now feeds ONLY the strategy timeframe (an NT data-loading bug previously fed ALL timeframes incl. 1m, giving screening accidental intrabar fills). Discovery scores ≤ run 854 are not comparable with newer runs. **Validation is unchanged** — it loads 1m detail explicitly and reproduces historical results bit-for-bit.
 - **Compiler version hash:** stored in discovery notes for staleness detection. Changes when the indicator registry changes — check `bd recall discovery:compiler-hash` for the current value; recompute with `compiler_version_hash()`.
@@ -193,6 +195,8 @@ SPEC.md              # Authoritative implementation spec
 - `BacktestEngine.run()` stops all strategies when it ends — assert mid-run strategy state from a scheduled actor, not after `run()`.
 - Generated strategy modules are content-addressed (`{name}_{hash}`) — always use `module.__name__`, never rebuild the path from `dsl.name`.
 - ADX stays on the pandas path deliberately (NT has no true ADX — `DirectionalMovement.value` is always 0). Don't "optimize" it to `nt_class` without checking values.
+- **NT's `LatencyModel` releases queued orders venue-wide.** Never use it for bar data; the generated strategy's `command_release` outbox does per-instrument release.
+- **A `BacktestDataConfig` for an instrument missing from the catalog only warns.** Synthetic feeds need an explicit coverage check (`fill_ticks` does).
 
 ## Swarm board (every agent: read it, write to it)
 
@@ -220,12 +224,14 @@ checkout with full access: every brief names the absolute worktree and requires 
 
 Valid proofs that a change preserved correctness:
 - **Fixed-strategy eval before/after** (`scripts/agents/exactness_239.py`): one `NTScreeningRunner` call on a saved strategy must
-  return bit-identical metrics (strategy 239, BTCUSDT 2024-01-01..2026-03-17: sharpe
-  `1.3169239785208688`, 68 trades since the 2026-10-08 data refresh filled a BTC funding hole —
-  bars unchanged, funding only; `1.3165049716553048` after the 2026-10-03 audit fixes).
-- **Validation repeatability**: the same validation run twice is bit-identical (strategy 239
-  since the 2026-10-08 data refresh: sharpe `0.780452281957465`, 67 trades; `0.7802305953007851` after
-  the 2026-10-03 audit fixes; runs 868 == 870 before). Any drift = regression.
+  return bit-identical metrics (strategy 239, BTCUSDT 2024-01-01..2026-03-17: sharpe `0.7974716442710239`, 67 trades,
+  return `0.159784359286041`, profit factor `1.6359612484989312`, max drawdown `0.05716872229767501` since the 2026-10-10
+  fill-timing semantics break; was `1.3169239785208688`/68 before 2026-10-10). All five metrics are asserted.
+- **Validation repeatability**: the same validation run twice is bit-identical (strategy 239, BTCUSDT 2024-01-01..2026-03-17:
+  sharpe `0.780452281957465`, 67 trades — single-symbol validation is unchanged by the 2026-10-10 break; `0.7802305953007851`
+  after the 2026-10-03 audit fixes; runs 868 == 870 before). The two-symbol baseline (BTCUSDT+ETHUSDT, same window,
+  `exactness_239.py --validation-multi`) is sharpe `0.4956474374166028`, 164 trades, return `0.13753127107369148`,
+  profit factor `1.1990127778814956`, max drawdown `0.11707174708945581`, and is symbol-order-invariant. Any drift = regression.
 - **Within-run replay**: discovery champion → `/replay` matches exactly when the run used
   `eval_windows=1`.
 - Zero-tolerance unit tests against the reference implementation for ported math.

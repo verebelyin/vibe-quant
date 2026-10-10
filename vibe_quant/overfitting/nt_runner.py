@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from datetime import date
 
+    from vibe_quant.screening.pipeline import ParentFillTicks
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,6 +46,7 @@ class NTWFARunner:
         self._db_path = Path(db_path)
         self._dsl_dict: dict[str, object] = {}
         self._symbols: list[str] = []
+        self._ticks: ParentFillTicks | None = None
         self._resolve()
 
     def _resolve(self) -> None:
@@ -67,6 +70,9 @@ class NTWFARunner:
                 raise ValueError(msg)
             self._dsl_dict = json.loads(strat["dsl_config"])
             self._symbols = json.loads(run["symbols"])
+            from vibe_quant.screening.pipeline import ParentFillTicks
+
+            self._ticks = ParentFillTicks(self._dsl_dict, self._symbols)
         finally:
             conn.close()
 
@@ -98,11 +104,14 @@ class NTWFARunner:
         """Run a single NT screening backtest and return (sharpe, total_return)."""
         from vibe_quant.screening.nt_runner import NTScreeningRunner
 
+        assert self._ticks is not None
         runner = NTScreeningRunner(
             dsl_dict=self._dsl_dict,
             symbols=self._symbols,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
+            # resolved by this (parent) process, once per covered span
+            fill_ticks=self._ticks.get(start_date.isoformat(), end_date.isoformat()),
         )
         numeric_params: dict[str, float | int] = {
             k: v

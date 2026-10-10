@@ -25,6 +25,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.utils import log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ async def launch_screening(
     from datetime import datetime as dt
 
     _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/screening_{run_id}_{_ts}.log"
+    log_file = str(log_dir() / f"screening_{run_id}_{_ts}.log")
     command = [
         sys.executable,
         "-m",
@@ -162,7 +163,7 @@ async def launch_validation(
     from datetime import datetime as dt
 
     _ts = dt.now(UTC).strftime("%Y%m%d_%H%M%S")
-    log_file = f"logs/validation_{run_id}_{_ts}.log"
+    log_file = str(log_dir() / f"validation_{run_id}_{_ts}.log")
     command = [
         sys.executable,
         "-m",

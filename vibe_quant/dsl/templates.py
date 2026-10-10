@@ -17,6 +17,11 @@ paper/live trading, so the order-management rules here are money-path code
 * ``on_start`` adopts an already-open position and re-arms missing SL/TP
   (restart recovery);
 * a trailing stop never loosens, including the first update after entry.
+
+Every venue command goes through ``_send_command`` (vibe-quant-yul7u.9): with
+``command_release`` set (backtests only) it is queued in a per-instrument
+outbox and sent on this strategy's OWN next datum -- NT's venue-wide latency
+release let another symbol's data event release it at a stale book.
 """
 
 from __future__ import annotations
@@ -58,7 +63,7 @@ ON_EVENT_LINES: tuple[str, ...] = _lines(
                 self._position_open = False
                 self._position_side = None
                 self._trailing_best_sl = None
-                self.cancel_all_orders(self.instrument_id)
+                self._send_command(self.cancel_all_orders, self.instrument_id)
         elif isinstance(event, OrderFilled):
             if event.instrument_id == self.instrument_id:
                 self._sync_position_state()
@@ -68,7 +73,14 @@ ON_EVENT_LINES: tuple[str, ...] = _lines(
 ON_STOP_LINES: tuple[str, ...] = _lines(
     '''
     def on_stop(self) -> None:
-        """Strategy shutdown: cancel orders and close positions."""
+        """Strategy shutdown: cancel orders and close positions.
+
+        Outbox mode sends nothing: end-of-run commands stay unsent, like latency
+        never releasing end-of-run closes; open positions are marked at the last
+        price by the metrics layer.
+        """
+        if getattr(self.config, 'command_release', ''):
+            return
         self.cancel_all_orders(self.instrument_id)
         self.close_all_positions(self.instrument_id)
     '''
@@ -83,6 +95,7 @@ ON_RESET_LINES: tuple[str, ...] = _lines(
         self._pending_validation_action = None
         self._trailing_best_sl = None
         self._rearm_protection = False
+        self._outbox = []
     '''
 )
 
@@ -94,6 +107,42 @@ ON_START_RECOVERY_LINES: tuple[str, ...] = _lines(
     self._sync_position_state()
     if self._position_open and not self._ensure_protection():
         self._rearm_protection = True
+    '''
+)
+
+# Inserted in the generated on_start right after the bar subscriptions.
+ON_START_OUTBOX_LINES: tuple[str, ...] = _lines(
+    '''
+    # Command outbox: queued commands are released by this instrument's OWN
+    # next trade tick / detail bar, never by another symbol's data event.
+    _release = getattr(self.config, 'command_release', '')
+    if _release and getattr(self.config, 'execution_delay_probability', 0.0) > 0:
+        # The outbox IS the execution delay; a one-bar defer on top double-delays.
+        raise ValueError("command_release needs execution_delay_probability=0")
+    if _release == "trade_tick":
+        self.subscribe_trade_ticks(self.instrument_id)
+    elif _release == "bar":
+        _bar_type = getattr(self.config, 'command_release_bar_type', '')
+        if not _bar_type:
+            raise ValueError("command_release='bar' needs command_release_bar_type")
+        self._command_release_bar_type = BarType.from_str(_bar_type)
+        if self._command_release_bar_type.instrument_id != self.instrument_id:
+            raise ValueError(
+                f"command_release_bar_type {self._command_release_bar_type} is not "
+                f"for {self.instrument_id}"
+            )
+        self.subscribe_bars(self._command_release_bar_type)
+    elif _release:
+        raise ValueError(f"Unknown command_release {_release!r}")
+    '''
+)
+
+ON_TRADE_TICK_LINES: tuple[str, ...] = _lines(
+    '''
+    def on_trade_tick(self, tick: TradeTick) -> None:
+        """Command outbox: this instrument's own trade tick releases queued commands."""
+        if tick.instrument_id == self.instrument_id:
+            self._flush_outbox(tick.ts_init)
     '''
 )
 
@@ -130,14 +179,42 @@ PTA_FEED_LINES: tuple[str, ...] = (
 ORDER_METHODS_LINES: tuple[str, ...] = _lines(
     '''
     def _has_pending_entry(self) -> bool:
-        """True while an entry (non-reduce-only) order of this strategy is open or in flight."""
+        """True while an entry (non-reduce-only) order of this strategy is open, in
+        flight or queued in the command outbox."""
         for order in self.cache.orders_open(instrument_id=self.instrument_id, strategy_id=self.id):
             if not order.is_reduce_only:
                 return True
         for order in self.cache.orders_inflight(instrument_id=self.instrument_id, strategy_id=self.id):
             if not order.is_reduce_only:
                 return True
+        for _ts, fn, args in self._outbox:
+            if fn == self.submit_order and not args[0].is_reduce_only:
+                return True
         return False
+
+    def _send_command(self, fn, *args) -> None:
+        """Send a venue command (submit/cancel) now, or queue it in the outbox.
+
+        command_release "" (live, paper, 1m strategies) sends immediately.
+        Otherwise (queue ts, fn, args) waits for _flush_outbox on this
+        instrument's own next datum.
+        """
+        if getattr(self.config, 'command_release', ''):
+            self._outbox.append((self.clock.timestamp_ns(), fn, args))
+            return
+        fn(*args)
+
+    def _flush_outbox(self, ts: int) -> None:
+        """Send queued commands with queue ts < ts, in order (strict: a datum at
+        the queue ts itself never releases)."""
+        if not self._outbox:
+            return
+        ready = [cmd for cmd in self._outbox if cmd[0] < ts]
+        if not ready:
+            return
+        self._outbox = [cmd for cmd in self._outbox if cmd[0] >= ts]
+        for _ts, fn, args in ready:
+            fn(*args)
 
     def _submit_long_entry(self, bar: Bar) -> None:
         """Submit a long market entry (SL/TP follow on PositionOpened)."""
@@ -153,7 +230,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
             quantity=qty,
             time_in_force=TimeInForce.IOC,
         )
-        self.submit_order(order)
+        self._send_command(self.submit_order, order)
         # SL/TP orders are submitted from on_event(PositionOpened) after fill
 
     def _submit_short_entry(self, bar: Bar) -> None:
@@ -170,7 +247,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
             quantity=qty,
             time_in_force=TimeInForce.IOC,
         )
-        self.submit_order(order)
+        self._send_command(self.submit_order, order)
         # SL/TP orders are submitted from on_event(PositionOpened) after fill
 
     def _submit_exit(self, bar: Bar) -> None:
@@ -179,7 +256,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
             return
 
         # Cancel existing SL/TP orders
-        self.cancel_all_orders(self.instrument_id)
+        self._send_command(self.cancel_all_orders, self.instrument_id)
 
         # Determine exit side and get actual position quantity from cache
         exit_side = OrderSide.SELL if self._position_side == OrderSide.BUY else OrderSide.BUY
@@ -202,7 +279,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
             time_in_force=TimeInForce.IOC,
             reduce_only=True,
         )
-        self.submit_order(order)
+        self._send_command(self.submit_order, order)
 
     def _sl_config(self, is_long: bool) -> tuple[str, str]:
         """(stop-loss type, config field prefix), per-direction override first."""
@@ -247,7 +324,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                 time_in_force=TimeInForce.GTC,
                 reduce_only=True,
             )
-            self.submit_order(sl_order)
+            self._send_command(self.submit_order, sl_order)
 
         # Calculate and submit take-profit order
         tp_price = self._calculate_tp_price(entry_price, is_long)
@@ -263,7 +340,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                 time_in_force=TimeInForce.GTC,
                 reduce_only=True,
             )
-            self.submit_order(tp_order)
+            self._send_command(self.submit_order, tp_order)
 
     def _protective_orders(self) -> list:
         """Live reduce-only SL (stop-market) / TP (limit) orders of this strategy."""
@@ -291,7 +368,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         for order in orders:
             if order.leaves_qty == pos.quantity:
                 continue
-            self.cancel_order(order)
+            self._send_command(self.cancel_order, order)
             if order.order_type == OrderType.STOP_MARKET:
                 replacement = self.order_factory.stop_market(
                     instrument_id=self.instrument_id,
@@ -310,7 +387,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                     time_in_force=TimeInForce.GTC,
                     reduce_only=True,
                 )
-            self.submit_order(replacement)
+            self._send_command(self.submit_order, replacement)
 
     def _ensure_protection(self) -> bool:
         """Restart recovery: give an adopted open position its SL/TP.
@@ -399,7 +476,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         for order in self.cache.orders_open(venue=self.instrument_id.venue):
             if (order.instrument_id == self.instrument_id
                     and order.is_reduce_only and order.order_type == OrderType.STOP_MARKET):
-                self.cancel_order(order)
+                self._send_command(self.cancel_order, order)
         positions = self.cache.positions_open(venue=self.instrument_id.venue)
         for pos in positions:
             if pos.instrument_id == self.instrument_id and pos.is_open:
@@ -412,7 +489,7 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
                     time_in_force=TimeInForce.GTC,
                     reduce_only=True,
                 )
-                self.submit_order(sl_order)
+                self._send_command(self.submit_order, sl_order)
                 break
 
     def _calculate_tp_price(self, entry_price: float, is_long: bool) -> float | None:

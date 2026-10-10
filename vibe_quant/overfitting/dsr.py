@@ -33,6 +33,12 @@ import math
 from dataclasses import dataclass
 from functools import lru_cache
 from statistics import NormalDist
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # Euler-Mascheroni constant
 EULER_MASCHERONI: float = 0.5772156649015329
@@ -53,6 +59,48 @@ def deannualize_sharpe(
     in the backtest window. Uses iid sqrt-time scaling.
     """
     return annualized_sharpe / math.sqrt(periods_per_year)
+
+
+def daily_sharpe_inputs(returns: Sequence[float] | np.ndarray) -> tuple[float, float, float]:
+    """``(sharpe, skewness, kurtosis)`` of a daily return series, all per-day.
+
+    ``sharpe`` is mean / std(ddof=1) -- NT's ``SharpeRatio`` before its
+    sqrt(252) annualization -- so it pairs with ``num_observations =
+    len(returns)``. Moments are the bias-corrected sample skewness (G1) and
+    FULL kurtosis (G2 + 3, floored at 1), i.e. scipy ``skew(bias=False)`` and
+    ``kurtosis(bias=False) + 3``. These are moments of the SAME series the
+    Sharpe comes from (DSR used to mix a daily Sharpe with per-trade moments).
+    A flat or too-short series gives ``(0.0, 0.0, 3.0)``.
+    """
+    x = np.asarray(returns, dtype=np.float64)
+    n = len(x)
+    if n < 4:
+        return 0.0, 0.0, 3.0
+    std = float(x.std(ddof=1))
+    if not std > 0 or not math.isfinite(std):
+        return 0.0, 0.0, 3.0
+    sharpe = float(x.mean()) / std
+    d = x - x.mean()
+    m2 = float(np.mean(d**2))
+    m3 = float(np.mean(d**3))
+    m4 = float(np.mean(d**4))
+    skew = math.sqrt(n * (n - 1)) / (n - 2) * m3 / m2**1.5
+    excess = ((n + 1) * (n - 1) * m4) / ((n - 2) * (n - 3) * m2**2) - 3.0 * (n - 1) ** 2 / (
+        (n - 2) * (n - 3)
+    )
+    return sharpe, skew, max(1.0, excess + 3.0)
+
+
+def lag1_autocorrelation(returns: Sequence[float] | np.ndarray) -> float:
+    """Lag-1 autocorrelation of a series (0.0 when flat or shorter than 3)."""
+    x = np.asarray(returns, dtype=np.float64)
+    if len(x) < 3:
+        return 0.0
+    d = x - x.mean()
+    denom = float(np.dot(d, d))
+    return float(np.dot(d[:-1], d[1:])) / denom if denom > 0 else 0.0
+
+
 # Pre-compute 1/sqrt(2) for fast normal CDF
 _INV_SQRT2: float = 1.0 / math.sqrt(2.0)
 # Standard normal for inverse CDF (stdlib, no scipy needed)

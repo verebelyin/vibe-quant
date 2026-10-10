@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-10: Semantics break — per-instrument fill release, Binance specs, multi-symbol validation fix (job 20261010-edge-engine)
+
+Screening/discovery no longer fill one strategy bar late: each strategy queues orders in a per-instrument outbox and releases them on its own next price update (screening: two synthetic 1m fill ticks per bar, `command_release="trade_tick"`; validation: its own next 1m detail bar). Open screening positions are now marked at run end, symbols are sorted, and instrument specs match Binance (BTC min_notional 50, ETH 20, SOL size step 0.01) with a rebuilt catalog. NT's `LatencyModel` is gone from bar data — it released orders venue-wide, so in multi-symbol runs the 2nd symbol filled at the signal-bar close.
+
+Screening 239 (BTCUSDT 2024-01-01..2026-03-17) moved from sharpe 1.3169239785208688 / 68 trades to 0.7974716442710239 / 67 (return 0.159784359286041, PF 1.6359612484989312, max DD 0.05716872229767501). The churner case made the old bug obvious: screening claimed 3.94 Sharpe on 46 trades vs validation 0.19 on 87; now screening trade counts match validation. Multi-symbol validation 239 BTC+ETH: 0.8079177391348477/163 was inflated by signal-close fills; the fixed value is 0.4956474374166028/164 (symbol-order-invariant). Single-symbol validation is unchanged: 0.780452281957465 / 67.
+
+**Same job, separate perf change (bit-identical):** exact recurrence memo for ADX/KAMA/FRAMA/MACD; strategy 239 screening eval roughly halved on an idle machine.
+
+**Lesson:** screening/discovery scores and multi-symbol validation results from before 2026-10-10 are NOT comparable across this break; single-symbol validation is.
+
+---
+
 ## 2026-10-09: Run 878 — first discovery with the worst-mode soft GA score (0 champions, statistically insignificant)
 
 Config: ETH/SOL/BNB 4h, 2022-06-01..2026-09-30 (train → 2025-11-17, holdout 20% after), `--symbol-agg worst --eval-windows 1 --seed 20261009`, pool TREND_ENSEMBLE/DONCHIAN/ADX/SQUEEZE_RATIO/SQUEEZE_MOM/ROC, pop 16 × 6, all default gates. compiler 2e14137b8370 + vibe-quant-ox73t soft score. Catalog rebuilt without partial bars first (exactness 239 IDENTICAL).

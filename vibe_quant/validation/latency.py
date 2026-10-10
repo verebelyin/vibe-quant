@@ -9,7 +9,15 @@ from nautilus_trader.config import LatencyModelConfig
 
 
 class LatencyPreset(StrEnum):
-    """Latency preset for execution simulation."""
+    """Latency preset for execution simulation (tick data only).
+
+    On bar data a LatencyModel cannot express sub-bar delay, and NT releases
+    pending commands venue-wide on the next datum of ANY instrument. So bar
+    validation with detail data runs no LatencyModel: each strategy releases
+    its orders on its own next detail bar, and the preset only selects the
+    fill model (bd vibe-quant-yul7u.11). The millisecond values take effect
+    only on tick data.
+    """
 
     COLOCATED = "co_located"
     NEAR_EXCHANGE = "near_exchange"

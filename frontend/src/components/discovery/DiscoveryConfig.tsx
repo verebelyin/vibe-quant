@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
+import { formatApiErrorDetail } from "./apiErrorDetail";
 
 export interface DiscoveryConvergenceConfig {
   convergenceWindow: number;
@@ -220,10 +221,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           if (err instanceof Error) {
             message = err.message;
           }
-          // Try to extract detail from Axios-style error response
-          const axiosErr = err as { response?: { data?: { detail?: string }; status?: number } };
-          if (axiosErr.response?.data?.detail) {
-            message = axiosErr.response.data.detail;
+          // The API client throws an ApiError carrying FastAPI's parsed body;
+          // prefer its `detail` (string or pydantic list) over the status line.
+          const detail = formatApiErrorDetail(err);
+          if (detail) {
+            message = detail;
           }
           toast.error("Discovery launch failed", {
             description: message,

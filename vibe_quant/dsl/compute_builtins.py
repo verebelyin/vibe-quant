@@ -158,13 +158,15 @@ def compute_volsma(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     return cast("pd.Series", _ta().sma(df["volume"], length=int_param(params, "period", 20)))
 
 
-def _rma_np(x: Any, length: int) -> Any:
-    """Port of ``pandas_ta_classic.rma`` (SMA-seeded Wilder smoothing).
+def _rma_consts(length: int) -> tuple[float, float]:
+    base = 1.0 / length
+    com = (1.0 - base) / base  # pandas get_center_of_mass(alpha)
+    alpha = 1.0 / (1.0 + com)
+    return alpha, 1.0 - alpha
 
-    Operation-for-operation with pandas: NaN-skipping seed mean (sum of
-    NaN->0 slots / non-NaN count), then ``ewm(alpha, adjust=False)`` with
-    ``ignore_na=False`` as in pandas' cython ``ewm`` (alpha re-derived via
-    com, interior NaN decays the old weight). Requires ``len(x) >= length``.
+
+def _rma_step(state: Any, inputs: Any, i: int) -> tuple[float, Any]:
+    """One pandas ``ewm(adjust=False, ignore_na=False)`` step (shared by full and extend paths).
 
     The blend uses a fused multiply-add: pandas' arm64 wheel compiles
     ``old_wt * weighted + new_wt * cur`` with FMA contraction (verified bitwise
@@ -173,8 +175,24 @@ def _rma_np(x: Any, length: int) -> Any:
     """
     from math import fma
 
+    weighted, old_wt, alpha, factor = state
+    cur = float(inputs[0][i])
+    if weighted == weighted:
+        old_wt *= factor  # interior NaN decays the old weight
+        if cur == cur:
+            if weighted != cur:
+                weighted = fma(old_wt, weighted, alpha * cur)
+                weighted /= old_wt + alpha
+            old_wt = 1.0
+    elif cur == cur:
+        weighted = cur
+    return weighted, (weighted, old_wt, alpha, factor)
+
+
+def _rma_full(inputs: Any, length: int) -> tuple[Any, Any]:
     import numpy as np
 
+    x = inputs[0]
     n = len(x)
     seed_win = x[:length]
     nan_mask = np.isnan(seed_win)
@@ -184,42 +202,57 @@ def _rma_np(x: Any, length: int) -> Any:
     for i in range(length - 1):
         vals[i] = float("nan")
     vals[length - 1] = seed
-    base = 1.0 / length
-    com = (1.0 - base) / base  # pandas get_center_of_mass(alpha)
-    alpha = 1.0 / (1.0 + com)
-    factor = 1.0 - alpha
-    s = length - 1
+    alpha, factor = _rma_consts(length)
     if seed == seed and not np.isnan(x[length:]).any():
         # Fast path (no NaN after the seed): every step is an observation with
-        # old_wt == factor, so the general loop below reduces to this recurrence.
+        # old_wt == factor, so _rma_step reduces to this recurrence (same
+        # arithmetic; state after an observation has old_wt == 1.0).
+        from math import fma
+
         denom = factor + alpha
         w = seed
-        out = [float("nan")] * s
-        out.append(w)
-        append = out.append
+        fast = [float("nan")] * (length - 1)
+        fast.append(w)
+        append = fast.append
         for c in vals[length:]:
             if w != c:
                 w = fma(factor, w, alpha * c) / denom
             append(w)
-        return np.array(out, dtype=np.float64)
+        return np.array(fast, dtype=np.float64), (w, 1.0, alpha, factor)
+    seeded = (np.array(vals, dtype=np.float64),)
     out = [float("nan")] * n
-    weighted = vals[0]
-    old_wt = 1.0
-    out[0] = weighted
+    state: Any = (vals[0], 1.0, alpha, factor)
+    out[0] = vals[0]
     for i in range(1, n):
-        cur = vals[i]
-        obs = cur == cur
-        if weighted == weighted:
-            old_wt *= factor
-            if obs:
-                if weighted != cur:
-                    weighted = fma(old_wt, weighted, alpha * cur)
-                    weighted /= old_wt + alpha
-                old_wt = 1.0
-        elif obs:
-            weighted = cur
-        out[i] = weighted
-    return np.array(out, dtype=np.float64)
+        out[i], state = _rma_step(state, seeded, i)
+    return np.array(out, dtype=np.float64), state
+
+
+def _rma_np(x: Any, length: int) -> Any:
+    """Port of ``pandas_ta_classic.rma`` (SMA-seeded Wilder smoothing).
+
+    Operation-for-operation with pandas: NaN-skipping seed mean (sum of
+    NaN->0 slots / non-NaN count), then ``ewm(alpha, adjust=False)`` with
+    ``ignore_na=False`` as in pandas' cython ``ewm`` (alpha re-derived via
+    com, interior NaN decays the old weight). Requires ``len(x) >= length``.
+
+    The per-bar rebuild is memoized on the actual input array: when ``x`` is a
+    previously seen input plus one appended bar, only one :func:`_rma_step` runs
+    (``prefix_memo``; kill switch ``VIBE_QUANT_PTA_MEMO=0``). A miss recomputes
+    fully through the same step helper.
+    """
+    import numpy as np
+
+    from vibe_quant.dsl.prefix_memo import memo_run
+
+    x = np.asarray(x, dtype=np.float64)
+
+    def full(inputs: Any) -> tuple[Any, Any]:
+        return _rma_full(inputs, length)
+
+    if len(x) <= length:  # seed window not complete before the appended element
+        return full((x,))[0]
+    return memo_run(("rma", length), (x,), full, _rma_step)
 
 
 def _adx_pandas(df: pd.DataFrame, length: int) -> pd.Series:
@@ -321,15 +354,8 @@ def _adx_port(df: pd.DataFrame, length: int) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 
-def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
-    """MACD — returns ``{"macd", "signal", "histogram"}`` keyed series.
-
-    pandas-ta-classic's ``ta.macd`` returns a DataFrame with columns in the
-    order ``[MACD, histogram, signal]`` (iloc 0/1/2).
-    """
-    fast = int_param(params, "fast_period", 12)
-    slow = int_param(params, "slow_period", 26)
-    signal = int_param(params, "signal_period", 9)
+def _macd_ta(df: pd.DataFrame, fast: int, slow: int, signal: int) -> dict[str, pd.Series]:
+    """Reference path: the pandas-ta-classic MACD columns (the pre-port code)."""
     result = _ta().macd(df["close"], fast=fast, slow=slow, signal=signal)
     if result is None:
         empty = nan_like(df)
@@ -339,6 +365,144 @@ def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Se
         "histogram": result.iloc[:, 1],
         "signal": result.iloc[:, 2],
     }
+
+
+def _ema_step(state: Any, inputs: Any, i: int) -> tuple[float, Any]:
+    """One ``_ema_aligned`` recurrence step; ``state = (k, prev)``, no FMA."""
+    k, prev = state
+    v = k * float(inputs[0][i]) + (1 - k) * prev
+    return v, (k, v)
+
+
+def _ema_aligned_np(arr: Any, period: int, seed_end: int) -> Any:
+    """Port of ``pandas_ta_classic.momentum.macd._ema_aligned``.
+
+    NumPy ``.mean()`` seed over the ``period`` bars ending at ``seed_end``, then
+    ``k*x + (1-k)*prev`` on plain floats (Python never contracts to FMA, like the
+    library's scalar loop). Memoized on the actual input array (``prefix_memo``).
+    """
+    import numpy as np
+
+    from vibe_quant.dsl.prefix_memo import memo_run
+
+    m = len(arr)
+    k = 2.0 / (period + 1)
+
+    def full(inputs: Any) -> tuple[Any, Any]:
+        x = inputs[0]
+        out = np.full(m, np.nan)
+        if seed_end - period + 1 < 0 or seed_end >= m:
+            return out, (k, float("nan"))
+        prev = float(x[seed_end - period + 1 : seed_end + 1].mean())
+        out[seed_end] = prev
+        k1 = 1 - k
+        res: list[float] = []
+        append = res.append
+        for c in x[seed_end + 1 :].tolist():
+            prev = k * c + k1 * prev
+            append(prev)
+        out[seed_end + 1 :] = res
+        return out, (k, prev)
+
+    # an extension is only valid once the seed was placed before the new bar
+    if m - 1 <= seed_end or seed_end - period + 1 < 0:
+        return full((arr,))[0]
+    return memo_run(("ema_aligned", period, seed_end), (arr,), full, _ema_step)
+
+
+def _macd_port(close: pd.Series, fast: int, slow: int, signal: int) -> dict[str, pd.Series]:
+    """Numpy port of ``ta.macd`` (default, non-talib, non-asmode path).
+
+    Mirrors the library: non-positive periods -> 12/26/9, slow<fast swapped,
+    fast/slow EMAs seeded at their own lookback, signal EMA seeded at
+    ``slow-1+signal-1`` over the MACD line. See
+    ``tests/unit/test_plugins/test_macd_exactness.py`` (zero tolerance).
+    """
+    import numpy as np
+    import pandas as pd
+
+    fast = fast if fast > 0 else 12
+    slow = slow if slow > 0 else 26
+    signal = signal if signal > 0 else 9
+    if slow < fast:
+        fast, slow = slow, fast
+    c = close.to_numpy(dtype=np.float64)
+    fast_ema = _ema_aligned_np(c, fast, fast - 1)
+    slow_ema = _ema_aligned_np(c, slow, slow - 1)
+    macd = fast_ema - slow_ema
+    sig = _ema_aligned_np(macd, signal, slow - 1 + signal - 1)
+    hist = macd - sig
+    idx = close.index
+    props = f"_{fast}_{slow}_{signal}"
+    return {
+        "macd": pd.Series(macd, index=idx, name=f"MACD{props}"),
+        "histogram": pd.Series(hist, index=idx, name=f"MACDh{props}"),
+        "signal": pd.Series(sig, index=idx, name=f"MACDs{props}"),
+    }
+
+
+@cache
+def _macd_port_ok() -> bool:
+    """One-shot runtime check that the numpy MACD port is bit-identical here.
+
+    Compared on fixed vectors (random walk, flat stretch, NaN gap; normal and
+    swapped periods) against ``ta.macd``; any mismatch falls back to it.
+    """
+    import logging
+
+    import numpy as np
+    import pandas as pd
+
+    from vibe_quant.dsl import prefix_memo
+
+    rng = np.random.RandomState(4321)
+    walk = 100.0 + np.cumsum(rng.randn(150) * 0.5)
+    flat = walk.copy()
+    flat[50:80] = flat[50]
+    gap = walk.copy()
+    gap[100] = np.nan
+    ok = True
+    # memo off: the check neither reads nor writes the shared (e.g. ADX) entries
+    was_enabled = prefix_memo._enabled
+    prefix_memo._enabled = False
+    try:
+        for arr in (walk, flat, gap):
+            df = pd.DataFrame({"close": arr})
+            for fast, slow, sig in ((12, 26, 9), (30, 8, 5), (5, 5, 3)):
+                ref = _macd_ta(df, fast, slow, sig)
+                got = _macd_port(df["close"], fast, slow, sig)
+                for name in ref:
+                    ok = ok and bool(
+                        np.array_equal(got[name].to_numpy(), ref[name].to_numpy(), equal_nan=True)
+                    )
+    finally:
+        prefix_memo._enabled = was_enabled
+    if not ok:
+        logging.getLogger(__name__).warning(
+            "numpy MACD port differs from pandas-ta here; falling back to ta.macd"
+        )
+    return ok
+
+
+def compute_macd(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
+    """MACD — returns ``{"macd", "signal", "histogram"}`` keyed series.
+
+    Bit-identical numpy port of ``ta.macd`` (whose columns are ordered
+    ``[MACD, histogram, signal]``); falls back to it for non-float64 close or if
+    the one-shot self-check (``_macd_port_ok``) fails. Series shorter than the
+    library's minimum length give all-NaN.
+    """
+    fast = int_param(params, "fast_period", 12)
+    slow = int_param(params, "slow_period", 26)
+    signal = int_param(params, "signal_period", 9)
+    close = df["close"]
+    if close.dtype != "float64" or not _macd_port_ok():
+        return _macd_ta(df, fast, slow, signal)
+    need = max(fast if fast > 0 else 12, slow if slow > 0 else 26, signal if signal > 0 else 9)
+    if len(close) < need:
+        empty = nan_like(df)
+        return {"macd": empty, "histogram": empty, "signal": empty}
+    return _macd_port(close, fast, slow, signal)
 
 
 def compute_stoch(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
