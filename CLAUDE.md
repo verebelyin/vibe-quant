@@ -220,6 +220,15 @@ Large jobs (many beads, research campaigns): `orchestrate` skill + [`docs/orches
 Read `docs/orchestration/cheap-agents.md` § Dispatch protocol first. Children have no cwd and start in the MAIN
 checkout with full access: every brief names the absolute worktree and requires `cd <worktree> &&` on each command.
 
+## Agent speed rules (measured 2026-10-11 on job 20261010-backlog)
+
+Costs: full `tests/unit` ≈ 3 min (worse with parallel workers) · `swarm-check.sh` ≈ 3 min when it runs the full suite · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min + `ui-check.sh` up/down · one model turn ≈ 4–10 s.
+- **Full suite once per round**, via `swarm-check.sh` at the end — not also as a separate step before it. While iterating, run the targeted test files plus the files that import changed symbols.
+- **Fewer, fatter turns:** batch independent reads/greps into one turn, read whole functions (not 70-line slices), no todo lists, chain shell checks with `&&`. DeepSeek spent 58% of its time on turns that each made one tool call.
+- **Mutation checks are budgeted:** at most 5 mutants per review, only on changed logic, run against the targeted test file in a `git archive` scratch copy. Stress loops: 10 runs at most unless flakiness is the finding.
+- **E2E:** iterate with `-g <scenario>`, then run the full spec once at the end.
+- **Async launches:** a test of anything that returns 201 and then runs in a subprocess must poll the final status.
+
 ## Verification Rules (what counts as "results are the same")
 
 Valid proofs that a change preserved correctness:

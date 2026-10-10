@@ -20,7 +20,7 @@ Escalating is a correct outcome, not a failure.
 
 1. **Spec:** each acceptance criterion in the brief MET / NOT MET / UNTESTED with file:line. Nothing done beyond the spec.
 2. **Scope:** only the brief's SCOPE paths changed.
-3. **Tests have teeth:** for every new or changed test, name the line it guards; for test-only diffs, mutate that line in a scratch copy (`cp -r <worktree> /tmp/rl-check`) and confirm the test fails. A test that monkeypatches the very name it verifies proves nothing.
+3. **Tests have teeth:** for every new or changed test, name the line it guards; for test-only diffs, mutate that line in a scratch copy (`git -C <worktree> archive HEAD | tar -x -C /tmp/rl-check`; `cp -r` shares the worktree's git index) and confirm the test fails. Budget: at most 5 mutants, run against the targeted test file only. A test that monkeypatches the very name it verifies proves nothing.
 4. **Reachability:** changed code/components are actually used (`rg` the importer/caller).
 5. **Repo traps** (CLAUDE.md): `api/generated/` hand-edits, SQL f-strings, `pandas-ta` (must be `pandas-ta-classic`), editing a script while it runs.
 6. Run the touched test files; quote the summary line.
@@ -50,3 +50,4 @@ You are deliberately read-only, so you **propose** rather than edit: if this def
 - 2026-10-09: effort pinned to high (user rule: Haiku only at high or xhigh — never lower, never max).
 - 2026-10-09: line-count escalation excludes generated files (lockfiles, api/generated) — evidence: SC orval-pin review had to ask the chief whether an 889-line pnpm-lock.yaml counted (job 20261009-mimo-swarm).
 - 2026-10-10: added messaging triggers (ask/DM/reply/inbox) + handoff `comms:` line — evidence: job 20261010-backlog had 0 asks, 0 replies, 0 peer DMs across 15 agents (user request).
+- 2026-10-11: scratch copies via git archive (rev-e-tools #self-improvement: cp -r staged main's files into the worktree index); mutation budget ≤5 — evidence: job 20261010-backlog time analysis (300 agent-min: ~65 min in repeated full suites, 30 min mutation, 58% of DeepSeek time in 1-tool turns) — user request.

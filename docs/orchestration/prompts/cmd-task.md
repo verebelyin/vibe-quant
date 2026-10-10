@@ -15,7 +15,12 @@ GOAL: <one sentence: the exact change or extraction>
 FILES YOU MAY EDIT OR CREATE (inside the worktree): <exact paths>. Leave every other file unchanged.
 FILES TO READ FIRST: <exact paths, the fewest that suffice>
 
-FACTS YOU NEED:
+SPEED RULES (measured: one model turn costs 4–10 s; the full test suite costs ~3 min):
+- Batch independent reads/greps/commands into ONE turn (parallel tool calls). Read whole functions or the line ranges given below, not 70-line slices. No todo lists.
+- While iterating, run only the targeted test files. The full suite runs ONCE, inside swarm-check at the end — do not also run `pytest tests/unit` separately.
+- Chain checks in one shell call: `ruff check && mypy && <targeted pytest>`.
+
+FACTS YOU NEED (exact code excerpts / line ranges, so you don't have to search):
 - <pasted schema / signature / convention>
 - <the 1–3 gotchas that apply>
 
