@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import sys
@@ -37,6 +38,32 @@ logger = logging.getLogger(__name__)
 
 # Timeframes aggregated from 1m bars (1d = UTC-midnight aligned; ts_event=open, ts_init=close).
 AGGREGATION_INTERVALS = ["5m", "15m", "1h", "4h", "1d"]
+
+# Cap for the download-session error summary so one bad symbol cannot bloat the row.
+_MAX_SESSION_SUMMARY = 2000
+
+
+def _failed_downloads_summary(
+    results: dict[str, dict[str, Any]],
+) -> tuple[bool, str | None]:
+    """Summarize per-symbol download holes for the session audit row.
+
+    ``failed_months`` (Binance Vision months that errored) and ``failed_ranges``
+    (REST ranges that errored) are the holes worth re-running. Returns
+    ``(has_failures, compact JSON)``; no holes gives ``(False, None)``.
+    """
+    failed: dict[str, dict[str, list[str]]] = {}
+    for symbol, counts in results.items():
+        months = list(counts.get("failed_months", []))
+        ranges = list(counts.get("failed_ranges", []))
+        if months or ranges:
+            failed[symbol] = {"failed_months": months, "failed_ranges": ranges}
+    if not failed:
+        return False, None
+    summary = json.dumps(failed, sort_keys=True, separators=(",", ":"))
+    if len(summary) > _MAX_SESSION_SUMMARY:
+        summary = summary[: _MAX_SESSION_SUMMARY - 3] + "..."
+    return True, summary
 
 
 def _interval_to_minutes(interval: str) -> int:
@@ -362,11 +389,14 @@ def update_all(
             total_new += counts.get("new_klines", 0)
             total_funding += counts.get("new_funding_rates", 0)
 
+        has_failures, summary = _failed_downloads_summary(results)
         archive.complete_download_session(
             session_id,
             klines_fetched=total_new,
             klines_inserted=total_new,
             funding_rates_fetched=total_funding,
+            status="partial" if has_failures else "completed",
+            error_message=summary,
         )
     except Exception as e:
         archive.complete_download_session(
@@ -778,11 +808,14 @@ def ingest_all(
             total_klines_inserted += counts.get("klines_inserted", 0)
             total_funding += funding_count
 
+        has_failures, summary = _failed_downloads_summary(results)
         archive.complete_download_session(
             session_id,
             klines_fetched=total_klines_fetched,
             klines_inserted=total_klines_inserted,
             funding_rates_fetched=total_funding,
+            status="partial" if has_failures else "completed",
+            error_message=summary,
         )
     except Exception as e:
         archive.complete_download_session(

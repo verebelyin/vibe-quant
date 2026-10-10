@@ -54,6 +54,11 @@ class RestDownloadError(DownloadError):
         self.partial = partial
         self.failed_from = failed_from
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Exception.args only carries ``message``; without this, unpickling would
+        # call RestDownloadError(message) and fail on the two missing args.
+        return (type(self), (str(self), self.partial, self.failed_from))
+
 
 def _is_retryable(exc: Exception) -> bool:
     """Transient: transport errors, 5xx, 429 and truncated/corrupt zips."""

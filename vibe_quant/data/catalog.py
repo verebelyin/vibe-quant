@@ -439,10 +439,21 @@ class CatalogManager:
 
         inst_dir = self._catalog_path / "data" / "crypto_perpetual" / str(instrument.id)
         if inst_dir.exists():
+            import pyarrow.lib
+
             try:
-                existing = {i.id: i for i in self.catalog.instruments()}.get(instrument.id)
-            except Exception:  # unreadable/corrupt parquet: rewrite below
+                catalog_instruments = self.catalog.instruments()
+            except (pyarrow.lib.ArrowInvalid, OSError) as e:
+                # Only a genuinely unreadable/corrupt parquet means "rewrite me";
+                # any other error (bug, permission, missing file) must surface.
+                logger.warning(
+                    "Unreadable instrument parquet for %s (%s); rewriting",
+                    instrument.id,
+                    e,
+                )
                 existing = None
+            else:
+                existing = {i.id: i for i in catalog_instruments}.get(instrument.id)
             if existing is not None and type(existing).to_dict(existing) == type(instrument).to_dict(instrument):
                 return  # unchanged: no churn (validation runner calls this per run)
             shutil.rmtree(inst_dir)
