@@ -68,6 +68,10 @@ logger = logging.getLogger(__name__)
 # Max retries when generating valid offspring via crossover+mutation
 _MAX_OFFSPRING_RETRIES: int = 10
 
+# Informational N_eff eigendecomposition (never gates) is O(m^3): cap the series
+# count it runs on so a large retained pool cannot stall the run (bd yul7u.30).
+_NEFF_MAX_SERIES: int = 500
+
 class DiscoveryEvaluationError(RuntimeError):
     """Every evaluation in a batch raised: systemic failure, not bad strategies."""
 
@@ -150,6 +154,12 @@ class DiscoveryConfig:
     bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound (t-stat) < this
     bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
     require_dsr: bool = True  # Deflated Sharpe Ratio guardrail
+    # Cumulative DSR trial count (bd vibe-quant-yul7u.28): called with this
+    # run's train window ``(start, end)``; returns the summed ``notes.evaluated``
+    # of earlier non-mock discovery runs with the SAME timeframe whose train
+    # window OVERLAPS, or ``None`` when the DB lookup failed (fail open to the
+    # run-only N and record ``prior_error``). Default ``None`` = run N only.
+    prior_trials_fn: Callable[[str, str], int | None] | None = None
 
     def __post_init__(self) -> None:
         errors: list[str] = []
@@ -1905,7 +1915,8 @@ class DiscoveryPipeline:
 
         Args:
             top_strategies: Candidates to check.
-            total_evaluated: DSR trial count N (distinct strategies tried).
+            total_evaluated: This run's distinct strategies tried. The DSR gate's
+                N is ``total_evaluated + prior_n`` (see ``prior_trials_fn``).
         """
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
@@ -1922,6 +1933,26 @@ class DiscoveryPipeline:
         # and apply_discovery_dsr de-annualizes to daily units — so T must be
         # the day count of the window, not the bar count (vibe-quant-zmzzh).
         day_count = compute_day_count(self.config.start_date, self.config.end_date)
+
+        # Cumulative trial count (bd vibe-quant-yul7u.28): the gate's N is this
+        # run's distinct evaluated strategies PLUS the prior non-mock discovery
+        # runs with the same timeframe and an overlapping train window. A
+        # missing/raising fn (or one returning None) fails open to the run-only
+        # N and is recorded as prior_error.
+        prior_n = 0
+        prior_error = False
+        prior_fn = self.config.prior_trials_fn
+        if prior_fn is not None:
+            try:
+                prior_raw = prior_fn(self.config.start_date, self.config.end_date)
+            except Exception:
+                logger.warning("prior_trials_fn failed; using prior_n=0", exc_info=True)
+                prior_raw = None
+            if prior_raw is None:
+                prior_error = True
+            else:
+                prior_n = max(0, int(prior_raw))
+        gate_n = total_evaluated + prior_n
 
         import numpy as np
 
@@ -1940,7 +1971,7 @@ class DiscoveryPipeline:
                 fitness=fitness,
                 num_genes=num_genes,
                 config=guardrail_cfg,
-                num_trials=max(1, total_evaluated),
+                num_trials=max(1, gate_n),
                 num_observations=num_obs,
                 skewness=fitness.skewness,
                 kurtosis=fitness.kurtosis,
@@ -1969,7 +2000,12 @@ class DiscoveryPipeline:
                 )
 
         if self.config.require_dsr:
-            self._dsr_trials = self._dsr_trial_counts(total_evaluated)
+            trials = self._dsr_trial_counts(total_evaluated)
+            trials["gate_n"] = gate_n
+            trials["prior_n"] = None if prior_error else prior_n
+            if prior_error:
+                trials["prior_error"] = True
+            self._dsr_trials = trials
 
         if not validated and top_strategies:
             logger.warning(
@@ -1991,34 +2027,48 @@ class DiscoveryPipeline:
         correlation) and ``PR * N / m`` (participation ratio of the
         correlation eigenvalues). Recorded, never used by the gate (bd
         yul7u.24).
+
+        The eigendecomposition is O(m^3), so when more than ``_NEFF_MAX_SERIES``
+        series are retained it runs on a deterministic evenly-spaced subset
+        (sorted uid order) and ``neff_subsampled_from`` records the original
+        count (bd yul7u.30). ``non_flat`` always stays the true count.
         """
         import numpy as np
 
-        rows = [
-            np.frombuffer(fr.daily_returns.values, dtype=np.float64)
-            for fr in self._fitness_cache.values()
+        # Sorted uid order: the deterministic basis for the subsample below.
+        entries = sorted(self._fitness_cache.items(), key=lambda kv: str(kv[0]))
+        raw_rows = [
+            np.frombuffer(fr.daily_returns.values, dtype=np.float64)  # type: ignore[union-attr]
+            for _, fr in entries
             if fr.daily_returns is not None and len(fr.daily_returns) >= 2
         ]
-        lengths = {len(r) for r in rows}
-        rows = [r for r in rows if r.std() > 0]
+        lengths = {len(r) for r in raw_rows}
+        rows = [r for r in raw_rows if r.std() > 0]
         m = len(rows)
+        subsampled_from: int | None = None
+        if m > _NEFF_MAX_SERIES:
+            subsampled_from = m
+            idx = np.unique(np.linspace(0, m - 1, _NEFF_MAX_SERIES).astype(int))
+            rows = [rows[i] for i in idx]
+        n_used = len(rows)
         neff_mean_corr: float | None = None
         neff_eig_pr: float | None = None
-        if m >= 2 and len(lengths) == 1:
+        if n_used >= 2 and len(lengths) == 1:
             corr = np.nan_to_num(np.corrcoef(np.vstack(rows)))
-            rho_bar = (float(corr.sum()) - float(np.trace(corr))) / (m * (m - 1))
-            denom = 1.0 + (m - 1) * rho_bar
+            rho_bar = (float(corr.sum()) - float(np.trace(corr))) / (n_used * (n_used - 1))
+            denom = 1.0 + (n_used - 1) * rho_bar
             if denom > 0:
                 neff_mean_corr = float(total_evaluated) / denom
             ev = np.clip(np.linalg.eigvalsh(corr), 0.0, None)
             sq = float((ev**2).sum())
             if sq > 0:
-                neff_eig_pr = float(ev.sum() ** 2 / sq) * total_evaluated / m
+                neff_eig_pr = float(ev.sum() ** 2 / sq) * total_evaluated / n_used
         return {
             "raw": total_evaluated,
             "non_flat": m,
             "neff_mean_corr": neff_mean_corr,
             "neff_eig_pr": neff_eig_pr,
+            "neff_subsampled_from": subsampled_from,
         }
 
     def _export_top_strategies(

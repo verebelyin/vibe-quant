@@ -182,6 +182,7 @@ SPEC.md              # Authoritative implementation spec
 - **Discovery fails loudly:** an all-errored eval batch (before any success, or ≥ max(2, pop//4) after) raises `DiscoveryEvaluationError` → run `failed`, not "0 champions".
 - **Bootstrap-CI gate keeps being vindicated:** every champion forced past it with `no_bootstrap_ci=true` and then validated has collapsed (Batch 41: 5.40→−2.78; Batch 43 RAMS: 0.59→−0.36). The validation runner auto-flags collapses (`validation/consistency.py`); treat a flagged strategy as overfit, not as a validation bug.
 - 4h/1d discovery uses bootstrap floor 0.0 by default (1.0 is structurally unpassable at ~50-180 trades/yr); 1m uses 0.5.
+- **Cumulative DSR gate N (2026-10-10):** the gate's trial count is this run's evaluated strategies PLUS the evaluated counts of prior non-mock discovery runs with the same timeframe and an overlapping train window (`notes.dsr_trials.gate_n`/`prior_n`/`prior_run_ids`, `n_rule=cumulative_same_tf_overlapping_train`).
 
 ## NautilusTrader Gotchas (each of these cost real debugging time)
 

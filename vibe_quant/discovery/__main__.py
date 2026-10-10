@@ -25,6 +25,8 @@ from vibe_quant.utils import compute_day_count, log_dir
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from vibe_quant.db.state_manager import StateManager
     from vibe_quant.discovery.fitness import FitnessResult
     from vibe_quant.discovery.operators import StrategyChromosome
@@ -197,6 +199,7 @@ def _run_multi_seed(
     all_generations: list[GenerationResult] = []
     all_rejections: list[dict[str, object]] = []
     total_evaluated = 0
+    pooled_fitness_cache: dict[str, FitnessResult] = {}
     seed_stats: list[dict[str, float]] = []
     any_converged = False
     convergence_gen: int | None = None
@@ -220,6 +223,7 @@ def _run_multi_seed(
             seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
+        pooled_fitness_cache.update(pipeline._fitness_cache)
         if result_metadata is None:
             result_metadata = result
 
@@ -342,6 +346,8 @@ def _run_multi_seed(
     # undercounts it. Re-check the selected champions with pooled N; failures
     # are dropped (fail closed) and recorded.
     pooled_checker = DiscoveryPipeline(config=config, backtest_fn=backtest_fn)  # type: ignore[arg-type]
+    # The seeds' retained daily series feed the informational N_eff record.
+    pooled_checker._fitness_cache.update(pooled_fitness_cache)
     candidates = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
     kept = pooled_checker._validate_top_strategies(candidates, total_evaluated)
     kept_ids = {id(chrom) for chrom, _ in kept}
@@ -390,6 +396,9 @@ def _run_multi_seed(
         wfa_results=wfa_results,
         guardrail_rejections=all_rejections,
         holdout_min_trades=result_metadata.holdout_min_trades if result_metadata else None,
+        # Pooled trial record: raw = pooled N, gate_n/prior_n = what the pooled
+        # gate used (the per-seed results' own dsr_trials are not the pick's N).
+        dsr_trials=pooled_checker._dsr_trials,
     )
 
 
@@ -525,7 +534,7 @@ def _run_provenance_notes(
     seed: int,
     bootstrap_min_sharpe: float,
     holdout_min_sharpe: float,
-    prior_trials: int | None = None,
+    prior_run_ids: list[int] | None = None,
 ) -> dict[str, object]:
     """Run-level notes shared by the champion and zero-champion outcomes."""
     notes: dict[str, object] = {
@@ -570,64 +579,140 @@ def _run_provenance_notes(
         # need every symbol's train return > 0 and trades >= min (hard gate).
         notes["worst_mode_score"] = "0.5*min+0.5*median"
     if result.dsr_trials is not None:
-        notes["dsr_trials"] = _dsr_trials_note(result, prior_trials)
+        notes["dsr_trials"] = _dsr_trials_note(result, prior_run_ids or [])
     return notes
 
 
-def _dsr_trials_note(result: DiscoveryResult, prior_trials: int | None) -> dict[str, object]:
-    """``notes.dsr_trials``: N used (raw) + informational N_eff and cumulative N.
+def _dsr_trials_note(result: DiscoveryResult, prior_run_ids: list[int]) -> dict[str, object]:
+    """``notes.dsr_trials``: gate N and the cumulative-N rule that produced it.
 
-    Cumulative N = this run's trials + every earlier discovery run's. The gate
-    uses the run's raw N only; the p-value each candidate WOULD get at the
-    cumulative N is logged alongside (review SF4; gating on it is a separate
-    bead).
+    The gate N is ``this run's N + prior_n`` -- the summed ``notes.evaluated``
+    of earlier non-mock discovery runs with the same timeframe and an
+    OVERLAPPING train window (bd vibe-quant-yul7u.28). The pipeline records
+    ``gate_n``/``prior_n`` when it runs the gate; ``prior_run_ids`` lists the
+    contributing runs. A failed prior lookup fails open to the run-only N and
+    sets ``prior_error``.
     """
-    from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
-
     note: dict[str, object] = dict(result.dsr_trials or {})
-    if prior_trials is None:
-        note["cumulative_n"] = None
-        return note
-    cumulative = prior_trials + result.total_candidates_evaluated
-    note["cumulative_n"] = cumulative
-    dsr = DeflatedSharpeRatio()
-    p_at_cum: dict[str, float] = {}
-    for uid, rec in result.dsr_records.items():
-        if rec.get("input") != "pooled_daily_returns" or "p_value" not in rec:
-            continue
-        p_at_cum[uid] = dsr.calculate(
-            float(rec["sharpe_daily"]),  # type: ignore[arg-type]
-            max(1, cumulative),
-            int(rec["observations"]),  # type: ignore[call-overload]
-            float(rec["skewness_used"]),  # type: ignore[arg-type]
-            float(rec["kurtosis_used"]),  # type: ignore[arg-type]
-        ).p_value
-    note["p_value_at_cumulative_n"] = p_at_cum
+    note["n_rule"] = "cumulative_same_tf_overlapping_train"
+    note["prior_run_ids"] = list(prior_run_ids)
+    if "prior_n" not in note:
+        note["prior_n"] = 0
+    if "gate_n" not in note:
+        prior_raw = note["prior_n"]
+        prior = prior_raw if isinstance(prior_raw, int) else 0
+        note["gate_n"] = result.total_candidates_evaluated + prior
     return note
 
 
-def _prior_discovery_trials(state: StateManager, run_id: int) -> int | None:
-    """Sum of DSR trial counts (``notes.evaluated``) of earlier non-mock discovery runs."""
+def _iso_day(value: object) -> str | None:
+    """The ``YYYY-MM-DD`` of a date-ish value; None when unusable."""
+    if not isinstance(value, str) or not value:
+        return None
+    day = value[:10]
+    return day if len(day) == 10 else None
+
+
+def _run_train_window(
+    notes: dict[str, object],
+    start_date: object,
+    end_date: object,
+) -> tuple[str, str] | None:
+    """A prior run's train window: ``notes.train_dates`` when present, else run dates.
+
+    Returns None (skip the row) when the window is missing or garbled.
+    """
+    if notes.get("train_dates"):
+        train_dates = notes["train_dates"]
+        if not isinstance(train_dates, (list, tuple)) or len(train_dates) != 2:
+            return None
+        start, end = _iso_day(train_dates[0]), _iso_day(train_dates[1])
+    else:
+        start, end = _iso_day(start_date), _iso_day(end_date)
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def _prior_discovery_trials(
+    state: StateManager,
+    run_id: int,
+    timeframe: str,
+    train_window: tuple[str, str],
+) -> tuple[int | None, list[int]]:
+    """Cumulative prior trial count + contributing run ids (bd vibe-quant-yul7u.28).
+
+    Sums ``notes.evaluated`` over earlier (``b.id < run_id``) non-mock discovery
+    runs with the SAME timeframe whose train window overlaps ``train_window``
+    (counts only, no de-dup; symbols are not filtered). Returns ``(None, [])``
+    when the DB lookup fails or ``train_window`` is unusable -- the caller fails
+    open to the run-only N and records ``prior_error``.
+    """
     import json
 
+    this_start, this_end = _iso_day(train_window[0]), _iso_day(train_window[1])
+    if this_start is None or this_end is None:
+        # Unusable current window: cannot tell which runs overlap. Fail open
+        # (like a DB error) but loudly -- the caller records prior_error.
+        logger.warning("Unusable train window %r; cannot count prior trials", train_window)
+        return None, []
     try:
         rows = state.conn.execute(
-            "SELECT r.notes FROM backtest_results r JOIN backtest_runs b ON b.id = r.run_id "
-            "WHERE b.run_mode = ? AND b.id < ?",
-            ("discovery", run_id),
+            "SELECT b.id, r.notes, b.start_date, b.end_date "
+            "FROM backtest_results r JOIN backtest_runs b ON b.id = r.run_id "
+            "WHERE b.run_mode = ? AND b.id < ? AND b.timeframe = ?",
+            ("discovery", run_id, timeframe),
         ).fetchall()
     except Exception:
         logger.warning("Could not count prior discovery trials", exc_info=True)
-        return None
+        return None, []
     total = 0
-    for (raw,) in rows:
+    ids: set[int] = set()
+    for row_id, raw, start_date, end_date in rows:
         try:
             notes = json.loads(raw) if raw else {}
         except (TypeError, ValueError):
+            continue  # garbled notes -> skip the row
+        if not isinstance(notes, dict) or notes.get("mock") or not notes.get("evaluated"):
             continue
-        if isinstance(notes, dict) and not notes.get("mock") and notes.get("evaluated"):
-            total += int(notes["evaluated"])
-    return total
+        window = _run_train_window(notes, start_date, end_date)
+        if window is None:
+            continue  # missing/garbled train window -> skip the row
+        prior_start, prior_end = window
+        if prior_start < this_end and this_start < prior_end:
+            try:
+                evaluated = int(notes["evaluated"])  # type: ignore[call-overload]
+            except (TypeError, ValueError):
+                continue  # garbled evaluated count -> skip only this row
+            total += evaluated
+            ids.add(int(row_id))
+    return total, sorted(ids)
+
+
+def _build_prior_trials_fn(
+    state: StateManager,
+    run_id: int,
+    timeframe: str,
+    *,
+    mock: bool,
+) -> tuple[Callable[[str, str], int | None] | None, list[int]]:
+    """``(DiscoveryConfig.prior_trials_fn, prior_run_ids)`` for the cumulative DSR N.
+
+    Mock runs get ``(None, [])`` (run-only N; their evaluations are not real
+    trials). Otherwise the fn runs ``_prior_discovery_trials`` for the train
+    window the pipeline hands it and refreshes the SHARED ``prior_run_ids`` list
+    so ``notes.dsr_trials`` can name the contributing runs (bd yul7u.28).
+    """
+    prior_run_ids: list[int] = []
+    if mock:
+        return None, prior_run_ids
+
+    def prior_trials(start: str, end: str) -> int | None:
+        n, ids = _prior_discovery_trials(state, run_id, timeframe, (start, end))
+        prior_run_ids[:] = ids
+        return n
+
+    return prior_trials, prior_run_ids
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -901,7 +986,15 @@ def main() -> int:
                 " | ".join(f"{s}→{e}" for s, e in eval_windows),
             )
 
+        # Cumulative DSR gate N (bd vibe-quant-yul7u.28): the gate adds the
+        # evaluated counts of earlier non-mock discovery runs with the same
+        # timeframe and an overlapping train window; mock runs keep run-only N.
+        prior_trials_fn, prior_run_ids = _build_prior_trials_fn(
+            state, args.run_id, args.timeframe, mock=bool(args.mock)
+        )
+
         config = DiscoveryConfig(
+            prior_trials_fn=prior_trials_fn,
             population_size=args.population_size,
             max_generations=args.max_generations,
             mutation_rate=args.mutation_rate,
@@ -1074,7 +1167,7 @@ def main() -> int:
             seed=seed,
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             holdout_min_sharpe=args.holdout_min_sharpe,
-            prior_trials=None if use_mock else _prior_discovery_trials(state, args.run_id),
+            prior_run_ids=prior_run_ids,
         )
 
         if not result.top_strategies:

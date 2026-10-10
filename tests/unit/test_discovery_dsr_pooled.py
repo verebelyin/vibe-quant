@@ -402,10 +402,16 @@ def test_series_kept_only_for_gate_passing_genomes() -> None:
 
 
 def test_dsr_trials_recorded_not_used() -> None:
+    """N_eff is recorded but never gates; the gate N is cumulative (yul7u.28).
+
+    The old note logged ``p_value_at_cumulative_n`` while the gate used raw N;
+    now the gate itself uses ``gate_n = run N + prior_n`` and the note records
+    that rule. N_eff stays informational.
+    """
     from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
 
-    pipe = _pipeline()
+    pipe = _pipeline(prior_trials_fn=lambda s, e: 921)
     # Highly correlated retained series -> N_eff far below raw N
     rng = np.random.default_rng(11)
     common = rng.normal(0.0005, 0.01, 1264)
@@ -420,28 +426,30 @@ def test_dsr_trials_recorded_not_used() -> None:
     trials = pipe._dsr_trials
     assert trials is not None
     assert trials["raw"] == 79 and trials["non_flat"] == 6
+    assert trials["prior_n"] == 921 and trials["gate_n"] == 1000
     neff_eig = trials["neff_eig_pr"]
     assert isinstance(neff_eig, float) and neff_eig < 79 / 3
     neff_mc = trials["neff_mean_corr"]
     assert isinstance(neff_mc, float) and 0 < neff_mc < 79
     sr, skew, kurt = daily_sharpe_inputs(cand.values)
-    expected = DeflatedSharpeRatio().calculate(sr, 79, 1264, min(skew, 0.0), max(kurt, 3.0))
+    # Champion p_value uses gate_n (= run N + prior), NOT raw N and NOT N_eff.
+    expected = DeflatedSharpeRatio().calculate(sr, 1000, 1264, min(skew, 0.0), max(kurt, 3.0))
     rec = pipe._dsr_records[chrom.uid]
-    assert rec["p_value"] == expected.p_value  # raw N, not N_eff
+    assert rec["trials"] == 1000 and rec["p_value"] == expected.p_value
+    n_eff_p = DeflatedSharpeRatio().calculate(
+        sr, int(neff_eig), 1264, min(skew, 0.0), max(kurt, 3.0)
+    ).p_value
+    assert rec["p_value"] != n_eff_p  # N_eff is recorded, never used
 
     result = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=79, converged=False,
         convergence_generation=None, dsr_records=pipe._dsr_records, dsr_trials=trials,
     )  # fmt: skip
-    note = _dsr_trials_note(result, prior_trials=921)
-    assert note["cumulative_n"] == 1000 and note["raw"] == 79
-    p_cum = note["p_value_at_cumulative_n"]
-    assert isinstance(p_cum, dict)
-    assert p_cum[chrom.uid] == DeflatedSharpeRatio().calculate(
-        sr, 1000, 1264, min(skew, 0.0), max(kurt, 3.0)
-    ).p_value
-    assert p_cum[chrom.uid] > rec["p_value"]  # logged alongside, never gates
-    assert _dsr_trials_note(result, prior_trials=None)["cumulative_n"] is None
+    note = _dsr_trials_note(result, [1, 2])
+    assert note["gate_n"] == 1000 and note["prior_n"] == 921 and note["raw"] == 79
+    assert note["prior_run_ids"] == [1, 2]
+    assert note["n_rule"] == "cumulative_same_tf_overlapping_train"
+    assert "cumulative_n" not in note and "p_value_at_cumulative_n" not in note
 
 
 def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
@@ -452,17 +460,24 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     from vibe_quant.discovery.__main__ import _prior_discovery_trials
 
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE backtest_runs (id INTEGER, run_mode TEXT)")
+    conn.execute(
+        "CREATE TABLE backtest_runs (id INTEGER, run_mode TEXT, timeframe TEXT,"
+        " start_date TEXT, end_date TEXT)"
+    )
     conn.execute("CREATE TABLE backtest_results (run_id INTEGER, notes TEXT)")
     runs = [
-        (1, "discovery", {"evaluated": 79}),
-        (2, "discovery", {"evaluated": 500, "mock": True}),  # mock: not a real trial
-        (3, "screening", {"evaluated": 40}),  # not discovery
-        (4, "discovery", {"evaluated": 21}),
-        (5, "discovery", {"evaluated": 1000}),  # this run and later: excluded
+        (1, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 79}),
+        (2, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 500, "mock": True}),
+        (3, "screening", "4h", "2024-01-01", "2024-06-01", {"evaluated": 40}),
+        (4, "discovery", "4h", "2024-02-01", "2024-04-01", {"evaluated": 21}),
+        # this run and later: excluded by b.id < run_id
+        (5, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 1000}),
     ]
-    for rid, mode, notes in runs:
-        conn.execute("INSERT INTO backtest_runs VALUES (?, ?)", (rid, mode))
+    for rid, mode, tf, sd, ed, notes in runs:
+        conn.execute("INSERT INTO backtest_runs VALUES (?, ?, ?, ?, ?)", (rid, mode, tf, sd, ed))
         conn.execute("INSERT INTO backtest_results VALUES (?, ?)", (rid, json.dumps(notes)))
     conn.execute("INSERT INTO backtest_results VALUES (?, ?)", (4, "not json"))
-    assert _prior_discovery_trials(SimpleNamespace(conn=conn), 5) == 100  # type: ignore[arg-type]
+    n, ids = _prior_discovery_trials(
+        SimpleNamespace(conn=conn), 5, "4h", ("2024-03-01", "2024-09-01")  # type: ignore[arg-type]
+    )
+    assert n == 100 and ids == [1, 4]
