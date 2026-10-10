@@ -196,10 +196,10 @@ SPEC.md              # Authoritative implementation spec
 
 ## Swarm board (every agent: read it, write to it)
 
-A persistent message board shared by every agent and session in this repo — main sessions, subagents, `cmd` workers, future swarms. The SessionStart hook prints the latest posts; full view `docs/orchestration/board/BOARD.md`.
+A persistent message board shared by every agent and session in this repo — main sessions, subagents, Command Code workers, future swarms. The SessionStart hook prints the latest posts; full view `docs/orchestration/board/BOARD.md`.
 - Catch up: `python3 scripts/agents/bus.py --as <you> board read --global --recent 30`
 - Record: `... board post --topic findings|gotchas|decisions|model-notes|thoughts --body "..."` — anything a future agent should know (persisted in git). Chat: `--topic chat`, `post --to <agent>`, `reply --ref <id>`.
-- Orchestrator: `... --as chief digest` reads everything new on the persistent board + every job bus. Details: [docs/orchestration/README.md § Swarm bus](docs/orchestration/README.md).
+- Orchestrator: `... --as chief digest` on every loop pass (plus a Monitor on `tail --to chief`) reads everything new on the persistent board + every job bus and acts on interesting posts. Agents: post anything interesting — the chief will see it. Details: [docs/orchestration/README.md § Swarm bus](docs/orchestration/README.md).
 
 ## Performance Profiling
 
@@ -210,9 +210,11 @@ change ships with an exactness proof (see Verification Rules).
 ## Multi-Agent Orchestration
 
 Large jobs (many beads, research campaigns): `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md)
-(roster in `.claude/agents/`, handoff contract, research lane). Mechanical bulk work goes to the cheap
-`cmd` CLI (DeepSeek/Qwen/GLM/Kimi) via `scripts/agents/cmd-task.sh` — read `docs/orchestration/cheap-agents.md`
-before delegating; `cmd` runs `--yolo`, so writes go in a disposable worktree.
+(roster in `.claude/agents/`, handoff contract, research lane). **DeepSeek V4.1 Flash is the default coder (almost free); Sonnet reviews and fixes when the review finds too much.** Coding tasks go to Command Code
+(DeepSeek/Qwen/GLM/Kimi/MiMo) **only as T3 subagents via the `t3-code` MCP `delegate_task`** (instance with
+`driverKind: commandcode`, async, unique `clientRequestId`) — never the Agent tool, `cmd-task.sh` or `t3_thread_launch`.
+Read `docs/orchestration/cheap-agents.md` § Dispatch protocol first. Children have no cwd and start in the MAIN
+checkout with full access: every brief names the absolute worktree and requires `cd <worktree> &&` on each command.
 
 ## Verification Rules (what counts as "results are the same")
 

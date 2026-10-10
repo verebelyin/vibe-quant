@@ -1,9 +1,9 @@
 <!--
 cmd brief: bulk triage of The-Quant-Trading-Vault strategy specs into JSONL.
-Tier: fast (deepseek-v4.1-flash-fast). Batch ~20 files per brief (per-call overhead ~18k tokens).
+Tier: fast (T3 delegate_task, commandcode_command, model deepseek/deepseek-v4.1-flash-fast, options {"effort":"high"}). Batch ~20 files per brief (per-call overhead ~18k tokens).
 Orchestrator fills: <VAULT>, <FILE LIST>, <OUT>, <INDICATORS> (live registry, see alpha-scout.md).
 Checker: the jq/python check at the bottom, then a hand spot-check of ~5% against the source files.
-Run read-only (no worktree needed): --cwd <VAULT>.
+Run read-only (no worktree needed): the brief must use absolute paths under <VAULT> (T3 children start in the main checkout).
 -->
 You are classifying trading-strategy description files. Read each file listed below and write one JSON object per file to the output file. Edit no other file.
 

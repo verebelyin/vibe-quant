@@ -1,6 +1,7 @@
 <!--
 cmd brief: first-draft DSL YAML from one triaged, dsl_feasible spec.
-Tier: code (deepseek-v4.1-flash, effort max). Run with --cwd <disposable worktree>.
+Tier: code (T3 delegate_task, commandcode_command, model deepseek/deepseek-v4.1-flash). T3 children have no cwd:
+prepend the WORKSPACE block from prompts/cmd-task.md naming the disposable worktree (cd <worktree> && on every command).
 Orchestrator fills: <SPEC PATH>, <TRIAGE JSON LINE>, <TEMPLATE PATHS>, <OUT YAML>, <INDICATORS>.
 Checker: the parser command below (deterministic) + strategy-author reviews rule fidelity before any backtest.
 -->

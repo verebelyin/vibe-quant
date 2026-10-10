@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run one headless Command Code (`cmd`) task from a brief file.
+# LEGACY (2026-10-10): swarm dispatch uses T3 delegate_task subagents instead — see
+# docs/orchestration/cheap-agents.md § Dispatch protocol. Keep this for manual one-offs only.
 # Prints the agent's final text on stdout; full NDJSON transcript goes to the log dir.
 # Exit code: cmd's own (0 ok, 8 = hit --max-turns), 2 = usage error.
 #

@@ -2,9 +2,9 @@
 
 How one **orchestrator** (a Claude Code session running the [`orchestrate`](../../.claude/skills/orchestrate/SKILL.md) skill) splits large work across specialist agents. This file is the single source for the roster, the brief format, the handoff contract and the workspace layout. Other files cover the rest:
 
-- [`cheap-agents.md`](cheap-agents.md): delegating mechanical tasks to the `cmd` CLI (DeepSeek / Qwen / GLM / Kimi).
+- [`cheap-agents.md`](cheap-agents.md): delegating mechanical tasks to Command Code (DeepSeek / Qwen / GLM / Kimi / MiMo) as T3 `delegate_task` subagents.
 - [`research-swarm.md`](research-swarm.md): the strategy-factory lane, plus what we took (and rejected) from the 2026 "AI hedge fund" agent-swarm posts.
-- [`prompts/`](prompts/): brief templates for `cmd` tasks.
+- [`prompts/`](prompts/): brief templates for Command Code tasks ([`prompts/cmd-task.md`](prompts/cmd-task.md)) and the bus protocol block.
 - Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/). Each file's body is the agent's system prompt.
 
 ## Principles
@@ -14,7 +14,7 @@ How one **orchestrator** (a Claude Code session running the [`orchestrate`](../.
 3. **Bounded briefs.** Every dispatch is one task with a checkable **done-when** criterion. "Investigate X" is not a brief; "list every caller of X with file:line" is.
 4. **Structured handoffs.** Every agent ends with the [handoff contract](#handoff-contract). The orchestrator reads handoffs, not transcripts.
 5. **Evidence over claims.** A claim without the command and output that prove it is UNVERIFIED. Before the orchestrator relays a result to the user, it re-runs the decisive command or has a checker do it.
-6. **Cheapest capable tier.** Mechanical work goes to `cmd` (cents). Judgement goes to Claude. Final verdicts on money or correctness go to Opus.
+6. **Cheapest capable tier.** **DeepSeek V4.1 Flash (Command Code via T3) is the workhorse** — it writes the code for every task with clear acceptance criteria, because it is almost free (user, 2026-10-10). **Sonnet reviews** every diff and **fixes** when the review finds too many problems. Opus is kept for design (architect, design reviews) and for verdicts on money (overfit-auditor, risk-officer).
 7. **Gates block.** A failed gate means the work goes back to its maker, gets escalated, or gets dropped. Lowering a threshold to get something through is never an option (see CLAUDE.md § Verification Rules).
 
 ## Roster
@@ -23,8 +23,9 @@ How one **orchestrator** (a Claude Code session running the [`orchestrate`](../.
 |---|---|---|---|---|---|
 | orchestrator | both | session model (Opus) | ledger, merges, beads | decompose, dispatch, integrate, talk to user | user gates |
 | `architect` | eng | opus | design doc only | spec → design → task plan with acceptance criteria | user gate |
-| `implementer` | eng | sonnet | code + tests, in a worktree | one task, test-first | `reviewer` + `verifier` |
-| `reviewer` | eng | opus | nothing | two verdicts: matches spec? well built? | orchestrator |
+| DeepSeek maker (`cmd`) | eng | `deepseek/deepseek-v4.1-flash` via T3 Command Code | code + tests, in a worktree | DEFAULT maker for every task with clear acceptance criteria, test-first | `reviewer` + `verifier` |
+| `implementer` | eng | sonnet | code + tests, in a worktree | fixer when the reviewer returns `fix-route: sonnet`; escalation after a DeepSeek stall or 2 failed rounds; tasks the chief judges too risky for DeepSeek | fresh `reviewer` + `verifier` |
+| `reviewer` | eng | sonnet (opus in design mode) | nothing | two verdicts: matches spec? well built? + `fix-route: deepseek / sonnet / none` | orchestrator |
 | `reviewer-lite` | eng | haiku (5.5), effort high (user rule: Haiku only at high/xhigh — never lower, never max) | nothing | fast first-pass review of mechanical diffs; escalates semantics to `reviewer` | orchestrator |
 | `verifier` | eng | sonnet | nothing | runs quality gates + exactness proofs | orchestrator |
 | `alpha-scout` | research | sonnet | hypothesis tickets | external sources → falsifiable hypotheses | `strategy-author` (feasibility), `overfit-auditor` |
@@ -32,17 +33,17 @@ How one **orchestrator** (a Claude Code session running the [`orchestrate`](../.
 | `backtest-operator` | research | sonnet | DB rows via API/CLI only | runs screening / discovery / validation, reports raw numbers | `overfit-auditor` |
 | `overfit-auditor` | research | opus | nothing | skeptic: PASS / REJECT against the repo's gates | `risk-officer` |
 | `risk-officer` | research | opus | nothing | veto before any paper/live step, no negotiation | user |
-| `cmd` worker | both | DeepSeek / Qwen / GLM / Kimi | scoped files, in a worktree | mechanical bulk work | `verifier` or a deterministic check |
+| Command Code worker (`cmd`) | both | DeepSeek / Qwen / GLM / Kimi / MiMo (T3 instance `commandcode_command`) | scoped files, in a worktree | mechanical bulk work, well-specified implementation | `verifier` or a deterministic check |
 
-Model choice follows maker-checker: the agents that write run on sonnet or cheap models, and the checkers run on opus, so writer and checker share fewer blind spots. Override per dispatch with the Agent tool's `model` parameter when a task is harder or easier than usual.
+Model choice follows maker-checker: DeepSeek writes, Sonnet checks (a different model family, so fewer shared blind spots); when Sonnet fixes, a fresh reviewer checks the fix. Opus does design and money verdicts. Override per dispatch with the Agent tool's `model` parameter when a task is harder or easier than usual.
 
 ## Dispatch
 
 | Runtime | When | How |
 |---|---|---|
 | Claude subagent | default for judgement work | Agent tool, `subagent_type: "<name>"`. Writers work in a worktree from `scripts/agents/worktree.sh` (not `isolation: "worktree"`, which can only branch from `main` and lacks market data). |
-| `cmd` worker | mechanical / bulk / well-specified | `scripts/agents/cmd-task.sh` (see [`cheap-agents.md`](cheap-agents.md)) |
-| T3 `delegate_task` | other providers (Codex, …) or a long-running background child | `orchestrator_capabilities` → `delegate_task`; paste the agent file's body as the task prompt |
+| Command Code worker | mechanical / bulk / well-specified | **T3 `delegate_task` only** (`orchestrator_capabilities` → `driverKind: commandcode`; `mode: "async"`; unique `clientRequestId`; keep the `taskId`). Never the Agent tool, `cmd-task.sh`, `t3_thread_launch` or `create_threads`. Protocol: [`cheap-agents.md`](cheap-agents.md) § Dispatch protocol |
+| T3 `delegate_task`, other providers | other providers (Codex, …) or a long-running background child | `orchestrator_capabilities` → `delegate_task`; paste the agent file's body as the task prompt |
 
 - **Worktrees:** `scripts/agents/worktree.sh <slug> [base-ref]` creates `../vq-<slug>` on `swarm/<slug>`, links the main checkout's `data/catalog` + `data/archive` (so catalog-backed tests and `exactness_239.py` run there) and prints the `run as` line. Paste that line into every worktree brief: the editable install points at the main checkout, so Python run without `PYTHONPATH=$PWD` tests main's code (CLAUDE.md #7).
 - **Shared state is single-writer.** `data/state/vibe_quant.db`, the backend on :8000 and the beads Dolt store each have one owner at a time. Only `backtest-operator` launches jobs, only the orchestrator mutates beads, and only one agent at a time restarts servers.
@@ -53,7 +54,7 @@ Model choice follows maker-checker: the agents that write run on sonnet or cheap
 
 | Profile | Use when | Design | Build + check |
 |---|---|---|---|
-| **lean** (default) | ≤ ~500 changed lines, one package, no NT engine lifecycle, fill/metric semantics or DB schema change | orchestrator writes the plan from the bead AC | implementer(s) → `reviewer` → `verifier` |
+| **lean** (default) | ≤ ~500 changed lines, one package, no NT engine lifecycle, fill/metric semantics or DB schema change | orchestrator writes the plan from the bead AC | DeepSeek (T3) → `reviewer` (Sonnet) → fix round (DeepSeek, or Sonnet `implementer` on `fix-route: sonnet`) → `verifier` |
 | **full** | anything bigger, cross-package, or touching the areas above | `architect` → `reviewer` (design mode) → user gate | same as lean |
 
 Measured on job `20261008-discovery-robustness` (2 beads, +~330 lines, full profile): ~335k Claude subagent tokens + ~604k cmd tokens, ~1 h wall. The Opus review found 3 real defects; the architect step added little the bead AC didn't already say, and one design choice (seeded uids) caused a defect only a design review would have caught cheaply.
@@ -100,11 +101,11 @@ open:
 
 ## Swarm bus (agent ↔ agent ↔ chief)
 
-`scripts/agents/bus.py` gives every job a shared mailbox + message board at `data/swarm/<job>/bus/` (append-only JSONL, flock-guarded; stdlib python3, so Claude subagents and `cmd` workers can both use it).
+`scripts/agents/bus.py` gives every job a shared mailbox + message board at `data/swarm/<job>/bus/` (append-only JSONL, flock-guarded; stdlib python3, so Claude subagents and Command Code subagents can both use it).
 
 - **Direct messages:** `post --to <agent>|chief|all`, `inbox`, `ask` (blocks for the answer), `wait`, `reply --ref`.
 - **Message board:** `board post --topic <t>`, `board read` (per-agent, per-topic cursors), `board topics`, `thread <id>`, `board render --out <job>/board.md` (human view). Conventions: `#design` (claims on shared files, design questions), `#findings` (reusable facts and numbers), `#blockers`.
-- **Workers:** `cmd-task.sh --agent <name>` with `SWARM_BUS=<job>/bus` prepends [`prompts/bus-protocol.md`](prompts/bus-protocol.md) to the brief and announces the worker. For Claude subagents, paste the same block (placeholders filled) into the brief.
+- **Workers:** paste [`prompts/bus-protocol.md`](prompts/bus-protocol.md) (placeholders filled: agent id, absolute job bus path, repo) into every brief — Claude subagents and Command Code T3 subagents alike (T3 children get nothing automatically).
 - **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board read --global --recent 30` (the protocol makes every worker do this first); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
 - **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
 
@@ -113,8 +114,8 @@ open:
 | Tool | What | Used by |
 |---|---|---|
 | `scripts/agents/swarm-check.sh <wt> [--scope globs] [--base main]` | automated pre-review gate: scope, clean tree, ruff, mypy, targeted tests, exactness (any `vibe_quant/` change outside UI/IO dirs), frontend; fails closed (bad base, empty diff, git errors) | chief, before every review |
-| `scripts/agents/stall_watch.py watch --job <job_dir> [--kill]` | flags cmd workers with no log growth / no edits; `--kill` only signals a registered worker's own session after re-verifying pid + start time | chief, under a Monitor |
-| `scripts/agents/telemetry.py record/ingest-cmd-log/review/report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` (committed): rounds-to-done, pass-1 rate, tokens, wall time by model/runtime/agent | cmd-task.sh (auto), chief (reviews, report) |
+| `scripts/agents/stall_watch.py watch --job <job_dir> [--kill]` | legacy: flags `cmd-task.sh` processes only (it cannot see T3 subagents). For T3 Command Code children use T3 notifications, `task_status` when overdue, and `git -C <worktree> status` | manual one-offs |
+| `scripts/agents/telemetry.py record/ingest-cmd-log/review/report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` (committed): rounds-to-done, pass-1 rate, tokens, wall time by model/runtime/agent | chief (`record --runtime cmd` per T3 Command Code round, reviews, report); cmd-task.sh (auto, legacy) |
 | `scripts/agents/bus.py needs-user ask/open/answer --user` | queue of decisions only the user makes; shown first in `digest` and the SessionStart brief | any agent asks; only the user closes |
 
 ## Tiered review
@@ -124,14 +125,17 @@ Route each diff to the cheapest checker that can judge it (user, 2026-10-09). **
 | Diff | Checker |
 |---|---|
 | test-only nits, docs/config, dependency pins, renames, small UI tweaks, fix-round deltas that only apply a reviewer's exact spec | `reviewer-lite` (Haiku 5.5) — escalates on its own when a hunk touches semantics |
-| fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control (signals, kill, locks), risk/paper/live, design reviews, NEW scripts/modules, anything > ~150 hand-written non-test lines | `reviewer` (Opus) |
-| a `reviewer-lite` escalation, or a later Opus finding that lite missed | `reviewer` (Opus); post the miss to `#self-improvement` |
+| fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control (signals, kill, locks), risk/paper/live, NEW scripts/modules, anything > ~150 hand-written non-test lines | `reviewer` (Sonnet) |
+| design reviews (architect handoffs) | `reviewer` with `model: "opus"`, `mode: design` |
+| a `reviewer-lite` escalation, or a later reviewer finding that lite missed | `reviewer` (Sonnet); post the miss to `#self-improvement` |
+
+**Fix route** (from the reviewer's `fix-route:` line): `deepseek` → re-delegate to DeepSeek via T3 with the findings verbatim (new `clientRequestId`); `sonnet` (any blocking finding, ≥ 3 should-fix, 2nd failed round, or the maker misunderstood the task) → a Sonnet `implementer` fixes with the findings verbatim, and the fix delta goes to a **fresh** reviewer.
 
 Every diff still passes `scripts/agents/swarm-check.sh <worktree>` (the automated pre-review gate) before any reviewer sees it.
 
 ## Self-improving prompts
 
-Agent definitions (`.claude/agents/*.md`), the orchestrate skill and the worker protocol are living documents. Writing roles may edit their **own** definition; read-only roles and `cmd` workers propose exact changes on `#self-improvement` (persistent); the chief reviews every proposal/self-edit at each Land step and keeps, adjusts or reverts it, logging a line in the file's `## Changelog`. Nobody weakens gates, maker-checker, verification rules or hard rules without the user's approval.
+Agent definitions (`.claude/agents/*.md`), the orchestrate skill and the worker protocol are living documents. Writing roles may edit their **own** definition; read-only roles and Command Code workers propose exact changes on `#self-improvement` (persistent); the chief reviews every proposal/self-edit at each Land step and keeps, adjusts or reverts it, logging a line in the file's `## Changelog`. Nobody weakens gates, maker-checker, verification rules or hard rules without the user's approval.
 
 ## Workspace
 
@@ -141,8 +145,8 @@ Each orchestrated job gets `data/swarm/<job-id>/` (gitignored), where `<job-id>`
 brief.md          user goal, constraints, gate decisions (append-only)
 ledger.md         task table: id | agent | status | worktree | handoff file | bead
 handoffs/NN-<agent>-<slug>.md   each handoff, verbatim
-prompts/          briefs sent to cmd workers
-cmd-logs/         NDJSON transcripts from cmd-task.sh
+prompts/          briefs sent to Command Code subagents (full text passed as delegate_task `task`)
+cmd-logs/         legacy NDJSON transcripts from cmd-task.sh (T3 children keep theirs in their child thread)
 hypotheses/       research lane: H-*.json tickets
 bus/              swarm bus: messages.jsonl + cursors/ (scripts/agents/bus.py)
 board.md          rendered message board (bus.py board render)
@@ -159,7 +163,7 @@ Six gated phases:
 1. **Brief.** The orchestrator restates the goal and constraints in `brief.md`. Ambiguity goes to the user now, not mid-build.
 2. **Design.** Lean profile: the orchestrator writes the task plan. Full profile: `architect` reads the code and returns a design + a task plan (tasks with acceptance criteria, file paths, dependencies, parallel-safe groups), then `reviewer` checks it in design mode. **User gate:** approve before any code.
 3. **Plan → beads.** The orchestrator files one bead per task (`bd create`) with the acceptance criteria as user-testable checks.
-4. **Build.** One `implementer` per bead, each in its own worktree, test-first. Parallelise only tasks the plan marks as disjoint. Mechanical sub-steps (renames, fixture tables, boilerplate tests) go to `cmd` workers.
+4. **Build.** One DeepSeek T3 subagent per bead (Command Code, `deepseek/deepseek-v4.1-flash`), each in its own worktree, test-first. Parallelise only tasks the plan marks as disjoint. The Sonnet `implementer` only fixes (`fix-route: sonnet`) or takes over after a stall / 2 failed rounds.
 5. **Check.** `reviewer` (spec + quality verdicts) and `verifier` (gates + exactness proofs) run on each diff. A blocking finding sends the task back to an implementer with the finding pasted into the brief. After 3 rounds on the same task, escalate: switch model, re-scope, or ask the user.
 6. **Land.** The orchestrator merges worktrees one at a time onto the job branch, runs the full gate set on the merged result, squash-merges it to `main` (one commit per job), closes beads and pushes (CLAUDE.md § Session Completion).
 

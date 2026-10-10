@@ -1,5 +1,5 @@
 <!--
-cmd brief: draft a discovery-journal entry from a job's handoffs. Tier: fast.
+cmd brief: draft a discovery-journal entry from a job's handoffs. Tier: fast (T3 delegate_task, commandcode_command).
 Orchestrator fills: <JOB DIR>, <OUT>. Orchestrator reviews the draft and pastes it into docs/discovery-journal.md itself.
 Checker: orchestrator diff-reads every number against the handoffs (cheap models round and invent numbers).
 -->
