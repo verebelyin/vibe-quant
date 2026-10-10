@@ -81,7 +81,7 @@ class GuardrailConfig:
     require_wfa: bool = True
     wfa_min_efficiency: float = 0.5
     require_purged_kfold: bool = False
-    require_bootstrap_ci: bool = False  # Bootstrap Sharpe CI filter
+    require_bootstrap_ci: bool = False  # Bootstrap t-stat CI filter
     bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound < this
     bootstrap_ci_level: float = 0.95  # Confidence level (95%)
 
@@ -566,7 +566,7 @@ def apply_guardrails(
             if kfold_reason:
                 reasons.append(kfold_reason)
 
-    # 6. Bootstrap Sharpe CI
+    # 6. Bootstrap t-stat CI (statistic is mean/std*sqrt(n), not an annualized Sharpe)
     bootstrap_passed: bool | None = None
     bootstrap_result: BootstrapResult | None = None
     if config.require_bootstrap_ci:
@@ -581,14 +581,14 @@ def apply_guardrails(
             bootstrap_passed = bootstrap_result.passed
             if not bootstrap_passed:
                 reasons.append(
-                    f"Bootstrap CI lower bound {bootstrap_result.ci_lower:.2f} "
+                    f"Bootstrap CI lower bound {bootstrap_result.ci_lower:.2f} (t-stat) "
                     f"< {config.bootstrap_min_sharpe:.1f} "
-                    f"(observed Sharpe={bootstrap_result.observed_sharpe:.2f}, "
+                    f"(observed t-stat={bootstrap_result.observed_sharpe:.2f}, "
                     f"n={bootstrap_result.n_trades})"
                 )
             else:
                 logger.info(
-                    "Bootstrap CI passed: [%.2f, %.2f] (n=%d)",
+                    "Bootstrap CI passed: t-stat [%.2f, %.2f] (n=%d)",
                     bootstrap_result.ci_lower,
                     bootstrap_result.ci_upper,
                     bootstrap_result.n_trades,

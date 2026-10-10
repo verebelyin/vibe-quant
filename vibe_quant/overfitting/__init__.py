@@ -40,7 +40,7 @@ from vibe_quant.overfitting.wfa import (
 )
 
 __all__ = [
-    # Bootstrap Sharpe CI
+    # Bootstrap t-stat CI
     "BootstrapResult",
     "bootstrap_sharpe_ci",
     # Deflated Sharpe Ratio

@@ -44,6 +44,9 @@ if TYPE_CHECKING:
 
 _EPS = 2.220446049250313e-16  # np.finfo(np.float64).eps == pandas_ta sflt.epsilon
 
+# Kaufman's canonical fast/slow periods (pandas_ta_classic.kama defaults).
+_FAST, _SLOW = 2, 30
+
 
 def compute_kama(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     """KAMA over ``close`` at the given period. Fast/slow periods follow
@@ -65,7 +68,7 @@ def _kama_pandas(df: pd.DataFrame, period: int) -> pd.Series:
     import pandas as pd
     from pandas_ta_classic.utils import non_zero_range, verify_series
 
-    fast, slow, drift = 2, 30, 1
+    fast, slow, drift = _FAST, _SLOW, 1
 
     close = verify_series(df["close"], max(fast, slow, period))
     if close is None:
@@ -106,7 +109,7 @@ def _kama_port(df: pd.DataFrame, period: int) -> pd.Series:
 
     if period < 1:
         return _kama_pandas(df, period)
-    fast, slow = 2, 30
+    fast, slow = _FAST, _SLOW
 
     close = df["close"]
     if close.size < max(fast, slow, period):
@@ -230,7 +233,10 @@ indicator_registry.register_spec(
         default_params={"period": 10},
         param_schema={"period": int},
         compute_fn=compute_kama,
-        pta_lookback_fn=lambda p: int_param(p, "period", 10) * 3,
+        # pandas_ta rejects (warns + returns None for) series shorter than
+        # max(fast, slow, period) = max(30, period): never call it earlier, or
+        # periods 5..9 (3 * period < 30) warn once per bar until bar 30.
+        pta_lookback_fn=lambda p: max(int_param(p, "period", 10) * 3, _SLOW),
         display_name="Kaufman Adaptive MA",
         description=(
             "Adaptive moving average that tightens in trends and widens "

@@ -315,6 +315,23 @@ class TestApplyGuardrails:
         assert result.passed is False
         assert any("Bootstrap CI" in r for r in result.reasons)
 
+    def test_bootstrap_ci_fail_reason_labels_t_stat_not_sharpe(self) -> None:
+        """The bootstrap statistic is mean/std*sqrt(n) = a t-stat; reason must say so."""
+        rng = np.random.default_rng(42)
+        returns = rng.normal(0.0, 1.0, 20)
+        cfg = GuardrailConfig(
+            require_dsr=False,
+            require_wfa=False,
+            require_bootstrap_ci=True,
+            bootstrap_min_sharpe=1.0,
+        )
+        result = apply_guardrails(
+            _make_fitness(trades=20), num_genes=4, config=cfg, trade_returns=returns,
+        )
+        reason = next(r for r in result.reasons if r.startswith("Bootstrap CI"))
+        assert "t-stat" in reason
+        assert "Sharpe" not in reason
+
     def test_bootstrap_ci_no_returns_fails(self) -> None:
         """Bootstrap CI required but no trade returns -> fail."""
         cfg = GuardrailConfig(

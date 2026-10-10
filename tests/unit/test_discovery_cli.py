@@ -288,7 +288,7 @@ def test_1m_default_bootstrap_min_sharpe_is_0_5(tmp_path: Path, monkeypatch, cap
         assert main() == 0
 
     assert any(
-        "Bootstrap min Sharpe default: 0.5" in r.message and "timeframe=1m" in r.message
+        "Bootstrap min t-stat default: 0.5" in r.message and "timeframe=1m" in r.message
         for r in caplog.records
     ), f"expected 1m default=0.5, got: {[r.message for r in caplog.records]}"
 
@@ -313,7 +313,7 @@ def test_non_1m_default_bootstrap_min_sharpe_is_1_0(tmp_path: Path, monkeypatch,
         assert main() == 0
 
     assert any(
-        "Bootstrap min Sharpe default: 1.0" in r.message and "timeframe=1h" in r.message
+        "Bootstrap min t-stat default: 1.0" in r.message and "timeframe=1h" in r.message
         for r in caplog.records
     )
 
@@ -339,7 +339,7 @@ def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, cap
         assert main() == 0
 
     assert any(
-        "Bootstrap min Sharpe default: 0.0" in r.message and "timeframe=4h" in r.message
+        "Bootstrap min t-stat default: 0.0" in r.message and "timeframe=4h" in r.message
         for r in caplog.records
     )
 
@@ -376,7 +376,7 @@ def test_explicit_bootstrap_min_sharpe_overrides_default(tmp_path: Path, monkeyp
 
     # Should NOT log the default-resolution line when user provided value.
     assert not any(
-        "Bootstrap min Sharpe default:" in r.message
+        "Bootstrap min t-stat default:" in r.message
         for r in caplog.records
     )
 

@@ -755,7 +755,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Bootstrap CI lower bound threshold. Candidates whose bootstrap "
-        "CI lower bound falls below this Sharpe are rejected. Timeframe-aware "
+        "CI lower bound falls below this t-stat (mean/std*sqrt(n), not an "
+        "annualized Sharpe) are rejected. Timeframe-aware "
         "default: 0.5 for 1m (wider CIs on high-freq noise), 0.0 for 4h/1d "
         "(low trade counts make the lower bound structurally < 1.0), "
         "1.0 otherwise.",
@@ -764,14 +765,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--bootstrap-ci-level",
         type=float,
         default=0.95,
-        help="Confidence level for bootstrap Sharpe CI (default: 0.95).",
+        help="Confidence level for bootstrap t-stat CI (default: 0.95).",
     )
     parser.add_argument(
         "--no-bootstrap-ci",
         dest="require_bootstrap_ci",
         action="store_false",
         default=True,
-        help="Disable the bootstrap Sharpe CI hard guardrail.",
+        help="Disable the bootstrap t-stat CI hard guardrail.",
     )
     parser.add_argument(
         "--no-dsr",
@@ -884,7 +885,7 @@ def main() -> int:
         if args.bootstrap_min_sharpe is None:
             args.bootstrap_min_sharpe = _default_bootstrap_min_sharpe(args.timeframe)
             logger.info(
-                "Bootstrap min Sharpe default: %.1f (timeframe=%s)",
+                "Bootstrap min t-stat default: %.1f (timeframe=%s)",
                 args.bootstrap_min_sharpe, args.timeframe,
             )
 

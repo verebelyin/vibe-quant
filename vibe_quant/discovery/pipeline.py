@@ -146,8 +146,8 @@ class DiscoveryConfig:
     wfa_min_consistency: float = 0.75  # fraction of rolling windows that must be profitable
     holdout_min_sharpe: float = 0.0  # holdout gate: Sharpe must exceed this
     holdout_min_trades: int | None = None  # holdout gate trade floor (None = derived)
-    require_bootstrap_ci: bool = True  # Bootstrap Sharpe CI guardrail
-    bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound < this
+    require_bootstrap_ci: bool = True  # Bootstrap t-stat CI guardrail
+    bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound (t-stat) < this
     bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
     require_dsr: bool = True  # Deflated Sharpe Ratio guardrail
 

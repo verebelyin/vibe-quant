@@ -1,17 +1,18 @@
-"""Bootstrap confidence interval for Sharpe ratio.
+"""Bootstrap confidence interval for the trade-level t-stat.
 
 Resamples trade-level PnL returns with replacement to compute a
-confidence interval on the Sharpe ratio. Strategies where the lower
-bound falls below a threshold are rejected as statistically
-insignificant — they may have achieved high Sharpe by luck from
-a small number of trades.
+confidence interval on the trade-level t-stat (mean / std * sqrt(n);
+NOT an annualized Sharpe ratio -- the ``*sharpe*`` names are historical).
+Strategies where the lower bound falls below a threshold are rejected
+as statistically insignificant — they may have achieved a high t-stat
+by luck from a small number of trades.
 
 Usage:
     from vibe_quant.overfitting.bootstrap_sharpe import (
         bootstrap_sharpe_ci, BootstrapResult
     )
     result = bootstrap_sharpe_ci(trade_returns, n_bootstrap=10_000)
-    print(f"Sharpe 95% CI: [{result.ci_lower:.2f}, {result.ci_upper:.2f}]")
+    print(f"t-stat 95% CI: [{result.ci_lower:.2f}, {result.ci_upper:.2f}]")
     if result.ci_lower < 1.0:
         print("REJECT: insufficient statistical significance")
 """
@@ -28,10 +29,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class BootstrapResult:
-    """Result of bootstrap Sharpe ratio confidence interval.
+    """Result of bootstrap t-stat (mean/std*sqrt(n)) confidence interval.
 
     Attributes:
-        observed_sharpe: Sharpe computed from the original trade returns.
+        observed_sharpe: t-stat (mean/std*sqrt(n)) of the original trade returns.
         ci_lower: Lower bound of the confidence interval.
         ci_upper: Upper bound of the confidence interval.
         ci_level: Confidence level (e.g. 0.95 for 95% CI).
@@ -39,7 +40,7 @@ class BootstrapResult:
         n_bootstrap: Number of bootstrap iterations performed.
         passed: Whether ci_lower >= min_sharpe threshold.
         min_sharpe: The threshold used for the pass/fail decision.
-        bootstrap_sharpes: Full array of bootstrap Sharpe ratios (for plotting).
+        bootstrap_sharpes: Full array of bootstrap t-stats (for plotting).
     """
 
     observed_sharpe: float
@@ -54,9 +55,9 @@ class BootstrapResult:
 
 
 def _sharpe_from_returns(returns: np.ndarray) -> float:
-    """Compute Sharpe ratio from an array of trade returns.
+    """Compute the trade-level t-stat from an array of trade returns.
 
-    Uses trade-level Sharpe: mean / std * sqrt(n), consistent with
+    Uses mean / std * sqrt(n) (a t-statistic, not annualized Sharpe), consistent with
     the random_baseline and screening metric computation.
     """
     n = len(returns)
@@ -87,7 +88,7 @@ def bootstrap_sharpe_ci(
     seed: int | None = 42,
     block_length: int | None = None,
 ) -> BootstrapResult:
-    """Compute bootstrap confidence interval for trade-level Sharpe.
+    """Compute bootstrap confidence interval for the trade-level t-stat.
 
     Circular MOVING-BLOCK bootstrap: each resample concatenates random runs of
     ``block_length`` consecutive trades, preserving short-range serial
@@ -100,7 +101,7 @@ def bootstrap_sharpe_ci(
             percentages — just be consistent). Can be list or ndarray.
         n_bootstrap: Number of bootstrap iterations.
         ci_level: Confidence level (default 0.95 = 95% CI).
-        min_sharpe: Minimum Sharpe for the lower CI bound to pass.
+        min_sharpe: Minimum t-stat for the lower CI bound to pass.
         seed: Random seed for reproducibility.
         block_length: Trades per block; ``None`` = ``default_block_length``.
             ``1`` = classic i.i.d. bootstrap.
@@ -138,7 +139,7 @@ def bootstrap_sharpe_ci(
     indices = indices.reshape(n_bootstrap, n_blocks * b)[:, :n]
     samples = returns[indices]  # (n_bootstrap, n)
 
-    # Compute Sharpe for each bootstrap sample
+    # Compute the t-stat for each bootstrap sample
     means = np.mean(samples, axis=1)
     stds = np.std(samples, axis=1, ddof=1)
     # Avoid division by zero
@@ -154,7 +155,7 @@ def bootstrap_sharpe_ci(
     passed = ci_lower >= min_sharpe
 
     logger.debug(
-        "Bootstrap Sharpe CI: observed=%.2f [%.2f, %.2f] (n=%d, %d bootstrap) → %s",
+        "Bootstrap t-stat CI: observed=%.2f [%.2f, %.2f] (n=%d, %d bootstrap) → %s",
         observed,
         ci_lower,
         ci_upper,
