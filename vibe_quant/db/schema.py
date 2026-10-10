@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when adding new migrations to _migrate_add_columns. One-time data
 # migrations are additionally gated by ``PRAGMA user_version`` markers.
-SCHEMA_VERSION: int = 16
+SCHEMA_VERSION: int = 17
 
 SCHEMA_SQL = """
 -- Strategy definitions (DSL configs)
@@ -383,6 +383,10 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("research_extraction_jobs", "max_attempts", "INTEGER NOT NULL DEFAULT 3"),
         ("research_extraction_jobs", "last_error", "TEXT"),
         ("research_extraction_jobs", "heartbeat_at", "TEXT"),
+        # Set by POST /extraction-jobs/{id}/cancel for a RUNNING job; the
+        # worker polls it (~1s) and interrupts only that job's subprocess.
+        # Status stays 'running' until the worker finalizes it as 'cancelled'.
+        ("research_extraction_jobs", "cancel_requested_at", "TEXT"),
         ("backtest_results", "user_notes", "TEXT"),
         ("background_jobs", "pid_start_time", "TEXT"),
     ]

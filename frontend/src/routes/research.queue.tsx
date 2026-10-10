@@ -1,7 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronLeft, ListChecks } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
+import type { ExtractionJobResponse } from "@/api/generated/models";
 import {
   getListExtractionQueueApiResearchExtractionQueueGetQueryKey,
   getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryKey,
@@ -14,6 +16,7 @@ import { formatRelative } from "@/lib/time";
 
 export function ResearchQueuePage() {
   const queryClient = useQueryClient();
+  const [cancelPendingIds, setCancelPendingIds] = useState<number[]>([]);
   const { data, isLoading } = useListExtractionQueueApiResearchExtractionQueueGet(undefined, {
     query: { refetchInterval: 3_000, refetchOnWindowFocus: true },
   });
@@ -22,9 +25,17 @@ export function ResearchQueuePage() {
     mutation: {
       onSuccess: (resp) => {
         // customInstance throws on non-2xx, so 409 (already running/finished)
-        // and 404 (job gone) land in onError, not here — only 200 reaches us.
-        if (resp.status === 200) {
-          toast.success(`Job ${resp.data.id} cancelled`);
+        // and 404 (job gone) land in onError, not here. The generated response
+        // union also carries the 422 error variant, hence the cast.
+        const job = resp.data as ExtractionJobResponse;
+        // A running job's cancel can return 202 with the response-only
+        // 'cancel_pending' status while the worker interrupts the subprocess.
+        if (job.status === "cancel_pending") {
+          setCancelPendingIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]));
+          toast.info(`Job ${job.id}: cancel requested — waiting for the worker`);
+        } else {
+          setCancelPendingIds((prev) => prev.filter((id) => id !== job.id));
+          toast.success(`Job ${job.id} cancelled`);
         }
         queryClient.invalidateQueries({
           queryKey: getListExtractionQueueApiResearchExtractionQueueGetQueryKey(),
@@ -37,7 +48,7 @@ export function ResearchQueuePage() {
         // The thrown Error message embeds the HTTP status ("API error: 409 …").
         const msg = error instanceof Error ? error.message : "";
         if (msg.includes("409")) {
-          toast.error("Job already running or finished — cannot cancel");
+          toast.error("Job already finished — cannot cancel");
         } else if (msg.includes("404")) {
           toast.error("Job not found");
         } else {
@@ -104,7 +115,8 @@ export function ResearchQueuePage() {
             </thead>
             <tbody>
               {jobs.map((job) => {
-                const isQueued = job.status === "queued";
+                const isActive = job.status === "queued" || job.status === "running";
+                const isCancelPending = cancelPendingIds.includes(job.id);
                 return (
                   <tr key={job.id} className="border-b border-border/30 hover:bg-card/60">
                     <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
@@ -141,17 +153,20 @@ export function ResearchQueuePage() {
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{job.item_source}</td>
                     <td className="px-3 py-2 text-right">
-                      {isQueued && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-[11px]"
-                          disabled={cancelMutation.isPending}
-                          onClick={() => cancelMutation.mutate({ jobId: job.id })}
-                        >
-                          Cancel
-                        </Button>
-                      )}
+                      {isActive &&
+                        (isCancelPending ? (
+                          <span className="text-[10px] text-amber-300">Cancel pending…</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[11px]"
+                            disabled={cancelMutation.isPending}
+                            onClick={() => cancelMutation.mutate({ jobId: job.id })}
+                          >
+                            Cancel
+                          </Button>
+                        ))}
                     </td>
                   </tr>
                 );

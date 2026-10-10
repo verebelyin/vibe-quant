@@ -1725,42 +1725,180 @@ class StateManager:
                 raise ValueError(
                     f"job {job_id} cannot be cancelled from status={status!r}"
                 )
-            self.conn.execute(
-                """UPDATE research_extraction_jobs
-                   SET status = 'cancelled',
-                       completed_at = datetime('now'),
-                       error_message = COALESCE(error_message, 'cancelled by user')
-                   WHERE id = ?""",
-                (job_id,),
-            )
-            item_id = int(job["research_item_id"])
-            # Restore item to a sensible non-running state. If there are
-            # prior extractions, derive item status from the latest one;
-            # otherwise default to 'pending'.
-            latest_ext = self.conn.execute(
-                """SELECT status FROM research_extractions
-                   WHERE research_item_id = ?
-                   ORDER BY extracted_at DESC, id DESC LIMIT 1""",
-                (item_id,),
-            ).fetchone()
-            if latest_ext is None:
-                new_item_status = "pending"
-            else:
-                ext_status = str(latest_ext["status"])
-                new_item_status = {
-                    "parsed": "extracted",
-                    "promoted": "extracted",
-                    "rejected": "extracted",
-                    "failed": "failed",
-                    "skipped": "skipped",
-                }.get(ext_status, "pending")
-            self.conn.execute(
-                "UPDATE research_items SET extraction_status = ? WHERE id = ?",
-                (new_item_status, item_id),
-            )
+            if not self._mark_cancelled_locked(
+                job_id, int(job["research_item_id"]), error_message=None
+            ):
+                # Cross-process race: the job left 'queued' under us.
+                raise ValueError(
+                    f"job {job_id} cannot be cancelled from status != 'queued'"
+                )
             self.conn.commit()
             job["status"] = "cancelled"
             return job
+
+    def request_cancel_extraction_job(self, job_id: int) -> JsonDict | None:
+        """Request cancellation of a queued or running extraction job.
+
+        - queued    -> cancelled immediately (same as cancel_queued_extraction_job).
+        - running   -> stamps ``cancel_requested_at``; the worker interrupts this
+          job's subprocess and finalizes the row as 'cancelled'.
+        - cancelled -> idempotent no-op.
+        - done/failed -> raises ValueError (already has a terminal outcome).
+
+        Every UPDATE carries a ``status`` predicate + rowcount check, so a
+        cross-process transition between the SELECT and the UPDATE (e.g. the
+        API cancelling a job a worker just claimed) can never stamp or
+        overwrite the wrong state; on such a race the loop re-reads and
+        re-dispatches. Returns the post-update row, or None if the job does
+        not exist.
+        """
+        with self._write_lock:
+            for _ in range(4):
+                row = self.conn.execute(
+                    "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                if row is None:
+                    return None
+                job = dict(row)
+                status = str(job["status"])
+                if status == "cancelled":
+                    return job  # idempotent
+                if status in ("done", "failed"):
+                    raise ValueError(
+                        f"job {job_id} cannot be cancelled from status={status!r}"
+                    )
+                if status == "queued":
+                    if self._mark_cancelled_locked(
+                        job_id, int(job["research_item_id"]), error_message=None
+                    ):
+                        self.conn.commit()
+                        job["status"] = "cancelled"
+                        return job
+                    continue  # raced: re-read
+                # Running: flag it. COALESCE keeps the first request time.
+                if not self._stamp_cancel_requested_locked(job_id):
+                    continue  # left 'running' under us: re-read
+                self.conn.commit()
+                updated = self.conn.execute(
+                    "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                return dict(updated) if updated else job
+            # Another process keeps flipping the row; report the freshest read.
+            row = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def finish_cancelled_extraction_job(
+        self,
+        job_id: int,
+        *,
+        error_message: str,
+    ) -> JsonDict:
+        """Finalize a running job as 'cancelled' after its subprocess was interrupted.
+
+        A user cancel is not a failure: ``attempts`` is left untouched (no
+        retry, no increment) and the parent item's ``extraction_status`` is
+        restored so the item can be re-extracted. Idempotent for a job already
+        'cancelled'; raises ValueError if the row is missing or already
+        'done'/'failed' — a cancel must never overwrite a real outcome.
+
+        Returns the post-update row.
+        """
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"extraction job {job_id} not found")
+            job = dict(row)
+            status = str(job["status"])
+            if status == "cancelled":
+                return job  # idempotent
+            if status in ("done", "failed"):
+                raise ValueError(
+                    f"job {job_id} cannot be cancelled from status={status!r}"
+                )
+            if not self._mark_cancelled_locked(
+                job_id, int(job["research_item_id"]), error_message=error_message
+            ):
+                raise ValueError(
+                    f"job {job_id} changed state before the cancel could be applied"
+                )
+            self.conn.commit()
+            job["status"] = "cancelled"
+            job["error_message"] = error_message
+            return job
+
+    def _stamp_cancel_requested_locked(self, job_id: int) -> bool:
+        """Stamp ``cancel_requested_at`` for a RUNNING job. Caller holds the lock.
+
+        Returns False when the job is no longer 'running' — the guard that
+        stops a cross-process race from stamping a finished job. COALESCE keeps
+        the first request time.
+        """
+        cursor = self.conn.execute(
+            """UPDATE research_extraction_jobs
+               SET cancel_requested_at = COALESCE(
+                       cancel_requested_at, datetime('now'))
+               WHERE id = ? AND status = 'running'""",
+            (job_id,),
+        )
+        return cursor.rowcount > 0
+
+    def _mark_cancelled_locked(
+        self,
+        job_id: int,
+        item_id: int,
+        *,
+        error_message: str | None,
+    ) -> bool:
+        """Set a job row to 'cancelled' + restore its item. Caller holds the lock.
+
+        The UPDATE is guarded by status so a cross-process transition into a
+        real terminal state ('done'/'failed') is never overwritten. Returns
+        False — touching neither the job nor the item — when the guard misses.
+        """
+        cursor = self.conn.execute(
+            """UPDATE research_extraction_jobs
+               SET status = 'cancelled',
+                   completed_at = datetime('now'),
+                   error_message = COALESCE(?, error_message, 'cancelled by user')
+               WHERE id = ? AND status IN ('queued', 'running')""",
+            (error_message, job_id),
+        )
+        if cursor.rowcount == 0:
+            return False
+        self._restore_item_after_cancel_locked(item_id)
+        return True
+
+    def _restore_item_after_cancel_locked(self, item_id: int) -> None:
+        """Roll the parent item out of queued/running after a cancel.
+
+        Mirrors the latest extraction's rolled-up status when one exists,
+        otherwise 'pending'. Caller holds the write lock.
+        """
+        latest_ext = self.conn.execute(
+            """SELECT status FROM research_extractions
+               WHERE research_item_id = ?
+               ORDER BY extracted_at DESC, id DESC LIMIT 1""",
+            (item_id,),
+        ).fetchone()
+        if latest_ext is None:
+            new_item_status = "pending"
+        else:
+            ext_status = str(latest_ext["status"])
+            new_item_status = {
+                "parsed": "extracted",
+                "promoted": "extracted",
+                "rejected": "extracted",
+                "failed": "failed",
+                "skipped": "skipped",
+            }.get(ext_status, "pending")
+        self.conn.execute(
+            "UPDATE research_items SET extraction_status = ? WHERE id = ?",
+            (new_item_status, item_id),
+        )
 
     def list_extraction_queue(
         self,
@@ -1884,10 +2022,27 @@ class StateManager:
             return cursor.rowcount > 0
 
     def get_extraction_job(self, job_id: int) -> JsonDict | None:
-        row = self.conn.execute(
-            "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
-        ).fetchone()
+        # The worker watcher (1 s/job), the API cancel poll (0.25 s) and the
+        # drain threads share this connection. An unlocked SELECT here can
+        # interleave with a writer and corrupt the connection
+        # (sqlite3.InterfaceError), so the read must take the write lock.
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT * FROM research_extraction_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
         return dict(row) if row else None
+
+    def extraction_job_cancel_requested(self, job_id: int) -> bool:
+        """Cheap locked poll: has a cancel been requested for this job?
+
+        The per-job watcher calls this ~1 s while a drain thread writes; the
+        read must be serialized with those writers (shared connection)."""
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT cancel_requested_at FROM research_extraction_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        return bool(row and row["cancel_requested_at"])
 
     def list_extraction_jobs(
         self,

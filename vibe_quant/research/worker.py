@@ -31,6 +31,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import FrameType
 
     from vibe_quant.db.state_manager import StateManager
@@ -42,6 +43,9 @@ DEFAULT_GRACE_PERIOD_S: float = 5.0
 DEFAULT_LOG_ROOT: Path = Path("data/logs")
 DEFAULT_HEARTBEAT_INTERVAL_S: float = 30.0
 DEFAULT_SWEEP_INTERVAL_S: float = 60.0
+# How often a job's watcher thread polls its row for `cancel_requested_at`.
+# Cheap SELECT; 1 s keeps the UI's 5 s cancel-confirm window comfortable.
+DEFAULT_CANCEL_POLL_INTERVAL_S: float = 1.0
 MAX_CONCURRENCY: int = 4
 
 
@@ -58,7 +62,14 @@ def _stuck_threshold_seconds() -> int:
 
 
 class _HeartbeatThread(threading.Thread):
-    """Background daemon that bumps `heartbeat_at` for the current job."""
+    """Background daemon that heartbeats a job and watches for cancel requests.
+
+    Heartbeats every ``interval`` seconds and polls the job row for
+    ``cancel_requested_at`` every ``cancel_poll_interval`` seconds; the first
+    time it appears it invokes ``on_cancel`` exactly once. The callback only
+    flips the per-job cancel Event — the thread that owns the subprocess does
+    the SIGTERM/SIGKILL, so no Popen handle ever crosses threads.
+    """
 
     def __init__(
         self,
@@ -66,22 +77,45 @@ class _HeartbeatThread(threading.Thread):
         job_id: int,
         *,
         interval: float = DEFAULT_HEARTBEAT_INTERVAL_S,
+        cancel_poll_interval: float = DEFAULT_CANCEL_POLL_INTERVAL_S,
+        on_cancel: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(daemon=True, name=f"extract-heartbeat-{job_id}")
         self._sm = sm
         self._job_id = job_id
         self._interval = interval
+        self._cancel_poll_interval = cancel_poll_interval
+        self._on_cancel = on_cancel
         self._stop = threading.Event()
+        self._cancel_seen = False
 
     def stop(self) -> None:
         self._stop.set()
 
     def run(self) -> None:
-        while not self._stop.wait(self._interval):
-            try:
-                self._sm.heartbeat_extraction_job(self._job_id)
-            except Exception:  # noqa: BLE001
-                logger.exception("heartbeat failed for job %s", self._job_id)
+        last_beat = time.monotonic()
+        while not self._stop.wait(self._cancel_poll_interval):
+            now = time.monotonic()
+            if now - last_beat >= self._interval:
+                try:
+                    self._sm.heartbeat_extraction_job(self._job_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("heartbeat failed for job %s", self._job_id)
+                last_beat = now
+            if self._on_cancel is not None and not self._cancel_seen:
+                try:
+                    flagged = self._sm.extraction_job_cancel_requested(self._job_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("cancel poll failed for job %s", self._job_id)
+                    continue
+                if flagged:
+                    self._cancel_seen = True
+                    try:
+                        self._on_cancel()
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "cancel callback failed for job %s", self._job_id
+                        )
 
 
 def _iso_now() -> str:
@@ -133,19 +167,33 @@ def process_one_job(sm: StateManager) -> dict[str, Any] | None:
     return {**job, "status": "done"}
 
 
-def _run_extraction(sm: StateManager, item_id: int) -> None:
+def _run_extraction(
+    sm: StateManager,
+    item_id: int,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> None:
     """Synchronously extract one item using the default extractor.
 
     Mirrors the previous `_run_extraction_background` in the router but
     raises on failure so the caller (process_one_job) can mark the job
     failed and log uniformly.
+
+    ``cancel_event`` (when provided) is bound to this thread so the extractor's
+    cancellable subprocess path can interrupt just this job's `claude` child;
+    ``None`` keeps the legacy, non-cancellable subprocess.run call.
     """
     from vibe_quant.research.archive import row_to_raw_item
     from vibe_quant.research.extraction_log import (
         log_dir_for_manual,
         write_extraction_log,
     )
-    from vibe_quant.research.extractor import extractor_version, get_default_extractor
+    from vibe_quant.research.extractor import (
+        clear_thread_cancel_event,
+        extractor_version,
+        get_default_extractor,
+        set_thread_cancel_event,
+    )
     from vibe_quant.research.pipeline import persist_extractions
 
     item_row = sm.get_research_item(item_id)
@@ -153,7 +201,11 @@ def _run_extraction(sm: StateManager, item_id: int) -> None:
         raise RuntimeError(f"research_item {item_id} not found at job start")
 
     extractor = get_default_extractor()
-    batch = extractor.extract_all(row_to_raw_item(item_row))
+    set_thread_cancel_event(cancel_event)
+    try:
+        batch = extractor.extract_all(row_to_raw_item(item_row))
+    finally:
+        clear_thread_cancel_event()
     write_extraction_log(
         log_dir=log_dir_for_manual(),
         item_id=item_id,
@@ -177,6 +229,8 @@ def _drain_loop(
     """One worker thread's drain loop. Claims one job at a time, marks
     in_flight, processes, then loops. Tracks its own current job so it can
     finalize as 'cancelled' if stop is set mid-extraction."""
+    from vibe_quant.research.extractor import ExtractionCancelled
+
     current_job_id: int | None = None
     try:
         while not stop.is_set():
@@ -201,10 +255,37 @@ def _drain_loop(
                 item_id=item_id,
                 worker_idx=worker_idx,
             )
-            heartbeat = _HeartbeatThread(sm, current_job_id)
+            # Per-job cancel Event: the watcher flips it when the row carries
+            # cancel_requested_at; only this job's subprocess is interrupted.
+            cancel_event = threading.Event()
+            heartbeat = _HeartbeatThread(
+                sm,
+                current_job_id,
+                cancel_poll_interval=DEFAULT_CANCEL_POLL_INTERVAL_S,
+                on_cancel=cancel_event.set,
+            )
             heartbeat.start()
             try:
-                _run_extraction(sm, item_id)
+                _run_extraction(sm, item_id, cancel_event=cancel_event)
+            except ExtractionCancelled as e:
+                error_message = (
+                    "cancelled-after-timeout" if e.grace_expired else "cancelled by user"
+                )
+                try:
+                    sm.finish_cancelled_extraction_job(
+                        current_job_id, error_message=error_message
+                    )
+                except ValueError:
+                    logger.warning(
+                        "extraction-worker: job %s already terminal before cancel",
+                        current_job_id,
+                    )
+                sink.emit(
+                    "job_cancelled",
+                    job_id=current_job_id,
+                    item_id=item_id,
+                    reason=error_message,
+                )
             except Exception as e:  # noqa: BLE001
                 msg = f"{type(e).__name__}: {e}"
                 logger.exception("extraction-worker: job %s failed", current_job_id)

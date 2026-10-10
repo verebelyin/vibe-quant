@@ -9,10 +9,11 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from vibe_quant.api.deps import get_state_manager
 from vibe_quant.api.schemas.research import (
@@ -368,17 +369,8 @@ def get_item(item_id: int, sm: StateMgr) -> ResearchItemDetailResponse:
     )
 
 
-def _latest_job_for_item(sm: StateMgr, item_id: int) -> ExtractionJobResponse | None:
-    """Pull the most recent extraction job row for an item, if any."""
-    rows = sm.conn.execute(
-        """SELECT * FROM research_extraction_jobs
-           WHERE research_item_id = ?
-           ORDER BY id DESC LIMIT 1""",
-        (item_id,),
-    ).fetchone()
-    if not rows:
-        return None
-    r = dict(rows)
+def _job_to_response(r: dict[str, Any]) -> ExtractionJobResponse:
+    """Map a raw `research_extraction_jobs` row to the API response model."""
     return ExtractionJobResponse(
         id=int(r["id"]),
         research_item_id=int(r["research_item_id"]),
@@ -392,6 +384,19 @@ def _latest_job_for_item(sm: StateMgr, item_id: int) -> ExtractionJobResponse | 
         error_message=r.get("error_message"),
         heartbeat_at=r.get("heartbeat_at"),
     )
+
+
+def _latest_job_for_item(sm: StateMgr, item_id: int) -> ExtractionJobResponse | None:
+    """Pull the most recent extraction job row for an item, if any."""
+    rows = sm.conn.execute(
+        """SELECT * FROM research_extraction_jobs
+           WHERE research_item_id = ?
+           ORDER BY id DESC LIMIT 1""",
+        (item_id,),
+    ).fetchone()
+    if not rows:
+        return None
+    return _job_to_response(dict(rows))
 
 
 @router.post(
@@ -421,6 +426,11 @@ def extract_item(item_id: int, sm: StateMgr) -> ExtractEnqueueResponse:
 
 
 _QUEUE_STATUSES = {"queued", "running", "done", "failed", "cancelled"}
+
+# How long POST /extraction-jobs/{id}/cancel waits for the worker to confirm a
+# running job's cancellation before falling back to 202 + 'cancel_pending'.
+_CANCEL_WAIT_SECONDS: float = 5.0
+_CANCEL_POLL_INTERVAL_S: float = 0.25
 
 
 def _queue_job_to_response(row: dict[str, Any]) -> ExtractionQueueJobResponse:
@@ -485,28 +495,60 @@ def extraction_queue_status(sm: StateMgr) -> ExtractionQueueStatusResponse:
     "/extraction-jobs/{job_id}/cancel",
     response_model=ExtractionJobResponse,
 )
-def cancel_extraction_job(job_id: int, sm: StateMgr) -> ExtractionJobResponse:
-    """Cancel a *queued* extraction job. Cancelling a running job is not
-    supported yet (bd-ma1j) — those return 409 until that bead ships."""
+def cancel_extraction_job(
+    job_id: int, sm: StateMgr, response: Response
+) -> ExtractionJobResponse:
+    """Cancel a queued or running extraction job.
+
+    - **queued** → cancelled immediately (200).
+    - **running** → stamp ``cancel_requested_at`` and wait up to
+      ``_CANCEL_WAIT_SECONDS`` for the worker to interrupt that job's
+      subprocess and finalize it as 'cancelled' (200). If the worker does not
+      confirm in time → 202 with the response-only status ``'cancel_pending'``
+      (never stored — the status CHECK forbids it).
+    - **cancelled** → 200 idempotent no-op.
+    - **done/failed** → 409.
+    """
     try:
-        job = sm.cancel_queued_extraction_job(job_id)
+        job = sm.request_cancel_extraction_job(job_id)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     if job is None:
         raise HTTPException(status_code=404, detail=f"extraction job {job_id} not found")
-    return ExtractionJobResponse(
-        id=int(job["id"]),
-        research_item_id=int(job["research_item_id"]),
-        status=str(job["status"]),
-        queued_at=job.get("queued_at"),
-        started_at=job.get("started_at"),
-        completed_at=job.get("completed_at"),
-        attempts=int(job.get("attempts") or 0),
-        max_attempts=int(job.get("max_attempts") or 0),
-        last_error=job.get("last_error"),
-        error_message=job.get("error_message"),
-        heartbeat_at=job.get("heartbeat_at"),
-    )
+
+    if str(job["status"]) != "running":
+        # queued (cancelled inline) or already cancelled.
+        return _job_to_response(job)
+
+    deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(_CANCEL_POLL_INTERVAL_S)
+        row = sm.get_extraction_job(job_id)
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail=f"extraction job {job_id} not found"
+            )
+        status = str(row["status"])
+        if status == "cancelled":
+            return _job_to_response(row)
+        if status == "queued":
+            # The worker's retry re-queued the job while we waited; it survives
+            # the requeue as cancellable, so cancel it now instead of spinning
+            # to 202 (which would look pending forever).
+            requeued = sm.request_cancel_extraction_job(job_id)
+            if requeued is not None:
+                return _job_to_response(requeued)
+            continue
+        if status in ("done", "failed"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"job {job_id} finished as {status!r} before cancel took effect",
+            )
+
+    response.status_code = 202
+    result = _job_to_response(sm.get_extraction_job(job_id) or job)
+    result.status = "cancel_pending"
+    return result
 
 
 @router.post("/extractions/{extraction_id}/promote", response_model=PromoteResponse)

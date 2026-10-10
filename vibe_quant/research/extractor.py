@@ -25,6 +25,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -41,6 +43,47 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_BIN = "claude"
 CLAUDE_TIMEOUT_SECONDS = 180
+# Grace period between SIGTERM and SIGKILL when a cancelled extraction's
+# subprocess must be interrupted. Module-level so tests can shrink it.
+CANCEL_GRACE_SECONDS: float = 30.0
+# How often the cancellable path wakes to re-check its cancel Event.
+_CANCEL_POLL_S: float = 0.25
+
+
+class ExtractionCancelled(Exception):
+    """A per-job cancel Event interrupted the ``claude`` subprocess.
+
+    ``grace_expired`` is True when the child ignored SIGTERM and had to be
+    SIGKILLed after ``CANCEL_GRACE_SECONDS`` — the worker records the distinct
+    ``cancelled-after-timeout`` error message for that case.
+    """
+
+    def __init__(self, *, grace_expired: bool) -> None:
+        self.grace_expired = grace_expired
+        super().__init__(
+            "cancelled-after-timeout" if grace_expired else "cancelled by user"
+        )
+
+
+# Per-thread binding of the current extraction's cancel Event. The worker's
+# drain thread sets it before calling extract_all(); the cancellable subprocess
+# path reads it. threading.local keeps it isolated to the one job's thread.
+_cancel_ctx = threading.local()
+
+
+def set_thread_cancel_event(event: threading.Event | None) -> None:
+    """Bind ``event`` to the current thread (None clears it)."""
+    _cancel_ctx.event = event
+
+
+def clear_thread_cancel_event() -> None:
+    """Drop the current thread's cancel Event binding."""
+    _cancel_ctx.event = None
+
+
+def _thread_cancel_event() -> threading.Event | None:
+    return getattr(_cancel_ctx, "event", None)
+
 # Extraction runs on Sonnet 5 by default: it is fully capable at structured
 # text+vision extraction and far cheaper than the CLI's own default (Fable 5),
 # which was burning quota on the 4-images-per-call research sweep. Override
@@ -707,23 +750,93 @@ class ClaudePExtractor:
             # dirs holding the images must be granted explicitly.
             for d in sorted({str(Path(p).parent) for p in image_paths}):
                 argv += ["--add-dir", d]
-        proc = subprocess.run(  # noqa: S603
+        cancel_event = _thread_cancel_event()
+        if cancel_event is None:
+            # Legacy, non-cancellable call. Kept on subprocess.run so existing
+            # extractor tests (which patch subprocess.run) keep exercising this
+            # exact argv/cwd/text/timeout behaviour.
+            proc = subprocess.run(  # noqa: S603
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                # Neutral cwd: run from the system temp dir, NOT the repo.
+                # claude -p loads any CLAUDE.md/AGENTS.md in its working directory
+                # into context — from the vibe-quant repo that is ~5k tokens of
+                # irrelevant engineering instructions PER CALL (pure quota waste)
+                # that also contaminates extraction behavior.
+                cwd=tempfile.gettempdir(),
+            )
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()
+                raise ValueError(f"claude exited {proc.returncode}: {stderr[:500]}")
+            return proc.stdout
+        return self._run_claude_cancellable(argv, cancel_event)
+
+    def _run_claude_cancellable(
+        self, argv: list[str], cancel_event: threading.Event
+    ) -> str:
+        """Popen + communicate() variant that can be interrupted per job.
+
+        Identical argv/cwd/text/timeout semantics as the subprocess.run path;
+        the only addition is that a set ``cancel_event`` SIGTERMs *this one*
+        child (SIGKILL after ``CANCEL_GRACE_SECONDS`` if it ignores SIGTERM)
+        and raises :class:`ExtractionCancelled`.
+        """
+        if cancel_event.is_set():
+            raise ExtractionCancelled(grace_expired=False)
+        proc = subprocess.Popen(  # noqa: S603
             argv,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=self.timeout_seconds,
-            # Neutral cwd: run from the system temp dir, NOT the repo.
-            # claude -p loads any CLAUDE.md/AGENTS.md in its working directory
-            # into context — from the vibe-quant repo that is ~5k tokens of
-            # irrelevant engineering instructions PER CALL (pure quota waste)
-            # that also contaminates extraction behavior.
+            # Neutral cwd: see the subprocess.run path above.
             cwd=tempfile.gettempdir(),
         )
+        try:
+            stdout, stderr = self._communicate_with_cancel(proc, cancel_event)
+        except BaseException:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            raise
         if proc.returncode != 0:
-            stderr = (proc.stderr or "").strip()
-            raise ValueError(f"claude exited {proc.returncode}: {stderr[:500]}")
-        return proc.stdout
+            stderr_text = (stderr or "").strip()
+            raise ValueError(f"claude exited {proc.returncode}: {stderr_text[:500]}")
+        return stdout
+
+    def _communicate_with_cancel(
+        self, proc: subprocess.Popen[str], cancel_event: threading.Event
+    ) -> tuple[str, str]:
+        """Read child output, honouring the timeout AND a per-job cancel Event.
+
+        Retrying ``communicate(timeout=…)`` after a TimeoutExpired loses no
+        output (documented subprocess behaviour), so the loop can poll the
+        cancel Event cheaply while the child runs.
+        """
+        deadline = time.monotonic() + self.timeout_seconds
+        while True:
+            if cancel_event.is_set():
+                grace_expired = False
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=CANCEL_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    grace_expired = True
+                    proc.kill()
+                    proc.communicate()
+                raise ExtractionCancelled(grace_expired=grace_expired)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.communicate()
+                raise subprocess.TimeoutExpired(proc.args, self.timeout_seconds)
+            try:
+                out, err = proc.communicate(timeout=min(_CANCEL_POLL_S, remaining))
+                return out or "", err or ""
+            except subprocess.TimeoutExpired:
+                continue
 
     def _parse_response(self, raw: str) -> list[dict[str, Any]]:
         """Parse Claude's stdout into a list of finding objects.

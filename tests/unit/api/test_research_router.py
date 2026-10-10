@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -11,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from vibe_quant.api.app import create_app
 from vibe_quant.api.deps import get_state_manager
+from vibe_quant.api.routers import research as research_router
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research import extraction_log
 from vibe_quant.research.sources import _reset_for_tests, register_source
@@ -468,16 +471,156 @@ def test_cancel_queued_job_idempotent(
     assert second.json()["status"] == "cancelled"
 
 
-def test_cancel_running_job_returns_409(
+def test_cancel_running_job_waits_and_returns_200_when_worker_confirms(
     client: TestClient, sm: StateManager
 ) -> None:
-    """Cancelling a running job isn't supported yet (deferred to bd-ma1j) —
-    must surface as 409 not a silent success."""
+    """A running job's cancel request sets cancel_requested_at and waits for
+    the worker to finalize it — 200 with the cancelled job once it does."""
     iid = _seed_titled(sm, "a", "alpha")
     job_id = sm.enqueue_extraction_job(iid)
     sm.claim_next_extraction_job()
+    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
+
+    def _confirm() -> None:
+        time.sleep(0.2)
+        sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
+
+    th = threading.Thread(target=_confirm)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=5.0)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["cancel_requested_at"] is not None
+    after = sm.get_research_item(iid)
+    assert after is not None
+    assert after["extraction_status"] == "pending"
+
+
+def test_cancel_running_job_returns_202_cancel_pending(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No worker confirms within the wait window → 202 + a response-only
+    'cancel_pending' status (the DB row stays 'running')."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "cancel_pending"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    # 'cancel_pending' is response-only — the status CHECK forbids storing it.
+    assert row["status"] == "running"
+    assert row["cancel_requested_at"] is not None
+
+
+def test_cancel_already_cancelled_is_idempotent_200(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
+
+    resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+
+
+def test_cancel_done_job_returns_409(client: TestClient, sm: StateManager) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    sm.complete_extraction_job(job_id, status="done")
+
     resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
     assert resp.status_code == 409
+
+
+@pytest.mark.parametrize("final_status", ["done", "failed"])
+def test_cancel_running_job_finished_before_cancel_returns_409(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch, final_status: str
+) -> None:
+    """A running job whose cancel was requested but that reaches a REAL
+    terminal outcome before the worker confirms must 409, not be reported as
+    cancelled (the poll sees done/failed)."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
+
+    def _finish() -> None:
+        time.sleep(0.15)
+        sm.complete_extraction_job(job_id, status=final_status)
+
+    th = threading.Thread(target=_finish)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=5.0)
+
+    assert resp.status_code == 409, resp.text
+    assert final_status in resp.json()["detail"]
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == final_status
+
+
+def test_cancel_running_job_requeued_by_worker_reports_cancelled(
+    client: TestClient, sm: StateManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F3: if the job is re-queued (retry) while we wait, the endpoint must
+    cancel it rather than spin to 202 — a requeued job is still cancellable."""
+    monkeypatch.setattr(research_router, "_CANCEL_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(research_router, "_CANCEL_POLL_INTERVAL_S", 0.05)
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    assert sm.get_extraction_job(job_id)["status"] == "running"  # type: ignore[index]
+
+    def _requeue() -> None:
+        time.sleep(0.15)
+        # attempts 1 < max_attempts 3 -> back to 'queued' (cancel flag survives).
+        sm.fail_extraction_job(job_id, "boom")
+
+    th = threading.Thread(target=_requeue)
+    th.start()
+    try:
+        resp = client.post(f"/api/research/extraction-jobs/{job_id}/cancel")
+    finally:
+        th.join(timeout=5.0)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "cancelled"
+    row = sm.get_extraction_job(job_id)
+    assert row is not None
+    assert row["status"] == "cancelled"
+
+
+def test_re_extract_after_cancel_enqueues_again(
+    client: TestClient, sm: StateManager
+) -> None:
+    iid = _seed_titled(sm, "a", "alpha")
+    job_id = sm.enqueue_extraction_job(iid)
+    sm.claim_next_extraction_job()
+    sm.finish_cancelled_extraction_job(job_id, error_message="cancelled by user")
+
+    resp = client.post(f"/api/research/items/{iid}/extract")
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "queued"
 
 
 def test_cancel_unknown_job_returns_404(client: TestClient) -> None:
