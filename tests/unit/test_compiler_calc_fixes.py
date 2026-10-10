@@ -243,8 +243,8 @@ take_profit:
         assert '"5m": pta_buffer_cap([self._pta_lookback["tema"]], full_history=False)' in source
         # TEMA lookback is 3*period = 60 -> cap = max(400, 600) = 600
         assert StrategyCompiler._compute_pta_buffer_cap(compiler._gather_indicator_info(dsl)) == 600
-        # Trim logic present in the buffer feed
-        assert "del _col[:_trim]" in source
+        # Trim logic lives in PtaBuffer, sized from the same runtime cap
+        assert '": PtaBuffer(self._pta_buffer_cap["5m"], with_close_ns=False)' in source
 
     def test_runtime_cap_follows_config_override(self) -> None:
         """A swept period must move the warmup gate and the buffer cap."""

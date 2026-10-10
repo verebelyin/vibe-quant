@@ -450,7 +450,7 @@ def test_bar_mode_feeds_every_1m_bar_to_pandas_indicator() -> None:
     engine, strats = _run(mode="bar", data=data, dsl=dsl)
     strat = strats[_BTC]
     assert strat._command_release_bar_type == strat.bar_type_1m
-    assert len(strat._pta_bufs["1m"]["close"]) == n_1m
+    assert len(strat._pta_bufs["1m"]) == n_1m
     # and the 1m bars also released the 4h signal's entry
     assert len(_entry_fills(engine, _BTC)) == 1
     engine.dispose()

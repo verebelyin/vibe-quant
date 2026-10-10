@@ -129,7 +129,7 @@ class TestParamsFromConfig:
 
         def expected(strat: Any, period: int) -> float:
             # Same window the strategy's (capped) rolling buffer holds.
-            window = df.tail(len(strat._pta_bufs["1h"]["close"])).reset_index(drop=True)
+            window = df.tail(len(strat._pta_bufs["1h"])).reset_index(drop=True)
             return float(compute_adx(window, {"period": period}).iloc[-1])
 
         assert swept._pta_params["adx"] == {"period": 40}
@@ -150,7 +150,7 @@ class TestParamsFromConfig:
             "take_profit": {"type": "fixed_pct", "percent": 4.0},
         }
         strat = _run_strategy(dsl, bars, macd_fast_period=5, macd_slow_period=50)
-        window = df.tail(len(strat._pta_bufs["1h"]["close"])).reset_index(drop=True)
+        window = df.tail(len(strat._pta_bufs["1h"])).reset_index(drop=True)
         exp = compute_macd(window, {"fast_period": 5, "slow_period": 50, "signal_period": 9})
         assert strat._pta_values["macd_histogram"] == pytest.approx(
             float(exp["histogram"].iloc[-1]), rel=1e-12
@@ -196,7 +196,7 @@ class TestTimeframeHonoured:
         assert strat._pta_values["adx"] == pytest.approx(exp_4h, rel=1e-9)
         assert exp_4h != pytest.approx(exp_1h, rel=1e-3)
         # 4h buffer only holds 4h bars
-        assert len(strat._pta_bufs["4h"]["close"]) == len(df4h)
+        assert len(strat._pta_bufs["4h"]) == len(df4h)
 
 
 class TestStochAliases:

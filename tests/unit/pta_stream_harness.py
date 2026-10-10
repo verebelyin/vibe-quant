@@ -20,6 +20,7 @@ from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.parser import validate_strategy_dict
 from vibe_quant.dsl.prefix_memo import MEMO, refresh_enabled
+from vibe_quant.dsl.pta_buffer import PtaBuffer
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -84,7 +85,6 @@ def run_stream(
     harness: Any = type("Harness", (compiled_cls,), {"config": SimpleNamespace(instrument_id="X")})
     inst: Any = harness.__new__(harness)
     tfs = sorted({tf for _, _, tf in specs.values()})
-    inst._pta_bufs = {tf: {k: [] for k in ("open", "high", "low", "close", "volume")} for tf in tfs}
     inst._pta_values = {}
     inst._pta_params = {name: params for name, (_, params, _) in specs.items()}
     inst._pta_lookback = {name: pta_lookback(t, params) for name, (t, params, _) in specs.items()}
@@ -95,6 +95,7 @@ def run_stream(
         )
         for tf in tfs
     }
+    inst._pta_bufs = {tf: PtaBuffer(inst._pta_buffer_cap[tf]) for tf in tfs}
     out: list[dict[str, float]] = []
     with memo_env(memo):
         for tf, o, h, lo, c, v in bars:

@@ -90,8 +90,9 @@ def test_context_strategy_source_buffers_close_ns() -> None:
     import vibe_quant.dsl.plugins.funding  # noqa: F401
 
     src = StrategyCompiler().compile(validate_strategy_dict(_funding_dsl()))
-    assert '_buf["close_ns"].append' in src
-    assert '_df.attrs["bar_close_ns"]' in src
+    assert "self._pta_bufs: dict[str, PtaBuffer] = {" in src
+    assert "with_close_ns=True" in src
+    assert "((bar.ts_init + _step // 2) // _step) * _step," in src
     compile(src, "<generated>", "exec")
 
 

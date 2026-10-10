@@ -30,6 +30,7 @@ import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 import pandas as pd
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
+from vibe_quant.dsl.pta_buffer import PtaBuffer
 from vibe_quant.dsl.compute_builtins import compute_macd
 
 if TYPE_CHECKING:
@@ -105,10 +106,6 @@ class MacdCrossoverStrategy(Strategy):
         # Last close price for computed indicator outputs (percent_b, position)
         self._last_close: float = 0.0
 
-        # compute_fn (pandas) indicators: one OHLCV bar buffer per timeframe
-        self._pta_bufs: dict[str, dict[str, list[float]]] = {
-            "15m": {"open": [], "high": [], "low": [], "close": [], "volume": []},
-        }
         self._pta_values: dict[str, float] = {}
         # compute_fn params come from config so sweep/WFA overrides apply
         self._pta_params: dict[str, dict[str, object]] = {
@@ -121,6 +118,10 @@ class MacdCrossoverStrategy(Strategy):
         # Rolling-buffer cap per timeframe (0 = unbounded: cumulative indicator)
         self._pta_buffer_cap: dict[str, int] = {
             "15m": pta_buffer_cap([self._pta_lookback["macd"]], full_history=False),
+        }
+        # compute_fn (pandas) indicators: one numpy-backed OHLCV buffer per timeframe
+        self._pta_bufs: dict[str, PtaBuffer] = {
+            "15m": PtaBuffer(self._pta_buffer_cap["15m"], with_close_ns=False),
         }
 
     def on_start(self) -> None:
@@ -342,33 +343,25 @@ class MacdCrossoverStrategy(Strategy):
     def _feed_pta_buffer(self, tf: str, bar: Bar) -> None:
         """Append a bar to its timeframe buffer, trim, recompute that timeframe.
 
-        The buffer is trimmed to the cap (with 25% slack so the trim amortizes):
+        PtaBuffer trims to the cap (with 25% slack so the trim amortizes):
         recomputing indicators over full history every bar is O(n^2) across a
         backtest and dominates 1m-data runtime.
         """
-        _buf = self._pta_bufs[tf]
-        _buf["close"].append(float(bar.close))
-        _buf["high"].append(float(bar.high))
-        _buf["low"].append(float(bar.low))
-        _buf["open"].append(float(bar.open))
-        _buf["volume"].append(float(bar.volume))
-        _cap = self._pta_buffer_cap[tf]
-        if _cap and len(_buf["close"]) > _cap + (_cap // 4):
-            _trim = len(_buf["close"]) - _cap
-            for _col in _buf.values():
-                del _col[:_trim]
+        self._pta_bufs[tf].append(
+            float(bar.open), float(bar.high), float(bar.low), float(bar.close), float(bar.volume)
+        )
         self._update_pta_indicators(tf)
 
     def _update_pta_indicators(self, tf: str) -> None:
         """Compute the compute_fn indicators of timeframe ``tf`` from its buffer."""
         _buf = self._pta_bufs[tf]
-        _n = len(_buf["close"])
+        _n = len(_buf)
         _df = None
         if tf == "15m":
             # macd (MACD) via compute_macd — default lookback 35
             if _n >= self._pta_lookback["macd"]:
                 if _df is None:
-                    _df = pd.DataFrame({"open": _buf["open"], "high": _buf["high"], "low": _buf["low"], "close": _buf["close"], "volume": _buf["volume"]})
+                    _df = _buf.frame()
                 _res = compute_macd(_df, self._pta_params["macd"])
                 if isinstance(_res, dict):
                     _primary = _res.get("macd")

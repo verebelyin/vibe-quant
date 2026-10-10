@@ -12,6 +12,7 @@ import pytest
 from vibe_quant.dsl import aux_data
 from vibe_quant.dsl.aux_data import AuxDataUnavailableError
 from vibe_quant.dsl.indicators import indicator_registry
+from vibe_quant.dsl.pta_buffer import PtaBuffer
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -312,10 +313,9 @@ def test_context_nan_after_valid_value_blocks_entry_at_bar_level() -> None:
     inst._pta_values = {}
     inst._pta_params = {"x": {"period": 20}}
     inst._pta_lookback = {"x": 1}
-    inst._pta_bufs = {"4h": {k: [] for k in ("open", "high", "low", "close", "volume", "close_ns")}}
+    inst._pta_bufs = {"4h": PtaBuffer(0, with_close_ns=True)}
     for i in range(3):
-        for k, v in zip(("open", "high", "low", "close", "volume", "close_ns"), (1, 1, 1, 1, 1, i), strict=True):
-            inst._pta_bufs["4h"][k].append(float(v))
+        inst._pta_bufs["4h"].append(1.0, 1.0, 1.0, 1.0, 1.0, i)
         inst._update_pta_indicators("4h")
         if i == 1:
             assert inst._pta_values["x"] == 0.5

@@ -150,9 +150,10 @@ take_profit:
         compiler = StrategyCompiler()
         source = compiler.compile(dsl)
         compile(source, "<generated>", "exec")
-        # The OHLCV DataFrame the compute_fn receives wires self._pta_volume
-        # into its "volume" column, so the reference must be present.
-        assert '_buf["volume"].append(float(bar.volume))' in source
+        # The OHLCV DataFrame the compute_fn receives is built by PtaBuffer from
+        # the fed bar, so volume must be passed through on append.
+        assert "self._pta_bufs[tf].append(" in source
+        assert "float(bar.volume)" in source
         # VOLSMA routes through compute_volsma (applies SMA to the volume
         # column internally) instead of calling ta.sma directly.
         assert "compute_volsma(" in source
