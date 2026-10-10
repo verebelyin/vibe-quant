@@ -776,3 +776,129 @@ def test_task_without_round1_excluded_from_rounds() -> None:
     recs = [_rec(task="sa", model="y/m", round=2, outcome="done", review="PASS")]
     (row,) = tel.report_rows(recs, by="model")
     assert row["mean_rounds"] is None
+
+
+def test_latest_attempts_keeps_retry_and_collapses_review_copy() -> None:
+    """A retry is its own attempt; a review update is a copy of one (vibe-quant-kzbc6)."""
+    first = _rec(task="t", model="mimo/m", round=1, outcome="stalled")
+    second = _rec(task="t", model="deepseek/m", round=1, outcome="done")
+    review_copy = _rec(
+        ts="2026-10-09T11:00:00Z", task="t", model="deepseek/m", round=1,
+        outcome="done", review="PASS",
+    )  # fmt: skip
+    attempts = tel.latest_attempts([first, second, review_copy])
+    assert [r["model"] for r in attempts] == ["mimo/m", "deepseek/m"]
+    assert attempts[-1]["review"] == "PASS"  # the review update still supersedes its source
+
+
+def test_report_keeps_retry_attempts_per_model() -> None:
+    """MiMo stall -> DeepSeek done+PASS: both attempts stay, each under its own model."""
+    recs = [
+        _rec(task="t", model="mimo/m", round=1, outcome="stalled", tokens_in=100, wall_s=10.0),
+        _rec(
+            task="t",
+            model="deepseek/m",
+            round=1,
+            outcome="done",
+            review="PASS",
+            tokens_in=300,
+            wall_s=30.0,
+        ),  # fmt: skip
+    ]
+    rows = tel.report_rows(recs, by="model")
+    stalled = _row(rows, "mimo/m")
+    done = _row(rows, "deepseek/m")
+    assert stalled is not None and done is not None
+    # every attempt is counted under its own model
+    assert (stalled["tasks"], stalled["stalls_errors"]) == (1, 1)
+    assert (stalled["med_tokens_in"], stalled["med_wall_s"]) == (100, 10)
+    # pass-1/rounds follow the LATEST attempt (unchanged single-attempt behaviour)
+    assert (stalled["pass1_passes"], stalled["pass1_attempts"]) == (0, 0)
+    assert (done["pass1_passes"], done["pass1_attempts"]) == (1, 1)
+    assert done["mean_rounds"] == 1.0
+    assert (done["tasks"], done["stalls_errors"]) == (1, 0)
+    assert (done["med_tokens_in"], done["med_wall_s"]) == (300, 30)
+
+
+def test_report_by_model_shows_attempts_column(
+    _isolated_ledger: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed(_isolated_ledger, LEDGER)
+    tel.main(["report", "--by", "model", "--markdown"])
+    md = capsys.readouterr().out
+    assert md.splitlines()[0].endswith("| attempts |")
+    row_a = next(line for line in md.splitlines() if line.startswith(f"| {MODEL_A} "))
+    assert row_a.endswith("| 3 |")  # MODEL_A has 3 attempts in LEDGER
+
+
+def test_pass1_uses_latest_attempt_only() -> None:
+    """Same (job, task, round): mimo SHOULD-FIX then deepseek PASS. The superseded attempt must
+    not count as a mimo pass-1 failure; the pass-1 attempt belongs to deepseek alone."""
+    recs = [
+        _rec(task="t", model="mimo/m", round=1, outcome="done", review="SHOULD-FIX"),
+        _rec(task="t", model="deepseek/m", round=1, outcome="done", review="PASS"),
+    ]
+    rows = tel.report_rows(recs, by="model")
+    mimo = _row(rows, "mimo/m")
+    deepseek = _row(rows, "deepseek/m")
+    assert mimo is not None and deepseek is not None
+    assert (mimo["pass1_passes"], mimo["pass1_attempts"]) == (0, 0)
+    assert mimo["tasks"] == 1  # but the attempt still counts as a task of mimo
+    assert (deepseek["pass1_passes"], deepseek["pass1_attempts"]) == (1, 1)
+    assert deepseek["pass1_rate"] == 1.0
+    assert deepseek["mean_rounds"] == 1.0
+    assert mimo["mean_rounds"] is None
+
+
+def test_attempt_counts_count_every_attempt_per_group() -> None:
+    recs = [
+        _rec(task="t", model="mimo/m", round=1, outcome="stalled"),
+        _rec(task="t", model="deepseek/m", round=1, outcome="done"),
+    ]
+    assert tel.attempt_counts(recs, "model") == {"mimo/m": 1, "deepseek/m": 1}
+    # the same retry pair: one agent, two attempts
+    assert tel.attempt_counts(recs, "agent") == {"w1": 2}
+
+
+def test_identical_stalled_retries_count_as_separate_attempts() -> None:
+    """Two byte-identical stalled records for one model (a relaunch that stalls the same way)
+    are two attempts and two stalls: only a review copy may collapse onto its source."""
+    recs = [
+        _rec(ts="2026-10-09T10:00:00", task="t", model="mimo/m", round=1, outcome="stalled"),
+        _rec(ts="2026-10-09T10:30:00", task="t", model="mimo/m", round=1, outcome="stalled"),
+    ]
+    assert tel.attempt_counts(recs, "model") == {"mimo/m": 2}
+    row = _row(tel.report_rows(recs, by="model"), "mimo/m")
+    assert row is not None
+    assert row["stalls_errors"] == 2
+
+
+def test_attempt_counts_respect_since_window() -> None:
+    recs = [
+        _rec(ts="2026-10-08T09:00:00", task="old", model="mimo/m", round=1, outcome="stalled"),
+        _rec(ts="2026-10-09T09:00:00", task="new", model="mimo/m", round=1, outcome="done"),
+        _rec(ts="2026-10-09T09:30:00", task="new", model="deepseek/m", round=1, outcome="done"),
+    ]
+    assert tel.attempt_counts(recs, "model") == {"mimo/m": 2, "deepseek/m": 1}
+    assert tel.attempt_counts(recs, "model", since="2026-10-09") == {
+        "mimo/m": 1,
+        "deepseek/m": 1,
+    }
+
+
+def test_attempts_column_printed_for_every_group_by(
+    _isolated_ledger: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The attempts column is not model-specific (documented in the module docstring)."""
+    _seed(
+        _isolated_ledger,
+        [
+            _rec(task="t", model="mimo/m", round=1, outcome="stalled"),
+            _rec(task="t", model="deepseek/m", round=1, outcome="done"),
+        ],
+    )
+    tel.main(["report", "--by", "agent", "--markdown"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith("| attempts |")
+    row = next(line for line in lines if line.startswith("| w1 "))
+    assert row.endswith("| 2 |")

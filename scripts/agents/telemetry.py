@@ -20,8 +20,17 @@ Record schema (all keys present, null when unknown):
     telemetry.py report [--by model|runtime|agent] [--since YYYY-MM-DD] [--markdown]
 
 The ledger is append-only: `review` appends a copy of the record for (job, task, round) (default:
-the latest round) with the review set and a FRESH ts; readers use the latest record per
-(job, task, round). `--since` therefore filters on the last update of a record, not its first run.
+the latest round) with the review set and a FRESH ts; the pass-1 rate and rounds-to-done read
+the latest record per (job, task, round), the other columns count attempts (below). `--since`
+therefore filters on the last update of a record, not its first run.
+
+Attempts: a retry/relaunch of the same (job, task, round) — e.g. a stalled model replaced by
+another — is a NEW attempt and never overwrites the earlier one. Reports keep it and count its
+tasks, stalls/errors, tokens and wall under its own group (model), so a stalled MiMo attempt stays
+visible next to the DeepSeek run that replaced it. Every plain record is an attempt, even an
+identical relaunch. Only a `review` copy (review set) shares the payload of the record it updates
+and supersedes that attempt instead of adding one; the pass-1 rate and rounds-to-done still use
+only the LATEST attempt per (job, task, round).
 
 Rounds: an explicit `--round N` with `--task <base>` is authoritative. `--auto-round` (ingest only,
 ignored when --round is given; opt-in, so a bare "-r" maps to round 2) derives (base, round) from the task name with
@@ -42,12 +51,18 @@ that the work was accepted — acceptance is the review. Model resolution order:
       suffix after the last "-<vendor>_" among KNOWN_VENDORS becomes "<vendor>/<rest>";
   (4) else model null with note "model unknown".
 
-`report` groups deduped records (latest per job+task+round) and shows per group: tasks (distinct
-job+task), first-pass PASS rate (round-1 records with review PASS / round-1 records with any
-review), mean rounds to done (per (job, task) across ALL records: the earliest round
-whose latest record has review PASS, charged to the group of the task's round-1 record; tasks with
-no PASS or no round-1 record are excluded; --since keeps only tasks with a record in the window but never changes the attribution), median tokens_in, median wall_s, and the count of round-records with
-outcome stalled/error. Stdlib only; runs with any python3.
+`report` shows per group: tasks (distinct job+task), first-pass PASS rate (round-1 records with
+review PASS / round-1 records with any review), mean rounds to done (per (job, task) across ALL
+records: the earliest round whose latest record has review PASS, charged to the group of the task's
+round-1 record; tasks with no PASS or no round-1 record are excluded; --since keeps only tasks with
+a record in the window but never changes the attribution), median tokens_in, median wall_s, and the
+count of round-records with outcome stalled/error. Tasks, stalls/errors, tokens, wall and the
+`attempts` column (printed for every --by) count EVERY attempt (latest_attempts); only the pass-1
+rate and rounds-to-done follow the LATEST attempt per (job, task, round).
+Known limitation (accepted): `ingest-cmd-log` is the legacy cmd-task.sh path. A log idle >= 120 s
+with no result event is recorded as stalled; ingesting the same log again after it finished records
+a second attempt (done), so that task counts one extra attempt and one stall. Stdlib only; runs
+with any python3.
 """
 
 from __future__ import annotations
@@ -355,25 +370,78 @@ def latest_per_round(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(by_key.values())
 
 
+def _attempt_signature(rec: dict[str, Any]) -> tuple[Any, ...]:
+    """Payload identifying one attempt: every schema field except ts and review.
+
+    A `review` copy has the same payload as the record it updates, so it collapses onto that
+    attempt (see latest_attempts).
+    """
+    return tuple(rec.get(key) for key in SCHEMA if key not in ("ts", "review"))
+
+
+def latest_attempts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One entry per attempt, in ledger order.
+
+    Every plain record (review null) is its own attempt — even a byte-identical relaunch, e.g.
+    a model stalling twice the same way. Only a review copy (review set) collapses: it replaces
+    the latest earlier attempt with the same payload (_attempt_signature); with no such source
+    it is kept as an attempt of its own.
+    """
+    attempts: list[dict[str, Any]] = []
+    for rec in records:
+        if rec.get("review") is not None:
+            sig = _attempt_signature(rec)
+            for i in range(len(attempts) - 1, -1, -1):
+                if _attempt_signature(attempts[i]) == sig:
+                    attempts[i] = rec
+                    break
+            else:
+                attempts.append(rec)
+        else:
+            attempts.append(rec)
+    return attempts
+
+
+def _windowed(records: list[dict[str, Any]], since: str | None) -> list[dict[str, Any]]:
+    if not since:
+        return records
+    return [rec for rec in records if str(rec.get("ts") or "") >= since]
+
+
+def _group_key(rec: dict[str, Any], by: str) -> str:
+    key = rec.get(by)
+    text = key if isinstance(key, str) else str(key)
+    return text.lower() if by == "model" else text
+
+
+def attempt_counts(
+    records: list[dict[str, Any]], by: str = "model", since: str | None = None
+) -> dict[str, int]:
+    """Number of attempts (see latest_attempts) per group — the `report` `attempts` column."""
+    counts: dict[str, int] = {}
+    for rec in latest_attempts(_windowed(records, since)):
+        key = _group_key(rec, by)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def report_rows(
     records: list[dict[str, Any]], by: str = "model", since: str | None = None
 ) -> list[dict[str, Any]]:
-    """Per-group task stats over the deduped records (see module docstring for the definitions)."""
+    """Per-group task stats (see module docstring for the definitions)."""
     if by not in GROUPS:
         sys.exit(f"telemetry: --by must be one of {GROUPS}")
 
-    def gkey(rec: dict[str, Any]) -> str:
-        key = rec.get(by)
-        text = key if isinstance(key, str) else str(key)
-        return text.lower() if by == "model" else text
-
     full = latest_per_round(records)  # rounds-to-done always sees the UNFILTERED ledger
-    deduped = latest_per_round(
-        [rec for rec in records if str(rec.get("ts") or "") >= since] if since else records
-    )
+    deduped = latest_per_round(_windowed(records, since))  # pass-1: latest attempt per round
+    attempts = latest_attempts(_windowed(records, since))  # counts: EVERY attempt
+
     groups: dict[str, list[dict[str, Any]]] = {}
+    for rec in attempts:
+        groups.setdefault(_group_key(rec, by), []).append(rec)
+    canonical: dict[str, list[dict[str, Any]]] = {}
     for rec in deduped:
-        groups.setdefault(gkey(rec), []).append(rec)
+        canonical.setdefault(_group_key(rec, by), []).append(rec)
     in_window = {(rec.get("job"), rec.get("task")) for rec in deduped}
 
     # rounds-to-done per (job, task), charged to the round-1 record's group; tasks without a
@@ -388,16 +456,17 @@ def report_rows(
         trecs.sort(key=lambda r: r["round"])
         passed = [r["round"] for r in trecs if r.get("review") == "PASS"]
         if passed and trecs[0]["round"] == 1 and tkey in in_window:
-            task_rounds.setdefault(gkey(trecs[0]), []).append(float(min(passed)))
-            charged.setdefault(gkey(trecs[0]), set()).add(tkey)
-            groups.setdefault(gkey(trecs[0]), [])
+            task_rounds.setdefault(_group_key(trecs[0], by), []).append(float(min(passed)))
+            charged.setdefault(_group_key(trecs[0], by), set()).add(tkey)
+            groups.setdefault(_group_key(trecs[0], by), [])
 
     rows: list[dict[str, Any]] = []
     for name in sorted(groups):
-        recs = groups[name]
+        recs = groups[name]  # every attempt of this group
+        canon = canonical.get(name, [])  # latest attempt per round (pass-1 / rounds)
         tasks = {(rec.get("job"), rec.get("task")) for rec in recs} | charged.get(name, set())
         first_pass = [
-            rec for rec in recs if rec.get("round") == 1 and rec.get("review") is not None
+            rec for rec in canon if rec.get("round") == 1 and rec.get("review") is not None
         ]
         passes = [rec for rec in first_pass if rec.get("review") == "PASS"]
         rounds_to_done = task_rounds.get(name, [])
@@ -431,7 +500,11 @@ def report_rows(
     return rows
 
 
-def format_table(rows: list[dict[str, Any]], markdown: bool = False) -> str:
+def format_table(
+    rows: list[dict[str, Any]],
+    markdown: bool = False,
+    attempts: dict[str, int] | None = None,
+) -> str:
     headers = [
         "group",
         "tasks",
@@ -441,10 +514,12 @@ def format_table(rows: list[dict[str, Any]], markdown: bool = False) -> str:
         "med_wall_s",
         "stalls+errors",
     ]
+    if attempts is not None:
+        headers.append("attempts")
 
     def cells(rec: dict[str, Any]) -> list[str]:
         rate = rec["pass1_rate"]
-        return [
+        out = [
             str(rec["group"]),
             str(rec["tasks"]),
             f"{rec['pass1_passes']}/{rec['pass1_attempts']} ({rate:.2f})"
@@ -455,6 +530,9 @@ def format_table(rows: list[dict[str, Any]], markdown: bool = False) -> str:
             "n/a" if rec["med_wall_s"] is None else f"{rec['med_wall_s']:g}",
             str(rec["stalls_errors"]),
         ]
+        if attempts is not None:
+            out.append(str(attempts.get(rec["group"], 0)))
+        return out
 
     body = [cells(rec) for rec in rows]
     if markdown:
@@ -548,9 +626,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "review":
         rec = apply_review(args.job, args.task, args.review, args.round)
     else:
-        print(
-            format_table(report_rows(read_records(), by=args.by, since=args.since), args.markdown)
-        )
+        records = read_records()
+        rows = report_rows(records, by=args.by, since=args.since)
+        print(format_table(rows, args.markdown, attempt_counts(records, args.by, args.since)))
         return 0
     print(json.dumps(rec, ensure_ascii=False))
     return 0

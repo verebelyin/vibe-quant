@@ -119,6 +119,8 @@ comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids or none>
 | `scripts/agents/telemetry.py record/ingest-cmd-log/review/report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` (committed): rounds-to-done, pass-1 rate, tokens, wall time by model/runtime/agent | chief (`record --runtime cmd` per T3 Command Code round, reviews, report); cmd-task.sh (auto, legacy) |
 | `scripts/agents/bus.py needs-user ask/open/answer --user` | queue of decisions only the user makes; shown first in `digest` and the SessionStart brief | any agent asks; only the user closes |
 
+`worktree.sh` symlinks `frontend/node_modules` from the main checkout by default (a `pnpm install` in the worktree would then mutate main's deps); add `--private-node-modules` to skip the symlink and run `pnpm install --frozen-lockfile` in the worktree whenever `package.json`/`pnpm-lock.yaml` will change.
+
 ## Tiered review
 
 Route each diff to the cheapest checker that can judge it (user, 2026-10-09). **Haiku runs only at effort `high` or `xhigh` — never lower, never `max`** (user rule; `reviewer-lite.md` pins `effort: high`; pass `effort: "xhigh"` explicitly for harder lite reviews).
