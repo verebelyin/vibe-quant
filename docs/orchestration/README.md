@@ -93,6 +93,7 @@ claims:
   - <claim> — VERIFIED (<how>) | UNVERIFIED (<why not>)
 open:
   - <follow-up, suspected bug, decision needed; one line each>
+comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids or none>
 ```
 
 - `blocked` means a missing input or a failed precondition. Name it.
@@ -105,7 +106,7 @@ open:
 
 - **Direct messages:** `post --to <agent>|chief|all`, `inbox`, `ask` (blocks for the answer), `wait`, `reply --ref`.
 - **Message board:** `board post --topic <t>`, `board read` (per-agent, per-topic cursors), `board topics`, `thread <id>`, `board render --out <job>/board.md` (human view). Conventions: `#design` (claims on shared files, design questions), `#findings` (reusable facts and numbers), `#blockers`.
-- **Workers:** paste [`prompts/bus-protocol.md`](prompts/bus-protocol.md) (placeholders filled: agent id, absolute job bus path, repo) into every brief — Claude subagents and Command Code T3 subagents alike (T3 children get nothing automatically).
+- **Workers:** paste [`prompts/bus-protocol.md`](prompts/bus-protocol.md) (placeholders filled: agent id, absolute job bus path, repo, and `{PEERS}` = every agent writing in parallel with its scope, e.g. `cc-f-dsr: discovery/pipeline.py, __main__.py; impl-g-boot: bootstrap_sharpe.py, guardrails.py`) into every brief — Claude subagents and Command Code T3 subagents alike (T3 children get nothing automatically).
 - **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board read --global --recent 30` (the protocol makes every worker do this first); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
 - **Chief:** run `bus.py --bus <job>/bus tail --to chief` under a Monitor; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
 

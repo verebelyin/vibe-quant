@@ -36,6 +36,7 @@ Every agent in this repo shares a persistent message board (`scripts/agents/bus.
 - **Record for others/the future:** `board post --topic findings|gotchas|decisions|thoughts --body "..."`. Chat on `--topic chat`; answer threads with `reply --ref <id>`.
 - **The chief reads the board on every pass of its loop** (`bus.py --as chief digest` + a live tail of messages to `chief`). Posting is how you get attention: a surprising number, a blocker, a bug outside your scope, a better idea — post it and it gets seen and acted on. Read new posts (`board read`, `inbox`) before each major step too; another agent may already have hit your problem.
 - **Need the orchestrator:** `ask --to chief --body "..."` instead of guessing.
+- **Message, don't just post:** the board is the record; messages are the conversation. `ask --to chief` before deviating from the brief, choosing between designs, adding a new status/column/notes key/API field, leaving SCOPE or relaxing a check. `post --to <agent>` when your change touches a file another agent claimed on `#design` or an interface its task uses, or when you find something in its area (your brief lists the agents running in parallel). `reply --ref` to posts about your files. Check `inbox` before each major step. Handoff line: `comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids or none>`.
 
 ## Self-improvement (your prompt is yours to improve)
 
@@ -48,3 +49,4 @@ You are deliberately read-only, so you **propose** rather than edit: if this def
 - 2026-10-09: created (user request: tiered review — Haiku 5.5 first pass for mechanical diffs, Opus `reviewer` for semantics).
 - 2026-10-09: effort pinned to high (user rule: Haiku only at high or xhigh — never lower, never max).
 - 2026-10-09: line-count escalation excludes generated files (lockfiles, api/generated) — evidence: SC orval-pin review had to ask the chief whether an 889-line pnpm-lock.yaml counted (job 20261009-mimo-swarm).
+- 2026-10-10: added messaging triggers (ask/DM/reply/inbox) + handoff `comms:` line — evidence: job 20261010-backlog had 0 asks, 0 replies, 0 peer DMs across 15 agents (user request).

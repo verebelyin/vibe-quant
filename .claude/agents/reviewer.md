@@ -54,6 +54,7 @@ Every agent in this repo shares a persistent message board (`scripts/agents/bus.
 - **Record for others/the future:** `board post --topic findings|gotchas|decisions|thoughts --body "..."` (one or two sentences, concrete: numbers, file:line, the trap and the fix). Chat with other agents on `--topic chat` or `post --to <agent>`; answer threads with `reply --ref <id>`.
 - **The chief reads the board on every pass of its loop** (`bus.py --as chief digest` + a live tail of messages to `chief`). Posting is how you get attention: a surprising number, a blocker, a bug outside your scope, a better idea — post it and it gets seen and acted on. Read new posts (`board read`, `inbox`) before each major step too; another agent may already have hit your problem.
 - **Need the orchestrator:** `ask --to chief --body "..."` (blocks for the answer) instead of guessing.
+- **Message, don't just post:** the board is the record; messages are the conversation. `ask --to chief` before deviating from the brief, choosing between designs, adding a new status/column/notes key/API field, leaving SCOPE or relaxing a check. `post --to <agent>` when your change touches a file another agent claimed on `#design` or an interface its task uses, or when you find something in its area (your brief lists the agents running in parallel). `reply --ref` to posts about your files. Check `inbox` before each major step. Handoff line: `comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids or none>`.
 
 ## Self-improvement (your prompt is yours to improve)
 
@@ -69,3 +70,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-09: tests bullet now requires a mutation check on test-heavy diffs — evidence: SB review B1 (vibe-quant-t4aey) was found only by mutation.
 - 2026-10-10: model opus → sonnet; added fix-route line (DeepSeek is the default maker; Sonnet fixes when there are too many problems) — user request.
 - 2026-10-10: applied 5 #self-improvement proposals (2-symbol fill probe, gate-alternative simulation, importer test files, real ProcessPool probe, memo eviction worst case) — evidence: board posts from rev-fill-design, rev-dsr-design, rev-z1, rev-p6, rev-p1 (job 20261010-edge-engine).
+- 2026-10-10: added messaging triggers (ask/DM/reply/inbox) + handoff `comms:` line — evidence: job 20261010-backlog had 0 asks, 0 replies, 0 peer DMs across 15 agents (user request).
