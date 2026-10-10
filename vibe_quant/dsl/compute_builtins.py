@@ -564,21 +564,47 @@ def compute_kc(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Seri
 
 
 def compute_donchian(df: pd.DataFrame, params: dict[str, object]) -> dict[str, pd.Series]:
-    """Donchian Channel — ``{"lower", "middle", "upper"}`` keyed series.
+    """Donchian Channel — ``{lower, middle, upper, position, upper_prev, lower_prev}``.
 
-    The derived output ``position`` is computed at runtime by
-    ``vibe_quant/dsl/derived.py::compute_position`` from the raw bands plus
-    the latest close, so it is not returned here.
+    ``upper_prev``/``lower_prev`` are the PREVIOUS bar's channel
+    (``upper.shift(1)`` / ``lower.shift(1)``) — highest high / lowest low of
+    the N bars before the current bar — so ``close crosses_above
+    donchian.upper_prev`` is a genuine breakout. They are opt-in: the spec
+    omits them from ``nt_output_attrs``/``computed_outputs``, so only a
+    strategy referencing them is forced onto this compute_fn path and
+    ``upper``/``middle``/``lower``/``position`` keep their NT values otherwise.
+
+    ``position`` = ``(close - lower) / (upper - lower)`` (0.5 when the channel
+    has zero width) — identical to ``derived.compute_position`` on the NT path
+    (same-bar bands), so a strategy mixing ``donchian.position`` with a
+    ``*_prev`` output (compute_fn path) reads the same value as the NT path.
     """
     period = int_param(params, "period", 20)
     result = _ta().donchian(df["high"], df["low"], lower_length=period, upper_length=period)
     if result is None:
         empty = nan_like(df)
-        return {"lower": empty, "middle": empty, "upper": empty}
+        return {
+            "lower": empty,
+            "middle": empty,
+            "upper": empty,
+            "position": empty,
+            "upper_prev": empty,
+            "lower_prev": empty,
+        }
+    lower = result.iloc[:, 0]
+    upper = result.iloc[:, 2]
+    channel_range = upper - lower
+    # Zero-width channel -> neutral 0.5 (mirrors derived.compute_position).
+    position = ((df["close"] - lower) / channel_range).where(channel_range > 0, 0.5)
+    # NaN warm-up rows must stay NaN (``where`` would turn them into 0.5).
+    position = position.where(channel_range.notna())
     return {
-        "lower": result.iloc[:, 0],
+        "lower": lower,
         "middle": result.iloc[:, 1],
-        "upper": result.iloc[:, 2],
+        "upper": upper,
+        "position": position,
+        "upper_prev": upper.shift(1),
+        "lower_prev": lower.shift(1),
     }
 
 

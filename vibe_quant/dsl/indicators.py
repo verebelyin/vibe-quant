@@ -995,12 +995,21 @@ def _donchian_spec() -> IndicatorSpec:
         pandas_ta_func="donchian",
         default_params={"period": 20},
         param_schema={"period": int},
-        output_names=("upper", "middle", "lower", "position"),
+        # ``upper_prev``/``lower_prev`` are the PREVIOUS bar's channel (highest
+        # high / lowest low of the N bars before the current one) so a real
+        # breakout (``close crosses_above donchian.upper_prev``) is expressible.
+        # They are deliberately NOT in ``nt_output_attrs``/``computed_outputs``:
+        # referencing one forces the compute_fn path (opt-in) while strategies
+        # that don't keep the untouched NT ``DonchianChannel`` path.
+        output_names=("upper", "middle", "lower", "position", "upper_prev", "lower_prev"),
         compute_fn=compute_donchian,
         nt_kwargs_fn=_donchian_kwargs,
         nt_codegen_kwargs=(("period", "period"),),
         nt_output_attrs={"upper": "upper", "middle": "middle", "lower": "lower"},
         computed_outputs={"position": "compute_position"},
+        # The prev bands are ``shift(1)``, so one extra bar must be buffered
+        # before they are valid.
+        pta_lookback_fn=lambda p: int_param(p, "period", 20) + 1,
         primary_output="middle",
         requires_high_low=True,
         display_name="Donchian Channel",

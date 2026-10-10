@@ -18,17 +18,17 @@ indicators:
 
 entry_conditions:
   long:
-    - "close > donchian"
+    - "close crosses_above donchian.upper_prev"
     - "close > ema_trend"
   short:
-    - "close < donchian"
+    - "close crosses_below donchian.lower_prev"
     - "close < ema_trend"
 
 exit_conditions:
   long:
-    - "close < ema_trend"
+    - "close crosses_below donchian.lower_prev"
   short:
-    - "close > ema_trend"
+    - "close crosses_above donchian.upper_prev"
 
 time_filters:
   allowed_sessions: []

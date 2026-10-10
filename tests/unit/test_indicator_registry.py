@@ -462,7 +462,14 @@ class TestBuiltinIndicators:
         """Donchian Channel is registered."""
         spec = indicator_registry.get("DONCHIAN")
         assert spec is not None
-        assert spec.output_names == ("upper", "middle", "lower", "position")
+        assert spec.output_names == (
+            "upper",
+            "middle",
+            "lower",
+            "position",
+            "upper_prev",
+            "lower_prev",
+        )
 
     def test_roc_registered(self) -> None:
         """Rate of Change is registered."""
