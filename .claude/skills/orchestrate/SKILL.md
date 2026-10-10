@@ -18,6 +18,7 @@ You are the **orchestrator**. You decompose, dispatch, check and integrate the w
    - Every writer joins the bus: paste the protocol block from `docs/orchestration/prompts/bus-protocol.md` (placeholders filled) into every brief, Claude and Command Code alike. Command Code briefs also name the absolute worktree and require `cd <worktree> &&` on every command (T3 children have no cwd parameter and start in the main checkout). Answer bus questions promptly with `reply --ref`; a worker blocked on you is wasted spend.
    - Save each handoff verbatim to `handoffs/` and update the ledger row.
    - Return any implementer handoff whose `evidence` lacks the red test run; red-before-green is the proof the test has teeth.
+   - Keep proofs fast (user 2026-10-10): never put long discovery/backtest reruns in a task brief (a seeded 878 rerun took ~30 min). Per-task proofs = unit tests, mutants, `exactness_239.py`; a live discovery check uses tiny settings (pop 4–6, 1–2 gens, 2–3 month window). Full-size reruns at most once, in the final verifier pass, only when necessary.
    - Before dispatching, fill each brief's LIVE line: `rg` that every SCOPE path is imported or called from a live entry point. A brief that names dead code ships dead features.
    - Before any review: `scripts/agents/swarm-check.sh <worktree> --scope <brief SCOPE globs>` must say GATE PASS; a FAIL goes straight back to the maker (no reviewer spend).
    - Pick the checker by the tiered-review table in the README: `reviewer-lite` (Haiku) for mechanical diffs, `reviewer` (Sonnet) for semantics, `reviewer` with `model: "opus"` only for design reviews.
@@ -55,3 +56,4 @@ You own the swarm's prompts: this skill, every `.claude/agents/*.md`, `docs/orch
 - 2026-10-10: stall supervisor, needs-user queue, telemetry steps (user request #8/#9/#4); evidence: MiMo/DeepSeek ~2 h read-loop stalls went unnoticed until a network drop (job 20261009-swarm-tooling).
 - 2026-10-10: Command Code dispatch moved to T3 `delegate_task` subagents (async, unique clientRequestId, taskId in ledger, no polling/t3_thread_send/thread launch, errors verbatim, no fallback, verify before reporting); stall_watch/cmd-task.sh no longer used for swarm workers — user request.
 - 2026-10-10: DeepSeek = default maker, Sonnet = reviewer + fixer on fix-route sonnet; chief board watching made explicit (tail + digest each pass, act on interesting posts) — user request.
+- 2026-10-10: keep proofs fast — no long discovery reruns in briefs; tiny settings otherwise — user request (cc-dsr-finish 878 rerun took ~30 min).

@@ -91,6 +91,7 @@ Start from [`prompts/cmd-task.md`](prompts/cmd-task.md). Cheap models follow a b
 - **Worktree first.** Absolute worktree path and the `cd <worktree> &&` rule (see § Workspace).
 - **Positive scope.** "Edit only `a.py` and `tests/test_a.py`" rather than a list of forbidden things.
 - **Exact verification command** the agent must run before it answers, plus the expected result.
+- **Keep proofs fast.** No long discovery/backtest reruns as per-task proofs (a seeded 878 rerun took ~30 min, user 2026-10-10). Use unit tests, mutants and single fixed-strategy evals (`exactness_239.py`, ~6 s); if a live discovery check is really needed, give tiny settings (1–2 symbols, population 4–6, 1–2 generations, 2–3 month window, ~1–2 min). Full-size reruns happen at most once, in the final verifier pass, and only when necessary.
 - **Exact output.** Name the output file and give its format (JSON schema or a filled example). The final reply is one line: `DONE <path>` or `FAILED <reason>`, or the handoff contract when the task is an implementation.
 - **Commits:** the child may commit on its own worktree branch when the brief says so (message ends with the bead id). Never push, never touch `main`, no secrets. The orchestrator owns merges.
 

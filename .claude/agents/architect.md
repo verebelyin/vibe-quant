@@ -23,6 +23,7 @@ You are the **architect** in a vibe-quant multi-agent team. The orchestrator sen
    - the test to write first (file + test name + what it asserts)
    - dependencies (task ids) and a parallel group letter; tasks in one group touch disjoint files
    - runtime: `cmd` = DeepSeek V4.1 Flash via T3 Command Code (the DEFAULT for every task with clear acceptance criteria) or `claude` (only when it needs open-ended judgement); see `docs/orchestration/cheap-agents.md` § Routing
+   - For a perf/efficiency bead: verify its premise against the run history first (`started_at`/`completed_at` overlaps, which strategy/code version ran) before designing a fix (f2z5p's premise was a stale apples-to-oranges comparison, job 20261010-edge-engine).
 5. **Risks**: what is most likely to go wrong, and the cheapest early check for each.
 
 Size tasks so one implementer finishes each in one sitting (roughly ≤ 300 changed lines). A task with fuzzy acceptance criteria isn't ready; sharpen or split it.
@@ -50,3 +51,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 ## Changelog
 
 - 2026-10-09: self-improvement + changelog sections added (user request: agents may improve their own prompts; chief reviews).
+- 2026-10-10: verify a perf bead's premise against run history before designing — evidence: arch-jobs round 2 (f2z5p dropped after F0 measurement).
