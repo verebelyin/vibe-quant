@@ -36,6 +36,6 @@
     }
   },
   "files": {
-    "includes": ["src/**", "!src/api/generated/**"]
+    "includes": ["src/**", "!src/api/generated/**", "e2e/discovery-flow.spec.ts"]
   }
 }

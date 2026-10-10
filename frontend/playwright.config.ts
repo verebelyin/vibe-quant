@@ -1,5 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// When E2E_BASE_URL is set the caller already runs the stack (e.g. the
+// ui-check script on :8001/:5188) — target it and do NOT start a dev server.
+const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -8,7 +12,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: [["html", { open: "never" }]],
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL,
     screenshot: "only-on-failure",
     trace: "on-first-retry",
   },
@@ -18,9 +22,14 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "pnpm dev",
-    url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
-  },
+  // Default (no E2E_BASE_URL) is unchanged: start/reuse `pnpm dev` on :5173.
+  ...(process.env.E2E_BASE_URL
+    ? {}
+    : {
+        webServer: {
+          command: "pnpm dev",
+          url: baseURL,
+          reuseExistingServer: !process.env.CI,
+        },
+      }),
 });
