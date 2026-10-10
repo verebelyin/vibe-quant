@@ -26,7 +26,6 @@ def events_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "events"
     d.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("vibe_quant.logging.query._DEFAULT_BASE_PATH", d)
-    monkeypatch.setattr("vibe_quant.reconciliation._DEFAULT_BASE_PATH", d)
     return d
 
 

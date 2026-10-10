@@ -96,6 +96,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if reconciled:
         logger.warning("startup: marked %d dead 'running' job(s) failed", reconciled)
 
+    # Runs whose job row is missing or long gone are never visited by
+    # reconcile_jobs; close them out so they cannot show as in-flight forever.
+    reaped = job_mgr.reap_orphan_runs()
+    if reaped:
+        logger.warning("startup: reaped %d orphan backtest run(s) with no live job", len(reaped))
+
     await ws_mgr.start()
     try:
         yield

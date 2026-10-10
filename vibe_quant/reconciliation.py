@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from vibe_quant.logging.query import _DEFAULT_BASE_PATH, _validate_run_id
+from vibe_quant.logging.query import _default_base_path, _validate_run_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -200,7 +200,7 @@ def load_trades(
         FileNotFoundError: If no log file exists for the run.
     """
     _validate_run_id(run_id)
-    resolved = Path(base_path) if base_path is not None else _DEFAULT_BASE_PATH
+    resolved = Path(base_path) if base_path is not None else _default_base_path()
     log_path = resolved / f"{run_id}.jsonl"
 
     # position_id -> (open record, open data)

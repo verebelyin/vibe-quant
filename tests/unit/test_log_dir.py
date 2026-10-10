@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from vibe_quant.api.app import create_app
@@ -15,9 +16,6 @@ from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_log_dir_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -159,3 +157,74 @@ def test_event_default_dirs_unset_keep_project_root(
     assert expected.is_absolute()
     assert writer_module._default_base_path() == expected
     assert query_module._default_base_path() == expected
+
+
+def _write_one_trade_log(directory: Path, run_id: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{run_id}.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "POSITION_OPEN",
+                        "ts": "2025-01-01T00:00:00+00:00",
+                        "data": {
+                            "position_id": "p1",
+                            "symbol": "BTCUSDT",
+                            "side": "LONG",
+                            "entry_price": 100.0,
+                            "quantity": 1.0,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "POSITION_CLOSE",
+                        "ts": "2025-01-01T01:00:00+00:00",
+                        "data": {
+                            "position_id": "p1",
+                            "exit_price": 110.0,
+                            "net_pnl": 10.0,
+                            "gross_pnl": 10.0,
+                            "exit_reason": "signal",
+                        },
+                    }
+                ),
+            ]
+        )
+    )
+
+
+def test_load_trades_default_follows_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``load_trades`` with no base_path reads ``VIBE_QUANT_LOG_DIR/events``.
+
+    Before this, ``reconciliation`` imported the frozen ``_DEFAULT_BASE_PATH``
+    constant, so a direct caller ignored the env var the writer/reader honor.
+    """
+    from vibe_quant import reconciliation as recon_module
+
+    target = tmp_path / "env-logs"
+    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(target))
+    _write_one_trade_log(target / "events", "ENV-RUN")
+
+    trades = recon_module.load_trades("ENV-RUN")
+    assert len(trades) == 1
+    assert trades[0].position_id == "p1"
+    assert trades[0].net_pnl == 10.0
+
+
+def test_load_trades_default_unset_keeps_project_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from vibe_quant import reconciliation as recon_module
+    from vibe_quant.logging import query as query_module
+
+    monkeypatch.delenv("VIBE_QUANT_LOG_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        recon_module.load_trades("NOPE-UNSET")
+
+    assert str(query_module._DEFAULT_BASE_PATH / "NOPE-UNSET.jsonl") in str(excinfo.value)

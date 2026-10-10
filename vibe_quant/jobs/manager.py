@@ -552,6 +552,78 @@ class BacktestJobManager:
                 fixed += 1
         return fixed
 
+    def reap_orphan_runs(self) -> list[int]:
+        """Fail pending/running runs that have no verifiably live job.
+
+        Run at backend startup right after :meth:`reconcile_jobs`. Reconcile
+        only visits runs that have a ``background_jobs`` row, so a run whose
+        job row is missing, already closed, or whose process is gone would
+        otherwise stay pending/running and show as in-flight forever.
+
+        A run whose job process verifiably lives, or which has no job row but
+        whose own ``pid``/``heartbeat_at`` still looks alive (CLI, auto_screen
+        and campaign runs), is never touched. Existing error text is kept and
+        the reap reason appended.
+
+        Returns:
+            IDs of the runs marked failed, in ascending id order.
+        """
+        reaped: list[int] = []
+        threshold = (datetime.now(UTC) - timedelta(seconds=STALE_THRESHOLD_SECONDS)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        with self._db_lock:
+            rows = self.conn.execute(
+                """SELECT id, status, error_message, pid, heartbeat_at FROM backtest_runs
+                   WHERE status IN ('pending', 'running')
+                   ORDER BY id"""
+            ).fetchall()
+            for row in rows:
+                run_id = int(row["id"])
+                job = self.conn.execute(
+                    """SELECT pid, pid_start_time FROM background_jobs
+                       WHERE run_id = ? AND status = 'running'""",
+                    (run_id,),
+                ).fetchone()
+                if job is not None and self._job_alive(int(job["pid"]), job["pid_start_time"]):
+                    continue
+                if self._run_without_job_alive(row["pid"], row["heartbeat_at"], threshold):
+                    continue
+                reason = f"reaped at startup: no live job (was {row['status']})"
+                existing = row["error_message"]
+                error = f"{existing}\n{reason}" if existing else reason
+                # Status guard: a job that finished between the SELECT above and
+                # this UPDATE already owns the row — never overwrite it.
+                cursor = self.conn.execute(
+                    """UPDATE backtest_runs
+                       SET status = 'failed', completed_at = datetime('now'),
+                           error_message = ?
+                       WHERE id = ? AND status IN ('pending', 'running')""",
+                    (error, run_id),
+                )
+                if cursor.rowcount == 1:
+                    reaped.append(run_id)
+            if reaped:
+                self.conn.commit()
+        if reaped:
+            logger.info("startup: reaped %d orphan run(s): %s", len(reaped), reaped)
+        return reaped
+
+    def _run_without_job_alive(
+        self, pid: int | None, heartbeat_at: str | None, threshold: str
+    ) -> bool:
+        """True if a run with no live job row still looks alive.
+
+        Runs started by the CLI, ``research/auto_screen`` and
+        ``discovery/campaign`` record ``backtest_runs.pid``/``heartbeat_at``
+        without a ``background_jobs`` row. Spare such a run when its own PID is
+        alive (or its heartbeat is within ``STALE_THRESHOLD_SECONDS``), so a
+        backend restart never fails a run that is still making progress.
+        """
+        if pid is not None and self.is_process_alive(int(pid)):
+            return True
+        return heartbeat_at is not None and str(heartbeat_at) >= threshold
+
     def is_process_alive(self, pid: int) -> bool:
         """Check if a process is still running.
 
