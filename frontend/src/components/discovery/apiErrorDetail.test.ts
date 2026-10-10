@@ -49,6 +49,56 @@ describe("formatApiErrorDetail", () => {
     );
   });
 
+  it("shows the field name (not the array index) for list-item errors", () => {
+    const out = formatApiErrorDetail(
+      apiError(422, {
+        detail: [
+          {
+            loc: ["body", "symbols", 0],
+            msg: "String should have at least 2 characters",
+            type: "string_too_short",
+          },
+        ],
+      }),
+    );
+    expect(out).toBe("symbols[0]: String should have at least 2 characters");
+    expect(out).toContain("symbols");
+    expect(out.startsWith("0:")).toBe(false);
+    expect(out).not.toContain("body:");
+  });
+
+  it("labels a nested field with the innermost string loc segment", () => {
+    expect(
+      formatApiErrorDetail(
+        apiError(422, {
+          detail: [
+            {
+              loc: ["body", "windows", 0, "start"],
+              msg: "Input should be greater than or equal to 0",
+              type: "greater_than_equal",
+            },
+          ],
+        }),
+      ),
+    ).toBe("start: Input should be greater than or equal to 0");
+  });
+
+  it("shows a clean message for model-level validator errors", () => {
+    expect(
+      formatApiErrorDetail(
+        apiError(422, {
+          detail: [
+            {
+              loc: ["body"],
+              msg: "Value error, train window too short",
+              type: "value_error",
+            },
+          ],
+        }),
+      ),
+    ).toBe("train window too short");
+  });
+
   it("uses the bare msg when a pydantic item has no loc", () => {
     expect(formatApiErrorDetail(apiError(422, { detail: [{ msg: "value is invalid" }] }))).toBe(
       "value is invalid",
