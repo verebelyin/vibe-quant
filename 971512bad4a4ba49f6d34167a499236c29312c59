@@ -1,0 +1,1 @@
+Verification lines lost to shell backtick expansion in the commit message (job 20261012-p1-honest), restored: red before green: reviewer repro "assert 0.00010749262429905896 == 0.1286979852516388"; screening "assert 32 == 1"; old-schema CLI "sqlite3.OperationalError: table sweep_results has no column named mtm_sharpe_daily"; busy-migration test "DID NOT RAISE RuntimeError".
