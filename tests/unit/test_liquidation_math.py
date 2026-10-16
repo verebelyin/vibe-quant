@@ -214,6 +214,12 @@ class TestShippedSnapshot:
         assert isinstance(_TABLES.version, str) and _TABLES.version
         assert isinstance(_TABLES.fetched_at, str) and _TABLES.fetched_at
 
+    def test_shipped_brackets_pass_min_width(self):
+        tables = load_tier_tables()
+        assert set(tables) == {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"}
+        for symbol, table in tables.items():
+            assert min(bracket.cap - bracket.floor for bracket in table.brackets) >= 10000, symbol
+
     def test_btc_tier_one(self):
         bracket = _BTC.brackets[0]
         assert (bracket.floor, bracket.cap, bracket.mmr, bracket.cum) == (
@@ -417,38 +423,106 @@ class TestThinLastTierCapGuard:
     """
 
     _THIN = (
-        (0.0, 149.99999999, 0.01, 0.0),
-        (149.99999999, 150.0, 0.02, 1.4999999999),
+        Bracket(0.0, 149.99999999, 0.01, 0.0, None),
+        Bracket(149.99999999, 150.0, 0.02, 1.50000000000003, None),
     )
 
-    def _thin(self, tmp_path: Path) -> TierTable:
-        path = _snapshot(
-            tmp_path,
-            {
-                "THIN": _symbol(
-                    [_bracket(floor, cap, mmr, cum, None) for floor, cap, mmr, cum in self._THIN]
-                )
-            },
-        )
-        return load_tier_tables(path)["THIN"]
+    def _thin(self) -> TierTable:
+        """The 1e-8-wide table built directly: the loader now rejects it.
 
-    def test_thin_last_tier_cap_raises_exceeded_isolated(self, tmp_path):
+        Direct construction keeps the guard-order regression independent of the
+        loader's min-bracket-width rule (see ``TestMinBracketWidth``).
+        """
+        return TierTable(symbol="THIN", brackets=self._THIN, clearance_fee_rate=None)
+
+    def test_thin_last_tier_cap_raises_exceeded_isolated(self):
         """Isolated short, q=1, EP=100, margin 51.5000000001.
 
           tier1 LP = (51.5000000001 + 0 + 100)/(0.01 + 1) = 151.5000000001/1.01
                    = 150.000000000099 -> interior slack would accept it;
-          tier2 LP = (51.5000000001 + 1.4999999999 + 100)/(0.02 + 1) = 153/1.02
-                   = 150.0 == the last cap exactly.
+          tier2 LP = (51.5000000001 + 1.50000000000003 + 100)/(0.02 + 1)
+                   = 153.0000000001/1.02 = 150.000000000098 -> at/beyond the last cap.
         """
-        table = self._thin(tmp_path)
         with pytest.raises(TierTableExceeded):
-            isolated_liq_price(-1, 1.0, 100.0, 51.5000000001, table)
+            isolated_liq_price(-1, 1.0, 100.0, 51.5000000001, self._thin())
 
-    def test_thin_last_tier_cap_raises_exceeded_cross(self, tmp_path):
+    def test_thin_last_tier_cap_raises_exceeded_cross(self):
         """Same table as the isolated case: cross short with TMM1 = UPNL1 = 0."""
-        table = self._thin(tmp_path)
         with pytest.raises(TierTableExceeded):
-            cross_liq_price(-1, 1.0, 100.0, 51.5000000001, 0.0, 0.0, table)
+            cross_liq_price(-1, 1.0, 100.0, 51.5000000001, 0.0, 0.0, self._thin())
+
+    def test_guard_runs_before_near_isolated(self):
+        """Exact-cap boundary: the last-cap guard must run before the slack lookup.
+
+          isolated short, q=1, EP=100, wallet 51.49999999999997:
+          tier1 LP = 151.49999999999997/1.01 = 149.99999999999997 -> interior slack
+          would accept it;
+          tier2 LP = (51.49999999999997 + 1.50000000000003 + 100)/(0.02 + 1)
+                   = 153/1.02 = 150.0 == the last cap exactly.
+        The exact message proves the last-cap guard raised, not the slack lookup.
+        """
+        with pytest.raises(TierTableExceeded) as excinfo:
+            isolated_liq_price(-1, 1.0, 100.0, 51.49999999999997, self._thin())
+        assert str(excinfo.value) == "THIN: liquidation notional 150.0 >= last cap 150.0"
+
+    def test_guard_runs_before_near_cross(self):
+        """Same table as the isolated case: cross short with TMM1 = UPNL1 = 0."""
+        with pytest.raises(TierTableExceeded) as excinfo:
+            cross_liq_price(-1, 1.0, 100.0, 51.49999999999997, 0.0, 0.0, self._thin())
+        assert str(excinfo.value) == "THIN: liquidation notional 150.0 >= last cap 150.0"
+
+
+class TestMinBracketWidth:
+    """The loader rejects degenerate (sub-1-USDT-wide) brackets.
+
+    A 1e-8-wide last bracket makes the interior-slack class reachable; the
+    direct-construction guard-order regression above pins the solver, while
+    these tests pin the loader rule that keeps such snapshots out.
+    """
+
+    def test_loader_rejects_thin_bracket(self, tmp_path):
+        path = _snapshot(
+            tmp_path,
+            {
+                "THIN": _symbol(
+                    [
+                        _bracket(0.0, 149.99999999, 0.01, 0.0, None),
+                        _bracket(149.99999999, 150.0, 0.02, 1.4999999999, None),
+                    ]
+                )
+            },
+        )
+        with pytest.raises(TierTableError, match=r"bracket 1 width .* < 1\.0 USDT"):
+            load_tier_tables(path)
+
+    def test_min_width_boundary(self, tmp_path):
+        accepted = _snapshot(
+            tmp_path,
+            {
+                "X": _symbol(
+                    [
+                        _bracket(0.0, 1000.0, 0.01, 0.0, None),
+                        _bracket(1000.0, 1001.0, 0.02, 10.0, None),
+                    ]
+                )
+            },
+        )
+        tables = load_tier_tables(accepted)
+        second = tables["X"].brackets[1]
+        assert second.cap - second.floor == 1.0
+        rejected = _snapshot(
+            tmp_path,
+            {
+                "X": _symbol(
+                    [
+                        _bracket(0.0, 1000.0, 0.01, 0.0, None),
+                        _bracket(1000.0, 1000.999999, 0.02, 10.0, None),
+                    ]
+                )
+            },
+        )
+        with pytest.raises(TierTableError, match=r"bracket 1 width .* < 1\.0 USDT"):
+            load_tier_tables(rejected)
 
 
 class TestExactZeroLiquidationPrice:
@@ -503,6 +577,13 @@ class TestInvalidTables:
     def test_bracket_direct_construction_validates(self):
         with pytest.raises(TierTableError):
             Bracket(0.0, 1000.0, 1.5, 0.0, None)
+
+    def test_zero_width_keeps_cap_message(self, tmp_path):
+        # cap == floor is checked before the min-width rule, so the message is
+        # the pre-existing "cap ... <= floor" one, not the degenerate-width one.
+        path = _snapshot(tmp_path, {"X": _symbol([_bracket(0.0, 0.0, 0.01, 0.0, None)])})
+        with pytest.raises(TierTableError, match=r"cap 0\.0 <= floor 0\.0"):
+            load_tier_tables(path)
 
     def test_gap_between_brackets_raises(self, tmp_path):
         # cap 300000 then floor 300000.1: continuity of cum holds (0.1 * 0.005 is tiny)

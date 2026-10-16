@@ -46,6 +46,10 @@ _CUM_TOL_REL = 1e-6
 # Relative slack (on the bracket-boundary notional) when rounding leaves a
 # solved LP a few ulps outside the bracket it was solved with.
 _BOUNDARY_TOL_REL = 1e-9
+# Narrowest bracket a snapshot may declare (USDT). An absolute floor here, not
+# an epsilon: a sub-1-USDT bracket makes the interior-slack class reachable in
+# everyday notionals, and the floor keeps that class out of loaded snapshots.
+MIN_BRACKET_WIDTH_USDT: float = 1.0
 
 
 class TierTableError(ValueError):
@@ -387,6 +391,11 @@ def _validate_brackets(symbol: str, brackets: tuple[Bracket, ...]) -> None:
         if not bracket.cap > bracket.floor:
             raise TierTableError(
                 f"{symbol}: bracket {index} cap {bracket.cap} <= floor {bracket.floor}"
+            )
+        if bracket.cap - bracket.floor < MIN_BRACKET_WIDTH_USDT:
+            raise TierTableError(
+                f"{symbol}: bracket {index} width {bracket.cap - bracket.floor} < "
+                f"{MIN_BRACKET_WIDTH_USDT} USDT (degenerate thin tier)"
             )
     for previous, current in zip(brackets, brackets[1:], strict=False):
         if current.floor != previous.cap:
