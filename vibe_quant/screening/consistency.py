@@ -72,7 +72,13 @@ class ConsistencyChecker:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """Get database connection.
+
+        NOT thread-safe: the lazy ``_conn`` is created and returned without a
+        lock, so one instance belongs to one thread / asyncio loop. Before
+        sharing an instance across threads, add locking (see
+        ``StateManager._write_lock``).
+        """
         if self._conn is None:
             self._conn = get_connection(self.db_path)
         return self._conn

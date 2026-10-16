@@ -129,7 +129,13 @@ class StatePersistence:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Get or create database connection."""
+        """Get or create database connection.
+
+        NOT thread-safe: the lazy ``_conn`` is created and returned without a
+        lock, so one instance belongs to one thread / asyncio loop. Before
+        sharing an instance across threads, add locking (see
+        ``StateManager._write_lock``).
+        """
         if self._conn is None:
             self._conn = get_connection(self._db_path)
             self._init_schema()
@@ -403,6 +409,13 @@ class PaperCommandQueue:
 
     @property
     def conn(self) -> sqlite3.Connection:
+        """Get or create the command-queue connection.
+
+        NOT thread-safe: the lazy ``_conn`` is created and returned without a
+        lock, so one instance belongs to one thread / asyncio loop. Before
+        sharing an instance across threads, add locking (see
+        ``StateManager._write_lock``).
+        """
         if self._conn is None:
             self._conn = get_connection(self._db_path)
             self._conn.executescript(COMMANDS_TABLE_SQL)
