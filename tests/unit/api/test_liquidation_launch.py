@@ -24,10 +24,12 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from vibe_quant.api import mark_precheck
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.validation.extraction import date_to_ns
 
 
 @pytest.fixture()
@@ -58,6 +60,25 @@ async def client(
     await ws_mgr.stop()
     job_mgr.close()
     state_mgr.close()
+
+
+@pytest.fixture(autouse=True)
+def mark_precheck_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
+    """Record the MARK-coverage precheck (vibe-quant-592lt) calls of a launch.
+
+    Every launch here would otherwise open the real ``data/catalog`` (a symlink
+    into the datasets, and stale MARK data would 422 a mode-on launch). The
+    recorded args are ``(catalog_path, symbols, start_ns, end_ns)``: a mode-on
+    launch must check the request's symbols, a mode-off launch must not check at
+    all.
+    """
+    calls: list[tuple[object, ...]] = []
+
+    def _record(*args: object) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(mark_precheck, "check_mark_coverage", _record)
+    return calls
 
 
 def _launch_body(
@@ -112,6 +133,7 @@ async def test_mode_off_stored_params_unchanged(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
     mode: str | None,
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """E1: field absent or "off" -> stored parameters identical to today."""
     ac, state, job_mgr, _db = client
@@ -126,12 +148,15 @@ async def test_mode_off_stored_params_unchanged(
     assert run["parameters"] == {"initial_balance": 1000}
     assert "liquidation_mode" not in run["parameters"]
     assert popen.call_count == 1
+    # mode off: no MARK file is opened at all (M5)
+    assert mark_precheck_calls == []
 
 
 @pytest.mark.parametrize("endpoint", ["screening", "validation"])
 async def test_mode_on_stored_in_params_leverage_untouched(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """E2: "cross" -> parameters.liquidation_mode="cross"; leverage stays as sent."""
     ac, state, job_mgr, _db = client
@@ -145,6 +170,20 @@ async def test_mode_on_stored_in_params_leverage_untouched(
     assert run is not None
     assert run["parameters"]["liquidation_mode"] == "cross"
     assert run["parameters"]["leverage"] == 20
+    if endpoint == "screening":
+        # mode on: checked with the request's symbols and window (M4/M1)
+        assert mark_precheck_calls == [
+            (
+                mark_precheck.DEFAULT_CATALOG_PATH,
+                ["BTCUSDT"],
+                date_to_ns("2025-01-01"),
+                date_to_ns("2025-02-01"),
+            )
+        ]
+    else:
+        # this fixture's strategy DSL is {} -> unparseable, so the validation
+        # precheck skips itself and the run fails later as today (M2c)
+        assert mark_precheck_calls == []
 
 
 async def test_uppercase_mode_is_422_with_no_run_row(
@@ -187,6 +226,7 @@ async def test_params_key_rejected(
 
 async def test_mode_on_leverage_over_max_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """E5: mode on with parameters.leverage=200 -> 422 (MAX_LEVERAGE), no run row."""
     ac, state, job_mgr, _db = client
@@ -201,6 +241,8 @@ async def test_mode_on_leverage_over_max_is_422(
     assert r.status_code == 422, r.text
     assert _run_count(state) == before
     assert popen.call_count == 0
+    # a pydantic 422 wins over the MARK precheck (M8)
+    assert mark_precheck_calls == []
 
 
 # --- E6/E7/E8: discovery launch ---
@@ -216,6 +258,7 @@ _DISCOVERY_BODY: dict[str, object] = {
 
 async def test_discovery_default_leaves_params_and_argv_unchanged(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """C6: no leverage field -> no leverage/liquidation params keys, no CLI flags."""
     ac, state, job_mgr, _db = client
@@ -232,11 +275,14 @@ async def test_discovery_default_leaves_params_and_argv_unchanged(
     assert "--liquidation-mode" not in argv
     assert "--leverage" not in argv
     assert "--liquidation-leverage" not in argv
+    assert mark_precheck_calls == []
 
 
 @pytest.mark.parametrize("field", ["leverage", "liquidation_leverage"])
 async def test_discovery_off_leverage_params_and_argv(
-    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path], field: str
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    field: str,
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """C8: mode off with an explicit leverage -> params {"leverage": 50.0}, --leverage 50.0."""
     ac, state, job_mgr, _db = client
@@ -253,10 +299,12 @@ async def test_discovery_off_leverage_params_and_argv(
     assert argv[argv.index("--leverage") + 1] == "50.0"
     assert "--liquidation-mode" not in argv
     assert "--liquidation-leverage" not in argv
+    assert mark_precheck_calls == []
 
 
 async def test_discovery_on_flags_and_params(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    mark_precheck_calls: list[tuple[object, ...]],
 ) -> None:
     """C9: isolated 20 -> params {"liquidation_mode","leverage"}, argv --leverage (no alias)."""
     ac, state, job_mgr, _db = client
@@ -277,6 +325,8 @@ async def test_discovery_on_flags_and_params(
     assert argv[argv.index("--liquidation-mode") + 1] == "isolated"
     assert argv[argv.index("--leverage") + 1] == "20.0"
     assert "--liquidation-leverage" not in argv
+    # mode on: MARK coverage is checked for the request's symbols (M3/M4)
+    assert [call[1] for call in mark_precheck_calls] == [["BTCUSDT"]]
 
 
 @pytest.mark.parametrize("bad", [0, 0.5, 2.5, 126])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from vibe_quant.api import mark_precheck
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
 from vibe_quant.api.schemas.discovery import (
     DiscoveryJobResponse,
@@ -382,14 +384,8 @@ def _discovery_cli_args(
     return command
 
 
-@router.post("/launch", response_model=DiscoveryJobResponse, status_code=201)
-async def launch_discovery(
-    body: DiscoveryLaunchRequest,
-    state: StateMgr,
-    jobs: JobMgr,
-    ws: WsMgr,
-) -> DiscoveryJobResponse:
-    # Guard: refuse if too many discovery jobs already running
+def _refuse_if_discovery_full(jobs: BacktestJobManager) -> None:
+    """409 when the max concurrent discoveries are already running."""
     running = _sync_discovery_statuses(jobs)
     if len(running) >= _MAX_CONCURRENT_DISCOVERIES:
         run_ids = [j.run_id for j in running]
@@ -401,6 +397,17 @@ async def launch_discovery(
                 f"or wait for them to complete."
             ),
         )
+
+
+@router.post("/launch", response_model=DiscoveryJobResponse, status_code=201)
+async def launch_discovery(
+    body: DiscoveryLaunchRequest,
+    state: StateMgr,
+    jobs: JobMgr,
+    ws: WsMgr,
+) -> DiscoveryJobResponse:
+    # Guard: refuse if too many discovery jobs already running
+    _refuse_if_discovery_full(jobs)
 
     # Warm-start: validate that the seed run's compiler hash matches the
     # current compiler. A mismatch means chromosomes would be evaluated by a
@@ -475,6 +482,21 @@ async def launch_discovery(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     _precheck_discovery_config(cli_args)
+
+    # A mode-on run scans MARK 1m bars across every stage of the span; refuse
+    # before any run row exists rather than failing the run in a worker
+    # (vibe-quant-592lt).
+    if settings.on:
+        await asyncio.to_thread(
+            mark_precheck.precheck_discovery,
+            settings.mode,
+            body.symbols,
+            start_date,
+            end_date,
+        )
+        # The await above let another launch in: re-check capacity right before
+        # the run row, with no await between here and start_job (M16).
+        _refuse_if_discovery_full(jobs)
 
     # Use strategy_id=None for discovery (no pre-existing strategy)
     run_id = state.create_backtest_run(

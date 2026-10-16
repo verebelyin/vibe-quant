@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from vibe_quant.api import mark_precheck
 from vibe_quant.api.deps import (
     get_catalog_manager,
     get_job_manager,
@@ -110,6 +112,16 @@ async def launch_screening(
                 "(screening maker-fill parity unproven, bead vibe-quant-7eek0)"
             ),
         )
+    # A mode-on run scans MARK 1m bars; refuse before any run row exists rather
+    # than failing the run inside apply_liquidation (vibe-quant-592lt).
+    if body.liquidation_mode != "off":
+        await asyncio.to_thread(
+            mark_precheck.precheck_screening,
+            body.liquidation_mode,
+            body.symbols,
+            body.start_date,
+            body.end_date,
+        )
     # The fee schedule is venue-level. Store bnb_discount only when set, so
     # default runs' stored parameters are unchanged.
     parameters = dict(body.parameters)
@@ -172,6 +184,26 @@ async def launch_validation(
     ws: WsMgr,
 ) -> BacktestRunResponse:
     _ensure_strategy(state, body.strategy_id)
+    # A mode-on run scans MARK 1m bars over the window validation will actually
+    # run on; refuse before any run row exists rather than failing the run
+    # inside apply_liquidation (vibe-quant-592lt).
+    if body.liquidation_mode != "off":
+        strategy = state.get_strategy(body.strategy_id)
+        if strategy is None:  # pragma: no cover - _ensure_strategy raised already
+            raise HTTPException(
+                status_code=404, detail=f"Strategy {body.strategy_id} not found"
+            )
+        dsl_config = strategy["dsl_config"]
+        await asyncio.to_thread(
+            mark_precheck.precheck_validation,
+            body.liquidation_mode,
+            body.symbols,
+            body.start_date,
+            body.end_date,
+            dsl_config if isinstance(dsl_config, dict) else {},
+            str(strategy["name"]),
+            body.parameters,
+        )
     # The fee schedule is venue-level. Store bnb_discount only when set, so
     # default runs' stored parameters are unchanged.
     parameters = dict(body.parameters)
