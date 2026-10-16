@@ -22,6 +22,10 @@ Read limits from the code and config (`vibe_quant/risk/`, `vibe_quant/paper/conf
 2. **Kill switches**: drawdown halt, daily loss limit, `TradingGuard` order gate configured and tested; `TradingState.REDUCING` alone doesn't stop a flat account from opening positions.
 3. **Costs**: fees + funding at the validated latency preset. Edge after costs is still positive at the retail preset.
 4. **Operational**: a new exchange endpoint in the diff: probe the route unauthenticated (401 = it exists, 404 = it does not) and name the one signed call the operator must run before the next paper run (risk-hs-1: the only real-API evidence for the forceOrders detector). TraderId matches `paper/config.py`'s regex (an invalid id aborts the process from Rust), API keys only in env vars, alerts wired (`vibe_quant/alerts/telegram.py`), restore path known (`/api/paper/restore`).
+Code-change reviews (no paper/live start requested) also:
+- For a restart/restore diff, drive at least one repro through the public `start()` and its except path, not `_initialize`/`_shutdown` directly (risk-sz-halt-1: only the public-start probe found the halt message overwritten).
+- For a new halt reason, list the existing halts it can replace (`guard.py` priorities) and what each replacement does to resume and to the UTC-midnight lift (risk-sz-kill-1: ERROR replacing a daily-loss halt removes the midnight lift).
+- For a per-symbol cap or limit, state the portfolio total (N symbols × cap vs leverage/equity) and write the live-gate rule (risk-sz-refuse-1 → bead vibe-quant-9r0m5).
 5. **Correlation**: overlap with strategies already in paper (same symbol + direction + timeframe means concentration).
 
 ## Output
@@ -64,3 +68,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-15 (Land, job 20261015-followups): shutdown-order check against stop_async. Evidence: risk-fu-paperalert-1 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-safety-bugs): callee-moved-into-finally chained-exception repro. Evidence: risk-sf-paperckpt-1 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-followups2): repro on the base commit too. Evidence: risk-fu2-paper-1 improve line. Applied automatically.
+- 2026-10-16 (Land, job 20261016-sizing): code-change review checks (public start() repro, halt-reason replacement, portfolio total of per-symbol caps) — evidence risk-sz-halt-1, risk-sz-kill-1, risk-sz-refuse-1. Applied by the chief.

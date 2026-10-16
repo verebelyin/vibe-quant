@@ -27,6 +27,7 @@ Escalating is a correct outcome, not a failure.
 6. Run the touched test files; quote the summary line.
 7. **Docs-only diffs:** for each "UI" claim, `rg` the field name in frontend/src, excluding generated files. For each leverage or default claim, check the code path of EVERY tier the claim covers (screening AND validation), in BOTH the on and the off branch, not only the code the commit touched. Ask the chief whether a UI claim depends on an in-flight task.
    Check that each bullet keeps the contract's tier scope (screening/discovery vs validation vs paper), and flag an inherited label the new facts contradict (revlite-hs-doc-1: an old "report-only" label sat next to "fitness reads the adjusted metrics"; a break entry lost its "screening/discovery" scope). Run "before" greps on the rendered markup (`**Paper/live trading:**`, not the plain words).
+   For every behaviour verb in a claim (skipped / refused / clamped / rejected / raised), read the code branch and name which outcome it produces (revl-sz-docs-1: SPEC said entries below min qty are skipped; `dsl/templates.py` clamps them up within the cap).
    For each "sends nothing" / "byte-identical" / "no key appears" claim, read the payload builder for that mode and list every key it still sends. Run doc `rg` checks in the worktree, not the main checkout (a stale main gives false hits). Evidence: revlite-hl-lev-t3 S1/S2: SPEC.md said Off sends nothing while `BacktestLaunchForm` always sends `parameters.leverage`.
 
 **Scratch hygiene (2026-10-13):** keep `rm -rf` of scratch copies out of Bash calls that do other work. Three reviewer calls that combined `rm` with other commands failed with "Claude V2 adapter has no active turn". Leave scratch dirs under /tmp and list them under `open:`; the chief cleans up. macOS has no `timeout` binary, so use the Bash tool's timeout instead.
@@ -79,3 +80,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-15 (Land): per-assert kill attribution, no -I for repo CLIs, byte-level quote checks. Evidence: revlite-fc-t4-3, revlite-fc-t7 r1/r2.
 - 2026-10-15 (Land, job 20261015-followups): test-deletion check. Evidence: revl-fu-r42-1 should-fix. Applied automatically.
 - 2026-10-16 (Land, job 20261016-followups2): no `-p no:logging` in mutant runs. Evidence: revl-fu2-markp1-2 improve line. Applied automatically.
+- 2026-10-16 (Land, job 20261016-sizing): docs check names the code outcome of each behaviour verb — evidence revl-sz-docs-1 (min-qty skip vs clamp-up). Applied by the chief.
