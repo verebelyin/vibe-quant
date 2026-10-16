@@ -112,6 +112,7 @@ Measured costs: full `tests/unit` ≈ 3 min serial, ≈ 1 min under `-n auto --d
 - **Gate cache:** `swarm-check.sh` caches a PASS per HEAD + base + scope + tool hash (clean tree only); re-running it on an unchanged worktree is instant, `--no-cache` forces a full run.
 - **E2E:** iterate with `-g <scenario>`, run the full spec once at the end.
 - **Async launches:** a test of anything that returns 201 and then runs in a subprocess polls the run's final status.
+- **Measure per-test time serially:** `--durations` under `-n auto` is inflated by CPU contention (job 20261016-followups3: 58.7 s and 7.8 s parallel-summed figures were 23.3 s and 2.98 s serially; two speed beads chased nothing).
 - **Keep proofs short:** never put long discovery/backtest reruns in a task brief; use unit tests, mutants and `exactness_239.py`, and tiny live settings (pop 4–6, 1–2 gens, 2–3 month window) when a live check is unavoidable.
 
 ## Shell

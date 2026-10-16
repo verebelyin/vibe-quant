@@ -25,6 +25,7 @@ Read limits from the code and config (`vibe_quant/risk/`, `vibe_quant/paper/conf
 Code-change reviews (no paper/live start requested) also:
 - For a restart/restore diff, drive at least one repro through the public `start()` and its except path, not `_initialize`/`_shutdown` directly (risk-sz-halt-1: only the public-start probe found the halt message overwritten).
 - For a new halt reason, list the existing halts it can replace (`guard.py` priorities) and what each replacement does to resume and to the UTC-midnight lift (risk-sz-kill-1: ERROR replacing a daily-loss halt removes the midnight lift).
+- For a fail-closed read of a DB row that `init_schema` seeds, also run the repro from a FRESH StateManager/process: the seed re-creates the row on first connect, so a cached-connection test can pass while production never sees the failure (risk-fu3-sysstate-1 → vibe-quant-tdjop).
 - For a per-symbol cap or limit, state the portfolio total (N symbols × cap vs leverage/equity) and write the live-gate rule (risk-sz-refuse-1 → bead vibe-quant-9r0m5).
 5. **Correlation**: overlap with strategies already in paper (same symbol + direction + timeframe means concentration).
 
@@ -69,3 +70,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-16 (Land, job 20261016-safety-bugs): callee-moved-into-finally chained-exception repro. Evidence: risk-sf-paperckpt-1 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-followups2): repro on the base commit too. Evidence: risk-fu2-paper-1 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-sizing): code-change review checks (public start() repro, halt-reason replacement, portfolio total of per-symbol caps) — evidence risk-sz-halt-1, risk-sz-kill-1, risk-sz-refuse-1. Applied by the chief.
+- 2026-10-16 (Land, job 20261016-followups3): fresh-connection repro for seeded rows — evidence risk-fu3-sysstate-1. Applied by the chief.

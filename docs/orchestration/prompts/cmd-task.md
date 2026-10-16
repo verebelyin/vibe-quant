@@ -36,6 +36,7 @@ SPEED RULES (measured: one model turn costs 4–10 s; the full test suite costs 
 - Tests that patch a collaborator teardown also uses (event writer, client): restore it before calling shutdown/teardown, or the teardown fails for an unrelated reason (cc-sb-alertwrite: 3 of 4 new tests went red at `_shutdown`).
 - Secret-leak tests: use leak markers that contain none of the redacted names (`ZZLEAK9`, not `BEARERSECRET9`), or a mutant that drops a name survives (impl-sb-watchlog-2).
 - Your file-read tool may be scoped to the main checkout: read WORKTREE files with the shell (`cat`/`sed -n`/`rg`), never the main checkout's copy (cc-sz-settings: a refused read cost a turn).
+- A config-only change (pyproject/ini, no .py file) makes swarm-check SKIP its tests check, so the gate prints no pytest output or warning count: prove such a task with a targeted-file before/after probe (cc-fu3-swarmtest).
 - Frontend tests: vitest includes only `src/**/*.test.ts` in a node env (no jsdom): write pure-function `.test.ts` tests, never `.test.tsx` render tests (cc-sz-sweepui: a `.test.tsx` was never collected).
 - Frontend edits: format your NEW/edited files before committing (`./node_modules/.bin/biome check --write <your files>`, never on files you did not touch); biome counts format diffs as lint errors (cc-sb-exitui).
 - Frontend edits: the gate fails only on NEW lint diagnostics (worktree errors > main errors; main baseline 77 errors on 2026-10-14, bead vibe-quant-mi71m). Target no new diagnostics (cc-hl-lev-t3).
