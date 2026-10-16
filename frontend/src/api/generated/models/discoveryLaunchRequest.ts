@@ -70,4 +70,6 @@ export interface DiscoveryLaunchRequest {
   liquidation_mode?: DiscoveryLaunchRequestLiquidationMode;
   leverage?: number | null;
   liquidation_leverage?: number | null;
+  max_position_pct?: number | null;
+  risk_per_trade?: number | null;
 }

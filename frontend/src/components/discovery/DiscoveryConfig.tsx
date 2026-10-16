@@ -29,6 +29,13 @@ import {
   MAX_LEVERAGE,
   MIN_LEVERAGE,
 } from "@/lib/liquidation";
+import {
+  DEFAULT_MAX_POSITION_PCT,
+  DEFAULT_RISK_PCT,
+  MAX_MAX_POSITION_PCT,
+  MAX_RISK_PCT,
+  sizingProblems,
+} from "@/lib/sizing";
 import { formatApiErrorDetail } from "./apiErrorDetail";
 import { buildDiscoveryLaunchBody, parseCrossWindowMonths } from "./discoveryLaunchBody";
 
@@ -97,7 +104,12 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // neither key.
   const [liquidationMode, setLiquidationMode] = useState<LiquidationMode>("off");
   const [leverage, setLeverage] = useState(DEFAULT_LEVERAGE);
+  // Sizing (vibe-quant-2gyk1.2): "" = an empty field, which is a problem.
+  const [maxPos, setMaxPos] = useState<number | "">(DEFAULT_MAX_POSITION_PCT);
+  const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
+  const sizingIssues = sizingProblems(maxPos, riskPct, leverage);
 
+  const symbolCount = symbols.split(",").filter((s) => s.trim() !== "").length;
   const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
 
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
@@ -164,6 +176,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       toast.error("Enter at least one symbol");
       return;
     }
+    if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
     if (eliteCount >= population) {
       toast.error("Elite count must be less than population size");
       return;
@@ -207,6 +220,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           bnbDiscount,
           liquidationMode,
           leverage,
+          maxPositionPct: maxPos,
+          riskPct,
           selectedIndicators,
         }),
       },
@@ -513,6 +528,46 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               Venue leverage; changes results only with Liquidation on.
             </p>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="disc-max-exposure">Max exposure (× equity)</Label>
+            <Input
+              id="disc-max-exposure"
+              type="number"
+              min={0}
+              max={MAX_MAX_POSITION_PCT}
+              step="any"
+              value={maxPos}
+              onChange={(e) => setMaxPos(e.target.value === "" ? "" : Number(e.target.value))}
+            />
+            <p className="text-xs text-muted-foreground">
+              Largest position per symbol, as a multiple of your account (0.5 = half the account).
+              Must not exceed leverage.
+              {symbolCount > 1 &&
+                ` Applies per symbol: ${symbolCount} symbols can hold up to ${symbolCount} × this in total.`}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="disc-risk-per-trade">Risk per trade (%)</Label>
+            <Input
+              id="disc-risk-per-trade"
+              type="number"
+              min={0}
+              max={MAX_RISK_PCT}
+              step="any"
+              value={riskPct}
+              onChange={(e) => setRiskPct(e.target.value === "" ? "" : Number(e.target.value))}
+            />
+            <p className="text-xs text-muted-foreground">
+              How much of the account one stopped-out trade may lose (2 = 2%).
+            </p>
+          </div>
+          {sizingIssues.length > 0 && (
+            <ul className="col-span-2 space-y-1 text-xs text-destructive" role="alert">
+              {sizingIssues.map((m) => (
+                <li key={m}>{m}</li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
@@ -913,7 +968,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       <Button
         type="button"
         className="w-full py-3 font-semibold"
-        disabled={launchMutation.isPending}
+        disabled={launchMutation.isPending || sizingIssues.length > 0}
         onClick={handleLaunch}
       >
         {launchMutation.isPending ? "Launching..." : "Launch Discovery"}

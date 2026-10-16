@@ -8,6 +8,7 @@
  */
 import type { DiscoveryLaunchRequest } from "@/api/generated/models";
 import { type LiquidationMode, leveragePayload, liquidationPayload } from "@/lib/liquidation";
+import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
 
 export type DiscoveryDirection = "long" | "short" | "both" | "random";
 export type DiscoverySymbolAgg = "portfolio" | "worst";
@@ -44,6 +45,10 @@ export interface DiscoveryLaunchForm {
   bnbDiscount: boolean;
   liquidationMode: LiquidationMode;
   leverage: number;
+  /** Max exposure in multiples of equity (validated by sizingProblems). */
+  maxPositionPct: number;
+  /** Risk per trade in PERCENT (validated by sizingProblems). */
+  riskPct: number;
   selectedIndicators: string[];
 }
 
@@ -104,5 +109,7 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     ...(form.bnbDiscount && { bnb_discount: true }),
     ...liquidationPayload(form.liquidationMode),
     ...leveragePayload(form.liquidationMode, form.leverage),
+    // Non-default sizing keys only, so a default launch body is unchanged.
+    ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
   } as DiscoveryLaunchRequest;
 }

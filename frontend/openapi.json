@@ -6044,6 +6044,28 @@
               }
             ],
             "title": "Liquidation Leverage"
+          },
+          "max_position_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Position Pct"
+          },
+          "risk_per_trade": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Per Trade"
           }
         },
         "additionalProperties": false,

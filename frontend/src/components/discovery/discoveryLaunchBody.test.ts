@@ -13,6 +13,7 @@ import {
   parseCrossWindowMonths,
 } from "@/components/discovery/discoveryLaunchBody";
 import { DEFAULT_LEVERAGE } from "@/lib/liquidation";
+import { DEFAULT_MAX_POSITION_PCT, DEFAULT_RISK_PCT } from "@/lib/sizing";
 
 function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLaunchForm {
   return {
@@ -46,6 +47,8 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     bnbDiscount: false,
     liquidationMode: "off",
     leverage: DEFAULT_LEVERAGE,
+    maxPositionPct: DEFAULT_MAX_POSITION_PCT,
+    riskPct: DEFAULT_RISK_PCT,
     selectedIndicators: [],
     ...overrides,
   };
@@ -190,5 +193,28 @@ describe("parseCrossWindowMonths", () => {
     expect(parseCrossWindowMonths("")).toStrictEqual([]);
     expect(parseCrossWindowMonths("1, 2,3")).toStrictEqual([1, 2, 3]);
     expect(parseCrossWindowMonths("0,-2,x,")).toStrictEqual([]);
+  });
+});
+
+describe("buildDiscoveryLaunchBody sizing (vibe-quant-2gyk1.2)", () => {
+  it("sends no sizing keys at the defaults (0.5 x equity, 2%)", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm());
+    expect("max_position_pct" in body).toBe(false);
+    expect("risk_per_trade" in body).toBe(false);
+  });
+
+  it("sends max_position_pct 1 and risk_per_trade 0.01 for exposure 1 / risk 1%", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm({ maxPositionPct: 1, riskPct: 1 }));
+    expect(body.max_position_pct).toBe(1);
+    expect(body.risk_per_trade).toBe(0.01);
+  });
+
+  it("sends only the key that moved off the default", () => {
+    const cap = buildDiscoveryLaunchBody(defaultForm({ maxPositionPct: 2 }));
+    expect(cap.max_position_pct).toBe(2);
+    expect("risk_per_trade" in cap).toBe(false);
+    const risk = buildDiscoveryLaunchBody(defaultForm({ riskPct: 7 }));
+    expect(risk.risk_per_trade).toBe(0.07);
+    expect("max_position_pct" in risk).toBe(false);
   });
 });

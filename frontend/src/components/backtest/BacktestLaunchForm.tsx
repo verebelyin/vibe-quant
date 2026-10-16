@@ -8,7 +8,6 @@ import {
 } from "@/api/generated/backtest/backtest";
 import { useListSymbolsApiDataSymbolsGet } from "@/api/generated/data/data";
 import type {
-  BacktestLaunchRequest,
   BacktestLaunchRequestEntryOrder,
   CoverageCheckResponseCoverage,
 } from "@/api/generated/models";
@@ -29,12 +28,16 @@ import {
 } from "@/components/ui/select";
 import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
+import { LIQUIDATION_MODE_OPTIONS, type LiquidationMode } from "@/lib/liquidation";
 import {
-  LIQUIDATION_MODE_OPTIONS,
-  type LiquidationMode,
-  liquidationPayload,
-} from "@/lib/liquidation";
+  DEFAULT_MAX_POSITION_PCT,
+  DEFAULT_RISK_PCT,
+  MAX_MAX_POSITION_PCT,
+  MAX_RISK_PCT,
+  sizingProblems,
+} from "@/lib/sizing";
 import { cn } from "@/lib/utils";
+import { buildBacktestLaunchBody } from "./backtestLaunchBody";
 import { PreflightStatus } from "./PreflightStatus";
 import {
   SweepBuilder,
@@ -64,6 +67,9 @@ export function BacktestLaunchForm() {
   const [endDate, setEndDate] = useState("");
   const [initialBalance, setInitialBalance] = useState(10000);
   const [leverage, setLeverage] = useState(10);
+  // Sizing (vibe-quant-2gyk1.2): "" = an empty field, which is a problem.
+  const [maxPos, setMaxPos] = useState<number | "">(DEFAULT_MAX_POSITION_PCT);
+  const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
   // Liquidation (vibe-quant-2gyk1.1.10, E1): off sends no liquidation keys.
   const [liquidationMode, setLiquidationMode] = useState<LiquidationMode>("off");
   const [timeframe, setTimeframe] = useState("1m");
@@ -135,6 +141,8 @@ export function BacktestLaunchForm() {
     [selectedStrategy],
   );
 
+  const sizingIssues = sizingProblems(maxPos, riskPct, leverage);
+
   const isLaunching = screeningMutation.isPending || validationMutation.isPending;
 
   const canSubmit =
@@ -143,6 +151,7 @@ export function BacktestLaunchForm() {
     startDate !== "" &&
     endDate !== "" &&
     !strategyProblem &&
+    sizingIssues.length === 0 &&
     !(sweepEnabled && (!catalogReady || sweepProblem(sweepConfig, sweepableParams))) &&
     !isLaunching;
 
@@ -194,37 +203,29 @@ export function BacktestLaunchForm() {
     if (strategyId === "" || selectedSymbols.length === 0) return;
     setLaunchResult(null);
 
-    // Sizing/risk configs and overfitting toggles used to be sent here but no
-    // backtest runner ever applied them (the API now rejects them). Overfitting
-    // filters run in discovery / the overfitting CLI.
-    const payload: BacktestLaunchRequest = {
-      strategy_id: Number(strategyId),
+    // Overfitting toggles used to be sent here but no backtest runner ever
+    // applied them (the API now rejects them); they run in discovery / the
+    // overfitting CLI. Sizing is validated by sizingProblems (canSubmit).
+    if (maxPos === "" || riskPct === "" || sizingIssues.length > 0) return;
+    const payload = buildBacktestLaunchBody({
+      strategyId: Number(strategyId),
       symbols: selectedSymbols,
       timeframe,
-      start_date: startDate,
-      end_date: endDate,
-      parameters: {
-        initial_balance: initialBalance,
-        leverage,
-        ...(sweepEnabled &&
-          sweepConfig.params.length > 0 && {
-            sweep: sweepToPayload(sweepConfig),
-          }),
-      },
-      // Off sends no liquidation_mode, so stored parameters stay identical.
-      ...liquidationPayload(liquidationMode),
-      ...(mode === "validation" && {
-        latency_preset: latencyPreset && latencyPreset !== "__none__" ? latencyPreset : null,
-        ...(bnbDiscount && { bnb_discount: true }),
-        // Post-only maker entries are validation-only and opt-in; the three
-        // fields reach the run only when post_only is chosen (D3-6).
-        ...(entryOrder === "post_only" && {
-          entry_order: entryOrder,
-          maker_offset_ticks: makerOffsetTicks,
-          maker_entry_timeout_bars: makerEntryTimeoutBars,
-        }),
-      }),
-    };
+      startDate,
+      endDate,
+      initialBalance,
+      leverage,
+      maxPositionPct: maxPos,
+      riskPct,
+      liquidationMode,
+      sweep: sweepEnabled && sweepConfig.params.length > 0 ? sweepToPayload(sweepConfig) : null,
+      mode,
+      latencyPreset,
+      bnbDiscount,
+      entryOrder,
+      makerOffsetTicks,
+      makerEntryTimeoutBars,
+    });
 
     const mutation = mode === "screening" ? screeningMutation : validationMutation;
 
@@ -454,6 +455,50 @@ export function BacktestLaunchForm() {
                 Venue leverage; changes results only with Liquidation on.
               </p>
             </div>
+          </div>
+
+          {/* Sizing (vibe-quant-2gyk1.2) */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="max-exposure">Max exposure (× equity)</Label>
+              <Input
+                id="max-exposure"
+                type="number"
+                min={0}
+                max={MAX_MAX_POSITION_PCT}
+                step="any"
+                value={maxPos}
+                onChange={(e) => setMaxPos(e.target.value === "" ? "" : Number(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Largest position per symbol, as a multiple of your account (0.5 = half the account).
+                Must not exceed leverage.
+                {selectedSymbols.length > 1 &&
+                  ` Applies per symbol: ${selectedSymbols.length} symbols can hold up to ${selectedSymbols.length} × this in total.`}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="risk-per-trade">Risk per trade (%)</Label>
+              <Input
+                id="risk-per-trade"
+                type="number"
+                min={0}
+                max={MAX_RISK_PCT}
+                step="any"
+                value={riskPct}
+                onChange={(e) => setRiskPct(e.target.value === "" ? "" : Number(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                How much of the account one stopped-out trade may lose (2 = 2%).
+              </p>
+            </div>
+            {sizingIssues.length > 0 && (
+              <ul className="col-span-2 space-y-1 text-xs text-destructive" role="alert">
+                {sizingIssues.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            )}
           </div>
 
           {/* Liquidation (vibe-quant-2gyk1.1.10, E1) */}
