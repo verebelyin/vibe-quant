@@ -5,8 +5,8 @@ import {
   getGetItemApiResearchItemsItemIdGetQueryKey,
   useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost,
 } from "@/api/generated/research/research";
-import { Button } from "@/components/ui/button";
 import { scaffoldErrorDetail } from "@/components/research/scaffoldError";
+import { Button } from "@/components/ui/button";
 
 interface Proposal {
   name?: unknown;
@@ -96,7 +96,9 @@ export function MissingIndicatorsBanner({
         onError: (error) => {
           const { status, detail } = scaffoldErrorDetail(error);
           if (status === 409) {
-            toast.error(`Scaffold ${type}: collision, try ${detail.suggested_name ?? "another name"}`);
+            toast.error(
+              `Scaffold ${type}: collision, try ${detail.suggested_name ?? "another name"}`,
+            );
           } else {
             toast.error(`Scaffold ${type} failed: ${detail.error ?? "see details"}`);
           }

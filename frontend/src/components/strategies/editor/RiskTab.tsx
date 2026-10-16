@@ -245,9 +245,7 @@ export function RiskTab({ config, onConfigChange, canonical = false }: RiskTabPr
             id="trailing-stop-enabled"
             disabled={canonical}
             checked={config.risk.trailing_stop_pct != null}
-            onCheckedChange={(v) =>
-              updateRisk({ trailing_stop_pct: v === true ? 1.5 : undefined })
-            }
+            onCheckedChange={(v) => updateRisk({ trailing_stop_pct: v === true ? 1.5 : undefined })}
           />
           <Label htmlFor="trailing-stop-enabled" className="text-sm font-normal">
             Enable trailing stop

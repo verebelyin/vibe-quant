@@ -95,6 +95,7 @@ export function CheckpointsList({ traderId, sessionActive = false }: Checkpoints
             const isLatest = idx === 0;
             return (
               <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: timestamps have 1s precision and the API exposes no checkpoint id; two checkpoints can share a second
                 key={`${cp.timestamp}-${idx}`}
                 className="flex items-start justify-between gap-3 rounded-md border border-border bg-card px-4 py-3"
               >

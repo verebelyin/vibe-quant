@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Wand2, Plus } from "lucide-react";
+import { Plus, Wand2 } from "lucide-react";
 import { useState } from "react";
 import type { StrategyResponse } from "@/api/generated/models";
 import { StrategyCreateDialog } from "@/components/strategies/StrategyCreateDialog";
@@ -40,11 +40,7 @@ export function StrategiesPage() {
           <Wand2 className="h-3 w-3" />
           Wizard
         </Button>
-        <Button
-          size="sm"
-          onClick={() => setCreateOpen(true)}
-          className="gap-1.5 h-8 text-xs"
-        >
+        <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-1.5 h-8 text-xs">
           <Plus className="h-3 w-3" />
           New Strategy
         </Button>

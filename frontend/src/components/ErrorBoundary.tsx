@@ -52,11 +52,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleCopy = () => {
-    const report = getErrorReport(
-      this.state.error,
-      this.state.errorInfo,
-      window.location.href,
-    );
+    const report = getErrorReport(this.state.error, this.state.errorInfo, window.location.href);
     navigator.clipboard.writeText(report).then(() => {
       this.setState({ copied: true });
       setTimeout(() => this.setState({ copied: false }), 2000);
@@ -294,7 +290,16 @@ export class ErrorBoundary extends Component<Props, State> {
                 transition: "all 150ms",
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 {copied ? (
                   <path d="M20 6L9 17l-5-5" />
                 ) : (

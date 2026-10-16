@@ -53,7 +53,10 @@ export function RegimeValidationPanel({ runId }: RegimeValidationPanelProps) {
               const sharpe = r.sharpe ?? r.sharpe_ratio ?? null;
               const dd = r.max_dd ?? r.max_drawdown ?? null;
               return (
-                <TableRow key={`${r.regime ?? i}-${i}`}>
+                <TableRow
+                  // biome-ignore lint/suspicious/noArrayIndexKey: regime label is optional and not guaranteed unique
+                  key={`${r.regime ?? i}-${i}`}
+                >
                   <TableCell className="font-mono text-xs">{r.regime ?? "--"}</TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {sharpe != null ? sharpe.toFixed(2) : "--"}

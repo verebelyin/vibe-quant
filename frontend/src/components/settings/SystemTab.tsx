@@ -1,9 +1,9 @@
 import { useGetCredentialsStatusApiResearchCredentialsStatusGet } from "@/api/generated/research/research";
 import { useGetSystemInfoApiSettingsSystemInfoGet } from "@/api/generated/settings/settings";
+import { SubredditEditor } from "@/components/settings/SubredditEditor";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
-import { SubredditEditor } from "@/components/settings/SubredditEditor";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";

@@ -19,7 +19,13 @@ export interface CheckInfo {
   detail?: string | undefined;
 }
 
-function CheckRow({ label, status, detail, threshold, description }: CheckInfo & { threshold?: string; description?: string }) {
+function CheckRow({
+  label,
+  status,
+  detail,
+  threshold,
+  description,
+}: CheckInfo & { threshold?: string; description?: string }) {
   const bg =
     status === "pass"
       ? "border-emerald-500/20 bg-emerald-500/[0.04]"
@@ -161,8 +167,7 @@ export function OverfittingBadges({ runId }: OverfittingBadgesProps) {
   const query = useGetRunSummaryApiResultsRunsRunIdGet(runId);
   const metaQuery = useGetRunMetaApiResultsRunsRunIdMetaGet(runId);
   const data = query.data?.data as BacktestResultResponse | undefined;
-  const timeframe =
-    metaQuery.data?.status === 200 ? metaQuery.data.data.timeframe : undefined;
+  const timeframe = metaQuery.data?.status === 200 ? metaQuery.data.data.timeframe : undefined;
 
   if (query.isLoading) {
     return (

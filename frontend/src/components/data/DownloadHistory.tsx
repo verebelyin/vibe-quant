@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { DownloadHistoryApiDataHistoryGet200Item } from "@/api/generated/models";
 import { useDownloadHistoryApiDataHistoryGet } from "@/api/generated/data/data";
+import type { DownloadHistoryApiDataHistoryGet200Item } from "@/api/generated/models";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -123,8 +123,10 @@ export function DownloadHistory() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sorted.map((item, idx) => (
-            <TableRow key={`${String(item.symbol)}-${String(item.timestamp)}-${idx}`}>
+          {sorted.map((item) => (
+            <TableRow
+              key={`${String(item.symbol)}-${String(item.interval)}-${String(item.timestamp)}`}
+            >
               <TableCell className="px-4 font-mono font-medium">
                 {String(item.symbol ?? "--")}
               </TableCell>

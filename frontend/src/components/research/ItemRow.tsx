@@ -2,8 +2,8 @@ import { Link } from "@tanstack/react-router";
 import { memo } from "react";
 import type { ResearchItemResponse } from "@/api/generated/models";
 import { ConfidenceBar } from "@/components/research/ConfidenceBar";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { formatRelative } from "@/lib/time";
 

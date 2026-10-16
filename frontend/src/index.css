@@ -3,8 +3,8 @@
 
 @import "tailwindcss";
 @import "tw-animate-css";
-@plugin "@tailwindcss/typography";
 @import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
 
 /* Dark-only: no light theme, no @custom-variant needed */
 
@@ -131,7 +131,6 @@
     font-family: var(--font-sans);
   }
 
-
   /* ── Atmospheric background ──────────────────────────────
      Subtle noise + ambient glow breaks the flat-color look.
      The radial gradients create depth like ambient lighting. */
@@ -153,7 +152,10 @@
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
   [data-slot="card"] {
-    transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+    transition:
+      border-color 0.25s ease,
+      box-shadow 0.25s ease,
+      transform 0.25s ease;
   }
 
   /* ── Staggered entrance animation ────────────────────────
@@ -171,13 +173,27 @@
   main > div > * {
     animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
-  main > div > *:nth-child(1) { animation-delay: 0ms; }
-  main > div > *:nth-child(2) { animation-delay: 60ms; }
-  main > div > *:nth-child(3) { animation-delay: 120ms; }
-  main > div > *:nth-child(4) { animation-delay: 180ms; }
-  main > div > *:nth-child(5) { animation-delay: 240ms; }
-  main > div > *:nth-child(6) { animation-delay: 300ms; }
-  main > div > *:nth-child(n+7) { animation-delay: 350ms; }
+  main > div > *:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  main > div > *:nth-child(2) {
+    animation-delay: 60ms;
+  }
+  main > div > *:nth-child(3) {
+    animation-delay: 120ms;
+  }
+  main > div > *:nth-child(4) {
+    animation-delay: 180ms;
+  }
+  main > div > *:nth-child(5) {
+    animation-delay: 240ms;
+  }
+  main > div > *:nth-child(6) {
+    animation-delay: 300ms;
+  }
+  main > div > *:nth-child(n + 7) {
+    animation-delay: 350ms;
+  }
 
   /* ── Card glass-morphism ────────────────────────────────── */
   [data-slot="card"] {
@@ -225,7 +241,12 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: linear-gradient(90deg, oklch(0.72 0.19 230 / 0%) 0%, oklch(0.72 0.19 230 / 4%) 50%, oklch(0.72 0.19 230 / 0%) 100%);
+    background: linear-gradient(
+      90deg,
+      oklch(0.72 0.19 230 / 0%) 0%,
+      oklch(0.72 0.19 230 / 4%) 50%,
+      oklch(0.72 0.19 230 / 0%) 100%
+    );
     mask: linear-gradient(to bottom, transparent 80%, black 100%);
     -webkit-mask: linear-gradient(to bottom, transparent 80%, black 100%);
   }
@@ -279,8 +300,12 @@
   /* ── Skeleton shimmer ────────────────────────────────────
      Animated gradient pass for loading placeholders */
   @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
   }
   [data-slot="skeleton"] {
     background: linear-gradient(

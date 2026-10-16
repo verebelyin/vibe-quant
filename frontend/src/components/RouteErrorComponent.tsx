@@ -1,5 +1,5 @@
-import { useState } from "react";
 import type { ErrorComponentProps } from "@tanstack/react-router";
+import { useState } from "react";
 
 function getErrorReport(error: Error, url: string): string {
   const timestamp = new Date().toISOString();

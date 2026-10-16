@@ -50,7 +50,9 @@ export function ItemList() {
       return (
         <EmptyState
           title="No items match these filters"
-          description={debouncedQ ? `No titles match "${debouncedQ}".` : "Try clearing the filters."}
+          description={
+            debouncedQ ? `No titles match "${debouncedQ}".` : "Try clearing the filters."
+          }
           action={{ label: "Clear filters", onClick: reset }}
         />
       );

@@ -48,9 +48,7 @@ export function MetricCard({ label, value, subtitle, trend, className }: MetricC
         <div className="mt-2 flex items-baseline gap-2">
           <span className="text-2xl font-bold tracking-tight font-mono">{value}</span>
           {trend && trend !== "neutral" && (
-            <span className={cn("text-[10px] font-semibold", t?.color)}>
-              {t?.symbol}
-            </span>
+            <span className={cn("text-[10px] font-semibold", t?.color)}>{t?.symbol}</span>
           )}
         </div>
         {subtitle && <p className="mt-1 text-xs text-muted-foreground/70">{subtitle}</p>}

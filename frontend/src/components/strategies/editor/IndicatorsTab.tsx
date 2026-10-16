@@ -2,12 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { usePromoteProposedIndicatorApiResearchIndicatorsNamePromotePost } from "@/api/generated/research/research";
+import { LoadingSpinner } from "@/components/ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LoadingSpinner } from "@/components/ui";
 import {
   Select,
   SelectContent,
@@ -15,8 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type DslConfig, type DslIndicator, TIMEFRAMES } from "./types";
 import { useIndicatorCatalog } from "@/hooks/useIndicatorCatalog";
+import { type DslConfig, type DslIndicator, TIMEFRAMES } from "./types";
 
 interface IndicatorsTabProps {
   config: DslConfig;
@@ -213,7 +213,9 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
           } else if (msg.includes("400")) {
             toast.error(`Cannot promote ${type}: not a valid indicator name`);
           } else if (msg.includes("404")) {
-            toast.error(`Cannot promote ${type}: no scaffolded proposed_${type.toLowerCase()}.py found`);
+            toast.error(
+              `Cannot promote ${type}: no scaffolded proposed_${type.toLowerCase()}.py found`,
+            );
           } else {
             toast.error(`Promote ${type} failed`);
           }
@@ -298,12 +300,7 @@ export function IndicatorsTab({ config, onConfigChange }: IndicatorsTabProps) {
     return (
       <div className="rounded-lg border border-destructive bg-destructive/10 p-4">
         <p className="text-sm text-destructive">Failed to load indicator catalog.</p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-2"
-          onClick={() => catalogQuery.refetch()}
-        >
+        <Button variant="outline" size="sm" className="mt-2" onClick={() => catalogQuery.refetch()}>
           Retry
         </Button>
       </div>

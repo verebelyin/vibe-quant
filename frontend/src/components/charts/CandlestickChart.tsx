@@ -69,7 +69,20 @@ function formatTickMark(unixSec: number | string): string {
   const hrs = String(d.getUTCHours()).padStart(2, "0");
   const min = String(d.getUTCMinutes()).padStart(2, "0");
   const day = d.getUTCDate();
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const mon = months[d.getUTCMonth()];
   // At midnight show "DD Mon", at month boundary show "Mon 'YY", otherwise show HH:MM
   if (hrs === "00" && min === "00") {
@@ -124,7 +137,10 @@ export default function CandlestickChart({
     const container = containerRef.current;
     if (!container) return;
 
-    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, height));
+    const chart = createChart(
+      container,
+      getChartOptions(theme === "system" ? "dark" : theme, height),
+    );
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {

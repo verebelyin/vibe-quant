@@ -398,6 +398,7 @@ function RejectionList({ rejections }: { rejections: { [key: string]: unknown }[
         const liq = liqBadge(r);
         return (
           <div
+            // biome-ignore lint/suspicious/noArrayIndexKey: one genome uid can be rejected at several stages (per-seed and pooled), so uid repeats
             key={i}
             className="rounded-md border border-amber-500/20 bg-amber-950/10 p-2 font-mono text-[11px] text-muted-foreground"
           >
@@ -417,6 +418,7 @@ function RejectionList({ rejections }: { rejections: { [key: string]: unknown }[
             {Array.isArray(r.reasons) && (
               <ul className="mt-1 list-inside list-disc text-amber-300/80">
                 {r.reasons.map((reason, j) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: static reason list; strings may repeat
                   <li key={j}>{String(reason)}</li>
                 ))}
               </ul>

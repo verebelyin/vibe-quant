@@ -4,10 +4,10 @@
  * Each section targets a specific fix to prevent regressions.
  */
 import { describe, expect, it } from "vitest";
-import { toISODate } from "@/components/ui/date-picker";
-import { getPresetRange } from "@/components/ui/DateRangePicker";
-import { computeRollingSharpe } from "@/components/results/RollingSharpeChart";
 import { expandParam, type SweepParam } from "@/components/backtest/SweepBuilder";
+import { computeRollingSharpe } from "@/components/results/RollingSharpeChart";
+import { getPresetRange } from "@/components/ui/DateRangePicker";
+import { toISODate } from "@/components/ui/date-picker";
 
 // ---------------------------------------------------------------------------
 // 1. toISODate timezone fix (bd-bai9)
@@ -59,16 +59,12 @@ describe("Rolling Sharpe sample variance (bd-s5mi)", () => {
       (103 - 100) / 100,
     ];
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const sampleVariance =
-      returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length - 1);
+    const sampleVariance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (returns.length - 1);
     const std = Math.sqrt(sampleVariance);
     // sqrt(365): crypto trades every calendar day (vibe-quant-pazbr)
     const expectedSharpe = (mean / std) * Math.sqrt(365);
 
-    expect(result[0]!.sharpe).toBeCloseTo(
-      Number.parseFloat(expectedSharpe.toFixed(3)),
-      3,
-    );
+    expect(result[0]!.sharpe).toBeCloseTo(Number.parseFloat(expectedSharpe.toFixed(3)), 3);
   });
 
   it("should return empty for insufficient data", () => {

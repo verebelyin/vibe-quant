@@ -1,19 +1,19 @@
-import { Fragment, useCallback, useMemo, useState } from "react";
 import {
   type ColumnDef,
-  type SortingState,
-  type ExpandedState,
-  type OnChangeFn,
-  type SortFn,
   createExpandedRowModel,
   createSortedRowModel,
+  type ExpandedState,
   flexRender,
+  type OnChangeFn,
   rowExpandingFeature,
   rowSortingFeature,
+  type SortFn,
+  type SortingState,
   tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { ArrowUpDown, ChevronRight, Square } from "lucide-react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
@@ -22,10 +22,10 @@ import {
 } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
 import { queryClient } from "@/api/query-client";
+import { EmptyState } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { EmptyState } from "@/components/ui";
 import {
   Select,
   SelectContent,
@@ -48,7 +48,11 @@ import { DiscoveryResults } from "./DiscoveryResults";
 
 const ALL = "__all__";
 
-function formatDuration(start: string | null | undefined, end: string | null | undefined, status: string): string {
+function formatDuration(
+  start: string | null | undefined,
+  end: string | null | undefined,
+  status: string,
+): string {
   const s = parseServerTimestamp(start);
   if (s === undefined) return "-";
   const e = status === "running" ? Date.now() : (parseServerTimestamp(end) ?? Date.now());
@@ -146,6 +150,7 @@ const columns: ColumnDef<typeof features, DiscoveryJobResponse>[] = [
       <div className="flex flex-col">
         <span className="font-mono text-xs">#{row.original.run_id}</span>
         {row.original.seed != null && (
+          // biome-ignore lint/a11y: this span only stops click propagation to the row; it is not an interactive control
           <span
             className="select-all font-mono text-[10px] text-muted-foreground"
             onClick={(e) => e.stopPropagation()}
@@ -174,9 +179,7 @@ const columns: ColumnDef<typeof features, DiscoveryJobResponse>[] = [
   {
     accessorKey: "timeframe",
     header: "TF",
-    cell: ({ row }) => (
-      <span className="font-mono text-xs">{row.original.timeframe ?? "-"}</span>
-    ),
+    cell: ({ row }) => <span className="font-mono text-xs">{row.original.timeframe ?? "-"}</span>,
   },
   {
     accessorKey: "generations",
@@ -188,18 +191,14 @@ const columns: ColumnDef<typeof features, DiscoveryJobResponse>[] = [
       if (!max) return <span className="font-mono text-xs">-</span>;
       const isRunning = row.original.status.toLowerCase() === "running";
       return (
-        <span className="font-mono text-xs">
-          {isRunning ? `${current}/${max}` : String(max)}
-        </span>
+        <span className="font-mono text-xs">{isRunning ? `${current}/${max}` : String(max)}</span>
       );
     },
   },
   {
     accessorKey: "population",
     header: "Pop",
-    cell: ({ row }) => (
-      <span className="font-mono text-xs">{row.original.population ?? "-"}</span>
-    ),
+    cell: ({ row }) => <span className="font-mono text-xs">{row.original.population ?? "-"}</span>,
   },
   {
     id: "best_fitness",
@@ -211,18 +210,14 @@ const columns: ColumnDef<typeof features, DiscoveryJobResponse>[] = [
       return f != null ? Number(f) : null;
     },
     cell: ({ row }) => (
-      <span className="font-mono text-xs font-medium">
-        {bestFitnessFromProgress(row.original)}
-      </span>
+      <span className="font-mono text-xs font-medium">{bestFitnessFromProgress(row.original)}</span>
     ),
   },
   {
     accessorKey: "strategies_found",
     header: ({ column }) => <SortHeader column={column}>Strategies</SortHeader>,
     cell: ({ row }) => (
-      <span className="font-mono text-xs">
-        {row.original.strategies_found ?? "-"}
-      </span>
+      <span className="font-mono text-xs">{row.original.strategies_found ?? "-"}</span>
     ),
   },
   {
@@ -325,10 +320,7 @@ export function DiscoveryJobsTable({
                 <TableHead key={header.id}>
                   {header.isPlaceholder
                     ? null
-                    : flexRender(
-                        header.column.columnDef.header,
-                        header.getContext(),
-                      )}
+                    : flexRender(header.column.columnDef.header, header.getContext())}
                 </TableHead>
               ))}
             </TableRow>
@@ -346,10 +338,7 @@ export function DiscoveryJobsTable({
               >
                 {row.getAllCells().map((cell) => (
                   <TableCell key={cell.id}>
-                    {flexRender(
-                      cell.column.columnDef.cell,
-                      cell.getContext(),
-                    )}
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>
                 ))}
               </TableRow>
@@ -359,11 +348,12 @@ export function DiscoveryJobsTable({
                     <div className="border-t border-border bg-muted/10 p-4">
                       {row.original.status.toLowerCase() === "failed" ? (
                         <div className="space-y-2">
-                          <h4 className="text-sm font-semibold text-red-400">
-                            Error Details
-                          </h4>
+                          <h4 className="text-sm font-semibold text-red-400">Error Details</h4>
                           <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/20 bg-red-950/20 p-3 font-mono text-xs text-red-300">
-                            {row.original.error_message || "No error details available. Check server logs for run #" + row.original.run_id + "."}
+                            {row.original.error_message ||
+                              "No error details available. Check server logs for run #" +
+                                row.original.run_id +
+                                "."}
                           </pre>
                         </div>
                       ) : (
@@ -383,24 +373,20 @@ export function DiscoveryJobsTable({
 
 export function DiscoveryResultsPage() {
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "started_at", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "started_at", desc: true }]);
   const [expanded, setExpanded] = useState<ExpandedState>({});
 
-  const { data: jobsResp, isLoading } = useListDiscoveryJobsApiDiscoveryJobsGet(
-    {
-      query: {
-        refetchInterval: (query) => {
-          const data = query.state.data;
-          const jobs = data && data.status === 200 ? data.data : [];
-          return jobs.some((j: DiscoveryJobResponse) => j.status.toLowerCase() === "running")
-            ? 5000
-            : false;
-        },
+  const { data: jobsResp, isLoading } = useListDiscoveryJobsApiDiscoveryJobsGet({
+    query: {
+      refetchInterval: (query) => {
+        const data = query.state.data;
+        const jobs = data && data.status === 200 ? data.data : [];
+        return jobs.some((j: DiscoveryJobResponse) => j.status.toLowerCase() === "running")
+          ? 5000
+          : false;
       },
     },
-  );
+  });
 
   const jobs: DiscoveryJobResponse[] = useMemo(() => {
     if (!jobsResp || jobsResp.status !== 200) return [];

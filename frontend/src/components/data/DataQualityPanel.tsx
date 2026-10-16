@@ -1,5 +1,5 @@
-import type { DataQualityResponse } from "@/api/generated/models";
 import { useDataQualityApiDataQualitySymbolGet } from "@/api/generated/data/data";
+import type { DataQualityResponse } from "@/api/generated/models";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -214,6 +214,7 @@ export function DataQualityPanel({ symbol }: DataQualityPanelProps) {
               </TableHeader>
               <TableBody>
                 {ohlcErrors.map((err, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: static validation-report rows, never reordered
                   <TableRow key={i} className="text-destructive">
                     <TableCell className="px-3 py-1.5 font-mono">{err.timestamp}</TableCell>
                     <TableCell className="px-3 py-1.5">{err.error_type}</TableCell>

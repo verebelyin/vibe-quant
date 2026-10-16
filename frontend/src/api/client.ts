@@ -37,9 +37,7 @@ export const customInstance = async <T>(url: string, init?: RequestInit): Promis
     } catch {
       body = undefined;
     }
-    const err = new Error(
-      `API error: ${response.status} ${response.statusText}`,
-    ) as ApiError;
+    const err = new Error(`API error: ${response.status} ${response.statusText}`) as ApiError;
     err.status = response.status;
     err.body = body;
     throw err;

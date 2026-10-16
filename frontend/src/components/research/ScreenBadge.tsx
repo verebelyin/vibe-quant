@@ -66,9 +66,7 @@ function buildTooltip(s: ScreenSummary): string {
 
 export function ScreenBadge({ summary }: { summary: ScreenSummary }) {
   const text =
-    summary.screen_status === "failed"
-      ? "Sharpe: ✕"
-      : `Sharpe: ${fmt(summary.screen_sharpe)}`;
+    summary.screen_status === "failed" ? "Sharpe: ✕" : `Sharpe: ${fmt(summary.screen_sharpe)}`;
   const cls =
     "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs " +
     badgeClasses(summary);

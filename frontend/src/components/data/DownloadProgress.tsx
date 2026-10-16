@@ -144,6 +144,7 @@ export function DownloadProgress({ jobId, onComplete, onCancel }: DownloadProgre
         <div className="max-h-48 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs text-muted-foreground">
           {logs.length === 0 && <span>Waiting for progress events...</span>}
           {logs.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: bounded text-only rows with no per-row state; duplicate lines have no unique id (addLog trims old entries)
             <div key={`${i}-${line.slice(0, 20)}`}>{line}</div>
           ))}
           <div ref={logsEndRef} />

@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useMemo, useRef, useState } from "react";
 import type { TradeResponse } from "@/api/generated/models/tradeResponse";
 import { useGetTradesApiResultsRunsRunIdTradesGet } from "@/api/generated/results/results";
 import { Button } from "@/components/ui/button";
@@ -172,9 +172,7 @@ export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId
   const totalHeight = virtualizer.getTotalSize();
   const paddingTop = virtualItems.length > 0 ? (virtualItems[0]?.start ?? 0) : 0;
   const paddingBottom =
-    virtualItems.length > 0
-      ? totalHeight - (virtualItems[virtualItems.length - 1]?.end ?? 0)
-      : 0;
+    virtualItems.length > 0 ? totalHeight - (virtualItems[virtualItems.length - 1]?.end ?? 0) : 0;
 
   return (
     <div className="space-y-4">
@@ -287,7 +285,9 @@ export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId
                   <TableCell
                     className={cn(
                       "text-right font-medium tabular-nums",
-                      trade.net_pnl != null && trade.net_pnl >= 0 ? "text-green-500" : "text-red-500",
+                      trade.net_pnl != null && trade.net_pnl >= 0
+                        ? "text-green-500"
+                        : "text-red-500",
                     )}
                   >
                     {formatPnl(trade.net_pnl)}
@@ -308,7 +308,9 @@ export function TradeLog({ runId, onTradeHover, onTradeClick, highlightedTradeId
                   <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
                     {trade.entry_fee != null || trade.exit_fee != null || trade.funding_fees != null
                       ? formatPnl(
-                          (trade.entry_fee ?? 0) + (trade.exit_fee ?? 0) + (trade.funding_fees ?? 0),
+                          (trade.entry_fee ?? 0) +
+                            (trade.exit_fee ?? 0) +
+                            (trade.funding_fees ?? 0),
                         )
                       : "-"}
                   </TableCell>

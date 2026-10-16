@@ -13,7 +13,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { BacktestResultResponse, BacktestRunResponse, ComparisonResponse, DrawdownPoint, EquityCurvePoint, RunListResponse } from "@/api/generated/models";
+import type {
+  BacktestResultResponse,
+  BacktestRunResponse,
+  ComparisonResponse,
+  DrawdownPoint,
+  EquityCurvePoint,
+  RunListResponse,
+} from "@/api/generated/models";
 import {
   useCompareRunsApiResultsCompareGet,
   useGetDrawdownApiResultsRunsRunIdDrawdownGet,
@@ -434,7 +441,9 @@ function RadarOverlay({ runs }: { runs: BacktestResultResponse[] }) {
     const entry: Record<string, number | string> = { metric: label };
     runs.forEach((r) => {
       const val = typeof r[key] === "number" ? (r[key] as number) : 0;
-      entry[`run_${r.run_id}`] = Number((normalize(val, min, max, higherIsBetter) * 100).toFixed(1));
+      entry[`run_${r.run_id}`] = Number(
+        (normalize(val, min, max, higherIsBetter) * 100).toFixed(1),
+      );
     });
     return entry;
   });

@@ -160,7 +160,10 @@ export function ReconciliationPanel() {
                   </TableHeader>
                   <TableBody>
                     {data.paired_trades.map((p, i) => (
-                      <TableRow key={`${p.paper.position_id}-${i}`}>
+                      <TableRow
+                        // biome-ignore lint/suspicious/noArrayIndexKey: paper position ids can repeat when a position id is reused after a close; pairs carry no other unique id
+                        key={`${p.paper.position_id}-${i}`}
+                      >
                         <TableCell className="font-mono text-xs">{p.paper.symbol}</TableCell>
                         <TableCell className="text-xs">{p.paper.side}</TableCell>
                         <TableCell className="text-right font-mono text-xs">

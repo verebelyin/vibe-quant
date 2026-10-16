@@ -22,6 +22,7 @@ export function CommentsList({ comments }: Props) {
       </div>
       <ul className="divide-y divide-border/40">
         {comments.map((c, idx) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: comments have no stable id; author can repeat
           <li key={`${c.author ?? "anon"}-${idx}`} className="px-3 py-3 text-xs">
             <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground tabular-nums">
               <span className="font-mono text-foreground/70">{c.author ?? "[deleted]"}</span>

@@ -162,7 +162,8 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
         params: (ind.params as Record<string, number>) ?? {},
       };
       if (typeof ind.name === "string") out.name = ind.name;
-      if (typeof ind.timeframe_override === "string") out.timeframe_override = ind.timeframe_override;
+      if (typeof ind.timeframe_override === "string")
+        out.timeframe_override = ind.timeframe_override;
       return out;
     });
   }
@@ -171,10 +172,14 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
   if (conds) {
     if (Array.isArray(conds.entry)) base.conditions.entry = conds.entry as DslCondition[];
     if (Array.isArray(conds.exit)) base.conditions.exit = conds.exit as DslCondition[];
-    if (Array.isArray(conds.long_entry)) base.conditions.long_entry = conds.long_entry as DslCondition[];
-    if (Array.isArray(conds.long_exit)) base.conditions.long_exit = conds.long_exit as DslCondition[];
-    if (Array.isArray(conds.short_entry)) base.conditions.short_entry = conds.short_entry as DslCondition[];
-    if (Array.isArray(conds.short_exit)) base.conditions.short_exit = conds.short_exit as DslCondition[];
+    if (Array.isArray(conds.long_entry))
+      base.conditions.long_entry = conds.long_entry as DslCondition[];
+    if (Array.isArray(conds.long_exit))
+      base.conditions.long_exit = conds.long_exit as DslCondition[];
+    if (Array.isArray(conds.short_entry))
+      base.conditions.short_entry = conds.short_entry as DslCondition[];
+    if (Array.isArray(conds.short_exit))
+      base.conditions.short_exit = conds.short_exit as DslCondition[];
   }
 
   const risk = raw.risk as Record<string, unknown> | undefined;
@@ -182,7 +187,8 @@ export function parseDslConfig(raw: Record<string, unknown>): DslConfig {
     if (risk.stop_loss) base.risk.stop_loss = risk.stop_loss as DslStopLoss;
     if (risk.take_profit) base.risk.take_profit = risk.take_profit as DslTakeProfit;
     if (risk.position_sizing) base.risk.position_sizing = risk.position_sizing as DslPositionSizing;
-    if (typeof risk.trailing_stop_pct === "number") base.risk.trailing_stop_pct = risk.trailing_stop_pct;
+    if (typeof risk.trailing_stop_pct === "number")
+      base.risk.trailing_stop_pct = risk.trailing_stop_pct;
   }
 
   const time = raw.time as Record<string, unknown> | undefined;

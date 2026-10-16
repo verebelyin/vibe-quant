@@ -1,5 +1,10 @@
 import { useMemo } from "react";
-import type { BacktestResultResponse, DrawdownPoint, EquityCurvePoint, TradeResponse } from "@/api/generated/models";
+import type {
+  BacktestResultResponse,
+  DrawdownPoint,
+  EquityCurvePoint,
+  TradeResponse,
+} from "@/api/generated/models";
 import {
   useGetDrawdownApiResultsRunsRunIdDrawdownGet,
   useGetEquityCurveApiResultsRunsRunIdEquityCurveGet,

@@ -1,5 +1,5 @@
-import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { useListDiscoveryJobsApiDiscoveryJobsGet } from "@/api/generated/discovery/discovery";
 import type { DiscoveryJobResponse } from "@/api/generated/models";
 import { DiscoveryConfig } from "@/components/discovery/DiscoveryConfig";
@@ -33,9 +33,7 @@ export function DiscoveryPage() {
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-foreground">
-            Running Discoveries
-          </h3>
+          <h3 className="text-sm font-semibold text-foreground">Running Discoveries</h3>
           <Link
             to="/discovery/results"
             className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
@@ -45,9 +43,7 @@ export function DiscoveryPage() {
         </div>
 
         {runningJobs.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            No discoveries running.
-          </p>
+          <p className="text-xs text-muted-foreground">No discoveries running.</p>
         ) : (
           <div className="space-y-2">
             {runningJobs.map((job) => {

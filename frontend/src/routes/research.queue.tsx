@@ -5,13 +5,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { ExtractionJobResponse } from "@/api/generated/models";
 import {
-  getListExtractionQueueApiResearchExtractionQueueGetQueryKey,
   getExtractionQueueStatusApiResearchExtractionQueueStatusGetQueryKey,
+  getListExtractionQueueApiResearchExtractionQueueGetQueryKey,
   useCancelExtractionJobApiResearchExtractionJobsJobIdCancelPost,
   useListExtractionQueueApiResearchExtractionQueueGet,
 } from "@/api/generated/research/research";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatRelative } from "@/lib/time";
 
 export function ResearchQueuePage() {

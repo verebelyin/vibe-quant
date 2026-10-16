@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BrowseDataResponse } from "@/api/generated/models";
 import {
   useBrowseDataApiDataBrowseSymbolGet,
   useListSymbolsApiDataSymbolsGet,
 } from "@/api/generated/data/data";
+import type { BrowseDataResponse } from "@/api/generated/models";
 import type { CandlestickData, VolumeData } from "@/components/charts/CandlestickChart";
 import CandlestickChart from "@/components/charts/CandlestickChart";
 import { Card, CardContent } from "@/components/ui/card";

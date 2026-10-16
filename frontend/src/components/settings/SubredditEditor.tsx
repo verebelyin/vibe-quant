@@ -18,8 +18,7 @@ function validate(name: string): string | null {
   if (!name) return "Empty";
   if (name.startsWith("r/")) return "Drop the leading 'r/'";
   if (name !== name.toLowerCase()) return "Must be lowercase";
-  if (!SUBREDDIT_RE.test(name))
-    return "Lowercase letters, digits, underscores; 3-21 chars";
+  if (!SUBREDDIT_RE.test(name)) return "Lowercase letters, digits, underscores; 3-21 chars";
   return null;
 }
 
@@ -30,10 +29,8 @@ export function SubredditEditor() {
   const setMut = useSetSubredditsApiResearchSettingsSubredditsPut();
   const resetMut = useResetSubredditsApiResearchSettingsSubredditsDelete();
 
-  const serverList =
-    query.data?.status === 200 ? query.data.data.subreddits : [];
-  const usingDefault =
-    query.data?.status === 200 ? query.data.data.using_default : true;
+  const serverList = query.data?.status === 200 ? query.data.data.subreddits : [];
+  const usingDefault = query.data?.status === 200 ? query.data.data.using_default : true;
 
   const [list, setList] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
@@ -119,14 +116,12 @@ export function SubredditEditor() {
           <>
             <div className="mb-3 flex flex-wrap gap-1.5">
               {list.length === 0 ? (
-                <span className="text-xs text-muted-foreground">No subreddits — add one below.</span>
+                <span className="text-xs text-muted-foreground">
+                  No subreddits — add one below.
+                </span>
               ) : (
                 list.map((name) => (
-                  <Badge
-                    key={name}
-                    variant="outline"
-                    className="gap-1.5 font-mono text-[11px]"
-                  >
+                  <Badge key={name} variant="outline" className="gap-1.5 font-mono text-[11px]">
                     r/{name}
                     <button
                       type="button"
@@ -161,9 +156,7 @@ export function SubredditEditor() {
                 Add
               </Button>
             </div>
-            {draftError && (
-              <p className="mt-1 text-[11px] text-destructive">{draftError}</p>
-            )}
+            {draftError && <p className="mt-1 text-[11px] text-destructive">{draftError}</p>}
 
             <div className="mt-3 flex items-center gap-2">
               <Button
@@ -184,9 +177,9 @@ export function SubredditEditor() {
             </div>
 
             <p className="mt-3 text-[10px] text-muted-foreground">
-              Saved list takes effect on the next scrape — no backend restart needed.
-              Restore default reverts to the <code className="font-mono">REDDIT_SUBREDDITS</code>{" "}
-              env var (or <code className="font-mono">algotrading</code> when unset).
+              Saved list takes effect on the next scrape — no backend restart needed. Restore
+              default reverts to the <code className="font-mono">REDDIT_SUBREDDITS</code> env var
+              (or <code className="font-mono">algotrading</code> when unset).
             </p>
           </>
         )}

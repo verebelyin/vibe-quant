@@ -77,12 +77,7 @@ export function DateRangePicker({
         </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor="date-end">End</Label>
-          <DatePicker
-            id="date-end"
-            value={endDate}
-            onChange={onEndChange}
-            placeholder="End date"
-          />
+          <DatePicker id="date-end" value={endDate} onChange={onEndChange} placeholder="End date" />
         </div>
       </div>
       <div className="flex gap-1.5">

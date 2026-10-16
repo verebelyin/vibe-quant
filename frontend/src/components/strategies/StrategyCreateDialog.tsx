@@ -39,8 +39,7 @@ export function StrategyCreateDialog({ open, onClose, onCreated }: StrategyCreat
   const templates = (templatesQuery.data?.data ?? []) as TemplateItem[];
   const createMutation = useCreateStrategyApiStrategiesPost();
 
-  const uniqueName = (base: string) =>
-    `${base}_${Date.now().toString(36)}`;
+  const uniqueName = (base: string) => `${base}_${Date.now().toString(36)}`;
 
   const handleCreate = () => {
     if (selected === "blank") {

@@ -6,9 +6,9 @@ import {
   getGetItemApiResearchItemsItemIdGetQueryKey,
   useScaffoldProposedIndicatorApiResearchExtractionsExtractionIdIndicatorsIdxScaffoldPost,
 } from "@/api/generated/research/research";
+import { scaffoldErrorDetail } from "@/components/research/scaffoldError";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { scaffoldErrorDetail } from "@/components/research/scaffoldError";
 
 interface ProposedIndicator {
   name?: unknown;
@@ -310,16 +310,19 @@ export function ProposedIndicatorsList({ json, extractionId, itemId, scaffolds }
         </span>
       </div>
       <ul className="flex flex-col gap-3">
-        {proposals.map((p, idx) => (
-          <ProposalRow
-            key={`${asString(p.name) ?? "anon"}-${idx}`}
-            proposal={p}
-            idx={idx}
-            extractionId={extractionId}
-            itemId={itemId}
-            scaffold={byIdx.get(idx)}
-          />
-        ))}
+        {proposals.map((p, idx) => {
+          const rowKey = `${asString(p.name) ?? "anon"}-${idx}`;
+          return (
+            <ProposalRow
+              key={rowKey}
+              proposal={p}
+              idx={idx}
+              extractionId={extractionId}
+              itemId={itemId}
+              scaffold={byIdx.get(idx)}
+            />
+          );
+        })}
       </ul>
     </div>
   );

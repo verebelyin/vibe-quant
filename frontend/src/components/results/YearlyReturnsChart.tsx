@@ -35,7 +35,10 @@ function formatMonthDay(date: Date): string {
 export function computeYearlyReturns(data: EquityCurvePoint[]): YearReturn[] {
   if (data.length < 2) return [];
 
-  const byYear = new Map<number, { first: number; last: number; firstDate: Date; lastDate: Date }>();
+  const byYear = new Map<
+    number,
+    { first: number; last: number; firstDate: Date; lastDate: Date }
+  >();
 
   for (const point of data) {
     const d = new Date(point.timestamp);

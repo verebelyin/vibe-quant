@@ -114,7 +114,11 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
           value={fmt(data.calmar_ratio)}
           trend={trend(data.calmar_ratio)}
         />
-        <MetricCard label="CAGR" value={data.cagr != null ? fmt(data.cagr * 100, 2, "%") : "N/A"} trend={trend(data.cagr)} />
+        <MetricCard
+          label="CAGR"
+          value={data.cagr != null ? fmt(data.cagr * 100, 2, "%") : "N/A"}
+          trend={trend(data.cagr)}
+        />
         <MetricCard
           label="Annual Volatility"
           value={data.volatility_annual != null ? fmt(data.volatility_annual * 100, 2, "%") : "N/A"}
@@ -137,25 +141,13 @@ export function MetricsPanel({ runId }: MetricsPanelProps) {
             <MetricCard
               label="Skewness"
               value={fmt(data.skewness, 3)}
-              trend={
-                data.skewness == null
-                  ? "neutral"
-                  : data.skewness >= 0
-                    ? "up"
-                    : "down"
-              }
+              trend={data.skewness == null ? "neutral" : data.skewness >= 0 ? "up" : "down"}
               subtitle={data.skewness != null ? "negative = left tail" : undefined}
             />
             <MetricCard
               label="Kurtosis"
               value={fmt(data.kurtosis, 3)}
-              trend={
-                data.kurtosis == null
-                  ? "neutral"
-                  : data.kurtosis > 3
-                    ? "down"
-                    : "neutral"
-              }
+              trend={data.kurtosis == null ? "neutral" : data.kurtosis > 3 ? "down" : "neutral"}
               subtitle={data.kurtosis != null ? ">3 = fat tails" : undefined}
             />
           </div>

@@ -36,6 +36,11 @@
     }
   },
   "files": {
-    "includes": ["src/**", "!src/api/generated/**", "e2e/**"]
+    "includes": [
+      "src/**",
+      "!src/api/generated/**",
+      "!src/components/strategies/editor/__fixtures__/editor_outputs.json",
+      "e2e/**"
+    ]
   }
 }

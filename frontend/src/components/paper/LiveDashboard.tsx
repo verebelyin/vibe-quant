@@ -123,52 +123,49 @@ export function LiveDashboard(props: LiveDashboardProps = {}) {
     status: String(o.status ?? "filled"),
   }));
 
-  const handleMessage = useCallback(
-    (msg: WsMessage) => {
-      if (msg.type === "pnl_update") {
-        const newPnl = Number(msg.total_pnl ?? msg.pnl ?? 0);
-        setPnl((current) => {
-          prevPnlRef.current = current;
-          return newPnl;
+  const handleMessage = useCallback((msg: WsMessage) => {
+    if (msg.type === "pnl_update") {
+      const newPnl = Number(msg.total_pnl ?? msg.pnl ?? 0);
+      setPnl((current) => {
+        prevPnlRef.current = current;
+        return newPnl;
+      });
+
+      // Strategy metrics
+      if (msg.win_rate != null) setWinRate(Number(msg.win_rate));
+      if (msg.max_drawdown != null) setDrawdown(Number(msg.max_drawdown));
+
+      // Add equity point — prefer server timestamp over client clock
+      const equity = Number(msg.equity ?? msg.account_equity ?? 0);
+      if (equity > 0) {
+        const time = String(msg.timestamp ?? msg.ts ?? new Date().toISOString());
+        setEquityHistory((prev) => {
+          const next = [...prev, { time, equity }];
+          return next.length > MAX_EQUITY_POINTS ? next.slice(-MAX_EQUITY_POINTS) : next;
         });
-
-        // Strategy metrics
-        if (msg.win_rate != null) setWinRate(Number(msg.win_rate));
-        if (msg.max_drawdown != null) setDrawdown(Number(msg.max_drawdown));
-
-        // Add equity point — prefer server timestamp over client clock
-        const equity = Number(msg.equity ?? msg.account_equity ?? 0);
-        if (equity > 0) {
-          const time = String(msg.timestamp ?? msg.ts ?? new Date().toISOString());
-          setEquityHistory((prev) => {
-            const next = [...prev, { time, equity }];
-            return next.length > MAX_EQUITY_POINTS ? next.slice(-MAX_EQUITY_POINTS) : next;
-          });
-        }
-
-        queryClient.invalidateQueries({ queryKey: ["/api/paper/status"] });
-      } else if (msg.type === "position_update") {
-        const symbol = String(msg.symbol ?? "");
-        if (symbol) {
-          setFlashedSymbols((prev) => new Set(prev).add(symbol));
-          // Clear existing timer for this symbol
-          const existing = flashTimerRef.current.get(symbol);
-          if (existing) clearTimeout(existing);
-          const timer = setTimeout(() => {
-            setFlashedSymbols((prev) => {
-              const next = new Set(prev);
-              next.delete(symbol);
-              return next;
-            });
-            flashTimerRef.current.delete(symbol);
-          }, 600);
-          flashTimerRef.current.set(symbol, timer);
-        }
-        queryClient.invalidateQueries({ queryKey: ["/api/paper/positions"] });
       }
-    },
-    [],
-  );
+
+      queryClient.invalidateQueries({ queryKey: ["/api/paper/status"] });
+    } else if (msg.type === "position_update") {
+      const symbol = String(msg.symbol ?? "");
+      if (symbol) {
+        setFlashedSymbols((prev) => new Set(prev).add(symbol));
+        // Clear existing timer for this symbol
+        const existing = flashTimerRef.current.get(symbol);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          setFlashedSymbols((prev) => {
+            const next = new Set(prev);
+            next.delete(symbol);
+            return next;
+          });
+          flashTimerRef.current.delete(symbol);
+        }, 600);
+        flashTimerRef.current.set(symbol, timer);
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/paper/positions"] });
+    }
+  }, []);
 
   useEffect(() => {
     if (ws.lastMessage) {
@@ -188,11 +185,7 @@ export function LiveDashboard(props: LiveDashboardProps = {}) {
   }, []);
 
   const pnlTrend =
-    pnl != null && prevPnlRef.current != null
-      ? pnl >= prevPnlRef.current
-        ? "up"
-        : "down"
-      : null;
+    pnl != null && prevPnlRef.current != null ? (pnl >= prevPnlRef.current ? "up" : "down") : null;
 
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">

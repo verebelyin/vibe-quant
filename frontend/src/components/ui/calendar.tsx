@@ -1,9 +1,8 @@
-import { useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useState } from "react";
 import { DayPicker } from "react-day-picker";
-
-import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 function Calendar({
   className,
@@ -40,8 +39,7 @@ function Calendar({
         ),
         month_grid: "w-full border-collapse space-y-1",
         weekdays: "flex",
-        weekday:
-          "text-muted-foreground rounded-md w-8 font-normal text-[0.8rem]",
+        weekday: "text-muted-foreground rounded-md w-8 font-normal text-[0.8rem]",
         week: "flex w-full mt-2",
         day: cn(
           "relative p-0 text-center text-sm focus-within:relative focus-within:z-20 [&:has([aria-selected])]:bg-accent [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50",
@@ -58,11 +56,9 @@ function Calendar({
         selected:
           "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
         today: "bg-accent text-accent-foreground",
-        outside:
-          "day-outside text-muted-foreground aria-selected:text-muted-foreground",
+        outside: "day-outside text-muted-foreground aria-selected:text-muted-foreground",
         disabled: "text-muted-foreground opacity-50",
-        range_middle:
-          "aria-selected:bg-accent aria-selected:text-accent-foreground",
+        range_middle: "aria-selected:bg-accent aria-selected:text-accent-foreground",
         hidden: "invisible",
         ...classNames,
       }}

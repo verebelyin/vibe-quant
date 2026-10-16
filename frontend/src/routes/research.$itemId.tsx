@@ -10,9 +10,9 @@ import {
 } from "@/api/generated/research/research";
 import { ExtractionCard } from "@/components/research/ExtractionCard";
 import { PostContent } from "@/components/research/PostContent";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatRelative } from "@/lib/time";
 
 interface Props {
@@ -78,8 +78,7 @@ export function ResearchItemPage({ itemId }: Props) {
     const tb = b.extracted_at ? Date.parse(b.extracted_at) : 0;
     return tb - ta;
   });
-  const failedJob =
-    item.latest_job && item.latest_job.status === "failed" ? item.latest_job : null;
+  const failedJob = item.latest_job && item.latest_job.status === "failed" ? item.latest_job : null;
 
   const handleRunExtraction = () => {
     setRunning(true);

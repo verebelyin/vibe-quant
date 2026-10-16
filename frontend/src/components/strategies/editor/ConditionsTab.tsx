@@ -179,9 +179,7 @@ function AddMaConditionDialog({
     const existing = existingIndicators.find(
       (i) => i.type === maKind && i.params.period === period,
     );
-    const indicator: DslIndicator | null = existing
-      ? null
-      : { type: maKind, params: { period } };
+    const indicator: DslIndicator | null = existing ? null : { type: maKind, params: { period } };
     const maName = `${maKind}(${period})`;
     onApply(indicator, {
       left: "close",
@@ -286,10 +284,7 @@ function ConditionSection({
 
   const addMa = (indicator: DslIndicator | null, condition: DslCondition) => {
     if (indicator) onAddIndicator(indicator);
-    onChange([
-      ...conditions,
-      { ...condition, logic: conditions.length > 0 ? "and" : undefined },
-    ]);
+    onChange([...conditions, { ...condition, logic: conditions.length > 0 ? "and" : undefined }]);
   };
 
   const update = (idx: number, c: DslCondition) => {
@@ -320,10 +315,7 @@ function ConditionSection({
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm">{title}</CardTitle>
           <div className="flex gap-2">
-            <AddMaConditionDialog
-              existingIndicators={existingIndicators}
-              onApply={addMa}
-            />
+            <AddMaConditionDialog existingIndicators={existingIndicators} onApply={addMa} />
             <Button variant="outline" size="sm" onClick={add}>
               + Add
             </Button>

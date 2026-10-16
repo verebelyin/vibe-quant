@@ -53,7 +53,10 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
           </TableHeader>
           <TableBody>
             {rows.map((r, i) => (
-              <TableRow key={`${r.offset ?? i}-${i}`}>
+              <TableRow
+                // biome-ignore lint/suspicious/noArrayIndexKey: offset is optional (null rows have no unique id), so the row index keeps keys distinct
+                key={`${r.offset ?? i}-${i}`}
+              >
                 <TableCell className="font-mono text-xs">
                   {r.in_sample ? "0 (in-sample)" : r.offset != null ? `+${r.offset}` : "--"}
                 </TableCell>
@@ -66,9 +69,7 @@ export function CrossWindowPanel({ runId }: CrossWindowPanelProps) {
                 <TableCell className="text-right font-mono text-xs">
                   {r.max_dd != null ? `${(r.max_dd * 100).toFixed(2)}%` : "--"}
                 </TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {r.trades ?? "--"}
-                </TableCell>
+                <TableCell className="text-right font-mono text-xs">{r.trades ?? "--"}</TableCell>
                 <TableCell>
                   <PassBadge passed={r.passed} />
                 </TableCell>

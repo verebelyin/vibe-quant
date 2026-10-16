@@ -70,12 +70,13 @@ export function StrategyCard({
             .join(" · ")} +${symbols.length - 2}`;
 
   return (
-    <div
+    <button
+      type="button"
       className={cn(
         // Stagger entrance
         "animate-in fade-in-0 slide-in-from-bottom-2 fill-mode-both",
         // Base shape — sharp corners for terminal aesthetic
-        "group relative flex h-[172px] flex-col overflow-hidden rounded-sm",
+        "group relative flex h-[172px] w-full flex-col overflow-hidden rounded-sm text-left",
         // Border: thin all-around + thicker left accent
         "border border-white/[0.07] border-l-[2px]",
         "transition-all duration-150 ease-out",
@@ -88,18 +89,6 @@ export function StrategyCard({
         animationDuration: "320ms",
       }}
       onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
     >
       {/* ── Base bg ─────────────────────────────────────────── */}
       <div className="absolute inset-0 bg-[oklch(0.16_0.01_260)]" />
@@ -249,6 +238,6 @@ export function StrategyCard({
           )}
         </div>
       </div>
-    </div>
+    </button>
   );
 }
