@@ -956,6 +956,30 @@ python -m vibe_quant.data download-mark --start 2024-01-01 --end 2026-03-17 --ca
   - **Startup:** if the venue is not connected 120 s after start, one RISK_CHECK plus a critical Telegram, and strategies are never started.
   - **Liquidation detector:** polls every 60 s per symbol (30 s request timeout, per-symbol backoff 60/120/240/480/600 s, a degraded warning after 3 failures, 7-day lookback cap) and writes one LIQUIDATION event plus a critical Telegram per exchange liquidation/ADL; delivery is at most once per process and at least once across restarts.
 
+### Position sizing
+
+Every entry is sized by the rule below (settings validated by `vibe_quant/sizing_settings.py`; sizing code in the generated strategy, `vibe_quant/dsl/templates.py`). `equity` is the account balance (no unrealised PnL):
+
+```
+size = min(equity * risk_per_trade / stop_distance, equity * max_position_pct / price)
+```
+
+Then: a size below the instrument's min quantity is raised to the min quantity when that still fits under the `max_position_pct` cap, and the entry is skipped when it does not (so at small equity a trade can risk more than `risk_per_trade`, never more than the cap); the size is rounded down to the size increment (skipped if that leaves nothing); an entry below the min notional is skipped.
+
+Two **run-level** settings drive it:
+
+- `max_position_pct` — "Max exposure (× equity)", default **0.5**, range `(0, 125]`. It is a **cap, not a target** (the risk rule can size smaller), and it is **per symbol**: N symbols can hold up to N × cap in total.
+- `risk_per_trade` — "Risk per trade", default **0.02** (the UI shows percent: default 2, max 50), range `(0, 0.5]`.
+
+The launch check only requires `max_position_pct <= leverage` (the run's `parameters.leverage`, default 10). Binance notional brackets are **not** enforced: equity 10,000 × cap 125 = 1.25M BTC notional sits in the 800k–3M bracket (max 75x) while the run's leverage is 125 — a backtest fills it, Binance would reject.
+
+- **Where it is set:** the Backtest Launch form and the Discovery form (two inputs; Launch is disabled while either is invalid); API `parameters.max_position_pct` / `parameters.risk_per_trade` (backtest launch) and top-level `max_position_pct` / `risk_per_trade` (discovery launch); discovery CLI `--max-position-pct` / `--risk-per-trade`.
+- **Stored only when non-default** — a default launch stores exactly what it did before. A discovery run records `notes.sizing`; promote/replay inherit it (a present-but-unreadable `notes.sizing` is a 409 and writes no rows). A direct CLI discovery run records `notes.sizing` only, while the API launch also stores the run parameters.
+- **Not sweepable:** a sweep key naming a sizing field (including dotted spellings like `max.position.pct`) is rejected.
+- **Validation consistency** compares only against a screening reference with the same sizing. The sweep-row **Validate** button forwards the parent run's leverage, `initial_balance`, `liquidation_mode`, `bnb_discount`, `fee_tier` and sizing, and refuses a parent with a DSL override.
+- **Results:** the results page shows a sizing chip, e.g. `Max exposure 0.5× · Risk 2% (default)`; a multi-symbol run appends "per symbol, up to N × … total".
+- **Comparability:** defaults are byte-identical to before (the exactness proofs are unchanged), so a non-default sizing run is a new run, not a comparability break.
+
 ### Strategy Code Generation
 
 The DSL compiler generates a NautilusTrader `Strategy` subclass:
@@ -1145,6 +1169,8 @@ config:
   max_position_pct: 0.10          # Max 10% in single position
   max_leverage: 20
 ```
+
+The run-level sizing implemented today is the min(risk, cap) rule (defaults: 2% risk per trade, 0.5 × equity cap per symbol) — see [§ Position sizing](#position-sizing).
 
 **Available methods:**
 
@@ -1392,6 +1418,12 @@ On any unexpected error during paper/live:
 5. Wait for manual intervention (operator reviews, fixes, resumes)
 
 Transient errors (WebSocket disconnect, API timeout) are handled by NautilusTrader's built-in reconnection with exponential backoff. Strategy-level errors (invalid signal, sizing calculation failure) trigger the halt-and-alert flow.
+
+### Risk Controls
+
+- **Exposure refusal:** paper refuses to start when the effective `max_position_pct` (the validated run's stored value, or paper's sizing override; default 0.5) exceeds paper's effective leverage (the validated run's leverage, or paper's leverage override; default 10). `POST /api/paper/start` returns 422 before any run row is written, and the node refuses on every other start path. `max_total_exposure_pct` is **not** enforced, and the check is per symbol (N symbols can hold N × cap). Not built yet: before `LIVE`, a start with N × cap > leverage must be refused and `max_total_exposure_pct` enforced at order time (bead vibe-quant-9r0m5).
+- **Halt restore:** after a restart, a `MANUAL`, `ERROR`, `SIGNAL` or `KILL_SWITCH` halt comes back `HALTED` until the operator resumes; on the first halted guard tick the node closes owned positions and stops strategies exactly as the original halt did. Risk halts (drawdown, consecutive losses, daily loss) re-trip from the restored risk numbers. Old checkpoints without a halt reason start `RUNNING`; a failed restart keeps the halt and its message.
+- **Kill switch fails closed:** a failed read of the system kill switch counts as **engaged** for that check. Three consecutive failed reads halt the node with reason `ERROR` (worst case ≈ 33 s: a 1 s poll plus up to a 5 s DB busy wait per read and per command claim). Startup and resume are refused while it is unreadable, and there is no auto-resume. Before `LIVE`, a wall-clock bound of 15 s is required (bead vibe-quant-dt065).
 
 ---
 
