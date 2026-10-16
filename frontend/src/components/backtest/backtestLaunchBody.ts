@@ -54,10 +54,12 @@ export function buildBacktestLaunchBody(form: BacktestLaunchForm): BacktestLaunc
     },
     // Off sends no liquidation_mode, so stored parameters stay identical.
     ...liquidationPayload(form.liquidationMode),
+    // The BNB fee discount applies to screening and validation alike (t1ee0);
+    // unchecked sends no key, so stored screening parameters stay identical.
+    ...(form.bnbDiscount && { bnb_discount: true }),
     ...(form.mode === "validation" && {
       latency_preset:
         form.latencyPreset && form.latencyPreset !== "__none__" ? form.latencyPreset : null,
-      ...(form.bnbDiscount && { bnb_discount: true }),
       // Post-only maker entries are validation-only and opt-in; the three
       // fields reach the run only when post_only is chosen (D3-6).
       ...(form.entryOrder === "post_only" && {

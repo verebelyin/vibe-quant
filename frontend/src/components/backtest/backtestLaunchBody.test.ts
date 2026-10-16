@@ -90,4 +90,19 @@ describe("buildBacktestLaunchBody", () => {
     expect(body.entry_order).toBe("post_only");
     expect(body.liquidation_mode).toBe("isolated");
   });
+
+  it("sends bnb_discount for a screening run when the discount is checked", () => {
+    const body = buildBacktestLaunchBody(defaultForm({ mode: "screening", bnbDiscount: true }));
+    expect(body.bnb_discount).toBe(true);
+  });
+
+  it("omits bnb_discount for a screening run when the discount is unchecked", () => {
+    const body = buildBacktestLaunchBody(defaultForm({ mode: "screening", bnbDiscount: false }));
+    expect(body).not.toHaveProperty("bnb_discount");
+  });
+
+  it("omits bnb_discount for a validation run when the discount is unchecked", () => {
+    const body = buildBacktestLaunchBody(defaultForm({ mode: "validation", bnbDiscount: false }));
+    expect(body).not.toHaveProperty("bnb_discount");
+  });
 });

@@ -555,18 +555,6 @@ export function BacktestLaunchForm() {
                 </p>
               </div>
 
-              {/* BNB fee discount */}
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="bnb-discount"
-                  checked={bnbDiscount}
-                  onCheckedChange={(v) => setBnbDiscount(v === true)}
-                />
-                <Label htmlFor="bnb-discount" className="cursor-pointer">
-                  Pay fees in BNB (−10%)
-                </Label>
-              </div>
-
               {/* Entry orders: market fills or post-only maker limits (D3-6) */}
               <div className="space-y-2">
                 <Label htmlFor="entry-order">Entry Orders</Label>
@@ -628,6 +616,18 @@ export function BacktestLaunchForm() {
               </div>
             </div>
           )}
+
+          {/* BNB fee discount (screening + validation; vibe-quant-t1ee0) */}
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="bnb-discount"
+              checked={bnbDiscount}
+              onCheckedChange={(v) => setBnbDiscount(v === true)}
+            />
+            <Label htmlFor="bnb-discount" className="cursor-pointer">
+              Pay fees in BNB (−10%)
+            </Label>
+          </div>
         </div>
 
         {/* Right column */}
