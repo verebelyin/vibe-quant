@@ -145,7 +145,7 @@ def main() -> int:
     _wrap(BacktestNode, "_load_engine_data", "data: engine.add_data")
     _wrap(BacktestNode, "_run_oneshot", "node._run_oneshot")
     _wrap(NTScreeningRunner, "_extract_metrics", "extract_metrics")
-    _wrap(ex, "mark_to_market_drawdown", "  (mtm_dd)")
+    _wrap(ex, "mark_to_market_paths", "  (mtm_paths)")
     _wrap(BacktestNode, "dispose", "dispose")
     _wrap(cat, "cleanup_epoch_parquet", "cleanup_epoch_parquet")
     _wrap(ntr, "require_bars_in_window", "require_bars")
