@@ -959,8 +959,11 @@ class PaperTradingNode:
                 self._check_connectivity()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.exception("paper control loop iteration failed")
+            except Exception as exc:
+                # ott8r: class only (R1b). ``logger.exception`` prints the active
+                # exception's ``__context__`` chain too - a fetch error carrying a
+                # signed URL / api key - plus its traceback.
+                logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
             await asyncio.sleep(interval)
 
     def _check_kill_switch(self) -> None:
@@ -1292,7 +1295,10 @@ class PaperTradingNode:
             try:
                 ok, result, error = await self._execute_command(cmd)
             except Exception as exc:
-                logger.exception("paper command %s failed", cmd.command)
+                # ott8r: class only (R1b) - the command name identifies the command,
+                # while ``logger.exception`` would print its text and the active
+                # exception's ``__context__`` chain (a fetch error with signature/apiKey).
+                logger.error("paper command %s failed (%s)", cmd.command, type(exc).__name__)
                 self._commands.fail(cmd.id, f"{type(exc).__name__}: {exc}")
                 continue
             if ok:
@@ -1996,8 +2002,18 @@ class PaperTradingNode:
                 self._persistence.close()
             self._persistence = None
 
+        # otrm3: like the R6 writer close below, a raising ``close()`` is caught and
+        # logged class only, so the trading engine below is still stopped; class only
+        # (R1b) keeps the active exception's ``__context__`` chain (signed URL / api
+        # key text) and its traceback out of the log.
         if self._commands is not None:
-            self._commands.close()
+            try:
+                self._commands.close()
+            except Exception as exc:
+                logger.error(
+                    "paper command queue close failed (%s); continuing shutdown",
+                    type(exc).__name__,
+                )
             self._commands = None
 
         # Stop trading node. ``TradingNode.dispose()`` stops the running

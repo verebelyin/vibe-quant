@@ -36,6 +36,14 @@ Contract rows (brief cc-fu-paperalert; chief ruling R8 adds the 7 remaining pair
 * R12 (s3pqx, brief row R8) a failing ``_save_checkpoint_now`` logs its own error
        class-only - the store's text, the active write error's text/``__context__`` and
        any traceback stay out of the log - and the write's OSError still propagates.
+* R13 (otrm3) a raising ``_commands.close()`` in ``_shutdown`` is caught the same way as
+       R6's writer close (class only): the trading engine is still stopped, the event
+       writer still flushed and closed, and both handles end as ``None`` - while the
+       healthy order (``commands.close`` before ``stop_async``) is unchanged.
+* R14 (ott8r) the ``_control_loop`` per-iteration log and the ``process_commands``
+       per-command log are class only: the active exception's ``__context__`` chain
+       (a fetch error's signed URL / api key text) and any traceback stay out of the
+       log, and both loops keep running.
 """
 
 from __future__ import annotations
@@ -54,7 +62,7 @@ from vibe_quant.logging.events import EventType
 from vibe_quant.paper.errors import ErrorCategory, ErrorContext
 from vibe_quant.paper.guard import CloseAllResult, GuardState, HaltReason
 from vibe_quant.paper.node import NodeState, PaperTradingNode
-from vibe_quant.paper.persistence import StatePersistence
+from vibe_quant.paper.persistence import PaperCommand, StatePersistence
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1004,3 +1012,198 @@ def test_close_all_positions_without_errors_writes_without_alerting(
     assert spy.order == ["write"]
     assert spy.writes == [(EventType.SIGNAL, _close_all_payload([]), None)]
     assert spy.alerts == []
+
+
+# --------------------------------- R13: _shutdown command-queue close (otrm3)
+
+
+class _FakeCommandQueue:
+    """Command queue whose ``close`` can raise (otrm3) and which records the
+    claim/fail/complete calls (ott8r)."""
+
+    def __init__(self, *, close_error: Exception | None = None) -> None:
+        self.closed = 0
+        self.pending: list[PaperCommand] = []
+        self.claimed: list[str] = []
+        self.fails: list[tuple[int, str]] = []
+        self.completes: list[int] = []
+        self._close_error = close_error
+
+    def close(self) -> None:
+        self.closed += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+    def claim_pending(self, trader_id: str) -> list[PaperCommand]:
+        self.claimed.append(trader_id)
+        return list(self.pending)
+
+    def fail(self, command_id: int, error: str, result: object = None) -> None:
+        self.fails.append((command_id, error))
+
+    def complete(self, command_id: int, result: object) -> None:
+        self.completes.append(command_id)
+
+
+def _command(command_id: int, command: str) -> PaperCommand:
+    return PaperCommand(
+        id=command_id,
+        trader_id=_TRADER_ID,
+        command=command,
+        payload={},
+        status="running",
+        result=None,
+        error=None,
+    )
+
+
+async def test_shutdown_command_queue_close_failure_is_class_only_and_shutdown_continues(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R13/otrm3: a raising ``_commands.close()`` is logged class-only and must not skip
+    stopping the trading engine, flushing the writer or dropping either handle."""
+    node = _node(seeded)
+    error = RuntimeError(f"{_LEAK} close")
+    commands = _FakeCommandQueue(close_error=error)
+    node._commands = commands  # type: ignore[assignment]
+    writer = _FakeWriter()
+    node._event_writer = writer  # type: ignore[assignment]
+    persistence = _FakePersistence()
+    node._persistence = persistence  # type: ignore[assignment]
+    trading = _FakeTradingNodeStop()
+    node._trading_node = trading  # type: ignore[assignment]
+    node._state_manager = _FakeStateManager()  # type: ignore[assignment]
+
+    with caplog.at_level(logging.ERROR):
+        await asyncio.wait_for(node._shutdown(), 5)
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(errors) == 1, "exactly one ERROR, and no traceback logger.exception"
+    assert errors[0].getMessage() == (
+        "paper command queue close failed (RuntimeError); continuing shutdown"
+    )
+    assert errors[0].exc_info is None
+    assert "RuntimeError" in caplog.text
+    assert _LEAK not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert commands.closed == 1
+    assert trading.stopped == 1, "the trading engine is still stopped"
+    assert writer.flushed == 1, "the writer is still flushed"
+    assert writer.closed == 1, "the writer is still closed"
+    assert persistence.saved == 1 and persistence.closed == 1
+    assert node._commands is None
+    assert node._trading_node is None
+    assert node._event_writer is None
+
+
+async def test_shutdown_closes_the_command_queue_before_stopping_the_trading_node(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R13/otrm3: the healthy order is unchanged - ``commands.close`` once, then
+    ``stop_async``, in one ordered trace."""
+    node = _node(seeded)
+    order: list[str] = []
+
+    class _OrderedCommands(_FakeCommandQueue):
+        def close(self) -> None:
+            order.append("commands.close")
+            super().close()
+
+    class _OrderedTrading(_FakeTradingNodeStop):
+        async def stop_async(self) -> None:
+            order.append("stop_async")
+            await super().stop_async()
+
+    commands = _OrderedCommands()
+    node._commands = commands  # type: ignore[assignment]
+    node._event_writer = None
+    node._persistence = None
+    trading = _OrderedTrading()
+    node._trading_node = trading  # type: ignore[assignment]
+    node._state_manager = _FakeStateManager()  # type: ignore[assignment]
+
+    await asyncio.wait_for(node._shutdown(), 5)
+
+    assert order == ["commands.close", "stop_async"]
+    assert commands.closed == 1
+    assert trading.stopped == 1
+    assert node._commands is None
+    assert node._trading_node is None
+
+
+# ------------------------------- R14: _control_loop class-only log (ott8r)
+
+
+async def test_control_loop_iteration_failure_log_is_class_only_and_the_loop_keeps_running(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R14/ott8r: the ``_control_loop`` handler logs the class only, so neither the
+    exception's text nor its ``__context__`` chain prints, and the loop iterates again."""
+    node = _node(seeded)
+    monkeypatch.setattr(node._config, "control_poll_interval", 0.0)
+    monkeypatch.setattr(node, "_check_kill_switch", lambda: None)
+    monkeypatch.setattr(node, "_check_connectivity", lambda: None)
+    iterations = 0
+
+    async def flaky() -> None:
+        nonlocal iterations
+        iterations += 1
+        if iterations == 1:
+            try:
+                raise RuntimeError(f"fetch failed {_LEAK}")
+            except RuntimeError:
+                raise OSError(f"disk {_LEAK}")  # noqa: B904  # keep __context__
+        node._shutdown_event.set()
+
+    monkeypatch.setattr(node, "process_commands", flaky)
+
+    with caplog.at_level(logging.ERROR):
+        await asyncio.wait_for(node._control_loop(), 5)
+
+    assert iterations == 2, "the loop survived the failure and ran another iteration"
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].getMessage() == "paper control loop iteration failed (OSError)"
+    assert errors[0].exc_info is None
+    assert "OSError" in caplog.text
+    assert _LEAK not in caplog.text, "the __context__ chain must not print"
+    assert "Traceback" not in caplog.text
+
+
+# ----------------------------- R14: process_commands class-only log (ott8r)
+
+
+async def test_process_commands_failure_log_is_class_only_and_the_loop_continues(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R14/ott8r: a failing command logs the class (plus its name) only, still records
+    today's ``fail`` text and moves on to the next command."""
+    node = _node(seeded)
+    commands = _FakeCommandQueue()
+    commands.pending = [_command(1, "halt"), _command(2, "resume")]
+    node._commands = commands  # type: ignore[assignment]
+    executed: list[int] = []
+
+    async def execute(cmd: PaperCommand) -> tuple[bool, dict[str, Any], str | None]:
+        executed.append(cmd.id)
+        if cmd.id == 1:
+            try:
+                raise RuntimeError(f"fetch failed {_LEAK}")
+            except RuntimeError:
+                raise RuntimeError(f"{_LEAK} cmd")  # noqa: B904  # keep __context__
+        return True, {"ok": True}, None
+
+    monkeypatch.setattr(node, "_execute_command", execute)
+
+    with caplog.at_level(logging.ERROR):
+        await node.process_commands()
+
+    assert executed == [1, 2], "the loop continues with the next command"
+    assert commands.fails == [(1, f"RuntimeError: {_LEAK} cmd")], "today's fail text stands"
+    assert commands.completes == [2]
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].getMessage() == "paper command halt failed (RuntimeError)"
+    assert errors[0].exc_info is None
+    assert _LEAK not in caplog.text, "neither the command error nor its __context__ may print"
+    assert "Traceback" not in caplog.text
