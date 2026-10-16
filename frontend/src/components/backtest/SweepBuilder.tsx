@@ -86,8 +86,8 @@ interface LegacyFields {
 
 /**
  * UI-format params -> StrategyDSL fields exactly as dsl/translator.py `_canonical_params`:
- * equal spellings fold, different values are a conflict (the launch fails), nothing is
- * last-wins. Non-STOCH `period` is handled on its own, then std_dev / atr_multiplier.
+ * equal spellings (by `_conflict_key`) fold, different values are a conflict (the launch fails),
+ * nothing is last-wins. Non-STOCH `period` is handled on its own, then std_dev / atr_multiplier.
  */
 function legacyNativeFields(type: string, params: Record<string, number>): LegacyFields {
   const fields = new Map<string, string>();
@@ -98,8 +98,8 @@ function legacyNativeFields(type: string, params: Record<string, number>): Legac
   for (const [field, spellings] of groups) {
     const found = spellings.filter((k) => k in params);
     for (const k of spellings) handled.add(k);
-    if (new Set(found.map((k) => Number(params[k]))).size > 1) {
-      const shown = found.map((k) => `'${k}'=${params[k]}`).join(", ");
+    if (new Set(found.map((k) => conflictKey(params[k]))).size > 1) {
+      const shown = found.map((k) => `'${k}'=${pyRepr(params[k])}`).join(", ");
       conflicts.push(`Conflicting ${type} params for '${field}': ${shown}`);
       fields.delete(field);
       continue;
@@ -129,6 +129,38 @@ export function asFloat(value: unknown): number | null {
   if (typeof value !== "string" || !DECIMAL.test(value.trim())) return null;
   const number = Number(value.trim());
   return Number.isFinite(number) ? number : null;
+}
+
+/** Python `repr` of a JSON-parsed value, for translator messages built with `{v!r}`. */
+function pyRepr(value: unknown): string {
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return "nan";
+    if (!Number.isFinite(value)) return value > 0 ? "inf" : "-inf";
+    return `${value}`;
+  }
+  if (typeof value === "string") {
+    const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
+    const body = value
+      .replace(/\\/g, "\\\\")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t")
+      .split(quote)
+      .join(`\\${quote}`);
+    return `${quote}${body}${quote}`;
+  }
+  return JSON.stringify(value) ?? "None";
+}
+
+/**
+ * dsl/translator.py `_conflict_key`: the comparison key for two spellings of one param.
+ * Numbers and numeric strings compare numerically; everything else by its `repr`, so a bool
+ * never equals the number it would coerce to (`Number(true)` is 1, `_as_float(True)` is None).
+ */
+function conflictKey(value: unknown): number | string {
+  return asFloat(value) ?? pyRepr(value);
 }
 
 /**

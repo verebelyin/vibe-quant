@@ -498,3 +498,44 @@ describe("sweepableParamsFor UI-format numeric strings mirror the translator nam
     expect(bb("1e1")[0]).toMatchObject({ key: "bb_10_period", currentValue: 10, integer: true });
   });
 });
+
+describe("legacy spelling conflicts compare like the translator's _conflict_key", () => {
+  const macd = (params: Record<string, unknown>) => ({
+    general: {},
+    indicators: [{ type: "MACD", params }],
+  });
+  /** The conflict message for a param set, or null when the translator would not raise one. */
+  const conflictOf = (params: Record<string, unknown>): string | null => {
+    const problem = strategyTranslationProblem(macd(params));
+    return problem?.startsWith("Conflicting") ? problem : null;
+  };
+
+  it("a bool never equals the number it would coerce to (Number(true) === 1)", () => {
+    expect(strategyTranslationProblem(macd({ fast_period: 1, fast: true, slow: 26 }))).toBe(
+      "Conflicting MACD params for 'fast_period': 'fast_period'=1, 'fast'=True",
+    );
+    expect(strategyTranslationProblem(macd({ fast_period: 0, fast: false, slow: 26 }))).toBe(
+      "Conflicting MACD params for 'fast_period': 'fast_period'=0, 'fast'=False",
+    );
+  });
+
+  it("numbers and numeric strings compare numerically (no conflict)", () => {
+    for (const equal of [
+      { fast_period: 1, fast: "1", slow: 26 },
+      { fast_period: 1, fast: 1.0, slow: 26 },
+      { fast_period: 12, fast: " 12 ", slow: 26 },
+    ]) {
+      expect(conflictOf(equal), JSON.stringify(equal)).toBeNull();
+    }
+  });
+
+  it("two null spellings agree by repr (the launch then fails the int check)", () => {
+    expect(conflictOf({ fast_period: null, fast: null, slow: 26 })).toBeNull();
+  });
+
+  it("non-numeric strings conflict and print Python reprs", () => {
+    expect(strategyTranslationProblem(macd({ fast_period: "a", fast: "b", slow: 26 }))).toBe(
+      "Conflicting MACD params for 'fast_period': 'fast_period'='a', 'fast'='b'",
+    );
+  });
+});
