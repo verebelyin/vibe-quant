@@ -29,10 +29,11 @@ Review:
 - Follow-ups: <bead ids filed from this task>
 
 Job: <job id> · <worktree branch>
-Co-Authored-By: ...
+Co-Authored-By: Claude <model> <noreply@anthropic.com>   (chief adds it at Land; workers add none)
 ```
 
 Rules:
 - Body lines wrapped at ~72 chars; numbers copied verbatim from tool output.
 - One commit per task on `main`, in dependency order; prompt/self-improvement and board/telemetry changes stay in their own commits.
 - Worker commits on task branches use the same format (the chief rewrites/merges them into the final per-task commit from the brief, handoffs and reviews).
+- Never add a `Co-Authored-By` line for DeepSeek, Codex/GPT or any other non-Claude model, and never in worker commits; maker/reviewer models go in the Review section as text. The chief's land script strips any such trailer (user 2026-10-16: GitHub showed DeepSeek as a commit author; history was rewritten and force-pushed).
