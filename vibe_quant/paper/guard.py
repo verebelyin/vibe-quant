@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig
+from nautilus_trader.core.rust.common import ComponentState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import SubmitOrder, SubmitOrderList
 from nautilus_trader.model.enums import OrderSide
@@ -99,6 +100,13 @@ _HALT_PRIORITY: dict[HaltReason, int] = {
 # Halts that flatten and block entries but keep strategies running so they can
 # resume automatically (daily loss lifts at the next UTC midnight).
 _KEEP_STRATEGIES_RUNNING: frozenset[HaltReason] = frozenset({HaltReason.MAX_DAILY_LOSS})
+
+# NT component states in which a guarded strategy has not started yet. A stopping
+# halt applied now (e.g. in on_start, before NT starts the strategies) cannot
+# flatten them, but must record them so they are stopped once they run.
+_STRATEGY_NOT_STARTED: frozenset[ComponentState] = frozenset(
+    {ComponentState.PRE_INITIALIZED, ComponentState.READY, ComponentState.STARTING}
+)
 
 # Halts an operator may resume from without restarting the session.
 OPERATOR_RESUMABLE_HALTS: frozenset[HaltReason] = frozenset(
@@ -309,6 +317,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._halt_reason: HaltReason | None = None
         self._message = ""
         self._pending_stop: set[str] = set()
+        # Strategies recorded for stopping while they were not running yet (a
+        # halt in on_start, before NT starts them): they still owe a market exit.
+        self._pending_exit: set[str] = set()
         self._gate_installed = False
         self._warned: set[str] = set()
         self._gate_denials = 0
@@ -373,9 +384,19 @@ class TradingGuard(Actor):  # type: ignore[misc]
             callback=self._on_tick,
         )
         if self._restored_halt is not None and self._state == GuardState.HALTED:
+            # The state check is defensive (kept, no behaviour change): a resume
+            # before on_start (H20) already cleared the flag in _lift_halt, and
+            # _on_tick re-checks HALTED before using it.
             self._restored_flatten_pending = True
         self.evaluate_risk()
-        if self._restored_halt is not None and self._state == GuardState.HALTED:
+        if (
+            self._restored_halt is not None
+            and self._state == GuardState.HALTED
+            and self._halt_reason == self._restored_halt.reason
+        ):
+            # msocy: an escalation above (evaluate_risk re-halted with a more
+            # severe reason) already notified through halt(); only an un-escalated
+            # restored halt notifies here, so the operator sees one event/alert.
             try:
                 self._listener.on_state_change(
                     self._state,
@@ -684,6 +705,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         for strategy in self._strategies:
             sid = str(strategy.id)
             self._pending_stop.discard(sid)
+            self._pending_exit.discard(sid)
             if strategy.is_stopped:
                 strategy.resume()
                 sync = getattr(strategy, "_sync_position_state", None)
@@ -714,6 +736,13 @@ class TradingGuard(Actor):  # type: ignore[misc]
                         strategy.market_exit()
                     if stop_strategies:
                         self._pending_stop.add(sid)
+                elif stop_strategies and strategy.state in _STRATEGY_NOT_STARTED:
+                    # Not started yet (READY/STARTING/PRE_INITIALIZED): a stopping
+                    # halt tripped before NT started this strategy, so there is
+                    # nothing to flatten yet, but it must still be stopped.
+                    # _stop_exited_strategies exits and stops it once it runs.
+                    self._pending_stop.add(sid)
+                    self._pending_exit.add(sid)
                 else:
                     self._flatten_stopped_strategy(strategy)
             except Exception as exc:
@@ -744,7 +773,19 @@ class TradingGuard(Actor):  # type: ignore[misc]
             if sid not in self._pending_stop:
                 continue
             if not strategy.is_running:
-                self._pending_stop.discard(sid)
+                if strategy.is_stopped:
+                    # A stopped strategy is not coming back; its orders were
+                    # handled by _flatten_stopped_strategy, so drop the entry.
+                    self._pending_stop.discard(sid)
+                    self._pending_exit.discard(sid)
+                # A recorded strategy that has not started yet keeps waiting.
+                continue
+            if sid in self._pending_exit:
+                # Recorded before it started: give it its market exit now that it
+                # runs (a no-op when flat) and wait for that exit to finish.
+                self._pending_exit.discard(sid)
+                if not strategy.is_exiting():
+                    strategy.market_exit()
                 continue
             if strategy.is_exiting():
                 continue
