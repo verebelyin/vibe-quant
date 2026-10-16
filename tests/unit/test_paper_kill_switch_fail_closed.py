@@ -117,13 +117,17 @@ class _ScriptedReads:
 
     When the script runs out, its last outcome repeats. ``reads`` records one
     entry per call, so a test can pin that each check consumes exactly one read
-    (failures are counted per read, not per second)."""
+    (failures are counted per read, not per second). ``require_row_calls``
+    records the ``require_row`` flag each call was made with (F2:
+    vibe-quant-lickf)."""
 
     def __init__(self, outcomes: str) -> None:
         self._outcomes = list(outcomes)
         self.reads: list[str] = []
+        self.require_row_calls: list[bool] = []
 
-    def get_system_state(self) -> dict[str, Any]:
+    def get_system_state(self, *, require_row: bool = False) -> dict[str, Any]:
+        self.require_row_calls.append(require_row)
         index = min(len(self.reads), len(self._outcomes) - 1)
         outcome = self._outcomes[index]
         self.reads.append(outcome)
@@ -595,5 +599,25 @@ async def test_failed_read_returns_engaged_tuple(
         assert result[0] is True
         assert node._kill_read_failures == 1
         assert node._kill_read_error == cls
+    finally:
+        await node._shutdown()
+
+
+# --------------------------------------------------------------- F2
+
+
+async def test_kill_switch_read_asks_for_the_singleton_row(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F2 (vibe-quant-lickf): the node's read asks for the singleton row, so a
+    deleted system_state row is a failed read and never the defaults dict (a
+    no-arg read would return ``kill_switch: False`` and fail open)."""
+    guard = _RecordGuard()
+    node = _node_with_guard(seeded, guard)
+    script = _patch_reads(monkeypatch, node, "F")
+    try:
+        node._kill_switch()
+        assert script.require_row_calls == [True]
+        assert script.reads == ["F"]
     finally:
         await node._shutdown()

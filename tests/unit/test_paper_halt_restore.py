@@ -599,7 +599,7 @@ async def test_resume_refused_while_killed(
         monkeypatch.setattr(
             node._state_manager,
             "get_system_state",
-            lambda: {"kill_switch": True, "reason": "ops"},
+            lambda **_: {"kill_switch": True, "reason": "ops"},
         )
         assert node.resume() == (
             False,

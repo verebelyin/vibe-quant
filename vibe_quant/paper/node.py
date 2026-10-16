@@ -1020,12 +1020,13 @@ class PaperTradingNode:
     def _kill_switch(self) -> tuple[bool, str | None]:
         """Read the system kill switch; an unreadable state counts as engaged.
 
-        A read failure (locked/corrupt state DB, or a raising parse of the state
-        row) is recorded as a consecutive failure and returned as engaged, so
-        this check fails closed; a clean read resets the failure streak.
+        A read failure (locked/corrupt state DB, a deleted singleton row, or a
+        raising parse of the state row) is recorded as a consecutive failure and
+        returned as engaged, so this check fails closed; a clean read resets the
+        failure streak.
         """
         try:
-            sys_state = self._state_manager.get_system_state()
+            sys_state = self._state_manager.get_system_state(require_row=True)
             engaged = bool(sys_state.get("kill_switch"))
             reason = sys_state.get("reason")
         except Exception as exc:

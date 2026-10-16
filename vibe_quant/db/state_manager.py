@@ -40,6 +40,16 @@ def _recorded_sizing_params(parameters_json: object) -> dict[str, float] | None:
 class DuplicateResearchItem(Exception):
     """Raised when a research_item with (source, external_id) already exists."""
 
+
+class SystemStateMissingError(RuntimeError):
+    """Raised when the singleton ``system_state`` row (id=1) is absent.
+
+    ``init_schema`` seeds that row, so its absence means it was deleted or the
+    database is broken. Callers that guard money (the paper node, the paper API)
+    read with ``require_row=True`` so a missing row is treated as an unreadable
+    kill switch rather than as "not killed" (vibe-quant-lickf).
+    """
+
 # Type alias for JSON-like dict structures from database
 JsonDict = dict[str, Any]
 
@@ -473,12 +483,24 @@ class StateManager:
 
     # --- System state (kill switch) ---
 
-    def get_system_state(self) -> JsonDict:
-        """Read the singleton system_state row. Always returns a dict.
+    def get_system_state(self, *, require_row: bool = False) -> JsonDict:
+        """Read the singleton system_state row.
+
+        Args:
+            require_row: When True a missing row id=1 raises
+                :class:`SystemStateMissingError` instead of returning the
+                defensive defaults dict. The money-path guards (paper node,
+                paper API) read with True so a deleted row can never be mistaken
+                for an un-killed switch; ``/api/system/status`` keeps the default
+                (False) and reports the defaults.
 
         Returns:
             Dict with keys: kill_switch (bool), reason (str|None),
             killed_at (str|None), killed_by (str|None), updated_at (str).
+
+        Raises:
+            SystemStateMissingError: If ``require_row`` is True and the row is
+                missing.
         """
         with self._write_lock:
             row = self.conn.execute(
@@ -486,6 +508,8 @@ class StateManager:
                 "FROM system_state WHERE id = 1"
             ).fetchone()
         if row is None:
+            if require_row:
+                raise SystemStateMissingError("system_state row id=1 is missing")
             # Defensive: row should have been inserted by init_schema.
             return {
                 "kill_switch": False,
