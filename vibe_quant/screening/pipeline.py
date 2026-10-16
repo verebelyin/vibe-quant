@@ -43,6 +43,7 @@ from vibe_quant.screening.types import (
     MetricFilters,
     ScreeningResult,
 )
+from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -553,7 +554,12 @@ def create_screening_pipeline(
             account size is ``parameters.initial_balance``, parsed ONCE here with
             :func:`~vibe_quant.balance_settings.parse_initial_balance` (bead
             vibe-quant-zpbmo) before the mock/real split, so an invalid stored
-            value fails the run even when no engine would be built.
+            value fails the run even when no engine would be built. The run-level
+            sizing settings are ``parameters.max_position_pct`` / ``risk_per_trade``,
+            parsed here with :meth:`SizingSettings.from_params` and checked against the
+            run's leverage (S13) in the same place and for the same reason (bead
+            vibe-quant-2gyk1.2); the runner merges only the non-default keys into its
+            strategy config.
 
     Returns:
         Configured ScreeningPipeline
@@ -564,6 +570,8 @@ def create_screening_pipeline(
             in [1, 1000000000] (never silently defaulted).
         LiquidationConfigError: the stored ``liquidation_mode`` / ``leverage``
             is invalid (E10: the run fails before any engine exists).
+        SizingConfigError: the stored ``max_position_pct`` / ``risk_per_trade`` is
+            invalid, or the cap exceeds the run's leverage (S13/S15).
     """
     run_params: Mapping[str, Any] = parameters or {}
     # The run's account size, parsed ONCE and threaded to the runner and the
@@ -572,6 +580,11 @@ def create_screening_pipeline(
     # Parse ONCE, before the mock/real split, so an invalid stored mode fails
     # the run even when no engine would be built.
     liquidation = LiquidationSettings.from_params(run_params)
+    # Same for the sizing settings: a corrupt stored value fails the run HERE
+    # (never silently defaulted), and a cap the venue leverage cannot cover is
+    # refused before any engine exists (S13).
+    sizing = SizingSettings.from_params(run_params)
+    sizing.check_leverage(liquidation.leverage)
     entry_order = str(run_params.get("entry_order", "market"))
 
     from vibe_quant.screening.nt_runner import refuse_non_market_entry
@@ -602,6 +615,7 @@ def create_screening_pipeline(
             liquidation_mode=liquidation.mode,
             leverage=liquidation.leverage,
             starting_balance=starting_balance,
+            sizing=sizing,
         )
     return ScreeningPipeline(
         dsl=dsl,

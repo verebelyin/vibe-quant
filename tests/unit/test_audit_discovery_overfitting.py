@@ -21,6 +21,7 @@ from vibe_quant.overfitting.wfa import WalkForwardAnalysis, WFAConfig
 from vibe_quant.screening.grid import compute_pareto_front, filter_by_metrics, rank_by_sharpe
 from vibe_quant.screening.pipeline import ScreeningPipeline
 from vibe_quant.screening.types import BacktestMetrics, MetricFilters
+from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -281,6 +282,7 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
     from vibe_quant.overfitting.__main__ import main
 
     seen: list[tuple[str, str]] = []
+    sizings: list[Any] = []
 
     class _Rec:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
@@ -288,8 +290,10 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
                      fee_schedule: Any = None,
                      liquidation_mode: str = "off",
                      leverage: float = 10.0,
-                     starting_balance: Any = 1000) -> None:
+                     starting_balance: Any = 1000,
+                     sizing: Any = None) -> None:
             seen.append((start_date, end_date))
+            sizings.append(sizing)
 
         def __call__(self, params: Any) -> Any:
             return type("M", (), {"sharpe_ratio": 1.0, "total_return": 0.01})()
@@ -305,6 +309,8 @@ def test_wfa_on_2022_run_uses_2022_dates(tmp_path: Path, monkeypatch: pytest.Mon
     assert seen
     assert min(s for s, _ in seen) == "2022-01-01"
     assert max(e for _, e in seen) <= "2022-12-31"
+    # S20: the rerun's own sizing travels with every window (the run stores none).
+    assert set(sizings) == {SizingSettings()}
 
 
 def test_cv_runner_forwards_each_candidates_params(
@@ -316,6 +322,7 @@ def test_cv_runner_forwards_each_candidates_params(
     from vibe_quant.overfitting.nt_cv_runner import NTPurgedKFoldRunner
 
     calls: list[dict[str, Any]] = []
+    sizings: list[Any] = []
 
     class _Fake:
         def __init__(self, dsl_dict: Any, symbols: Any, start_date: str, end_date: str,
@@ -323,8 +330,9 @@ def test_cv_runner_forwards_each_candidates_params(
                      fee_schedule: Any = None,
                      liquidation_mode: str = "off",
                      leverage: float = 10.0,
-                     starting_balance: Any = 1000) -> None:
-            pass
+                     starting_balance: Any = 1000,
+                     sizing: Any = None) -> None:
+            sizings.append(sizing)
 
         def __call__(self, params: dict[str, Any]) -> Any:
             calls.append(dict(params))
@@ -348,6 +356,8 @@ def test_cv_runner_forwards_each_candidates_params(
 
     by_period = {json.loads(c.parameters)["rsi_period"]: c for c in res.candidates}
     assert by_period[14].cv_result is not None and by_period[2].cv_result is not None
+    # S20: every fold backtest carries the rerun's own sizing (the run stores none).
+    assert set(sizings) == {SizingSettings()}
     assert by_period[14].cv_result.mean_oos_sharpe == pytest.approx(2.0)
     assert by_period[2].cv_result.mean_oos_sharpe == pytest.approx(-1.5)
     assert {c["rsi_period"] for c in calls} == {14, 2}

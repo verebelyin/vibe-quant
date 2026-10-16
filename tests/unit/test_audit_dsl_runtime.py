@@ -262,9 +262,11 @@ def _fake(**attrs: Any) -> types.SimpleNamespace:
     return fake
 
 
-def _sizer(account: _Acct | None, *, sl_pct: float = 1.0, max_pos: float = 0.5) -> types.SimpleNamespace:
+def _sizer(
+    account: _Acct | None, *, sl_pct: float = 1.0, max_pos: float = 0.5, risk: float = 0.02
+) -> types.SimpleNamespace:
     cfg = types.SimpleNamespace(
-        risk_per_trade=0.02,
+        risk_per_trade=risk,
         max_position_pct=max_pos,
         stop_loss_type="fixed_pct",
         stop_loss_percent=sl_pct,
@@ -319,6 +321,43 @@ class TestSizing:
         assert _sizer(_Acct({USDT: 30.0}))._calculate_position_size(cheap, True) == Quantity.from_str("0.003")
         s = _sizer(_Acct({USDT: 15.0}))
         assert s._calculate_position_size(cheap, True) is None
+
+    def test_cap_one_doubles_cap_half(self) -> None:
+        """S16: the run's exposure cap, not the risk budget, is what moves the size here.
+
+        Equity 1000, BTC 60000, SL 0.88% (528): risk 2% = 20 -> 20/528 = 0.0379, so
+        ``min(risk, cap)`` is the cap in both rows.
+        """
+        half = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88)
+        qty = half._calculate_position_size(_BAR, True)
+        assert qty == Quantity.from_str("0.008")  # 500/60000 = 0.00833, rounded down
+        assert float(qty) * 60000.0 == pytest.approx(480.0)  # notional = 50% of equity
+        one = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0)
+        assert one._calculate_position_size(_BAR, True) == Quantity.from_str("0.016")
+
+    def test_risk_binds_below_cap(self) -> None:
+        """S17: when the risk budget is the smaller of the two, the cap is irrelevant.
+
+        risk 0.002 -> 2/528 = 0.0038, below the cap-1.0 size (1000/60000 = 0.0166).
+        """
+        s = _sizer(_Acct({USDT: 1000.0}), sl_pct=0.88, max_pos=1.0, risk=0.002)
+        assert s._calculate_position_size(_BAR, True) == Quantity.from_str("0.003")
+
+    def test_small_equity_cap_one_meets_min_qty(self) -> None:
+        """S18: a tiny account is skipped at cap 0.5 and sized inside the cap at 1.0.
+
+        Equity 100: cap 0.5 -> 50/60000 = 0.000833 < min qty 0.001 (the risk size, 0.0037,
+        is bigger, so the cap is what binds) -> skip, naming the cap -- never a silent
+        clamp up to 1.2x equity. Cap 1.0 -> 0.001, a notional of 60.
+        """
+        small = _sizer(_Acct({USDT: 100.0}), sl_pct=0.88)
+        assert small._calculate_position_size(_BAR, True) is None
+        assert "max_position_pct" in small.log.warnings[0]
+        qty = _sizer(_Acct({USDT: 100.0}), sl_pct=0.88, max_pos=1.0)._calculate_position_size(
+            _BAR, True
+        )
+        assert qty == Quantity.from_str("0.001")
+        assert float(qty) * 60000.0 == pytest.approx(60.0)
 
 
 class _Price:

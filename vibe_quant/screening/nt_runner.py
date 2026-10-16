@@ -23,6 +23,7 @@ from vibe_quant.liquidation_settings import (
     LiquidationMode,
     LiquidationSettings,
 )
+from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -214,10 +215,25 @@ def resolve_strategy_params(
     The runner-owned outbox fields (``command_release``,
     ``command_release_bar_type``) are never overridable.
 
+    A run-level sizing setting (``max_position_pct`` / ``risk_per_trade``) is never a sweep
+    key either: it is part of the run's ``parameters`` and the runner merges it into the
+    config AFTER this call, so a sweep row carrying one is rejected rather than silently
+    resolving to the generated config's own field (bead vibe-quant-2gyk1.2).
+
     Raises:
-        UnknownStrategyParamError: if any key matches no config field, or two
-            keys resolve to the same field.
+        UnknownStrategyParamError: if any key matches no config field, if a key is a
+            run-level sizing setting, or two keys resolve to the same field.
     """
+    for key in params:
+        # Normalized like the config-field lookup below: ``max.position.pct`` is the same
+        # target as ``max_position_pct`` and must not reach the field match.
+        norm_key = key.replace(".", "_")
+        if norm_key in SIZING_FIELDS:
+            msg = (
+                f"{norm_key} is a run-level sizing setting (parameters.{norm_key}), "
+                "not a sweep parameter"
+            )
+            raise UnknownStrategyParamError(msg)
     fields = set(config_fields) - _RUNNER_OWNED_FIELDS
     if not fields:
         msg = "Compiled strategy config exposes no fields; cannot apply overrides"
@@ -280,6 +296,7 @@ class NTScreeningRunner:
         liquidation_mode: LiquidationMode = "off",
         leverage: float = DEFAULT_LEVERAGE,
         starting_balance: int = DEFAULT_STARTING_BALANCE_USDT,
+        sizing: SizingSettings | None = None,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -323,6 +340,12 @@ class NTScreeningRunner:
                 ``parameters.initial_balance`` (bead vibe-quant-zpbmo). It sets the venue's
                 ``starting_balance_usdt`` and, when the mode is on, the liquidation wallet
                 (R16). The default 1000 keeps every pre-existing number byte-identical (R9).
+            sizing: The run's sizing settings (``parameters.max_position_pct`` /
+                ``risk_per_trade``, bead vibe-quant-2gyk1.2), already parsed by the parent.
+                They are merged into every strategy config AFTER the sweep-key resolution,
+                so they can never meet the sweep rejection, and their cap is re-checked
+                against ``leverage`` here as a defence. None = the defaults, which add no
+                key and keep every pre-existing number byte-identical.
 
         Raises:
             ValueError: ``entry_order`` is not ``"market"``, or the liquidation settings
@@ -330,6 +353,8 @@ class NTScreeningRunner:
                 an unknown mode, or a leverage that is not a whole number in [1, 125]).
             BalanceConfigError: ``starting_balance`` is not a whole number in
                 [1, 1000000000] (checked HERE, before any engine exists).
+            SizingConfigError: the cap of ``sizing`` exceeds this runner's ``leverage``
+                (a cap above the venue leverage would be unmarginable, S13).
         """
         refuse_non_market_entry(entry_order)
         # The venue's account size and the liquidation wallet: validated in __init__ so a
@@ -338,6 +363,10 @@ class NTScreeningRunner:
         settings = LiquidationSettings(mode=liquidation_mode, leverage=leverage)
         self._liquidation_mode: LiquidationMode = settings.mode
         self._leverage = settings.leverage
+        # The run's sizing settings, re-checked HERE against the venue leverage as a
+        # defence: a caller that read them from a stored run may not have checked them.
+        self._sizing = SizingSettings() if sizing is None else sizing
+        self._sizing.check_leverage(self._leverage)
         # Liquidation summary of the last run (``OverlayResult.result.to_notes``) for the
         # discovery/result notes plumbing; None when the mode is off or the run failed.
         self.last_liquidation_notes: dict[str, Any] | None = None
@@ -589,6 +618,12 @@ class NTScreeningRunner:
         # StrategyConfig's fields; an unknown key raises instead of being
         # silently dropped (NT 1.226+ would also reject it at decode time).
         strategy_params = resolve_strategy_params(params, self._config_fields())
+        # The run's sizing settings are a RUN-level override (parameters.max_position_pct /
+        # risk_per_trade, bead vibe-quant-2gyk1.2), merged in only now so a stored sweep
+        # combination can never smuggle them past the sweep-key rejection above. Only the
+        # keys this run moved off the default are added, so an all-default run builds the
+        # exact config dict it built before.
+        strategy_params.update(self._sizing.to_params())
 
         # Data configs
         data_configs: list[BacktestDataConfig] = []

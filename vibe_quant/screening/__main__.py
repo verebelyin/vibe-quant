@@ -140,6 +140,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         print(f"Screening starting balance: {parse_initial_balance(parameters)} USDT")
 
+        # The run-level sizing settings (bead vibe-quant-2gyk1.2). Logged like the fee
+        # schedule and the account size; create_screening_pipeline parses the same values
+        # and refuses a cap the leverage cannot cover, so an invalid stored one fails here
+        # or there, either way through the except below (never silently defaulted).
+        from vibe_quant.sizing_settings import SizingSettings
+
+        sizing = SizingSettings.from_params(parameters)
+        print(
+            f"Screening sizing: max_position_pct={sizing.max_position_pct:g} "
+            f"risk_per_trade={sizing.risk_per_trade:g}"
+        )
+
         pipeline = create_screening_pipeline(
             dsl,
             symbols=symbols,

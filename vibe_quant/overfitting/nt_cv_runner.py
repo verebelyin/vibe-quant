@@ -30,6 +30,7 @@ from vibe_quant.balance_settings import DEFAULT_STARTING_BALANCE_USDT
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import LiquidationSettings
 from vibe_quant.overfitting.nt_runner import parent_effective_balance
+from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from vibe_quant.overfitting.purged_kfold import FoldResult
@@ -95,6 +96,10 @@ class NTPurgedKFoldRunner:
         # The parent screening run's own fee schedule (VIP tier + BNB discount);
         # default VIP0/no-BNB keeps a params-less run byte-identical (E2).
         self._fee_schedule: FeeSchedule = FeeSchedule()
+        # The parent run's own sizing settings (bead vibe-quant-2gyk1.2), read from the
+        # same parameters row: a corrupt stored value raises HERE, before the pipeline
+        # builds any runner, and the default adds no key (byte-identical, S19).
+        self._sizing: SizingSettings = SizingSettings()
         self._ticks: ParentFillTicks | None = None
         self._resolve()
         self._load_bar_timestamps()
@@ -143,6 +148,11 @@ class NTPurgedKFoldRunner:
             # parent whose params say 10000 but whose sweep rows are NULL reruns at 1000.
             self._starting_balance = parent_effective_balance(conn, self._run_id)
             self._liquidation = LiquidationSettings.from_params(_run_params(run["parameters"]))
+            # Same params row: the parent's own sizing settings, checked against the
+            # leverage this rerun will use (S13). A corrupt or unmarginable stored one
+            # raises from this constructor, before the overfitting pipeline exists.
+            self._sizing = SizingSettings.from_params(_run_params(run["parameters"]))
+            self._sizing.check_leverage(self._liquidation.leverage)
             # Same params row: fail closed on an unknown tier rather than
             # silently cross-validating a discounted run at VIP0 (E2).
             self._fee_schedule = FeeSchedule.from_params(_run_params(run["parameters"]))
@@ -256,6 +266,8 @@ class NTPurgedKFoldRunner:
             leverage=self._liquidation.leverage,
             # the parent's own recorded account size (R11)
             starting_balance=self._starting_balance,
+            # the parent run's own sizing settings (S20)
+            sizing=self._sizing,
         )
         # The bound candidate's sweep params (empty for discovery champions,
         # whose params are baked into the DSL). Running ``{}`` for everyone
