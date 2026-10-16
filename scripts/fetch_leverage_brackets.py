@@ -17,12 +17,17 @@ Only the keyless snapshot is supported (no signed ``leverageBracket`` mode).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import httpx
+
+from vibe_quant.liquidation.tiers import TierTableError, load_tier_tables
 
 BRACKETS_ENDPOINT = "https://www.binance.com/bapi/futures/v1/friendly/future/common/brackets"
 DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
@@ -81,6 +86,30 @@ def build_snapshot(symbols: dict[str, dict[str, object]]) -> dict[str, object]:
     }
 
 
+def write_snapshot_atomic(snapshot: dict[str, object], out_path: Path) -> None:
+    """Validate ``snapshot`` then atomically replace ``out_path`` with it.
+
+    The JSON is written to a temp file beside the target, validated with
+    :func:`vibe_quant.liquidation.tiers.load_tier_tables` and only then moved
+    onto the target with ``os.replace``. A snapshot the loader rejects raises
+    ``TierTableError`` and leaves the target byte-identical and the directory
+    free of any temp file, so a bad fetch never corrupts the live snapshot.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=out_path.parent, prefix=f".{out_path.name}.tmp-", suffix=".json"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(snapshot, indent=2) + "\n")
+        load_tier_tables(Path(tmp_name))
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
@@ -92,8 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     snapshot = build_snapshot(fetched)
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+    try:
+        write_snapshot_atomic(snapshot, out_path)
+    except TierTableError as exc:
+        print(f"refusing to replace {out_path}: {exc}", file=sys.stderr)
+        return 1
     print(f"wrote {len(symbols)} symbols -> {out_path}")
     for symbol in symbols:
         first = fetched[symbol]["brackets"][0]  # type: ignore[index]
