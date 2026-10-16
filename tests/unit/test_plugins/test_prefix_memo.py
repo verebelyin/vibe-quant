@@ -49,20 +49,28 @@ def _ohlc(n: int, seed: int = 3) -> pd.DataFrame:
     return pd.DataFrame({"high": high, "low": low, "close": close})
 
 
-def _schedule(n: int, cap: int, lookback: int) -> Iterator[tuple[int, int]]:
-    """Yield the buffer window after each bar: grow to cap+cap//4+1, cut to last cap."""
+def _schedule(n: int, cap: int, lookback: int, prefill: int = 0) -> Iterator[tuple[int, int]]:
+    """Yield the buffer window after each bar: grow to cap+cap//4+1, cut to last cap.
+
+    ``prefill`` starts the stream at the steady state -- a buffer already holding
+    ``prefill`` rows, exactly as right after a trim -- instead of from an empty
+    one; the two ``prefill=0`` parametrizations keep the empty-start growth
+    (window 12 -> cap) covered.
+    """
     start = 0
-    for end in range(1, n + 1):
+    if prefill:  # steady state: a buffer already holding ``prefill`` rows
+        yield start, prefill
+    for end in range(prefill + 1, n + 1):
         if end - start > cap + cap // 4:
             start = end - cap
         if end - start >= lookback:
             yield start, end
 
 
-def _assert_stream_matches_pandas(df: pd.DataFrame, period: int, cap: int) -> int:
+def _assert_stream_matches_pandas(df: pd.DataFrame, period: int, cap: int, prefill: int = 0) -> int:
     frames = 0
     with memo_env(True):
-        for s, e in _schedule(len(df), cap, period):
+        for s, e in _schedule(len(df), cap, period, prefill):
             win = df.iloc[s:e].reset_index(drop=True)
             got = compute_adx(win, {"period": period}).to_numpy()
             ref = _adx_pandas(win, period).to_numpy()
@@ -73,10 +81,21 @@ def _assert_stream_matches_pandas(df: pd.DataFrame, period: int, cap: int) -> in
     return frames
 
 
-@pytest.mark.parametrize(("period", "cap"), [(12, 400), (12, 1330), (26, 400)])
-def test_full_array_bitwise_over_buffer_schedule(period: int, cap: int) -> None:
-    # crosses at least two trims (cap//4 slack) and every cut re-seeds the series
-    assert _assert_stream_matches_pandas(_ohlc(cap + 2 * (cap // 4) + 10), period, cap) > 0
+@pytest.mark.parametrize(
+    ("period", "cap", "prefill"),
+    [(12, 400, 0), (12, 1330, 1330), (26, 400, 0)],
+    ids=["12-400", "12-1330", "26-400"],
+)
+def test_full_array_bitwise_over_buffer_schedule(period: int, cap: int, prefill: int) -> None:
+    # Crosses at least two trims (cap//4 slack) and every cut re-seeds the series.
+    # [12-1330] starts from the steady state (prefill=cap): it crosses the same two
+    # production-scale trim boundaries (window 1663 > 1330 + 1330//4 -> reseed to
+    # 1330, twice) in ~680 frames instead of ~2000. The empty-start growth (window
+    # 12 -> cap) stays covered by the two prefill=0 cases, [12-400] and [26-400].
+    # Length: from a start buffer of cap rows (prefill=0) or prefill rows, two trims
+    # need cap//4 further bars each.
+    n = (prefill or cap) + 2 * (cap // 4) + 10
+    assert _assert_stream_matches_pandas(_ohlc(n), period, cap, prefill) > 0
 
 
 def test_eps_flip_mid_segment() -> None:
