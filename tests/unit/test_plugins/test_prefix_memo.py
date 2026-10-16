@@ -30,8 +30,10 @@ from pta_stream_harness import (  # noqa: E402
 from vibe_quant.dsl import prefix_memo  # noqa: E402
 from vibe_quant.dsl.compute_builtins import (  # noqa: E402
     _adx_pandas,
+    _first_valid,
     _rma_np,
     _wilder_np,
+    _wilder_start,
     compute_adx,
 )
 from vibe_quant.dsl.prefix_memo import MEMO, RecurrenceMemo, memo_run  # noqa: E402
@@ -104,6 +106,16 @@ def test_eps_flip_mid_segment() -> None:
     for i in (500, 650):
         df.loc[i, ["high", "low"]] = df.loc[i, "close"]
     _assert_stream_matches_pandas(df, 12, 400)
+
+
+def test_dm_below_eps_is_zeroed_at_tiny_scale() -> None:
+    """At a scale where the raw +DM/-DM sit below eps the pandas reference blanks them
+    (``utils._math.zero`` == ``abs(x) < float64 eps``) before Wilder smoothing, so the
+    port must blank them too. 3e-16 keeps a few DMs above eps (finite ADX values)
+    while the rest are below: an unguarded ``pos`` carries those tiny nonzero DMs into
+    the Wilder seed and every ADX bit differs from the reference."""
+    frames = _assert_stream_matches_pandas(_ohlc(100) * 3e-16, 12, 60, 60)
+    assert frames > 0
 
 
 def test_leading_nan_buffer_stream() -> None:
@@ -231,6 +243,28 @@ def test_rma_seeds_at_first_valid_value() -> None:
         assert MEMO.hits > 150
 
 
+def test_rma_memo_extends_at_seed_boundary() -> None:
+    """The rma extension guard is strict: ``len(x) - 1 < first_valid + length``. At
+    ``len(x) == first_valid + length + 1`` the seed is already inside the prefix, so the
+    call must go through the memo (a real miss that stores) and every later append must
+    HIT. A ``<=`` guard sends that boundary call down the full path, so nothing is
+    stored and the next append misses and re-seeds instead of extending."""
+    length = 12
+    x = np.random.RandomState(12).randn(80)
+    x[:4] = np.nan
+    n0 = _first_valid(x) + length + 1  # 17: first length with the seed inside the prefix
+    ref = _rma_np_reference(x[: n0 + 3], length)
+    with memo_env(True):
+        for n in range(1, n0):  # seed not in the prefix yet: the memo is bypassed
+            _rma_np(x[:n], length)
+        assert MEMO.hits == MEMO.misses == 0
+        for n in range(n0, n0 + 4):
+            got = _rma_np(x[:n], length)
+        assert MEMO.hits == 3  # boundary append stores, the next three extend
+        assert MEMO.misses == 1
+    assert np.array_equal(_bits(got), _bits(ref))
+
+
 @pytest.mark.parametrize("length", [1, 2, 14])
 def test_wilder_matches_library_wilder_smooth(length: int) -> None:
     """``_wilder_np`` (memoized) vs the library's TA-Lib-seeded smoother, bit for
@@ -250,6 +284,51 @@ def test_wilder_matches_library_wilder_smooth(length: int) -> None:
                 ref = wilder_smooth(pd.Series(x[:n]), length).to_numpy()
                 assert np.array_equal(_bits(got), _bits(ref)), (lead, n)
             assert MEMO.hits > 100
+
+
+@pytest.mark.parametrize("length", [1, 2, 14])
+def test_wilder_seed_skips_index_zero(length: int) -> None:
+    """``_wilder_start`` clamps to 1 (the library: ``max(int(finite[0]), 1)``): the seed
+    is the sum of the ``length - 1`` values AFTER the first finite bar, even when that
+    bar is index 0. Dropping the clamp sums the wrong window (``x[0:length-1]``), places
+    the seed one bar early and indexes -1 at length 1, so the memoized stream stops
+    matching ``wilder_smooth`` (which also skips index 0) from the first append."""
+    from pandas_ta_classic.utils._wilder import wilder_smooth
+
+    assert _wilder_start(np.array([1.0, 2.0, 3.0])) == 1  # finite[0] == 0 -> clamp to 1
+    rng = np.random.RandomState(10)
+    x = np.abs(rng.randn(160))  # no leading NaN: the first bar is finite
+    x[70] = np.nan
+    with memo_env(True):
+        for n in range(1, 160):
+            got = _wilder_np(x[:n], length)
+            ref = wilder_smooth(pd.Series(x[:n]), length).to_numpy()
+            assert np.array_equal(_bits(got), _bits(ref)), n
+        assert MEMO.hits > 100
+
+
+def test_wilder_memo_extends_at_seed_boundary() -> None:
+    """The Wilder extension guard is strict: ``n - 1 < start + length - 1``. At
+    ``n == start + length`` the seed bar is already inside the prefix, so the call must
+    go through the memo (a real miss that stores) and every later append must HIT. A
+    ``<=`` guard sends that boundary call down the full path, so nothing is stored and
+    the next append misses and re-seeds instead of extending."""
+    length = 12
+    x = np.random.RandomState(12).randn(80)
+    x[:4] = np.nan
+    start = _wilder_start(x)  # 4: the NaN prefix is skipped
+    n0 = start + length  # 16: first length with the seed bar inside the prefix
+    with memo_env(False):
+        ref = np.asarray(_wilder_np(x[: n0 + 3], length))
+    with memo_env(True):
+        for n in range(1, n0):  # seed not in the prefix yet: the memo is bypassed
+            _wilder_np(x[:n], length)
+        assert MEMO.hits == MEMO.misses == 0
+        for n in range(n0, n0 + 4):
+            got = _wilder_np(x[:n], length)
+        assert MEMO.hits == 3  # boundary append stores, the next three extend
+        assert MEMO.misses == 1
+    assert np.array_equal(_bits(got), _bits(ref))
 
 
 def test_two_timeframe_adx_value_stream_identical_memo_on_off() -> None:
