@@ -68,6 +68,7 @@ Stdlib only; runs with any python3.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import fnmatch
 import hashlib
@@ -86,6 +87,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Set as AbstractSet
     from typing import Any
 
     RunResult = tuple[int, str]
@@ -146,6 +148,15 @@ PYTEST_NO_TESTS_RC = 5
 # contention, so they are deselected from the parallel pass and run serially after.
 PYTEST_PARALLEL_ARGS = ("-n", "auto", "--dist", "worksteal")
 TIMING_MARK = "timing"
+# Cap on the importer-file selection (the reverse import closure of the changed modules).
+# Past this many files a per-file targeted run no longer costs less than the same work as
+# one whole-suite run under xdist, so the gate runs full tests/unit instead: the closure is
+# a way to run LESS work, never a way to skip more of it. MEASURED on the 2026-10-16 tree
+# (463 files parsed in 1.2s): 135 importer test files for vibe_quant/metrics.py, 127 for
+# errors.py, 50 for discovery/pipeline.py, 15 for paper/node.py - a hub module reaches half
+# of tests/unit, and only a full run is cheap enough there. A conftest/__init__ change
+# already forces the full suite via needs_full_suite, before any graph is built.
+MAX_IMPORTER_FILES = 150
 CACHE_DIR = "swarm-check"
 CACHE_VERSION = 2
 CHECK_STATUSES = ("PASS", "FAIL", "SKIP", "WARN")
@@ -315,6 +326,145 @@ def needs_full_suite(paths: Sequence[str]) -> bool:
     """True if a changed .py has a stem k_expr drops (conftest/__init__/__main__): no -k
     selection can represent it, so the whole tests/unit must run."""
     return any(p.endswith(".py") and Path(p).stem in SKIP_STEMS for p in paths)
+
+
+def _dotted(path: str) -> str:
+    """Dotted name of a repo-relative .py path (`__init__.py` names its own package)."""
+    parts = path[:-3].split("/") if path.endswith(".py") else [path]
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def module_name(path: str) -> str:
+    """The vibe_quant module a repo-relative path defines, "" when it defines none.
+
+    Path-derived and never read from the tree, so a module DELETED by the diff still seeds
+    the reverse closure by name.
+    """
+    if path.startswith("vibe_quant/") and path.endswith(".py"):
+        return _dotted(path)
+    return ""
+
+
+def _is_vibe_quant(name: str) -> bool:
+    return name == "vibe_quant" or name.startswith("vibe_quant.")
+
+
+def _from_base(node: ast.ImportFrom, package: str) -> str | None:
+    """Module named as the base of a `from ... import`, None when it is not ours/unknown.
+
+    Relative levels count from the importing file's package: level 1 is that package
+    itself, level 2 its parent. A level climbing above the repo root resolves to nothing.
+    """
+    if not node.level:
+        return node.module or ""
+    parts = package.split(".") if package else []
+    if node.level > len(parts):
+        return None
+    base = parts[: len(parts) - (node.level - 1)]
+    if node.module:
+        base += node.module.split(".")
+    return ".".join(base)
+
+
+def parse_imports(
+    source: str, module: str, known: AbstractSet[str], *, is_package: bool = False
+) -> set[str] | None:
+    """The vibe_quant modules `source` imports, or None when it does not parse.
+
+    ast.walk sees imports in ANY scope, so a function-level (lazy) `from ... import f` -
+    common in this repo - counts, as does one under `if TYPE_CHECKING:`. Recognised:
+    `import a.b`, `import a.b as x`, `from a.b import y`, `from a import b` (b a submodule
+    recorded in `known`) and the relative forms resolved against this file's package.
+    NO implicit parent edge: `import vibe_quant.a.c` imports vibe_quant.a.c ONLY; adding
+    vibe_quant.a too would select every test of that package for any submodule change.
+    A `from vibe_quant.a import X` whose X is no module keeps its base (the package
+    __init__). Imports of anything outside vibe_quant are dropped.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):  # ValueError: NUL bytes / a decode that slipped through
+        return None
+    package = module if is_package else module.rpartition(".")[0]
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names if _is_vibe_quant(alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            base = _from_base(node, package)
+            if base is None or not _is_vibe_quant(base):
+                continue
+            found.add(base)
+            for alias in node.names:
+                candidate = f"{base}.{alias.name}"
+                if alias.name != "*" and candidate in known:
+                    found.add(candidate)
+    return found
+
+
+def build_import_graph(
+    worktree: Path, extra_modules: Sequence[str] = ()
+) -> dict[str, set[str]]:
+    """repo-relative path -> the vibe_quant modules that file imports.
+
+    Nodes: every `vibe_quant/**/*.py` and every `tests/unit/**/test_*.py` of the WORKTREE.
+    A file that cannot be read or parsed contributes no edges and never raises: one
+    SyntaxError must not crash the gate (ruff, mypy and pytest report it anyway). Only
+    vibe_quant modules carry the walk, so a chain through a tests/ helper is out of scope.
+    `extra_modules` (the changed files) join the known names: a DELETED module has no file on
+    disk, yet `from vibe_quant.pkg import gone` must still resolve to the submodule edge.
+    """
+    roots = ((worktree / "vibe_quant", "*.py"), (worktree / "tests" / "unit", "test_*.py"))
+    rels = sorted(
+        p.relative_to(worktree).as_posix()
+        for root, pattern in roots
+        if root.is_dir()
+        for p in root.rglob(pattern)
+    )
+    known = {_dotted(rel) for rel in rels if module_name(rel)}
+    known.update(_dotted(p) for p in extra_modules if module_name(p))
+    graph: dict[str, set[str]] = {}
+    for rel in rels:
+        try:
+            source = (worktree / rel).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            graph[rel] = set()
+            continue
+        graph[rel] = parse_imports(
+            source, _dotted(rel), known, is_package=rel.endswith("__init__.py")
+        ) or set()
+    return graph
+
+
+def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -> list[str]:
+    """tests/unit test files that reach a changed vibe_quant module (reverse closure).
+
+    Selection by test NAME (`-k <stem>`) misses a caller test whose names never mention the
+    module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first stayed red
+    through DiscoveryPipeline.run while the gate PASSed (20261015-funding-carry pqon2 r1).
+    The seeds are the modules the diff names; the walk follows only vibe_quant modules, so
+    a test importing another test cannot pull it in. Sorted: the pytest command line must
+    not depend on filesystem order.
+    """
+    seeds = {mod for path in changed if (mod := module_name(path))}
+    if not seeds:
+        return []
+    importers: dict[str, set[str]] = {}
+    for path, imports in graph.items():
+        if mod := module_name(path):
+            for target in imports:
+                importers.setdefault(target, set()).add(mod)
+    reached = set(seeds)
+    frontier = list(seeds)
+    while frontier:
+        for mod in importers.get(frontier.pop(), ()):
+            if mod not in reached:
+                reached.add(mod)
+                frontier.append(mod)
+    return sorted(
+        path for path, imports in graph.items() if is_changed_test(path) and imports & reached
+    )
 
 
 def should_run_exactness(paths: Sequence[str]) -> bool:
@@ -563,15 +713,42 @@ def _run_tests(
         return Check("tests", "SKIP", "no python changed")
     targets = [p for p in changed_test_files(state.changed) if (cfg.worktree / p).exists()]
     expr = k_expr(state.changed)
+    notes: list[str] = []
     # (args, rc5_is_skip, rc5_note)
     commands: list[tuple[list[str], bool, str]] = []
     # A handful of targeted files runs serially (worker startup costs more than it
     # saves); timing-marked tests in them therefore run uncontended.
     if targets:
         commands.append((targets, False, ""))
+    full = needs_full_suite(state.changed)
+    # A changed vibe_quant module also runs every test file that imports it, directly or
+    # through other vibe_quant modules (reverse import closure): a caller test whose names
+    # never mention the module is invisible to `-k <stem>` (see importer_test_files).
+    if not full and any(module_name(p) for p in state.changed):
+        seen = set(targets)
+        importers = [
+            p
+            for p in importer_test_files(state.changed, build_import_graph(cfg.worktree, state.changed))
+            if p not in seen
+        ]
+        if len(importers) > MAX_IMPORTER_FILES:
+            full = True  # a low-level module reaches most of tests/unit: one whole-suite run
+            notes.append(
+                f"{len(importers)} importer files > cap {MAX_IMPORTER_FILES}: full tests/unit"
+            )
+        elif importers:
+            notes.append(f"{len(importers)} importer files")
+            # ONE parallel call with the timing-marked tests deselected, then those run
+            # serially, exactly like the -k group below.
+            commands.append(
+                ([*importers, *PYTEST_PARALLEL_ARGS, "-m", f"not {TIMING_MARK}"], True,
+                 "no non-timing tests in the importer files")
+            )
+            commands.append(
+                ([*importers, "-m", TIMING_MARK], True, "no timing tests in the importer files")
+            )
     # A big selection (full suite, -k group) runs under xdist with the timing-marked
     # relative-speed tests deselected, then those run serially (they flake under load).
-    full = needs_full_suite(state.changed)
     group = ["tests/unit"] if full else (["tests/unit", "-k", expr] if expr else [])
     if group:
         # rc5 on a full-suite run is a real failure; on a -k group it means "no match".
@@ -598,6 +775,7 @@ def _run_tests(
             failed = True
         else:
             passed += 1
+    summaries.extend(notes)  # how many importer files ran, or why the full suite ran instead
     if failed:
         return Check("tests", "FAIL", " | ".join(summaries))
     if passed == 0:

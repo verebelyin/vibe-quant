@@ -354,6 +354,143 @@ class TestTestSelection:
         assert swarm_check.changed_test_files(["frontend/App.tsx"]) == []
 
 
+_KNOWN_MODULES = frozenset({"vibe_quant", "vibe_quant.a", "vibe_quant.a.b"})
+
+
+class TestImportGraph:
+    """The reverse import closure: which tests/unit files reach a changed vibe_quant module.
+
+    Selection by test NAME (`-k <stem>`) cannot see a caller test whose names never mention
+    the module: tests/unit/test_symbol_agg.py::test_topk_ranks_gate_passers_first ran red
+    while the gate PASSed (job 20261015-funding-carry pqon2 r1). These are pure functions.
+    """
+
+    _GRAPH: dict[str, set[str]] = {
+        "vibe_quant/__init__.py": set(),
+        "vibe_quant/a/__init__.py": set(),
+        "vibe_quant/a/b.py": {"vibe_quant.c"},
+        "vibe_quant/c.py": set(),
+        "tests/unit/test_direct.py": {"vibe_quant.a.b"},
+        "tests/unit/test_pkg.py": {"vibe_quant.a"},
+        "tests/unit/test_other.py": {"vibe_quant.c"},
+        "tests/unit/test_gone.py": {"vibe_quant.gone"},
+        "tests/unit/test_unrelated.py": {"vibe_quant.other"},
+    }
+
+    def test_module_name_from_path(self) -> None:
+        assert swarm_check.module_name("vibe_quant/discovery/pipeline.py") == (
+            "vibe_quant.discovery.pipeline"
+        )
+        assert swarm_check.module_name("vibe_quant/discovery/__init__.py") == "vibe_quant.discovery"
+        assert swarm_check.module_name("vibe_quant/__init__.py") == "vibe_quant"
+        assert swarm_check.module_name("vibe_quant/metrics.py") == "vibe_quant.metrics"
+        # only vibe_quant modules seed the closure (scripts/ and tests/ changes are out of it)
+        assert swarm_check.module_name("tests/unit/test_x.py") == ""
+        assert swarm_check.module_name("scripts/agents/swarm_check.py") == ""
+        assert swarm_check.module_name("vibe_quant/grammar.lark") == ""
+
+    @pytest.mark.parametrize(
+        ("source", "module", "expected"),
+        [
+            ("import vibe_quant.a.b\n", "vibe_quant.c.d", {"vibe_quant.a.b"}),
+            ("import vibe_quant.a.b as x\n", "vibe_quant.c.d", {"vibe_quant.a.b"}),
+            ("from vibe_quant.a.b import y\n", "vibe_quant.c.d", {"vibe_quant.a.b"}),
+            ("import numpy\nimport vibe_quant.a.b\n", "vibe_quant.c.d", {"vibe_quant.a.b"}),
+            # a lazy import inside a function still counts (common in this repo)
+            ("def f():\n    from vibe_quant.a.b import y\n", "vibe_quant.c.d", {"vibe_quant.a.b"}),
+            (
+                "if TYPE_CHECKING:\n    from vibe_quant.a.b import y\n",
+                "vibe_quant.c.d",
+                {"vibe_quant.a.b"},
+            ),
+            ("from vibe_quant.a import b\n", "vibe_quant.c.d", {"vibe_quant.a", "vibe_quant.a.b"}),
+            ("from .b import y\n", "vibe_quant.a.c", {"vibe_quant.a.b"}),
+            ("from ..a import b\n", "vibe_quant.x.y", {"vibe_quant.a", "vibe_quant.a.b"}),
+            # climbing above the repo root resolves to nothing: never a crash
+            ("from ...a import b\n", "vibe_quant.x.y", set()),
+        ],
+    )
+    def test_import_forms(self, source: str, module: str, expected: set[str]) -> None:
+        assert swarm_check.parse_imports(source, module, _KNOWN_MODULES) == expected
+
+    def test_package_relative_import(self) -> None:
+        found = swarm_check.parse_imports(
+            "from . import b\n", "vibe_quant.a", _KNOWN_MODULES, is_package=True
+        )
+        assert found == {"vibe_quant.a", "vibe_quant.a.b"}
+
+    def test_submodule_import_has_no_parent_edge(self) -> None:
+        # No implicit parent edge: otherwise EVERY vibe_quant.a test would be selected for
+        # any change to one of its submodules.
+        found = swarm_check.parse_imports("import vibe_quant.a.c\n", "vibe_quant.x.y", _KNOWN_MODULES)
+        assert found == {"vibe_quant.a.c"}
+
+    def test_from_package_of_a_non_module_keeps_the_package(self) -> None:
+        found = swarm_check.parse_imports(
+            "from vibe_quant.a import X\n", "vibe_quant.x.y", _KNOWN_MODULES
+        )
+        assert found == {"vibe_quant.a"}
+
+    def test_unparseable_source_is_none(self) -> None:
+        assert swarm_check.parse_imports("def (:\n", "vibe_quant.x", _KNOWN_MODULES) is None
+
+    def _tree(self, tmp_path: Path) -> dict[str, set[str]]:
+        """A tiny worktree: two caller tests (one nested), a broken file, a binary file."""
+        (tmp_path / "vibe_quant" / "discovery").mkdir(parents=True)
+        (tmp_path / "vibe_quant" / "discovery" / "pipeline.py").write_text("P = 1\n")
+        (tmp_path / "vibe_quant" / "broken.py").write_text("def (:\n")
+        (tmp_path / "vibe_quant" / "unreadable.py").write_bytes(b"\xff\xfe\x00\x01")
+        (tmp_path / "tests" / "unit" / "api").mkdir(parents=True)
+        for rel, source in (
+            ("tests/unit/test_caller.py", "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n"),
+            ("tests/unit/api/test_nested.py", "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n"),
+            ("tests/unit/test_plainer.py", "import json\n"),
+        ):
+            (tmp_path / rel).write_text(source)
+        return swarm_check.build_import_graph(tmp_path)
+
+    def test_graph_walks_nested_test_dirs(self, tmp_path: Path) -> None:
+        graph = self._tree(tmp_path)
+        assert graph["tests/unit/test_caller.py"] == {"vibe_quant.discovery.pipeline"}
+        assert graph["tests/unit/api/test_nested.py"] == {"vibe_quant.discovery.pipeline"}
+        assert graph["tests/unit/test_plainer.py"] == set()
+        assert swarm_check.importer_test_files(["vibe_quant/discovery/pipeline.py"], graph) == [
+            "tests/unit/api/test_nested.py",
+            "tests/unit/test_caller.py",
+        ]
+
+    def test_graph_skips_unparseable_and_unreadable_files(self, tmp_path: Path) -> None:
+        graph = self._tree(tmp_path)
+        assert graph["vibe_quant/broken.py"] == set()
+        assert graph["vibe_quant/unreadable.py"] == set()
+        assert swarm_check.importer_test_files(["vibe_quant/broken.py"], graph) == []
+
+    def test_direct_and_transitive_importers(self) -> None:
+        # test_other imports vibe_quant.c directly; test_direct reaches it through
+        # vibe_quant.a.b (a two-module chain: the caller test in the bead's report).
+        assert swarm_check.importer_test_files(["vibe_quant/c.py"], self._GRAPH) == [
+            "tests/unit/test_direct.py",
+            "tests/unit/test_other.py",
+        ]
+
+    def test_deleted_module_seeds_the_closure_by_name(self) -> None:
+        # vibe_quant.gone.py is in the diff but not in the graph: it still seeds by name
+        assert swarm_check.importer_test_files(["vibe_quant/gone.py"], self._GRAPH) == [
+            "tests/unit/test_gone.py",
+        ]
+
+    def test_package_change_selects_only_its_explicit_importers(self) -> None:
+        # test_direct imports vibe_quant.a.b, never the package itself
+        assert swarm_check.importer_test_files(["vibe_quant/a/__init__.py"], self._GRAPH) == [
+            "tests/unit/test_pkg.py",
+        ]
+
+    def test_no_selection_for_a_change_outside_vibe_quant(self) -> None:
+        for path in ("scripts/agents/swarm_check.py", "tests/unit/test_direct.py", "README.md"):
+            assert swarm_check.importer_test_files([path], self._GRAPH) == []
+        assert swarm_check.importer_test_files([], self._GRAPH) == []
+
+
 class TestAutoTriggers:
     def test_exactness_dirs(self) -> None:
         for p in [
@@ -669,6 +806,212 @@ class TestRunChecks:
         checks = swarm_check.run_checks(cfg, runner)
         assert {c.name: c for c in checks}["frontend"].status == "PASS"
         assert _called_with(runner, "tsc")
+
+
+def _importer_repo(tmp_path: Path) -> Path:
+    """The bead's red fixture: a PRE-EXISTING test file imports the module under change.
+
+    test_symbol_agg.py is committed on the feature branch, so the diff carries only an edit
+    to vibe_quant/discovery/pipeline.py. No test name contains "pipeline", so the old
+    `-k pipeline` name match can never reach that file.
+    """
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    (repo / "vibe_quant" / "discovery").mkdir()
+    (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text("P = 1\n")
+    (repo / "tests" / "unit" / "test_symbol_agg.py").write_text(
+        "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n\n\n"
+        "def test_topk_ranks_gate_passers_first() -> None:\n"
+        "    assert DiscoveryPipeline is not None\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add the pipeline and its caller test")
+    (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text("P = 2\n")  # the change
+    return repo
+
+
+def _lazy_importer_repo(tmp_path: Path) -> Path:
+    """G2 fixture: pipeline imports selection INSIDE a function (lazy imports are common)."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    (repo / "vibe_quant" / "discovery").mkdir()
+    (repo / "vibe_quant" / "discovery" / "selection.py").write_text("def f() -> int:\n    return 1\n")
+    (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text(
+        "def run() -> int:\n    from vibe_quant.discovery.selection import f\n\n    return f()\n"
+    )
+    (repo / "tests" / "unit" / "test_caller.py").write_text(
+        "from vibe_quant.discovery.pipeline import run\n\n\n"
+        "def test_run() -> None:\n    assert run() == 1\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "lazy selection import")
+    (repo / "vibe_quant" / "discovery" / "selection.py").write_text(
+        "def f() -> int:\n    return 2\n"
+    )  # the change
+    return repo
+
+
+class TestImporterTestSelection:
+    """run_checks: the reverse import closure drives real pytest calls."""
+
+    @staticmethod
+    def _pytest_cmds(runner: FakeRunner) -> list[list[str]]:
+        return [
+            c[c.index("pytest") + 1:]
+            for c in runner.calls
+            if any("pytest" in Path(a).name for a in c)
+        ]
+
+    @staticmethod
+    def _fails_on(needle: str) -> Callable[[Sequence[str], Path], tuple[int, str]]:
+        def run(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            if any(needle in Path(a).name for a in cmd):
+                return 1, "1 failed in 0.02s"
+            return 0, "1 passed in 0.01s"
+
+        return run
+
+    def test_importing_test_file_is_selected_and_fails_the_gate(self, tmp_path: Path) -> None:
+        repo = _importer_repo(tmp_path)
+        runner = FakeRunner()
+        runner.responses = {"pytest": self._fails_on("test_symbol_agg.py")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        checks = swarm_check.run_checks(cfg, runner)
+        by = {c.name: c for c in checks}
+        assert by["tests"].status == "FAIL"
+        assert "1 failed" in by["tests"].detail
+        assert _called_with(runner, "test_symbol_agg.py")
+        assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
+
+    def test_importer_files_run_as_one_parallel_call_plus_a_serial_timing_call(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _importer_repo(tmp_path)
+        runner = FakeRunner()
+
+        def respond(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            # rc5 on the importer files' serial timing call only: "no timing tests" is a SKIP note
+            if "tests/unit/test_symbol_agg.py" in cmd and cmd[-1] == "timing":
+                return 5, "no tests ran"
+            return 0, "1 passed in 0.01s"
+
+        runner.responses = {"pytest": respond}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit/test_symbol_agg.py", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit/test_symbol_agg.py", "-m", "timing"],
+            ["tests/unit", "-k", "pipeline", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-k", "pipeline", "-m", "timing"],
+        ]
+        assert "1 importer files" in tests.detail
+        assert "no timing tests in the importer files" in tests.detail
+
+    def test_deleted_module_still_selects_its_lazy_importers_chain(self, tmp_path: Path) -> None:
+        # B1: deleting selection.py (on disk) must keep the `from vibe_quant.discovery import
+        # selection` submodule edge, or the pipeline's caller test is never selected.
+        repo = _init_repo(tmp_path)
+        _git(repo, "checkout", "-qb", "feature")
+        (repo / "vibe_quant" / "discovery").mkdir()
+        (repo / "vibe_quant" / "discovery" / "__init__.py").write_text("")
+        (repo / "vibe_quant" / "discovery" / "selection.py").write_text("def f() -> int:\n    return 1\n")
+        (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text(
+            "def run() -> int:\n    from vibe_quant.discovery import selection\n\n"
+            "    return selection.f()\n"
+        )
+        (repo / "tests" / "unit" / "test_caller.py").write_text(
+            "from vibe_quant.discovery.pipeline import run\n\n\n"
+            "def test_run() -> None:\n    assert run() == 1\n"
+        )
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "lazy submodule import")
+        (repo / "vibe_quant" / "discovery" / "selection.py").unlink()  # the change: deletion
+        runner = FakeRunner()
+        runner.responses = {"pytest": self._fails_on("test_caller.py")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        checks = swarm_check.run_checks(cfg, runner)
+        assert {c.name: c for c in checks}["tests"].status == "FAIL"
+        assert _called_with(runner, "test_caller.py")
+        assert swarm_check.gate_summary(checks)[1] == 1
+
+    def test_a_changed_test_file_is_not_repeated_as_an_importer(self, tmp_path: Path) -> None:
+        repo = _importer_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_symbol_agg.py").write_text(
+            "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n\n\n"
+            "def test_topk_ranks_gate_passers_first() -> None:\n    assert DiscoveryPipeline\n"
+        )  # now also a changed test file
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit/test_symbol_agg.py"],
+            ["tests/unit", "-k", "pipeline", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-k", "pipeline", "-m", "timing"],
+        ]
+        assert "importer files" not in tests.detail
+
+    def test_transitive_importer_through_a_function_level_import(self, tmp_path: Path) -> None:
+        repo = _lazy_importer_repo(tmp_path)
+        runner = FakeRunner()
+        runner.responses = {"pytest": self._fails_on("test_caller.py")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "FAIL"
+        assert _called_with(runner, "test_caller.py")
+
+    def test_importer_count_at_the_cap_still_runs_the_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _importer_repo(tmp_path)
+        monkeypatch.setattr(swarm_check, "MAX_IMPORTER_FILES", 1)  # boundary: 1 > 1 is false
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert _called_with(runner, "test_symbol_agg.py")
+        assert "1 importer files" in tests.detail
+
+    def test_the_configured_cap_trips_on_one_file_over_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _importer_repo(tmp_path)
+        (repo / "vibe_quant" / "hub.py").write_text("H = 1\n")  # the changed seed
+        n = swarm_check.MAX_IMPORTER_FILES + 1
+        assert n < 10_000  # a cap this high could never trip: fail here, not by hanging
+        graph = {"vibe_quant/hub.py": set()} | {
+            f"tests/unit/test_imp{i:03d}.py": {"vibe_quant.hub"} for i in range(n)
+        }
+        monkeypatch.setattr(swarm_check, "build_import_graph", lambda worktree, extra=(): graph)
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "9 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-m", "timing"],
+        ]
+        assert f"{n} importer files > cap {swarm_check.MAX_IMPORTER_FILES}" in tests.detail
+        assert "full tests/unit" in tests.detail
+        assert not _called_with(runner, "test_imp")
+
+    def test_scripts_agents_change_runs_no_importer_selection(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "scripts" / "agents").mkdir(parents=True)
+        (repo / "scripts" / "agents" / "swarm_check.py").write_text("X = 2\n")
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit", "-k", "swarm_check", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-k", "swarm_check", "-m", "timing"],
+        ]
 
 
 class TestExactnessCarry:
