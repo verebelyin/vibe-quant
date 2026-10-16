@@ -23,6 +23,7 @@ import {
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
 import { useGetStrategyApiStrategiesStrategyIdGet } from "@/api/generated/strategies/strategies";
+import { candlesFromBrowseRows, volumeFromCandles } from "@/components/results/candleSeriesData";
 import { indicatorConfigsFromDsl } from "@/components/results/indicatorConfigs";
 import {
   Select,
@@ -119,6 +120,9 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const indicatorSeriesRefs = useRef<{ key: string; series: ISeriesApi<SeriesType> }[]>([]);
 
   const [hiddenIndicators, setHiddenIndicators] = useState<Set<string>>(new Set());
+  // Bumped by the chart-creation effect: the candle/volume and marker effects
+  // depend on it so data is re-applied to a newly created chart instance.
+  const [chartGeneration, setChartGeneration] = useState(0);
 
   // Get run metadata
   const runsQuery = useListRunsApiResultsRunsGet();
@@ -219,14 +223,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const candles = useMemo(() => {
     const resp = candleQuery.data;
     if (!resp || resp.status !== 200) return [];
-    return resp.data.data.map((d: Record<string, unknown>) => ({
-      time: Math.floor((d.open_time as number) / 1000) as UTCTimestamp,
-      open: d.open as number,
-      high: d.high as number,
-      low: d.low as number,
-      close: d.close as number,
-      volume: d.volume as number,
-    }));
+    return candlesFromBrowseRows(resp.data.data);
   }, [candleQuery.data]);
 
   // Build a set of candle timestamps for snapping markers
@@ -241,15 +238,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     return Array.from(candleTimeSet).sort((a, b) => a - b);
   }, [candleTimeSet]);
 
-  const volumeData = useMemo(
-    () =>
-      candles.map((c) => ({
-        time: c.time,
-        value: c.volume,
-        color: c.close >= c.open ? "#26a69a80" : "#ef535080",
-      })),
-    [candles],
-  );
+  const volumeData = useMemo(() => volumeFromCandles(candles), [candles]);
 
   // Snap a timestamp to the nearest candle time
   const snapToCandle = useMemo(() => {
@@ -449,6 +438,9 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
 
     indicatorSeriesRefs.current = indRefs;
 
+    // This chart instance starts empty: tell the data effects to fill it.
+    setChartGeneration((generation) => generation + 1);
+
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         chart.applyOptions({ width: entry.contentRect.width });
@@ -475,6 +467,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   }, [hiddenIndicators]);
 
   // Set candle + volume data and initial range
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-apply to a recreated chart
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
@@ -494,12 +487,13 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     volumeSeries.setData(volumeData);
 
     chart.timeScale().fitContent();
-  }, [candles, volumeData]);
+  }, [candles, volumeData, chartGeneration]);
 
   // Update markers separately
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-apply to a recreated chart
   useEffect(() => {
     markersRef.current?.setMarkers(markers);
-  }, [markers]);
+  }, [markers, chartGeneration]);
 
   const toggleIndicator = (key: string) => {
     setHiddenIndicators((prev) => {
