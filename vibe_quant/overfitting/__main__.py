@@ -3,7 +3,7 @@
 Usage:
     python -m vibe_quant.overfitting run --run-id 42
     python -m vibe_quant.overfitting run --run-id 42 --filters dsr,wfa
-    python -m vibe_quant.overfitting run --run-id 42 --filters dsr --observations 500
+    python -m vibe_quant.overfitting run --run-id 42 --filters dsr --total-trials 500
     python -m vibe_quant.overfitting report --run-id 42
 """
 
@@ -172,8 +172,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         result = pipeline.run(
             run_id=args.run_id,
             config=config,
-            # None -> day count of the run's (train) date range
-            num_observations=args.observations,
             data_start=data_start,
             data_end=data_end,
             n_samples=effective_samples,
@@ -388,13 +386,6 @@ def main(argv: list[str] | None = None) -> int:
         "--db",
         type=str,
         help="Database path (default: data/state.db)",
-    )
-    run_parser.add_argument(
-        "--observations",
-        type=int,
-        default=None,
-        help="Daily observations for DSR (default: day count of the run's date "
-        "range -- a discovery run's train range)",
     )
     run_parser.add_argument(
         "--total-trials",

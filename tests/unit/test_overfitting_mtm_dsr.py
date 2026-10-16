@@ -184,14 +184,24 @@ def test_moments_clamped_like_discovery(tmp_path: Path) -> None:
     assert cand.dsr_result.p_value == pytest.approx(ref.p_value, rel=1e-12)
 
 
-def test_num_observations_override_is_ignored_with_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_run_no_longer_accepts_num_observations(tmp_path: Path) -> None:
+    """The dead DSR override is gone: an external caller passing it fails loud."""
     db, rid = _discovery_db(tmp_path, evaluated=79, record=_record())
-    with caplog.at_level("WARNING"):
-        cand, _ = _run_dsr(db, rid, num_observations=50)
-    assert cand.dsr_result is not None and cand.dsr_result.num_observations == T_DAYS
-    assert "num_observations=50 is ignored" in caplog.text
+    pipeline = OverfittingPipeline(db)
+    try:
+        with pytest.raises(TypeError, match="num_observations"):
+            pipeline.run(run_id=rid, config=FilterConfig.dsr_only(), num_observations=5)
+    finally:
+        pipeline.close()
+
+
+def test_pipeline_uses_the_public_migrate_add_columns() -> None:
+    """pipeline.py must reach the helper through schema's public name, not the private one."""
+    import vibe_quant.db.schema as schema
+    import vibe_quant.overfitting.pipeline as pipeline_module
+
+    assert schema.migrate_add_columns is not None
+    assert pipeline_module.migrate_add_columns is schema.migrate_add_columns
 
 
 def test_recheck_consumes_the_record_discovery_actually_writes(tmp_path: Path) -> None:
@@ -577,7 +587,7 @@ def test_incomplete_migration_fails_closed_and_next_call_retries(
     import vibe_quant.overfitting.pipeline as pl
 
     db, rid = _old_schema_db(tmp_path)
-    real = pl._migrate_add_columns
+    real = pl.migrate_add_columns
     seen: list[sqlite3.Connection] = []
 
     def busy(conn: sqlite3.Connection) -> None:
@@ -586,7 +596,7 @@ def test_incomplete_migration_fails_closed_and_next_call_retries(
             with contextlib.suppress(sqlite3.OperationalError):  # duplicate on 2nd call
                 conn.execute(f"ALTER TABLE sweep_results ADD COLUMN {col} REAL")
 
-    monkeypatch.setattr(pl, "_migrate_add_columns", busy)
+    monkeypatch.setattr(pl, "migrate_add_columns", busy)
     p = OverfittingPipeline(db)
     with pytest.raises(RuntimeError, match=r"migration incomplete.*missing mtm_sharpe_daily"):
         p.conn  # noqa: B018
@@ -597,7 +607,7 @@ def test_incomplete_migration_fails_closed_and_next_call_retries(
         p.run(run_id=rid, config=FilterConfig.dsr_only())
     assert p._conn is None
 
-    monkeypatch.setattr(pl, "_migrate_add_columns", real)
+    monkeypatch.setattr(pl, "migrate_add_columns", real)
     try:
         res = p.run(run_id=rid, config=FilterConfig.dsr_only())
     finally:

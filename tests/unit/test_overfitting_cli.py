@@ -245,7 +245,6 @@ class TestCmdRun:
             run_id=1,
             filters="dsr",
             db=str(db_path),
-            observations=252,
             start_date=None,
             end_date=None,
             samples=1000,
@@ -269,7 +268,6 @@ class TestCmdRun:
             run_id=1,
             filters="all",
             db=str(db_path),
-            observations=252,
             start_date="2024-01-01",
             end_date="2025-12-31",
             samples=1000,
@@ -294,7 +292,6 @@ class TestCmdRun:
             run_id=1,
             filters="dsr",
             db=str(db_path),
-            observations=252,
             start_date=None,
             end_date=None,
             samples=1000,
@@ -317,7 +314,6 @@ class TestCmdRun:
             run_id=999,  # Non-existent
             filters="dsr",
             db=str(db_path),
-            observations=252,
             start_date=None,
             end_date=None,
             samples=1000,
@@ -397,6 +393,15 @@ class TestMain:
         )
         result = main()
         assert result == 0
+
+    def test_run_rejects_the_removed_observations_flag(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The dead --observations flag is gone: argparse exits 2, fail loud."""
+        with pytest.raises(SystemExit) as exc:
+            main(["run", "--run-id", "1", "--observations", "5"])
+        assert exc.value.code == 2
+        assert "--observations" in capsys.readouterr().err
 
     def test_report_command(
         self, db_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

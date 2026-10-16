@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from vibe_quant.db.connection import DEFAULT_DB_PATH
-from vibe_quant.db.schema import _migrate_add_columns
+from vibe_quant.db.schema import migrate_add_columns
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
@@ -103,7 +103,7 @@ class OverfittingPipeline:
                 # now propagates an error from a needed ALTER (a concurrent writer
                 # -> SQLITE_BUSY reaches this except), and the column check below
                 # still fails closed if the helper ever no-ops instead.
-                _migrate_add_columns(conn)
+                migrate_add_columns(conn)
                 present = {r[1] for r in conn.execute("PRAGMA table_info(sweep_results)")}
                 missing = [c for c in _MTM_SWEEP_COLUMNS if present and c not in present]
                 if missing:
@@ -128,7 +128,6 @@ class OverfittingPipeline:
         self,
         run_id: int,
         config: FilterConfig | None = None,
-        num_observations: int | None = None,
         data_start: date | None = None,
         data_end: date | None = None,
         n_samples: int = 1000,
@@ -141,10 +140,6 @@ class OverfittingPipeline:
         Args:
             run_id: Backtest run ID to filter candidates for.
             config: Filter configuration. Uses default if None.
-            num_observations: IGNORED by DSR (kept for CLI/API compatibility).
-                DSR tests the candidate's stored mark-to-market daily
-                statistics and T is the length of THAT series
-                (``mtm_days``); a different T would not match the Sharpe.
             data_start: Start date for WFA windows. ``None`` = run start date.
             data_end: End date for WFA windows. ``None`` = run end date.
             n_samples: Number of samples for Purged K-Fold (default 1000).
@@ -220,13 +215,6 @@ class OverfittingPipeline:
         passed_dsr_count = 0
         passed_wfa_count = 0
         passed_cv_count = 0
-
-        if config.enable_dsr and num_observations is not None:
-            logger.warning(
-                "num_observations=%d is ignored by DSR: T is the length of the stored "
-                "mark-to-market daily series (mtm_days)",
-                num_observations,
-            )
 
         for candidate in candidates:
             # Apply DSR filter
@@ -888,7 +876,6 @@ def run_overfitting_pipeline(
     run_id: int,
     db_path: str | Path | None = None,
     config: FilterConfig | None = None,
-    num_observations: int | None = None,
 ) -> PipelineResult:
     """Convenience function to run overfitting pipeline.
 
@@ -896,13 +883,12 @@ def run_overfitting_pipeline(
         run_id: Backtest run ID to filter candidates for.
         db_path: Optional database path.
         config: Filter configuration. Uses default if None.
-        num_observations: Daily observations for DSR (None = run's day count).
 
     Returns:
         PipelineResult with all candidate results.
     """
     pipeline = OverfittingPipeline(db_path)
     try:
-        return pipeline.run(run_id=run_id, config=config, num_observations=num_observations)
+        return pipeline.run(run_id=run_id, config=config)
     finally:
         pipeline.close()

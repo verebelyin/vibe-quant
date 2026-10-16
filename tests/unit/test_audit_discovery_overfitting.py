@@ -99,7 +99,7 @@ def test_dsr_observations_are_mtm_series_length_not_run_day_count(tmp_path: Path
     assert res.candidates[0].dsr_result.num_observations == 300  # not the 364-day range
 
 
-def test_overfitting_cli_forwards_total_trials_and_derived_observations(
+def test_overfitting_cli_forwards_total_trials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from vibe_quant.overfitting.__main__ import main
@@ -120,7 +120,7 @@ def test_overfitting_cli_forwards_total_trials_and_derived_observations(
     assert main(["run", "--run-id", str(run_id), "--db", str(db), "--filters", "dsr",
                  "--total-trials", "777"]) == 0
     assert seen["total_trials"] == 777
-    assert seen["num_observations"] is None  # resolved from the run, not 252
+    assert "num_observations" not in seen  # the dead DSR override is gone
 
 
 def _metrics(sr: float, trades: int = 100) -> BacktestMetrics:

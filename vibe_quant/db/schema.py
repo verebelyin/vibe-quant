@@ -457,6 +457,11 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         logger.info("Applied %d schema migration(s) (current version: %d)", applied, SCHEMA_VERSION)
 
 
+def migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Add columns that may be missing from older databases."""
+    _migrate_add_columns(conn)
+
+
 def _migrate_research_items_allow_queued(conn: sqlite3.Connection) -> None:
     """Rebuild research_items so its extraction_status CHECK includes 'queued'.
 

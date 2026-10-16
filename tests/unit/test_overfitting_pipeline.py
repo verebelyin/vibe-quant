@@ -389,7 +389,6 @@ class TestOverfittingPipeline:
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.dsr_only(),
-            num_observations=252,
         )
         assert result.total_candidates == 3
         # DSR results depend on num_trials and observed sharpe
@@ -456,7 +455,6 @@ class TestOverfittingPipeline:
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.default(),
-            num_observations=252,
             data_start=date(2024, 1, 1),
             data_end=date(2025, 12, 31),
             n_samples=1000,
@@ -654,7 +652,6 @@ class TestIntegration:
         result = pipeline.run(
             run_id=1,
             config=FilterConfig.default(),
-            num_observations=252,
             data_start=date(2024, 1, 1),
             data_end=date(2025, 12, 31),
             n_samples=1000,
