@@ -238,6 +238,25 @@ def test_worst_mode_annualizes_fees_over_summed_symbol_equity() -> None:
     assert fit.fee_drag == pytest.approx(20.0 / 900.0)  # summed fees / summed gross
 
 
+def test_worst_mode_annualizes_fees_over_unequal_symbol_balances() -> None:
+    """Each symbol runs on its OWN account, so the annual fee rate divides the
+    summed fees by the SUM of the symbols' starting balances -- here 1000 + 3000,
+    not a single balance scaled by the symbol count."""
+    results = [
+        _m(0.3, fees=10.0, gross=400.0, balance=1000.0, days=365.0),
+        _m(0.1, fees=10.0, gross=500.0, balance=3000.0, days=365.0),
+    ]
+    out = NTBacktestFn._aggregate_symbols(results, ["A", "B"])
+    assert out["total_fees"] == 20.0
+    assert out["starting_balance"] == 4000.0  # 1000 + 3000, NOT 2 x 1000
+    assert out["days"] == 365
+    fit = _evaluate_single(_chromosome(), lambda c: dict(out), min_trades=0, timeframe="1h")
+    # 20 / 4000 * 365/365 == 0.005; a single-balance approximation (2 x 1000)
+    # would divide by 2000 and report 0.01.
+    assert fit.fees_pct_equity_yr == 0.005
+    assert fit.fee_drag == pytest.approx(20.0 / 900.0)  # summed fees / summed gross
+
+
 def test_portfolio_mode_annualizes_fees_over_shared_account() -> None:
     """Portfolio mode is one shared account: the same totals -> one balance."""
     bt = {
