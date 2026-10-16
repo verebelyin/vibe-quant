@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { DiscoveryLaunchRequest } from "@/api/generated/models";
 import {
   getListDiscoveryJobsApiDiscoveryJobsGetQueryKey,
   useGetIndicatorPoolApiDiscoveryIndicatorPoolGet,
@@ -25,14 +24,13 @@ import {
 import { useDatasetDateRange } from "@/hooks/useDatasetDateRange";
 import {
   DEFAULT_LEVERAGE,
-  leveragePayload,
   LIQUIDATION_MODE_OPTIONS,
-  liquidationPayload,
+  type LiquidationMode,
   MAX_LEVERAGE,
   MIN_LEVERAGE,
-  type LiquidationMode,
 } from "@/lib/liquidation";
 import { formatApiErrorDetail } from "./apiErrorDetail";
+import { buildDiscoveryLaunchBody, parseCrossWindowMonths } from "./discoveryLaunchBody";
 
 export interface DiscoveryConvergenceConfig {
   convergenceWindow: number;
@@ -100,10 +98,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [liquidationMode, setLiquidationMode] = useState<LiquidationMode>("off");
   const [leverage, setLeverage] = useState(DEFAULT_LEVERAGE);
 
-  const parsedCrossWindowMonths = crossWindowMonths
-    .split(",")
-    .map((s) => Number.parseInt(s.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0);
+  const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
 
   const indicatorPoolQuery = useGetIndicatorPoolApiDiscoveryIndicatorPoolGet();
   const launchMutation = useLaunchDiscoveryApiDiscoveryLaunchPost();
@@ -122,9 +117,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       .sort((a, b) => (b.run_id ?? 0) - (a.run_id ?? 0));
   })();
 
-  const selectedSeedJob = completedJobs.find(
-    (j) => String(j.run_id) === seedRunId,
-  );
+  const selectedSeedJob = completedJobs.find((j) => String(j.run_id) === seedRunId);
 
   // Auto-populate dates: default to last 3 months of available data
   useEffect(() => {
@@ -183,51 +176,39 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
 
     launchMutation.mutate(
       {
-        data: {
+        data: buildDiscoveryLaunchBody({
           population,
           generations,
-          mutation_rate: mutationRate,
-          crossover_rate: crossoverRate,
-          elite_count: eliteCount,
-          tournament_size: tournamentSize,
-          convergence_generations: convergenceWindow,
-          symbols: symbolList,
-          timeframes: [timeframe],
-          indicator_pool: selectedIndicators.length > 0 ? selectedIndicators : null,
-          ...(startDate && { start_date: startDate }),
-          ...(endDate && { end_date: endDate }),
-          ...(direction !== "random" && { direction }),
-          eval_windows: evalWindows,
-          train_test_split: trainTestSplit,
-          num_seeds: numSeeds,
-          ...(symbolAgg === "worst" && { symbol_agg: symbolAgg }),
-          wfa_oos_step_days: wfaOosStepDays,
-          wfa_min_consistency: wfaMinConsistency,
-          ...(parsedCrossWindowMonths.length > 0 && {
-            cross_window_months: parsedCrossWindowMonths,
-            cross_window_min_sharpe: crossWindowMinSharpe,
-          }),
-          immigrant_fraction: immigrantFraction,
-          entropy_threshold: entropyThreshold,
-          crowding_enabled: crowdingEnabled,
-          ...(seedRunId.trim() !== "" &&
-            Number.isFinite(Number(seedRunId)) && {
-              seed_run_id: Number(seedRunId),
-            }),
-          ...(rngSeed.trim() !== "" &&
-            Number.isInteger(Number(rngSeed)) && { seed: Number(rngSeed) }),
-          ...(noBootstrapCi && { no_bootstrap_ci: true }),
-          ...(bootstrapMinSharpe.trim() !== "" &&
-            Number.isFinite(Number(bootstrapMinSharpe)) && {
-              bootstrap_min_sharpe: Number(bootstrapMinSharpe),
-            }),
-          ...(bnbDiscount && { bnb_discount: true }),
-          // A default run sends no liquidation/leverage keys (C6): the mode is
-          // sent when on, leverage when the mode is on or the value is not the
-          // default (vibe-quant-6wq6w).
-          ...liquidationPayload(liquidationMode),
-          ...leveragePayload(liquidationMode, leverage),
-        } as DiscoveryLaunchRequest,
+          mutationRate,
+          crossoverRate,
+          eliteCount,
+          tournamentSize,
+          convergenceWindow,
+          symbols,
+          timeframe,
+          startDate,
+          endDate,
+          direction,
+          evalWindows,
+          trainTestSplit,
+          numSeeds,
+          symbolAgg,
+          wfaOosStepDays,
+          wfaMinConsistency,
+          crossWindowMonths,
+          crossWindowMinSharpe,
+          immigrantFraction,
+          entropyThreshold,
+          crowdingEnabled,
+          seedRunId,
+          rngSeed,
+          noBootstrapCi,
+          bootstrapMinSharpe,
+          bnbDiscount,
+          liquidationMode,
+          leverage,
+          selectedIndicators,
+        }),
       },
       {
         onSuccess: (resp) => {
@@ -463,7 +444,9 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="disc-start-date" className="text-xs text-muted-foreground">Start</Label>
+            <Label htmlFor="disc-start-date" className="text-xs text-muted-foreground">
+              Start
+            </Label>
             <DatePicker
               id="disc-start-date"
               value={startDate}
@@ -472,7 +455,9 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="disc-end-date" className="text-xs text-muted-foreground">End</Label>
+            <Label htmlFor="disc-end-date" className="text-xs text-muted-foreground">
+              End
+            </Label>
             <DatePicker
               id="disc-end-date"
               value={endDate}
@@ -559,9 +544,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 modified
               </Badge>
             )}
-            <span className="text-xs text-muted-foreground">
-              {robustnessOpen ? "▾" : "▸"}
-            </span>
+            <span className="text-xs text-muted-foreground">{robustnessOpen ? "▾" : "▸"}</span>
           </div>
         </button>
         {robustnessOpen && (
@@ -571,9 +554,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <Label htmlFor="direction">Direction</Label>
                 <Select
                   value={direction}
-                  onValueChange={(v) =>
-                    setDirection(v as "long" | "short" | "both" | "random")
-                  }
+                  onValueChange={(v) => setDirection(v as "long" | "short" | "both" | "random")}
                 >
                   <SelectTrigger id="direction" className="w-full">
                     <SelectValue />
@@ -634,9 +615,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <Label htmlFor="symbol-agg">Symbol scoring</Label>
                 <Select
                   value={symbolAgg}
-                  onValueChange={(v) =>
-                    setSymbolAgg(v as "portfolio" | "worst")
-                  }
+                  onValueChange={(v) => setSymbolAgg(v as "portfolio" | "worst")}
                 >
                   <SelectTrigger id="symbol-agg" className="w-full">
                     <SelectValue />
@@ -647,7 +626,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   </SelectContent>
                 </Select>
                 <p className="text-[10px] text-muted-foreground">
-                  Worst symbol: each coin backtested alone, scored by the weakest — stricter, costs ×N symbols.
+                  Worst symbol: each coin backtested alone, scored by the weakest — stricter, costs
+                  ×N symbols.
                 </p>
               </div>
               <div className="space-y-2">
@@ -662,8 +642,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   onChange={(e) => setTrainTestSplit(Number(e.target.value))}
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  Fraction used for <strong>training</strong>; the rest is a holdout that
-                  every champion must pass once. 0 = no holdout (no out-of-sample gate).
+                  Fraction used for <strong>training</strong>; the rest is a holdout that every
+                  champion must pass once. 0 = no holdout (no out-of-sample gate).
                 </p>
               </div>
             </div>
@@ -868,8 +848,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 </div>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                Low-budget runs (4h/pop=12/gens=8) rarely reach 100 trades and lose all
-                champions to the CI lower-bound gate. Disable only when you know what you're doing.
+                Low-budget runs (4h/pop=12/gens=8) rarely reach 100 trades and lose all champions to
+                the CI lower-bound gate. Disable only when you know what you're doing.
               </p>
             </div>
           </div>
@@ -900,19 +880,30 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
         return (
           <div className={`rounded-lg border p-3 text-xs ${borderCls}`}>
             <div className="flex items-center justify-between">
-              <span>Total evaluations: <span className="font-mono font-semibold text-foreground">{totalEvals.toLocaleString()}</span></span>
+              <span>
+                Total evaluations:{" "}
+                <span className="font-mono font-semibold text-foreground">
+                  {totalEvals.toLocaleString()}
+                </span>
+              </span>
               <span>~{fmt(secPerEval)}/eval</span>
             </div>
             <div className="mt-1 flex items-center justify-between">
-              <span>Parallel ({cores} cores): <span className="font-mono font-semibold text-foreground">{fmt(parallelSec)}</span></span>
+              <span>
+                Parallel ({cores} cores):{" "}
+                <span className="font-mono font-semibold text-foreground">{fmt(parallelSec)}</span>
+              </span>
             </div>
             {danger && (
               <p className="mt-1.5 text-[10px] font-medium text-red-300">
-                {totalEvals.toLocaleString()} evals = ~{fmt(parallelSec)} runtime. Recommended: pop=20 x gen=15 = 300 evals for quick exploration.
+                {totalEvals.toLocaleString()} evals = ~{fmt(parallelSec)} runtime. Recommended:
+                pop=20 x gen=15 = 300 evals for quick exploration.
               </p>
             )}
             {warn && !danger && (
-              <p className="mt-1 text-[10px]">Consider reducing population or generations for faster iteration.</p>
+              <p className="mt-1 text-[10px]">
+                Consider reducing population or generations for faster iteration.
+              </p>
             )}
           </div>
         );
