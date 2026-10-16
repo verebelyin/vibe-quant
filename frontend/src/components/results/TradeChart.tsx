@@ -1,29 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   createChart,
   createSeriesMarkers,
   HistogramSeries,
-  LineSeries,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  LineSeries,
   type SeriesMarker,
   type SeriesType,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import {
-  useGetTradesApiResultsRunsRunIdTradesGet,
-  useListRunsApiResultsRunsGet,
-} from "@/api/generated/results/results";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useBrowseDataApiDataBrowseSymbolGet,
   useComputeIndicatorsEndpointApiDataIndicatorsSymbolGet,
 } from "@/api/generated/data/data";
-import { useGetStrategyApiStrategiesStrategyIdGet } from "@/api/generated/strategies/strategies";
 import type { IndicatorSeries } from "@/api/generated/models";
-import { useUIStore } from "@/stores/ui";
+import {
+  useGetTradesApiResultsRunsRunIdTradesGet,
+  useListRunsApiResultsRunsGet,
+} from "@/api/generated/results/results";
+import { useGetStrategyApiStrategiesStrategyIdGet } from "@/api/generated/strategies/strategies";
+import { indicatorConfigsFromDsl } from "@/components/results/indicatorConfigs";
 import {
   Select,
   SelectContent,
@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useUIStore } from "@/stores/ui";
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h"] as const;
 
@@ -153,11 +154,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const indicatorConfigs = useMemo(() => {
     const resp = strategyQuery.data;
     if (!resp || resp.status !== 200) return [];
-    const dsl = resp.data.dsl_config as Record<string, unknown> | null;
-    if (!dsl) return [];
-    const indicators = dsl.indicators;
-    if (!Array.isArray(indicators)) return [];
-    return indicators as Record<string, unknown>[];
+    return indicatorConfigsFromDsl(resp.data.dsl_config);
   }, [strategyQuery.data]);
 
   // Fetch candle data
@@ -167,11 +164,9 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     ...(run?.start_date ? { start: run.start_date } : {}),
     ...(run?.end_date ? { end: run.end_date } : {}),
   };
-  const candleQuery = useBrowseDataApiDataBrowseSymbolGet(
-    selectedSymbol,
-    browseParams,
-    { query: { enabled: !!selectedSymbol && !!run && !!interval } },
-  );
+  const candleQuery = useBrowseDataApiDataBrowseSymbolGet(selectedSymbol, browseParams, {
+    query: { enabled: !!selectedSymbol && !!run && !!interval },
+  });
 
   // Fetch trades
   const tradesQuery = useGetTradesApiResultsRunsRunIdTradesGet(runId, undefined, {
@@ -209,7 +204,10 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const oscillatorPaneCount = useMemo(() => {
     const types = new Set<string>();
     for (const s of indicatorSeries) {
-      if (s.pane === "oscillator" && !hiddenIndicators.has(`${s.indicator_type}-${s.output_name}`)) {
+      if (
+        s.pane === "oscillator" &&
+        !hiddenIndicators.has(`${s.indicator_type}-${s.output_name}`)
+      ) {
         types.add(s.indicator_type);
       }
     }
@@ -275,11 +273,14 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   // Map trade id -> snapped entry/exit times
   const tradeTimeMap = useMemo(() => {
     const resp = tradesQuery.data;
-    if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0) return new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
+    if (!resp || resp.status !== 200 || sortedCandleTimes.length === 0)
+      return new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
     const map = new Map<number, { entry: UTCTimestamp; exit: UTCTimestamp | null }>();
     for (const trade of resp.data.filter((t) => t.symbol.startsWith(selectedSymbol))) {
       const entryTs = Math.floor(new Date(trade.entry_time).getTime() / 1000);
-      const exitTs = trade.exit_time ? Math.floor(new Date(trade.exit_time).getTime() / 1000) : null;
+      const exitTs = trade.exit_time
+        ? Math.floor(new Date(trade.exit_time).getTime() / 1000)
+        : null;
       map.set(trade.id, {
         entry: snapToCandle(entryTs),
         exit: exitTs != null ? snapToCandle(exitTs) : null,
@@ -346,7 +347,10 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
       indicatorSeriesRefs.current = [];
     }
 
-    const chart = createChart(container, getChartOptions(theme === "system" ? "dark" : theme, chartHeight));
+    const chart = createChart(
+      container,
+      getChartOptions(theme === "system" ? "dark" : theme, chartHeight),
+    );
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -378,10 +382,7 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
     // Group oscillators by indicator_type to assign panes
     const oscillatorTypes: string[] = [];
     for (const s of indicatorSeries) {
-      if (
-        s.pane === "oscillator" &&
-        !oscillatorTypes.includes(s.indicator_type)
-      ) {
+      if (s.pane === "oscillator" && !oscillatorTypes.includes(s.indicator_type)) {
         oscillatorTypes.push(s.indicator_type);
       }
     }
@@ -399,7 +400,8 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
 
       const color = getSeriesColor(s);
       const isHistogram = s.output_name === "histogram" && s.indicator_type === "MACD";
-      const paneIndex = s.pane === "oscillator" ? oscillatorPaneIndexMap.get(s.indicator_type) : undefined;
+      const paneIndex =
+        s.pane === "oscillator" ? oscillatorPaneIndexMap.get(s.indicator_type) : undefined;
 
       const data = s.data
         .filter((p) => p.value != null)
@@ -413,11 +415,15 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
           ...d,
           color: d.value >= 0 ? "#26a69a" : "#ef5350",
         }));
-        const series = chart.addSeries(HistogramSeries, {
-          title: s.display_label,
-          priceScaleId: `osc-${s.indicator_type}`,
-          visible: !hidden,
-        }, paneIndex);
+        const series = chart.addSeries(
+          HistogramSeries,
+          {
+            title: s.display_label,
+            priceScaleId: `osc-${s.indicator_type}`,
+            visible: !hidden,
+          },
+          paneIndex,
+        );
         series.setData(histData);
         indRefs.push({ key, series });
       } else {
