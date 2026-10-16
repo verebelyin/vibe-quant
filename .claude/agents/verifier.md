@@ -32,6 +32,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
 
 - Quote failing output verbatim: the first failure plus the summary line.
 - A gate you couldn't run (missing data, server down) is `UNVERIFIED (reason)`. Don't count it as passed.
+- Real-DB smoke checks: copy the DB with `sqlite3 <db> ".backup /tmp/x.db"`, pass `StateManager` a `Path` (a `str` raises AttributeError), and run the SAME copy under main's code and the branch's code; a difference only counts if the two results differ (ver-sf-job: 8 pending migrations looked like a branch change until the chief's main-vs-branch run gave identical schemas).
 - Re-check each claim in the maker's handoff you were given. Mark it VERIFIED with your command, or REFUTED with output.
 
 Done when every applicable gate has a command and a verbatim result line.
@@ -73,3 +74,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-14: UI-check hints (Radix date pickers, cap end_date at catalog coverage). Evidence: ver-liq-ui `improve:`; runs 919/920 failed with MissingBarDataError. Applied automatically.
 - 2026-10-14: board Start line now searches by SCOPE path; posting rules (RULE/WHEN/EVIDENCE, search before posting, verdicts and status off the global board). Evidence: orchestration analysis 2026-10-14: 93% of the posts agents relied on came from their own job; 49% of global posts were task-local; 15 duplicates.
 - 2026-10-14: UI check: cap liquidation windows at MARK coverage; re-snapshot refs, Radix options via eval — evidence: job 20261014-honest-lev: ver-hl-lev runs 923/924.
+- 2026-10-16 (Land, job 20261016-safety-bugs): real-DB smoke recipe (Path, backup copy, main-vs-branch baseline). Evidence: ver-sf-job improve line + unresolved migration finding. Applied automatically.
