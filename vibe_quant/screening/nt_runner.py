@@ -314,10 +314,10 @@ class NTScreeningRunner:
             fill_ticks: Fill-tick set resolved by the parent (trade_tick
                 mode). None resolves it in-process when the mode needs it.
             collect_daily_returns: Opt-in (discovery DSR, bd vibe-quant-yul7u.24;
-                market-valued series, bd vibe-quant-wcn55): keep the run's dense
-                daily balance returns in ``last_daily_returns`` and its daily
-                mark-to-market returns in ``last_mtm_daily_returns`` (neither is
-                ever put into BacktestMetrics).
+                market-valued series, bd vibe-quant-wcn55): keep the run's daily
+                mark-to-market returns in ``last_mtm_daily_returns`` (never put
+                into BacktestMetrics). The realized-balance twin was removed
+                (bd vibe-quant-f9zzq).
             fee_schedule: Binance fee schedule (VIP tier + optional BNB
                 discount) applied to the screening venue. None = the default
                 (VIP0, no BNB), which keeps NT's MakerTakerFeeModel path and
@@ -376,7 +376,6 @@ class NTScreeningRunner:
         self._entry_order = entry_order
         self._fee_schedule = FeeSchedule() if fee_schedule is None else fee_schedule
         self._collect_daily_returns = collect_daily_returns
-        self.last_daily_returns: DailyReturns | None = None
         self.last_mtm_daily_returns: DailyReturns | None = None
         # Fee-drag inputs of the last run, for the discovery bt dict
         # (bd vibe-quant-2gyk1.4); not part of BacktestMetrics.
@@ -425,9 +424,8 @@ class NTScreeningRunner:
         from vibe_quant.screening.types import BacktestMetrics
 
         start_time = time.time()
-        # Per-run outputs: a failed run or an unavailable series must not leave
+        # Per-run output: a failed run or an unavailable series must not leave
         # the previous run's series on a reused runner (bd vibe-quant-wcn55).
-        self.last_daily_returns = None
         self.last_mtm_daily_returns = None
         self.last_starting_balance = 0.0
         self.last_days = 0
@@ -1149,13 +1147,6 @@ class NTScreeningRunner:
             metrics.sharpe_ratio, metrics.sortino_ratio = daily_sharpe_sortino(
                 starting_balance, cash_events, start_ns, end_ns
             )
-            if self._collect_daily_returns:
-                from vibe_quant.metrics import dense_daily_returns
-
-                self.last_daily_returns = dense_daily_returns(
-                    starting_balance, cash_events, start_ns, end_ns
-                )
-
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         if liquidated is not None:
             metrics.skewness, metrics.kurtosis, metrics.trade_returns = (

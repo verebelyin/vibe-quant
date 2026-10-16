@@ -1,15 +1,22 @@
-"""Real-runner wiring: ``NTScreeningRunner.last_daily_returns`` -> DSR inputs
-(bd vibe-quant-yul7u.30).
+"""Real-runner wiring: the ``NTBacktestFn`` MTM series -> runner MTM statistics.
 
-Runs an actual ``NTBacktestFn._run_single(collect_daily_returns=True)`` over a
-tiny real window and proves the dense daily series it returns reproduces the
-Sharpe the runner itself reported -- the same equality ``test_dsr.py::
-test_daily_sharpe_inputs_matches_nt_sharpe`` pins at the metrics level.
+Runs an actual ``NTBacktestFn`` over a tiny real window and proves the dense
+mark-to-market daily series it RETURNS (``_run_single`` ->
+``_chain_window_series``, the path discovery consumes) IS the runner's own
+``last_mtm_daily_returns`` with exactly day 0 dropped: the same series whose
+statistics the runner captures into ``mtm_sharpe_daily``/``mtm_skewness``/
+``mtm_kurtosis``/``mtm_days``. Comparing them pins the forwarding path, which
+``test_dsr.py::test_daily_sharpe_inputs_matches_nt_sharpe`` (the metric alone)
+and ``test_overfitting_mtm_dsr.py::
+test_runner_stores_mtm_stats_for_every_run_equal_to_series_inputs`` (calls
+``_make_runner`` directly) both miss.
+
+Was the realized-series wiring (bd vibe-quant-yul7u.30); re-pointed at the MTM
+series when the realized one was removed (bd vibe-quant-f9zzq).
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import pytest
@@ -18,7 +25,6 @@ from vibe_quant.discovery.backtest_fn import NTBacktestFn
 from vibe_quant.overfitting.dsr import daily_sharpe_inputs
 from vibe_quant.utils import compute_day_count
 
-_ANN = math.sqrt(252.0)
 _START, _END = "2024-01-01", "2024-03-01"
 
 
@@ -51,23 +57,49 @@ def _btcusdt_catalog_available() -> bool:
     return any("BTCUSDT-PERP.BINANCE" in d.name for d in bar_dir.iterdir())
 
 
-def test_run_single_daily_returns_match_reported_sharpe() -> None:
+def test_returned_mtm_series_matches_captured_runner_statistics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     if not _btcusdt_catalog_available():
         pytest.skip("BTCUSDT catalog data not available")
-    fn = NTBacktestFn(
-        ["BTCUSDT"], "4h", _START, _END, collect_daily_returns=True,
-    )  # fmt: skip
-    out = fn._run_single(_chrom(), _START, _END)
+    from vibe_quant.screening.nt_runner import NTScreeningRunner
 
-    series = out["daily_returns"]
+    # Capture the runner's own MTM stats: _run_single discards the metrics it
+    # computes them on, so spy on the call it uses to reach the runner.
+    captured: dict[str, Any] = {}
+    real_call = NTScreeningRunner.__call__
+
+    def spy_call(self: Any, params: Any) -> Any:
+        metrics = real_call(self, params)
+        captured["metrics"] = metrics
+        captured["runner"] = self
+        return metrics
+
+    monkeypatch.setattr(NTScreeningRunner, "__call__", spy_call)
+
+    fn = NTBacktestFn(["BTCUSDT"], "4h", _START, _END, collect_daily_returns=True)
+    out = fn(_chrom())
+
+    series = out["mtm_daily_returns"]
     assert series is not None and len(series) > 0
     assert int(out["total_trades"]) > 0  # the series is not a veiled flat run
 
-    # dense series covers every day; NT/DSR consume the same days minus day 0
-    day_count = compute_day_count(_START, _END)
-    assert day_count is not None and len(series) == day_count
-    trimmed = series.without_first_day()
-    assert len(trimmed) == day_count - 1
+    metrics = captured["metrics"]
+    full = captured["runner"].last_mtm_daily_returns
+    assert full is not None
 
-    sr, _skew, _kurt = daily_sharpe_inputs(trimmed.values)
-    assert sr * _ANN == pytest.approx(float(out["sharpe_ratio"]), rel=1e-9)
+    # The runner's stats come from the UNTRIMMED series minus day 0, so the day
+    # grid the returned series lands on must be that exact single trim.
+    day_count = compute_day_count(_START, _END)
+    assert day_count is not None
+    assert len(full) == day_count
+    assert metrics.mtm_days == day_count - 1
+    assert len(series) == day_count - 1
+    assert series.first_day == full.first_day + 1  # exactly one day-0 trim
+    assert list(series.values) == list(full.values[1:])
+
+    # ... and the stats the runner captured are exactly what the returned series
+    # yields, so the forwarding path cannot drop or shift a different day.
+    assert daily_sharpe_inputs(series.values) == (
+        metrics.mtm_sharpe_daily, metrics.mtm_skewness, metrics.mtm_kurtosis,
+    )  # fmt: skip

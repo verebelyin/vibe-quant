@@ -125,16 +125,13 @@ def test_dsr_uses_pooled_daily_not_worst_of() -> None:
 
 
 def test_dsr_tests_the_mtm_series_not_the_realized_one() -> None:
-    """The gate's pooled input is mark-to-market: swap the two series and the verdict flips."""
+    """The gate's pooled input is the mark-to-market series, not the reported Sharpe."""
     pipe = _pipeline()
     mtm_weak = _series(0.2, seed=2)
     mtm_strong = _series(2.5, seed=4)
-    # realized SR 2.5 would pass, but the MTM series of the same candidate is weak
-    weak = (_chrom(stop_loss_pct=2.0),
-            _fit(0.1, daily_returns=_series(2.5, seed=1), mtm_daily_returns=mtm_weak))
-    # realized SR 0.2 would fail, but the MTM series is strong
-    strong = (_chrom(stop_loss_pct=3.0),
-              _fit(0.1, daily_returns=_series(0.2, seed=3), mtm_daily_returns=mtm_strong))
+    # the SAME reported Sharpe for both; only the MTM series differs
+    weak = (_chrom(stop_loss_pct=2.0), _fit(0.1, mtm_daily_returns=mtm_weak))
+    strong = (_chrom(stop_loss_pct=3.0), _fit(0.1, mtm_daily_returns=mtm_strong))
     kept = pipe._validate_top_strategies([weak, strong], 79)
 
     assert [c.uid for c, _ in kept] == [strong[0].uid]
@@ -142,7 +139,7 @@ def test_dsr_tests_the_mtm_series_not_the_realized_one() -> None:
     weak_rec = by_uid[weak[0].uid]["dsr"]
     assert weak_rec["input"] == "pooled_mtm_daily_returns"
     assert weak_rec["observations"] == 1264
-    # the MTM series (0.2 ann), never the realized 2.5 the same candidate also carries
+    # the MTM series (0.2 ann), never the reported Sharpe 0.1
     assert weak_rec["sharpe_annualized"] == pytest.approx(0.2, rel=1e-9)
     sr_mtm, _skew, _kurt = daily_sharpe_inputs(list(mtm_weak.values))
     assert weak_rec["sharpe_daily"] == pytest.approx(sr_mtm)
@@ -154,8 +151,8 @@ def test_dsr_tests_the_mtm_series_not_the_realized_one() -> None:
 def test_missing_mtm_series_fails_dsr_closed() -> None:
     pipe = _pipeline()
     chrom = _chrom()
-    # realized series present and passing, but the MTM series is missing -> fail closed
-    fit = _fit(0.1, daily_returns=_series(2.5, seed=1), mtm_daily_returns=None)
+    # the reported Sharpe is strong, but the MTM series is missing -> fail closed
+    fit = _fit(3.0, mtm_daily_returns=None)
     kept = pipe._validate_top_strategies([(chrom, fit)], 79)
 
     assert kept == []
@@ -242,8 +239,8 @@ def test_worst_mode_symbol_floor_rejects_weak_mtm_symbol(n_symbols: int) -> None
     ``apply_discovery_dsr_returns`` applies the floor only when
     ``len(symbol_daily) >= 2``, so two symbols is the boundary: a regression
     that drops the floor for exactly two symbols must fail the ``n_symbols=2``
-    case. Every symbol's REALIZED stats (``symbol_daily``) would clear the
-    floor -- only the MTM series is allowed to judge them.
+    case. The floor reads each symbol's MTM series only (the realized stats
+    dict the pre-y9ywf gate used no longer exists, bd vibe-quant-f9zzq).
     """
     strong = [f"S{i}" for i in range(n_symbols - 1)]
     weak = "W"
@@ -255,7 +252,6 @@ def test_worst_mode_symbol_floor_rejects_weak_mtm_symbol(n_symbols: int) -> None
         0.1,
         mtm_daily_returns=_series(2.5, seed=24),  # the pool itself clears the DSR
         symbol_mtm_daily=mtm,
-        symbol_daily={s: _sym_stats(2.5) for s in [*strong, weak]},  # realized: all would pass
     )
     assert pipe._validate_top_strategies([(chrom, fit)], 79) == []
     rej = pipe._guardrail_rejections[0]
@@ -330,7 +326,7 @@ def test_three_window_chain_matches_continuous_days() -> None:
     events = [(int(rng.integers(s_ns, e_ns)), float(rng.normal(1.0, 20.0))) for _ in range(300)]
     windows = split_into_windows(start, end, 3)
     parts: list[dict[str, Any]] = [
-        {"daily_returns": dense_daily_returns(1000.0, events, _ns(ws), _ns(we))}
+        {"mtm_daily_returns": dense_daily_returns(1000.0, events, _ns(ws), _ns(we))}
         for ws, we in windows
     ]
     chain = NTBacktestFn._chain_window_series(parts)
@@ -343,7 +339,7 @@ def test_three_window_chain_matches_continuous_days() -> None:
     assert (chain.first_day, chain.end_day) == (cont.first_day, cont.end_day)
     # First window: same values as the continuous run (same starting balance),
     # except its last day, where later events are clamped in the window run
-    w1 = len(parts[0]["daily_returns"]) - 1  # type: ignore[arg-type]
+    w1 = len(parts[0]["mtm_daily_returns"]) - 1  # type: ignore[arg-type]
     assert list(chain.values[: w1 - 1]) == list(cont.values[: w1 - 1])
 
 
@@ -355,7 +351,7 @@ def test_eval_symbols_chains_windows_and_trims_day0(monkeypatch: pytest.MonkeyPa
             "total_trades": 60, "total_return": 0.1,
         }  # fmt: skip
         if self.collect_daily_returns:  # what the real _run_single does
-            out["daily_returns"] = DailyReturns(_ns(s) // DAY_NS, array("d", [0.001] * n))
+            out["mtm_daily_returns"] = DailyReturns(_ns(s) // DAY_NS, array("d", [0.001] * n))
         return out
 
     monkeypatch.setattr(NTBacktestFn, "_run_single", fake_single)
@@ -363,12 +359,12 @@ def test_eval_symbols_chains_windows_and_trims_day0(monkeypatch: pytest.MonkeyPa
     multi = NTBacktestFn(["X"], "4h", start, end, windows=split_into_windows(start, end, 3),
                          min_trades=10, collect_daily_returns=True)  # fmt: skip
     single = NTBacktestFn(["X"], "4h", start, end, collect_daily_returns=True)
-    out_m = multi(_chrom())["daily_returns"]
-    out_s = single(_chrom())["daily_returns"]
+    out_m = multi(_chrom())["mtm_daily_returns"]
+    out_s = single(_chrom())["mtm_daily_returns"]
     assert isinstance(out_m, DailyReturns) and isinstance(out_s, DailyReturns)
     assert (out_m.first_day, len(out_m)) == (out_s.first_day, len(out_s))
     assert len(out_s) == (compute_day_count(start, end) or 0) - 1
-    assert "daily_returns" not in NTBacktestFn(["X"], "4h", start, end)(_chrom())
+    assert "mtm_daily_returns" not in NTBacktestFn(["X"], "4h", start, end)(_chrom())
 
 
 def test_concat_fails_closed_on_gap_or_overlap() -> None:
@@ -409,7 +405,7 @@ def test_dense_series_fails_closed_on_non_positive_balance() -> None:
 def _sym_result(daily: DailyReturns | None, ret: float = 0.2) -> dict[str, Any]:
     return {
         "sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5,
-        "total_trades": 100, "total_return": ret, "daily_returns": daily,
+        "total_trades": 100, "total_return": ret, "mtm_daily_returns": daily,
     }  # fmt: skip
 
 
@@ -417,19 +413,20 @@ def test_worst_mode_pools_symbols_and_strips_their_series() -> None:
     syms = ["A", "B", "C"]
     series = [_series(sr, seed=i) for i, sr in enumerate((2.0, 1.0, 0.5))]
     out = NTBacktestFn._aggregate_symbols([_sym_result(s) for s in series], syms)
-    pooled = out["daily_returns"]
+    pooled = out["mtm_daily_returns"]
     assert isinstance(pooled, DailyReturns)
     expect = np.mean([np.asarray(s.values) for s in series], axis=0)
     assert list(pooled.values) == list(expect)
-    sd = out["symbol_daily"]
+    sd = out["symbol_mtm_daily"]
     assert isinstance(sd, dict)
-    assert sd["A"]["sharpe"] == pytest.approx(2.0 / ANN, rel=1e-9)
-    assert all("daily_returns" not in r for r in out["symbol_results"].values())  # type: ignore[union-attr]
+    assert sd["A"] is series[0]  # the raw series itself, not realized stats
+    assert all(isinstance(v, DailyReturns) for v in sd.values())
+    assert all("mtm_daily_returns" not in r for r in out["symbol_results"].values())  # type: ignore[union-attr]
     # one symbol without a series -> no pool, that symbol flagged missing
     broken = NTBacktestFn._aggregate_symbols(
         [_sym_result(series[0]), _sym_result(None), _sym_result(series[2])], syms
     )
-    assert broken["daily_returns"] is None and broken["symbol_daily"]["B"] is None  # type: ignore[index]
+    assert broken["mtm_daily_returns"] is None and broken["symbol_mtm_daily"]["B"] is None  # type: ignore[index]
 
 
 def test_portfolio_mode_uses_shared_account_series(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -444,12 +441,12 @@ def test_portfolio_mode_uses_shared_account_series(monkeypatch: pytest.MonkeyPat
     fn = NTBacktestFn(["A", "B"], "4h", "2022-01-01", "2022-01-05", collect_daily_returns=True)
     out: dict[str, Any] = fn(_chrom())
     assert seen == [None]  # ONE shared-account run over both symbols
-    assert out["daily_returns"] == shared.without_first_day()
-    assert "symbol_daily" not in out  # no per-symbol floor in portfolio mode
+    assert out["mtm_daily_returns"] == shared.without_first_day()
+    assert "symbol_mtm_daily" not in out  # no per-symbol floor in portfolio mode
     # worst mode with ONE symbol is a single run too (no pool, no floor)
     one: dict[str, Any] = NTBacktestFn(["A"], "4h", "2022-01-01", "2022-01-05", symbol_agg="worst",
                        collect_daily_returns=True)(_chrom())  # fmt: skip
-    assert one["daily_returns"] == shared.without_first_day() and "symbol_daily" not in one
+    assert one["mtm_daily_returns"] == shared.without_first_day() and "symbol_mtm_daily" not in one
 
 
 # ---------------------------------------------------------------------------
@@ -464,22 +461,22 @@ def _const(bt: dict[str, Any]) -> Any:
 def test_series_kept_only_for_gate_passing_genomes() -> None:
     d = _series(1.0)
     base = {"sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5,
-            "total_trades": 100, "total_return": 0.2, "daily_returns": d}  # fmt: skip
-    assert _evaluate_single(_chrom(), _const(base), min_trades=50).daily_returns is d
+            "total_trades": 100, "total_return": 0.2, "mtm_daily_returns": d}  # fmt: skip
+    assert _evaluate_single(_chrom(), _const(base), min_trades=50).mtm_daily_returns is d
     losing = {**base, "total_return": -0.1}
-    assert _evaluate_single(_chrom(), _const(losing), min_trades=50).daily_returns is None
+    assert _evaluate_single(_chrom(), _const(losing), min_trades=50).mtm_daily_returns is None
     few = {**base, "total_trades": 10}
-    assert _evaluate_single(_chrom(), _const(few), min_trades=50).daily_returns is None
+    assert _evaluate_single(_chrom(), _const(few), min_trades=50).mtm_daily_returns is None
 
-    ok_sym = {k: v for k, v in base.items() if k != "daily_returns"}
-    worst = {**base, "symbol_daily": {"A": {}, "B": {}},
+    ok_sym = {k: v for k, v in base.items() if k != "mtm_daily_returns"}
+    worst = {**base, "symbol_mtm_daily": {"A": d, "B": d},
              "symbol_results": {"A": dict(ok_sym), "B": dict(ok_sym)}}  # fmt: skip
     kept = _evaluate_single(_chrom(), _const(worst), min_trades=50)
-    assert kept.daily_returns is d and kept.symbol_daily == {"A": {}, "B": {}}
+    assert kept.mtm_daily_returns is d and kept.symbol_mtm_daily == {"A": d, "B": d}
     one_loser = {**worst, "symbol_results": {"A": dict(ok_sym), "B": {**ok_sym, "total_return": -0.1}}}
     dropped = _evaluate_single(_chrom(), _const(one_loser), min_trades=50)
     assert dropped.adjusted_score > 0  # still ranks (soft score) ...
-    assert dropped.daily_returns is None and dropped.symbol_daily is None  # ... but keeps no series
+    assert dropped.mtm_daily_returns is None and dropped.symbol_mtm_daily is None  # ... keeps no series
 
 
 # ---------------------------------------------------------------------------
@@ -568,3 +565,23 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     state._conn = conn  # noqa: SLF001 -- skip get_connection/init_schema
     n, ids = _prior_discovery_trials(state, 5, "4h", ("2024-03-01", "2024-09-01"))
     assert n == 100 and ids == [1, 4]
+
+
+# ---------------------------------------------------------------------------
+# vibe-quant-f9zzq: the realized (non-MTM) daily series left discovery
+# ---------------------------------------------------------------------------
+
+
+def test_fitness_result_has_no_realized_daily_series() -> None:
+    """Only the market-valued series remains on ``FitnessResult`` (f9zzq).
+
+    The realized-balance series fed nothing but the pre-y9ywf DSR gate, so its
+    fields and producers were removed; the MTM pair stays.
+    """
+    import dataclasses
+
+    names = {f.name for f in dataclasses.fields(FitnessResult)}
+    assert "daily_returns" not in names
+    assert "symbol_daily" not in names
+    assert "mtm_daily_returns" in names
+    assert "symbol_mtm_daily" in names

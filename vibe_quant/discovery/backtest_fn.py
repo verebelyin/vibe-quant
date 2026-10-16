@@ -96,10 +96,11 @@ class NTBacktestFn:
 
     ``collect_daily_returns`` (opt-in; the discovery pipeline turns it on for
     its train fn when DSR is required, bd vibe-quant-yul7u.24) adds
-    ``daily_returns``: the run's dense daily return series (windows chained,
-    see :meth:`_chain_window_series`; worst mode: the equal-weight pool of
-    the symbols, plus ``symbol_daily`` per-symbol Sharpe inputs). It is the
-    DSR gate's input only -- fitness and ranking never read it.
+    ``mtm_daily_returns``: the run's dense MARK-TO-MARKET daily return series
+    (windows chained, see :meth:`_chain_window_series`; worst mode: the
+    equal-weight pool of the symbols, plus ``symbol_mtm_daily`` per-symbol
+    series). It is the DSR gate's input only -- fitness and ranking never read
+    it. The realized (non-MTM) series was removed (bd vibe-quant-f9zzq).
 
     ``fee_schedule`` (bd vibe-quant-2gyk1.4) is venue-level and is passed to
     every :class:`NTScreeningRunner` this callable builds, including the
@@ -218,7 +219,6 @@ class NTBacktestFn:
         }
         if self.collect_daily_returns:
             # Full dense series INCLUDING day 0; trimmed by _chain_window_series.
-            out["daily_returns"] = runner.last_daily_returns  # type: ignore[assignment]
             out["mtm_daily_returns"] = runner.last_mtm_daily_returns  # type: ignore[assignment]
         # Fee-drag inputs (bd vibe-quant-2gyk1.4): raw cost-free PnL and fees,
         # plus the annualization inputs. The aggregates sum fees/gross and
@@ -238,12 +238,13 @@ class NTBacktestFn:
 
     @staticmethod
     def _chain_window_series(
-        results: list[dict[str, float | int]], key: str = "daily_returns"
+        results: list[dict[str, float | int]], key: str = "mtm_daily_returns"
     ) -> DailyReturns | None:
         """One daily series over consecutive windows, keyed like a continuous run.
 
-        ``key`` selects the series (``"daily_returns"`` or the market-valued
-        ``"mtm_daily_returns"``); both share the day grid and the chaining. A
+        ``key`` selects the series dict key (the market-valued
+        ``"mtm_daily_returns"``); every window shares the day grid and the
+        chaining. A
         continuous run's series starts the day AFTER its first day (NT's
         Sharpe convention), so the first window drops its day-0 return and
         every later window keeps it (its return vs that window's fresh
@@ -399,14 +400,12 @@ class NTBacktestFn:
                     return self._early_exit_result(results, idx, low_trades)
             agg = self._aggregate_multi_window(results, self.min_trades)
             if self.collect_daily_returns:
-                agg["daily_returns"] = self._chain_window_series(results)  # type: ignore[assignment]
                 agg["mtm_daily_returns"] = self._chain_window_series(  # type: ignore[assignment]
                     results, key="mtm_daily_returns"
                 )
             return agg
         res = self._run_single(chromosome, self.start_date, self.end_date, **kw)
         if self.collect_daily_returns:
-            res["daily_returns"] = self._chain_window_series([res])  # type: ignore[assignment]
             res["mtm_daily_returns"] = self._chain_window_series(  # type: ignore[assignment]
                 [res], key="mtm_daily_returns"
             )
@@ -439,14 +438,12 @@ class NTBacktestFn:
         rets = [float(r.get("total_return", 0.0)) for r in results]
         dds = [float(r["max_drawdown"]) for r in results]
         trades = tuple(int(r["total_trades"]) for r in results)
-        collected = any("daily_returns" in r for r in results)
-        series = [cast("DailyReturns | None", r.get("daily_returns")) for r in results]
         mtm_collected = any("mtm_daily_returns" in r for r in results)
         mtm_series = [cast("DailyReturns | None", r.get("mtm_daily_returns")) for r in results]
         # The per-symbol series feed only the pools + per-symbol stats below;
         # they must not ride along in symbol_results (memory, bd yul7u.24).
         results = [
-            {k: v for k, v in r.items() if k not in ("daily_returns", "mtm_daily_returns")}
+            {k: v for k, v in r.items() if k != "mtm_daily_returns"}
             for r in results
         ]
         out: dict[str, float | int] = {
@@ -494,28 +491,9 @@ class NTBacktestFn:
             # Worst-of metrics inherit forced values from these symbols -> mark
             # the aggregate synthetic so the fitness sanity check skips it.
             out["synthetic_symbols"] = synthetic  # type: ignore[assignment]
-        if collected or mtm_collected:
+        if mtm_collected:
             from vibe_quant.metrics import pool_daily_returns
 
-        if collected:
-            from vibe_quant.overfitting.dsr import daily_sharpe_inputs
-
-            out["daily_returns"] = pool_daily_returns(series)  # type: ignore[assignment]
-            symbol_daily: dict[str, dict[str, float] | None] = {}
-            for sym, sr in zip(symbols, series, strict=True):
-                if sr is None or len(sr) == 0:
-                    symbol_daily[sym] = None
-                    continue
-                sharpe, skew, kurt = daily_sharpe_inputs(sr.values)
-                symbol_daily[sym] = {
-                    "sharpe": sharpe,
-                    "skewness": skew,
-                    "kurtosis": kurt,
-                    "observations": len(sr),
-                    "mean": sum(sr.values) / len(sr),
-                }
-            out["symbol_daily"] = symbol_daily  # type: ignore[assignment]
-        if mtm_collected:
             # Pooled market-valued series + each symbol's own (worst-mode gate
             # input, bd vibe-quant-wcn55); neither leaks into symbol_results.
             out["mtm_daily_returns"] = pool_daily_returns(mtm_series)  # type: ignore[assignment]

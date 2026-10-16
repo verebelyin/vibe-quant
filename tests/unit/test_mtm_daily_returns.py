@@ -1,7 +1,8 @@
 """Daily mark-to-market return series (bd vibe-quant-wcn55, task D2-2).
 
-``FitnessResult.daily_returns`` books PnL only on exit days, so a multi-day
-hold shows a zero return until it closes — that inflates Sharpe vs a fair
+The realized-balance series (``FitnessResult.daily_returns`` until it was
+removed, bd vibe-quant-f9zzq) books PnL only on exit days, so a multi-day hold
+shows a zero return until it closes — that inflates Sharpe vs a fair
 buy-and-hold comparison. ``mark_to_market_daily_returns`` values the same UTC
 day grid at each execution bar's close, so an overnight position shows its move
 on the day it happens. Output only: nothing existing may move numerically.
@@ -196,7 +197,6 @@ def test_runner_failed_run_does_not_keep_previous_series(
     runner = NTScreeningRunner({"name": "x"}, ["BTCUSDT"], "2024-01-01", "2024-02-01",
                                collect_daily_returns=True)  # fmt: skip
     stale = DailyReturns(D0, array("d", [0.01]))
-    runner.last_daily_returns = stale
     runner.last_mtm_daily_returns = stale
 
     def boom(self: Any, params: Any, start_time: float) -> Any:
@@ -205,7 +205,7 @@ def test_runner_failed_run_does_not_keep_previous_series(
     monkeypatch.setattr(NTScreeningRunner, "_run_backtest", boom)
     result = runner({})
     assert result.sharpe_ratio == float("-inf")
-    assert runner.last_daily_returns is None and runner.last_mtm_daily_returns is None
+    assert runner.last_mtm_daily_returns is None
 
 
 def test_runner_unavailable_mtm_after_success_returns_none(
@@ -234,14 +234,12 @@ def test_runner_unavailable_mtm_after_success_returns_none(
     runner = captured["r"]
     assert out["mtm_daily_returns"] is not None
     assert runner.last_mtm_daily_returns is not None
-    assert runner.last_daily_returns is not None
 
     import vibe_quant.validation.extraction as extraction
 
     monkeypatch.setattr(extraction, "mark_to_market_paths", lambda *a, **kw: None)
     runner({})
     assert runner.last_mtm_daily_returns is None
-    assert runner.last_daily_returns is not None  # realized series is built independently
 
 
 # --- discovery wiring -------------------------------------------------------
@@ -250,7 +248,7 @@ def test_runner_unavailable_mtm_after_success_returns_none(
 def test_mtm_chain_windows_length_is_train_days_minus_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Worst mode, 2 windows: the per-symbol MTM series chains like the realized one."""
+    """Worst mode, 2 windows: the per-symbol MTM series chains across the windows."""
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.utils import compute_day_count, split_into_windows
 
@@ -261,7 +259,6 @@ def test_mtm_chain_windows_length_is_train_days_minus_one(
             "total_trades": 60, "total_return": 0.1,
         }  # fmt: skip
         if self.collect_daily_returns:
-            out["daily_returns"] = DailyReturns(_ns(s) // DAY_NS, array("d", [0.001] * n))
             out["mtm_daily_returns"] = DailyReturns(_ns(s) // DAY_NS, array("d", [0.002] * n))
         return out
 
@@ -274,9 +271,8 @@ def test_mtm_chain_windows_length_is_train_days_minus_one(
     )  # fmt: skip
     out = fn(_chrom())
     n_days = compute_day_count(start, end) or 0
-    assert len(out["daily_returns"]) == n_days - 1
     assert len(out["mtm_daily_returns"]) == n_days - 1
-    assert out["mtm_daily_returns"].first_day == out["daily_returns"].first_day
+    assert out["mtm_daily_returns"].first_day == (_ns(start) // DAY_NS) + 1  # day 0 trimmed
     assert set(out["symbol_mtm_daily"]) == {"A", "B"}
 
 
@@ -310,17 +306,16 @@ def test_mtm_not_in_averaged_symbol_metrics() -> None:
     d = DailyReturns(100, array("d", [0.01, 0.02]))
     r = {
         "sharpe_ratio": 1.0, "max_drawdown": 0.1, "profit_factor": 1.5,
-        "total_trades": 100, "total_return": 0.2,
-        "daily_returns": d, "mtm_daily_returns": d,
+        "total_trades": 100, "total_return": 0.2, "mtm_daily_returns": d,
     }  # fmt: skip
     out = NTBacktestFn._aggregate_symbols([dict(r), dict(r)], ["A", "B"])
     for sr in out["symbol_results"].values():
-        assert "mtm_daily_returns" not in sr and "daily_returns" not in sr
+        assert "mtm_daily_returns" not in sr
     assert out["sharpe_ratio"] == 1.0 and out["total_return"] == 0.2
 
 
 def test_mtm_fields_follow_keep_series() -> None:
-    """Nit (b): mtm fields obey the same keep_series rule as daily_returns."""
+    """Nit (b): the mtm fields obey the keep_series rule."""
     from vibe_quant.discovery.fitness import _evaluate_single
 
     d = DailyReturns(100, array("d", [0.01, 0.02]))

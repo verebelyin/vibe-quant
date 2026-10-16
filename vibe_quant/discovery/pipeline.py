@@ -438,9 +438,8 @@ def _symbol_mtm_stats(
 ) -> dict[str, dict[str, float] | None] | None:
     """Per-symbol DSR Sharpe inputs from each symbol's MARK-TO-MARKET series.
 
-    Same dict shape as ``FitnessResult.symbol_daily`` (sharpe / skewness /
-    kurtosis / observations / mean via :func:`daily_sharpe_inputs`), but built
-    from ``symbol_mtm_daily`` so the worst-mode per-symbol PSR floor judges the
+    One dict per symbol (sharpe / skewness / kurtosis / observations / mean
+    via :func:`daily_sharpe_inputs`), built from ``symbol_mtm_daily`` so the worst-mode per-symbol PSR floor judges the
     SAME series the pooled test does (vibe-quant-y9ywf). A missing or empty
     symbol series maps to ``None`` so the floor fails closed; a ``None`` input
     (portfolio mode) yields ``None`` -- no per-symbol floor applies.

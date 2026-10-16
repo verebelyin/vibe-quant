@@ -838,12 +838,12 @@ def test_zero_hit_run_with_a_funded_open_survivor_equals_mode_off_in_every_field
 ) -> None:
     catalog = write_marks(tmp_path, CALM)
 
-    def run(mode: str) -> tuple[Any, Any, Any]:
+    def run(mode: str) -> tuple[Any, Any]:
         positions = [*winners_and_loser(), open_long("S", 2 * DAY_MIN + 600)]
         runner = make_runner(tmp_path, mode, catalog=catalog)
         runner._collect_daily_returns = True
         m = extract(runner, positions, CALM, n_positions=4)
-        return m, runner.last_daily_returns, runner.last_mtm_daily_returns
+        return m, runner.last_mtm_daily_returns
 
     off = run("off")
     scans = spy_scans(monkeypatch)
@@ -853,8 +853,8 @@ def test_zero_hit_run_with_a_funded_open_survivor_equals_mode_off_in_every_field
     assert on[0].total_funding == pytest.approx(_RATE * 40000.0)  # S pays 16:00 day 2 only
     assert on[0].total_fees == pytest.approx(20.0)  # S's exit fee
     assert equal_metrics(on[0], off[0])
-    assert on[1] is not None and on[2] is not None
-    assert (on[1], on[2]) == (off[1], off[2])
+    assert on[1] is not None
+    assert on[1] == off[1]
 
 
 def ledger_net(ledgers: dict[str, list[Any]]) -> float:
