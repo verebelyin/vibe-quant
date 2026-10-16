@@ -48,10 +48,13 @@ from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     OPERATOR_RESUMABLE_HALTS,
+    RESTORED_HALT_PREFIX,
+    RESTORED_HALTS,
     CloseAllResult,
     GuardListener,
     GuardState,
     HaltReason,
+    RestoredHalt,
     RiskState,
     TradingGuard,
     TradingGuardConfig,
@@ -308,6 +311,42 @@ def validated_leverage_override(value: object) -> int:
     return int(settings.leverage)
 
 
+def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
+    """Decide what a prior checkpoint's ``node_status`` restores (D-H1/H22).
+
+    MANUAL/ERROR/SIGNAL/KILL_SWITCH restore HALTED with a
+    ``RESTORED_HALT_PREFIX`` message (idempotent across restarts); risk halts are
+    left to the restored bookkeeping (they re-trip in ``evaluate_risk``);
+    anything unrecognised fails closed as ERROR. ``None`` means start RUNNING.
+    """
+    if not isinstance(node_status, dict):
+        return None
+    raw = node_status.get("halt_reason")
+    if raw is None:
+        return None
+    reason: HaltReason | None = None
+    if isinstance(raw, str):
+        with contextlib.suppress(ValueError):
+            reason = HaltReason(raw)
+    if reason is not None:
+        if reason not in RESTORED_HALTS:
+            return None
+        text_raw = node_status.get("error_message")
+        text = text_raw if isinstance(text_raw, str) and text_raw.strip() else reason.value
+        if text.startswith(RESTORED_HALT_PREFIX):
+            text = text[len(RESTORED_HALT_PREFIX) :]
+        return RestoredHalt(
+            reason=reason,
+            message=RESTORED_HALT_PREFIX + text,
+            checkpoint_time=checkpoint_time,
+        )
+    return RestoredHalt(
+        reason=HaltReason.ERROR,
+        message=f"{RESTORED_HALT_PREFIX}unrecognised prior halt_reason {raw!r}",
+        checkpoint_time=checkpoint_time,
+    )
+
+
 class _GuardBridge(GuardListener):
     """Forwards guard callbacks to the node."""
 
@@ -383,6 +422,7 @@ class PaperTradingNode:
         self._commands: PaperCommandQueue | None = None
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
+        self._restored_halt: RestoredHalt | None = None
         self._resolved: ResolvedRunConfig | None = None
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
@@ -936,6 +976,7 @@ class PaperTradingNode:
             risk_engine=risk_engine,
             listener=_GuardBridge(self),
             risk_state=self._restored_risk,
+            restored_halt=self._restored_halt,
         )
 
     # ------------------------------------------------------------ control
@@ -1717,6 +1758,10 @@ class PaperTradingNode:
             guard_status = self._guard.status()
             node_status["risk"] = guard_status["risk"]
             node_status["guard"] = guard_status
+        elif self._restored_risk is not None:
+            # H19: no guard yet (failed restart) - persist the restored risk
+            # bookkeeping instead of wiping it from the checkpoint.
+            node_status["risk"] = self._restored_risk.to_dict()
         if self._resolved is not None:
             node_status["config_diff"] = self._resolved.diff
             node_status["validation_run_id"] = self._config.validation_run_id
@@ -1807,6 +1852,15 @@ class PaperTradingNode:
         )
         risk_raw = prior.node_status.get("risk") if isinstance(prior.node_status, dict) else None
         self._restored_risk = RiskState.from_dict(risk_raw if isinstance(risk_raw, dict) else None)
+        self._restored_halt = restored_halt_from_status(
+            prior.node_status, prior.timestamp.isoformat()
+        )
+        if self._restored_halt is not None:
+            # H19: every checkpoint written before _run_loop keeps the halt.
+            self._status.state = NodeState.HALTED
+            self._status.halt_reason = self._restored_halt.reason
+            self._status.error_message = self._restored_halt.message
+            self._status.updated_at = datetime.now(UTC)
         self._write_event(
             EventType.SIGNAL,
             {
@@ -1817,6 +1871,9 @@ class PaperTradingNode:
                 "prior_positions": sorted(prior.positions),
                 "prior_orders": sorted(prior.orders),
                 "restored_risk": self._restored_risk.to_dict(),
+                "restored_halt": (
+                    self._restored_halt.reason.value if self._restored_halt else None
+                ),
             },
         )
         logger.info(
@@ -1981,7 +2038,12 @@ class PaperTradingNode:
         if self._trading_node is None:
             raise RuntimeError("Trading node is not initialized")
 
-        self._status.state = NodeState.RUNNING
+        if self._restored_halt is not None:
+            self._status.state = NodeState.HALTED
+            self._status.halt_reason = self._restored_halt.reason
+            self._status.error_message = self._restored_halt.message
+        else:
+            self._status.state = NodeState.RUNNING
         self._status.started_at = datetime.now(UTC)
         self._status.updated_at = datetime.now(UTC)
 
@@ -1990,7 +2052,7 @@ class PaperTradingNode:
             {
                 "action": "state_change",
                 "from_state": NodeState.INITIALIZING.value,
-                "to_state": NodeState.RUNNING.value,
+                "to_state": self._status.state.value,
             },
         )
 
@@ -2135,7 +2197,13 @@ class PaperTradingNode:
             await self._run_loop()
         except Exception as e:
             self._status.state = NodeState.ERROR
-            self._status.error_message = str(e)
+            if self._status.halt_reason is not None:
+                # H19b (oe9yc): a restored/live halt owns the status message. Store
+                # the failure class only (never the exception text) so the halted
+                # message survives into the failure checkpoint and the next restart.
+                logger.error("paper node start failed while halted (%s)", type(e).__name__)
+            else:
+                self._status.error_message = str(e)
             # R3 (k8oei): the CRITICAL "failed" alert goes out even if the error-event
             # write raises, and the ORIGINAL error `e` is what start() re-raises:
             # suppressing the write's own failure keeps the two from being confused.

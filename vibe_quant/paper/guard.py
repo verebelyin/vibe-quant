@@ -105,6 +105,22 @@ OPERATOR_RESUMABLE_HALTS: frozenset[HaltReason] = frozenset(
     {HaltReason.MANUAL, HaltReason.SIGNAL, HaltReason.ERROR, HaltReason.KILL_SWITCH}
 )
 
+# Halts restored to HALTED after a restart: fail-closed until the operator
+# resumes (D-H1). Risk halts are re-derived from the restored bookkeeping.
+RESTORED_HALTS: frozenset[HaltReason] = OPERATOR_RESUMABLE_HALTS
+
+#: Prefix on every restored-halt message (stripped before re-prefixing, H13).
+RESTORED_HALT_PREFIX = "restored after restart: "
+
+
+@dataclass(frozen=True)
+class RestoredHalt:
+    """A halt restored from the prior session's checkpoint."""
+
+    reason: HaltReason
+    message: str  # already prefixed with RESTORED_HALT_PREFIX
+    checkpoint_time: str  # prior checkpoint timestamp (isoformat)
+
 
 @dataclass(frozen=True)
 class RiskLimits:
@@ -272,6 +288,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         risk_engine: Any,
         listener: GuardListener | None = None,
         risk_state: RiskState | None = None,
+        restored_halt: RestoredHalt | None = None,
     ) -> None:
         super().__init__(config)
         self._cfg = config
@@ -295,6 +312,13 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._gate_installed = False
         self._warned: set[str] = set()
         self._gate_denials = 0
+        self._restored_halt = restored_halt
+        self._restored_flatten_pending = False
+        if restored_halt is not None:
+            self._state = GuardState.HALTED
+            self._halt_reason = restored_halt.reason
+            self._message = restored_halt.message
+            self._state_before_halt = GuardState.RUNNING
 
     # ------------------------------------------------------------------ props
 
@@ -348,7 +372,22 @@ class TradingGuard(Actor):  # type: ignore[misc]
             interval=timedelta(seconds=self._cfg.check_interval_secs),
             callback=self._on_tick,
         )
+        if self._restored_halt is not None and self._state == GuardState.HALTED:
+            self._restored_flatten_pending = True
         self.evaluate_risk()
+        if self._restored_halt is not None and self._state == GuardState.HALTED:
+            try:
+                self._listener.on_state_change(
+                    self._state,
+                    self._halt_reason,
+                    self._message,
+                    {
+                        "restored": True,
+                        "checkpoint_time": self._restored_halt.checkpoint_time,
+                    },
+                )
+            except Exception as exc:
+                logger.error("restored halt notify failed (%s)", type(exc).__name__)
 
     def on_stop(self) -> None:
         # The gate stays installed: strategies may still be running and must
@@ -458,6 +497,12 @@ class TradingGuard(Actor):  # type: ignore[misc]
     # ----------------------------------------------------------------- events
 
     def _on_tick(self, _event: Any) -> None:
+        if self._state == GuardState.HALTED and self._restored_flatten_pending:
+            self._restored_flatten_pending = False
+            reason = self._halt_reason
+            errors = self._flatten(stop_strategies=reason not in _KEEP_STRATEGIES_RUNNING).errors
+            for error in errors:
+                self._listener.on_warning(f"restored halt flatten: {error}")
         self._stop_exited_strategies()
         self.evaluate_risk()
 
@@ -587,6 +632,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._state = GuardState.HALTED
         self._halt_reason = reason
         self._message = message
+        # This halt flattens right here: a deferred restored flatten must not
+        # run again on the first tick (H8: exactly once).
+        self._restored_flatten_pending = False
         stop = reason not in _KEEP_STRATEGIES_RUNNING
         errors = self._flatten(stop_strategies=stop).errors
         payload: dict[str, object] = dict(metrics or {})
@@ -632,6 +680,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
     # -------------------------------------------------------------- internals
 
     def _lift_halt(self, message: str) -> None:
+        self._restored_flatten_pending = False
         for strategy in self._strategies:
             sid = str(strategy.id)
             self._pending_stop.discard(sid)
@@ -727,11 +776,14 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
 __all__ = [
     "GATE_DENIAL_PREFIX",
+    "RESTORED_HALTS",
+    "RESTORED_HALT_PREFIX",
     "CloseAllResult",
     "GuardListener",
     "GuardState",
     "OPERATOR_RESUMABLE_HALTS",
     "HaltReason",
+    "RestoredHalt",
     "RiskLimits",
     "RiskState",
     "TradingGuard",
