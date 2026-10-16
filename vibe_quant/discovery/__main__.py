@@ -212,6 +212,7 @@ def _run_multi_seed(
     Returns:
         Merged DiscoveryResult with aggregated stats.
     """
+    import math
     import statistics
 
     all_strategies: list[
@@ -257,7 +258,14 @@ def _run_multi_seed(
         # Collect per-seed stats
         if result.top_strategies:
             sharpes = [f.sharpe_ratio for _, f in result.top_strategies]
-            best_sharpe = max(sharpes)
+            # ``max`` over a non-finite Sharpe is order-dependent (NaN
+            # comparisons are False, so ``max([nan, 1.0])`` is nan while
+            # ``max([1.0, nan])`` is 1.0). Pick the best FINITE value only; a
+            # seed whose strategies are all non-finite gets a NaN best_sharpe.
+            finite_seed_sharpes = [s for s in sharpes if math.isfinite(s)]
+            best_sharpe = (
+                max(finite_seed_sharpes) if finite_seed_sharpes else float("nan")
+            )
             seed_stats.append({
                 "seed": seed_val,
                 "best_sharpe": best_sharpe,
@@ -284,25 +292,38 @@ def _run_multi_seed(
             any_converged = True
             convergence_gen = result.convergence_generation
 
-    # Log multi-seed distribution stats
+    # Log multi-seed distribution stats. A seed's best Sharpe can be non-finite
+    # (a NaN/+-inf champion). ``statistics.stdev([nan, ...])`` raises
+    # AttributeError ('float' object has no attribute 'numerator'), which would
+    # abort the whole run BEFORE grouping/notes -- so compute mean/median/min/
+    # max/stdev over FINITE values only and report the rest as a count.
+    # Summary logging must never abort a run.
     sharpe_list = [s["best_sharpe"] for s in seed_stats]
     score_list = [s["best_score"] for s in seed_stats]
+    finite_sharpes = [s for s in sharpe_list if math.isfinite(s)]
+    non_finite_seeds = len(sharpe_list) - len(finite_sharpes)
     failure_count = sum(1 for s in seed_stats if s["num_strategies"] == 0)
 
     logger.info("=== MULTI-SEED SUMMARY (%d seeds) ===", num_seeds)
-    if sharpe_list:
+    if finite_sharpes:
         logger.info(
             "  Best Sharpe: mean=%.2f median=%.2f min=%.2f max=%.2f std=%.2f",
-            statistics.mean(sharpe_list),
-            statistics.median(sharpe_list),
-            min(sharpe_list),
-            max(sharpe_list),
-            statistics.stdev(sharpe_list) if len(sharpe_list) > 1 else 0,
+            statistics.mean(finite_sharpes),
+            statistics.median(finite_sharpes),
+            min(finite_sharpes),
+            max(finite_sharpes),
+            statistics.stdev(finite_sharpes) if len(finite_sharpes) > 1 else 0,
         )
+    else:
+        logger.info("  Best Sharpe: n/a (no finite seed Sharpe)")
+    logger.info(
+        "  Best Score: mean=%.4f median=%.4f",
+        statistics.mean(score_list),
+        statistics.median(score_list),
+    )
+    if non_finite_seeds:
         logger.info(
-            "  Best Score: mean=%.4f median=%.4f",
-            statistics.mean(score_list),
-            statistics.median(score_list),
+            "  Non-finite seed Sharpes: %d/%d", non_finite_seeds, num_seeds
         )
     logger.info(
         "  Seed failures: %d/%d (%.0f%%)",
