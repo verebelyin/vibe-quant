@@ -47,11 +47,10 @@ Each Command Code call carries ~17–20k input tokens of system-prompt overhead 
 
 Model slugs as listed by `orchestrator_capabilities` for `commandcode_command` on 2026-10-10 (case matters; re-check the catalog when a slug fails).
 
-**Allowed models (user 2026-10-15, supersedes the 2026-10-11 DeepSeek-only rule):** `deepseek/deepseek-v4.1-flash` at effort `high` for small and medium tasks, and `xiaomi/mimo-v2.6-pro` for difficult tasks (NT lifecycle, money-path asyncio, semantics fixes). Never Kimi, GLM, Qwen, MiniMax or any other Command Code model. Fix rounds with `fix-route: sonnet` still go to a Claude Sonnet 5.5 `implementer`.
+**Allowed model (user 2026-10-16, supersedes the 2026-10-15 MiMo allowance):** only `deepseek/deepseek-v4.1-flash` at effort `high`, for every Command Code task. MiMo V2.6 Pro is disabled (expensive and ~5x slower; see Changelog 2026-10-16). Difficult tasks (NT lifecycle, money-path asyncio, semantics fixes) go to DeepSeek with a Sonnet `implementer` escalation after one failed round, or straight to a Sonnet `implementer` when the chief judges DeepSeek too risky (write why in the ledger). Never MiMo, Kimi, GLM, Qwen, MiniMax or any other Command Code model. Fix rounds with `fix-route: sonnet` still go to a Claude Sonnet 5.5 `implementer`.
 
 | Tier | Model slug | Use for |
 |---|---|---|
-| `hard` | `xiaomi/mimo-v2.6-pro` (no options) | difficult tasks: NT lifecycle, money-path asyncio, semantics fixes (user 2026-10-15) |
 | `code` (default) | `deepseek/deepseek-v4.1-flash` (`options: {"effort": "high"}`; user 2026-10-10: "cheaper and better than MiMo", high not max — max may cause the read-loop stall) | every well-specified task: code, tests, mechanical edits, bulk extraction, read-heavy audits |
 
 ## Routing
@@ -114,3 +113,4 @@ The `verifier` (or the orchestrator for tiny tasks) must:
 - 2026-10-15: MiMo V2.6 Pro allowed again for difficult tasks; DeepSeek V4.1 Flash high stays the default; reviews GPT-6.1-Sol high — user (job 20261015-small-beads).
 - 2026-10-15 (job 20261015-small-beads): first MiMo V2.6 Pro task after re-allowing it (T5, real-NT test) had 0 worktree edits after ~90 min when a T3 restart cancelled it, so the chief escalated to a Sonnet implementer (done in ~7 min). Correction: the MiMo run then RESUMED by itself, worked in the same worktree in parallel, and reached the same verified result (probes, red run, 26 passed); its 0-edit period was probing in /tmp, not a stall. Check probe output, not only worktree edits, before calling a MiMo stall.
 - 2026-10-16 (job 20261016-safety-bugs): DeepSeek V4.1 Flash made 4 tasks (T1 paper, T3 gate, T4 migrations, T5 discovery API) at 1-2 rounds each; 2 needed a Sonnet fix after Sol found a blocking miss (T3 deleted-module edge, T4 cached half-migrated connection). MiMo V2.6 Pro did the real-NT lifecycle test (T2) in ~45 min (first worktree edit ~20 min in), passed Sol first round.
+- 2026-10-16 (job 20261016-sizing): MiMo V2.6 Pro disabled — user, after reviewing its record: clean first rounds (safety-bugs T2 Sol PASS; sizing K1 no code defect, 2 test gaps, risk PASS) but ~31-34 min and 1.9-5.2M input tokens per task vs DeepSeek ~7 min, plus 37 min / 2 h / 90 min stalls (10-08, 10-09, 10-15). DeepSeek failures (S2, S4 blocking) were recovered by a ~4 min Sonnet fix. Hard tasks: DeepSeek, Sonnet implementer on escalation.
