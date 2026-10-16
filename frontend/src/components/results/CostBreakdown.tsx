@@ -3,6 +3,7 @@ import {
   useGetRunMetaApiResultsRunsRunIdMetaGet,
   useGetRunSummaryApiResultsRunsRunIdGet,
 } from "@/api/generated/results/results";
+import { totalCosts } from "@/components/results/totalCosts";
 import { LoadingSpinner } from "@/components/ui";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -169,7 +170,8 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
   const fees = data.total_fees;
   const slippage = data.total_slippage;
   const funding = data.total_funding;
-  const totalCosts = (fees ?? 0) + (slippage ?? 0) + (funding ?? 0);
+  // null when every component is missing (legacy rows) -> shown as N/A below.
+  const costsTotal = totalCosts(fees, slippage, funding);
 
   // total_return is a NET fraction (after fees, slippage, funding). The window
   // comes from notes.data_window (validation clamps to 1m coverage) before the
@@ -241,7 +243,7 @@ export function CostBreakdown({ runId }: CostBreakdownProps) {
             </div>
             <div>
               <p className="text-xs uppercase text-muted-foreground">Total Costs</p>
-              <p className="mt-1 text-sm font-bold text-red-500">{formatUsd(totalCosts)}</p>
+              <p className="mt-1 text-sm font-bold text-red-500">{formatUsd(costsTotal)}</p>
             </div>
             <div>
               <p className="text-xs uppercase text-muted-foreground">Net PnL</p>
