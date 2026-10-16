@@ -95,6 +95,16 @@ markers = [
     "timing: asserts relative wall-clock speed; run serially (-m timing), never in the parallel pass",
 ]
 
+# nautilus_trader 1.231.0's compiled BacktestEngine._run calls pandas
+# Timestamp.utcnow() (site-packages/nautilus_trader/backtest/engine.pyx), so every
+# engine.run() in the test suite emits this Pandas4Warning under pandas 3.x and
+# floods the warning summary. Ignore exactly that message and category; every other
+# warning (including any other Pandas4Warning) stays visible.
+filterwarnings = [
+    "ignore:Timestamp\\.utcnow is deprecated:pandas.errors.Pandas4Warning",
+]
+
+
 [tool.coverage.run]
 source = ["vibe_quant"]
 branch = true
