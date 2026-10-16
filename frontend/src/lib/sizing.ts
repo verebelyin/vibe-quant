@@ -175,6 +175,36 @@ export function runSizing(params: Record<string, unknown> | null | undefined): R
   return { maxPositionPct: cap, riskPerTrade: risk, legacy };
 }
 
+/**
+ * The sizing a discovery run recorded in its machine `notes` JSON (Z1, bead
+ * vibe-quant-zrh23): the frontend mirror of `_discovery_recorded_sizing` and the
+ * child resolver in `api/routers/discovery.py`.
+ *
+ * `null` when the notes are absent, unreadable, not a mapping, or carry no
+ * `sizing` key — the run was launched at the defaults, so the caller keeps the
+ * run parameters' (legacy) sizing. The recorded settings when the key holds an
+ * object. A `sizing` key that is present but NOT an object, or that holds a value
+ * out of range, is an error rather than a silent default (S23b/S23d).
+ */
+export function notesSizing(notes: string | null | undefined): RunSizing | null {
+  if (notes == null) return null;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(notes);
+  } catch {
+    return null;
+  }
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+  if (!Object.hasOwn(payload, "sizing")) return null;
+
+  const raw = (payload as Record<string, unknown>).sizing;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { invalid: `notes.sizing must be an object, got ${render(raw)}` };
+  }
+  return runSizing(raw as Record<string, unknown>);
+}
+
 /** The exposure part of the chip: per-symbol cap, plus the run total for many. */
 function chipExposure(maxPositionPct: number, nSymbols: number): string {
   if (nSymbols > 1) {

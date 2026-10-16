@@ -88,6 +88,35 @@ describe("sweepValidationBody", () => {
     expect(res.ok && "sweep" in res.body.parameters).toBe(false);
   });
 
+  it("the parent's run-level values win over a swept parameter of the same name", () => {
+    // The swept row carries its own leverage/initial_balance (strategy params that
+    // happen to share the run-level names); the parent's environment must win so
+    // the validation reproduces the run the row was measured in.
+    const run = makeRun({
+      parameters: { initial_balance: 5000, leverage: 3, sweep: { rsi_period: [1, 2] } },
+    });
+    const sweep = makeSweep({ rsi_period: 14, leverage: 99, initial_balance: 1 });
+
+    const res = sweepValidationBody(run, sweep);
+
+    expect(res.ok && res.body.parameters).toStrictEqual({
+      rsi_period: 14,
+      initial_balance: 5000,
+      leverage: 3,
+    });
+  });
+
+  it("forwards the cross liquidation mode", () => {
+    const run = makeRun({
+      parameters: { initial_balance: 5000, leverage: 10, liquidation_mode: "cross" },
+    });
+    const sweep = makeSweep({ rsi_period: 14 });
+
+    const res = sweepValidationBody(run, sweep);
+
+    expect(res.ok && res.body.liquidation_mode).toBe("cross");
+  });
+
   it("legacy parent", () => {
     const run = makeRun({
       parameters: { initial_balance: 1000, leverage: 10, sweep: { rsi_period: [1, 2] } },

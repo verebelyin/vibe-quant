@@ -14,6 +14,7 @@ import {
   DEFAULT_RISK_PER_TRADE,
   MAX_MAX_POSITION_PCT,
   MAX_RISK_PCT,
+  notesSizing,
   type RunSizing,
   riskFractionToPct,
   riskPctToFraction,
@@ -200,5 +201,39 @@ describe("sizingChipLabel", () => {
     expect(sizingChipLabel({ maxPositionPct: 1, riskPerTrade: 0.01, legacy: false }, 3)).toBe(
       "Max exposure 1× per symbol, up to 3 × 1× total · Risk 1%",
     );
+  });
+});
+
+describe("notesSizing", () => {
+  it("reads the sizing key of a discovery run's notes", () => {
+    expect(notesSizing(JSON.stringify({ sizing: { max_position_pct: 1 } }))).toStrictEqual({
+      maxPositionPct: 1,
+      riskPerTrade: 0.02,
+      legacy: false,
+    });
+    // A present but empty object is the defaults, not an error.
+    expect(notesSizing(JSON.stringify({ sizing: {} }))).toStrictEqual(LEGACY);
+  });
+
+  it("absent, unreadable or non-mapping notes read as no sizing", () => {
+    expect(notesSizing(JSON.stringify({ seed: 1 }))).toBeNull();
+    expect(notesSizing(null)).toBeNull();
+    expect(notesSizing(undefined)).toBeNull();
+    expect(notesSizing("not json")).toBeNull();
+    expect(notesSizing(JSON.stringify([1, 2]))).toBeNull();
+    expect(notesSizing(JSON.stringify("str"))).toBeNull();
+  });
+
+  it("a present but unreadable sizing is invalid", () => {
+    expect(notesSizing(JSON.stringify({ sizing: null }))).toStrictEqual({
+      invalid: "notes.sizing must be an object, got null",
+    });
+    expect(notesSizing(JSON.stringify({ sizing: "x" }))).toStrictEqual({
+      invalid: 'notes.sizing must be an object, got "x"',
+    });
+    expect(notesSizing(JSON.stringify({ sizing: { risk_per_trade: -1 } }))).toStrictEqual({
+      invalid:
+        "risk_per_trade must be more than 0 and at most 0.5 (50% of equity per trade), got -1",
+    });
   });
 });
