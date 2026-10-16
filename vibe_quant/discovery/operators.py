@@ -90,6 +90,37 @@ def _ensure_pool() -> None:
             _INT_PARAMS.setdefault(name, ma_def.int_params)
 
 
+def validate_indicator_pool(names: Sequence[str]) -> None:
+    """Validate a requested GA indicator pool -- the ONE rule for CLI + API.
+
+    Called by the discovery pipeline (``_apply_indicator_pool_filter``) and by
+    the launch endpoint, so a pool the genome cannot use fails with the same
+    message before any work starts.
+
+    Raises:
+        ValueError: the pool is empty (there is no "no indicators" run; omit
+            the pool to use the default), or it names indicators the GA genome
+            cannot use (unknown names, or price-vs-MA plugins whose
+            ``threshold_range`` is None).
+    """
+    _ensure_pool()
+    if not names:
+        msg = "indicator_pool must not be empty; omit it (null) to use the default pool"
+        raise ValueError(msg)
+    available = set(INDICATOR_POOL.keys())
+    unknown = sorted(set(names) - available)
+    if unknown:
+        # Moving-average-type plugins register with threshold_range=None and
+        # are excluded from the GA pool (gene structure is indicator-vs-threshold).
+        msg = (
+            f"indicator_pool contains names not available for GA discovery: "
+            f"{unknown}. Available: {sorted(available)}. "
+            f"(Indicators with threshold_range=None, e.g. price-vs-MA plugins, "
+            f"are not yet supported by the genome — see bd-9c1g.)"
+        )
+        raise ValueError(msg)
+
+
 class ConditionType(Enum):
     """Condition types for gene evaluation."""
 

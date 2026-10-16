@@ -465,6 +465,15 @@ async def launch_discovery(
     # Precheck BEFORE any run row exists: parse the exact argv the subprocess
     # will get and derive its windows (same code path as the CLI).
     cli_args = _discovery_cli_args(body, start_date, end_date, settings)
+    # Refuse a pool the GA genome cannot use via the SAME validator the
+    # pipeline runs, before any run row or job exists (vibe-quant-l42df).
+    if body.indicator_pool is not None:
+        from vibe_quant.discovery.operators import validate_indicator_pool
+
+        try:
+            validate_indicator_pool(body.indicator_pool)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     _precheck_discovery_config(cli_args)
 
     # Use strategy_id=None for discovery (no pre-existing strategy)
