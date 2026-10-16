@@ -979,6 +979,12 @@ async def promote_discovered_strategy(
     entry = _get_genome_entry(state, run_id, strategy_index)
     _enforce_short_1m_cross_regime_gate(state, run_id, discovery_run, entry)
 
+    # Resolve the parent's authoritative fee/liquidation notes BEFORE the
+    # strategy row exists: an unreadable parent note fails closed (409) without
+    # leaking a strategies row (vibe-quant-dtj5h).
+    fee_params, fee_source = _inherited_fee_params(state, run_id)
+    liquidation_params = _inherited_liquidation_params(state, run_id)
+
     # Export genome to strategies table (matched by DSL content, not name)
     import json
 
@@ -1005,9 +1011,8 @@ async def promote_discovered_strategy(
 
     # promote_source: lets the post-run drift check (bd-l6ml) find the genome
     # and records WHICH range was validated (OOS holdout vs full range).
-    # The child inherits the parent's fee schedule (bd vibe-quant-2gyk1.4).
-    fee_params, fee_source = _inherited_fee_params(state, run_id)
-    liquidation_params = _inherited_liquidation_params(state, run_id)
+    # The child inherits the parent's fee schedule (bd vibe-quant-2gyk1.4);
+    # fee_params/liquidation_params were resolved above, before the strategy row.
     run_parameters: dict[str, object] = {
         "promote_source": {
             "discovery_run_id": run_id,

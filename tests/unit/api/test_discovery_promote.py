@@ -725,6 +725,44 @@ async def test_promote_rejects_corrupt_recorded_schedule(
     assert "fee_schedule" in r.json()["detail"]
 
 
+def _table_counts(state: StateManager) -> tuple[int, int]:
+    strategies = state.conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0]
+    runs = state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]
+    return int(strategies), int(runs)
+
+
+@pytest.mark.parametrize(
+    ("notes_extra", "key"),
+    [
+        ({"fee_schedule": {"fee_tier": "VIP9", "bnb_discount": True}}, "fee_schedule"),
+        ({"liquidation": "junk"}, "liquidation"),
+    ],
+    ids=["unreadable-fee", "unreadable-liquidation"],
+)
+async def test_promote_unreadable_parent_notes_creates_no_strategy_row(
+    client: tuple[AsyncClient, StateManager],
+    notes_extra: dict[str, object],
+    key: str,
+) -> None:
+    """D1: a fail-closed 409 on parent notes must not leak a strategies row.
+
+    Resolving the inherited fee/liquidation notes happens BEFORE
+    ``_find_or_create_discovered_strategy``, so an unreadable parent note
+    leaves the DB exactly as it was.
+    """
+    ac, state = client
+    run_id = _create_discovery_run_with_results(state, notes_extra=notes_extra)
+    before = _table_counts(state)
+
+    popen, alive = _popen_patches()
+    with popen, alive:
+        r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 409, r.text
+    assert f"discovery run {run_id} has an unreadable notes.{key}" in r.json()["detail"]
+    assert _table_counts(state) == before
+
+
 async def test_replay_inherits_bnb_schedule_from_discovery_notes(
     client: tuple[AsyncClient, StateManager],
 ) -> None:
