@@ -27,6 +27,8 @@ Code-change reviews (no paper/live start requested) also:
 - For a new halt reason, list the existing halts it can replace (`guard.py` priorities) and what each replacement does to resume and to the UTC-midnight lift (risk-sz-kill-1: ERROR replacing a daily-loss halt removes the midnight lift).
 - For a fail-closed read of a DB row that `init_schema` seeds, also run the repro from a FRESH StateManager/process: the seed re-creates the row on first connect, so a cached-connection test can pass while production never sees the failure (risk-fu3-sysstate-1 → vibe-quant-tdjop).
 - For a per-symbol cap or limit, state the portfolio total (N symbols × cap vs leverage/equity) and write the live-gate rule (risk-sz-refuse-1 → bead vibe-quant-9r0m5).
+- For a UI error/unknown state on a safety control, confirm the emergency action (Kill) stays reachable in that state; a fail-closed label that hides the button is a regression (risk-sb-t1-1 F1: KillSwitch unknown branch hid Kill on a /status 503).
+- For an error-path fix with a carve-out (an error class deliberately left raw), probe that class on every entry point and run one mutant that removes the carve-out (risk-sb-t1-2: BUSY/LOCKED raw OperationalError; all five entry points failed closed, and the mutant showed the carve-out is needed).
 5. **Correlation**: overlap with strategies already in paper (same symbol + direction + timeframe means concentration).
 
 ## Output
@@ -71,3 +73,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-16 (Land, job 20261016-followups2): repro on the base commit too. Evidence: risk-fu2-paper-1 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-sizing): code-change review checks (public start() repro, halt-reason replacement, portfolio total of per-symbol caps) — evidence risk-sz-halt-1, risk-sz-kill-1, risk-sz-refuse-1. Applied by the chief.
 - 2026-10-16 (Land, job 20261016-followups3): fresh-connection repro for seeded rows — evidence risk-fu3-sysstate-1. Applied by the chief.
+- 2026-10-16 (job 20261016-safety-bankroll): emergency action reachable in UI error states; carve-out probes. Evidence: risk-sb-t1-1 F1 (proposal 18df1a81e03c66e8-8873), risk-sb-t1-2.
