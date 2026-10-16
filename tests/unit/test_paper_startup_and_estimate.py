@@ -26,12 +26,16 @@ Bead vibe-quant-2gyk1.1.11. Contract rows (design r2, job 20261015-honest-safe):
        timeout message; the timeout never overwrites an existing (halt) message.
 * R42e (chief ruling) the connect probe runs first; a first tick that sees the venue
        connected after > 120 s sends neither the timeout alert nor the recovery.
+* R11 (s3pqx) a connect-probe failure logs ``RuntimeError`` by class only: no exception
+       text, no traceback, and no ``__context__`` chain (a raw fetch error's signed URL /
+       api key would otherwise print). The startup-timeout path still runs.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -53,6 +57,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _TRADER_ID = "PAPER-007"
+#: Leak marker: contains none of the redacted credential names, so a mutant that
+#: drops a name cannot hide it (impl-sb-watchlog-2).
+_LEAK = "ZZLEAK9"
 #: R42b fixes the threshold at 120 s; the payload carries it too.
 _TIMEOUT_S = 120
 #: R44b: the estimate's basis is this string, with the tier-table version spliced in.
@@ -660,6 +667,50 @@ async def test_failing_connect_probe_after_120s_still_reports_the_timeout(
 
         assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
         assert alerts.calls == [("error", _timeout_message(), True)]
+    finally:
+        await node._shutdown()
+
+
+def _chained_probe_error() -> RuntimeError:
+    """A ``RuntimeError`` raised while another ``RuntimeError`` is active (R11).
+
+    Both carry the leak marker, so any ``logger.exception`` in the probe's handler
+    prints it twice through the ``__context__`` chain.
+    """
+    try:
+        try:
+            raise RuntimeError(f"fetch failed {_LEAK}")
+        except RuntimeError:
+            raise RuntimeError(f"probe broke {_LEAK}")  # noqa: B904  # keep __context__
+    except RuntimeError as err:
+        return err
+
+
+async def test_failing_connect_probe_log_is_class_only(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R11: the probe-failure log names the class only, with no chain text or traceback."""
+    node = await _initialized(seeded)
+    monkeypatch.setattr(node, "_send_telegram_alert", _Alerts())
+    node.status.started_at = datetime.now(UTC) - timedelta(seconds=_TIMEOUT_S + 1)
+    error = _chained_probe_error()
+    assert error.__context__ is not None
+    fake_tradingnode.instances[0].kernel.data_engine.error = error
+    try:
+        with caplog.at_level(logging.ERROR, logger="vibe_quant.paper.node"):
+            node._check_connectivity()
+
+        records = [r for r in caplog.records if r.name == "vibe_quant.paper.node"]
+        assert any("RuntimeError" in r.getMessage() for r in records)
+        assert all(_LEAK not in r.getMessage() for r in records)
+        assert all(r.exc_info is None and not r.exc_text for r in records)
+        assert _LEAK not in caplog.text, "the __context__ chain must not print"
+        assert "Traceback" not in caplog.text
+        # R42e: a probe that raises is still "not connected", so the timeout fires.
+        assert len(_actions(node, seeded, "startup_connect_timeout")) == 1
     finally:
         await node._shutdown()
 

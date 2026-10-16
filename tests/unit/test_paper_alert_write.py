@@ -22,6 +22,20 @@ Contract rows (brief cc-fu-paperalert; chief ruling R8 adds the 7 remaining pair
 * R9  each converted site pins its full event tuple (type, payload, timestamp) and a
        healthy guard transition still reaches its trailing checkpoint (write -> alert
        -> checkpoint), so a dropped timestamp/payload or an early return fails a test.
+* R10 (bykze) a guard state transition persists its checkpoint even when the event
+       write raises: the ordered trace is ``write[, alert] -> checkpoint`` and only then
+       does the write's own error propagate - on the HALT branch, the RESUMED branch and
+       a plain (no-alert) change - so a disk-full writer cannot cost the halt its
+       checkpoint. The real checkpoint row shows the halted state and reason.
+* R11 (bykze) a checkpoint that itself fails never replaces the write's error:
+       ``_save_checkpoint_now`` swallows its own failure (the write's OSError still
+       propagates).
+* R4b (bykze) a healthy plain (non-alerting) guard transition also reaches its
+       trailing checkpoint: ``write -> checkpoint`` is pinned by a test, so a mutant
+       that skips the checkpoint on that branch dies (Sol SF1).
+* R12 (s3pqx, brief row R8) a failing ``_save_checkpoint_now`` logs its own error
+       class-only - the store's text, the active write error's text/``__context__`` and
+       any traceback stay out of the log - and the write's OSError still propagates.
 """
 
 from __future__ import annotations
@@ -40,6 +54,7 @@ from vibe_quant.logging.events import EventType
 from vibe_quant.paper.errors import ErrorCategory, ErrorContext
 from vibe_quant.paper.guard import CloseAllResult, GuardState, HaltReason
 from vibe_quant.paper.node import NodeState, PaperTradingNode
+from vibe_quant.paper.persistence import StatePersistence
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -629,15 +644,17 @@ def test_on_guard_state_change_halt_writes_before_it_alerts(
 def test_on_guard_state_change_halt_alert_survives_a_failing_write(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8: the CRITICAL halt alert is sent even when the write raises."""
+    """R8/R10: the CRITICAL halt alert is sent and the halt is checkpointed when the
+    write raises; the write's own OSError is what propagates afterwards."""
     node = _node(seeded)
     error, spy = _fail_write(monkeypatch, node)
+    _trace_checkpoint(monkeypatch, spy, node)
 
     with pytest.raises(OSError) as caught:
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
 
     assert caught.value is error
-    assert spy.order == ["write", "alert"]
+    assert spy.order == ["write", "alert", "checkpoint"]
     assert spy.writes == [
         (
             EventType.RISK_CHECK,
@@ -688,16 +705,18 @@ def test_on_guard_state_change_resumed_writes_before_it_alerts(
 def test_on_guard_state_change_resumed_alert_survives_a_failing_write(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8: the RESUMED alert is sent even when the write raises."""
+    """R8/R10: the RESUMED alert is sent and the transition checkpointed when the
+    write raises; the write's own OSError is what propagates afterwards."""
     node = _node(seeded)
     node._status.state = NodeState.HALTED
     error, spy = _fail_write(monkeypatch, node)
+    _trace_checkpoint(monkeypatch, spy, node)
 
     with pytest.raises(OSError) as caught:
         node._on_guard_state_change(GuardState.RUNNING, None, "back", {})
 
     assert caught.value is error
-    assert spy.order == ["write", "alert"]
+    assert spy.order == ["write", "alert", "checkpoint"]
     assert spy.writes == [
         (
             EventType.SIGNAL,
@@ -716,15 +735,17 @@ def test_on_guard_state_change_resumed_alert_survives_a_failing_write(
 def test_on_guard_state_change_without_resume_writes_without_alerting(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """R8: a plain state change alerts today, so it must not start alerting now."""
+    """R4b/R8: a plain state change alerts today, so it must not start alerting now -
+    and it still reaches its trailing checkpoint (Sol SF1)."""
     node = _node(seeded)
     node._status.state = NodeState.RUNNING
     spy = _Spy()
     spy.install(monkeypatch, node)
+    _trace_checkpoint(monkeypatch, spy, node)
 
     node._on_guard_state_change(GuardState.PAUSED, None, "paused", {})
 
-    assert spy.order == ["write"]
+    assert spy.order == ["write", "checkpoint"]
     assert spy.writes == [
         (
             EventType.SIGNAL,
@@ -738,6 +759,103 @@ def test_on_guard_state_change_without_resume_writes_without_alerting(
         )
     ]
     assert spy.alerts == []
+
+
+def test_on_guard_state_change_plain_change_checkpoints_when_the_write_fails(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3/R10: a plain (no alert) change still checkpoints when the write raises."""
+    node = _node(seeded)
+    node._status.state = NodeState.RUNNING
+    error, spy = _fail_write(monkeypatch, node)
+    _trace_checkpoint(monkeypatch, spy, node)
+
+    with pytest.raises(OSError) as caught:
+        node._on_guard_state_change(GuardState.PAUSED, None, "paused", {})
+
+    assert caught.value is error
+    assert spy.order == ["write", "checkpoint"]
+    assert spy.alerts == []
+
+
+# ------------------------------------ R10/R11: the checkpoint really lands
+
+
+def test_on_guard_state_change_persists_the_halt_when_the_write_fails(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R5/R10: the halt is a REAL checkpoint row even though the RISK_CHECK write failed."""
+    node = _node(seeded)
+    persistence = StatePersistence(db_path=seeded["db"], trader_id=node._config.trader_id)
+    node._persistence = persistence
+    error, spy = _fail_write(monkeypatch, node)
+
+    with pytest.raises(OSError) as caught:
+        node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
+
+    assert caught.value is error
+    assert spy.order == ["write", "alert"]
+    try:
+        checkpoint = persistence.load_latest_checkpoint()
+        assert checkpoint is not None
+        assert checkpoint.node_status["state"] == "halted"
+        assert checkpoint.node_status["halt_reason"] == "manual"
+        assert checkpoint.node_status["error_message"] == "drawdown"
+    finally:
+        persistence.close()
+
+
+class _RaisingPersistence:
+    """A checkpoint store that records the attempt and then fails (R11)."""
+
+    def __init__(self, message: str = "checkpoint store is down") -> None:
+        self.calls = 0
+        self.message = message
+
+    def save_checkpoint(self, checkpoint: object) -> int:
+        self.calls += 1
+        raise RuntimeError(self.message)
+
+
+def test_checkpoint_failure_does_not_replace_the_write_error(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R11: the checkpoint is attempted, fails, is swallowed, and the write's OSError
+    (not the checkpoint's error) still propagates."""
+    node = _node(seeded)
+    persistence = _RaisingPersistence()
+    node._persistence = persistence  # type: ignore[assignment]
+    error, spy = _fail_write(monkeypatch, node)
+
+    with pytest.raises(OSError) as caught:
+        node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
+
+    assert caught.value is error
+    assert persistence.calls == 1
+    assert spy.order == ["write", "alert"]
+
+
+def test_save_checkpoint_now_failure_log_is_class_only(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R12/R8: a failing checkpoint is logged class-only. The helper now always runs
+    under an active write error (the bykze finally), so neither the store's own text nor
+    the write error's text/``__context__`` may print; the write's OSError still wins."""
+    node = _node(seeded)
+    node._persistence = _RaisingPersistence(f"checkpoint store {_LEAK}")  # type: ignore[assignment]
+    error = OSError(f"disk {_LEAK}")
+    spy = _Spy(write_error=error)
+    spy.install(monkeypatch, node)
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(OSError) as caught:
+        node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
+
+    assert caught.value is error
+    assert spy.order == ["write", "alert"]
+    assert "RuntimeError" in caplog.text
+    assert _LEAK not in caplog.text, "neither the store error nor the write error may print"
+    assert "Traceback" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 # ----------------------------------------- R8: _on_order_denied (site 6)

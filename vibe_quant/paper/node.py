@@ -986,8 +986,11 @@ class PaperTradingNode:
                 connected = bool(
                     kernel.data_engine.check_connected() and kernel.exec_engine.check_connected()
                 )
-            except Exception:
-                logger.exception("connectivity check failed")
+            except Exception as exc:
+                # s3pqx: class only - the probe can run while a fetch error (signed URL,
+                # api key) is the active exception, and ``logger.exception`` would print
+                # its ``__context__`` chain. Same rule as _write_then_alert (R1b).
+                logger.error("connectivity check failed (%s)", type(exc).__name__)
                 if self._connected is None:
                     # R42e: a stuck connect can break the probe itself; that is still
                     # "not connected" for the startup timeout.
@@ -1361,41 +1364,47 @@ class PaperTradingNode:
         self._status.halt_reason = reason if state == GuardState.HALTED else None
         self._status.error_message = message
         self._status.updated_at = datetime.now(UTC)
-        if state == GuardState.HALTED and reason is not None:
-            self._write_then_alert(
-                EventType.RISK_CHECK,
-                {
-                    "action": "halt",
-                    "check_type": reason.value,
-                    "reason": reason.value,
-                    "message": message,
-                    "passed": False,
-                    **metrics,
-                },
-                "circuit_breaker",
-                f"HALT ({reason.value}): {message}",
-                critical=True,
-            )
-        else:
-            payload: dict[str, object] = {
-                "action": "state_change",
-                "from_state": prev.value,
-                "to_state": self._status.state.value,
-                "message": message,
-            }
-            # oledr/k8oei: only the RESUMED branch alerts today, so only it goes
-            # through the helper; a plain state change still writes without alerting.
-            if prev == NodeState.HALTED and state == GuardState.RUNNING:
+        try:
+            if state == GuardState.HALTED and reason is not None:
                 self._write_then_alert(
-                    EventType.SIGNAL,
-                    payload,
+                    EventType.RISK_CHECK,
+                    {
+                        "action": "halt",
+                        "check_type": reason.value,
+                        "reason": reason.value,
+                        "message": message,
+                        "passed": False,
+                        **metrics,
+                    },
                     "circuit_breaker",
-                    f"RESUMED: {message}",
+                    f"HALT ({reason.value}): {message}",
                     critical=True,
                 )
             else:
-                self._write_event(EventType.SIGNAL, payload)
-        self._save_checkpoint_now()
+                payload: dict[str, object] = {
+                    "action": "state_change",
+                    "from_state": prev.value,
+                    "to_state": self._status.state.value,
+                    "message": message,
+                }
+                # oledr/k8oei: only the RESUMED branch alerts today, so only it goes
+                # through the helper; a plain state change still writes without alerting.
+                if prev == NodeState.HALTED and state == GuardState.RUNNING:
+                    self._write_then_alert(
+                        EventType.SIGNAL,
+                        payload,
+                        "circuit_breaker",
+                        f"RESUMED: {message}",
+                        critical=True,
+                    )
+                else:
+                    self._write_event(EventType.SIGNAL, payload)
+        finally:
+            # bykze: the transition is checkpointed even when the event write raises. The
+            # status was updated above, so the checkpoint carries the new state/the halt
+            # reason and a disk-full writer cannot cost the restart its halt. The helper
+            # swallows its own failure, so it never masks the write's error.
+            self._save_checkpoint_now()
 
     def _on_order_rejected(self, event: Any) -> None:
         self._write_event(
@@ -1691,8 +1700,12 @@ class PaperTradingNode:
             return
         try:
             self._persistence.save_checkpoint(self._capture_checkpoint())
-        except Exception:
-            logger.exception("immediate checkpoint failed")
+        except Exception as exc:
+            # s3pqx: class only - this now always runs in a finally after a failed
+            # guard-transition write (bykze), so an active exception is present and
+            # ``logger.exception`` would print that error and its ``__context__`` chain
+            # next to this one. Same rule as _check_connectivity / _write_then_alert.
+            logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
 
     def _restore_from_checkpoint(self) -> None:
         """Load the latest checkpoint for this trader_id (restart / /restore).
