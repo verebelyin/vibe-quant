@@ -10,6 +10,7 @@ from vibe_quant.api.schemas._validators import KNOWN_TIMEFRAMES, check_date_rang
 from vibe_quant.api.schemas.finite import reject_non_finite
 from vibe_quant.balance_settings import BalanceConfigError, parse_initial_balance
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, SizingSettings
 
 
 class BacktestLaunchRequest(BaseModel):
@@ -87,6 +88,30 @@ class BacktestLaunchRequest(BaseModel):
             parse_initial_balance(self.parameters)
         except BalanceConfigError as exc:
             raise ValueError(f"parameters.initial_balance: {exc}") from exc
+        # Both sizing settings go through the ONE shared rule
+        # (vibe-quant-2gyk1.2): a string, a bool, an explicit null or an
+        # out-of-range number used to launch a run that sized at the default,
+        # and a cap above the run's margin leverage would be unmarginable.
+        # Checked in EVERY mode, before any run row exists; the resolved
+        # leverage is the run's own `parameters.leverage` (10.0 by default).
+        try:
+            SizingSettings.from_params(self.parameters).check_leverage(
+                LiquidationSettings.from_params(self.parameters).leverage
+            )
+        except SizingConfigError as exc:
+            raise ValueError(f"parameters: {exc}") from exc
+        # `parameters.sweep` is a free dict of strategy parameters: a sizing key
+        # there would size every sweep row differently and is not a strategy
+        # field at all, so refuse it here as well as at run time (S14).
+        sweep = self.parameters.get("sweep")
+        if isinstance(sweep, dict):
+            for key in SIZING_FIELDS:
+                if key in sweep:
+                    msg = (
+                        f"parameters.sweep: {key} is a run-level sizing setting "
+                        f"(parameters.{key}), not a sweep parameter"
+                    )
+                    raise ValueError(msg)
         return self
 
 

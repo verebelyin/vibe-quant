@@ -27,6 +27,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.utils import log_dir
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,19 @@ def _ensure_strategy(state: StateManager, strategy_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
 
+def _stored_parameters(parameters: dict[str, object]) -> dict[str, object]:
+    """A run's parameters with the sizing keys it did not move off the default stripped.
+
+    The request model has already validated both settings against the ONE shared rule
+    (vibe-quant-2gyk1.2 S5), so re-writing them through ``to_params()`` only keeps a
+    non-default value (as a float) and drops an explicit default — an explicit-default
+    launch then stores byte-identically to a default launch (S2b).
+    """
+    stored = {key: value for key, value in parameters.items() if key not in SIZING_FIELDS}
+    stored.update(SizingSettings.from_params(parameters).to_params())
+    return stored
+
+
 # --- Launch endpoints ---
 
 
@@ -124,7 +138,8 @@ async def launch_screening(
         )
     # The fee schedule is venue-level. Store bnb_discount only when set, so
     # default runs' stored parameters are unchanged.
-    parameters = dict(body.parameters)
+    # Sizing keys are stored only when they moved off the shared default (S2b).
+    parameters = _stored_parameters(body.parameters)
     if body.bnb_discount:
         parameters["bnb_discount"] = True
     # Run-level liquidation mode, stored only when on so default runs' stored
@@ -206,7 +221,8 @@ async def launch_validation(
         )
     # The fee schedule is venue-level. Store bnb_discount only when set, so
     # default runs' stored parameters are unchanged.
-    parameters = dict(body.parameters)
+    # Sizing keys are stored only when they moved off the shared default (S2b).
+    parameters = _stored_parameters(body.parameters)
     if body.bnb_discount:
         parameters["bnb_discount"] = True
     # Run-level liquidation mode, stored only when on so default runs' stored
