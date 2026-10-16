@@ -27,6 +27,7 @@ from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationS
 from vibe_quant.logging.events import EventType, create_event
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.metrics import profit_factor
+from vibe_quant.sizing_settings import SizingConfigError, SizingSettings, recorded_sizing
 from vibe_quant.utils import log_dir
 from vibe_quant.validation.funding import FundingCalculator
 from vibe_quant.validation.latency import LatencyPreset
@@ -398,6 +399,15 @@ class ValidationRunner:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
             raise
 
+        # The run's sizing settings are validated once, right after the liquidation
+        # settings: a stored cap/risk the strategy could not honour, or a cap the
+        # margin leverage cannot cover, fails the run before it reaches "running".
+        try:
+            sizing = self._resolve_sizing(run_config, liquidation_settings)
+        except ValidationRunnerError as exc:
+            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
+            raise
+
         # Resolve fill-resolution detail data and clamp the run window to the
         # data actually available (bd vibe-quant-e70tl.13). Missing detail data
         # fails the run instead of silently degrading to strategy-TF fills.
@@ -517,7 +527,12 @@ class ValidationRunner:
                 }
             self._store_results(run_id, result)
             consistency = self._check_screening_consistency(
-                run_id, strategy_id, strategy_name, result, run_config=run_config
+                run_id,
+                strategy_id,
+                strategy_name,
+                result,
+                run_config=run_config,
+                sizing=sizing,
             )
             if consistency is not None:
                 result.notes["consistency"] = consistency
@@ -615,6 +630,14 @@ class ValidationRunner:
         # Parsed ONCE per run: the venue config and every window's extraction reuse it.
         try:
             liquidation_settings = self._resolve_liquidation_mode(run_config)
+        except ValidationRunnerError as exc:
+            self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
+            raise
+
+        # The same sizing gate as ``run``: it only has to pass once for the whole run,
+        # before any window's engine starts (no per-window reference check needs it).
+        try:
+            self._resolve_sizing(run_config, liquidation_settings)
         except ValidationRunnerError as exc:
             self._state.update_backtest_run_status(run_id, "failed", error_message=str(exc))
             raise
@@ -1615,6 +1638,29 @@ class ValidationRunner:
         except LiquidationConfigError as exc:
             raise ValidationRunnerError(str(exc)) from exc
 
+    def _resolve_sizing(
+        self, run_config: dict[str, object], liquidation_settings: LiquidationSettings
+    ) -> SizingSettings:
+        """The run's validated :class:`~vibe_quant.sizing_settings.SizingSettings`.
+
+        Parsed through the shared rule (one rule with screening and discovery): a missing
+        key is its default and an explicit ``None`` / garbage value is rejected, so a run
+        that stored a sizing it could not honour fails instead of quietly running a
+        different one. The cap is also checked against the run's margin leverage (S13) —
+        the same leverage the venue gets, in every liquidation mode.
+
+        Raises:
+            ValidationRunnerError: For an invalid sizing value, or a cap above the leverage.
+        """
+        raw_params = run_config.get("parameters")
+        params = raw_params if isinstance(raw_params, dict) else {}
+        try:
+            sizing = SizingSettings.from_params(params)
+            sizing.check_leverage(liquidation_settings.leverage)
+        except SizingConfigError as exc:
+            raise ValidationRunnerError(str(exc)) from exc
+        return sizing
+
     def _build_strategy_params(self, run_config: dict[str, object]) -> dict[str, object]:
         """Extract strategy parameter overrides from run config.
 
@@ -1908,6 +1954,7 @@ class ValidationRunner:
         strategy_name: str,
         result: ValidationResult,
         run_config: dict[str, object] | None = None,
+        sizing: SizingSettings | None = None,
     ) -> dict[str, object] | None:
         """Flag overfit promotions: validation collapsing vs screening.
 
@@ -1916,6 +1963,9 @@ class ValidationRunner:
         finite-Sharpe row with trades, else the discovery champion's
         full-range metrics) and returns the report for the result notes when
         flagged (vibe-quant-o11tp). Best-effort — never fails the run.
+
+        Only a reference at the same sizing is comparable (S29): the same strategy run at a
+        different exposure cap is a different policy, not an overfit/underfit signal.
         """
         from vibe_quant.validation.consistency import (
             assess_consistency,
@@ -1926,6 +1976,12 @@ class ValidationRunner:
             cfg = run_config or {}
             start, end = cfg.get("start_date"), cfg.get("end_date")
             val_window = (str(start), str(end)) if start and end else None
+            params = cfg.get("parameters")
+            val_sizing = (
+                sizing.to_params()
+                if sizing is not None
+                else recorded_sizing(params if isinstance(params, dict) else {}).to_params()
+            )
             reference = find_screening_reference(
                 self._state,
                 strategy_id,
@@ -1933,6 +1989,7 @@ class ValidationRunner:
                 validated_params=self._build_strategy_params(cfg),
                 val_window=val_window,
                 val_symbols=[str(x) for x in syms] if isinstance(syms := cfg.get("symbols"), list) else None,
+                val_sizing=val_sizing,
             )
             if reference is None:
                 return None

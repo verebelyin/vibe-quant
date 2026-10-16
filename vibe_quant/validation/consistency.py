@@ -29,8 +29,11 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from vibe_quant.dsl.identity import dsl_body_key
+from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, recorded_sizing
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from vibe_quant.db.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
@@ -178,10 +181,38 @@ def assess_consistency(
     return report
 
 
-# Run-level launch knobs stored next to strategy params in run parameters
+# Run-level launch knobs stored next to strategy params in run parameters.
+# The sizing settings are run-level too: they never appear in a sweep row, so leaving them
+# in a validation run's params would stop the exact-row match from ever succeeding (S28).
 _NON_STRATEGY_PARAM_KEYS = frozenset(
-    {"sweep", "overfitting_filters", "initial_balance", "leverage", "detail_timeframe"}
+    {
+        "sweep",
+        "overfitting_filters",
+        "initial_balance",
+        "leverage",
+        "detail_timeframe",
+        *SIZING_FIELDS,
+    }
 )
+
+
+def _discovery_recorded_sizing(payload: Mapping[str, object]) -> dict[str, float] | None:
+    """The sizing a discovery run recorded, or None when it is unreadable (S29c/S29d).
+
+    A run whose notes carry no ``sizing`` key at all was launched at the defaults
+    (``{}``). A run whose ``sizing`` key is PRESENT but not an object (``null``, a list,
+    a string, a number) or holds an invalid value is unreadable: it must be skipped rather
+    than compared at the defaults, consistent with discovery's own promote/replay rule (S23b).
+    """
+    if "sizing" not in payload:
+        return {}
+    raw = payload["sizing"]
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return recorded_sizing(raw).to_params()
+    except SizingConfigError:
+        return None
 
 
 def _normalize_params(params: object) -> dict[str, float | str] | None:
@@ -214,6 +245,7 @@ def find_screening_reference(
     validated_params: dict[str, object] | None = None,
     val_window: tuple[str, str] | None = None,
     val_symbols: list[str] | None = None,
+    val_sizing: Mapping[str, float] | None = None,
 ) -> ScreeningReference | None:
     """Locate screening-tier metrics for a strategy, if any exist.
 
@@ -228,9 +260,13 @@ def find_screening_reference(
             ``val_window`` it restricts the reference to a screening run over
             the same window and symbol set — a Sharpe from another window or
             portfolio is not a like-for-like reference.
+        val_sizing: The validation run's sizing params (``to_params()`` of its
+            settings). A reference must have recorded the same sizing: the same
+            strategy at a different exposure cap is a different policy. ``None``
+            means no sizing filter at all.
     """
     run_row = state.get_latest_screening_run_with_sweeps(
-        strategy_id, window=val_window, symbols=val_symbols
+        strategy_id, window=val_window, symbols=val_symbols, sizing=val_sizing
     )
     if run_row is not None:
         rows = state.list_sweep_reference_rows(run_row[0])
@@ -260,7 +296,7 @@ def find_screening_reference(
             )
 
     return _reference_from_discovery_notes(
-        state, strategy_name, val_window, _strategy_dsl(state, strategy_id)
+        state, strategy_name, val_window, _strategy_dsl(state, strategy_id), val_sizing
     )
 
 
@@ -280,6 +316,7 @@ def _reference_from_discovery_notes(
     strategy_name: str,
     val_window: tuple[str, str] | None = None,
     strategy_dsl: dict[str, object] | None = None,
+    val_sizing: Mapping[str, float] | None = None,
 ) -> ScreeningReference | None:
     """Match a discovery-exported strategy back to its champion metrics.
 
@@ -287,9 +324,11 @@ def _reference_from_discovery_notes(
     strategy (``genome_x_2``), so when the validated strategy's DSL is known the
     champion is matched purely by DSL body (name ignored). With no DSL, falls
     back to name equality. Runs are scanned newest-first with no cutoff; the
-    first match wins.
+    first match wins. ``val_sizing`` skips a run whose ``notes.sizing`` is a
+    different (or unreadable) sizing, like the screening-run lookup does.
     """
     wanted_body = dsl_body_key(strategy_dsl) if strategy_dsl else None
+    wanted_sizing = None if val_sizing is None else dict(val_sizing)
     notes_like = (
         None if wanted_body is not None else f'%{strategy_name.removeprefix("genome_")}%'
     )
@@ -303,6 +342,10 @@ def _reference_from_discovery_notes(
             continue
         strategies = payload.get("top_strategies")
         if not isinstance(strategies, list):
+            continue
+        if wanted_sizing is not None and (
+            _discovery_recorded_sizing(payload) != wanted_sizing
+        ):
             continue
         for entry in strategies:
             if not isinstance(entry, dict):

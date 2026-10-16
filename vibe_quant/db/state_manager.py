@@ -9,10 +9,32 @@ from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
 from vibe_quant.db.schema import init_schema
+from vibe_quant.sizing_settings import SizingConfigError, recorded_sizing
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
+
+
+def _recorded_sizing_params(parameters_json: object) -> dict[str, float] | None:
+    """The sizing params a run recorded, or None when the stored column is unreadable.
+
+    A run that recorded no sizing key reads as the defaults (``{}``). A column that is not
+    valid JSON, is not an object, or holds an invalid sizing value is unreadable: callers
+    must skip that run rather than compare it at the defaults (vibe-quant-2gyk1.2 S29c).
+    """
+    raw = parameters_json
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return recorded_sizing(raw).to_params()
+    except SizingConfigError:
+        return None
 
 
 class DuplicateResearchItem(Exception):
@@ -789,18 +811,22 @@ class StateManager:
         *,
         window: tuple[str, str] | None = None,
         symbols: list[str] | None = None,
+        sizing: Mapping[str, float] | None = None,
     ) -> tuple[int, str, str] | None:
         """Newest completed screening run of a strategy that has sweep rows.
 
         ``window`` / ``symbols`` (order-insensitive), when given, restrict it to
-        runs over exactly that date range / symbol set.
+        runs over exactly that date range / symbol set. ``sizing`` restricts it to runs
+        whose recorded sizing params equal it (``to_params()`` of the run's settings);
+        a run whose stored sizing is unreadable is skipped, never a reason to raise.
 
         Returns ``(id, start_date, end_date)`` or None.
         """
         with self._write_lock:
             rows = self.conn.execute(
                 """
-                SELECT br.id, br.start_date, br.end_date, br.symbols FROM backtest_runs br
+                SELECT br.id, br.start_date, br.end_date, br.symbols, br.parameters
+                FROM backtest_runs br
                 WHERE br.strategy_id = ? AND br.run_mode = 'screening'
                       AND br.status = 'completed'
                       AND EXISTS (SELECT 1 FROM sweep_results sr WHERE sr.run_id = br.id)
@@ -808,10 +834,15 @@ class StateManager:
                 """,
                 (strategy_id,),
             ).fetchall()
-        for run_id, start, end, run_symbols in rows:
+        wanted_sizing = None if sizing is None else dict(sizing)
+        for run_id, start, end, run_symbols, run_parameters in rows:
             if window is not None and (start, end) != tuple(window):
                 continue
             if symbols is not None and sorted(json.loads(run_symbols or "[]")) != sorted(symbols):
+                continue
+            if wanted_sizing is not None and (
+                _recorded_sizing_params(run_parameters) != wanted_sizing
+            ):
                 continue
             return (run_id, start, end)
         return None
