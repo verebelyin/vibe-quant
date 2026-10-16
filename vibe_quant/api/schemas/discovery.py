@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from vibe_quant.api.schemas.finite import reject_non_finite
 from vibe_quant.liquidation_settings import (
@@ -13,6 +21,7 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
     resolve_leverage,
 )
+from vibe_quant.sizing_settings import SizingSettings
 
 
 class DiscoveryLaunchRequest(BaseModel):
@@ -72,6 +81,14 @@ class DiscoveryLaunchRequest(BaseModel):
     leverage: float | None = None
     # Deprecated alias for ``leverage``; the two must agree (A2).
     liquidation_leverage: float | None = None
+    # Run-level sizing for every screening backtest of this discovery (bead
+    # vibe-quant-2gyk1.2): the exposure cap (equity fractions, (0, 125]) and the
+    # risk budget per trade ((0, 0.5]). Omitted = the run default (0.5 / 0.02);
+    # an explicit null is a 422, never a silent default. Forwarded and stored
+    # only when not the default, so a default launch keeps its stored params and
+    # argv unchanged (S27).
+    max_position_pct: float | None = None
+    risk_per_trade: float | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -101,6 +118,20 @@ class DiscoveryLaunchRequest(BaseModel):
     def _validate_leverage(cls, value: Any) -> float:
         """One parse rule for the value: the shared ``LiquidationSettings`` check."""
         return LiquidationSettings(mode="off", leverage=value).leverage
+
+    @field_validator("max_position_pct", "risk_per_trade", mode="before")
+    @classmethod
+    def _validate_sizing(cls, value: Any, info: ValidationInfo) -> float:
+        """One parse rule per sizing field: the shared ``SizingSettings`` check.
+
+        A field validator (not a model before-validator) on purpose: an explicit ``null``
+        is a 422 whose error sits on its OWN field, so an independently bad leverage is
+        still reported alongside it (S27b). An omitted field never reaches here and keeps
+        its ``None`` default, i.e. the run's default (S1).
+        """
+        if info.field_name == "max_position_pct":
+            return SizingSettings(max_position_pct=value).max_position_pct
+        return SizingSettings(risk_per_trade=value).risk_per_trade
 
     @field_validator("entry_order")
     @classmethod
@@ -135,10 +166,31 @@ class DiscoveryLaunchRequest(BaseModel):
             self.leverage = cast("float", resolved)
         return self
 
+    # Declared AFTER ``_resolve_leverage_alias`` on purpose: model after-validators run in
+    # declaration order, so the leverage alias is resolved before the cap is compared to it.
+    @model_validator(mode="after")
+    def _check_sizing_leverage(self) -> DiscoveryLaunchRequest:
+        """S13/S27: a cap above the run's margin leverage would be unmarginable (422)."""
+        self.sizing_settings().check_leverage(self.liquidation_settings().leverage)
+        return self
+
     def liquidation_settings(self) -> LiquidationSettings:
         """The run's validated settings (the launch router's single source)."""
         leverage = self.leverage if self.leverage is not None else DEFAULT_LEVERAGE
         return LiquidationSettings(mode=self.liquidation_mode, leverage=leverage)
+
+    def sizing_settings(self) -> SizingSettings:
+        """The run's validated sizing (the launch router's single source).
+
+        An omitted field means its default; only the fields explicitly supplied are
+        read, so ``SizingSettings().to_params()`` stays empty for a default launch.
+        """
+        params: dict[str, float] = {}
+        if self.max_position_pct is not None:
+            params["max_position_pct"] = self.max_position_pct
+        if self.risk_per_trade is not None:
+            params["risk_per_trade"] = self.risk_per_trade
+        return SizingSettings.from_params(params)
 
 
 class DiscoveryJobResponse(BaseModel):

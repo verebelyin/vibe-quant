@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.liquidation_settings import LiquidationSettings
+from vibe_quant.sizing_settings import SizingSettings
 
 if TYPE_CHECKING:
     from vibe_quant.data.fill_ticks import FillTickSet
@@ -128,6 +129,7 @@ class NTBacktestFn:
         fee_schedule: FeeSchedule | None = None,
         entry_order: str = "market",
         liquidation: LiquidationSettings = _LIQUIDATION_OFF,
+        sizing: SizingSettings | None = None,
     ) -> None:
         from vibe_quant.fees import FeeSchedule
         from vibe_quant.screening.nt_runner import refuse_non_market_entry
@@ -152,6 +154,12 @@ class NTBacktestFn:
         # train GA and every holdout/cross-window/WFA factory agree. Default is
         # off, which keeps every pre-existing number byte-identical.
         self.liquidation = liquidation
+        # Run-level sizing settings (bead vibe-quant-2gyk1.2): the same
+        # SizingSettings reaches every runner this callable builds, so the train
+        # GA and every holdout/cross-window/WFA factory agree. None = the
+        # defaults, which add no key and keep every pre-existing number
+        # byte-identical.
+        self.sizing = SizingSettings() if sizing is None else sizing
 
     def _make_runner(
         self,
@@ -178,6 +186,7 @@ class NTBacktestFn:
             entry_order=self.entry_order,
             liquidation_mode=self.liquidation.mode,
             leverage=self.liquidation.leverage,
+            sizing=self.sizing,
         )
 
     def _run_single(

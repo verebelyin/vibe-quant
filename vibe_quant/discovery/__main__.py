@@ -28,6 +28,7 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
     resolve_leverage,
 )
+from vibe_quant.sizing_settings import SizingSettings
 from vibe_quant.utils import compute_day_count, log_dir
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ def _make_nt_backtest_fn(
     fee_schedule: FeeSchedule,
     entry_order: str,
     liquidation: LiquidationSettings,
+    sizing: SizingSettings | None = None,
 ) -> NTBacktestFn:
     """Create a picklable backtest function using real NautilusTrader screening runner.
 
@@ -100,11 +102,16 @@ def _make_nt_backtest_fn(
     defaults) so a new call site cannot silently run at VIP0/10x while the
     rest of the run is on BNB or at the run's liquidation settings
     (bd vibe-quant-2gyk1.4, vibe-quant-2gyk1.1.9).
+
+    ``sizing`` (bead vibe-quant-2gyk1.2) is the run's parsed
+    :class:`~vibe_quant.sizing_settings.SizingSettings`. Every call site in
+    ``main`` passes it; ``None`` means the defaults, which add no key and keep
+    every pre-existing number byte-identical.
     """
     return NTBacktestFn(
         symbols, timeframe, start_date, end_date, windows=windows, min_trades=min_trades,
         symbol_agg=symbol_agg, fee_schedule=fee_schedule, entry_order=entry_order,
-        liquidation=liquidation,
+        liquidation=liquidation, sizing=sizing,
     )
 
 
@@ -617,6 +624,7 @@ def _run_provenance_notes(
     fee_schedule: FeeSchedule | None = None,
     prior_run_ids: list[int] | None = None,
     liquidation: LiquidationSettings | None = None,
+    sizing: SizingSettings | None = None,
 ) -> dict[str, object]:
     """Run-level notes shared by the champion and zero-champion outcomes."""
     schedule = fee_schedule if fee_schedule is not None else FeeSchedule()
@@ -666,6 +674,14 @@ def _run_provenance_notes(
     # the mode is off, so existing runs stay unchanged (R4).
     if liquidation_notes is not None:
         notes["liquidation"] = liquidation_notes
+    # Run-level sizing settings (bead vibe-quant-2gyk1.2): the settings every
+    # screening backtest of this run used, recorded so promote/replay inherit
+    # them. Only the keys moved off the default are written -- a default run
+    # adds no key and its notes stay byte-identical to today (S23c).
+    if sizing is not None:
+        sizing_params = sizing.to_params()
+        if sizing_params:
+            notes["sizing"] = sizing_params
     # A non-default venue leverage is recorded so promote/replay inherit it
     # (bead vibe-quant-6wq6w). Only a mode-OFF run needs the top-level key: a
     # mode-on run already carries its leverage in notes.liquidation, and an
@@ -1018,6 +1034,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deprecated alias for --leverage (given both, they must agree).",
     )
     parser.add_argument(
+        "--max-position-pct",
+        type=float,
+        default=None,
+        help="Exposure cap for every screening backtest of this run, in equity "
+        "fractions (a number in (0, 125]; default: 0.5). Only a non-default "
+        "value is recorded in notes.sizing (the API launch also stores it in the "
+        "run parameters).",
+    )
+    parser.add_argument(
+        "--risk-per-trade",
+        type=float,
+        default=None,
+        help="Risk budget per trade for every screening backtest of this run, in "
+        "equity fractions (more than 0 and at most 0.5; default: 0.02). Only a "
+        "non-default value is recorded in notes.sizing (the API launch also stores "
+        "it in the run parameters).",
+    )
+    parser.add_argument(
         "--immigrant-fraction",
         type=float,
         default=0.15,
@@ -1141,6 +1175,24 @@ def main() -> int:
         )
         logger.info("Discovery liquidation settings: %s", liquidation.to_notes())
 
+        # Run-level sizing settings (bead vibe-quant-2gyk1.2): parsed and checked
+        # against the resolved leverage BEFORE plan_from_args, so a corrupt or
+        # unmarginable cap fails the run with its message rather than a silent
+        # default. An omitted flag means the default; the keys are stored only
+        # when non-default (SIP -> notes.sizing).
+        sizing = SizingSettings.from_params(
+            {
+                key: value
+                for key, value in (
+                    ("max_position_pct", args.max_position_pct),
+                    ("risk_per_trade", args.risk_per_trade),
+                )
+                if value is not None
+            }
+        )
+        sizing.check_leverage(cast("float", resolved_leverage))
+        logger.info("Discovery sizing settings: %s", sizing)
+
         # Train/test split + eval/cross/WFA windows: one shared check (the API
         # runs the same plan_from_args before creating a run row).
         plan = plan_from_args(args)
@@ -1256,6 +1308,7 @@ def main() -> int:
                 fee_schedule=fee_schedule,
                 entry_order=entry_order,
                 liquidation=liquidation,
+                sizing=sizing,
             )
 
         # Create holdout backtest function if train/test split enabled
@@ -1273,6 +1326,7 @@ def main() -> int:
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=liquidation,
+                    sizing=sizing,
                 )
         elif split_ratio <= 0:
             logger.warning(
@@ -1292,11 +1346,12 @@ def main() -> int:
                 _fee = fee_schedule
                 _entry = entry_order
                 _liq = liquidation
+                _sz = sizing
 
                 def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
                     return NTBacktestFn(
                         _syms, _tf, s, e, symbol_agg=_agg, fee_schedule=_fee,
-                        entry_order=_entry, liquidation=_liq,
+                        entry_order=_entry, liquidation=_liq, sizing=_sz,
                     )
 
         # Load seed chromosomes from prior run if requested
@@ -1374,6 +1429,7 @@ def main() -> int:
             fee_schedule=fee_schedule,
             prior_run_ids=prior_run_ids,
             liquidation=liquidation,
+            sizing=sizing,
         )
 
         if not result.top_strategies:
@@ -1456,6 +1512,7 @@ def main() -> int:
                 fee_schedule=fee_schedule,
                 entry_order=entry_order,
                 liquidation=liquidation,
+                sizing=sizing,
             )
             if needs_full_range
             else None
@@ -1533,6 +1590,7 @@ def main() -> int:
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=liquidation,
+                    sizing=sizing,
                 )(best_chrom)
                 train_return = float(train_metrics.get("total_return", 0.0))
             else:

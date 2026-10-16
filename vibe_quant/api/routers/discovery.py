@@ -215,6 +215,44 @@ def _inherited_liquidation_params(state: StateManager, run_id: int) -> dict[str,
     return settings.to_params()
 
 
+def _inherited_sizing_params(state: StateManager, run_id: int) -> dict[str, float]:
+    """Sizing run parameters for a child of discovery run ``run_id`` (S23-S23d).
+
+    The parent's ``notes.sizing`` is authoritative: a promoted or replayed child must
+    be sized exactly as the champion was found. A run that predates the key (no
+    ``sizing`` key in its notes) ran at the defaults, so the child gets no sizing keys
+    (S23c). A present-but-unreadable value — null, not an object, an invalid number, or a
+    cap the child's inherited leverage cannot cover — fails closed (409) instead of
+    silently reverting to the default (S23b/S23d).
+
+    Returns:
+        ``SizingSettings.to_params()`` of the parent (``{}`` when the parent ran at
+        the defaults).
+    """
+    from vibe_quant.liquidation_settings import DEFAULT_LEVERAGE
+    from vibe_quant.sizing_settings import SizingSettings
+
+    payload = _load_discovery_payload(state, run_id)
+    if "sizing" not in payload:
+        return {}
+    raw = payload["sizing"]  # present: null / non-object / invalid fails closed below
+    try:
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected an object, got {raw!r}")
+        settings = SizingSettings.from_params(raw)
+        # The child runs at the parent's inherited leverage; a cap above it would
+        # be unmarginable (S13/S23d). Resolved here from the same notes the child's
+        # liquidation params come from.
+        leverage = _inherited_liquidation_params(state, run_id).get("leverage", DEFAULT_LEVERAGE)
+        settings.check_leverage(float(leverage))  # type: ignore[arg-type]
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"discovery run {run_id} has an unreadable notes.sizing: {exc}",
+        ) from exc
+    return settings.to_params()
+
+
 def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
     """Reject warm-start when the seed run's compiler hash != current."""
     from vibe_quant.dsl.compiler import compiler_version_hash
@@ -381,6 +419,13 @@ def _discovery_cli_args(
         command.extend(["--liquidation-mode", settings.mode])
     if "leverage" in settings.to_params():
         command.extend(["--leverage", str(settings.leverage)])
+    # Run-level sizing is forwarded only when it is not the default, so a default
+    # launch keeps its argv byte-identical to today (bead vibe-quant-2gyk1.2, S27).
+    sizing_params = body.sizing_settings().to_params()
+    if "max_position_pct" in sizing_params:
+        command.extend(["--max-position-pct", str(sizing_params["max_position_pct"])])
+    if "risk_per_trade" in sizing_params:
+        command.extend(["--risk-per-trade", str(sizing_params["risk_per_trade"])])
     return command
 
 
@@ -463,6 +508,10 @@ async def launch_discovery(
     # at a non-default L, {"liquidation_mode", "leverage"} when on (C6/C8/C9).
     # The stored parameters carry the settings for promote/replay inheritance.
     params.update(settings.to_params())
+    # Run-level sizing (bead vibe-quant-2gyk1.2): recorded so promote/replay
+    # inherit the set the champion was found under. Only the keys moved off the
+    # default are stored, so a default launch keeps its parameters unchanged (S27).
+    params.update(body.sizing_settings().to_params())
 
     timeframe = body.timeframes[0] if body.timeframes else "4h"
     today = datetime.now()
@@ -1015,6 +1064,9 @@ async def promote_discovered_strategy(
     # leaking a strategies row (vibe-quant-dtj5h).
     fee_params, fee_source = _inherited_fee_params(state, run_id)
     liquidation_params = _inherited_liquidation_params(state, run_id)
+    # Sizing is resolved BEFORE the strategy row (S23b/S23d: an unreadable
+    # notes.sizing is a 409 with no strategies/backtest_runs row created).
+    sizing_params = _inherited_sizing_params(state, run_id)
 
     # Export genome to strategies table (matched by DSL content, not name)
     import json
@@ -1054,6 +1106,7 @@ async def promote_discovered_strategy(
         },
         **fee_params,
         **liquidation_params,
+        **sizing_params,
     }
     backtest_run_id = state.create_backtest_run(
         strategy_id=strategy_id,
@@ -1162,6 +1215,9 @@ async def replay_discovered_strategy(
 
     fee_params, fee_source = _inherited_fee_params(state, run_id)
     liquidation_params = _inherited_liquidation_params(state, run_id)
+    # Sizing is resolved BEFORE the run row: an unreadable notes.sizing is a 409
+    # with no backtest_runs row created (S23b/S23d).
+    sizing_params = _inherited_sizing_params(state, run_id)
     replay_run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="screening",
@@ -1175,6 +1231,7 @@ async def replay_discovered_strategy(
             "fee_schedule_source": fee_source,
             **fee_params,
             **liquidation_params,
+            **sizing_params,
         },
     )
 
