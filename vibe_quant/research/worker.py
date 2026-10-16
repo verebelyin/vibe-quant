@@ -46,6 +46,14 @@ DEFAULT_SWEEP_INTERVAL_S: float = 60.0
 # How often a job's watcher thread polls its row for `cancel_requested_at`.
 # Cheap SELECT; 1 s keeps the UI's 5 s cancel-confirm window comfortable.
 DEFAULT_CANCEL_POLL_INTERVAL_S: float = 1.0
+# How long ``_HeartbeatThread.stop()`` waits for the thread to exit after it sets
+# the stop event. The thread's longest blocking step is one heartbeat or cancel
+# DB call and the StateManager connection carries a 5 s ``busy_timeout``, so a
+# call can block ~5 s before the loop even notices the stop event; the bound must
+# exceed both that and the cancel poll interval (1 s). Joining (instead of only
+# setting the event) keeps the sqlite3 connection from being closed under a live
+# step -- vibe-quant-2qgd6: a leaked daemon racing close() derefs the module.
+HEARTBEAT_STOP_JOIN_TIMEOUT_S: float = 6.0
 MAX_CONCURRENCY: int = 4
 
 
@@ -90,7 +98,25 @@ class _HeartbeatThread(threading.Thread):
         self._cancel_seen = False
 
     def stop(self) -> None:
+        """Signal the thread to exit and wait (bounded) for it to finish.
+
+        The stop event is set unconditionally, so ``stop()`` before ``start()``
+        and a second ``stop()`` are both safe. The join runs only for a live
+        thread and never for the calling thread itself (a thread cannot join
+        itself), and it is bounded by ``HEARTBEAT_STOP_JOIN_TIMEOUT_S`` so a
+        thread stuck inside a blocking heartbeat call cannot hang the caller:
+        still alive after the timeout -> one ``logger.warning``, no raise.
+        """
         self._stop.set()
+        if not self.is_alive() or self is threading.current_thread():
+            return
+        self.join(timeout=HEARTBEAT_STOP_JOIN_TIMEOUT_S)
+        if self.is_alive():
+            logger.warning(
+                "heartbeat thread for job %s still alive %.1fs after stop()",
+                self._job_id,
+                HEARTBEAT_STOP_JOIN_TIMEOUT_S,
+            )
 
     def run(self) -> None:
         last_beat = time.monotonic()

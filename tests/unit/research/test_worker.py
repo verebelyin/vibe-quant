@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -522,3 +523,95 @@ def test_cli_concurrency_validation(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Keep a strict reference so we don't accidentally test something else.
     _ = argparse
+
+
+# ---------- vibe-quant-vos5u: _HeartbeatThread.stop() joins its thread ----------
+
+
+class _SleepyHeartbeatSM:
+    """StateManager stand-in whose heartbeat call blocks, making the join real."""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+        self.beats = 0
+        self.entered = threading.Event()
+
+    def heartbeat_extraction_job(self, job_id: int) -> bool:
+        self.beats += 1
+        self.entered.set()
+        time.sleep(self._delay)  # a real heartbeat call can block ~5 s (busy_timeout)
+        return True
+
+    def extraction_job_cancel_requested(self, job_id: int) -> bool:
+        return False
+
+
+def _heartbeat(sm: _SleepyHeartbeatSM, job_id: int) -> worker_mod._HeartbeatThread:
+    return worker_mod._HeartbeatThread(  # type: ignore[arg-type]
+        sm, job_id, interval=0.0, cancel_poll_interval=0.01
+    )
+
+
+def test_heartbeat_stop_joins_a_thread_blocked_in_a_heartbeat_call() -> None:
+    """H1: stop() must not return while the thread is still inside a heartbeat."""
+    sm = _SleepyHeartbeatSM(delay=0.4)
+    hb = _heartbeat(sm, 1)
+    hb.start()
+    assert sm.entered.wait(timeout=2.0), "heartbeat call never started"
+
+    hb.stop()
+
+    assert not hb.is_alive()  # pre-fix stop() returned while the thread still slept
+
+
+def test_heartbeat_stop_warns_once_when_the_thread_outlasts_the_timeout(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """H1: a thread still blocked past the bounded timeout logs once, never raises."""
+    monkeypatch.setattr(worker_mod, "HEARTBEAT_STOP_JOIN_TIMEOUT_S", 0.05)
+    sm = _SleepyHeartbeatSM(delay=0.5)
+    hb = _heartbeat(sm, 7)
+    hb.start()
+    assert sm.entered.wait(timeout=2.0), "heartbeat call never started"
+
+    with caplog.at_level(logging.WARNING):
+        hb.stop()
+
+    assert hb.is_alive()  # still inside the 0.5 s heartbeat, longer than the bound
+    warnings = [r for r in caplog.records if "still alive" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "job 7" in warnings[0].getMessage()
+
+    hb.join(timeout=2.0)  # let the leaked thread finish before the test ends
+    hb.stop()  # second stop on a dead thread: no raise and no new warning
+    assert len([r for r in caplog.records if "still alive" in r.getMessage()]) == 1
+
+
+def test_heartbeat_stop_before_start_and_double_stop_are_safe() -> None:
+    """H1: stop() before start() and a second stop() must not raise."""
+    sm = _SleepyHeartbeatSM(delay=0.0)
+    hb = _heartbeat(sm, 3)
+
+    hb.stop()  # never started
+    assert not hb.is_alive()
+
+    hb.start()
+    hb.stop()
+    hb.stop()  # second stop on an already-dead thread
+    assert not hb.is_alive()
+
+
+def test_heartbeat_stop_from_its_own_thread_does_not_join_itself() -> None:
+    """H1: a stop() from inside the thread must not join itself (deadlock)."""
+    sm = _SleepyHeartbeatSM(delay=0.0)
+    hb = _heartbeat(sm, 4)
+    done = threading.Event()
+
+    def run_and_stop() -> None:
+        hb.stop()  # is_alive() is True here and it IS the current thread
+        done.set()
+
+    hb.run = run_and_stop  # type: ignore[method-assign]
+    hb.start()
+    assert done.wait(timeout=2.0), "stop() deadlocked on its own thread"
+    hb.join(timeout=2.0)
