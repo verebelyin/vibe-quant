@@ -33,6 +33,8 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
+    ConfigurationError,
+    check_paper_exposure,
     credential_env_names,
     default_paper_trader_id,
     is_valid_trader_id,
@@ -182,6 +184,7 @@ async def start_paper(
 
     strategy_id = body.strategy_id
     requested = [s.strip().upper() for s in body.symbols or [] if s.strip()]
+    run_parameters: object = None
     if body.validation_run_id is not None:
         run = state.get_backtest_run(body.validation_run_id)
         if run is None:
@@ -199,6 +202,7 @@ async def start_paper(
                 f"{run.get('strategy_id')}, not {strategy_id}",
             )
         strategy_id = int(run["strategy_id"])
+        run_parameters = run.get("parameters")
         symbols = [str(s) for s in run.get("symbols") or []]
         if requested and sorted(requested) != sorted(symbols):
             raise HTTPException(
@@ -220,6 +224,18 @@ async def start_paper(
         timeframe = str(dsl.get("timeframe", "")) if isinstance(dsl, dict) else ""
     if not symbols:
         raise HTTPException(400, "No symbols to trade")
+
+    # D-S5: refuse a cap above the run's leverage BEFORE credentials and before
+    # any run row / job -- one shared rule with the node.
+    try:
+        check_paper_exposure(
+            validation_run_id=body.validation_run_id,
+            run_parameters=run_parameters,
+            max_position_pct_override=body.max_position_pct,
+            leverage_override=None,
+        )
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _require_credentials(body.testnet)
 

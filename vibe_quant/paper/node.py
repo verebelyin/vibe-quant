@@ -43,6 +43,7 @@ from vibe_quant.paper.config import (
     DEFAULT_VALIDATION_LEVERAGE,
     ConfigurationError,
     PaperTradingConfig,
+    check_paper_exposure,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.force_orders import build_binance_fetch
@@ -632,6 +633,7 @@ class PaperTradingNode:
         )
 
         validated: dict[str, object] | None = None
+        run_parameters: object = None
         base_params: dict[str, object] = {}
         symbols = list(cfg.symbols)
         leverage_f = float(DEFAULT_VALIDATION_LEVERAGE)
@@ -678,6 +680,7 @@ class PaperTradingNode:
             # forwarded to the strategy). An invalid schedule fails closed,
             # exactly like validation does.
             raw_params = run.get("parameters")
+            run_parameters = raw_params
             run_params: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
             try:
                 fee_schedule = FeeSchedule.from_params(run_params)
@@ -738,6 +741,17 @@ class PaperTradingNode:
             raise ConfigurationError(
                 f"leverage {leverage} exceeds max_leverage {cfg.sizing.max_leverage}"
             )
+
+        # D-S5: the same shared rule the API runs before it writes any run row.
+        # Right after the max_leverage check so that error keeps precedence, and
+        # before ResolvedRunConfig, so no strategy / checkpoint / TradingNode is
+        # built for a run whose cap its leverage cannot cover.
+        check_paper_exposure(
+            validation_run_id=cfg.validation_run_id,
+            run_parameters=run_parameters,
+            max_position_pct_override=cfg.sizing.max_position_pct,
+            leverage_override=cfg.leverage,
+        )
 
         resolved = ResolvedRunConfig(
             symbols=symbols,

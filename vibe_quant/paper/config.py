@@ -19,6 +19,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.sizing_settings import (
+    DEFAULT_MAX_POSITION_PCT,
+    SizingConfigError,
+    SizingSettings,
+    recorded_sizing,
+)
 from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
@@ -65,6 +72,67 @@ def credential_env_names(testnet: bool) -> tuple[str, str]:
 def default_paper_trader_id(run_id: int) -> str:
     """Default trader_id for an API-launched session (``paper_{id}`` aborted NT)."""
     return f"PAPER-{run_id:03d}"
+
+
+def check_paper_exposure(
+    *,
+    validation_run_id: int | None,
+    run_parameters: object,
+    max_position_pct_override: Decimal | float | None,
+    leverage_override: int | None,
+) -> None:
+    """Refuse a paper start whose exposure cap exceeds paper's leverage (D-S5).
+
+    The ONE rule the paper node and the ``/api/paper/start`` endpoint share. Both
+    derive the same effective cap and leverage -- an explicit override wins, else
+    the validation run's recorded settings, else the defaults -- and reject a cap
+    the run's margin leverage cannot cover (:meth:`SizingSettings.check_leverage`,
+    so equality is allowed). A corrupt recorded value fails closed with the run's
+    id instead of silently becoming a different number.
+
+    Raises:
+        ConfigurationError: If the cap exceeds the leverage, or the validation
+            run's recorded sizing / liquidation settings are invalid.
+    """
+    if max_position_pct_override is not None:
+        cap = float(max_position_pct_override)
+        cap_source = "paper sizing override"
+    elif validation_run_id is not None:
+        try:
+            cap = recorded_sizing(run_parameters).max_position_pct
+        except SizingConfigError as exc:
+            raise ConfigurationError(
+                f"Validation run {validation_run_id} has invalid sizing settings: {exc}"
+            ) from exc
+        cap_source = f"validation run {validation_run_id}"
+    else:
+        cap = DEFAULT_MAX_POSITION_PCT
+        cap_source = "default"
+
+    if leverage_override is not None:
+        leverage = float(leverage_override)
+        leverage_source = "paper leverage override"
+    elif validation_run_id is not None:
+        try:
+            leverage = LiquidationSettings.from_params(
+                run_parameters if isinstance(run_parameters, dict) else {}
+            ).leverage
+        except LiquidationConfigError as exc:
+            raise ConfigurationError(
+                f"Validation run {validation_run_id} has invalid liquidation settings: {exc}"
+            ) from exc
+        leverage_source = f"validation run {validation_run_id}"
+    else:
+        leverage = float(DEFAULT_VALIDATION_LEVERAGE)
+        leverage_source = "default"
+
+    try:
+        SizingSettings(max_position_pct=cap).check_leverage(leverage)
+    except SizingConfigError as exc:
+        raise ConfigurationError(
+            f"paper refuses to start: {exc} "
+            f"(max_position_pct from {cap_source}; leverage from {leverage_source})"
+        ) from exc
 
 
 #: NautilusTrader TraderId is ``NAME-TAG``. Constructing ``TraderId`` with an
