@@ -14,6 +14,11 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from vibe_quant.data import catalog as catalog_mod
+from vibe_quant.data.catalog import (
+    INTERVAL_TO_AGGREGATION,
+    CatalogManager,
+)
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -45,6 +50,246 @@ class ValidationRunnerError(Exception):
     """Error during validation run."""
 
     pass
+
+
+# Detail data that gives a strategy timeframe intrabar fill resolution:
+# 1m strategies look for 5s bars (optional, usually absent); every
+# coarser strategy -- including 3m/5m, which used to ask for 5s and so
+# never got detail -- uses 1m bars (bd vibe-quant-e70tl.13).
+_SUB_MINUTE_DETAIL_TIMEFRAME = "5s"
+_DEFAULT_COARSE_DETAIL_TIMEFRAME = "1m"
+_TIMEFRAME_SECONDS: dict[str, int] = {  # noqa: RUF012 — read-only table
+    "1s": 1,
+    "5s": 5,
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3_600,
+    "4h": 14_400,
+    "1d": 86_400,
+}
+
+
+def _parse_symbols(run_config: dict[str, object]) -> list[str]:
+    """Parse symbol list from run configuration.
+
+    Args:
+        run_config: Run configuration dict from database.
+
+    Returns:
+        List of symbol strings (e.g., ['BTCUSDT', 'ETHUSDT']).
+    """
+    symbols_raw = run_config.get("symbols", ["BTCUSDT"])
+    if isinstance(symbols_raw, str):
+        return list(json.loads(symbols_raw))
+    elif isinstance(symbols_raw, list):
+        return [str(s) for s in symbols_raw]
+    return ["BTCUSDT"]
+
+
+def _parse_run_date(value: object, field_name: str) -> date:
+    """Parse run date fields from DB config."""
+    if not isinstance(value, str):
+        msg = f"Run config missing valid {field_name}"
+        raise ValidationRunnerError(msg)
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        msg = f"Invalid {field_name}: {value}"
+        raise ValidationRunnerError(msg) from exc
+
+
+def resolve_detail_timeframe(
+    run_config: dict[str, object],
+    strategy_timeframe: str,
+    override: str | None,
+    *,
+    catalog_path: Path | None = None,
+) -> str | None:
+    """Resolve the detail (fill-resolution) timeframe for a run.
+
+    Explicit overrides (argument or ``parameters.detail_timeframe``) win;
+    they must be a loadable timeframe no coarser than the strategy's
+    (``ValidationRunnerError`` otherwise).
+    Otherwise strategies coarser than 1m use 1m detail -- whose presence
+    and coverage :func:`clamp_run_window` then enforces (missing 1m data
+    fails the run; it no longer silently falls back to strategy-TF
+    fills). 1m strategies use 5s detail only when every symbol has it;
+    without it they run with full one-bar deferral (see
+    :meth:`ValidationRunner._augment_strategy_params_for_validation`).
+
+    Args:
+        run_config: Run configuration from database.
+        strategy_timeframe: Primary strategy timeframe.
+        override: Explicit detail timeframe override.
+        catalog_path: Catalog to look up sub-minute detail data in. Defaults
+            to ``vibe_quant.data.catalog.DEFAULT_CATALOG_PATH``, read at call
+            time.
+
+    Returns:
+        Detail timeframe string (e.g., '1m') or None.
+    """
+    # Explicit override always wins (argument, then run parameters)
+    params = run_config.get("parameters")
+    if override is None and isinstance(params, dict) and params.get("detail_timeframe"):
+        override = str(params["detail_timeframe"])
+    if override is not None:
+        # Orders release on the strategy's own next detail bar, so the
+        # detail bar must be loadable and not coarser than the strategy
+        # bar (1h detail under 15m bars = orders up to 1h late).
+        if override not in INTERVAL_TO_AGGREGATION:
+            msg = f"Unknown detail timeframe {override!r}"
+            raise ValidationRunnerError(msg)
+        strategy_secs = _TIMEFRAME_SECONDS.get(strategy_timeframe)
+        if strategy_secs is not None and _TIMEFRAME_SECONDS[override] > strategy_secs:
+            msg = (
+                f"Detail timeframe {override!r} is coarser than the "
+                f"{strategy_timeframe} strategy timeframe"
+            )
+            raise ValidationRunnerError(msg)
+        return override
+
+    symbols = _parse_symbols(run_config)
+    if not symbols:
+        return None
+    if not isinstance(run_config.get("start_date"), str) or not isinstance(
+        run_config.get("end_date"), str
+    ):
+        return None
+
+    strategy_seconds = _TIMEFRAME_SECONDS.get(strategy_timeframe)
+    if strategy_seconds is None:
+        return None
+    detail_tf = (
+        _DEFAULT_COARSE_DETAIL_TIMEFRAME
+        if strategy_seconds > _TIMEFRAME_SECONDS["1m"]
+        else _SUB_MINUTE_DETAIL_TIMEFRAME
+    )
+    if (
+        detail_tf not in INTERVAL_TO_AGGREGATION
+        or _TIMEFRAME_SECONDS[detail_tf] >= strategy_seconds
+    ):
+        return None
+
+    if detail_tf == _SUB_MINUTE_DETAIL_TIMEFRAME:
+        # Sub-minute data is optional: use it only if every symbol has it
+        if catalog_path is None:
+            catalog_path = catalog_mod.DEFAULT_CATALOG_PATH
+        catalog_mgr = CatalogManager(catalog_path)
+        for symbol in symbols:
+            if catalog_mgr.get_bar_date_range(symbol, detail_tf) is None:
+                logger.info(
+                    "No %s detail data for %s — %s strategy runs with one-bar "
+                    "deferral instead of latency",
+                    detail_tf,
+                    symbol,
+                    strategy_timeframe,
+                )
+                return None
+
+    logger.info("Using %s detail data for %s strategy", detail_tf, strategy_timeframe)
+    return detail_tf
+
+
+def clamp_run_window(
+    run_config: dict[str, object],
+    fill_timeframe: str,
+    *,
+    catalog_path: Path | None = None,
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Clamp the run window to the span the fill-resolution data covers.
+
+    The window end used to be allowed past the last 1m bar, which made
+    the detail data silently drop out (fills at the next 4h close with
+    latency on). Now every symbol must have ``fill_timeframe`` bars;
+    the window is clamped to whole UTC days fully covered by all of
+    them, with a WARNING and a note persisted in the result notes.
+
+    Args:
+        run_config: Run configuration from database.
+        fill_timeframe: Timeframe of the fill-resolution bars.
+        catalog_path: Catalog to look up the bars' coverage in. Defaults to
+            ``vibe_quant.data.catalog.DEFAULT_CATALOG_PATH``, read at call time.
+
+    Returns:
+        ``(run_config, note)`` -- a copy with effective dates when
+        clamped (note describes requested vs effective window), else the
+        original config and ``None``.
+
+    Raises:
+        ValidationRunnerError: a symbol has no ``fill_timeframe`` data,
+            or no full day of the window is covered.
+    """
+    run_start = run_config.get("start_date")
+    run_end = run_config.get("end_date")
+    if not isinstance(run_start, str) or not isinstance(run_end, str):
+        return run_config, None
+    if fill_timeframe not in INTERVAL_TO_AGGREGATION:
+        return run_config, None
+    start = _parse_run_date(run_start, "start_date")
+    end = _parse_run_date(run_end, "end_date")
+
+    if catalog_path is None:
+        catalog_path = catalog_mod.DEFAULT_CATALOG_PATH
+    catalog_mgr = CatalogManager(catalog_path)
+    bar_seconds = _TIMEFRAME_SECONDS.get(fill_timeframe, 0)
+    covered_from: date | None = None
+    covered_to: date | None = None
+    for symbol in _parse_symbols(run_config):
+        date_range = catalog_mgr.get_bar_date_range(symbol, fill_timeframe)
+        if date_range is None:
+            msg = (
+                f"No {fill_timeframe} bars for {symbol} in the catalog. Validation "
+                f"needs {fill_timeframe} data for intrabar fills/latency — download "
+                f"it (Data Management) before validating."
+            )
+            raise ValidationRunnerError(msg)
+        first_open, last_open = date_range
+        # Whole UTC days covered: from the first midnight at/after the first
+        # bar's open to the midnight at/before the last bar's close.
+        first_day = first_open.date()
+        if (first_open.hour, first_open.minute, first_open.second) != (0, 0, 0):
+            first_day += timedelta(days=1)
+        last_day = (last_open + timedelta(seconds=bar_seconds)).date()
+        covered_from = first_day if covered_from is None else max(covered_from, first_day)
+        covered_to = last_day if covered_to is None else min(covered_to, last_day)
+
+    if covered_from is None or covered_to is None:
+        return run_config, None
+    eff_start = max(start, covered_from)
+    eff_end = min(end, covered_to)
+    if eff_end <= eff_start:
+        msg = (
+            f"{fill_timeframe} data covers {covered_from}..{covered_to}, which does not "
+            f"overlap the run window {run_start}..{run_end}"
+        )
+        raise ValidationRunnerError(msg)
+    if eff_start == start and eff_end == end:
+        return run_config, None
+
+    note: dict[str, object] = {
+        "requested_start": run_start,
+        "requested_end": run_end,
+        "effective_start": eff_start.isoformat(),
+        "effective_end": eff_end.isoformat(),
+        "coverage_timeframe": fill_timeframe,
+        "reason": f"{fill_timeframe} data covers {covered_from}..{covered_to}",
+    }
+    logger.warning(
+        "Run window %s..%s clamped to %s..%s: %s data only covers %s..%s",
+        run_start,
+        run_end,
+        eff_start,
+        eff_end,
+        fill_timeframe,
+        covered_from,
+        covered_to,
+    )
+    clamped = dict(run_config)
+    clamped["start_date"] = eff_start.isoformat()
+    clamped["end_date"] = eff_end.isoformat()
+    return clamped, note
 
 
 @dataclass(frozen=True)
@@ -511,15 +756,8 @@ class ValidationRunner:
 
     @staticmethod
     def _parse_run_date(value: object, field_name: str) -> date:
-        """Parse run date fields from DB config."""
-        if not isinstance(value, str):
-            msg = f"Run config missing valid {field_name}"
-            raise ValidationRunnerError(msg)
-        try:
-            return date.fromisoformat(value)
-        except ValueError as exc:
-            msg = f"Invalid {field_name}: {value}"
-            raise ValidationRunnerError(msg) from exc
+        """Parse run date fields from DB config (delegates to the module function)."""
+        return _parse_run_date(value, field_name)
 
     @staticmethod
     def _build_walk_forward_windows(
@@ -1226,7 +1464,7 @@ class ValidationRunner:
                 )
                 result.notes["maker_entries"] = maker_entry_stats(
                     engine,
-                    primary_bar_ns=self._TIMEFRAME_SECONDS.get(dsl.timeframe, 3600)
+                    primary_bar_ns=_TIMEFRAME_SECONDS.get(dsl.timeframe, 3600)
                     * 1_000_000_000,
                     maker_entry_timeout_bars=timeout_bars,
                 )
@@ -1444,24 +1682,6 @@ class ValidationRunner:
             augmented.setdefault("execution_delay_probability", 1.0)
         return augmented
 
-    # Detail data that gives a strategy timeframe intrabar fill resolution:
-    # 1m strategies look for 5s bars (optional, usually absent); every
-    # coarser strategy -- including 3m/5m, which used to ask for 5s and so
-    # never got detail -- uses 1m bars (bd vibe-quant-e70tl.13).
-    _SUB_MINUTE_DETAIL_TIMEFRAME = "5s"
-    _DEFAULT_COARSE_DETAIL_TIMEFRAME = "1m"
-    _TIMEFRAME_SECONDS: dict[str, int] = {  # noqa: RUF012 — read-only table
-        "1s": 1,
-        "5s": 5,
-        "1m": 60,
-        "3m": 180,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3_600,
-        "4h": 14_400,
-        "1d": 86_400,
-    }
-
     def _resolve_detail_timeframe(
         self,
         run_config: dict[str, object],
@@ -1470,88 +1690,10 @@ class ValidationRunner:
     ) -> str | None:
         """Resolve the detail (fill-resolution) timeframe for a run.
 
-        Explicit overrides (argument or ``parameters.detail_timeframe``) win;
-        they must be a loadable timeframe no coarser than the strategy's
-        (``ValidationRunnerError`` otherwise).
-        Otherwise strategies coarser than 1m use 1m detail -- whose presence
-        and coverage :meth:`_clamp_run_window` then enforces (missing 1m data
-        fails the run; it no longer silently falls back to strategy-TF
-        fills). 1m strategies use 5s detail only when every symbol has it;
-        without it they run with full one-bar deferral (see
-        :meth:`_augment_strategy_params_for_validation`).
-
-        Args:
-            run_config: Run configuration from database.
-            strategy_timeframe: Primary strategy timeframe.
-            override: Explicit detail timeframe override.
-
-        Returns:
-            Detail timeframe string (e.g., '1m') or None.
+        Delegate to :func:`resolve_detail_timeframe` (kept as a method so
+        existing call sites and test monkeypatches keep working).
         """
-        from vibe_quant.data.catalog import (
-            DEFAULT_CATALOG_PATH,
-            INTERVAL_TO_AGGREGATION,
-            CatalogManager,
-        )
-
-        # Explicit override always wins (argument, then run parameters)
-        params = run_config.get("parameters")
-        if override is None and isinstance(params, dict) and params.get("detail_timeframe"):
-            override = str(params["detail_timeframe"])
-        if override is not None:
-            # Orders release on the strategy's own next detail bar, so the
-            # detail bar must be loadable and not coarser than the strategy
-            # bar (1h detail under 15m bars = orders up to 1h late).
-            if override not in INTERVAL_TO_AGGREGATION:
-                msg = f"Unknown detail timeframe {override!r}"
-                raise ValidationRunnerError(msg)
-            strategy_secs = self._TIMEFRAME_SECONDS.get(strategy_timeframe)
-            if strategy_secs is not None and self._TIMEFRAME_SECONDS[override] > strategy_secs:
-                msg = (
-                    f"Detail timeframe {override!r} is coarser than the "
-                    f"{strategy_timeframe} strategy timeframe"
-                )
-                raise ValidationRunnerError(msg)
-            return override
-
-        symbols = self._parse_symbols(run_config)
-        if not symbols:
-            return None
-        if not isinstance(run_config.get("start_date"), str) or not isinstance(
-            run_config.get("end_date"), str
-        ):
-            return None
-
-        strategy_seconds = self._TIMEFRAME_SECONDS.get(strategy_timeframe)
-        if strategy_seconds is None:
-            return None
-        detail_tf = (
-            self._DEFAULT_COARSE_DETAIL_TIMEFRAME
-            if strategy_seconds > self._TIMEFRAME_SECONDS["1m"]
-            else self._SUB_MINUTE_DETAIL_TIMEFRAME
-        )
-        if (
-            detail_tf not in INTERVAL_TO_AGGREGATION
-            or self._TIMEFRAME_SECONDS[detail_tf] >= strategy_seconds
-        ):
-            return None
-
-        if detail_tf == self._SUB_MINUTE_DETAIL_TIMEFRAME:
-            # Sub-minute data is optional: use it only if every symbol has it
-            catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
-            for symbol in symbols:
-                if catalog_mgr.get_bar_date_range(symbol, detail_tf) is None:
-                    logger.info(
-                        "No %s detail data for %s — %s strategy runs with one-bar "
-                        "deferral instead of latency",
-                        detail_tf,
-                        symbol,
-                        strategy_timeframe,
-                    )
-                    return None
-
-        logger.info("Using %s detail data for %s strategy", detail_tf, strategy_timeframe)
-        return detail_tf
+        return resolve_detail_timeframe(run_config, strategy_timeframe, override)
 
     def _clamp_run_window(
         self,
@@ -1560,110 +1702,17 @@ class ValidationRunner:
     ) -> tuple[dict[str, object], dict[str, object] | None]:
         """Clamp the run window to the span the fill-resolution data covers.
 
-        The window end used to be allowed past the last 1m bar, which made
-        the detail data silently drop out (fills at the next 4h close with
-        latency on). Now every symbol must have ``fill_timeframe`` bars;
-        the window is clamped to whole UTC days fully covered by all of
-        them, with a WARNING and a note persisted in the result notes.
-
-        Returns:
-            ``(run_config, note)`` -- a copy with effective dates when
-            clamped (note describes requested vs effective window), else the
-            original config and ``None``.
-
-        Raises:
-            ValidationRunnerError: a symbol has no ``fill_timeframe`` data,
-                or no full day of the window is covered.
+        Delegate to :func:`clamp_run_window` (kept as a method so existing
+        call sites and test monkeypatches keep working).
         """
-        from vibe_quant.data.catalog import (
-            DEFAULT_CATALOG_PATH,
-            INTERVAL_TO_AGGREGATION,
-            CatalogManager,
-        )
-
-        run_start = run_config.get("start_date")
-        run_end = run_config.get("end_date")
-        if not isinstance(run_start, str) or not isinstance(run_end, str):
-            return run_config, None
-        if fill_timeframe not in INTERVAL_TO_AGGREGATION:
-            return run_config, None
-        start = self._parse_run_date(run_start, "start_date")
-        end = self._parse_run_date(run_end, "end_date")
-
-        catalog_mgr = CatalogManager(DEFAULT_CATALOG_PATH)
-        bar_seconds = self._TIMEFRAME_SECONDS.get(fill_timeframe, 0)
-        covered_from: date | None = None
-        covered_to: date | None = None
-        for symbol in self._parse_symbols(run_config):
-            date_range = catalog_mgr.get_bar_date_range(symbol, fill_timeframe)
-            if date_range is None:
-                msg = (
-                    f"No {fill_timeframe} bars for {symbol} in the catalog. Validation "
-                    f"needs {fill_timeframe} data for intrabar fills/latency — download "
-                    f"it (Data Management) before validating."
-                )
-                raise ValidationRunnerError(msg)
-            first_open, last_open = date_range
-            # Whole UTC days covered: from the first midnight at/after the first
-            # bar's open to the midnight at/before the last bar's close.
-            first_day = first_open.date()
-            if (first_open.hour, first_open.minute, first_open.second) != (0, 0, 0):
-                first_day += timedelta(days=1)
-            last_day = (last_open + timedelta(seconds=bar_seconds)).date()
-            covered_from = first_day if covered_from is None else max(covered_from, first_day)
-            covered_to = last_day if covered_to is None else min(covered_to, last_day)
-
-        if covered_from is None or covered_to is None:
-            return run_config, None
-        eff_start = max(start, covered_from)
-        eff_end = min(end, covered_to)
-        if eff_end <= eff_start:
-            msg = (
-                f"{fill_timeframe} data covers {covered_from}..{covered_to}, which does not "
-                f"overlap the run window {run_start}..{run_end}"
-            )
-            raise ValidationRunnerError(msg)
-        if eff_start == start and eff_end == end:
-            return run_config, None
-
-        note: dict[str, object] = {
-            "requested_start": run_start,
-            "requested_end": run_end,
-            "effective_start": eff_start.isoformat(),
-            "effective_end": eff_end.isoformat(),
-            "coverage_timeframe": fill_timeframe,
-            "reason": f"{fill_timeframe} data covers {covered_from}..{covered_to}",
-        }
-        logger.warning(
-            "Run window %s..%s clamped to %s..%s: %s data only covers %s..%s",
-            run_start,
-            run_end,
-            eff_start,
-            eff_end,
-            fill_timeframe,
-            covered_from,
-            covered_to,
-        )
-        clamped = dict(run_config)
-        clamped["start_date"] = eff_start.isoformat()
-        clamped["end_date"] = eff_end.isoformat()
-        return clamped, note
+        return clamp_run_window(run_config, fill_timeframe)
 
     def _parse_symbols(self, run_config: dict[str, object]) -> list[str]:
         """Parse symbol list from run configuration.
 
-        Args:
-            run_config: Run configuration dict from database.
-
-        Returns:
-            List of symbol strings (e.g., ['BTCUSDT', 'ETHUSDT']).
+        Delegate to :func:`_parse_symbols`.
         """
-        symbols_raw = run_config.get("symbols", ["BTCUSDT"])
-        if isinstance(symbols_raw, str):
-            return list(json.loads(symbols_raw))
-        elif isinstance(symbols_raw, list):
-            return [str(s) for s in symbols_raw]
-        return ["BTCUSDT"]
+        return _parse_symbols(run_config)
 
     def _extract_results(
         self,

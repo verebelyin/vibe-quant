@@ -32,6 +32,7 @@ from vibe_quant.data.mark_bars import (
     MarkDataMissing,
     MarkSeries,
     build_mark_bars,
+    check_mark_coverage,
     load_mark_series,
     mark_bar_type,
     require_mark_coverage,
@@ -354,6 +355,56 @@ class TestRequireMarkCoverage:
         s = self._gapped()
         require_mark_coverage(s, "BTCUSDT", self._at(100), self._at(110))
         require_mark_coverage(s, "BTCUSDT", self._at(0), self._at(5))
+
+
+class TestCheckMarkCoverage:
+    """``check_mark_coverage`` loops symbols in order; first failure wins (M10)."""
+
+    def test_check_mark_coverage_first_failure_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[object, str]] = []
+
+        def fake_load(catalog_path: object, symbol: str) -> MarkSeries | None:
+            seen.append((catalog_path, symbol))
+            if symbol == "MISSINGUSDT":
+                return None
+            # Bars at minutes [0, 10) and [100, 120): the 91-minute gap
+            # (minute 9 -> 100) sits inside the window and exceeds the 60 min limit.
+            idx = np.concatenate([np.arange(10), np.arange(100, 120)]).astype(np.int64)
+            return _series_from_ts(T0_MS * 1_000_000 + idx * _MINUTE_NS)
+
+        monkeypatch.setattr(mark_bars, "load_mark_series", fake_load)
+        start = T0_MS * 1_000_000
+        end = start + 120 * _MINUTE_NS
+
+        with pytest.raises(MarkDataMissing, match="gap") as exc:
+            check_mark_coverage("cat", ["BTCUSDT"], start, end)
+        assert "BTCUSDT" in str(exc.value)
+        assert seen == [("cat", "BTCUSDT")]
+
+        # A covered window passes: the gap lies outside [start, end), so no raise.
+        seen.clear()
+        check_mark_coverage("cat", ["BTCUSDT"], start, start + 10 * _MINUTE_NS)
+
+        # Every symbol is visited in order when the first is covered: the second
+        # symbol's absent series still raises (a symbols[:1] loop would pass).
+        seen.clear()
+        with pytest.raises(MarkDataMissing, match="MISSINGUSDT"):
+            check_mark_coverage("cat", ["BTCUSDT", "MISSINGUSDT"], start, start + 10 * _MINUTE_NS)
+        assert seen == [("cat", "BTCUSDT"), ("cat", "MISSINGUSDT")]
+
+        # All symbols covered: nothing raises, and both were loaded in order.
+        seen.clear()
+        check_mark_coverage("cat", ["BTCUSDT", "ETHUSDT"], start, start + 10 * _MINUTE_NS)
+        assert seen == [("cat", "BTCUSDT"), ("cat", "ETHUSDT")]
+
+        # First failure wins: the first symbol's absent series raises before the
+        # second symbol is even loaded.
+        seen.clear()
+        with pytest.raises(MarkDataMissing, match="MISSINGUSDT"):
+            check_mark_coverage("cat", ["MISSINGUSDT", "BTCUSDT"], start, end)
+        assert seen == [("cat", "MISSINGUSDT")]
 
 
 def _build(archive: RawDataArchive, catalog: CatalogManager, count: int) -> None:

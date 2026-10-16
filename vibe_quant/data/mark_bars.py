@@ -247,6 +247,24 @@ def require_mark_coverage(
             )
 
 
+def check_mark_coverage(
+    catalog_path: Path | str,
+    symbols: Sequence[str],
+    start_ns: int,
+    end_ns: int,
+) -> None:
+    """Fail closed unless every symbol's MARK 1m bars cover ``[start_ns, end_ns)``.
+
+    Loads each symbol's series in the given order and raises the first
+    :class:`MarkDataMissing` reported by :func:`require_mark_coverage` (which
+    owns the coverage/gap rules). A mode-on launch calls this before any run
+    row exists; the runtime keeps its own per-symbol loop because it needs the
+    loaded series.
+    """
+    for symbol in symbols:
+        require_mark_coverage(load_mark_series(catalog_path, symbol), symbol, start_ns, end_ns)
+
+
 def _snapshot(bar_dir: Path) -> tuple[list[Path], tuple[tuple[str, int, int], ...]]:
     """Glob the complete parquet set and sign it (raises FileNotFoundError if it moves)."""
     files = sorted(bar_dir.glob("*.parquet")) if bar_dir.is_dir() else []
