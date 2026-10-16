@@ -131,24 +131,84 @@ export function asFloat(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
-/** Python `repr` of a JSON-parsed value, for translator messages built with `{v!r}`. */
-function pyRepr(value: unknown): string {
+/**
+ * Python `repr` of a finite float: the shortest round-trip digits JS `toString` and Python `repr`
+ * share, laid out the way Python does. Python always signs the exponent and pads it to two digits,
+ * and switches to exponent notation below `1e-4` (exp < -4) and at `1e16` (exp >= 16), where JS
+ * switches at `1e-6` and `1e21` instead.
+ */
+function pyFloatRepr(value: number): string {
+  const [mantissa = "", exponentText] = Math.abs(value).toString().split("e");
+  let digits: string;
+  let exponent: number;
+  if (exponentText !== undefined) {
+    // JS exponential form ("d" or "d.ddd"): the leading digit sits at 10^exponentText.
+    digits = mantissa.replace(".", "");
+    exponent = Number(exponentText);
+  } else {
+    const [integerPart = "", fractionPart = ""] = mantissa.split(".");
+    if (integerPart !== "0") {
+      digits = integerPart + fractionPart;
+      exponent = integerPart.length - 1;
+    } else {
+      const zeros = fractionPart.length - fractionPart.replace(/^0+/, "").length;
+      digits = fractionPart.slice(zeros);
+      exponent = -(zeros + 1);
+    }
+  }
+  const lead = digits[0] ?? "0";
+  const rest = digits.slice(1);
+  let body: string;
+  if (exponent < -4 || exponent >= 16) {
+    const sign = exponent < 0 ? "-" : "+";
+    body = `${lead}${rest ? `.${rest}` : ""}e${sign}${String(Math.abs(exponent)).padStart(2, "0")}`;
+  } else if (exponent >= digits.length - 1) {
+    body = `${digits}${"0".repeat(exponent - (digits.length - 1))}.0`;
+  } else if (exponent >= 0) {
+    body = `${digits.slice(0, exponent + 1)}.${digits.slice(exponent + 1)}`;
+  } else {
+    body = `0.${"0".repeat(-exponent - 1)}${digits}`;
+  }
+  return value < 0 ? `-${body}` : body;
+}
+
+/**
+ * Python `repr` of a JSON-parsed value, for translator messages built with `{v!r}`.
+ *
+ * A number mirrors how Python's `json` reads the editor's `JSON.stringify` output: an integer form
+ * (no `.`, no exponent) becomes a Python `int`, so it prints as exact decimal digits (`BigInt`);
+ * anything else is a float and prints via {@link pyFloatRepr}. JS cannot tell `14` from `14.0`, so
+ * a whole number typed as `14.0` prints as `14`, not `14.0` -- not fixable in JS.
+ *
+ * A string escapes `\` `\n` `\r` `\t` and every other code point `< 0x20` or `= 0x7f` as `\xNN`
+ * (lowercase hex); a printable non-ASCII char stays literal and the quote flips to `"` when the
+ * string holds a `'` and no `"` -- as Python `repr` does.
+ *
+ * Exported so tests can pin it against Python `repr` directly, as `asFloat` is exported.
+ */
+export function pyRepr(value: unknown): string {
   if (value === null || value === undefined) return "None";
   if (typeof value === "boolean") return value ? "True" : "False";
   if (typeof value === "number") {
     if (Number.isNaN(value)) return "nan";
     if (!Number.isFinite(value)) return value > 0 ? "inf" : "-inf";
-    return `${value}`;
+    const json = JSON.stringify(value);
+    if (json === undefined || /[.eE]/.test(json)) return pyFloatRepr(value);
+    return BigInt(json).toString();
   }
   if (typeof value === "string") {
     const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
-    const body = value
-      .replace(/\\/g, "\\\\")
-      .replace(/\n/g, "\\n")
-      .replace(/\r/g, "\\r")
-      .replace(/\t/g, "\\t")
-      .split(quote)
-      .join(`\\${quote}`);
+    let body = "";
+    for (const char of value) {
+      const code = char.codePointAt(0) ?? 0;
+      if (char === "\\") body += "\\\\";
+      else if (char === "\n") body += "\\n";
+      else if (char === "\r") body += "\\r";
+      else if (char === "\t") body += "\\t";
+      else if (char === quote) body += `\\${quote}`;
+      else if (code < 0x20 || code === 0x7f) body += `\\x${code.toString(16).padStart(2, "0")}`;
+      else body += char;
+    }
     return `${quote}${body}${quote}`;
   }
   return JSON.stringify(value) ?? "None";

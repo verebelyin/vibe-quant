@@ -14,6 +14,7 @@ import {
   expandParam,
   MAX_SWEEP_COMBINATIONS,
   MAX_VALUES_PER_PARAM,
+  pyRepr,
   type SweepableParam,
   type SweepCatalog,
   type SweepConfig,
@@ -458,6 +459,42 @@ describe("asFloat mirrors the translator's _as_float", () => {
     for (const [value, expected] of TABLE) {
       expect(asFloat(value), JSON.stringify(value)).toBe(expected);
     }
+  });
+});
+
+describe("pyRepr mirrors Python 3.13 repr for floats and control-character strings", () => {
+  it("prints each value the way Python repr() does", () => {
+    const TABLE: Array<[unknown, string]> = [
+      [1e-7, "1e-07"],
+      [0.0001, "0.0001"],
+      [0.00001, "1e-05"],
+      [1.5, "1.5"],
+      // A whole number stringifies to digits only -> the editor sends an int -> Python int repr;
+      // 1e21 stringifies with an exponent -> Python parses a float -> Python float repr.
+      [2.5e16, "25000000000000000"],
+      [1e21, "1e+21"],
+      [1.5e300, "1.5e+300"],
+      [14, "14"],
+      [-0.000012, "-1.2e-05"],
+      ["a\bb", "'a\\x08b'"],
+      ["tab\t", "'tab\\t'"],
+      ["\u007f", "'\\x7f'"],
+      ["é", "'é'"],
+      ["it's", '"it\'s"'],
+    ];
+    for (const [value, expected] of TABLE) {
+      expect(pyRepr(value), JSON.stringify(value)).toBe(expected);
+    }
+  });
+
+  it("a float conflict prints the exact backend translator message", () => {
+    const macd = {
+      general: {},
+      indicators: [{ type: "MACD", params: { fast_period: 1e-7, fast: true } }],
+    };
+    expect(strategyTranslationProblem(macd)).toBe(
+      "Conflicting MACD params for 'fast_period': 'fast_period'=1e-07, 'fast'=True",
+    );
   });
 });
 
