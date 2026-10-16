@@ -763,6 +763,41 @@ async def test_promote_unreadable_parent_notes_creates_no_strategy_row(
     assert _table_counts(state) == before
 
 
+_CORRUPT_FEE_PARAMS: dict[str, object] = {"fee_tier": "VIP9", "bnb_discount": True}
+_CORRUPT_FEE_NOTES: dict[str, object] = {"fee_schedule": _CORRUPT_FEE_PARAMS}
+
+
+@pytest.mark.parametrize("endpoint", ["promote/0", "replay/0"])
+async def test_corrupt_fee_schedule_rejected_with_full_detail_and_no_rows(
+    client: tuple[AsyncClient, StateManager], endpoint: str
+) -> None:
+    """Promote AND replay fail closed on an unreadable parent fee_schedule.
+
+    Both resolve ``_inherited_fee_params`` BEFORE the row-creating call, so the
+    409 carries the same full detail text the promote endpoint pins and leaves
+    the strategies and backtest_runs counts untouched.
+    """
+    from vibe_quant.fees import FeeSchedule
+
+    ac, state = client
+    run_id = _create_discovery_run_with_results(state, notes_extra=_CORRUPT_FEE_NOTES)
+    before = _table_counts(state)
+
+    with pytest.raises(ValueError) as excinfo:
+        FeeSchedule.from_params(_CORRUPT_FEE_PARAMS)
+    expected = f"discovery run {run_id} has an unreadable notes.fee_schedule: {excinfo.value}"
+
+    popen, alive = _popen_patches()
+    with popen, alive:
+        r = await ac.post(f"/api/discovery/results/{run_id}/{endpoint}")
+
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail.startswith(f"discovery run {run_id} has an unreadable notes.fee_schedule: ")
+    assert detail == expected
+    assert _table_counts(state) == before
+
+
 async def test_replay_inherits_bnb_schedule_from_discovery_notes(
     client: tuple[AsyncClient, StateManager],
 ) -> None:
