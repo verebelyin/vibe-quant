@@ -99,9 +99,10 @@ class OverfittingPipeline:
                 conn.execute("PRAGMA foreign_keys=ON")
                 # This connection bypasses StateManager/init_schema, so a DB from
                 # before a column migration (e.g. sweep_results.mtm_*) would raise
-                # on promotion instead of failing DSR closed. The shared helper is
-                # idempotent but swallows EVERY error (incl. SQLITE_BUSY from a
-                # concurrent writer), so verify the columns it was needed for.
+                # on promotion instead of failing DSR closed. The shared helper
+                # now propagates an error from a needed ALTER (a concurrent writer
+                # -> SQLITE_BUSY reaches this except), and the column check below
+                # still fails closed if the helper ever no-ops instead.
                 _migrate_add_columns(conn)
                 present = {r[1] for r in conn.execute("PRAGMA table_info(sweep_results)")}
                 missing = [c for c in _MTM_SWEEP_COLUMNS if present and c not in present]

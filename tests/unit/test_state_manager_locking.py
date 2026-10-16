@@ -276,10 +276,10 @@ def test_close_waits_for_connection_initialization(
 ) -> None:
     """``close()`` must also queue behind ``conn`` while it initializes.
 
-    ``conn`` assigns ``self._conn`` and then runs ``init_schema`` under
-    ``_lock``; a ``close()`` that takes only ``_write_lock`` can close that
-    half-built connection and leave the opening thread with ``conn`` returning
-    ``None``. An ``init_schema`` wrapper that pauses after the connection exists
+    ``conn`` opens a connection and runs ``init_schema`` under ``_lock``
+    (publishing ``self._conn`` only afterwards); a ``close()`` that takes only
+    ``_write_lock`` can close that half-built connection and leave the opening
+    thread with ``conn`` returning ``None``. An ``init_schema`` wrapper that pauses after the connection exists
     makes the race deterministic instead of probabilistic.
     """
     sm = _state_manager_module.StateManager(tmp_path / "init-race.db")
@@ -306,7 +306,8 @@ def test_close_waits_for_connection_initialization(
         assert in_init.wait(timeout=5), "conn never reached init_schema"
         closer.start()
         assert not closed.wait(timeout=0.3), "close() ran during connection initialization"
-        assert sm._conn is not None
+        assert sm._conn is None  # published only after init_schema succeeds
+        initialized[0].execute("SELECT 1")  # still open: close() did not touch it
     finally:
         release.set()
 

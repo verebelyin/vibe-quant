@@ -570,10 +570,10 @@ def _old_schema_db(tmp_path: Path) -> tuple[Path, int]:
 def test_incomplete_migration_fails_closed_and_next_call_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, applied: int
 ) -> None:
-    """The shared migration helper swallows SQLITE_BUSY: if it left an mtm_* column
-    missing (0 or 3 of 4 applied), the connection is closed, ``_conn`` stays None and
-    a clear RuntimeError is raised -- no half-migrated cached connection. Once the
-    columns can be added, the next call retries and the recheck judges the champion."""
+    """A busy fake for the shared migration helper: it leaves an mtm_* column
+    missing (0 or 3 of 4 applied), so the connection is closed, ``_conn`` stays None
+    and a clear RuntimeError is raised -- no half-migrated cached connection. Once
+    the columns can be added, the next call retries and the recheck judges the champion."""
     import vibe_quant.overfitting.pipeline as pl
 
     db, rid = _old_schema_db(tmp_path)

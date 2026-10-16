@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import sqlite3
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -356,8 +353,16 @@ CREATE INDEX IF NOT EXISTS idx_research_indicator_scaffolds_extraction
 def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     """Add columns that may be missing from older databases.
 
-    Each migration is idempotent (ALTER TABLE ADD COLUMN fails silently
-    if column already exists). When adding new migrations, bump SCHEMA_VERSION.
+    Each migration is idempotent: the columns a table already has are read once
+    with ``PRAGMA table_info`` and present columns are skipped without running an
+    ALTER, as is every table that does not exist yet. An ALTER that *is* needed
+    (column missing, table present) is allowed to raise -- so a concurrent writer
+    holding the lock surfaces as ``sqlite3.OperationalError: database is locked``
+    to the caller instead of leaving a silently half-migrated database. The one
+    exception is ``duplicate column name``: a concurrent process won the race and
+    added the column between our PRAGMA and our ALTER, so that failure is treated
+    as "present" (skipped, uncounted, unlogged) rather than raised.
+    When adding new migrations, bump SCHEMA_VERSION.
     """
     migrations = [
         ("backtest_results", "starting_balance", "REAL"),
@@ -421,13 +426,33 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         ("sweep_results", "exit_timing", "TEXT"),
     ]
     applied = 0
+    present_columns: dict[str, set[str]] = {}
     for table, column, col_type in migrations:
+        if table not in present_columns:
+            # ``PRAGMA table_info`` returns no rows for a table that does not
+            # exist (a real table always has >= 1 column), so an empty set means
+            # "table absent" -> skip every migration for it (M2).
+            present_columns[table] = {
+                str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not present_columns[table]:
+                logger.debug("Skipping migrations for absent table: %s", table)
+        if not present_columns[table] or column in present_columns[table]:
+            continue  # table absent, or the column is already there (M1)
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-            applied += 1
-            logger.info("Applied migration: %s.%s (%s)", table, column, col_type)
-        except Exception:  # noqa: BLE001
-            pass  # Column already exists
+        except sqlite3.OperationalError as exc:
+            # A concurrent process can add the column between our PRAGMA and this
+            # ALTER (the PRAGMA takes no lock): the race is lost, the winner owns
+            # the column -> treat it as present: skipped, not counted, not logged.
+            # Every other error (e.g. a held writer lock) still propagates.
+            if "duplicate column name" not in str(exc).lower():
+                raise
+            present_columns[table].add(column)
+            continue
+        present_columns[table].add(column)
+        applied += 1
+        logger.info("Applied migration: %s.%s (%s)", table, column, col_type)
     if applied:
         logger.info("Applied %d schema migration(s) (current version: %d)", applied, SCHEMA_VERSION)
 

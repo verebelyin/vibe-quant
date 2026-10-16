@@ -547,3 +547,48 @@ class TestConstants:
     def test_stale_threshold(self) -> None:
         """Stale threshold is 120 seconds per spec."""
         assert STALE_THRESHOLD_SECONDS == 120
+
+
+def test_job_manager_conn_fails_closed_on_a_held_lock_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A locked migration closes the new connection, caches nothing, and the next
+    ``conn`` access (lock released) migrates the legacy DB."""
+    import sqlite3
+
+    from vibe_quant.db.connection import get_connection
+    from vibe_quant.db.schema import SCHEMA_SQL
+
+    db = tmp_path / "old.db"
+    setup = get_connection(db)
+    setup.executescript(SCHEMA_SQL)
+    setup.execute("ALTER TABLE sweep_results DROP COLUMN mtm_days")
+    setup.commit()
+    setup.close()
+
+    opened: list[sqlite3.Connection] = []
+
+    def tracking(db_path: Path | None = None) -> sqlite3.Connection:
+        conn = get_connection(db_path)
+        conn.execute("PRAGMA busy_timeout=50")
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr("vibe_quant.jobs.manager.get_connection", tracking)
+    holder = sqlite3.connect(str(db))
+    holder.execute("PRAGMA journal_mode=WAL")
+    holder.execute("BEGIN IMMEDIATE")
+    mgr = BacktestJobManager(db)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            mgr.conn  # noqa: B018
+        assert mgr._conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")
+    finally:
+        holder.rollback()
+        holder.close()
+
+    columns = {str(r[1]) for r in mgr.conn.execute("PRAGMA table_info(sweep_results)")}
+    mgr.close()
+    assert "mtm_days" in columns

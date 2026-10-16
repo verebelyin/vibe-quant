@@ -196,8 +196,14 @@ class BacktestJobManager:
         """Get or create database connection."""
         with self._db_lock:
             if self._conn is None:
-                self._conn = get_connection(self._db_path)
-                init_schema(self._conn)
+                # Publish only after init succeeds (fail closed; next access retries).
+                conn = get_connection(self._db_path)
+                try:
+                    init_schema(conn)
+                except BaseException:
+                    conn.close()
+                    raise
+                self._conn = conn
             return self._conn
 
     def close(self) -> None:

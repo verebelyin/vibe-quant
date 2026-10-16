@@ -163,8 +163,16 @@ class StateManager:
         """Get or create database connection (thread-safe)."""
         with self._lock:
             if self._conn is None:
-                self._conn = get_connection(self._db_path)
-                init_schema(self._conn)
+                # Publish only after init succeeds: a failed migration (e.g. a
+                # held writer lock) must not leave a half-migrated cached
+                # connection; the next access retries.
+                conn = get_connection(self._db_path)
+                try:
+                    init_schema(conn)
+                except BaseException:
+                    conn.close()
+                    raise
+                self._conn = conn
             return self._conn
 
     def close(self) -> None:
