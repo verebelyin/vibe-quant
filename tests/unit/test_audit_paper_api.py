@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -20,6 +21,7 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import is_valid_trader_id
+from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import PaperCommandQueue, StateCheckpoint, StatePersistence
 
 if TYPE_CHECKING:
@@ -241,6 +243,17 @@ async def _fake_node(db: Path, trader_id: str, handler: Any, stop: asyncio.Event
         q.close()
 
 
+async def _real_node_loop(node: PaperTradingNode, stop: asyncio.Event) -> None:
+    """Drain the queue through the real ``PaperTradingNode.process_commands``."""
+    try:
+        while not stop.is_set():
+            await node.process_commands()
+            await asyncio.sleep(0.02)
+    finally:
+        if node._commands is not None:
+            node._commands.close()
+
+
 async def _start(ctx: Ctx) -> tuple[int, str]:
     r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
     assert r.status_code == 201
@@ -289,6 +302,37 @@ async def test_close_all_success(ctx: Ctx, tmp_db: Path) -> None:
     assert r.status_code == 200, r.text
     assert r.json()["targeted_positions"] == ["P-1", "P-2"]
     assert r.json()["still_open"] == []
+
+
+async def test_raised_command_error_never_reaches_api_detail(
+    ctx: Ctx, tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The node's command-failure detail must be class + fixed text, never ``str(exc)``.
+
+    The exception text of a failing command can hold a signed request URL (or an
+    apiKey), and this detail is the HTTP body the operator gets back.
+    """
+    _run_id, trader_id = await _start(ctx)
+
+    async def _boom(_cmd: Any) -> Any:
+        raise RuntimeError("signature=ZZLEAK9")
+
+    node = PaperTradingNode.__new__(PaperTradingNode)
+    node._config = SimpleNamespace(trader_id=trader_id)  # type: ignore[assignment]
+    node._commands = PaperCommandQueue(tmp_db)
+    monkeypatch.setattr(node, "_execute_command", _boom)
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(_real_node_loop(node, stop))
+    try:
+        r = await ctx.ac.post("/api/paper/close-all-positions")
+    finally:
+        stop.set()
+        await task
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "RuntimeError: command failed; see the paper node log"
+    assert "ZZLEAK9" not in r.text
 
 
 async def test_halt_and_pause_commands(ctx: Ctx, tmp_db: Path) -> None:

@@ -1427,7 +1427,9 @@ class PaperTradingNode:
                 # while ``logger.exception`` would print its text and the active
                 # exception's ``__context__`` chain (a fetch error with signature/apiKey).
                 logger.error("paper command %s failed (%s)", cmd.command, type(exc).__name__)
-                self._commands.fail(cmd.id, f"{type(exc).__name__}: {exc}")
+                self._commands.fail(
+                    cmd.id, f"{type(exc).__name__}: command failed; see the paper node log"
+                )
                 continue
             if ok:
                 self._commands.complete(cmd.id, result)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -433,6 +434,41 @@ async def test_close_all_success_when_flat(seeded: dict[str, Any]) -> None:
         cmd = q.get(cid)
         assert cmd is not None and cmd.status == "done", cmd
         assert cmd.result is not None and cmd.result["still_open"] == []
+    finally:
+        q.close()
+        await node._shutdown()
+
+
+@pytest.mark.parametrize("exc_type", [RuntimeError, OSError])
+async def test_raised_command_error_is_class_only(
+    seeded: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exc_type: type[Exception],
+) -> None:
+    """A raising command must not persist the exception text: it can carry secrets.
+
+    A fetch error's message holds the request URL with its signature/apiKey, and
+    this row's ``error`` is returned verbatim as the API's HTTP detail.
+    """
+    node, _guard = _node_with_fake_guard(seeded)
+    q = PaperCommandQueue(seeded["db"])
+
+    async def _boom(_cmd: Any) -> Any:
+        raise exc_type("signature=ZZLEAK9")
+
+    monkeypatch.setattr(node, "_execute_command", _boom)
+    try:
+        cid = q.enqueue("PAPER-007", "halt")
+        with caplog.at_level(logging.ERROR, logger="vibe_quant.paper.node"):
+            await node.process_commands()
+        cmd = q.get(cid)
+        assert cmd is not None and cmd.status == "failed", cmd
+        assert cmd.error == f"{exc_type.__name__}: command failed; see the paper node log"
+        assert cmd.result is None
+        logged = [r.getMessage() for r in caplog.records if r.name == "vibe_quant.paper.node"]
+        assert logged, "the command failure must still be logged"
+        assert all("ZZLEAK9" not in message for message in logged), logged
     finally:
         q.close()
         await node._shutdown()

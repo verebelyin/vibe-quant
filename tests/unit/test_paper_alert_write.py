@@ -1176,8 +1176,9 @@ async def test_control_loop_iteration_failure_log_is_class_only_and_the_loop_kee
 async def test_process_commands_failure_log_is_class_only_and_the_loop_continues(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R14/ott8r: a failing command logs the class (plus its name) only, still records
-    today's ``fail`` text and moves on to the next command."""
+    """R14/ott8r: a failing command logs the class (plus its name) only, records a
+    class-only ``fail`` text (nothing from the exception) and moves on to the next
+    command."""
     node = _node(seeded)
     commands = _FakeCommandQueue()
     commands.pending = [_command(1, "halt"), _command(2, "resume")]
@@ -1199,7 +1200,10 @@ async def test_process_commands_failure_log_is_class_only_and_the_loop_continues
         await node.process_commands()
 
     assert executed == [1, 2], "the loop continues with the next command"
-    assert commands.fails == [(1, f"RuntimeError: {_LEAK} cmd")], "today's fail text stands"
+    assert commands.fails == [(1, "RuntimeError: command failed; see the paper node log")], (
+        "the stored error is the class plus fixed text, never the exception text"
+    )
+    assert _LEAK not in str(commands.fails), "the exception text must not reach the command row"
     assert commands.completes == [2]
     errors = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert len(errors) == 1
