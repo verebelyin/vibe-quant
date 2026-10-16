@@ -65,6 +65,8 @@ You can make the next agent in this role better. Your purpose, method and checkl
 
 Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool calls in one turn (first turn: the whole diff plus every file it touches). Target ≥ 2 tool calls per turn; three measured jobs averaged 1.1.
 
+- **A UI criterion that needs a rare data row** (e.g. a liquidated discovery champion) and tiny runs (pop 4-6, 1-2 gens) produce none: after at most 2 tiny runs, seed the row into the ui-check DB COPY only (e.g. `liquidation_count` in `backtest_results.notes`), label it SEEDED, and report it as a render-only proof; the criterion stays NOT MET for real data (ver job 20261016-easy-beads-3: runs 920/921 at isolated 125x gave 0 rows).
+
 ## Changelog
 
 - 2026-10-09: self-improvement + changelog sections added (user request: agents may improve their own prompts; chief reviews).
@@ -77,3 +79,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-14: UI check: cap liquidation windows at MARK coverage; re-snapshot refs, Radix options via eval — evidence: job 20261014-honest-lev: ver-hl-lev runs 923/924.
 - 2026-10-16 (Land, job 20261016-safety-bugs): real-DB smoke recipe (Path, backup copy, main-vs-branch baseline). Evidence: ver-sf-job improve line + unresolved migration finding. Applied automatically.
 - 2026-10-16 (Land, job 20261016-sizing): choose live-AC windows from the first trade date — evidence ver-sz-job-1 runs 920/921. Applied by the chief.
+- 2026-10-16 (job 20261016-easy-beads-3): seeded render-only fallback for rare-row UI criteria — evidence: nq6vg runs 920/921 produced no liquidated rows.
