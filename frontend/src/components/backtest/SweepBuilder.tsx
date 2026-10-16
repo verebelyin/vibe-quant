@@ -115,6 +115,23 @@ function legacyNativeFields(type: string, params: Record<string, number>): Legac
 const DECIMAL = /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/;
 
 /**
+ * dsl/translator.py `_as_float`: the value as a finite number, else null.
+ *
+ * A number must be finite. A string must be a plain decimal numeral (`DECIMAL`) that `Number()`
+ * reads the way Python `float()` does -- `Number("0x10")` is 16 but `float("0x10")` raises, and
+ * `float("1_000")` is 1000 while `Number("1_000")` is NaN, so both are rejected. A bool is
+ * excluded (`Number(true)` is 1, but a flag is not a period) and so is anything `JSON.parse`
+ * cannot make a number (null, objects, arrays).
+ */
+export function asFloat(value: unknown): number | null {
+  if (typeof value === "boolean" || value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || !DECIMAL.test(value.trim())) return null;
+  const number = Number(value.trim());
+  return Number.isFinite(number) ? number : null;
+}
+
+/**
  * Mirrors dsl/translator.py `_int_param` for one legacy int field: a number or a numeric string
  * is parsed, a bool or non-numeric string is rejected, and a fractional value is rejected (never
  * silently truncated). Returns the translator's message, or null when the value is a whole number.
@@ -177,10 +194,7 @@ export function sweepableParamsFor(
     ]);
     const isInt = (field: string, key: string) =>
       NATIVE_INT_FIELDS.has(field) || entry?.param_schema[key] === "int";
-    const numeric = (key: string) => {
-      const v = ind.params[key];
-      return typeof v === "number" && Number.isFinite(v) ? v : null;
-    };
+    const numeric = (key: string) => asFloat(ind.params[key]);
 
     let name = ind.name ?? "";
     // [field, source param key] in display order
@@ -191,9 +205,10 @@ export function sweepableParamsFor(
         .filter((k) => !entry || NATIVE_FIELDS.has(k) || declared.has(k))
         .map((k) => [k, k]);
     } else {
+      const period = asFloat(ind.params.period);
       const base =
-        typeof ind.params.period === "number"
-          ? `${ind.type.toLowerCase()}_${Math.trunc(ind.params.period)}`
+        period !== null
+          ? `${ind.type.toLowerCase()}_${Math.trunc(period)}`
           : ind.type.toLowerCase();
       name = base;
       for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;

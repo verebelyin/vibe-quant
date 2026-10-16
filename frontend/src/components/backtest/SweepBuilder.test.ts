@@ -10,6 +10,7 @@ import folded from "./__fixtures__/folded_ui_strategy.json";
 import catalog from "./__fixtures__/indicator_catalog.json";
 import legacy from "./__fixtures__/legacy_ui_strategy.json";
 import {
+  asFloat,
   expandParam,
   MAX_SWEEP_COMBINATIONS,
   MAX_VALUES_PER_PARAM,
@@ -411,5 +412,89 @@ describe("sweepProblem", () => {
         ...sweepable(true, "b"),
       ]),
     ).toMatch(/10[\s\u00a0\u202f,.]?201 combinations exceed/); // 101 * 101
+  });
+});
+
+describe("asFloat mirrors the translator's _as_float", () => {
+  it("parses a finite number or a plain decimal numeral string, and nothing else", () => {
+    const TABLE: Array<[unknown, number | null]> = [
+      [14, 14],
+      [14.0, 14],
+      [14.5, 14.5],
+      [-3, -3],
+      ["14", 14],
+      [" 14 ", 14],
+      ["1e1", 10],
+      ["+7", 7],
+      ["5.", 5],
+      ["-2.5", -2.5],
+      // Number() and Python float() disagree on these, and Python rejects them too
+      ["0x10", null],
+      ["0b11", null],
+      ["1_000", null],
+      ["1 000", null],
+      ["--1", null],
+      ["1e", null],
+      ["+", null],
+      ["abc", null],
+      ["", null],
+      [" ", null],
+      // non-finite, on both sides: a literal or the "inf"/"nan" strings a YAML tab can produce
+      [Infinity, null],
+      [-Infinity, null],
+      [NaN, null],
+      ["inf", null],
+      ["-inf", null],
+      ["nan", null],
+      ["1e400", null],
+      // a bool is not a period (Number(true) is 1), and neither is null/an object
+      [true, null],
+      [false, null],
+      [null, null],
+      [undefined, null],
+      [{}, null],
+      [[], null],
+    ];
+    for (const [value, expected] of TABLE) {
+      expect(asFloat(value), JSON.stringify(value)).toBe(expected);
+    }
+  });
+});
+
+describe("sweepableParamsFor UI-format numeric strings mirror the translator naming", () => {
+  // BB is used so the sweepable std_dev key survives even when the period is unusable
+  const bb = (period: unknown) =>
+    sweepableParamsFor({
+      general: {},
+      indicators: [{ type: "BB", params: { period, std_dev: 2 } }],
+    });
+
+  it("names the indicator <type>_<int period> for every usable period spelling", () => {
+    for (const [value, name] of [
+      [14, "bb_14"],
+      [14.0, "bb_14"],
+      ["14", "bb_14"],
+      [" 14 ", "bb_14"],
+      ["1e1", "bb_10"],
+    ] as Array<[unknown, string]>) {
+      expect(
+        bb(value).map((p) => p.key),
+        JSON.stringify(value),
+      ).toEqual([`${name}_period`, `${name}_std_dev`]);
+    }
+  });
+
+  it("an unusable period leaves the plain <type> name and is not swept", () => {
+    for (const value of ["0x10", "1_000", "abc", "", true, null, Infinity, NaN, "inf"]) {
+      expect(
+        bb(value).map((p) => p.key),
+        JSON.stringify(value),
+      ).toEqual(["bb_std_dev"]);
+    }
+  });
+
+  it("a numeric string period is swept with its parsed value", () => {
+    expect(bb("14")[0]).toMatchObject({ key: "bb_14_period", currentValue: 14, integer: true });
+    expect(bb("1e1")[0]).toMatchObject({ key: "bb_10_period", currentValue: 10, integer: true });
   });
 });
