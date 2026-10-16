@@ -312,8 +312,10 @@ def _run_multi_seed(
 
     # Group strategies by structural similarity, rank by median Sharpe
     from vibe_quant.discovery.distance import chromosome_distance
+    from vibe_quant.discovery.pipeline import _behaviour_fingerprint
 
-    # Build groups: strategies within min_distance are "the same"
+    # Build groups: strategies within min_distance OR behaviourally identical to
+    # the group representative (same non-None fitness fingerprint) are "the same"
     groups: list[
         list[
             tuple[
@@ -326,9 +328,17 @@ def _run_multi_seed(
     ] = []
     for chrom, fit, result, idx in all_strategies:
         placed = False
+        candidate_fp = _behaviour_fingerprint(fit)
         for group in groups:
             rep_chrom = group[0][0]
-            if chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance:
+            structurally_close = (
+                chromosome_distance(chrom, rep_chrom) < config.min_diversity_distance
+            )
+            behaviourally_same = (
+                candidate_fp is not None
+                and candidate_fp == _behaviour_fingerprint(group[0][1])
+            )
+            if structurally_close or behaviourally_same:
                 group.append((chrom, fit, result, idx))
                 placed = True
                 break
