@@ -843,8 +843,8 @@ def _run_frontend(cfg: Config, run: RunFn) -> Check:
     for label, rc, out in (("worktree", wt_rc, lint_wt), ("main", main_rc, lint_main)):
         if msg := _lint_problem(label, rc, out):
             problems.append(msg)
-    if lint_regressed(lint_wt, lint_main):
-        problems.append(f"lint errors {wt_errs} > main {main_errs}")
+    if wt_errs > 0:
+        problems.append(f"lint errors {wt_errs} (must be 0; main {main_errs})")
     counts = f"lint errors {wt_errs} (main {main_errs})"
     if problems:
         return Check("frontend", "FAIL", "; ".join(problems) + "; " + counts)

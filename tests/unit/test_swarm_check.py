@@ -761,16 +761,23 @@ class TestRunChecks:
         assert fe.status == "FAIL"
         assert "5" in fe.detail and "3" in fe.detail
 
-    def test_frontend_ok_when_lint_flat(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
-        (repo / "frontend").mkdir()
-        (repo / "frontend" / "App.tsx").write_text("export {}\n")
-        (tmp_path / "frontend").mkdir()
-        runner = FakeRunner()
-        runner.responses = {"tsc": (0, ""), "pnpm": (0, "Found 3 errors.")}
-        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never")
-        checks = swarm_check.run_checks(cfg, runner)
-        assert {c.name: c for c in checks}["frontend"].status == "PASS"
+    def test_frontend_equal_nonzero_lint_fails(self, tmp_path: Path) -> None:
+        """Flat is no longer clean: main is expected at 0 lint errors (vibe-quant-g3z0q)."""
+        status, detail = self._fe_status(tmp_path, {"tsc": (0, ""), "pnpm": (0, "Found 3 errors.")})
+        assert status == "FAIL"
+        assert "must be 0" in detail and "3" in detail
+
+    def test_frontend_one_error_each_fails(self, tmp_path: Path) -> None:
+        status, detail = self._fe_status(tmp_path, {"tsc": (0, ""), "pnpm": (0, "Found 1 error.")})
+        assert status == "FAIL" and "must be 0" in detail
+
+    def test_frontend_zero_lint_ok_when_main_has_errors(self, tmp_path: Path) -> None:
+        def pnpm(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            return 0, "Found 3 errors." if cwd == tmp_path / "frontend" else "Found 0 errors."
+
+        status, detail = self._fe_status(tmp_path, {"tsc": (0, ""), "pnpm": pnpm})
+        assert status == "PASS"
+        assert "lint errors 0 (main 3)" in detail
 
     def _fe_status(
         self, tmp_path: Path, responses: dict[str, object]
