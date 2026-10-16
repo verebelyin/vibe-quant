@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getGetDrawdownApiResultsRunsRunIdDrawdownGetQueryKey,
   getGetEquityCurveApiResultsRunsRunIdEquityCurveGetQueryKey,
@@ -10,7 +11,6 @@ import {
   useGetSweepsApiResultsRunsRunIdSweepsGet,
   useListRunsApiResultsRunsGet,
 } from "@/api/generated/results/results";
-import { ArrowLeft } from "lucide-react";
 import { ChartsPanel } from "@/components/results/ChartsPanel";
 import { CostBreakdown } from "@/components/results/CostBreakdown";
 import { CrossWindowPanel } from "@/components/results/CrossWindowPanel";
@@ -26,6 +26,7 @@ import { OverfittingBadges } from "@/components/results/OverfittingBadges";
 import { RawStatsPanel } from "@/components/results/RawStatsPanel";
 import { RegimeValidationPanel } from "@/components/results/RegimeValidationPanel";
 import { RunDetailsExpander } from "@/components/results/RunDetailsExpander";
+import { SizingChip } from "@/components/results/SizingChip";
 import { SweepAnalysis } from "@/components/results/SweepAnalysis";
 import { TradeChart } from "@/components/results/TradeChart";
 import { TradeLog } from "@/components/results/TradeLog";
@@ -57,10 +58,7 @@ function useRunPolling(runId: number) {
     const run = runs.find((r: { id: number; status: string }) => r.id === runId);
     const status = run?.status ?? null;
 
-    if (
-      prevStatus.current === "running" &&
-      (status === "completed" || status === "failed")
-    ) {
+    if (prevStatus.current === "running" && (status === "completed" || status === "failed")) {
       queryClient.invalidateQueries({
         queryKey: getGetRunSummaryApiResultsRunsRunIdGetQueryKey(runId),
       });
@@ -135,6 +133,7 @@ export function ResultsDetailPage({ runId }: ResultsDetailPageProps) {
             Run #{runId}
           </h3>
           <LiquidationChip runId={runId} />
+          <SizingChip runId={runId} />
           <ExitTimingNote runId={runId} />
         </div>
         <ExportPanel runId={runId} />
@@ -144,7 +143,12 @@ export function ResultsDetailPage({ runId }: ResultsDetailPageProps) {
 
       <TradeChart runId={runId} highlightedTradeId={highlightedTradeId} />
 
-      <TradeLog runId={runId} onTradeHover={handleTradeHover} onTradeClick={handleTradeClick} highlightedTradeId={highlightedTradeId} />
+      <TradeLog
+        runId={runId}
+        onTradeHover={handleTradeHover}
+        onTradeClick={handleTradeClick}
+        highlightedTradeId={highlightedTradeId}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <CostBreakdown runId={runId} />

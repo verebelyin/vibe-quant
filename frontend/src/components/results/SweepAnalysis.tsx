@@ -28,6 +28,7 @@ import {
   showExitColumn,
   showLiqColumn,
 } from "@/lib/liquidationDisplay";
+import { sweepValidationBody } from "@/lib/sweepValidation";
 import { cn } from "@/lib/utils";
 
 interface SweepAnalysisProps {
@@ -160,19 +161,17 @@ export function SweepAnalysis({ runId }: SweepAnalysisProps) {
         toast.error("Run metadata not available");
         return;
       }
+      // U9-U12/U9b/U9c: the pure builder carries the parent run's run-level
+      // settings, or refuses (DSL override / unreadable sizing) before a request.
+      const validation = sweepValidationBody(run, sweep);
+      if (!validation.ok) {
+        toast.error(validation.error);
+        return;
+      }
       const sweepId = sweep.id;
       setPendingValidations((prev) => new Set(prev).add(sweepId));
       mutation.mutate(
-        {
-          data: {
-            strategy_id: run.strategy_id ?? 0,
-            symbols: run.symbols,
-            timeframe: run.timeframe ?? "",
-            start_date: run.start_date ?? "",
-            end_date: run.end_date ?? "",
-            parameters: sweep.parameters,
-          },
-        },
+        { data: validation.body },
         {
           onSuccess: () => {
             toast.success("Validation launched");
