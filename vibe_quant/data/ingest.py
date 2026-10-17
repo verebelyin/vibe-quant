@@ -877,10 +877,17 @@ def ingest_funding_intervals(
 
     Vision publishes one monthly ``fundingRate`` file per symbol; the stored
     ``funding_interval_hours`` is what tells a hole on a 2h/4h symbol apart
-    from a legal 8h gap. Months run from the one after the latest archived
-    interval row's month — or, when nothing is archived yet, from the month of
-    the symbol's oldest ``raw_funding_rates`` row — through the last COMPLETE
-    UTC month before *now*: the current month is never published.
+    from a legal 8h gap.
+
+    The months fetched are every UTC calendar month that holds at least one
+    archived ``raw_funding_rates`` row for *symbol* but no
+    ``raw_funding_intervals`` row yet, strictly before the current month. That
+    fills months older than the newest interval row and mid-range holes alike,
+    and a month with no archived rates is never fetched. The current month is
+    skipped because Vision publishes a month's file only after it ends.
+
+    A month that 404s (not published) inserts nothing and therefore still has
+    no interval rows, so the next run retries it.
 
     Args:
         symbol: Trading symbol.
@@ -890,30 +897,36 @@ def ingest_funding_intervals(
 
     Returns:
         Number of interval rows inserted. 0 when the archive holds no funding
-        rates at all (nothing to date the backfill from).
+        rates at all (nothing to date a fetch from).
     """
-    latest = archive.conn.execute(
-        "SELECT MAX(funding_time) FROM raw_funding_intervals WHERE symbol = ?", (symbol,)
-    ).fetchone()[0]
-    if latest is not None:
-        anchor = datetime.fromtimestamp(int(latest) / 1000, tz=UTC)
-        if anchor.month == 12:
-            start_date = datetime(anchor.year + 1, 1, 1, tzinfo=UTC)
-        else:
-            start_date = datetime(anchor.year, anchor.month + 1, 1, tzinfo=UTC)
-    else:
-        first = archive.conn.execute(
-            "SELECT MIN(funding_time) FROM raw_funding_rates WHERE symbol = ?", (symbol,)
-        ).fetchone()[0]
-        if first is None:
-            return 0
-        anchor = datetime.fromtimestamp(int(first) / 1000, tz=UTC)
-        start_date = datetime(anchor.year, anchor.month, 1, tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    current_month = (now.year, now.month)
+
+    def _archived_months(table: str) -> set[tuple[int, int]]:
+        keys = archive.conn.execute(
+            f"SELECT DISTINCT strftime('%Y-%m', funding_time / 1000, 'unixepoch') "
+            f"FROM {table} WHERE symbol = ?",
+            (symbol,),
+        ).fetchall()
+        months: set[tuple[int, int]] = set()
+        for (key,) in keys:
+            if key is None:
+                continue
+            year, month = str(key).split("-")
+            months.add((int(year), int(month)))
+        return months
+
+    missing = sorted(
+        month
+        for month in _archived_months("raw_funding_rates")
+        - _archived_months("raw_funding_intervals")
+        if month < current_month
+    )
 
     inserted_total = 0
-    for year, month in get_months_in_range(start_date, now or datetime.now(UTC)):
+    for year, month in missing:
         rows = download_monthly_funding_intervals(symbol, year, month)
-        if rows is None:  # not published
+        if rows is None:  # not published; retried on the next run
             continue
         inserted = archive.insert_funding_intervals(symbol, rows, "binance_vision")
         inserted_total += inserted

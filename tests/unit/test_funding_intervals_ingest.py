@@ -174,10 +174,11 @@ def test_insert_funding_intervals_is_append_only(tmp_path: Path) -> None:
         archive.close()
 
 
-def test_december_anchor_rolls_into_january(
+def test_rate_months_missing_interval_rows_are_backfilled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A December anchor resumes at the next January, not at its own December."""
+    """C6: rate months with no interval row are fetched, across a year edge —
+    the old December-anchor rollover is gone."""
     archive = RawDataArchive(tmp_path / "rollover.db")
     calls: list[tuple[int, int]] = []
 
@@ -187,15 +188,146 @@ def test_december_anchor_rolls_into_january(
 
     monkeypatch.setattr(ingest, "download_monthly_funding_intervals", fake)
     try:
-        archive.insert_funding_intervals("SOLUSDT", [(_ms(2025, 12, 15), 8)], "binance_vision")
+        archive.insert_funding_rates(
+            "SOLUSDT",
+            [
+                (_ms(2025, 12, 15), 0.0001, 1.0),
+                (_ms(2026, 1, 15), 0.0001, 1.0),
+                (_ms(2026, 2, 15), 0.0001, 1.0),
+            ],
+            "seed",
+        )
+        archive.insert_funding_intervals("SOLUSDT", [(_ms(2025, 12, 15), 8)], "seed")
 
         assert (
             ingest.ingest_funding_intervals(
-                "SOLUSDT", archive, now=datetime(2026, 3, 10, tzinfo=UTC)
+                "SOLUSDT", archive, now=datetime(2026, 10, 17, tzinfo=UTC)
             )
             == 0
         )
         assert calls == [(2026, 1), (2026, 2)]
+    finally:
+        archive.close()
+
+
+def test_older_months_without_interval_rows_are_backfilled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: months OLDER than the newest interval row are fetched too."""
+    archive = RawDataArchive(tmp_path / "older.db")
+    calls: list[tuple[int, int]] = []
+
+    def fake(symbol: str, year: int, month: int, *a: Any, **k: Any) -> list[tuple[int, int]]:
+        calls.append((year, month))
+        return [(_ms(year, month, 5), 8)]
+
+    monkeypatch.setattr(ingest, "download_monthly_funding_intervals", fake)
+    try:
+        archive.insert_funding_rates(
+            "SOLUSDT", [(_ms(2026, m, 5), 0.0001, 1.0) for m in range(5, 10)], "seed"
+        )
+        archive.insert_funding_intervals(
+            "SOLUSDT", [(_ms(2026, 8, 5), 8), (_ms(2026, 9, 5), 8)], "seed"
+        )
+
+        assert (
+            ingest.ingest_funding_intervals(
+                "SOLUSDT", archive, now=datetime(2026, 10, 17, tzinfo=UTC)
+            )
+            == 3
+        )
+        assert calls == [(2026, 5), (2026, 6), (2026, 7)]
+    finally:
+        archive.close()
+
+
+def test_404_month_is_retried_and_gap_months_fetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C3: a mid-range month whose zip 404s inserts nothing and stays missing,
+    so the next run re-fetches it; months that already hold intervals do not."""
+    archive = RawDataArchive(tmp_path / "gap.db")
+    calls: list[tuple[int, int]] = []
+
+    def fake(
+        symbol: str, year: int, month: int, *a: Any, **k: Any
+    ) -> list[tuple[int, int]] | None:
+        calls.append((year, month))
+        if month == 7:
+            return None
+        return [(_ms(year, month, 5), 8)]
+
+    monkeypatch.setattr(ingest, "download_monthly_funding_intervals", fake)
+    now = datetime(2026, 10, 17, tzinfo=UTC)
+    try:
+        archive.insert_funding_rates(
+            "SOLUSDT", [(_ms(2026, m, 5), 0.0001, 1.0) for m in range(6, 10)], "seed"
+        )
+        archive.insert_funding_intervals(
+            "SOLUSDT", [(_ms(2026, 6, 5), 8), (_ms(2026, 8, 5), 8)], "seed"
+        )
+
+        assert ingest.ingest_funding_intervals("SOLUSDT", archive, now=now) == 1
+        assert calls == [(2026, 7), (2026, 9)]
+
+        assert ingest.ingest_funding_intervals("SOLUSDT", archive, now=now) == 0
+        assert calls == [(2026, 7), (2026, 9), (2026, 7)]
+    finally:
+        archive.close()
+
+
+def test_current_month_is_never_fetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C4: the current month is not published yet, so rates in it fetch nothing."""
+    archive = RawDataArchive(tmp_path / "current.db")
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        ingest,
+        "download_monthly_funding_intervals",
+        lambda *a, **k: calls.append((1, 1)) or [],
+    )
+    try:
+        archive.insert_funding_rates("SOLUSDT", [(_ms(2026, 10, 5), 0.0001, 1.0)], "seed")
+
+        assert (
+            ingest.ingest_funding_intervals(
+                "SOLUSDT", archive, now=datetime(2026, 10, 17, tzinfo=UTC)
+            )
+            == 0
+        )
+        assert calls == []
+    finally:
+        archive.close()
+
+
+def test_months_without_rates_are_not_fetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C7: only months holding archived rates are fetched; an interior month
+    with no rates is skipped."""
+    archive = RawDataArchive(tmp_path / "hole.db")
+    calls: list[tuple[int, int]] = []
+
+    def fake(symbol: str, year: int, month: int, *a: Any, **k: Any) -> list[tuple[int, int]]:
+        calls.append((year, month))
+        return []
+
+    monkeypatch.setattr(ingest, "download_monthly_funding_intervals", fake)
+    try:
+        archive.insert_funding_rates(
+            "SOLUSDT",
+            [(_ms(2026, 5, 5), 0.0001, 1.0), (_ms(2026, 7, 5), 0.0001, 1.0)],
+            "seed",
+        )
+
+        assert (
+            ingest.ingest_funding_intervals(
+                "SOLUSDT", archive, now=datetime(2026, 10, 17, tzinfo=UTC)
+            )
+            == 0
+        )
+        assert calls == [(2026, 5), (2026, 7)]
     finally:
         archive.close()
 
@@ -213,7 +345,9 @@ def test_ingest_months_and_idempotent(
 
     monkeypatch.setattr(ingest, "download_monthly_funding_intervals", fake)
     try:
-        archive.insert_funding_rates("SOLUSDT", [(_ms(2026, 7, 5), 0.0001, 1.0)], "seed")
+        archive.insert_funding_rates(
+            "SOLUSDT", [(_ms(2026, m, 5), 0.0001, 1.0) for m in (7, 8, 9)], "seed"
+        )
         now = datetime(2026, 10, 17, tzinfo=UTC)
 
         assert ingest.ingest_funding_intervals("SOLUSDT", archive, now=now) == 3
@@ -231,7 +365,8 @@ def test_ingest_months_and_idempotent(
 
 
 def test_no_funding_no_interval_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A symbol with no archived rates gives no month to start from."""
+    """C5: no archived rates means no month to fetch, even when interval rows
+    exist (an interval row alone dates no fetch)."""
     archive = RawDataArchive(tmp_path / "empty.db")
     calls: list[tuple[int, int]] = []
     monkeypatch.setattr(
@@ -240,6 +375,7 @@ def test_no_funding_no_interval_fetch(tmp_path: Path, monkeypatch: pytest.Monkey
         lambda *a, **k: calls.append((1, 1)) or [],
     )
     try:
+        archive.insert_funding_intervals("SOLUSDT", [(_ms(2026, 7, 15), 8)], "seed")
         assert ingest.ingest_funding_intervals("SOLUSDT", archive) == 0
         assert calls == []
     finally:
