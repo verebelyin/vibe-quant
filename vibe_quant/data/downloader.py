@@ -37,6 +37,11 @@ BINANCE_VISION_DAILY_MARK_BASE = (
     "https://data.binance.vision/data/futures/um/daily/markPriceKlines"
 )
 
+# Binance Vision base URL for funding-rate archives. Unlike the kline layouts
+# there is no interval path segment: <base>/<SYMBOL>/<SYMBOL>-fundingRate-YYYY-MM.zip,
+# whose CSV is ``calc_time,funding_interval_hours,last_funding_rate``.
+BINANCE_VISION_FUNDING_BASE = "https://data.binance.vision/data/futures/um/monthly/fundingRate"
+
 # Binance Futures REST API
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
@@ -246,6 +251,54 @@ def download_daily_mark_klines(
     )
 
 
+def download_monthly_funding_intervals(
+    symbol: str,
+    year: int,
+    month: int,
+    timeout: float = 60.0,
+    client: httpx.Client | None = None,
+) -> list[tuple[int, int]] | None:
+    """Download one month of funding intervals from Binance Vision.
+
+    Vision publishes the ``funding_interval_hours`` in effect at each funding
+    settlement, which is the only source that can tell a legitimate 8h gap from
+    a hole on a 2h/4h symbol. The layout differs from klines (no interval path
+    segment), so this has its own fetch, but it shares the retry policy.
+
+    Args:
+        symbol: Trading symbol (e.g., 'SOLUSDT').
+        year: Year to download.
+        month: Month to download (1-12).
+        timeout: Request timeout in seconds.
+        client: Optional shared httpx.Client for connection reuse.
+
+    Returns:
+        List of ``(calc_time_ms, interval_hours)`` tuples, or None when the
+        month is not published (404).
+
+    Raises:
+        MonthlyDownloadError: Transient failures persisted through the retry
+            schedule, or a non-retryable error (e.g. 403) occurred.
+    """
+    filename = f"{symbol}-fundingRate-{year}-{month:02d}.zip"
+    url = f"{BINANCE_VISION_FUNDING_BASE}/{symbol}/{filename}"
+
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(timeout=timeout)
+    assert client is not None  # narrowing for mypy
+    try:
+        return _call_with_retry(
+            lambda: _fetch_funding_intervals_zip(client, url, filename, symbol, year, month),
+            f"{symbol} fundingRate {year}-{month:02d}",
+        )
+    except DownloadError as e:
+        raise MonthlyDownloadError(str(e)) from e.__cause__
+    finally:
+        if own_client:
+            client.close()
+
+
 def _download_monthly_zip(
     base_url: str,
     symbol: str,
@@ -367,6 +420,47 @@ def _fetch_vision_csv_zip(
                     )
                 )
             return klines
+
+
+def _fetch_funding_intervals_zip(
+    client: httpx.Client, url: str, filename: str, symbol: str, year: int, month: int
+) -> list[tuple[int, int]] | None:
+    """One attempt: GET + parse a fundingRate zip. None on 404.
+
+    The CSV is ``calc_time,funding_interval_hours,last_funding_rate`` with a
+    header. A row is kept only when its ``funding_interval_hours`` is a
+    positive integer; the header, a blank/non-integer interval and ``0`` are
+    dropped, and the dropped rows are reported once per file (never fatal).
+    """
+    response = client.get(url)
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+
+    rows: list[tuple[int, int]] = []
+    skipped = 0
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        csv_filename = filename.replace(".zip", ".csv")
+        with zf.open(csv_filename) as f:
+            reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8"))
+            for row in reader:
+                # Skip the header and any malformed line (calc_time is digits).
+                if not row or not row[0].isdigit():
+                    continue
+                try:
+                    hours = int(row[1])
+                except (IndexError, ValueError):
+                    skipped += 1
+                    continue
+                if hours <= 0:
+                    skipped += 1
+                    continue
+                rows.append((int(row[0]), hours))
+    if skipped:
+        logger.warning(
+            "skipped %d funding interval rows for %s %d-%02d", skipped, symbol, year, month
+        )
+    return rows
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:

@@ -64,6 +64,20 @@ CREATE TABLE IF NOT EXISTS raw_funding_rates (
     UNIQUE(symbol, funding_time)
 );
 
+-- Binance Vision funding intervals: the settlement interval (hours) actually
+-- in effect at each archived funding_time. Append-only and joined to
+-- raw_funding_rates on ``funding_time``; a row with no entry here inherits the
+-- previous row's interval (see FundingCalculator._load_intervals).
+CREATE TABLE IF NOT EXISTS raw_funding_intervals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    funding_time INTEGER NOT NULL,
+    interval_hours INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(symbol, funding_time)
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_klines_symbol_time
     ON raw_klines(symbol, interval, open_time);
 CREATE INDEX IF NOT EXISTS idx_raw_mark_klines_symbol_time
@@ -316,6 +330,63 @@ class RawDataArchive:
             (symbol,),
         ).fetchone()[0]
         return int(after - before)
+
+    def insert_funding_intervals(
+        self,
+        symbol: str,
+        rows: Iterable[tuple[int, int]],
+        source: str,
+    ) -> int:
+        """Insert Binance Vision funding intervals into the archive.
+
+        Append-only: rows are keyed by ``(symbol, funding_time)`` and an
+        already-archived row is left untouched, so a re-run is idempotent.
+
+        Args:
+            symbol: Trading symbol (e.g., 'SOLUSDT').
+            rows: Iterable of (funding_time_ms, interval_hours) tuples.
+            source: Data source identifier (e.g., 'binance_vision').
+
+        Returns:
+            Number of rows inserted.
+        """
+        values = [(symbol, int(r[0]), int(r[1]), source) for r in rows]
+
+        before = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_funding_intervals WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()[0]
+
+        self.conn.executemany(
+            """INSERT OR IGNORE INTO raw_funding_intervals
+               (symbol, funding_time, interval_hours, source)
+               VALUES (?, ?, ?, ?)""",
+            values,
+        )
+        self.conn.commit()
+
+        after = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_funding_intervals WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()[0]
+        return int(after - before)
+
+    def get_funding_intervals(self, symbol: str) -> dict[int, int]:
+        """Get archived funding intervals for a symbol.
+
+        Args:
+            symbol: Trading symbol.
+
+        Returns:
+            ``{funding_time_ms: interval_hours}``, empty when none is archived.
+        """
+        return {
+            int(row[0]): int(row[1])
+            for row in self.conn.execute(
+                "SELECT funding_time, interval_hours FROM raw_funding_intervals WHERE symbol = ?",
+                (symbol,),
+            )
+        }
 
     def get_klines(
         self,

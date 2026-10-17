@@ -30,6 +30,7 @@ from vibe_quant.data.downloader import (
     download_daily_klines,
     download_daily_mark_klines,
     download_funding_rates,
+    download_monthly_funding_intervals,
     download_monthly_klines,
     download_monthly_mark_klines,
     download_recent_klines,
@@ -297,6 +298,16 @@ def update_symbol(
     except httpx.HTTPError as e:
         logger.warning("%s: funding refresh failed (%s); continuing with klines", symbol, e)
         counts["new_funding_rates"] = 0
+
+    # The interval backfill is its own best-effort step: an archive without
+    # intervals still charges every row, it just cannot see non-8h holes.
+    try:
+        counts["new_funding_intervals"] = ingest_funding_intervals(
+            symbol, archive, verbose=verbose
+        )
+    except (httpx.HTTPError, MonthlyDownloadError) as e:
+        logger.warning("%s: funding interval fetch failed (%s); continuing", symbol, e)
+        counts["new_funding_intervals"] = 0
 
     # Get last timestamp from archive
     date_range = archive.get_date_range(symbol, "1m")
@@ -855,6 +866,62 @@ def ingest_mark_klines(
     return counts
 
 
+def ingest_funding_intervals(
+    symbol: str,
+    archive: RawDataArchive,
+    *,
+    verbose: bool = False,
+    now: datetime | None = None,
+) -> int:
+    """Backfill Binance Vision funding intervals for an existing archive.
+
+    Vision publishes one monthly ``fundingRate`` file per symbol; the stored
+    ``funding_interval_hours`` is what tells a hole on a 2h/4h symbol apart
+    from a legal 8h gap. Months run from the one after the latest archived
+    interval row's month — or, when nothing is archived yet, from the month of
+    the symbol's oldest ``raw_funding_rates`` row — through the last COMPLETE
+    UTC month before *now*: the current month is never published.
+
+    Args:
+        symbol: Trading symbol.
+        archive: Raw data archive.
+        verbose: Print progress messages.
+        now: Reference "today" (defaults to the current UTC time).
+
+    Returns:
+        Number of interval rows inserted. 0 when the archive holds no funding
+        rates at all (nothing to date the backfill from).
+    """
+    latest = archive.conn.execute(
+        "SELECT MAX(funding_time) FROM raw_funding_intervals WHERE symbol = ?", (symbol,)
+    ).fetchone()[0]
+    if latest is not None:
+        anchor = datetime.fromtimestamp(int(latest) / 1000, tz=UTC)
+        if anchor.month == 12:
+            start_date = datetime(anchor.year + 1, 1, 1, tzinfo=UTC)
+        else:
+            start_date = datetime(anchor.year, anchor.month + 1, 1, tzinfo=UTC)
+    else:
+        first = archive.conn.execute(
+            "SELECT MIN(funding_time) FROM raw_funding_rates WHERE symbol = ?", (symbol,)
+        ).fetchone()[0]
+        if first is None:
+            return 0
+        anchor = datetime.fromtimestamp(int(first) / 1000, tz=UTC)
+        start_date = datetime(anchor.year, anchor.month, 1, tzinfo=UTC)
+
+    inserted_total = 0
+    for year, month in get_months_in_range(start_date, now or datetime.now(UTC)):
+        rows = download_monthly_funding_intervals(symbol, year, month)
+        if rows is None:  # not published
+            continue
+        inserted = archive.insert_funding_intervals(symbol, rows, "binance_vision")
+        inserted_total += inserted
+        if verbose:
+            print(f"  {year}-{month:02d}: {inserted} new funding intervals")
+    return inserted_total
+
+
 def ingest_funding_rates(
     symbol: str,
     years: int = 2,
@@ -894,6 +961,11 @@ def ingest_funding_rates(
         archive.insert_funding_rates(symbol, rates, "binance_api")
         if verbose:
             print(f"Archived {len(rates)} funding rates")
+        # A Vision failure must never lose the rates that just landed.
+        try:
+            ingest_funding_intervals(symbol, archive, verbose=verbose)
+        except (httpx.HTTPError, MonthlyDownloadError) as e:
+            logger.warning("%s: funding interval fetch failed (%s); continuing", symbol, e)
         return len(rates)
 
     if verbose:
@@ -1496,6 +1568,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Also rebuild MARK 1m bars in the ParquetDataCatalog from the archive",
     )
 
+    # Funding-intervals command (Binance Vision interval backfill)
+    intervals_parser = subparsers.add_parser(
+        "funding-intervals",
+        help="Backfill Binance Vision funding intervals into the archive",
+    )
+    intervals_parser.add_argument(
+        "--symbols",
+        type=str,
+        default=",".join(SUPPORTED_SYMBOLS),
+        help="Comma-separated symbols",
+    )
+
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify data quality")
     verify_parser.add_argument(
@@ -1645,6 +1729,21 @@ def main(argv: list[str] | None = None) -> int:
             print("\nERROR: downloads failed (holes in archive):", file=sys.stderr)
             for line in update_failed:
                 print(f"  {line}", file=sys.stderr)
+            return 1
+    elif args.command == "funding-intervals":
+        symbols = [s.strip() for s in args.symbols.split(",")]
+        intervals_archive = RawDataArchive()
+        interval_failed = False
+        for symbol in symbols:
+            try:
+                inserted = ingest_funding_intervals(symbol, intervals_archive, verbose=True)
+            except MonthlyDownloadError as e:
+                print(f"{symbol}: funding interval fetch failed ({e})", file=sys.stderr)
+                interval_failed = True
+                continue
+            print(f"{symbol}: archived {inserted} funding intervals")
+        intervals_archive.close()
+        if interval_failed:
             return 1
     elif args.command == "rebuild":
         rebuild_from_archive(verbose=True)
