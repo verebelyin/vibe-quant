@@ -41,6 +41,18 @@ describe("discoveryEvalEstimate", () => {
     ).toStrictEqual({ totalEvals: 2400, parallelSec: 4500 });
   });
 
+  it("multiplies by every factor of the search (N1)", () => {
+    expect(
+      discoveryEvalEstimate({
+        population: 20,
+        generations: 15,
+        numSeeds: 3,
+        crossWindowMultiplier: 2,
+        gridCount: 8,
+      }),
+    ).toStrictEqual({ totalEvals: 14400, parallelSec: 27000 });
+  });
+
   it("divides evals across EVAL_CORES cores at SEC_PER_EVAL seconds each", () => {
     expect(EVAL_CORES).toBe(8);
     expect(SEC_PER_EVAL).toBe(15);

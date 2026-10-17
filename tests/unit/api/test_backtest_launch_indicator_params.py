@@ -25,8 +25,10 @@ from typing import Any  # noqa: TCH003
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
+from vibe_quant.api import mark_precheck
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
@@ -130,5 +132,44 @@ async def test_indicator_check_precedes_post_only_422(client: tuple[Any, ...]) -
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == EMA_STD_DEV_MSG
     assert "validation-only" not in r.json()["detail"]
+    assert _run_count(state) == before
+    assert start_job.call_count == 0
+
+
+@pytest.mark.parametrize("endpoint", ["screening", "validation"])
+async def test_unused_indicator_param_422s_before_mark_precheck(
+    client: tuple[Any, ...], endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N1: a mode-on launch of a bad-param strategy is the indicator 422, no MARK scan.
+
+    The indicator guard's precedence over the screening post-only 422 is pinned by
+    P4; this pins it over the liquidation-mode MARK precheck of BOTH endpoints
+    (backtest.py ``launch_screening`` / ``launch_validation``), where the precheck
+    is the expensive branch (a cold MARK decode).
+    """
+    ac, state, start_job = client
+    before = _run_count(state)
+    precheck_calls: list[tuple[object, ...]] = []
+
+    def _indicator_guard_must_run_first(*args: object) -> None:
+        precheck_calls.append(args)
+        raise HTTPException(status_code=422, detail="MARK precheck ran before the indicator guard")
+
+    monkeypatch.setattr(mark_precheck, "precheck_screening", _indicator_guard_must_run_first)
+    monkeypatch.setattr(mark_precheck, "precheck_validation", _indicator_guard_must_run_first)
+
+    r = await ac.post(
+        f"/api/backtest/{endpoint}",
+        json=_body(
+            state,
+            _UNUSED_DSL,
+            name=f"unused_precheck_{endpoint}",
+            liquidation_mode="isolated",
+        ),
+    )
+
+    assert precheck_calls == []
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == EMA_STD_DEV_MSG
     assert _run_count(state) == before
     assert start_job.call_count == 0
