@@ -8,7 +8,14 @@ contract's hand-computed sums and are the point of the tests.
 
 from __future__ import annotations
 
-from vibe_quant.portfolio.signal import Settlements, rank_weights, trailing_funding
+import pytest
+
+from vibe_quant.portfolio.signal import (
+    Settlements,
+    carry_hours,
+    rank_weights,
+    trailing_funding,
+)
 
 _NANOS_PER_S = 10**9
 _DAY_NS = 86_400 * _NANOS_PER_S
@@ -159,3 +166,38 @@ def test_unrankable_symbols_are_not_ranked() -> None:
     """A ``None`` signal (funding hole / no price) is flat and out of the order."""
     weights = rank_weights({"AUSDT": 0.002, "BUSDT": None, "CUSDT": -0.002}, 3, 1.0)
     assert weights == {"AUSDT": -0.5, "BUSDT": 0.0, "CUSDT": 0.5}
+
+
+def test_4h_symbol_missing_row_is_unrankable() -> None:
+    """R34: a missing 4h row in the window is ``None``; with hours=None it is summed."""
+    times = _four_hour_times()
+    del times[0]  # the 04:00 row: not an 8h boundary, but 4h on this symbol
+    rates = [0.00005] * len(times)
+    four_hour = Settlements(times_ns=tuple(times), rates=tuple(rates), hours=(4,) * len(times))
+
+    assert trailing_funding(four_hour, _D) is None
+
+    # the same rows under the default 8h rule: summed as archived, the blind spot
+    assert trailing_funding(Settlements(tuple(times), tuple(rates)), _D) == 0.00205
+
+
+def test_settlements_hours_default_and_mismatch() -> None:
+    """R35: ``hours`` defaults to None (8h rule exactly as today); mismatch raises."""
+    grid = _grid()
+    default = _settlements(grid, [0.0001] * 21)
+
+    assert default.hours is None
+    assert trailing_funding(default, _D) == _ON_GRID_SUM
+    assert (
+        trailing_funding(Settlements(tuple(grid), (0.0001,) * 21, (8,) * 21), _D) == _ON_GRID_SUM
+    )
+    with pytest.raises(ValueError, match=r"^Settlements\.hours has 3 entries for 4 settlements$"):
+        Settlements(tuple(grid[:4]), (0.0001,) * 4, (2, 2, 2))
+
+
+def test_carry_hours_collapses_all_8h() -> None:
+    """R35b: all-8h (or empty) hours collapse to None; a real mix survives."""
+    assert carry_hours(()) is None
+    assert carry_hours((8, 8, 8)) is None
+    assert carry_hours((8, 2, 8)) == (8, 2, 8)
+    assert carry_hours((2, 2)) == (2, 2)

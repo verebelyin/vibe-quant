@@ -50,7 +50,7 @@ from vibe_quant.overfitting.dsr import (
 )
 from vibe_quant.portfolio.metrics import _WEEKS_PER_YEAR, _annualised_sharpe, carry_metrics
 from vibe_quant.portfolio.reference import simulate_reference
-from vibe_quant.portfolio.signal import Settlements
+from vibe_quant.portfolio.signal import Settlements, carry_hours
 from vibe_quant.portfolio.spec import DAY_NS, CarryEquityTooSmall
 from vibe_quant.portfolio.ticks import sizing_price
 from vibe_quant.validation.funding import FundingCalculator
@@ -176,6 +176,14 @@ class CappedFundingCalculator(FundingCalculator):
         times, rates = self._base._load_rates(symbol)
         return list(times), [min(max(rate, -self._cap), self._cap) for rate in rates]
 
+    def _load_intervals(self, symbol: str) -> list[int]:
+        """The base's intervals: they are not rates, so the cap cannot touch them.
+
+        Delegating (rather than re-resolving from the copied times) keeps the
+        base calculator's identity-keyed interval cache hit.
+        """
+        return self._base._load_intervals(symbol)
+
 
 def capped_inputs(inputs: CarryInputs, cap: float) -> CarryInputs:
     """``inputs`` with a capped funding calculator AND capped signal settlements (R37).
@@ -189,7 +197,11 @@ def capped_inputs(inputs: CarryInputs, cap: float) -> CarryInputs:
         inputs,
         calc=capped,
         settlements={
-            symbol: Settlements(*capped.settlements(symbol)) for symbol in inputs.spec.symbols
+            symbol: Settlements(
+                *capped.settlements(symbol),
+                hours=carry_hours(capped.settlement_hours(symbol)),
+            )
+            for symbol in inputs.spec.symbols
         },
     )
 

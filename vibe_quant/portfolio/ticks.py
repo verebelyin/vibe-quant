@@ -28,7 +28,7 @@ from nautilus_trader.model.identifiers import TradeId
 
 from vibe_quant.data.catalog import get_bar_type
 from vibe_quant.data.fill_ticks import FILL_TICK_SIZE
-from vibe_quant.portfolio.signal import Settlements
+from vibe_quant.portfolio.signal import Settlements, carry_hours
 from vibe_quant.portfolio.sizing import InstrumentSpec
 from vibe_quant.portfolio.spec import (
     DAY_NS,
@@ -275,7 +275,11 @@ def load_carry_inputs(
         instruments[symbol] = instrument
         specs[symbol] = InstrumentSpec.from_instrument(instrument)
         ticks[symbol] = select_ticks(bars, decisions, instrument, spec.end_ns)
-        settlements[symbol] = Settlements(times_ns=tuple(times), rates=tuple(rates))
+        settlements[symbol] = Settlements(
+            times_ns=tuple(times),
+            rates=tuple(rates),
+            hours=carry_hours(calc.settlement_hours(symbol)),
+        )
         marks[symbol] = series
         daily[symbol] = boundary_prices(bars, boundaries, instrument)
     return CarryInputs(

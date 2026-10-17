@@ -346,8 +346,13 @@ def _settlements_from(first_ns: int, end_ns: int) -> tuple[tuple[int, ...], tupl
 def _stub_settlements(
     monkeypatch: pytest.MonkeyPatch,
     by_symbol: Mapping[str, tuple[tuple[int, ...], tuple[float, ...]]],
+    hours: tuple[int, ...] | None = None,
 ) -> None:
-    """Stub ``FundingCalculator.settlements`` with fixed per-symbol series."""
+    """Stub ``FundingCalculator.settlements`` with fixed per-symbol series.
+
+    ``hours`` also stubs ``settlement_hours`` (all symbols), which the real
+    method would answer from the (empty) archive as ``()`` -> ``hours=None``.
+    """
 
     def settlements(
         self: FundingCalculator, symbol: str
@@ -355,6 +360,12 @@ def _stub_settlements(
         return by_symbol.get(symbol, ((), ()))
 
     monkeypatch.setattr(FundingCalculator, "settlements", settlements)
+    if hours is not None:
+
+        def settlement_hours(self: FundingCalculator, symbol: str) -> tuple[int, ...]:
+            return hours
+
+        monkeypatch.setattr(FundingCalculator, "settlement_hours", settlement_hours)
 
 
 def _valid_catalog(root: Path, prices: Mapping[int, float], mark_from: int) -> None:
@@ -402,6 +413,26 @@ def test_load_carry_inputs_assembles_components(
     assert inputs.settlements["BTCUSDT"] == Settlements(times_ns=rates[0], rates=rates[1])
     assert isinstance(inputs.calc, FundingCalculator)
     assert inputs.marks["BTCUSDT"].ts[0] == START
+
+
+def test_load_carry_inputs_carries_non_8h_hours(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R35b: a non-8h ``settlement_hours`` of matching length reaches ``Settlements``."""
+    spec = _spec()
+    prices = _minute_bars_for_run(START, END)
+    rates = _settlements_from(START, END)
+    hours = (2,) * len(rates[0])
+    _stub_settlements(monkeypatch, dict.fromkeys(spec.symbols, rates), hours=hours)
+    root = tmp_path / "catalog"
+    _valid_catalog(root, prices, START)
+
+    inputs = load_carry_inputs(spec, root, _archive(tmp_path))
+
+    assert inputs.settlements["BTCUSDT"] == Settlements(
+        times_ns=rates[0], rates=rates[1], hours=hours
+    )
+    assert inputs.settlements["BTCUSDT"].hours == hours
 
 
 def test_preflight_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,9 +3,12 @@
 ``trailing_funding`` sums the raw per-settlement rates over the fixed calendar
 window ``(L - 7 d, L]``, ``L = D - 60 s``: Binance already scales each rate by
 ``8 / N``, so a 4h symbol's half-size rates and an 8h symbol's rates give
-comparable 7-day totals (R4). A symbol is rankable only when every 8h UTC
-boundary in the window has an archived row within 60 s and a sizing tick
-exists; otherwise it is excluded that week, never forward-filled.
+comparable 7-day totals (R4). A symbol is rankable only when every settlement
+its OWN interval expects in the window has an archived row within 60 s and a
+sizing tick exists; otherwise it is excluded that week, never forward-filled.
+The interval rule is the funding accrual's own
+(:func:`vibe_quant.validation.funding.missing_settlements`), so a missing row on
+a 2h/4h symbol is a ``funding_hole`` here too (R34).
 """
 
 from __future__ import annotations
@@ -16,35 +19,53 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vibe_quant.portfolio.spec import LOOKBACK_NS, SIGNAL_SAFETY_NS
+from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS, missing_settlements
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-_EIGHT_HOURS_NS = 8 * 3_600 * 10**9
-
 
 @dataclass(frozen=True)
 class Settlements:
-    """Archived settlement times (int ns, ascending) and their rates."""
+    """Archived settlement times (int ns, ascending), their rates and intervals.
+
+    ``hours`` is the per-row settlement interval in hours, aligned with
+    ``times_ns``. ``None`` means 8h for every row -- today's fixed-grid rule --
+    so a ``Settlements`` built without it (every fixture that predates the
+    field) keeps that rule.
+    """
 
     times_ns: tuple[int, ...]
     rates: tuple[float, ...]
+    hours: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.hours is not None and len(self.hours) != len(self.times_ns):
+            raise ValueError(
+                f"Settlements.hours has {len(self.hours)} entries "
+                f"for {len(self.times_ns)} settlements"
+            )
 
 
-def _covered(times_ns: tuple[int, ...], boundary: int) -> bool:
-    index = bisect.bisect_left(times_ns, boundary - SIGNAL_SAFETY_NS)
-    return index < len(times_ns) and times_ns[index] <= boundary + SIGNAL_SAFETY_NS
+def carry_hours(hours: tuple[int, ...]) -> tuple[int, ...] | None:
+    """``hours`` as a ``Settlements`` field: None when every row is 8h (or none).
+
+    Collapsing the all-8h case keeps ``hours=None`` -- the documented default
+    rule -- for the real archive, for a stubbed or empty one, and for every test
+    fixture built before the field existed.
+    """
+    if not hours or all(h == FUNDING_PERIOD_HOURS for h in hours):
+        return None
+    return hours
 
 
 def trailing_funding(settlements: Settlements, decision_ns: int) -> float | None:
-    """7-day funding sum for ``decision_ns``; ``None`` = an 8h boundary is uncovered."""
+    """7-day funding sum for ``decision_ns``; ``None`` = an expected row is missing."""
     upper_ns = decision_ns - SIGNAL_SAFETY_NS
     lower_ns = upper_ns - LOOKBACK_NS
-    boundary = (lower_ns // _EIGHT_HOURS_NS + 1) * _EIGHT_HOURS_NS
-    while boundary <= upper_ns:
-        if not _covered(settlements.times_ns, boundary):
-            return None
-        boundary += _EIGHT_HOURS_NS
+    hours = settlements.hours or (FUNDING_PERIOD_HOURS,) * len(settlements.times_ns)
+    if missing_settlements(settlements.times_ns, hours, lower_ns, upper_ns, SIGNAL_SAFETY_NS):
+        return None
     first = bisect.bisect_right(settlements.times_ns, lower_ns)
     last = bisect.bisect_right(settlements.times_ns, upper_ns)
     return math.fsum(settlements.rates[first:last])
