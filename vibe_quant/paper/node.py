@@ -53,6 +53,7 @@ from vibe_quant.paper.config import (
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
+    ENTRY_CHECK_FAILED_PREFIX,
     MARGIN_DENIAL_PREFIX,
     OPERATOR_RESUMABLE_HALTS,
     RESTORED_HALT_PREFIX,
@@ -395,6 +396,7 @@ class _GuardBridge(GuardListener):
 
     def on_entry_allowed(self, symbol: str) -> None:
         self._node._margin_alerted.discard(symbol)
+        self._node._entry_check_alerted.discard(symbol)
 
 
 def _is_tier_error(exc: Exception) -> bool:
@@ -448,6 +450,8 @@ class PaperTradingNode:
         self._restored_risk: RiskState | None = None
         #: Symbols whose margin-limit refusal was already alerted (re-armed by an allowed entry).
         self._margin_alerted: set[str] = set()
+        #: Symbols whose raising-entry-check refusal was already alerted (re-armed on entry).
+        self._entry_check_alerted: set[str] = set()
         self._restored_halt: RestoredHalt | None = None
         self._resolved: ResolvedRunConfig | None = None
         self._shutdown_event = asyncio.Event()
@@ -1697,6 +1701,22 @@ class PaperTradingNode:
                 payload,
                 "warning",
                 f"Entry refused (margin limit): {reason}\n{symbol}",
+                timestamp=timestamp,
+            )
+        elif (
+            by_gate
+            and reason.startswith(ENTRY_CHECK_FAILED_PREFIX)
+            and symbol not in self._entry_check_alerted
+        ):
+            # One alert per symbol until an entry for it passes again (latch set before the
+            # write): a strategy retrying every bar must not flood the operator, but a
+            # symbol whose entry check recovers and then fails again alerts anew.
+            self._entry_check_alerted.add(symbol)
+            self._write_then_alert(
+                EventType.ORDER,
+                payload,
+                "error",
+                f"Entry check failed (order denied): {reason}\n{symbol}",
                 timestamp=timestamp,
             )
         elif not by_gate:

@@ -72,6 +72,9 @@ GATE_DENIAL_PREFIX = "VQ_GUARD"
 #: Prefix on a gate denial produced by the margin limit (node alerts once per symbol).
 MARGIN_DENIAL_PREFIX = f"{GATE_DENIAL_PREFIX}: margin limit: "
 
+#: Prefix on a gate denial produced by a raising entry check (node alerts once per symbol).
+ENTRY_CHECK_FAILED_PREFIX = f"{GATE_DENIAL_PREFIX}: entry check failed ("
+
 _RISK_ENDPOINT = "RiskEngine.execute"
 _TICK_TIMER = "TradingGuard.tick"
 
@@ -482,7 +485,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             return self._denial_reason(order)
         except Exception as exc:
             logger.error("entry check failed (%s); order denied", type(exc).__name__)
-            return f"{GATE_DENIAL_PREFIX}: entry check failed ({type(exc).__name__}); order denied"
+            return f"{ENTRY_CHECK_FAILED_PREFIX}{type(exc).__name__}); order denied"
 
     def _denial_reason(self, order: Any) -> str | None:
         if order.is_reduce_only:
@@ -947,6 +950,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
 
 __all__ = [
+    "ENTRY_CHECK_FAILED_PREFIX",
     "GATE_DENIAL_PREFIX",
     "MARGIN_DENIAL_PREFIX",
     "RESTORED_HALTS",
