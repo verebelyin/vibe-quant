@@ -97,3 +97,17 @@ class ArxivSource:
 python -c "from vibe_quant.research.sources import load_builtin_sources, list_sources; \
            load_builtin_sources(force=True); print(list_sources())"
 ```
+
+## Built-in: Hacker News (`hackernews`)
+
+`hackernews.py` searches the keyless Algolia HN API
+(`https://hn.algolia.com/api/v1/search_by_date`) once per configured query with
+`tags=story`, dedupes stories by `objectID`, and fetches up to 10 top-level
+comments per story from `items/<id>` (HTML stripped to text). Queries come from
+the comma-separated `HN_QUERIES` env var (default: `algorithmic trading`,
+`trading strategy`, `backtest`, `quant trading`, `crypto trading`), or the
+constructor's `queries=` argument. Requests are spaced 1s apart and retried with
+backoff on 429/5xx/timeouts; a query that still fails is logged and skipped, and
+all-query failure raises `RuntimeError` (so the scrape run records `failed`).
+Story URLs fall back to the HN item permalink when a story has no external URL;
+`extras` carries `{query, num_comments, comments, hn_url}`.
