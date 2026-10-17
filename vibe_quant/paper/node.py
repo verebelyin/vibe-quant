@@ -51,6 +51,7 @@ from vibe_quant.paper.config import (
     effective_max_position_pct,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
+from vibe_quant.paper.event_log import EventLogWorker, EventWriteTimeoutError
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
     ENTRY_CHECK_FAILED_PREFIX,
@@ -121,6 +122,11 @@ STARTUP_CONNECT_TIMEOUT_S = 120
 # close is waited at most this long (a hung statement closes after it returns).
 SHUTDOWN_CHECKPOINT_WAIT_S = 10.0
 STORE_CLOSE_WAIT_S = 2.0
+# ogd37: event-log appends run on their own worker. A site that must know the write landed
+# (the liquidation reports) waits at most EVENT_WRITE_WAIT_S; start waits at most
+# EVENT_STARTUP_WAIT_S for the first lines (an unwritable log refuses to start).
+EVENT_WRITE_WAIT_S = 5.0
+EVENT_STARTUP_WAIT_S = 10.0
 
 #: ``PositionOpened.side`` (a ``PositionSide``) -> the sign the solvency formula wants.
 _POSITION_SIDE_SIGNS = {"LONG": 1, "SHORT": -1}
@@ -446,6 +452,9 @@ class PaperTradingNode:
         # its own store after its last job (R19d), so the loop never blocks on the DB.
         self._db_worker = StoreWorker("vq-paper-db")
         self._cmd_worker = StoreWorker("vq-paper-cmd")
+        # ogd37: event-file appends have their own FIFO worker (not _db_worker, which
+        # stops before the trading engine does), so a stalled disk never blocks the loop.
+        self._event_log = EventLogWorker("vq-paper-events")
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
         #: Symbols whose margin-limit refusal was already alerted (re-armed by an allowed entry).
@@ -589,19 +598,55 @@ class PaperTradingNode:
         critical: bool = False,
         timestamp: datetime | None = None,
     ) -> None:
-        """Write the event, then alert, even when the write itself raises (R1/irdig).
+        """Submit the event, then alert, even when the submit itself raises (R1/irdig).
 
-        Order stays write -> alert, but a persistent writer failure (disk full,
-        permissions) must not also swallow the operator's warning, so the alert is
-        sent with the same text and ``critical`` flag and only then does the write's
-        own exception propagate unchanged: the caller keeps its retry semantics
-        (R47b - the watcher fails the symbol's cycle and re-delivers the row).
+        The append runs on the event-log worker (ogd37), so the alert never waits for the
+        disk: the line may land after the alert. A submit-time error (an unbuildable
+        event, a stopped worker) still sends the alert with the same text and
+        ``critical`` flag and only then propagates unchanged. Sites that must know the
+        line landed use :meth:`_awrite_then_alert`.
         """
         try:
             self._write_event(event_type, data, timestamp=timestamp)
         except Exception as exc:
             # R1b: class only. ``logger.exception`` would print the active exception's
             # ``__context__`` chain too (a fetch error with signature/apiKey text).
+            logger.error(
+                "paper event write failed (%s); sending the alert anyway", type(exc).__name__
+            )
+            self._send_telegram_alert(kind, message, critical=critical)
+            raise
+        self._send_telegram_alert(kind, message, critical=critical)
+
+    async def _awrite_then_alert(
+        self,
+        event_type: EventType,
+        data: dict[str, object],
+        kind: str,
+        message: str,
+        *,
+        critical: bool = False,
+        timestamp: datetime | None = None,
+    ) -> None:
+        """Write the event, wait for it (bounded), then alert, even when the write fails.
+
+        For the liquidation reports (R47b: a failed write fails the watcher's cycle so the
+        row is re-delivered). A timeout raises ``EventWriteTimeoutError`` and a worker
+        error is re-raised as is, each after the alert; a cancellation (shutdown) sends the
+        alert once and propagates. The loop keeps running while it waits.
+        """
+        try:
+            future = self._write_event(event_type, data, timestamp=timestamp)
+            if future is not None:
+                if not await wait_future(future, EVENT_WRITE_WAIT_S):
+                    raise EventWriteTimeoutError(
+                        f"paper event write not confirmed within {EVENT_WRITE_WAIT_S:g} s"
+                    )
+                future.result()
+        except asyncio.CancelledError:
+            self._send_telegram_alert(kind, message, critical=critical)
+            raise
+        except Exception as exc:
             logger.error(
                 "paper event write failed (%s); sending the alert anyway", type(exc).__name__
             )
@@ -1322,7 +1367,7 @@ class PaperTradingNode:
             with contextlib.suppress(Exception):
                 # R1/irdig: the alert goes out even if the write raises; the write's
                 # own error is already logged, and this terminal handler never raises.
-                self._write_then_alert(
+                await self._awrite_then_alert(
                     EventType.RISK_CHECK,
                     {
                         "action": "liquidation_watch_failed",
@@ -1403,7 +1448,7 @@ class PaperTradingNode:
         # R47e: the event's own vocabulary ('isolated'/'cross'), not the venue's
         # 'ISOLATED'/'CROSSED' margin type.
         mode = "isolated" if margin_type == "ISOLATED" else "cross"
-        self._write_then_alert(
+        await self._awrite_then_alert(
             EventType.LIQUIDATION,
             {
                 "source": "binance_force_orders",
@@ -1431,7 +1476,7 @@ class PaperTradingNode:
 
     async def _on_liquidation_warning(self, message: str) -> None:
         """R52: a degraded or clamped detector warns without a critical alert."""
-        self._write_then_alert(
+        await self._awrite_then_alert(
             EventType.RISK_CHECK,
             {"action": "liquidation_watch_degraded", "message": message, "passed": False},
             "error",
@@ -1440,7 +1485,7 @@ class PaperTradingNode:
 
     async def _on_liquidation_recovered(self, symbol: str, failures: int) -> None:
         """R52: the first success after a degraded run is reported once."""
-        self._write_then_alert(
+        await self._awrite_then_alert(
             EventType.RISK_CHECK,
             {
                 "action": "liquidation_watch_recovered",
@@ -2064,8 +2109,12 @@ class PaperTradingNode:
         event_type: EventType,
         data: dict[str, object],
         timestamp: datetime | None = None,
-    ) -> None:
-        """Write an event to the paper event log, preserving the full payload.
+    ) -> Future[None] | None:
+        """Queue an event for the paper event log, preserving the full payload.
+
+        The line is appended on the event-log worker (ogd37): the returned future
+        resolves when it is on disk (or carries the write error / ``EventLogFullError``),
+        ``None`` when there is no writer. The timestamp is taken here, at submit.
 
         Position events use the typed classes (their fields are the payload);
         everything else is written as a base ``Event`` because the typed
@@ -2073,7 +2122,7 @@ class PaperTradingNode:
         to True, which would record a halt as a passed risk check).
         """
         if self._event_writer is None:
-            return
+            return None
         strategy_name = self._strategy.name if self._strategy else "unknown"
         ts = timestamp or datetime.now(UTC)
         event: Event
@@ -2093,7 +2142,7 @@ class PaperTradingNode:
                 strategy_name=strategy_name,
                 data=data,
             )
-        self._event_writer.write(event)
+        return self._event_log.submit(self._event_writer, event)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -2176,6 +2225,19 @@ class PaperTradingNode:
             },
         )
         self._warn_margin_cushion(resolved)
+        # ogd37: the first lines must land, or the log is unwritable and start is refused
+        # (what a synchronous write used to do by raising).
+        if not await wait_future(self._event_log.barrier(), EVENT_STARTUP_WAIT_S):
+            raise ConfigurationError(
+                f"paper event log not writable within {EVENT_STARTUP_WAIT_S:g} s; "
+                "refusing to start"
+            )
+        log_health = self._event_log.health()
+        if log_health.failed > 0:
+            raise ConfigurationError(
+                f"paper event log not writable ({log_health.last_error_class}); "
+                "refusing to start"
+            )
         if resolved.validated is None:
             logger.warning(
                 "paper %s not started from a validation run: trading compiled DSL "
@@ -2424,19 +2486,27 @@ class PaperTradingNode:
                 await self._trading_node.stop_async()
             self._trading_node = None
 
-        if self._event_writer is not None:
+        # ogd37: after stop_async (events NT emits while stopping are kept). Later
+        # ``_write_event`` calls are no-ops; the event worker flushes and closes the file
+        # after its last queued line. R6 (k8oei): a close() failure is logged by class and
+        # the remaining teardown (telegram, state manager) still runs.
+        writer = self._event_writer
+        self._event_writer = None
+
+        def close_writer() -> None:
+            if writer is None:
+                return
             with contextlib.suppress(Exception):
-                self._event_writer.flush()
-            # R6 (k8oei): a close() failure is logged by class and the writer dropped;
-            # the remaining teardown (telegram, state manager) still runs.
-            try:
-                self._event_writer.close()
-            except Exception as exc:
-                logger.error(
-                    "paper event writer close failed (%s); continuing shutdown",
-                    type(exc).__name__,
-                )
-            self._event_writer = None
+                writer.flush()
+            writer.close()
+
+        try:
+            await self._close_store(self._event_log.worker, close_writer, "paper event writer")
+        except Exception as exc:
+            logger.error(
+                "paper event writer shutdown failed (%s); continuing shutdown",
+                type(exc).__name__,
+            )
 
         # Let in-flight alerts (e.g. the halt that caused shutdown) go out.
         if self._alert_tasks:

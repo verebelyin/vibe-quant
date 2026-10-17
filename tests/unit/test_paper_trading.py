@@ -487,6 +487,7 @@ class TestPaperTradingNode:
         node = PaperTradingNode(config)
         node._event_writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
         node.halt(HaltReason.MAX_DRAWDOWN, "dd 6%")
+        node._event_log.barrier().result(10)  # the line is appended on the event worker
         node._event_writer.close()
         records = [
             json.loads(line)

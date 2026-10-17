@@ -5,8 +5,8 @@ Contract rows of job 20261016-safety-bankroll (design B2, T2b half):
 * R13c REAL loop: checkpoint save + prune, command claim + complete, one guard
        transition (its event write AND its checkpoint) each block 5 s, the kill-switch
        reader fails from t_f -> ERROR halt <= 15.0 s after t_f, and the watcher tick
-       gap never exceeds 5.6 s (only the 5 s local event-file write is on the loop;
-       R13d keeps that one as a regression row, event writes are out of the bound).
+       gap never exceeds 1.5 s: the 5 s event-file write now runs on the
+       ``vq-paper-events`` worker (ogd37, R2), so no stall is left on the loop.
 * R19  checkpoint ordering: the single FIFO worker writes in capture order, whichever
        path (guard transition / periodic loop) captured first.
 * R19b a raising transition write still submits its checkpoint; the write error wins.
@@ -51,6 +51,29 @@ def _drain(node: PaperTradingNode) -> None:
 
 
 # ------------------------------------------------------------------ R13c
+
+
+class _StallingEventWriter:
+    """An event writer whose FIRST write blocks STALL_S (a stuck disk); all are recorded."""
+
+    def __init__(self) -> None:
+        self.durations: list[float] = []
+        self.threads: list[str] = []
+        self.sequence: list[Any] = []
+
+    def write(self, event: Any) -> None:
+        self.threads.append(threading.current_thread().name)
+        started = time.monotonic()
+        if not self.durations:
+            time.sleep(STALL_S)
+        self.durations.append(time.monotonic() - started)
+        self.sequence.append(event.timestamp)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 class _StallCounters:
@@ -98,9 +121,9 @@ async def test_full_callback_sequence_halts_within_15s(
 ) -> None:
     """R13c/R13d: REAL loop, REAL reader thread and workers. Every former sync DB call
     blocks 5 s (periodic save + prune, command claim + complete, the guard-transition
-    checkpoint) and one event write blocks the loop for 5 s; the reader fails from
-    t_f. The ERROR halt still lands <= 15.0 s after t_f and the watcher never goes
-    quiet for more than 5.6 s."""
+    checkpoint) and the first event write blocks for 5 s on the event worker; the
+    reader fails from t_f. The ERROR halt still lands <= 15.0 s after t_f and the
+    watcher never goes quiet for more than 1.5 s."""
     stalls = _StallCounters()
     guard = _TimedGuard()
     node = PaperTradingNode(_config(seeded, control_poll_interval=0.1))
@@ -119,13 +142,8 @@ async def test_full_callback_sequence_halts_within_15s(
 
     monkeypatch.setattr(node, "_execute_command", executed)
 
-    event_writes: list[float] = []
-
-    def blocking_event_write(*_args: Any, **_kwargs: Any) -> None:
-        event_writes.append(time.monotonic())
-        time.sleep(STALL_S)
-
-    monkeypatch.setattr(node, "_write_event", blocking_event_write)
+    writer = _StallingEventWriter()
+    node._event_writer = writer  # type: ignore[assignment]
     monkeypatch.setattr(
         node, "_capture_checkpoint", lambda: StateCheckpoint(trader_id=node._config.trader_id)
     )
@@ -171,9 +189,14 @@ async def test_full_callback_sequence_halts_within_15s(
         assert reader.first_fail_start is not None
         assert guard.halt_times[0] - reader.first_fail_start <= 15.0
         gaps = [b - a for a, b in zip(ticks, ticks[1:], strict=False)]
-        assert max(gaps) <= 5.6, max(gaps)
-        assert len(event_writes) == 1, "the 5 s event write ran on the loop (R13d row)"
-        assert max(gaps) >= 4.5, "the loop really was blocked by that event write"
+        assert max(gaps) <= 1.5, max(gaps)
+        # R2: the first event write really stalled 5 s, but on the event worker; the
+        # lines behind it are written in submit order once it returns.
+        node._event_log.barrier().result(15)
+        assert writer.durations[0] >= 4.5, writer.durations
+        assert all(name.startswith("vq-paper-events") for name in writer.threads), writer.threads
+        assert writer.sequence == sorted(writer.sequence)
+        assert node._event_log.health().written == len(writer.sequence) >= 1
 
         # Every stalled call was real and the work still completes afterwards.
         stalls.unstall.set()

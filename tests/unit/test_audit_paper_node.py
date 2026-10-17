@@ -222,6 +222,7 @@ async def test_validated_run_params_and_leverage_reach_live_config(
         assert tn.trader.strategies == node._compiled_strategies
 
         assert node._event_writer is not None
+        node._event_log.barrier().result(10)  # lines are appended on the event worker
         node._event_writer.flush()
         start = [
             json.loads(line)
@@ -594,6 +595,7 @@ async def test_order_rejection_halts_and_sends_telegram_alert(seeded: dict[str, 
         assert engine.cache.positions_open() == [], "halt flattened the open long"
     finally:
         assert node._event_writer is not None
+        node._event_log.barrier().result(10)
         node._event_writer.close()
         node._event_writer = None
         await node._shutdown()
@@ -614,6 +616,7 @@ async def test_paper_position_events_feed_reconciliation(seeded: dict[str, Any])
     engine.add_data(_flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0, 10000.0, 10200.0, 10200.0]))
     engine.run()
     assert node._event_writer is not None
+    node._event_log.barrier().result(10)
     node._event_writer.close()
     node._event_writer = None
     trades = load_trades("PAPER-007", base_path=seeded["tmp"] / "logs")

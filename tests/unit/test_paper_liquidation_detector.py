@@ -241,6 +241,7 @@ class _Harness:
     def events(self, event_type: EventType) -> list[dict[str, Any]]:
         """The logged events of one type, in write order."""
         if self.node._event_writer is not None:
+            self.node._event_log.barrier().result(10)  # lines are appended on the event worker
             self.node._event_writer.flush()
         lines = self.log.read_text().splitlines() if self.log.exists() else []
         entries = [json.loads(line) for line in lines if line.strip()]
@@ -376,12 +377,17 @@ async def _harness(
     )
 
 
-async def _until(predicate: Callable[[], bool], *, cycles: int = 500) -> None:
-    """Yield to the event loop until ``predicate`` holds (no wall-clock sleeping)."""
-    for _ in range(cycles):
+async def _until(predicate: Callable[[], bool], *, timeout_s: float = 10.0) -> None:
+    """Yield to the event loop until ``predicate`` holds.
+
+    The liquidation report waits for the event-log worker (ogd37), so spinning a fixed
+    number of zero-sleep cycles can end before the thread answers: bound it by time.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         if predicate():
             return
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.005)
     raise AssertionError("condition never became true")
 
 
