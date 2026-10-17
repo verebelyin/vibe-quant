@@ -7851,6 +7851,12 @@
             ],
             "title": "Trader Id"
           },
+          "start_fresh": {
+            "type": "boolean",
+            "title": "Start Fresh",
+            "description": "Skip inheriting the last session's peak, daily-loss and losing-streak limits for this account (default: continue from that session's risk state).",
+            "default": false
+          },
           "sizing_method": {
             "anyOf": [
               {

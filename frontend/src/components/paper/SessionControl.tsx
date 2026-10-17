@@ -79,6 +79,7 @@ function apiErrorDetail(err: unknown, fallback: string): string {
 
 export function SessionControl() {
   const [traderId, setTraderId] = useState(newTraderId);
+  const [startFresh, setStartFresh] = useState(false);
   const [strategyId, setStrategyId] = useState("");
   const [validationRunId, setValidationRunId] = useState(NO_RUN);
   const [symbolsText, setSymbolsText] = useState("BTCUSDT");
@@ -169,6 +170,7 @@ export function SessionControl() {
       testnet,
       confirm_live: !testnet && confirmLive,
       trader_id: traderId,
+      start_fresh: startFresh,
       max_leverage: maxLeverage === "" ? null : maxLeverage,
       max_position_pct: pctToFraction(maxPositionPct),
       risk_per_trade: pctToFraction(riskPerTrade),
@@ -186,6 +188,7 @@ export function SessionControl() {
               description: testnet ? "Binance testnet" : "LIVE trading",
             });
             setTraderId(newTraderId());
+            setStartFresh(false);
           }
         },
         onError: (err: unknown) => {
@@ -384,6 +387,20 @@ export function SessionControl() {
             {!traderIdValid && (
               <p className="text-xs text-destructive">Use NAME-TAG with a hyphen, e.g. PAPER-001</p>
             )}
+          </div>
+
+          <div className="space-y-1">
+            <Label className="flex items-center gap-2">
+              <Checkbox checked={startFresh} onCheckedChange={(v) => setStartFresh(v === true)} />
+              <span className="text-sm">
+                Start fresh: count peak, daily loss and losing streak from now
+              </span>
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Unchecked (default): continues this account&apos;s last session, so a drawdown or
+              losing streak that halted it halts again. Checked: those limits count from current
+              equity. Never clears this trader&apos;s own halt.
+            </p>
           </div>
 
           <div className="space-y-2">

@@ -300,6 +300,7 @@ async def start_paper(
         "logs_path": str(DEFAULT_PAPER_LOGS_PATH),
         "sizing": sizing,
         "risk": risk,
+        "start_fresh": body.start_fresh,
     }
     if body.trader_id:
         params["trader_id"] = body.trader_id
@@ -323,6 +324,7 @@ async def start_paper(
         "binance": {"testnet": body.testnet},
         "symbols": symbols,
         "logs_path": str(DEFAULT_PAPER_LOGS_PATH),
+        "start_fresh": body.start_fresh,
     }
     if db_path is not None:
         config_data["db_path"] = str(db_path)
@@ -442,6 +444,9 @@ async def restore_paper(
         "sizing": prior_config.get("sizing") or {},
         "risk": prior_config.get("risk") or {},
         "restored_from_trader_id": body.trader_id,
+        # K4: a saved config may carry start_fresh: true; /restore must not
+        # re-inject it, or the copied prior config resets the limits it restored.
+        "start_fresh": False,
     }
 
     run_id = state.create_backtest_run(
@@ -456,6 +461,7 @@ async def restore_paper(
 
     new_config: dict[str, Any] = dict(prior_config)
     new_config["trader_id"] = body.trader_id
+    new_config["start_fresh"] = False
     db_path = _state_db_path(state)
     if db_path is not None:
         new_config["db_path"] = str(db_path)

@@ -146,6 +146,7 @@ async def test_start_from_validation_run_writes_runnable_config(ctx: Ctx) -> Non
     assert cfg["validation_run_id"] == ctx.validation_run
     assert cfg["binance"] == {"testnet": True}
     assert cfg["db_path"].endswith("api.db")
+    assert cfg["start_fresh"] is False
     assert "api_key" not in json.dumps(cfg)
     assert "--live" not in ctx.launched[0]
 
@@ -158,6 +159,68 @@ async def test_start_from_validation_run_writes_runnable_config(ctx: Ctx) -> Non
 
     run = ctx.state.get_backtest_run(run_id)
     assert run is not None and run["symbols"] == ["BTCUSDT"]
+
+
+async def test_start_fresh_recorded_in_params_and_config(ctx: Ctx) -> None:
+    """R21: start_fresh travels into the run params AND the launched config JSON."""
+    from vibe_quant.paper.cli import load_config_from_json
+
+    r = await ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": ctx.validation_run, "start_fresh": True},
+    )
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    run = ctx.state.get_backtest_run(run_id)
+    assert run is not None
+    assert run["parameters"]["start_fresh"] is True
+    cfg_path = ctx.tmp / "paper_configs" / f"paper_{run_id}.json"
+    assert ctx.config_for(run_id)["start_fresh"] is True
+    assert load_config_from_json(cfg_path).start_fresh is True
+
+    # Absent -> False, in all three places: the field is not optional-true.
+    ctx.jobs.conn.execute("DELETE FROM background_jobs")
+    ctx.jobs.conn.commit()
+    r2 = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+    assert r2.status_code == 201, r2.text
+    run_id2 = r2.json()["run_id"]
+    run2 = ctx.state.get_backtest_run(run_id2)
+    assert run2 is not None
+    assert run2["parameters"]["start_fresh"] is False
+    assert ctx.config_for(run_id2)["start_fresh"] is False
+    cfg_path2 = ctx.tmp / "paper_configs" / f"paper_{run_id2}.json"
+    assert load_config_from_json(cfg_path2).start_fresh is False
+
+
+_ABSENT = object()
+
+
+@pytest.mark.parametrize(
+    ("start_fresh", "status"),
+    [
+        (_ABSENT, 201),
+        (True, 201),
+        ("true", 422),  # a string bool is not a bool
+        (1, 422),  # an int 1 is not a bool
+        (None, 422),  # explicit null is not the absent default
+    ],
+)
+async def test_start_fresh_body_rows(ctx: Ctx, start_fresh: object, status: int) -> None:
+    """R21: strict bool — only JSON true/false or the absent default are accepted."""
+    payload: dict[str, object] = {"validation_run_id": ctx.validation_run}
+    if start_fresh is not _ABSENT:
+        payload["start_fresh"] = start_fresh
+    r = await ctx.ac.post("/api/paper/start", json=payload)
+    assert r.status_code == status, r.text
+    if status != 201:
+        assert ctx.launched == []
+        return
+    run_id = r.json()["run_id"]
+    run = ctx.state.get_backtest_run(run_id)
+    assert run is not None
+    expected = start_fresh is True
+    assert run["parameters"]["start_fresh"] is expected
+    assert ctx.config_for(run_id)["start_fresh"] is expected
 
 
 async def test_second_start_while_active_is_409(ctx: Ctx) -> None:
@@ -477,6 +540,30 @@ async def test_positions_and_orders_map_nautilus_to_dict(ctx: Ctx, tmp_db: Path)
             "status": "ACCEPTED",
         }
     ]
+
+
+async def test_restore_forces_start_fresh_false(ctx: Ctx) -> None:
+    """R22/K4: a prior config's start_fresh:true never re-injects into a restore."""
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-777",
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": True},
+                "start_fresh": True,
+            }
+        )
+    )
+    r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-777"})
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    run = ctx.state.get_backtest_run(run_id)
+    assert run is not None
+    assert run["parameters"]["start_fresh"] is False
+    assert ctx.config_for(run_id)["start_fresh"] is False
 
 
 async def test_restore_live_session_requires_confirmation(ctx: Ctx) -> None:

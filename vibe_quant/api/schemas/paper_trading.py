@@ -29,6 +29,12 @@ class PaperStartRequest(BaseModel):
         description="Must be true together with testnet=false to trade real funds.",
     )
     trader_id: str | None = None
+    start_fresh: bool = Field(
+        default=False,
+        strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
+        description="Skip inheriting the last session's peak, daily-loss and losing-streak "
+        "limits for this account (default: continue from that session's risk state).",
+    )
     sizing_method: Literal["fixed_fractional"] | None = None
     max_leverage: float | None = Field(default=None, ge=1, le=125)
     max_position_pct: float | None = Field(default=None, gt=0, le=125)

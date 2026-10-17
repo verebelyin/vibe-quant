@@ -65,6 +65,18 @@ test.describe("Paper Trading page", () => {
     await expect(page.getByRole("checkbox", { name: /binance testnet/i })).toBeChecked();
   });
 
+  test("start fresh checkbox defaults to unchecked", async ({ page }) => {
+    // 3fqw9: inheriting the account's risk state is the default; the operator opts out.
+    // pp-t3: the label and help must name the consequence, not just say "ignore previous limits".
+    await expect(
+      page.getByRole("checkbox", {
+        name: "Start fresh: count peak, daily loss and losing streak from now",
+        exact: true,
+      }),
+    ).not.toBeChecked();
+    await expect(page.getByText("Never clears this trader's own halt.")).toBeVisible();
+  });
+
   test("sizing configuration fields are visible", async ({ page }) => {
     await expect(page.getByLabel("Max Leverage")).toBeVisible();
     await expect(page.getByLabel("Max Position %")).toBeVisible();
