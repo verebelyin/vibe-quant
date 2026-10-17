@@ -31,6 +31,7 @@ SPEED RULES (measured: one model turn costs 4–10 s; the full test suite costs 
 - A sibling task's API that is not on your base yet: call it as designed through ONE documented `# type: ignore[attr-defined]`, stub it in your tests, and do not rebase yourself; the chief merges siblings (cc-fc-t2b).
 - E2E: iterate with `playwright test <spec> -g "<scenario>"`; run the full spec once at the end.
 - Tests of anything launched asynchronously (API returns 201/running, work happens in a subprocess) must poll the run's FINAL status and fail on `failed` — a 201 proves nothing.
+- Run a mutant in its OWN turn, never in the same batch as a pytest run over the file it mutates: the parallel pytest imports the half-mutated file and reports phantom failures (cc-e6-months-1: 6 phantom failures, clean on re-run).
 - Mutation self-check: at most 3 mutants, only on the lines you changed, each run against the targeted test file only.
 - Never `git add -f` a gitignored path (job probes under `data/swarm/` stay local; cc-gr-t4-holes-1 force-added one and a round had to untrack it). Docs-only tasks have no failing test: paste a red PROBE instead (`rg` for the missing phrase / the false sentence before and after).
 - A value your code FORWARDS into a pinned string (exception class name, symbol, status): parametrize the test over at least two unrelated inputs and assert each expected string from a literal, never from `type(exc).__name__` (cc-gr-guard-2: a hard-coded class name survived the round-1 tests).
