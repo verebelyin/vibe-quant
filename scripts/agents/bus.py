@@ -6,8 +6,9 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
 
     bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT]
     bus.py inbox [--peek]            # new messages for me (to me or to all), advances my cursor
-    bus.py pending [--global]        # questions/blockers addressed to me with no reply yet, oldest first;
-                                     # --global = persistent board + every job bus (job-tagged), as digest does
+    bus.py pending [--global]        # questions/blockers addressed to me with no reply yet, oldest first,
+                                     # one bounded line each (the body is cut to 60 chars); --global =
+                                     # persistent board + every job bus (job-tagged), as digest does
     bus.py ask   --to chief --body TEXT [--timeout 900] [--client-id TEXT]   # post a question, block until an answer refs it
     bus.py wait  [--timeout 600]     # block until my inbox has something new
     bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS]  # follow messages (chief: run under a Monitor)
@@ -15,7 +16,12 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # replays everything that arrived while the watcher was dead;
                                      # one durable tail per (--as, --to): a second exits with an error.
                                      # Deleting its cursor loses the backlog: re-run with --since-start
+                                     # --kinds question,blocker emits only those kinds, so a Monitor wakes
+                                     # on what it can act on (the cursor still advances past the rest)
     bus.py roster                    # agents seen, message counts, last activity
+    bus.py status                    # one screen (<= 20 lines) for the chief (or --as): unanswered
+                                     # questions/blockers to it, unread DMs it sent per agent, whether its
+                                     # durable tail is alive, the last message, open needs-user items
   Message board (persistent topics everyone can browse; threads via --ref):
     bus.py board post   --topic design --body TEXT [--kind info|question|claim|...] [--client-id TEXT]
     bus.py board read   [--topic design] [--all]   # unread posts (per-agent, per-topic cursor); --all = full history
@@ -308,6 +314,34 @@ def fmt(msg: dict[str, object]) -> str:
     return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {msg['body']}"
 
 
+def _first_chars(body: object, width: int) -> str:
+    """A body's first ``width`` characters on one line (newlines collapsed) — for compact reports."""
+    text = " ".join(str(body).split())
+    return text[:width] + ("…" if len(text) > width else "")
+
+
+def _one_line(msg: dict[str, object], width: int = 60) -> str:
+    """``fmt`` with the body cut to one bounded line: a 3 KB body must not become a 3 KB answer."""
+    ref = f" re:{msg['ref']}" if msg.get("ref") else ""
+    return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {_first_chars(msg['body'], width)}"
+
+
+def parse_kinds(raw: str | None) -> frozenset[str] | None:
+    """The kinds a ``tail`` should emit (``question,blocker``), or None for every kind.
+
+    An unknown or empty set is refused: a typo would otherwise silently hide messages.
+    """
+    if not raw:
+        return None
+    want = frozenset(k.strip() for k in raw.split(",") if k.strip())
+    unknown = want - set(KINDS)
+    if unknown:
+        _refuse(f"bus: unknown --kinds value(s) {sorted(unknown)}; possible kinds: {KINDS}")
+    if not want:
+        _refuse(f"bus: --kinds needs at least one kind; possible kinds: {KINDS}")
+    return want
+
+
 def post(
     bus: Path, me: str, to: str, kind: str, body: str, ref: str | None = None, topic: str | None = None,
     mirror: bool = True, extra: dict[str, object] | None = None, client_id: str | None = None,
@@ -342,6 +376,26 @@ def post(
 
 def _all(bus: Path) -> list[dict[str, object]]:
     return _read_from(bus, 0)[0]
+
+
+def _all_with_offsets(bus: Path) -> list[tuple[dict[str, object], int]]:
+    """Every deliverable message with the byte offset just past its line (for unread counts)."""
+    path = bus / "messages.jsonl"
+    if not path.exists():
+        return []
+    out: list[tuple[dict[str, object], int]] = []
+    offset = 0
+    for line in path.read_bytes().splitlines(keepends=True):
+        offset += len(line)
+        if not line.endswith(b"\n"):  # an unfinished record is not deliverable yet
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if _is_message(rec):
+            out.append((rec, offset))
+    return out
 
 
 def _locate(bus: Path, ref: str) -> tuple[Path, dict[str, object]] | None:
@@ -493,6 +547,73 @@ def pending_all(me: str) -> list[dict[str, object]]:
     for jb in _job_buses():
         out.extend({**m, "job": jb.parent.name} for m in pending(jb, me))
     return sorted(out, key=_ts_key)
+
+
+def unread_from(bus: Path, sender: str) -> dict[str, int]:
+    """Unread DMs per recipient for the messages ``sender`` posted on ``bus``.
+
+    A message counts as unread while it sits past the recipient's own inbox cursor
+    (an agent that never read anything has no cursor and counts everything).
+    """
+    counts: dict[str, int] = {}
+    for rec, offset in _all_with_offsets(bus):
+        to = str(rec.get("to", ""))
+        if rec.get("from") != sender or to in ("all", "board", sender):
+            continue
+        if offset > _get_cursor(bus, to):
+            counts[to] = counts.get(to, 0) + 1
+    return counts
+
+
+def _tail_state(bus: Path, me: str) -> str:
+    """Whether a durable tail for ``me`` is alive: its lock file is held (see _durable_tail).
+
+    Detection is exactly the tail's own rule — take the lock non-blocking; a held one means a
+    live tail. A lock file left behind by a dead tail is therefore reported as ``none``.
+    """
+    for lock in sorted((bus / "cursors").glob(f"{me}.tail.*.lock")):
+        with lock.open("a") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return f"alive ({lock.name})"
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    return "none"
+
+
+def status_report(bus: Path, me: str, max_items: int = 5) -> list[str]:
+    """One screen about ``bus`` from ``me``'s side: at most 20 lines by construction.
+
+    Answers the questions a chief asks on every wake ("did anything arrive, does it reach the
+    workers, is anyone waiting on me?") without dumping the bus: counts first, at most
+    ``max_items`` items per list, and message bodies cut to their first 60 characters.
+    """
+    lines = [f"{me} status — {bus}"]
+    pend = pending(bus, me)
+    lines.append(f"pending to {me}: {len(pend)}")
+    lines += [f"  [{m['id']}] {m['from']} {_age_of(m)} — {_first_chars(m['body'], 60)}" for m in pend[:max_items]]
+    if len(pend) > max_items:
+        lines.append(f"  (+{len(pend) - max_items} more)")
+    unread = unread_from(bus, me)
+    shown = sorted(unread.items())[:max_items]
+    if unread:
+        counts = " ".join(f"{agent}={n}" for agent, n in shown)
+        extra = f" (+{len(unread) - len(shown)} more agents)" if len(unread) > len(shown) else ""
+        lines.append(f"unread from {me}: {len(unread)} agent(s) {counts}{extra}")
+    else:
+        lines.append(f"unread from {me}: none")
+    lines.append(f"{me} tail: {_tail_state(bus, me)}")
+    msgs = _all(bus)
+    if msgs:
+        last = msgs[-1]
+        lines.append(
+            f"last message: {last.get('ts', '?')} by {last['from']} "
+            f"({last['kind']}, {_age_of(last)} old): {_first_chars(last['body'], 60)}"
+        )
+    else:
+        lines.append("last message: none")
+    lines.append(f"open needs-user: {len(needs_user_open(bus))}")
+    return lines
 
 
 def _pending_section(msgs: list[dict[str, object]], me: str, max_items: int = 10) -> list[str]:
@@ -647,7 +768,7 @@ def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str |
 
 def _durable_tail(
     bus: Path, me: str, to: str, since_start: bool, timeout: float | None,
-    emit: Callable[[str], None] | None = None,
+    kinds: frozenset[str] | None = None, emit: Callable[[str], None] | None = None,
 ) -> None:
     """A tail that survives a restart: its own cursor, advanced only after printing.
 
@@ -655,10 +776,11 @@ def _durable_tail(
     (``--since-start`` overrides to 0), and persists that baseline immediately — so messages
     posted while the watcher was dead are replayed on the next start, not skipped. Each
     fetched batch is emitted (and flushed) before the cursor advances: at-least-once, never a
-    silent loss. The baseline is the end of the last complete line (an unfinished record is
-    delivered once it completes), and an exclusive lock on ``<cursor>.lock`` makes a second
-    tail for the same (as, to) refuse to start. ``emit`` is injectable so tests can simulate
-    a crash between those two steps.
+    silent loss. ``kinds`` drops everything the caller cannot act on; the cursor still advances
+    past those records, so a filtered message is never replayed either. The baseline is the end
+    of the last complete line (an unfinished record is delivered once it completes), and an
+    exclusive lock on ``<cursor>.lock`` makes a second tail for the same (as, to) refuse to
+    start. ``emit`` is injectable so tests can simulate a crash between those two steps.
     """
     send = emit if emit is not None else (lambda line: print(line, flush=True))
     cpath = _tail_cursor_path(bus, me, to)
@@ -678,6 +800,8 @@ def _durable_tail(
             msgs, new_offset = _read_from(bus, offset)
             for m in msgs:
                 if to and m.get("to") not in (to, "all", "board"):
+                    continue
+                if kinds and m.get("kind") not in kinds:
                     continue
                 send(fmt(m))
             if new_offset != offset:
@@ -786,7 +910,12 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--since-start", action="store_true", help="replay history first")
     t.add_argument("--durable", action="store_true", help="persist a delivery cursor so a restart replays undelivered messages")
     t.add_argument("--timeout", type=float, default=None, help="stop after SECONDS (default: forever)")
+    t.add_argument(
+        "--kinds", metavar="K1,K2",
+        help=f"emit only these kinds ({'/'.join(KINDS)}); the durable cursor still advances past the rest",
+    )
     sub.add_parser("roster")
+    sub.add_parser("status")
     dg = sub.add_parser("digest")
     dg.add_argument("--recent", type=int)
     r = sub.add_parser("reply")
@@ -840,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
         msgs = pending_all(me) if args.glob else pending(bus, me)  # --global = board + every job bus
         for m in msgs:
             job = f" @{m['job']}" if m.get("job") else ""
-            print(f"{fmt(m)}{job} ({_age_of(m)} old)")
+            print(f"{_one_line(m)}{job} ({_age_of(m)} old)")  # one bounded line: never a body dump
         if not msgs:
             print(f"(no pending questions for {me})")
     elif args.cmd == "ask":
@@ -872,15 +1001,21 @@ def main(argv: list[str] | None = None) -> int:
         print("(nothing new)")
         return 3
     elif args.cmd == "tail":
+        kinds = parse_kinds(args.kinds)
         path = bus / "messages.jsonl"
         if args.durable:
-            _durable_tail(bus, _me(args), str(args.to or ""), args.since_start, args.timeout)
+            _durable_tail(bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds)
         else:
             start = 0 if args.since_start or not path.exists() else path.stat().st_size
             for m in _follow(bus, start, args.timeout):
                 if args.to and m.get("to") not in (args.to, "all", "board"):
                     continue
+                if kinds and m.get("kind") not in kinds:
+                    continue
                 print(fmt(m), flush=True)
+    elif args.cmd == "status":
+        for line in status_report(bus, _me(args, "chief")):
+            print(line)
     elif args.cmd == "reply":
         print(fmt(reply(bus, _me(args), args.ref, args.body, args.kind, client_id=args.client_id)))
     elif args.cmd == "thread":

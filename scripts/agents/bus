@@ -1,0 +1,4 @@
+#!/bin/sh
+# Shim so `scripts/agents/bus ...` works directly: no `python3` prefix, no unquoted
+# `B="python3 .../bus.py"; $B ...` (which failed 8 times with zsh exit 127).
+exec python3 "$(dirname "$0")/bus.py" "$@"

@@ -30,7 +30,7 @@ T3's own number is a last-context approximation; Codex tokens come from T3 usage
 subagent transcripts under ~/.claude/projects/<main checkout>/*/subagents (tokens_in = input +
 cache creation + cache read, once per API message; transcripts modified < 120 s ago are skipped
 unless --force). Identity: a `TELEMETRY: task=<t> round=<n> [agent=<a>]` line in the brief wins;
-otherwise identity_from_name (cc-<slug>-<n>, -rN, -fixN, -opusN; reviewer/verifier/architect
+otherwise identity_from_name (cc-<slug>-<n>, -rN, -fixN, a bare -N, -opusN; reviewer/verifier/architect
 runs get task "review:<t>"/"verify:<t>"/"design:<t>"). Idempotent: a known source is skipped, and
 so is a run the chief already recorded by hand (same job, agent, round, no source).
 `--by board` / `--by asked` group by the round's comms fields: relied>0 | relied=0 | unknown.
@@ -50,8 +50,10 @@ only the LATEST attempt per (job, task, round).
 
 Rounds: an explicit `--round N` with `--task <base>` is authoritative. `--auto-round` (ingest only,
 ignored when --round is given; opt-in, so a bare "-r" maps to round 2) derives (base, round) from the task name with
-^(.+?)-(fix|r)(\\d*)$ — "-fix"/"-r" -> 2, "-fixN" -> N+1, "-rN" -> N — stores the base name as task,
-sets note "round derived from name" and prints the derived pair. For names the parser cannot link
+^(.+?)-(?:(fix|r)(\\d*)|(\\d{1,2}))$ — "-fix"/"-r" -> 2, "-fixN" -> N+1, "-rN"/"-N" -> N — stores the base
+name as task, sets note "round derived from name" and prints the derived pair. The bare "-N" form is what
+a T3 clientRequestId or agent id carries (cc-e6-sweep-2 = round 2); "-opusN"/"-sonnetN" model suffixes are
+recognised before it, so a model never reads as a round. For names the parser cannot link
 (q-ui -> qui-fix, sc -> sc2, m2 -> m2b) use explicit `--task <base> --round N`. Re-ingesting the
 same (job, task, round) after a review adds an unreviewed latest record: re-run `review` after any
 --force re-ingest.
@@ -166,15 +168,24 @@ def _now_ts() -> str:
 
 
 STALE_LOG_S = 120
-_ROUND_RE = re.compile(r"^(?P<base>.+?)-(?:fix|r)(?P<n>\d*)$")
+_ROUND_RE = re.compile(r"^(?P<base>.+?)-(?:(?P<word>fix|r)(?P<n>\d*)|(?P<plain>\d{1,2}))$")
 
 
 def derive_round(name: str) -> tuple[str, int] | None:
-    """(base, round) from a "<base>-fix", "<base>-fixN" (N+1) or "<base>-rN" (N) name, else None."""
+    """(base, round) from a "<base>-fix", "<base>-fixN" (N+1), "<base>-rN"/"<base>-N" (N) name, else None.
+
+    The bare ``-N`` form is how a T3 clientRequestId or a swarm agent id carries its round
+    (``cc-e6-sweep-2`` = round 2 of ``cc-e6-sweep``); without it such a run is recorded as a
+    round-1 task of its own and a job's rounds-to-done reads 1.0. Only 1-2 digits count, so a
+    trailing date (``-20261014``) is not mistaken for a round.
+    """
     m = _ROUND_RE.match(name)
     if m is None:
         return None
-    n = m.group("n")
+    plain = m.group("plain")
+    if plain is not None:
+        return (m.group("base"), int(plain)) if int(plain) >= 1 else None
+    n = m.group("n") or ""
     if not n:
         return m.group("base"), 2
     is_fix = "-fix" in name[len(m.group("base")) :]
@@ -628,11 +639,13 @@ def parse_comms(text: str | None) -> dict[str, int] | None:
 def identity_from_name(name: str) -> tuple[str, str, int]:
     """(agent, task, round) from a swarm agent name or T3 clientRequestId.
 
-    "cc-<slug>-<n>" (T3 id) -> agent cc-<slug>, round n; "-rN"/"-fixN" -> round as derive_round;
-    "-opusN"/"-sonnet" model suffixes -> round N (default 1); a dated Codex id loses its
-    "-YYYYMMDD". The task drops the maker prefix (cc-/impl-/cmd-) and maps checker roles to
-    "review:", "verify:" or "design:" so they never mix with maker tasks. Briefs can override
-    all of this with a `TELEMETRY: task=<t> round=<n>` line (see identity_from_prompt).
+    "cc-<slug>-<n>" (T3 id) -> agent cc-<slug>, round n; "-rN"/"-fixN"/a bare "-N" -> round as
+    derive_round; "-opusN"/"-sonnet" model suffixes -> round N (default 1) and are checked
+    BEFORE the bare "-N" rule, so "-opus5" stays a model and is not read as round 5; a dated
+    Codex id loses its "-YYYYMMDD". The task drops the maker prefix (cc-/impl-/cmd-) and maps
+    checker roles to "review:", "verify:" or "design:" so they never mix with maker tasks.
+    Briefs can override all of this with a `TELEMETRY: task=<t> round=<n>` line (see
+    identity_from_prompt).
     """
     name = re.sub(r"-20\d{6}$", "", name.strip())
     agent, base, rnd = name, name, 1
@@ -642,10 +655,10 @@ def identity_from_name(name: str) -> tuple[str, str, int]:
         rnd = int(t3.group("n"))
         if (inner := derive_round(base)) is not None:  # cc-x-r4-1: the -r4 is the round
             base, rnd = inner
-    elif (derived := derive_round(name)) is not None:
-        base, rnd = derived
     elif (ms := _MODEL_SUFFIX_RE.match(name)) is not None:
         base, rnd = ms.group("base"), int(ms.group("n") or 1)
+    elif (derived := derive_round(name)) is not None:
+        base, rnd = derived
     task = base
     for prefix, label in _ROLE_TASK_PREFIX:
         if base.startswith(prefix):

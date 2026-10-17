@@ -1073,3 +1073,160 @@ def test_locate_prefers_the_selected_bus_then_global_then_jobs_and_searches_none
     monkeypatch.setattr(bus, "_all", spy)
     assert bus._locate(gdir, "nowhere") is None
     assert searched == [gdir, job_a, job_b]  # the global board is asked once, not twice
+
+
+# --- tail --kinds (a chief Monitor wakes on the kinds it can act on) ----------
+
+
+def test_tail_kinds_emits_only_the_named_kinds(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    bus.post(tmp_path, "w", "chief", "info", "chatter")
+    bus.post(tmp_path, "w", "chief", "question", "which lookback?")
+    bus.post(tmp_path, "w", "chief", "done", "finished")
+    bus.post(tmp_path, "w", "chief", "blocker", "need the catalog")
+    argv = [
+        "--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief",
+        "--since-start", "--timeout", "0.2", "--kinds", "question,blocker",
+    ]  # fmt: skip
+    assert bus.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "which lookback?" in out and "need the catalog" in out
+    assert "chatter" not in out and "finished" not in out
+
+
+def test_tail_without_kinds_emits_every_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    bus.post(tmp_path, "w", "chief", "info", "chatter")
+    bus.post(tmp_path, "w", "chief", "done", "finished")
+    argv = ["--bus", str(tmp_path), "--as", "chief", "tail", "--to", "chief", "--since-start", "--timeout", "0.2"]
+    assert bus.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "chatter" in out and "finished" in out
+
+
+def test_tail_kinds_refuses_an_unknown_kind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    for argv in (["tail", "--kinds", "question,gossip"], ["tail", "--kinds", ","]):
+        with pytest.raises(SystemExit) as exc:
+            bus.main(["--bus", str(tmp_path), *argv])
+        assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "gossip" in err and "--kinds needs at least one kind" in err
+
+
+def test_durable_tail_kinds_filter_still_advances_the_cursor(tmp_path: Path) -> None:
+    bus.post(tmp_path, "w", "chief", "info", "noise before")
+    bus.post(tmp_path, "w", "chief", "question", "the one question")
+    bus.post(tmp_path, "w", "chief", "info", "noise after")
+    sent: list[str] = []
+    bus._durable_tail(tmp_path, "chief", "chief", True, 0.3, kinds=frozenset({"question"}), emit=sent.append)
+    assert [ln.split("): ", 1)[1] for ln in sent] == ["the one question"]
+    # the cursor moved past the filtered messages: a restart does not replay them
+    assert bus._read_cursor(bus._tail_cursor_path(tmp_path, "chief", "chief")) == (tmp_path / "messages.jsonl").stat().st_size
+    bus._durable_tail(tmp_path, "chief", "chief", False, 0.3, kinds=frozenset({"question"}), emit=sent.append)
+    assert len(sent) == 1
+
+
+# --- status (one screen for the chief) ----------------------------------------
+
+
+def test_status_reports_counts_and_stays_within_20_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import fcntl
+
+    answered = bus.post(tmp_path, "w1", "chief", "question", "already answered?")
+    bus.post(tmp_path, "chief", "w1", "answer", "yes", ref=str(answered["id"]))
+    for i in range(7):  # 7 unanswered, each with a long body
+        bus.post(tmp_path, f"w{i}", "chief", "blocker" if i == 3 else "question", f"open question {i} " + "x" * 200)
+    bus.post(tmp_path, "chief", "w1", "info", "dm 1")
+    bus.post(tmp_path, "chief", "w1", "info", "dm 2")
+    bus.post(tmp_path, "chief", "w2", "info", "dm 3")
+    bus.post(tmp_path, "chief", "w3", "blocker", "need the data")
+    assert len(bus.inbox(tmp_path, "w1")) == 3  # w1 read everything chief sent: nothing unread
+    bus.ask_user(tmp_path, "w4", "ship or wait?", job_only=True)
+    lock = bus._tail_lock_path(tmp_path, "chief", "chief")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)  # a live durable chief tail
+        assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) <= 20
+    assert "pending to chief: 7" in lines
+    items = [ln for ln in lines if ln.startswith("  [")]
+    assert len(items) == 5  # at most 5 listed, oldest first (the answered one is not pending)
+    assert not any("already answered" in ln for ln in items)
+    assert any(ln.startswith("  [") and "200" not in ln.split(" — ")[1][:60] for ln in items)  # body cut to 60
+    assert any("(+2 more)" in ln for ln in lines)
+    assert any(ln.startswith("unread from chief: 2 agent(s)") and "w2=1" in ln and "w3=1" in ln for ln in lines)
+    assert any(ln.startswith("chief tail: alive") for ln in lines)
+    assert any(ln.startswith("last message: ") and "w4" in ln and "ship or wait?" in ln for ln in lines)
+    assert "open needs-user: 1" in lines
+
+
+def test_status_says_none_for_an_idle_bus(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "pending to chief: 0" in out
+    assert "unread from chief: none" in out
+    assert "chief tail: none" in out
+    assert "last message: none" in out
+    assert "open needs-user: 0" in out
+
+
+def test_status_reports_no_tail_when_the_lock_is_free(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    bus.post(tmp_path, "w", "chief", "info", "hello")
+    lock = bus._tail_lock_path(tmp_path, "chief", "chief")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.touch()  # an abandoned lock file from a dead tail: not held, so the tail is not alive
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
+    assert "chief tail: none" in capsys.readouterr().out
+
+
+# --- pending: one bounded line per item ---------------------------------------
+
+
+def test_pending_cli_prints_only_the_fallback_line_for_old_inbox_traffic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bus full of old inbox traffic and no open question prints exactly the fallback line."""
+    for i in range(200):
+        bus.post(tmp_path, "w", "chief", "info", f"old chatter {i} " + "y" * 200)
+        q = bus.post(tmp_path, "w", "chief", "question", f"answered question {i} " + "y" * 200)
+        bus.post(tmp_path, "chief", "w", "answer", "done", ref=str(q["id"]))
+    bus.post(tmp_path, "w", "all", "question", "a broadcast is not a DM")
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "pending"]) == 0
+    out = capsys.readouterr().out
+    assert out == "(no pending questions for chief)\n"
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "pending", "--global"]) == 0
+    assert capsys.readouterr().out == "(no pending questions for chief)\n"
+
+
+def test_pending_cli_prints_one_short_line_per_pending_item(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bus.post(tmp_path, "w1", "chief", "question", "which lookback?\n\nUse 2*period if unsure.\n" + "z" * 3000)
+    bus.post(tmp_path, "w2", "chief", "blocker", "need the catalog")
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "pending"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2  # one line per pending item, whatever the body contains
+    assert len(lines[0]) < 200  # the 3k body is cut, not dumped
+    assert lines[0].startswith("[") and "which lookback?" in lines[0] and "old)" in lines[0]
+    assert "need the catalog" in lines[1]
+
+
+# --- scripts/agents/bus (the sh shim) -----------------------------------------
+
+
+_BUS_SHIM = _BUS_PATH.with_name("bus")
+
+
+def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
+    assert _BUS_SHIM.exists(), f"{_BUS_SHIM} is missing"
+    assert os.access(_BUS_SHIM, os.X_OK)  # committed executable: `bus ...` works without a python prefix
+    env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
+    help_run = subprocess.run([str(_BUS_SHIM), "--help"], capture_output=True, text=True, env=env)
+    assert help_run.returncode == 0
+    assert "status" in help_run.stdout and "--kinds" in help_run.stdout
+    posted = subprocess.run(
+        [str(_BUS_SHIM), "--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", "via the shim"],
+        capture_output=True, text=True, env=env,
+    )  # fmt: skip
+    assert posted.returncode == 0 and "via the shim" in posted.stdout

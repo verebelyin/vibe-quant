@@ -1107,3 +1107,59 @@ def test_report_by_board_and_asked(_isolated_ledger: Path) -> None:
     assert by_board == {"relied>0": (1, 1), "relied=0": (1, 2), "unknown": (1, 1)}
     by_asked = {r["group"]: (r["pass1_passes"], r["pass1_attempts"]) for r in tel.report_rows(recs, by="asked")}
     assert by_asked == {"asked>0": (0, 1), "asked=0": (2, 2), "unknown": (1, 1)}
+
+
+# --- round suffixes without a "-r"/"-fix" marker (cc-e6-sweep-2 was recorded as round 1) ------
+
+
+def test_derive_round_reads_a_bare_round_suffix() -> None:
+    assert tel.derive_round("cc-e6-sweep-2") == ("cc-e6-sweep", 2)
+    assert tel.derive_round("cc-e6-sweep-1") == ("cc-e6-sweep", 1)
+    assert tel.derive_round("e6-sweep-2") == ("e6-sweep", 2)
+    assert tel.derive_round("cc-e6-sweep-0") is None  # rounds start at 1
+    assert tel.derive_round("vibe-quant-20261014") is None  # 8 digits are a date, not a round
+
+
+def test_identity_from_name_reads_a_bare_round_suffix() -> None:
+    assert tel.identity_from_name("e6-sweep-2") == ("e6-sweep-2", "e6-sweep", 2)
+    # a model suffix is still a model: "-opus5" is not the round-5 retry
+    assert tel.identity_from_name("impl-liq-t2a-opus5") == ("impl-liq-t2a-opus5", "liq-t2a", 5)
+
+
+def _e6_db(path: Path) -> Path:
+    """Round 1 and round 2 workers of one task, ids cc-e6-sweep-<n>, with no TELEMETRY line."""
+    def row(cid: str, prompt: str) -> dict[str, Any]:
+        return {"cid": cid, "provider": "commandcode_command", "status": "completed",
+                "start": "2026-10-17T15:00:00.000Z", "end": "2026-10-17T15:10:00.000Z",
+                "model": MODEL_B, "prompt": prompt, "result": "done"}  # fmt: skip
+
+    return _t3_db(path, [
+        row("cc-e6-sweep-1", f"ROLE: Command Code worker (agent id cc-e6-sweep-1), job {JOB}. Sweep."),
+        row("cc-e6-sweep-2", f"ROLE: Command Code worker (agent id cc-e6-sweep-2), job {JOB}. Sweep again."),
+        row("cc-e6-sweep-9", f"TELEMETRY: task=e6-sweep round=8\nROLE: worker, job {JOB}"),  # explicit line wins
+    ])
+
+
+def test_ingest_runs_records_cc_ids_as_rounds_of_one_task(_isolated_ledger: Path, tmp_path: Path) -> None:
+    added = tel.ingest_runs(JOB, t3_db=_e6_db(tmp_path / "t3.sqlite"), cmd_dir=tmp_path / "nocmd", claude_dir=tmp_path / "nocl")
+    assert sorted((r["task"], r["round"]) for r in added) == [("e6-sweep", 1), ("e6-sweep", 2), ("e6-sweep", 8)]
+    # one task, round 1 fixed in round 2 -> 2.0 rounds to done (was 1.0 while each id was its own task)
+    tel.main(["review", "--job", JOB, "--task", "e6-sweep", "--round", "1", "--review", "SHOULD-FIX"])
+    tel.main(["review", "--job", JOB, "--task", "e6-sweep", "--round", "2", "--review", "PASS"])
+    row = _row(tel.report_rows(_ledger_rows(_isolated_ledger), by="model"), MODEL_B)
+    assert row is not None
+    assert (row["tasks"], row["mean_rounds"], row["pass1_passes"], row["pass1_attempts"]) == (1, 2.0, 0, 1)
+
+
+def test_ingest_cmd_log_auto_round_reads_a_bare_round_suffix(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    log = tmp_path / "20261017-150000-cc-e6-sweep-2-xiaomi_mimo-v2.6-pro.ndjson"
+    _write_log(log, RESULT_SUCCESS + "\n")
+    tel.main(
+        ["ingest-cmd-log", str(log), "--job", JOB, "--agent", "cc-e6-sweep-2",
+         "--task", "cc-e6-sweep-2", "--auto-round"]
+    )  # fmt: skip
+    (rec,) = _ledger_rows(_isolated_ledger)
+    assert (rec["task"], rec["round"]) == ("cc-e6-sweep", 2)
+    assert rec["note"] == "round derived from name"
