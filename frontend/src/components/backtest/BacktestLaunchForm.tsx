@@ -38,6 +38,7 @@ import {
 } from "@/lib/sizing";
 import { cn } from "@/lib/utils";
 import { buildBacktestLaunchBody } from "./backtestLaunchBody";
+import { parseMaxMarginPct } from "./marginLimit";
 import { PreflightStatus } from "./PreflightStatus";
 import {
   SweepBuilder,
@@ -70,6 +71,8 @@ export function BacktestLaunchForm() {
   // Sizing (vibe-quant-2gyk1.2): "" = an empty field, which is a problem.
   const [maxPos, setMaxPos] = useState<number | "">(DEFAULT_MAX_POSITION_PCT);
   const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
+  // Margin limit (T6, vibe-quant-t8nrv): a percent of equity, "" = no limit at all.
+  const [maxMarginPct, setMaxMarginPct] = useState<string>("");
   // Liquidation (vibe-quant-2gyk1.1.10, E1): off sends no liquidation keys.
   const [liquidationMode, setLiquidationMode] = useState<LiquidationMode>("off");
   const [timeframe, setTimeframe] = useState("1m");
@@ -141,7 +144,13 @@ export function BacktestLaunchForm() {
     [selectedStrategy],
   );
 
-  const sizingIssues = sizingProblems(maxPos, riskPct, leverage);
+  // The margin limit (T6) is optional — an empty field means OFF — but a value outside
+  // (0, 100] is refused here, before the launch.
+  const marginLimit = parseMaxMarginPct(maxMarginPct);
+  const sizingIssues = [
+    ...sizingProblems(maxPos, riskPct, leverage),
+    ...(marginLimit.kind === "invalid" ? [marginLimit.message] : []),
+  ];
 
   const isLaunching = screeningMutation.isPending || validationMutation.isPending;
 
@@ -217,6 +226,7 @@ export function BacktestLaunchForm() {
       leverage,
       maxPositionPct: maxPos,
       riskPct,
+      maxMarginPct,
       liquidationMode,
       sweep: sweepEnabled && sweepConfig.params.length > 0 ? sweepToPayload(sweepConfig) : null,
       mode,
@@ -490,6 +500,21 @@ export function BacktestLaunchForm() {
               />
               <p className="text-xs text-muted-foreground">
                 How much of the account one stopped-out trade may lose (2 = 2%).
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="max-margin-pct">Max margin in use (% of equity)</Label>
+              <Input
+                id="max-margin-pct"
+                type="text"
+                inputMode="decimal"
+                placeholder="off"
+                value={maxMarginPct}
+                onChange={(e) => setMaxMarginPct(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Refuse an entry that would push the margin in use over this share of the account (50
+                = half). Empty means no limit.
               </p>
             </div>
             {sizingIssues.length > 0 && (

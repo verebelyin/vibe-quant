@@ -123,3 +123,143 @@ describe("sizingChipForRun notes.sizing fallback", () => {
     ).toBeNull();
   });
 });
+
+/**
+ * T6 (bead vibe-quant-t8nrv): the run's margin limit and its refused entries.
+ *
+ * The validation runner records both in the machine `notes.margin_limit` (and only
+ * when the limit was on, so an off limit adds nothing to the chip); the chip appends
+ * them after the sizing label.
+ */
+describe("sizingChipForRun notes.margin_limit", () => {
+  const notes = (payload: unknown) => JSON.stringify(payload);
+  const validation = run({ run_mode: "validation" });
+
+  it("appends the limit and the refused count of a validation run", () => {
+    expect(
+      sizingChipForRun(
+        validation,
+        notes({ margin_limit: { max_margin_pct: 0.5, refused_entries: 3 } }),
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · Max margin 50% · 3 entries refused");
+    expect(
+      sizingChipForRun(
+        run({ run_mode: "validation", parameters: { max_position_pct: 1 } }),
+        notes({ margin_limit: { max_margin_pct: 0.255, refused_entries: 1 } }),
+      ),
+    ).toBe("Max exposure 1× · Risk 2% · Max margin 25.5% · 1 entries refused");
+  });
+
+  it("shows a limit that refused nothing", () => {
+    expect(
+      sizingChipForRun(
+        validation,
+        notes({ margin_limit: { max_margin_pct: 0.5, refused_entries: 0 } }),
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · Max margin 50% · 0 entries refused");
+  });
+
+  it("shows the limit alone when no refused count was recorded", () => {
+    expect(sizingChipForRun(validation, notes({ margin_limit: { max_margin_pct: 1 } }))).toBe(
+      "Max exposure 0.5× · Risk 2% (default) · Max margin 100%",
+    );
+  });
+
+  it("adds nothing without a recorded margin limit", () => {
+    const plain = "Max exposure 0.5× · Risk 2% (default)";
+    const moved = run({ run_mode: "validation", parameters: { max_position_pct: 1 } });
+    expect(sizingChipForRun(moved, notes({ margin_limit: null }))).toBe(
+      "Max exposure 1× · Risk 2%",
+    );
+    expect(sizingChipForRun(validation, notes({ margin_limit: [1, 2] }))).toBe(plain);
+    expect(sizingChipForRun(validation, notes({}))).toBe(plain);
+    expect(sizingChipForRun(validation, "not json")).toBe(plain);
+    expect(sizingChipForRun(validation, null)).toBe(plain);
+    expect(sizingChipForRun(validation, undefined)).toBe(plain);
+  });
+
+  it("renders only the parts that are numbers", () => {
+    expect(
+      sizingChipForRun(
+        validation,
+        notes({ margin_limit: { max_margin_pct: 0.5, refused_entries: "3" } }),
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · Max margin 50%");
+    expect(
+      sizingChipForRun(
+        validation,
+        notes({ margin_limit: { max_margin_pct: null, refused_entries: 3 } }),
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · 3 entries refused");
+  });
+
+  it("paper still renders nothing", () => {
+    expect(
+      sizingChipForRun(
+        run({ run_mode: "paper" }),
+        notes({ margin_limit: { max_margin_pct: 0.5, refused_entries: 3 } }),
+      ),
+    ).toBeNull();
+  });
+});
+
+/**
+ * T6 review B1: the margin limit shows for EVERY run type — a screening run has only
+ * `parameters.max_margin_pct`, a CLI discovery run only `notes.sizing.max_margin_pct`.
+ * The refused count stays validation-only.
+ */
+describe("sizingChipForRun margin limit by run type", () => {
+  const notes = (payload: unknown) => JSON.stringify(payload);
+
+  it("screening: reads parameters.max_margin_pct with no notes", () => {
+    expect(sizingChipForRun(run({ parameters: { max_margin_pct: 0.5 } }), null)).toBe(
+      "Max exposure 0.5× · Risk 2% (default) · Max margin 50%",
+    );
+    expect(sizingChipForRun(run({ parameters: { max_margin_pct: 0.255 } }))).toBe(
+      "Max exposure 0.5× · Risk 2% (default) · Max margin 25.5%",
+    );
+  });
+
+  it("screening: a margin key alone does not make the sizing explicit", () => {
+    expect(sizingChipForRun(run({ parameters: { max_position_pct: 1, max_margin_pct: 1 } }))).toBe(
+      "Max exposure 1× · Risk 2% · Max margin 100%",
+    );
+  });
+
+  it("discovery: reads notes.sizing.max_margin_pct", () => {
+    const discovery = run({ run_mode: "discovery" });
+    expect(
+      sizingChipForRun(discovery, notes({ sizing: { max_position_pct: 1, max_margin_pct: 0.4 } })),
+    ).toBe("Max exposure 1× · Risk 2% · Max margin 40%");
+  });
+
+  it("parameters win over the notes", () => {
+    expect(
+      sizingChipForRun(
+        run({ run_mode: "discovery", parameters: { max_margin_pct: 0.3 } }),
+        notes({ sizing: { max_margin_pct: 0.4 } }),
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · Max margin 30%");
+  });
+
+  it("the refused count is validation-only", () => {
+    const margin = notes({ margin_limit: { max_margin_pct: 0.5, refused_entries: 3 } });
+    expect(sizingChipForRun(run({ parameters: { max_margin_pct: 0.5 } }), margin)).toBe(
+      "Max exposure 0.5× · Risk 2% (default) · Max margin 50%",
+    );
+    expect(
+      sizingChipForRun(
+        run({ run_mode: "validation", parameters: { max_margin_pct: 0.5 } }),
+        margin,
+      ),
+    ).toBe("Max exposure 0.5× · Risk 2% (default) · Max margin 50% · 3 entries refused");
+  });
+
+  it("an unreadable stored limit adds nothing", () => {
+    for (const bad of [0, -1, 2, "50", null]) {
+      expect(sizingChipForRun(run({ parameters: { max_margin_pct: bad } }))).toBe(
+        "Max exposure 0.5× · Risk 2% (default)",
+      );
+    }
+  });
+});

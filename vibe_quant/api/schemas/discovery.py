@@ -89,6 +89,13 @@ class DiscoveryLaunchRequest(BaseModel):
     # argv unchanged (S27).
     max_position_pct: float | None = None
     risk_per_trade: float | None = None
+    # Run-level margin limit for every screening backtest of this discovery (bead
+    # vibe-quant-t8nrv, T6): the margin in use across open positions plus pending
+    # entries may not exceed this fraction of equity (the one rule of
+    # ``vibe_quant.margin_limit``). Omitted = OFF, which is the limit's own default;
+    # an explicit null is a 422, never a silent off. Forwarded and stored only when
+    # set, so a default launch keeps its stored params and argv unchanged.
+    max_margin_pct: float | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -119,7 +126,7 @@ class DiscoveryLaunchRequest(BaseModel):
         """One parse rule for the value: the shared ``LiquidationSettings`` check."""
         return LiquidationSettings(mode="off", leverage=value).leverage
 
-    @field_validator("max_position_pct", "risk_per_trade", mode="before")
+    @field_validator("max_position_pct", "risk_per_trade", "max_margin_pct", mode="before")
     @classmethod
     def _validate_sizing(cls, value: Any, info: ValidationInfo) -> float:
         """One parse rule per sizing field: the shared ``SizingSettings`` check.
@@ -128,10 +135,16 @@ class DiscoveryLaunchRequest(BaseModel):
         is a 422 whose error sits on its OWN field, so an independently bad leverage is
         still reported alongside it (S27b). An omitted field never reaches here and keeps
         its ``None`` default, i.e. the run's default (S1).
+
+        ``max_margin_pct`` is the one sizing field whose default IS ``None`` (off), so the
+        constructor cannot tell an omitted key from a stored null; it is read through the
+        shared ``from_params`` rule instead, which rejects the null.
         """
         if info.field_name == "max_position_pct":
             return SizingSettings(max_position_pct=value).max_position_pct
-        return SizingSettings(risk_per_trade=value).risk_per_trade
+        if info.field_name == "risk_per_trade":
+            return SizingSettings(risk_per_trade=value).risk_per_trade
+        return cast("float", SizingSettings.from_params({"max_margin_pct": value}).max_margin_pct)
 
     @field_validator("entry_order")
     @classmethod
@@ -190,6 +203,8 @@ class DiscoveryLaunchRequest(BaseModel):
             params["max_position_pct"] = self.max_position_pct
         if self.risk_per_trade is not None:
             params["risk_per_trade"] = self.risk_per_trade
+        if self.max_margin_pct is not None:
+            params["max_margin_pct"] = self.max_margin_pct
         return SizingSettings.from_params(params)
 
 

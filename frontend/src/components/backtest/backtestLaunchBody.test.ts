@@ -22,6 +22,8 @@ function defaultForm(overrides: Partial<BacktestLaunchForm> = {}): BacktestLaunc
     leverage: 10,
     maxPositionPct: DEFAULT_MAX_POSITION_PCT,
     riskPct: DEFAULT_RISK_PCT,
+    // Margin limit (T6): "" is the empty field = OFF.
+    maxMarginPct: "",
     liquidationMode: "off",
     sweep: null,
     mode: "screening",
@@ -104,5 +106,38 @@ describe("buildBacktestLaunchBody", () => {
   it("omits bnb_discount for a validation run when the discount is unchecked", () => {
     const body = buildBacktestLaunchBody(defaultForm({ mode: "validation", bnbDiscount: false }));
     expect(body).not.toHaveProperty("bnb_discount");
+  });
+});
+
+/**
+ * T6 (bead vibe-quant-t8nrv): the margin limit rides in `parameters`, and only when
+ * the field holds a value — an empty field leaves the run's numbers as today.
+ */
+describe("buildBacktestLaunchBody margin limit", () => {
+  it("sends no max_margin_pct for an empty field", () => {
+    expect(buildBacktestLaunchBody(defaultForm({ maxMarginPct: "" })).parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+    });
+  });
+
+  it("stores max_margin_pct 0.5 for a limit of 50% of equity", () => {
+    expect(buildBacktestLaunchBody(defaultForm({ maxMarginPct: "50" })).parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+      max_margin_pct: 0.5,
+    });
+  });
+
+  it("stores the inclusive 100% edge as 1, next to the other parameters", () => {
+    const body = buildBacktestLaunchBody(
+      defaultForm({ maxMarginPct: "100", mode: "validation", bnbDiscount: true }),
+    );
+    expect(body.parameters).toStrictEqual({
+      initial_balance: 10000,
+      leverage: 10,
+      max_margin_pct: 1,
+    });
+    expect(body.bnb_discount).toBe(true);
   });
 });

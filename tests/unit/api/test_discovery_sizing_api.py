@@ -202,3 +202,80 @@ async def test_null_risk_is_422(
         "Value error, risk_per_trade must be more than 0 and at most 0.5 "
         "(50% of equity per trade), got None"
     ) in r.text
+
+
+# ---------------------------------------------------------------------------
+# T6 (bead vibe-quant-t8nrv): the run-level margin limit on the discovery API
+# ---------------------------------------------------------------------------
+
+MARGIN_MESSAGE = "max_margin_pct must be a number in (0, 1], got"
+
+
+async def test_margin_limit_forwarded_and_stored(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """T6/B5a: a run-level margin limit is forwarded as ``--max-margin-pct`` AND stored
+    as a float; an omitted one adds neither argv nor a stored key."""
+    ac, state, job_mgr = client
+
+    r, argv = await _launch(ac, job_mgr, {**_OK_BODY, "max_margin_pct": 0.5})
+    assert r.status_code == 201, r.text
+    assert argv is not None
+    assert argv[argv.index("--max-margin-pct") + 1] == "0.5"
+    stored = _stored_params(state, r.json()["run_id"])
+    assert stored["max_margin_pct"] == 0.5
+    assert type(stored["max_margin_pct"]) is float
+
+    r2, argv2 = await _launch(ac, job_mgr, _OK_BODY)
+    assert r2.status_code == 201, r2.text
+    assert argv2 is not None
+    assert "--max-margin-pct" not in argv2
+    assert "max_margin_pct" not in _stored_params(state, r2.json()["run_id"])
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        # the margin limit's domain is (0, 1] and its default is "off", so an
+        # explicit null is a 422 rather than a silent off (the shared from_params rule)
+        pytest.param(None, MARGIN_MESSAGE, id="null"),
+        pytest.param(0, MARGIN_MESSAGE, id="zero"),
+        pytest.param(-0.5, MARGIN_MESSAGE, id="negative"),
+        pytest.param(1.5000001, MARGIN_MESSAGE, id="just-over-max"),
+        pytest.param(1.01, MARGIN_MESSAGE, id="over-max"),
+        pytest.param("0.5", MARGIN_MESSAGE, id="str"),
+        pytest.param(True, MARGIN_MESSAGE, id="bool"),
+    ],
+)
+async def test_bad_margin_limit_is_422_no_run(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+    value: object,
+    message: str,
+) -> None:
+    """T6: a value outside ``(0, 1]`` is a 422 naming the field, before any run row."""
+    ac, state, _job_mgr = client
+    before = int(state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0])
+
+    r = await ac.post("/api/discovery/launch", json={**_OK_BODY, "max_margin_pct": value})
+
+    assert r.status_code == 422, r.text
+    assert f"Value error, {message}" in r.text
+    assert f"got {value!r}" in r.text
+    assert int(state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]) == before
+
+
+@pytest.mark.parametrize("value", [1e-9, 0.5, 1, 1.0])
+async def test_margin_limit_domain_accepted(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+    value: float,
+) -> None:
+    """T6: the equality edge is inclusive — a limit of exactly 1.0 (100% of equity) is
+    accepted, and it is stored as the same float."""
+    ac, state, job_mgr = client
+
+    r, argv = await _launch(ac, job_mgr, {**_OK_BODY, "max_margin_pct": value})
+
+    assert r.status_code == 201, r.text
+    assert argv is not None
+    assert argv[argv.index("--max-margin-pct") + 1] == str(float(value))
+    assert _stored_params(state, r.json()["run_id"])["max_margin_pct"] == float(value)

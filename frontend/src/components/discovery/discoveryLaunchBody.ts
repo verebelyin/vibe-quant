@@ -7,6 +7,7 @@
  * a default form sends neither key, so stored run parameters stay unchanged.
  */
 import type { DiscoveryLaunchRequest } from "@/api/generated/models";
+import { parseMaxMarginPct } from "@/components/backtest/marginLimit";
 import { type LiquidationMode, leveragePayload, liquidationPayload } from "@/lib/liquidation";
 import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
 
@@ -49,6 +50,12 @@ export interface DiscoveryLaunchForm {
   maxPositionPct: number;
   /** Risk per trade in PERCENT (validated by sizingProblems). */
   riskPct: number;
+  /**
+   * Max margin in use as a PERCENT of equity ("50" is half of equity), or "" for no
+   * limit at all (validated by parseMaxMarginPct, T6). Discovery takes the limit as a
+   * top-level request field, not a run parameter.
+   */
+  maxMarginPct: string;
   selectedIndicators: string[];
 }
 
@@ -67,6 +74,7 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     .map((s) => s.trim())
     .filter(Boolean);
   const crossWindowMonths = parseCrossWindowMonths(form.crossWindowMonths);
+  const margin = parseMaxMarginPct(form.maxMarginPct);
 
   return {
     population: form.population,
@@ -111,5 +119,7 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     ...leveragePayload(form.liquidationMode, form.leverage),
     // Non-default sizing keys only, so a default launch body is unchanged.
     ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
+    // The margin limit (T6) is a top-level discovery field, sent only when set.
+    ...(margin.kind === "on" && { max_margin_pct: margin.fraction }),
   } as DiscoveryLaunchRequest;
 }

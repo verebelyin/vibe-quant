@@ -49,6 +49,8 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     leverage: DEFAULT_LEVERAGE,
     maxPositionPct: DEFAULT_MAX_POSITION_PCT,
     riskPct: DEFAULT_RISK_PCT,
+    // Margin limit (T6): "" is the empty field = OFF.
+    maxMarginPct: "",
     selectedIndicators: [],
     ...overrides,
   };
@@ -216,5 +218,24 @@ describe("buildDiscoveryLaunchBody sizing (vibe-quant-2gyk1.2)", () => {
     const risk = buildDiscoveryLaunchBody(defaultForm({ riskPct: 7 }));
     expect(risk.risk_per_trade).toBe(0.07);
     expect("max_position_pct" in risk).toBe(false);
+  });
+});
+
+/**
+ * T6 (bead vibe-quant-t8nrv): the discovery margin limit is a TOP-LEVEL request field
+ * (not a run parameter), and only when the field holds a value.
+ */
+describe("buildDiscoveryLaunchBody margin limit", () => {
+  it("sends no max_margin_pct for an empty field", () => {
+    expect("max_margin_pct" in buildDiscoveryLaunchBody(defaultForm())).toBe(false);
+  });
+
+  it("sends the top-level max_margin_pct 0.5 for a limit of 50% of equity", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm({ maxMarginPct: "50" }));
+    expect(body.max_margin_pct).toBe(0.5);
+  });
+
+  it("sends the inclusive 100% edge as 1", () => {
+    expect(buildDiscoveryLaunchBody(defaultForm({ maxMarginPct: "100" })).max_margin_pct).toBe(1);
   });
 });

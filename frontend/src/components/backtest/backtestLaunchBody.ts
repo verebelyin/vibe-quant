@@ -11,6 +11,7 @@ import type {
 } from "@/api/generated/models";
 import { type LiquidationMode, liquidationPayload } from "@/lib/liquidation";
 import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
+import { parseMaxMarginPct } from "./marginLimit";
 
 export type BacktestLaunchMode = "screening" | "validation";
 
@@ -27,6 +28,11 @@ export interface BacktestLaunchForm {
   maxPositionPct: number;
   /** Risk per trade in PERCENT (validated by sizingProblems). */
   riskPct: number;
+  /**
+   * Max margin in use as a PERCENT of equity ("50" is half of equity), or "" for no
+   * limit at all (validated by parseMaxMarginPct, T6).
+   */
+  maxMarginPct: string;
   liquidationMode: LiquidationMode;
   /** The already-expanded sweep, or null when the sweep is off/empty. */
   sweep: Record<string, number[]> | null;
@@ -40,6 +46,7 @@ export interface BacktestLaunchForm {
 
 /** The launch request body for a form; optional keys appear only when set. */
 export function buildBacktestLaunchBody(form: BacktestLaunchForm): BacktestLaunchRequest {
+  const margin = parseMaxMarginPct(form.maxMarginPct);
   return {
     strategy_id: form.strategyId,
     symbols: form.symbols,
@@ -50,6 +57,9 @@ export function buildBacktestLaunchBody(form: BacktestLaunchForm): BacktestLaunc
       initial_balance: form.initialBalance,
       leverage: form.leverage,
       ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
+      // The margin limit (T6) is stored like the other run-level sizing keys: only
+      // when the field holds a value, so an empty field leaves the run unchanged.
+      ...(margin.kind === "on" && { max_margin_pct: margin.fraction }),
       ...(form.sweep && { sweep: form.sweep }),
     },
     // Off sends no liquidation_mode, so stored parameters stay identical.

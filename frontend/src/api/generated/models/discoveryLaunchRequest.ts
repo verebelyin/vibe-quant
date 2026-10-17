@@ -72,4 +72,5 @@ export interface DiscoveryLaunchRequest {
   liquidation_leverage?: number | null;
   max_position_pct?: number | null;
   risk_per_trade?: number | null;
+  max_margin_pct?: number | null;
 }

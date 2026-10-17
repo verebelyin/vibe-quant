@@ -1083,6 +1083,16 @@ def build_parser() -> argparse.ArgumentParser:
         "it in the run parameters).",
     )
     parser.add_argument(
+        "--max-margin-pct",
+        type=float,
+        default=None,
+        help="Margin limit for every screening backtest of this run: the margin in "
+        "use across open positions plus pending entries may not exceed this "
+        "fraction of equity (a number in (0, 1]; absent = OFF). Only a set value "
+        "is recorded in notes.sizing (the API launch also stores it in the run "
+        "parameters).",
+    )
+    parser.add_argument(
         "--immigrant-fraction",
         type=float,
         default=0.15,
@@ -1217,6 +1227,7 @@ def main() -> int:
                 for key, value in (
                     ("max_position_pct", args.max_position_pct),
                     ("risk_per_trade", args.risk_per_trade),
+                    ("max_margin_pct", args.max_margin_pct),
                 )
                 if value is not None
             }

@@ -6067,6 +6067,17 @@
               }
             ],
             "title": "Risk Per Trade"
+          },
+          "max_margin_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Margin Pct"
           }
         },
         "additionalProperties": false,

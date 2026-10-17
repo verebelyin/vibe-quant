@@ -7,6 +7,7 @@ import {
   useListDiscoveryJobsApiDiscoveryJobsGet,
 } from "@/api/generated/discovery/discovery";
 import { queryClient } from "@/api/query-client";
+import { parseMaxMarginPct } from "@/components/backtest/marginLimit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -107,7 +108,15 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // Sizing (vibe-quant-2gyk1.2): "" = an empty field, which is a problem.
   const [maxPos, setMaxPos] = useState<number | "">(DEFAULT_MAX_POSITION_PCT);
   const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
-  const sizingIssues = sizingProblems(maxPos, riskPct, leverage);
+  // Margin limit (T6, vibe-quant-t8nrv): a percent of equity, "" = no limit at all.
+  const [maxMarginPct, setMaxMarginPct] = useState<string>("");
+  // The margin limit (T6) is optional — an empty field means OFF — but a value outside
+  // (0, 100] is refused here, before the launch.
+  const marginLimit = parseMaxMarginPct(maxMarginPct);
+  const sizingIssues = [
+    ...sizingProblems(maxPos, riskPct, leverage),
+    ...(marginLimit.kind === "invalid" ? [marginLimit.message] : []),
+  ];
 
   const symbolCount = symbols.split(",").filter((s) => s.trim() !== "").length;
   const parsedCrossWindowMonths = parseCrossWindowMonths(crossWindowMonths);
@@ -222,6 +231,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           leverage,
           maxPositionPct: maxPos,
           riskPct,
+          maxMarginPct,
           selectedIndicators,
         }),
       },
@@ -559,6 +569,21 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             />
             <p className="text-xs text-muted-foreground">
               How much of the account one stopped-out trade may lose (2 = 2%).
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="disc-max-margin-pct">Max margin in use (% of equity)</Label>
+            <Input
+              id="disc-max-margin-pct"
+              type="text"
+              inputMode="decimal"
+              placeholder="off"
+              value={maxMarginPct}
+              onChange={(e) => setMaxMarginPct(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Refuse an entry that would push the margin in use over this share of the account (50 =
+              half). Empty means no limit.
             </p>
           </div>
           {sizingIssues.length > 0 && (

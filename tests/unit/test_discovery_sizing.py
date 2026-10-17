@@ -13,6 +13,7 @@ The rule itself (S1-S13) is pinned by ``tests/unit/test_sizing_settings.py``; th
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator  # noqa: TCH003
 from pathlib import Path  # noqa: TCH003
 from typing import Any  # noqa: TCH003
@@ -96,9 +97,15 @@ def test_nt_backtest_fn_defaults_to_default_sizing() -> None:
 
 
 def _reach_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, zero_champion: bool = False
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    zero_champion: bool = False,
+    extra_args: list[str] | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any], list[NTBacktestFn]]:
     """Drive ``main()`` with cap 1.0 / risk 0.01 and the pipeline's ``run`` replaced.
+
+    ``extra_args`` are appended to argv verbatim.
 
     Returns ``(rc, run row, notes, every NTBacktestFn the CLI built)``.
     """
@@ -172,6 +179,7 @@ def _reach_run(
             "--eval-windows", "2", "--cross-window-months", "1",
             "--train-test-split", "0.8",
             "--max-position-pct", "1.0", "--risk-per-trade", "0.01",
+            *(extra_args or []),
         ],
     )  # fmt: skip
     rc = main()
@@ -222,13 +230,88 @@ def test_zero_champion_run_records_notes_sizing(
 
 
 def test_cli_help_says_notes_sizing(capsys: pytest.CaptureFixture[str]) -> None:
-    """S23e: the help texts name notes.sizing as the CLI's record."""
+    """S23e: the help texts name notes.sizing as the CLI's record.
+
+    Three flags now share that sentence: ``--max-position-pct``, ``--risk-per-trade``
+    and (T6) ``--max-margin-pct``. argparse wraps help text to the terminal width, so
+    whitespace is normalised before matching: the assertion is about the wording, not
+    about where the wrap happens.
+    """
     from vibe_quant.discovery.__main__ import build_parser
 
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--help"])
-    out = " ".join(capsys.readouterr().out.split())
-    assert out.count("recorded in notes.sizing (the API launch also stores it in the run parameters)") == 2
+    out = re.sub(r"\s+", " ", capsys.readouterr().out)
+    assert out.count("recorded in notes.sizing (the API launch also stores it in the run parameters)") == 3
+
+
+# ---------------------------------------------------------------------------
+# T6 (bead vibe-quant-t8nrv) -- the CLI's --max-margin-pct lands in notes.sizing
+# ---------------------------------------------------------------------------
+
+
+def test_cli_records_notes_margin_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6/B5a: ``--max-margin-pct`` is recorded in ``notes.sizing`` like the other keys.
+
+    The limit applies to every screening backtest of the run (the same setup the
+    champion is found under), so the CLI records it where promote/replay look.
+    """
+    rc, _run, notes, built = _reach_run(
+        tmp_path, monkeypatch, extra_args=["--max-margin-pct", "0.5"]
+    )
+
+    assert rc == 0
+    assert notes["sizing"] == {
+        "max_position_pct": 1.0,
+        "risk_per_trade": 0.01,
+        "max_margin_pct": 0.5,
+    }
+    assert built
+    assert all(fn.sizing.max_margin_pct == 0.5 for fn in built)
+
+
+def test_cli_bad_margin_limit_fails_before_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6/S15: a corrupt ``--max-margin-pct`` fails the run before ``plan_from_args``.
+
+    The window below is itself too short for ``plan_from_args``; the sizing error
+    winning proves the parse runs first, as it does for the other sizing keys.
+    """
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--run-id",
+            str(run_id),
+            "--symbols",
+            "BTCUSDT",
+            "--timeframe",
+            "1h",
+            "--start-date",
+            "2025-01-01",
+            "--end-date",
+            "2025-01-02",
+            "--db",
+            str(db_path),
+            "--max-margin-pct=0",
+        ],
+    )
+
+    assert main() == 1
+
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    state.close()
+    assert run is not None
+    assert run["status"] == "failed"
+    assert run["error_message"] == (
+        "SizingConfigError: max_margin_pct must be a number in (0, 1], got 0.0"
+    )
 
 
 # ---------------------------------------------------------------------------

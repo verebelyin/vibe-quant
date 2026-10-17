@@ -426,6 +426,10 @@ def _discovery_cli_args(
         command.extend(["--max-position-pct", str(sizing_params["max_position_pct"])])
     if "risk_per_trade" in sizing_params:
         command.extend(["--risk-per-trade", str(sizing_params["risk_per_trade"])])
+    # The margin limit is forwarded on the same rule (T6, bead vibe-quant-t8nrv):
+    # only when it is set, so an off limit keeps the argv unchanged.
+    if "max_margin_pct" in sizing_params:
+        command.extend(["--max-margin-pct", str(sizing_params["max_margin_pct"])])
     return command
 
 

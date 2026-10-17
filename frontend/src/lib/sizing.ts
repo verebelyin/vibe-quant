@@ -17,6 +17,8 @@
  * not a finite number in range is an error rather than a silent default.
  */
 
+import { marginPctText } from "@/components/backtest/marginLimit";
+
 /** The one default exposure cap: at most 50% of equity per position. */
 export const DEFAULT_MAX_POSITION_PCT = 0.5;
 
@@ -41,8 +43,14 @@ const MAX_LEVERAGE = 125;
 
 /** A run's stored sizing: the validated settings, or why they are unreadable. */
 export type RunSizing =
-  | { maxPositionPct: number; riskPerTrade: number; legacy: boolean }
+  | { maxPositionPct: number; riskPerTrade: number; legacy: boolean; maxMarginPct?: number }
   | { invalid: string };
+
+/** The margin limit shown on the chip: a stored fraction in (0, 1], else nothing. */
+function storedMarginPct(params: Record<string, unknown>): number | undefined {
+  const value = params.max_margin_pct;
+  return isAmount(value, 1) ? value : undefined;
+}
 
 /** The launch fields sizing contributes: only the keys moved off the default. */
 export interface SizingPayload {
@@ -172,7 +180,12 @@ export function runSizing(params: Record<string, unknown> | null | undefined): R
     : DEFAULT_RISK_PER_TRADE;
   if (!isAmount(risk, MAX_RISK_PER_TRADE)) return { invalid: riskError(risk) };
 
-  return { maxPositionPct: cap, riskPerTrade: risk, legacy };
+  // T6: the optional run-level margin limit rides along; an absent or unreadable
+  // value adds nothing (it never makes a run "invalid" or non-legacy).
+  const maxMarginPct = storedMarginPct(params);
+  return maxMarginPct === undefined
+    ? { maxPositionPct: cap, riskPerTrade: risk, legacy }
+    : { maxPositionPct: cap, riskPerTrade: risk, legacy, maxMarginPct };
 }
 
 /**
@@ -224,5 +237,7 @@ export function sizingChipLabel(sizing: RunSizing, nSymbols: number): string {
   const exposure = chipExposure(sizing.maxPositionPct, nSymbols);
   const risk = `Risk ${riskFractionToPct(sizing.riskPerTrade)}%`;
   const suffix = sizing.legacy ? " (default)" : "";
-  return `${exposure} · ${risk}${suffix}`;
+  const margin =
+    sizing.maxMarginPct === undefined ? "" : ` · Max margin ${marginPctText(sizing.maxMarginPct)}%`;
+  return `${exposure} · ${risk}${suffix}${margin}`;
 }

@@ -365,7 +365,7 @@ async def test_balance_error_wins(
 
 
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-@pytest.mark.parametrize("key", ["max_position_pct", "risk_per_trade"])
+@pytest.mark.parametrize("key", ["max_position_pct", "risk_per_trade", "max_margin_pct"])
 async def test_sweep_sizing_key_is_422(
     client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
     endpoint: str,
@@ -494,3 +494,86 @@ async def test_non_default_sizing_is_stored_as_float(
     assert stored_params == {"initial_balance": 1000, **stored}
     for key in stored:
         assert type(stored_params[key]) is float
+
+
+# --- T6 (bead vibe-quant-t8nrv): the run-level margin limit on the backtest API ---
+
+MARGIN_MESSAGE = "parameters: max_margin_pct must be a number in (0, 1], got"
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+@pytest.mark.parametrize(
+    ("value", "stored"),
+    [
+        pytest.param(0.5, 0.5, id="half"),
+        pytest.param(1, 1.0, id="int-one-is-the-inclusive-edge"),
+        pytest.param(1e-9, 1e-9, id="tiny"),
+    ],
+)
+async def test_margin_limit_is_stored_as_float(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    endpoint: str,
+    value: object,
+    stored: float,
+) -> None:
+    """T6/B5a: ``parameters.max_margin_pct`` reaches the run's stored parameters (it is
+    the run-level sizing key the screening and validation runners read) as a float, and
+    the run only stores it when it is set (absence = the limit is off)."""
+    ac, state, job_mgr, _db = client
+
+    r, popen = await _launch(
+        ac, job_mgr, endpoint, _body(state, parameters={"initial_balance": 1000, "max_margin_pct": value})
+    )
+
+    assert r.status_code == 201, r.text
+    assert popen.call_count == 1
+    stored_params = _stored(state, r)
+    assert stored_params == {"initial_balance": 1000, "max_margin_pct": stored}
+    assert type(stored_params["max_margin_pct"]) is float
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+async def test_absent_margin_limit_stores_nothing(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    endpoint: str,
+) -> None:
+    """T6: an absent ``max_margin_pct`` is OFF and stores no key (numbers identical)."""
+    ac, state, job_mgr, _db = client
+
+    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters={"initial_balance": 1000}))
+
+    assert r.status_code == 201, r.text
+    assert popen.call_count == 1
+    assert _stored(state, r) == {"initial_balance": 1000}
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        # the limit's default is "off", so an explicit null is a 422, not a silent off
+        pytest.param(None, MARGIN_MESSAGE, id="margin-null"),
+        pytest.param(0, MARGIN_MESSAGE, id="margin-zero"),
+        pytest.param(1.5000001, MARGIN_MESSAGE, id="margin-just-over-max"),
+        pytest.param("0.5", MARGIN_MESSAGE, id="margin-str"),
+        pytest.param(True, MARGIN_MESSAGE, id="margin-true"),
+        pytest.param(10**400, MARGIN_MESSAGE, id="margin-huge-int"),
+    ],
+)
+async def test_invalid_margin_limit_is_422(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager, Path],
+    endpoint: str,
+    value: object,
+    message: str,
+) -> None:
+    """T6: a value outside ``(0, 1]`` is a 422 naming ``parameters``, no run row, no job."""
+    ac, state, job_mgr, _db = client
+    before = _run_count(state)
+
+    r, popen = await _launch(ac, job_mgr, endpoint, _body(state, parameters={"max_margin_pct": value}))
+
+    assert r.status_code == 422, r.text
+    assert f"Value error, {message}" in r.text
+    assert f"got {value!r}" in r.text
+    assert _run_count(state) == before
+    assert popen.call_count == 0
