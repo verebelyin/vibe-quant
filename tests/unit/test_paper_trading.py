@@ -16,7 +16,6 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from vibe_quant.alerts.telegram import ConfigurationError as TelegramConfigurationError
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
     ConfigurationError,
@@ -1269,78 +1268,6 @@ class TestCaptureCheckpointIsolation:
         assert records[0].exc_info is None
         assert "STOP_SECRET_MARKER" not in caplog.text
         assert "OUTER_CONTEXT_MARKER" not in caplog.text
-
-    def test_telegram_init_configuration_error_logs_info(
-        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """R28: a missing-token ConfigurationError keeps today's info line."""
-
-        def _raise() -> object:
-            raise TelegramConfigurationError("missing TELEGRAM_BOT_TOKEN")
-
-        monkeypatch.setattr("vibe_quant.alerts.telegram.TelegramBot.from_env", _raise)
-
-        with caplog.at_level(logging.INFO):
-            node = self._node(db_path)
-
-        assert node._telegram is None
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("Telegram alerts disabled" in m and "not set" in m for m in messages)
-        assert not any(r.levelno >= logging.ERROR for r in caplog.records)
-
-    def test_telegram_init_other_error_logs_error_class_only(
-        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """R28: any other init failure is an error, class only, and _telegram stays None."""
-
-        def _raise() -> object:
-            raise RuntimeError("init blew up: TELEGRAM_SECRET_MARKER")
-
-        monkeypatch.setattr("vibe_quant.alerts.telegram.TelegramBot.from_env", _raise)
-
-        with caplog.at_level(logging.ERROR):
-            node = self._node(db_path)
-
-        assert node._telegram is None
-        records = [
-            r for r in caplog.records if "Telegram alerts disabled: init failed" in r.getMessage()
-        ]
-        assert len(records) == 1
-        assert "RuntimeError" in records[0].getMessage()
-        assert "TELEGRAM_SECRET_MARKER" not in caplog.text
-
-    def test_telegram_init_import_failure_degrades_gracefully(
-        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """F1/R28: an unimportable telegram module disables alerts, never crashes the node."""
-        import builtins
-
-        real_import = builtins.__import__
-
-        def _fail_telegram_import(
-            name: str,
-            _globals: object = None,
-            _locals: object = None,
-            fromlist: tuple[str, ...] = (),
-            level: int = 0,
-        ) -> object:
-            if name == "vibe_quant.alerts" and "telegram" in fromlist:
-                raise ImportError("telegram unavailable: TELEGRAM_IMPORT_SECRET_MARKER")
-            return real_import(name, _globals, _locals, fromlist, level)
-
-        monkeypatch.setattr(builtins, "__import__", _fail_telegram_import)
-
-        with caplog.at_level(logging.ERROR):
-            node = self._node(db_path)
-
-        assert node._telegram is None
-        records = [
-            r for r in caplog.records if "Telegram alerts disabled: import failed" in r.getMessage()
-        ]
-        assert len(records) == 1
-        assert "ImportError" in records[0].getMessage()
-        assert "TELEGRAM_IMPORT_SECRET_MARKER" not in caplog.text
-        assert all(r.exc_info is None for r in caplog.records)
 
 
 class TestNodeStateEnum:

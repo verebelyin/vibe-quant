@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from vibe_quant.alerts.telegram import TelegramUnavailableError, require_working_telegram
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
 from vibe_quant.api.schemas.paper_trading import (
     CheckpointResponse,
@@ -128,6 +129,18 @@ def _refuse_if_active(jobs: BacktestJobManager) -> None:
             status_code=409,
             detail=f"Paper session already running (run_id={job.run_id}); stop it first",
         )
+
+
+async def _require_working_telegram_or_503() -> None:
+    """Refuse with 503 when Telegram is configured but not working (vibe-quant-u2r9r).
+
+    ``str(exc)`` is token-free; ``from None`` keeps the httpx error (whose ``str()``
+    holds the token URL) out of the HTTPException's chain.
+    """
+    try:
+        await require_working_telegram()
+    except TelegramUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 def _launch(
@@ -249,6 +262,15 @@ async def start_paper(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _require_credentials(body.testnet)
+
+    await _require_working_telegram_or_503()
+
+    # P-R1: the probe awaits, which opened a window in which a second concurrent
+    # /start passed the checks at the top. Re-run them, then create the run and
+    # launch with NO await in between: `start_job` inserts the background_jobs row
+    # synchronously, so a second request's re-check sees the first request's job.
+    _refuse_if_killed(state)
+    _refuse_if_active(jobs)
 
     sizing: dict[str, object] = {}
     if body.sizing_method is not None:
@@ -401,6 +423,14 @@ async def restore_paper(
             detail="This trader_id traded LIVE: set confirm_live=true to restore it",
         )
     _require_credentials(testnet)
+
+    await _require_working_telegram_or_503()
+
+    # P-R1: see ``start_paper``: the probe awaits, so the active check is re-run
+    # immediately before the run row is created and the job launched, with no await
+    # in between (``start_job`` inserts the row synchronously).
+    _refuse_if_killed(state)
+    _refuse_if_active(jobs)
 
     raw_symbols = prior_config.get("symbols")
     symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []

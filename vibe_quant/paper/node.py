@@ -34,6 +34,11 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
+from vibe_quant.alerts.telegram import (
+    TelegramBot,
+    TelegramUnavailableError,
+    require_working_telegram,
+)
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -93,7 +98,6 @@ if TYPE_CHECKING:
     from decimal import Decimal
     from types import ModuleType
 
-    from vibe_quant.alerts.telegram import TelegramBot
     from vibe_quant.dsl.schema import StrategyDSL
     from vibe_quant.paper.force_orders import ForceOrder
 
@@ -501,23 +505,9 @@ class PaperTradingNode:
         # R26: entries already logged, so a repeated snapshot failure logs once.
         self._snapshot_failures_logged: set[str] = set()
 
-        # Optional Telegram alerts (if env vars configured)
+        # Telegram alerts are built in ``_initialize`` (u2r9r): a configured bot
+        # must pass the start probe before the session is allowed to run.
         self._telegram: TelegramBot | None = None
-        try:
-            from vibe_quant.alerts import telegram as _telegram_module
-        except Exception as exc:
-            # R28/F1: an unimportable alerts module must not crash node construction;
-            # class only, so a chained error's text never reaches the log.
-            logger.error("Telegram alerts disabled: import failed (%s)", type(exc).__name__)
-        else:
-            try:
-                self._telegram = _telegram_module.TelegramBot.from_env()
-            except _telegram_module.ConfigurationError:
-                logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
-            except Exception as exc:
-                # R28: any other init failure is a real problem (not just "not set");
-                # class only, so no token from a chained exception reaches the log.
-                logger.error("Telegram alerts disabled: init failed (%s)", type(exc).__name__)
 
     @property
     def config(self) -> PaperTradingConfig:
@@ -2468,6 +2458,21 @@ class PaperTradingNode:
                 self._config.trader_id,
                 self._config.validation_run_id,
             )
+
+        # u2r9r: a configured-but-broken Telegram silently loses every CRITICAL
+        # alert (halt, kill switch, liquidation), so the start is refused. The
+        # check runs before the persistence/restore step and before the NT trading
+        # node exists, so no strategy exists and 0 orders are structurally possible.
+        try:
+            telegram_config = await require_working_telegram()
+        except TelegramUnavailableError as exc:
+            # str(exc) is token-free by construction; `from None` keeps the httpx
+            # error (whose str() holds the token URL) out of the chain.
+            raise ConfigurationError(str(exc)) from None
+        if telegram_config is None:
+            logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
+        else:
+            self._telegram = TelegramBot(telegram_config)
 
         # Persistence first: restore risk state before the guard is built.
         self._persistence = StatePersistence(

@@ -14,12 +14,14 @@ import pytest
 
 from vibe_quant.alerts import telegram as telegram_mod
 from vibe_quant.alerts.telegram import (
+    HALF_MSG,
     RATE_LIMIT_SECONDS,
     AlertType,
     ConfigurationError,
     DailySummary,
     TelegramBot,
     TelegramConfig,
+    TelegramUnavailableError,
 )
 
 
@@ -63,6 +65,52 @@ class TestTelegramConfig:
 
         assert config.bot_token == "123:ABC"
         assert config.chat_id == "456"
+
+
+class TestTelegramConfigOrNone:
+    """The start-gate loader (vibe-quant-u2r9r): unset -> None, half-configured -> refuse."""
+
+    def test_configured_returns_config(self) -> None:
+        env = {"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": "456"}
+        with patch.dict(os.environ, env, clear=True):
+            config = telegram_mod.telegram_config_or_none()
+
+        assert config == TelegramConfig(bot_token="123:ABC", chat_id="456")
+
+    @pytest.mark.parametrize(
+        "env",
+        [{}, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}],
+        ids=["unset", "empty"],
+    )
+    def test_unconfigured_is_none(self, env: dict[str, str]) -> None:
+        with patch.dict(os.environ, env, clear=True):
+            assert telegram_mod.telegram_config_or_none() is None
+
+    @pytest.mark.parametrize(
+        ("env", "var"),
+        [
+            ({"TELEGRAM_BOT_TOKEN": "123:ABC"}, "TELEGRAM_CHAT_ID"),
+            ({"TELEGRAM_CHAT_ID": "456"}, "TELEGRAM_BOT_TOKEN"),
+            ({"TELEGRAM_BOT_TOKEN": "123:ABC", "TELEGRAM_CHAT_ID": ""}, "TELEGRAM_CHAT_ID"),
+        ],
+        ids=["token-only", "chat-only", "empty-chat"],
+    )
+    def test_half_configured_raises(self, env: dict[str, str], var: str) -> None:
+        with (
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(TelegramUnavailableError) as excinfo,
+        ):
+            telegram_mod.telegram_config_or_none()
+
+        assert str(excinfo.value) == HALF_MSG.format(VAR=var)
+
+    def test_space_only_token_counts_as_set(self) -> None:
+        """Only ``""`` is unset: a whitespace token is configured and must be probed."""
+        env = {"TELEGRAM_BOT_TOKEN": " ", "TELEGRAM_CHAT_ID": "42"}
+        with patch.dict(os.environ, env, clear=True):
+            config = telegram_mod.telegram_config_or_none()
+
+        assert config is not None and config.bot_token == " "
 
 
 class TestAlertType:

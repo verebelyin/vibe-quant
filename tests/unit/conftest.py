@@ -163,6 +163,19 @@ def _forbid_inherited_swarm_env() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _no_telegram_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delete ``TELEGRAM_BOT_TOKEN``/``TELEGRAM_CHAT_ID`` so the start gate is inert.
+
+    A dev or backend shell with Telegram configured would otherwise make every
+    node test reach the probe (and the network guard) and refuse to start with
+    ``TelegramUnavailableError`` (vibe-quant-u2r9r). Tests that want Telegram set
+    it in the test body, after this fixture has run.
+    """
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _restore_aux_data_paths() -> Iterator[None]:
     """Undo ``aux_data.configure`` leaks: its archive/catalog paths are module globals.
 

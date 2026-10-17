@@ -37,7 +37,33 @@ TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 # Rate limit: 1 alert per type per minute
 RATE_LIMIT_SECONDS = 60
 
+#: How long the start-up probe may take before the start is refused.
+TELEGRAM_PROBE_TIMEOUT_S = 5.0
+
+#: Longest ``reason`` inside a refusal (a Telegram description can be arbitrary).
+_REASON_MAX_CHARS = 200
+
+#: Shortest whitespace-separated piece of a token that is redacted on its own.
+_MIN_TOKEN_PART_CHARS = 8
+
+#: Only one of the two env vars set: the operator made a mistake, refuse loudly.
+HALF_MSG = (
+    "Telegram alerts half-configured: {VAR} is not set (set both "
+    "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, or neither); refusing to start"
+)
+
+#: Configured but unusable -- every CRITICAL alert would be silently lost.
+FAIL_MSG = (
+    "Telegram alerts are configured but not working ({reason}); refusing to start. "
+    "Fix TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, or unset both to run without alerts "
+    "(backend env; restart the backend)"
+)
+
 _TOKEN_IN_URL = re.compile(r"(/bot)[^/\s\"'<>]+")
+
+
+class TelegramUnavailableError(Exception):
+    """Telegram alerts configured but unusable. ``str()`` is token-free by construction."""
 
 
 def redact_token(text: str) -> str:
@@ -144,6 +170,139 @@ class TelegramConfig:
             raise ConfigurationError(f"Missing {ENV_TELEGRAM_CHAT_ID} environment variable")
 
         return cls(bot_token=bot_token, chat_id=chat_id)
+
+
+def telegram_config_or_none() -> TelegramConfig | None:
+    """Config from the environment, or ``None`` when alerts are not configured.
+
+    Returns:
+        ``None`` when both vars are unset/empty, else the config.
+
+    Raises:
+        TelegramUnavailableError: When exactly one of the two vars is set.
+    """
+    bot_token = os.getenv(ENV_TELEGRAM_BOT_TOKEN)
+    chat_id = os.getenv(ENV_TELEGRAM_CHAT_ID)
+    if bot_token and chat_id:
+        return TelegramConfig(bot_token=bot_token, chat_id=chat_id)
+    if not bot_token and not chat_id:
+        return None
+    missing = ENV_TELEGRAM_CHAT_ID if bot_token else ENV_TELEGRAM_BOT_TOKEN
+    raise TelegramUnavailableError(HALF_MSG.format(VAR=missing))
+
+
+def _make_probe_client(timeout_s: float) -> httpx.AsyncClient:
+    """Build the probe's HTTP client (test seam: ``MockTransport``).
+
+    The httpx timeout sits ABOVE ``timeout_s`` so ``asyncio.timeout(timeout_s)``
+    always governs and reports ``TimeoutError``, never ``ReadTimeout``.
+    """
+    return httpx.AsyncClient(timeout=timeout_s + 1.0)
+
+
+def _description_from_body(response: httpx.Response) -> str:
+    """Telegram's ``description`` field, or ``""`` when the body is not a JSON object."""
+    try:
+        body = response.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    description = body.get("description", "")
+    return description if isinstance(description, str) else str(description)
+
+
+def _clean_reason(text: str, config: TelegramConfig) -> str:
+    """Redact the token (literal first, then the ``/bot<token>`` URL form), cut to 200 chars.
+
+    A token with surrounding or inner whitespace is redacted raw, stripped and per
+    whitespace-separated part (>= 8 chars), longest first. An all-whitespace token
+    (``TELEGRAM_BOT_TOKEN=" "``) is skipped: it would turn every space in the
+    message into ``<redacted>``.
+    """
+    token = config.bot_token
+    stripped = token.strip()
+    if stripped:
+        parts = {part for part in stripped.split() if len(part) >= _MIN_TOKEN_PART_CHARS}
+        for secret in sorted({token, stripped, *parts}, key=len, reverse=True):
+            text = text.replace(secret, "<redacted>")
+    return redact_token(text)[:_REASON_MAX_CHARS]
+
+
+def _probe_reason(exc: Exception, config: TelegramConfig) -> str:
+    """Token-free reason for a failed probe: ``HTTP <status> <description>`` or the class name.
+
+    An httpx error's ``str()`` holds the full URL (and the token), so it is never used.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = getattr(exc.response, "status_code", "?")
+        description = _description_from_body(exc.response)
+        return _clean_reason(f"HTTP {status} {description}".strip(), config)
+    return type(exc).__name__
+
+
+def _response_failure(response: httpx.Response, config: TelegramConfig) -> str | None:
+    """``HTTP 200 ok=false`` / ``HTTP 200 invalid body``, or ``None`` on success.
+
+    Only exactly HTTP 200 is a success: another 2xx is refused as ``HTTP <status> <description>``.
+    """
+    if response.status_code != 200:
+        description = _description_from_body(response) or "invalid body"
+        return _clean_reason(f"HTTP {response.status_code} {description}", config)
+    try:
+        body = response.json()
+    except Exception:
+        return "HTTP 200 invalid body"
+    if not isinstance(body, dict):
+        return "HTTP 200 invalid body"
+    if body.get("ok") is not True:
+        return "HTTP 200 ok=false"
+    return None
+
+
+async def verify_telegram(
+    config: TelegramConfig, *, timeout_s: float = TELEGRAM_PROBE_TIMEOUT_S
+) -> None:
+    """Probe a configured bot once with a silent ``sendChatAction``; raise if unusable.
+
+    ``sendChatAction`` is silent (a ≤5 s "typing…" indicator) and checks the token,
+    the chat id AND the permission to post (a blocked bot returns 403), unlike
+    ``getMe``, which passes with a wrong chat id.
+
+    Raises:
+        TelegramUnavailableError: On any failure. ``str()`` is token-free.
+    """
+    url = f"{TELEGRAM_API_BASE}{config.bot_token}/sendChatAction"
+    payload = {"chat_id": config.chat_id, "action": "typing"}
+    try:
+        # P-R6: the try wraps the WHOLE timed block, so a TimeoutError is reported
+        # as the class name "TimeoutError". A client is closed on success and failure.
+        async with _make_probe_client(timeout_s) as client:
+            async with asyncio.timeout(timeout_s):
+                attempt = await client.post(url, json=payload)
+                attempt.raise_for_status()
+    except Exception as exc:
+        raise TelegramUnavailableError(
+            FAIL_MSG.format(reason=_probe_reason(exc, config))
+        ) from None
+
+    failure = _response_failure(attempt, config)
+    if failure is not None:
+        raise TelegramUnavailableError(FAIL_MSG.format(reason=failure)) from None
+
+
+async def require_working_telegram(
+    *, timeout_s: float = TELEGRAM_PROBE_TIMEOUT_S
+) -> TelegramConfig | None:
+    """``None`` when Telegram is unconfigured, else the config after a working probe.
+
+    Raises:
+        TelegramUnavailableError: When half-configured, or when the probe fails.
+    """
+    config = telegram_config_or_none()
+    if config is not None:
+        await verify_telegram(config, timeout_s=timeout_s)
+    return config
 
 
 @dataclass
