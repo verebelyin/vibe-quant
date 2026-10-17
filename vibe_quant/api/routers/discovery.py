@@ -21,6 +21,7 @@ from vibe_quant.api.schemas.discovery import (
 )
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
@@ -304,7 +305,13 @@ def _inherited_sizing_params(
 
 
 def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
-    """Reject warm-start when the seed run's compiler hash != current."""
+    """Reject warm-start when the seed run's compiler hash != current.
+
+    Also rejects a seed run that has no loadable champions: launching it would
+    create a run row and then fail 1 s later in the subprocess with a
+    ``ValueError``, so the API refuses it up front (same 400 family as the
+    sibling seed errors).
+    """
     from vibe_quant.dsl.compiler import compiler_version_hash
 
     run = state.get_backtest_run(seed_run_id)
@@ -331,6 +338,15 @@ def _validate_seed_run_compiler(state: StateManager, seed_run_id: int) -> None:
             detail=(
                 f"Seed run {seed_run_id} compiler_version={seed_hash} does not "
                 f"match current {current_hash}; warm-start would be stale"
+            ),
+        )
+    if load_seed_chromosomes(state, seed_run_id) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Seed run {seed_run_id} has no persisted champions to seed "
+                "from (guardrails may have rejected all candidates); launch "
+                "without seed_run_id instead"
             ),
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path  # noqa: TCH003
 from unittest.mock import patch
 
@@ -53,6 +54,43 @@ _BASE_BODY = {
     "tournament_size": 3,
     "convergence_generations": 5,
 }
+
+
+def _seed_chromosome() -> dict[str, object]:
+    """A minimally valid serialized chromosome, via the real serializer."""
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        Direction,
+        StrategyChromosome,
+        StrategyGene,
+    )
+
+    chrom = StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)],
+        stop_loss_pct=2.0,
+        take_profit_pct=3.0,
+        direction=Direction.LONG,
+    )
+    return chromosome_to_serializable(chrom)
+
+
+def _seed_discovery_run(state: StateManager) -> int:
+    """Create a completed discovery run whose compiler hash matches current."""
+    from vibe_quant.dsl.compiler import compiler_version_hash
+
+    seed_id = state.create_backtest_run(
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=["BTCUSDT"],
+        timeframe="4h",
+        start_date="2025-01-01",
+        end_date="2025-04-01",
+        parameters={"compiler_version": compiler_version_hash()},
+    )
+    state.update_backtest_run_status(seed_id, "completed")
+    return seed_id
 
 
 async def test_diversity_knobs_pass_through_to_params_and_command(
@@ -123,7 +161,7 @@ async def test_warm_start_400_when_seed_run_missing(
         r = await ac.post("/api/discovery/launch", json=body)
 
     assert r.status_code == 400
-    assert "Seed run 99999" in r.json()["detail"]
+    assert r.json()["detail"] == "Seed run 99999 not found"
 
 
 async def test_warm_start_400_when_compiler_mismatch(
@@ -131,6 +169,7 @@ async def test_warm_start_400_when_compiler_mismatch(
 ) -> None:
     """E5: seed run with stale compiler_version rejected."""
     ac, state, job_mgr = client
+    from vibe_quant.dsl.compiler import compiler_version_hash
 
     # Seed an existing discovery run with a stale compiler version
     seed_id = state.create_backtest_run(
@@ -150,7 +189,10 @@ async def test_warm_start_400_when_compiler_mismatch(
         r = await ac.post("/api/discovery/launch", json=body)
 
     assert r.status_code == 400
-    assert "compiler_version" in r.json()["detail"]
+    assert r.json()["detail"] == (
+        f"Seed run {seed_id} compiler_version=deadbeef-stale does not match "
+        f"current {compiler_version_hash()}; warm-start would be stale"
+    )
 
 
 async def test_bootstrap_ci_flags_pass_through_to_params_and_command(
@@ -207,21 +249,14 @@ async def test_bootstrap_ci_defaults_dont_add_cli_flags(
 async def test_warm_start_passes_through_when_compiler_matches(
     client: tuple[AsyncClient, StateManager, BacktestJobManager],
 ) -> None:
-    """E5: matching compiler_version launches and forwards --seed-from-run."""
+    """E5: matching compiler_version + a loadable champion launches & forwards --seed-from-run."""
     ac, state, job_mgr = client
-    from vibe_quant.dsl.compiler import compiler_version_hash
 
-    current = compiler_version_hash()
-    seed_id = state.create_backtest_run(
-        strategy_id=None,
-        run_mode="discovery",
-        symbols=["BTCUSDT"],
-        timeframe="4h",
-        start_date="2025-01-01",
-        end_date="2025-04-01",
-        parameters={"compiler_version": current},
+    seed_id = _seed_discovery_run(state)
+    state.save_backtest_result(
+        seed_id,
+        {"notes": json.dumps({"top_strategies": [{"chromosome": _seed_chromosome()}]})},
     )
-    state.update_backtest_run_status(seed_id, "completed")
 
     body = {**_BASE_BODY, "seed_run_id": seed_id}
 
@@ -240,6 +275,51 @@ async def test_warm_start_passes_through_when_compiler_matches(
     args = mock_popen.call_args.args[0]
     assert "--seed-from-run" in args
     assert args[args.index("--seed-from-run") + 1] == str(seed_id)
+
+
+@pytest.mark.parametrize(
+    "notes",
+    [
+        None,  # no result row at all
+        {"top_strategies": []},  # notes row, no persisted strategies
+        {"top_strategies": [{"strategy_id": 1}]},  # entries without a chromosome
+    ],
+    ids=["no_result_row", "empty_top_strategies", "entry_without_chromosome"],
+)
+async def test_warm_start_400_when_seed_run_has_no_champions(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+    notes: dict[str, object] | None,
+) -> None:
+    """W1: a matching-hash seed run with no loadable chromosome is refused at launch.
+
+    Before the fix this returned 201, created the run row, and the subprocess
+    died 1 s later with a warm-start ValueError.
+    """
+    ac, state, job_mgr = client
+
+    seed_id = _seed_discovery_run(state)
+    if notes is not None:
+        state.save_backtest_result(seed_id, {"notes": json.dumps(notes)})
+
+    before = state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]
+    body = {**_BASE_BODY, "seed_run_id": seed_id}
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 1
+        r = await ac.post("/api/discovery/launch", json=body)
+
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == (
+        f"Seed run {seed_id} has no persisted champions to seed from "
+        "(guardrails may have rejected all candidates); launch without "
+        "seed_run_id instead"
+    )
+    assert mock_popen.call_count == 0
+    after = state.conn.execute("SELECT COUNT(*) FROM backtest_runs").fetchone()[0]
+    assert after == before
 
 
 async def test_seed_passes_through_to_command(

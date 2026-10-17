@@ -28,6 +28,7 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryPipeline,
     DiscoveryResult,
 )
+from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
@@ -642,37 +643,6 @@ def _pool_runs(
     return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]
 
 
-def _load_seed_chromosomes(
-    state: StateManager,
-    run_id: int,
-) -> list[StrategyChromosome] | None:
-    """Load top chromosomes from a prior discovery run for warm-starting.
-
-    Reads the 'chromosome' field from stored top_strategies if available.
-    Falls back to None if data is missing or unparseable.
-    """
-    import json
-
-    from vibe_quant.discovery.genome import serializable_to_chromosome
-
-    result = state.get_backtest_result(run_id)  # type: ignore[union-attr]
-    if result is None:
-        return None
-    notes = result.get("notes", "")
-    if not notes or not isinstance(notes, str):
-        return None
-    try:
-        data = json.loads(notes)
-        strategies = data.get("top_strategies", [])
-        chromosomes: list[StrategyChromosome] = []
-        for entry in strategies:
-            chrom_data = entry.get("chromosome")
-            if chrom_data and isinstance(chrom_data, dict):
-                chromosomes.append(serializable_to_chromosome(chrom_data))
-        return chromosomes if chromosomes else None
-    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
-        logger.warning("Failed to load seed chromosomes from run %d", run_id, exc_info=True)
-        return None
 
 
 def walk_forward_efficiency(
@@ -1659,7 +1629,7 @@ def main() -> int:
         # Load seed chromosomes from prior run if requested
         seed_chromosomes = None
         if args.seed_from_run is not None:
-            seed_chromosomes = _load_seed_chromosomes(state, args.seed_from_run)
+            seed_chromosomes = load_seed_chromosomes(state, args.seed_from_run)
             if seed_chromosomes:
                 logger.info(
                     "Loaded %d seed chromosomes from run %d",

@@ -922,3 +922,143 @@ def test_stale_progress_file_never_shown_for_a_new_run(
     )
     assert main() != 0
     assert not stale.exists()
+
+
+def _create_seed_run(db_path: Path) -> int:
+    """A bare discovery run (no strategy row) to act as a --seed-from-run source."""
+    state = StateManager(db_path)
+    run_id = state.create_backtest_run(
+        strategy_id=None,
+        run_mode="discovery",
+        symbols=["BTCUSDT"],
+        timeframe="1h",
+        start_date="2025-01-01",
+        end_date="2025-02-01",
+        parameters={},
+    )
+    state.close()
+    return run_id
+
+
+def _seed_chromosome() -> Any:
+    """A minimally valid chromosome that round-trips through the genome serializer."""
+    from vibe_quant.discovery.operators import (
+        ConditionType,
+        Direction,
+        StrategyChromosome,
+        StrategyGene,
+    )
+
+    return StrategyChromosome(
+        entry_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)],
+        exit_genes=[StrategyGene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)],
+        stop_loss_pct=2.0,
+        take_profit_pct=3.0,
+        direction=Direction.LONG,
+    )
+
+
+def test_seed_from_run_chromosome_reaches_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Warm-start: the persisted champion reaches DiscoveryPipeline seeded, intact.
+
+    Drives main() -- the path that calls load_seed_chromosomes before building the
+    pipeline. A --seed-from-run whose run carries one persisted top_strategies
+    chromosome must hand that exact chromosome to DiscoveryPipeline's
+    seed_chromosomes argument: the same object the loader returned (same uid) with
+    its serialized genome unchanged. A None result there (the round-1 gap) raises
+    the warm-start ValueError before any pipeline is built.
+    """
+    import json
+
+    from vibe_quant.discovery import __main__ as cli
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+
+    db_path = tmp_path / "state.db"
+    seed_run_id = _create_seed_run(db_path)
+    seeded = _seed_chromosome()
+    state = StateManager(db_path)
+    state.save_backtest_result(
+        seed_run_id,
+        {
+            "notes": json.dumps(
+                {"top_strategies": [{"chromosome": chromosome_to_serializable(seeded)}]}
+            )
+        },
+    )
+    state.close()
+
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))  # keep progress files out of the repo
+
+    loaded: list[Any] = []
+    real_loader = cli.load_seed_chromosomes
+
+    def spy_loader(state: StateManager, run_id: int) -> Any:  # noqa: F811
+        chromosomes = real_loader(state, run_id)
+        loaded.append(chromosomes)
+        return chromosomes
+
+    monkeypatch.setattr(cli, "load_seed_chromosomes", spy_loader)
+
+    captured: dict[str, Any] = {}
+    real_pipeline = cli.DiscoveryPipeline
+
+    def spy_pipeline(*args: Any, **kwargs: Any) -> Any:
+        captured["seed_chromosomes"] = kwargs.get("seed_chromosomes")
+        return real_pipeline(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "DiscoveryPipeline", spy_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        _seed_argv(db_path, run_id, "--seed-from-run", str(seed_run_id), "--max-workers", "-1"),
+    )
+
+    assert main() == 0
+
+    assert loaded and loaded[0] is not None
+    assert captured["seed_chromosomes"] is loaded[0]  # the loader's own list, not a copy
+    got = captured["seed_chromosomes"][0]
+    assert got.uid == loaded[0][0].uid  # the exact chromosome, by uid
+    assert chromosome_to_serializable(got) == chromosome_to_serializable(seeded)  # ... and genes
+
+
+def test_seed_from_run_without_champions_fails_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --seed-from-run with no loadable champion fails the run, not silently.
+
+    The CLI keeps the runtime backstop (the API refuses such a launch earlier): a
+    run row created directly must end failed, with the exact ValueError text, and
+    no DiscoveryPipeline may be built.
+    """
+    from vibe_quant.discovery import __main__ as cli
+
+    db_path = tmp_path / "state.db"
+    seed_run_id = _create_seed_run(db_path)  # no result row -> no champions
+    run_id = _create_discovery_run(db_path)
+
+    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))  # keep progress files out of the repo
+
+    def _no_pipeline(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("no pipeline may be built for an unhonorable warm-start")
+
+    monkeypatch.setattr(cli, "DiscoveryPipeline", _no_pipeline)
+    monkeypatch.setattr(
+        "sys.argv",
+        _seed_argv(db_path, run_id, "--seed-from-run", str(seed_run_id), "--max-workers", "-1"),
+    )
+
+    assert main() == 1
+
+    state = StateManager(db_path)
+    run = state.get_backtest_run(run_id)
+    state.close()
+    assert run is not None
+    assert run["status"] == "failed"
+    assert run["error_message"] == (
+        f"ValueError: warm-start run {seed_run_id} has no persisted champions to seed from "
+        "(guardrails may have rejected all candidates); launch without seed_run_id instead"
+    )
