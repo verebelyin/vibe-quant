@@ -1552,6 +1552,47 @@ class TestPassCache:
         assert self._main(repo, runner) == 1
         assert not self._stamps(repo)
 
+    def test_bus_only_fail_writes_stamp_and_next_run_is_cached(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """B3/B4: a bus-inbox-only FAIL still stamps the tool PASS, so the re-run after the DM
+        is read reuses it instead of re-running the whole suite."""
+        repo = self._unstamped_pass_repo(tmp_path)
+        bus = tmp_path / "bus"
+        bus.mkdir()
+
+        def ruff_then_dm(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            # lands after the pre-check, before the end-of-run bus check: the tools really run
+            # and only the (time-dependent) bus-inbox check fails.
+            with (bus / "messages.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps({"id": "late1", "from": "chief", "to": "sa", "kind": "info",
+                                "body": "stop"}) + "\n"
+                )
+            return 0, "All checks passed!"
+
+        first = self._runner()
+        first.responses["ruff"] = ruff_then_dm
+        assert self._main(repo, first, "--bus", str(bus), "--bus-agent", "sa") == 1
+        out = capsys.readouterr().out
+        assert "FAIL bus-inbox:" in out and "late1" in out
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+        assert _called_with(first, "pytest")  # the tool checks really ran (and failed only on bus)
+        assert len(self._stamps(repo)) == 1  # B3: the tool PASS is stamped despite the bus FAIL
+
+        # read the DM: advance the agent's cursor past the message; the tree is unchanged
+        (bus / "cursors").mkdir(exist_ok=True)
+        (bus / "cursors" / "sa.offset").write_text(str((bus / "messages.jsonl").stat().st_size))
+
+        second = self._runner()
+        assert self._main(repo, second, "--bus", str(bus), "--bus-agent", "sa") == 0
+        out2 = capsys.readouterr().out
+        assert "PASS cache: reused stamp from" in out2  # B4: cached PASS, no suite re-run
+        assert "FAIL bus-inbox:" not in out2
+        assert out2.strip().endswith("GATE PASS")
+        assert not _called_with(second, "pytest")
+        assert not _called_with(second, "ruff") and not _called_with(second, "mypy")
+
     def test_no_cache_flag_forces_full_run(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1931,14 +1972,46 @@ class TestBusInbox:
         d = self._bus(tmp_path, [{"id": "m1", "from": "chief", "to": "sa", "kind": "question", "body": "x" * 100}])
         chk = self._check(tmp_path, bus=str(d), bus_agent="sa")[0]
         assert chk.status == "FAIL"
-        assert "m1" in chk.detail and "x" * 80 in chk.detail and "x" * 81 not in chk.detail
+        # B5: the FULL body is listed (no 80-char truncation) and the fix is named
+        assert "m1" in chk.detail and "x" * 100 in chk.detail and "x" * 101 not in chk.detail
+        assert chk.detail.endswith("— run: bus inbox")
         assert not (d / "cursors" / "sa.offset").exists()  # a FAIL must not consume the DM
 
+    def test_fail_lists_every_unread_dm_with_its_full_body(self, tmp_path: Path) -> None:
+        d = self._bus(
+            tmp_path,
+            [
+                {"id": "a1", "from": "chief", "to": "sa", "kind": "info", "body": "alpha" * 40},
+                {"id": "b2", "from": "chief", "to": "sa", "kind": "info", "body": "bravo" * 40},
+            ],
+        )
+        chk = self._check(tmp_path, bus=str(d), bus_agent="sa")[0]
+        assert chk.status == "FAIL"
+        assert chk.detail.startswith("2 unread from chief: ")
+        assert f"a1 {'alpha' * 40}" in chk.detail and f"b2 {'bravo' * 40}" in chk.detail
+        assert chk.detail.endswith("— run: bus inbox")  # each id + full body, then the command
+
     def test_cached_pass_plus_unread_chief_dm_is_gate_fail(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        """A cached PASS does not excuse an unread chief DM: the pre-check sees an empty bus,
+        then the DM lands and the cached-path bus check still fails the gate."""
         repo = _init_pass_repo(tmp_path)  # a clean tree with a valid PASS stamp: reuse path
-        d = self._bus(tmp_path, [{"id": "m1", "from": "chief", "to": "sa", "kind": "question", "body": "reread the brief"}])
+        d = self._bus(tmp_path)  # empty bus, so the pre-check does not short-circuit
+        calls: list[int] = []
+
+        def dm_after_precheck(cfg: object) -> Any:
+            calls.append(1)
+            if len(calls) == 1:
+                return swarm_check.Check("bus-inbox", "PASS", "pre-check: no unread")
+            return swarm_check.Check(
+                "bus-inbox", "FAIL", "1 unread from chief: m1 reread the brief — run: bus inbox"
+            )
+
+        monkeypatch.setattr(swarm_check, "bus_inbox_check", dm_after_precheck)
         rc = swarm_check.main(
             [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
              "--bus", str(d), "--bus-agent", "sa"],
@@ -1949,6 +2022,53 @@ class TestBusInbox:
         assert "PASS cache: reused stamp from" in out  # the tool checks really were cached
         assert "FAIL bus-inbox:" in out and "m1" in out
         assert out.strip().endswith("GATE FAIL (1 failed)")
+
+
+class TestBusInboxPrecheck:
+    """B1: an unread chief DM already waiting refuses the hand-back before any tool runs."""
+
+    def test_unread_dm_fails_before_any_tool_runs(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        d = tmp_path / "bus"
+        d.mkdir()
+        (d / "messages.jsonl").write_text(
+            json.dumps(
+                {"id": "m1", "from": "chief", "to": "sa", "kind": "question",
+                 "body": "read the brief " * 20}
+            )
+            + "\n"
+        )
+        runner = FakeRunner()
+        rc = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+             "--bus", str(d), "--bus-agent", "sa"],
+            run=runner,
+        )
+        out = capsys.readouterr().out
+        assert rc == 1
+        bus_line = next(ln for ln in out.splitlines() if ln.startswith("FAIL bus-inbox:"))
+        assert "m1" in bus_line and bus_line.endswith("— run: bus inbox")
+        assert out.strip().endswith("GATE FAIL (1 failed)")
+        assert runner.calls == []  # no tool (not even git) ran: the waiting DM refused it up front
+
+    def test_precheck_does_not_consume_the_dm(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        d = tmp_path / "bus"
+        d.mkdir()
+        (d / "messages.jsonl").write_text(
+            json.dumps({"id": "m1", "from": "chief", "to": "sa", "kind": "info", "body": "hi"}) + "\n"
+        )
+        assert swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never",
+             "--bus", str(d), "--bus-agent", "sa"],
+            run=FakeRunner(),
+        ) == 1
+        # the FAIL is a peek: reading the DM is the worker's job (`bus inbox`), not the gate's
+        assert not (d / "cursors" / "sa.offset").exists()
 
 
 class TestBusInboxHardening:

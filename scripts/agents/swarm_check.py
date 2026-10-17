@@ -10,12 +10,14 @@ Checks (each prints "PASS|FAIL|SKIP <name>: <detail>"), then "GATE PASS" /
 default exactness/frontend: auto (run only when relevant paths changed).
 
 bus-inbox: with --bus (or $SWARM_BUS) and --bus-agent (or $SWARM_AGENT) both known the gate
-peeks that agent's swarm inbox and FAILs while any message from "chief" is unread (id + first
-80 chars listed); it never advances a cursor. It is evaluated after every tool check, right
-before the verdict, so a DM that lands mid-run still blocks. SKIP only when neither is
-configured (or only a bus, no agent); an agent without a bus, a bus dir that does not exist,
-or an unreadable/garbled cursor is a FAIL with the reason. The gate result is posted to the
-resolved bus (flag or env) and never creates a bus dir: a missing one is skipped with a note on stderr. Time-dependent, so it runs even when the tool
+peeks that agent's swarm inbox and FAILs while any message from "chief" is unread (each id +
+full body listed, ending "run: bus inbox"); it never advances a cursor. It is evaluated
+BEFORE any tool runs (a DM already waiting refuses the hand-back without paying for the suite)
+AND again after every tool check, right before the verdict, so a DM that lands mid-run still
+blocks. SKIP only when neither is configured (or only a bus, no agent); an agent without a
+bus, a bus dir that does not exist, or an unreadable/garbled cursor is a FAIL with the reason.
+The gate result is posted to the resolved bus (flag or env) and never creates a bus dir: a
+missing one is skipped with a note on stderr. Time-dependent, so it runs even when the tool
 checks are served from a cached PASS and is never written into the stamp.
 
 PASS-stamp cache: a GATE PASS on a clean worktree writes
@@ -34,10 +36,12 @@ AND equals the key recomputed after it (nothing moved while the tools ran: a com
 mid-run would otherwise stamp a HEAD that was never gated), AND the HEAD reflog length is
 unchanged (`git rev-list --walk-reflogs --count HEAD`). The reflog guard catches a
 commit + `reset --hard` made mid-run: it leaves the key identical but adds reflog entries.
-Writes are atomic (temp file + os.replace). FAILs, WARNs, dirty trees and stubs are never
-cached; load_stamp accepts only PASS/SKIP lines, and any problem reading a stamp falls back
-to the full gate (fail closed: never a false PASS). `--no-cache` disables both reuse and
-writing.
+Writes are atomic (temp file + os.replace). A tool FAIL, a WARN, a dirty tree or a stub
+blocks the stamp, but a bus-inbox-only FAIL does not: the stored checks exclude the bus line
+(time-dependent), so the next run after `bus inbox` reuses the tool PASS instead of re-running
+the suite, and the bus check itself re-runs on every invocation. load_stamp accepts only
+PASS/SKIP lines, and any problem reading a stamp falls back to the full gate (fail closed:
+never a false PASS). `--no-cache` disables both reuse and writing.
 Known limit (accepted): the reflog guard cannot see an edit + revert of the working tree
 with no commit - the tree and HEAD return to their start state and no reflog entry is added,
 so such a run is still stamped.
@@ -1005,8 +1009,8 @@ def bus_inbox_check(cfg: Config) -> Check:
     unread = [m for m in msgs if m.get("from") == "chief" and m.get("to") in (cfg.bus_agent, "all")]
     if not unread:
         return Check("bus-inbox", "PASS", f"no unread message from chief to {cfg.bus_agent}")
-    listed = "; ".join(f"{m['id']} {str(m['body'])[:80]}" for m in unread)
-    return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed}")
+    listed = "; ".join(f"{m['id']} {str(m['body'])}" for m in unread)
+    return Check("bus-inbox", "FAIL", f"{len(unread)} unread from chief: {listed} — run: bus inbox")
 
 
 def bus_post(cfg: Config, checks: Sequence[Check], cached_head: str = "") -> None:
@@ -1070,6 +1074,17 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     )
 
     runner: RunFn = run or real_run
+
+    # B1: refuse the hand-back BEFORE spending a suite run (or even reading the cache) when the
+    # chief's DM is already waiting. A DM that lands mid-run is still caught by the end-of-run
+    # bus-inbox check in run_checks, so this only short-circuits the already-unread case.
+    pre_bus = bus_inbox_check(cfg)
+    if pre_bus.status == "FAIL":
+        print(format_line(pre_bus))
+        print(gate_summary([pre_bus])[0])
+        bus_post(cfg, [pre_bus])
+        return 1
+
     key, _ = _cache_probe(cfg, runner) if not args.no_cache else ("", None)  # PRE-run key
     stamp = load_stamp(wt, runner, key)
 
@@ -1111,7 +1126,10 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
             json.dump(to_json_dict(checks), fh, indent=2)
             fh.write("\n")
 
-    if not args.no_cache and not failed and not active_stubs() and key:
+    # B3: a bus-inbox-only FAIL is time-dependent (the DM may simply be read next run), so the
+    # tool PASS is still stamped; only a real tool FAIL blocks the stamp.
+    tool_failed = [c for c in checks if c.status == "FAIL" and c.name != "bus-inbox"]
+    if not args.no_cache and not tool_failed and not active_stubs() and key:
         # key is the PRE-run key (non-empty = clean start). Stamp only if nothing moved while
         # the tools ran; otherwise the verdict is for a HEAD/tree that was never gated.
         post_key, _ = _cache_probe(cfg, runner)
