@@ -1732,30 +1732,36 @@ class DiscoveryPipeline:
             gen_elapsed, total_elapsed, eta_seconds, improvement_str,
         )
 
-        best_chrom = population[best_idx]
-        logger.info(
-            "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
-            "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
-            best_chrom.uid,
-            best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
-            [g.indicator_type for g in best_chrom.entry_genes],
-            [g.indicator_type for g in best_chrom.exit_genes],
-            best_chrom.stop_loss_pct, best_chrom.take_profit_pct,
-            best_fr.sharpe_ratio, best_fr.profit_factor,
-            best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
-        )
-        if best_fr.symbol_scores is not None:
-            logger.info(
-                "  Score breakdown: soft=0.5*min+0.5*median of %s = %.4f",
-                {sym: round(sc, 4) for sym, sc in best_fr.symbol_scores.items()},
-                best_fr.adjusted_score,
-            )
+        if zero_count == len(scores):
+            # Every genome scored 0: the "best" is just the tie-broken first
+            # genome and its metrics are sentinels/worst-window noise. Print no
+            # Best/Score-breakdown line rather than presenting them as real.
+            logger.info("  Best: none (all %d genomes scored 0)", len(scores))
         else:
+            best_chrom = population[best_idx]
             logger.info(
-                "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
-                best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
-                best_fr.adjusted_score,
+                "  Best: uid=%s dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%% | "
+                "sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d",
+                best_chrom.uid,
+                best_chrom.direction.value if hasattr(best_chrom.direction, "value") else best_chrom.direction,
+                [g.indicator_type for g in best_chrom.entry_genes],
+                [g.indicator_type for g in best_chrom.exit_genes],
+                best_chrom.stop_loss_pct, best_chrom.take_profit_pct,
+                best_fr.sharpe_ratio, best_fr.profit_factor,
+                best_fr.max_drawdown * 100, best_fr.total_return * 100, best_fr.total_trades,
             )
+            if best_fr.symbol_scores is not None:
+                logger.info(
+                    "  Score breakdown: soft=0.5*min+0.5*median of %s = %.4f",
+                    {sym: round(sc, 4) for sym, sc in best_fr.symbol_scores.items()},
+                    best_fr.adjusted_score,
+                )
+            else:
+                logger.info(
+                    "  Score breakdown: raw=%.4f - complexity=%.4f - overtrade=%.4f = %.4f",
+                    best_fr.raw_score, best_fr.complexity_penalty, best_fr.overtrade_penalty,
+                    best_fr.adjusted_score,
+                )
         if all_sharpes:
             logger.info(
                 "  Population (n=%d active): sharpe=[%.2f, %.2f, %.2f] "

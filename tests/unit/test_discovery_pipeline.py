@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any
@@ -1111,3 +1112,53 @@ class TestAbortThreshold:
         pipe = self._pipe(fail)
         with pytest.raises(DiscoveryEvaluationError, match=r"ok_evals=0"):
             pipe._evaluate_new(self._fresh(1, 0))
+
+
+class TestLogGenerationBestLine:
+    """The per-generation "Best" line must not print sentinel metrics as real.
+
+    Run 927 printed ``Best: uid=... sharpe=-1.00 pf=0.00 dd=100.0% ...`` for a
+    generation in which every genome scored 0: the tie-broken first genome's
+    untouched/worst-window metrics, presented as if it were the winner.
+    """
+
+    @staticmethod
+    def _log(caplog: Any, pipe: DiscoveryPipeline, scores: list[float]) -> list[str]:
+        pop = initialize_population(len(scores))
+        frs = [_fit(score=s) for s in scores]
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        gen_res = GenerationResult(
+            generation=0,
+            best_fitness=max(scores),
+            mean_fitness=sum(scores) / len(scores),
+            worst_fitness=min(scores),
+            best_chromosome=pop[best_idx],
+            population_size=len(scores),
+            num_passed_filters=0,
+        )
+        with caplog.at_level(logging.INFO, logger="vibe_quant.discovery.pipeline"):
+            pipe._log_generation(
+                gen=0,
+                population=pop,
+                fitness_results=frs,
+                generation_results=[gen_res],
+                best_idx=best_idx,
+                gen_elapsed=1.0,
+                total_elapsed=1.0,
+                evals_this_gen=len(scores),
+            )
+        return [r.getMessage() for r in caplog.records]
+
+    def test_all_zero_scores_log_none_instead_of_a_fake_best(self, caplog: Any) -> None:
+        pipe = DiscoveryPipeline(_make_config(population_size=4), _mock_backtest)
+        msgs = self._log(caplog, pipe, [0.0, 0.0, 0.0, 0.0])
+        assert "  Best: none (all 4 genomes scored 0)" in msgs
+        assert not any(m.startswith("  Best: uid=") for m in msgs)
+        assert not any(m.startswith("  Score breakdown:") for m in msgs)
+
+    def test_one_positive_score_keeps_the_real_best_and_breakdown(self, caplog: Any) -> None:
+        pipe = DiscoveryPipeline(_make_config(population_size=4), _mock_backtest)
+        msgs = self._log(caplog, pipe, [0.0, 0.6, 0.0, 0.0])
+        assert "  Best: none (all 4 genomes scored 0)" not in msgs
+        assert any(m.startswith("  Best: uid=") for m in msgs)
+        assert any(m.startswith("  Score breakdown:") for m in msgs)
