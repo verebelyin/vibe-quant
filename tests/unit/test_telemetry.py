@@ -980,6 +980,15 @@ def _cmd_session(d: Path, start: str, prompt: str, usages: list[tuple[int, int]]
     (d / f"{start[-6:-1]}.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
 
 
+def _pointer_prompt(brief_id: str, task: str, rnd: int = 1) -> str:
+    """A real T3 dispatch prompt: a short pointer whose first 80 chars every sibling shares."""
+    return (
+        "Act as the implementation sub-agent for this task.\n\n"
+        f"Read your brief at /Users/verebelyin/projects/vibe-quant/data/swarm/{JOB}/prompts/{brief_id}.md"
+        f" and follow it exactly.\nTELEMETRY: task={task} round={rnd}"
+    )
+
+
 def _claude_subagent(d: Path, agent_id: str, name: str, prompt: str, final: str, error: str | None = None) -> None:
     sub = d / "sess1" / "subagents"
     sub.mkdir(parents=True, exist_ok=True)
@@ -1094,6 +1103,56 @@ def test_ingest_runs_dry_run_writes_nothing(_isolated_ledger: Path, tmp_path: Pa
     src = _sources(tmp_path)
     assert len(tel.ingest_runs(JOB, dry_run=True, **src)) == 4
     assert not _isolated_ledger.exists()
+
+
+def _t3_run(cid: str, start: str, end: str, prompt: str) -> dict[str, Any]:
+    return {"cid": cid, "provider": "commandcode_command", "status": "completed",
+            "start": start, "end": end, "model": MODEL_B, "prompt": prompt, "result": "done"}  # fmt: skip
+
+
+def test_ingest_runs_gives_each_cc_child_its_own_session(_isolated_ledger: Path, tmp_path: Path) -> None:
+    # Sibling dispatch prompts share their first 80 chars (only the brief id / TELEMETRY tail
+    # differ), so matching on that prefix handed every child the same session's tokens.
+    p1 = _pointer_prompt("cc-sh-telemetry-1", "sh-telemetry")
+    p2 = _pointer_prompt("cc-sh-telemetry-2", "sh-telemetry")
+    p3 = _pointer_prompt("cc-sh-telemetry-3", "sh-telemetry")
+    assert p1[:80] == p2[:80] == p3[:80] and len({p1, p2, p3}) == 3
+    db = _t3_db(tmp_path / "t3.sqlite", [
+        _t3_run("cc-sh-telemetry-1", "2026-10-17T15:00:00.000Z", "2026-10-17T15:10:00.000Z", p1),
+        _t3_run("cc-sh-telemetry-2", "2026-10-17T15:00:04.000Z", "2026-10-17T15:10:04.000Z", p2),
+        _t3_run("cc-sh-telemetry-3", "2026-10-17T15:00:02.000Z", "2026-10-17T15:10:02.000Z", p3),  # no session
+    ])
+    cmd = tmp_path / "cmd"
+    # The child that launched first (p1) is the LAST to open its session, so its closest session
+    # is the sibling's (proj-b): only the whole-prompt match routes it to its own file.
+    _cmd_session(cmd / "proj-a", "2026-10-17T15:00:10.000Z", p1, [(1000, 10)])
+    _cmd_session(cmd / "proj-b", "2026-10-17T15:00:01.000Z", p2, [(2000, 20)])
+    added = tel.ingest_runs(JOB, t3_db=db, cmd_dir=cmd, claude_dir=tmp_path / "nocl")
+    toks = {r["source"]: (r["tokens_in"], r["tokens_out"]) for r in added}
+    assert toks == {
+        "t3:cc-sh-telemetry-1": (1000, 10),
+        "t3:cc-sh-telemetry-2": (2000, 20),
+        "t3:cc-sh-telemetry-3": (None, None),  # unmatched keeps None, never a sibling's numbers
+    }
+    assert next(r for r in added if r["source"] == "t3:cc-sh-telemetry-3")["note"] == "tokens unknown"
+
+
+def test_ingest_runs_pairs_a_rerun_with_the_closest_unclaimed_session(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    # One task dispatched twice with the same pointer: each attempt takes its own closest session
+    # and no session file is counted twice.
+    p = _pointer_prompt("cc-sh-retry-1", "sh-retry")
+    db = _t3_db(tmp_path / "t3.sqlite", [
+        _t3_run("cc-sh-retry-1", "2026-10-17T16:00:00.000Z", "2026-10-17T16:10:00.000Z", p),
+        _t3_run("cc-sh-retry-2", "2026-10-17T16:00:04.000Z", "2026-10-17T16:10:04.000Z", p),
+    ])
+    cmd = tmp_path / "cmd"
+    _cmd_session(cmd / "proj-a", "2026-10-17T16:00:01.000Z", p, [(100, 1)])
+    _cmd_session(cmd / "proj-b", "2026-10-17T16:00:31.000Z", p, [(300, 3)])
+    added = tel.ingest_runs(JOB, t3_db=db, cmd_dir=cmd, claude_dir=tmp_path / "nocl")
+    toks = {r["source"]: (r["tokens_in"], r["tokens_out"]) for r in added}
+    assert toks == {"t3:cc-sh-retry-1": (100, 1), "t3:cc-sh-retry-2": (300, 3)}
 
 
 def test_report_by_board_and_asked(_isolated_ledger: Path) -> None:

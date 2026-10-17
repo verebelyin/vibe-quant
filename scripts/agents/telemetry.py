@@ -699,16 +699,23 @@ def _jsonl(path: Path) -> Iterator[dict[str, Any]]:
             yield rec
 
 
-def _cmd_session_usage(cmd_dir: Path, start: float, prompt: str) -> tuple[int, int] | None:
+def _cmd_session_usage(
+    cmd_dir: Path, start: float, prompt: str, claimed: set[Path]
+) -> tuple[int, int] | None:
     """(input, output) tokens summed over the Command Code session that ran this T3 task.
 
     T3's own usage for Command Code is absent or a last-context approximation, so the session
-    file is the truth. Match: session starts within [-5 s, +120 s] of the T3 start and its first
-    user message contains the start of the brief.
+    file is the truth. The WHOLE stripped dispatch prompt must appear in the session's first user
+    message: a dispatch is a short pointer, and its first 80 chars are identical for every child
+    of a job, so a prefix match would hand siblings the same file. Candidates must also start
+    within [-5 s, +120 s] of the T3 start; among them the closest start wins. ``claimed`` holds the
+    sessions already taken by an earlier run of this ingest, so no two runs share one file.
+    Returns None when no session matches.
     """
-    needle = prompt.strip()[:80]
+    needle = prompt.strip()
+    best: tuple[float, Path, list[dict[str, Any]]] | None = None
     for path in sorted(cmd_dir.glob("*/*.jsonl")):
-        if path.name.endswith(".checkpoints.jsonl"):
+        if path.name.endswith(".checkpoints.jsonl") or path in claimed:
             continue
         recs = list(_jsonl(path))
         t0 = _iso_s(recs[0].get("timestamp")) if recs else None
@@ -719,16 +726,21 @@ def _cmd_session_usage(cmd_dir: Path, start: float, prompt: str) -> tuple[int, i
         text = " ".join(b.get("text", "") for b in content if isinstance(b, dict)) if isinstance(content, list) else str(content or "")
         if needle not in text:
             continue
-        seen: set[object] = set()
-        tin = tout = 0
-        for r in recs:
-            usage = r.get("usage")
-            if (r.get("message") or {}).get("role") == "assistant" and isinstance(usage, dict) and r.get("id") not in seen:
-                seen.add(r.get("id"))
-                tin += int(usage.get("inputTokens") or 0)
-                tout += int(usage.get("outputTokens") or 0)
-        return tin, tout
-    return None
+        if best is None or abs(t0 - start) < abs(best[0] - start):
+            best = (t0, path, recs)
+    if best is None:
+        return None
+    _, path, recs = best
+    claimed.add(path)
+    seen: set[object] = set()
+    tin = tout = 0
+    for r in recs:
+        usage = r.get("usage")
+        if (r.get("message") or {}).get("role") == "assistant" and isinstance(usage, dict) and r.get("id") not in seen:
+            seen.add(r.get("id"))
+            tin += int(usage.get("inputTokens") or 0)
+            tout += int(usage.get("outputTokens") or 0)
+    return tin, tout
 
 
 def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
@@ -745,6 +757,7 @@ def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
     finally:
         con.close()
     out = []
+    claimed: set[Path] = set()  # Command Code session files already given to a run in this ingest
     for provider, status, started, completed, payload_json in rows:
         if status not in STATUS_OUTCOME:
             continue  # still running
@@ -765,7 +778,7 @@ def _t3_runs(job: str, db: Path, cmd_dir: Path) -> list[dict[str, Any]]:
             if usage.get("inputTokens") is not None:
                 tokens = (int(usage["inputTokens"]), int(usage.get("outputTokens") or 0))
         elif start is not None:
-            tokens = _cmd_session_usage(cmd_dir, start, prompt)
+            tokens = _cmd_session_usage(cmd_dir, start, prompt, claimed)
         if tokens is None:
             notes.append("tokens unknown")
         out.append(make_record(
