@@ -26,6 +26,7 @@ raises :class:`CarryDataError` (through :func:`equity_at`).
 from __future__ import annotations
 
 import bisect
+import itertools
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,7 +43,7 @@ from vibe_quant.portfolio.spec import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from vibe_quant.portfolio.ledger import CarryRun
     from vibe_quant.portfolio.ticks import CarryInputs
@@ -116,6 +117,150 @@ def _lo_se(sharpe: float | None, weeks: int) -> float | None:
     if sharpe is None:
         return None
     return math.sqrt((1.0 + sharpe * sharpe / 2.0) / (weeks / _WEEKS_PER_YEAR))
+
+
+# CF1/T8: the draw's ruin scan (R22) must cover every daily boundary but must not pay the
+# exact `equity_at` walk on all of them. A naive float64 prefix sum of n terms is off by at
+# most 2 * n * eps * gross (gross = the sum of the terms' magnitudes), so `_RUIN_ERROR *
+# gross` leaves ~200x headroom for n <= 1e4; only boundaries inside `_ruin_band` of 0 are
+# recomputed exactly and judged by the same ``not (E > 0.0)`` rule.
+_RUIN_BAND = 1e-6  # relative to max(1, |E0|), six orders above that error
+_RUIN_ERROR = 1e-9  # gross-relative slack covering the naive prefix error
+
+
+def _ruin_band(initial_balance: float, gross: float) -> float:
+    """The half-width around 0 the approximate path refuses to decide on its own (CF1)."""
+    return _RUIN_BAND * max(1.0, abs(initial_balance)) + _RUIN_ERROR * gross
+
+
+def _running_sums(pairs: Sequence[tuple[int, float]]) -> tuple[list[int], list[float]]:
+    """``(times, prefix)`` where ``prefix[i]`` sums every term with ``ts <= times[i]``."""
+    ordered = sorted(pairs)
+    return [ts for ts, _ in ordered], list(itertools.accumulate(term for _, term in ordered))
+
+
+def _summed_before(times: Sequence[int], prefix: Sequence[float], at_ns: int) -> float:
+    """The running sum over every term strictly before ``at_ns`` (``0.0`` when there is none)."""
+    index = bisect.bisect_left(times, at_ns)
+    return prefix[index - 1] if index else 0.0
+
+
+def _approx_equity_path(
+    run: CarryRun, inputs: CarryInputs, boundaries: Sequence[int]
+) -> tuple[list[float], float]:
+    """A naive float64 equity path at every boundary, plus the ``gross`` that sizes the band.
+
+    A stand-in for :func:`_boundary_equity` used only to *filter* the R22 ruin scan: the
+    cash and funding prefixes are plain running sums and the marks use the same
+    ``float(Decimal(steps) * step) * price``, so the value is within ``2 * n * eps *
+    gross`` of the exact one. A held symbol without a close makes its boundary ``-inf`` so
+    the exact call decides it (and raises :class:`CarryDataError`), and fills that imply
+    different size increments raise :class:`CarryExecutionError`, as :func:`equity_at` does.
+    """
+    cash = [(fill.ts, -fill.qty * fill.price - fill.fee) for fill in run.fills]
+    funding = [(payment.ts, payment.amount) for payment in run.payments]
+    cash_times, cash_prefix = _running_sums(cash)
+    funding_times, funding_prefix = _running_sums(funding)
+    gross = math.fsum(abs(term) for _, term in itertools.chain(cash, funding))
+    positions: list[tuple[list[int], list[int], Decimal | None, Mapping[int, float]]] = []
+    for symbol in run.spec.symbols:
+        fills = sorted(
+            (fill for fill in run.fills if fill.symbol == symbol), key=lambda fill: fill.ts
+        )
+        step: Decimal | None = None
+        for fill in fills:
+            if not fill.steps:
+                continue
+            increment = Decimal(repr(fill.qty)) / Decimal(fill.steps)
+            if step is not None and step != increment:
+                raise CarryExecutionError(
+                    f"inconsistent size increment for {symbol}: {step} vs {increment}"
+                )
+            step = increment
+        positions.append(
+            (
+                [fill.ts for fill in fills],
+                list(itertools.accumulate(fill.steps for fill in fills)),
+                step,
+                inputs.boundary_prices.get(symbol, {}),
+            )
+        )
+    values: list[float] = []
+    mark_peak = 0.0
+    for boundary in boundaries:
+        equity = (
+            run.spec.initial_balance
+            + _summed_before(cash_times, cash_prefix, boundary)
+            - _summed_before(funding_times, funding_prefix, boundary)
+        )
+        marked = 0.0
+        for times, counts, step, prices in positions:
+            index = bisect.bisect_left(times, boundary)
+            held = counts[index - 1] if index else 0
+            if held == 0:
+                continue
+            price = prices.get(boundary)
+            if price is None or step is None:
+                equity = float("-inf")
+                break
+            mark = float(Decimal(held) * step) * price
+            marked = math.fsum([marked, mark])
+            equity += mark
+        mark_peak = max(mark_peak, abs(marked))
+        values.append(equity)
+    return values, gross + mark_peak
+
+
+def _require_daily_ruin_scan(
+    run: CarryRun, inputs: CarryInputs, boundaries: Sequence[int]
+) -> None:
+    """R22/CF1: raise unless every daily boundary has ``E(B) > 0``, as ``carry_metrics`` does.
+
+    Runs :func:`_approx_equity_path` once, keeps the days it clears by more than
+    :func:`_ruin_band`, and recomputes the exact equity for the rest -- the same
+    :func:`_boundary_equity` and the same ``not (equity > 0.0)`` rule as the daily walk.
+    """
+    values, gross = _approx_equity_path(run, inputs, boundaries)
+    band = _ruin_band(run.spec.initial_balance, gross)
+    for boundary, approx in zip(boundaries, values, strict=True):
+        if approx > band:
+            continue
+        equity = _boundary_equity(run, inputs, boundary)
+        if not (equity > 0.0):
+            raise CarryEquityTooSmall("<book>", boundary, equity, 0.0)
+
+
+def weekly_sharpe_only(run: CarryRun, inputs: CarryInputs) -> float | None:
+    """``carry_metrics(run, inputs).summary["weekly_sharpe"]``, Monday boundaries only.
+
+    A research draw (§6/T8) needs this one number, not the daily equity path, the
+    drawdown or the P&L decomposition. The weekly returns come from the Monday boundaries
+    alone -- ``days // 7 + 1`` exact :func:`_boundary_equity` calls (226 for the pinned
+    4-coin book) instead of ``days + 1`` (1,581) -- combined exactly as
+    :func:`carry_metrics` combines them (``E(M_{j+1}) / E(M_j) - 1.0``, then
+    :func:`_weekly_sharpe`), so the value equals the report's headline bit for bit.
+
+    Ruin (R22) still covers EVERY daily boundary (CF1): :func:`_require_daily_ruin_scan`
+    clears the calm days with its float64 path and recomputes the exact equity wherever a
+    boundary could be ``<= 0``, raising the same :class:`CarryEquityTooSmall` -- so a ruined
+    draw stays ``-inf`` and counted exactly as before (R36).
+
+    Raises:
+        CarryEquityTooSmall: if ``E(B) <= 0`` at any daily boundary (R22).
+        CarryDataError: if a held symbol has no close in ``(B-60 min, B]`` (R22).
+        CarryExecutionError: if one symbol's fills imply different size increments -- raised
+            up front by the ruin scan's :func:`_approx_equity_path`, and unreachable from
+            ``simulate_reference``, which never emits a mixed step for one symbol.
+    """
+    spec = run.spec
+    days = (spec.end_ns - spec.start_ns) // DAY_NS
+    boundaries = [spec.start_ns + day * DAY_NS for day in range(days + 1)]
+    _require_daily_ruin_scan(run, inputs, boundaries)
+    values = [
+        _boundary_equity(run, inputs, boundary) for boundary in boundaries if _is_monday(boundary)
+    ]
+    returns = [values[index + 1] / values[index] - 1.0 for index in range(len(values) - 1)]
+    return _weekly_sharpe(returns)
 
 
 def _open_mark(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:

@@ -255,6 +255,8 @@ class _Harness:
         self.draw_fees: list[float] = []  # fee_multiplier of every null-draw simulate call
         self.strategy_fees: list[float] = []  # fee_multiplier of every ranker=None, same-inputs call
         self.other_kinds: list[tuple[str, float]] = []  # placebo / capped, with their fee
+        self.weekly_runs: list[float | None] = []  # every draw's ``weekly_sharpe_only`` run
+        self.report_calls = 0  # the §4 reports a draw must never build
 
     def factory(self, p_keep: float, seed: int) -> _SentinelRanker:
         self.factory_calls.append((p_keep, seed))
@@ -281,8 +283,8 @@ class _Harness:
         sharpe = {1.0: _STRATEGY_POST, 0.0: _STRATEGY_PRE, 2.0: _FEE2X}[fee_multiplier]
         return _FakeRun(sharpe, self.decisions)
 
-    @staticmethod
-    def metrics(run: _FakeRun, inputs: CarryInputs) -> CarryReport:
+    def metrics(self, run: _FakeRun, inputs: CarryInputs) -> CarryReport:
+        self.report_calls += 1
         return CarryReport(
             summary={"weekly_sharpe": run.sharpe, "weeks": 4},
             daily=[],
@@ -290,6 +292,17 @@ class _Harness:
             legs=[],
             by_year=[],
         )
+
+    def weekly(self, run: _FakeRun, inputs: CarryInputs) -> float | None:
+        """The metrics-level seam a draw reads instead of the full report (T8).
+
+        A draw handed ``-inf`` stands for one whose ruin is reported HERE (the CF1 daily
+        scan) rather than inside ``simulate_reference``.
+        """
+        if run.sharpe == float("-inf"):
+            raise CarryEquityTooSmall("<book>", 0, 1.0, 2.0)
+        self.weekly_runs.append(run.sharpe)
+        return run.sharpe
 
 
 def _install_fakes(
@@ -299,12 +312,44 @@ def _install_fakes(
     pre: list[float | str],
     decisions: tuple[Decision, ...] = (),
 ) -> _Harness:
-    """Patch the three seams ``evaluate`` drives: the ranker factory, simulate, metrics."""
+    """Patch the seams ``evaluate`` drives: the factory, simulate, metrics and the weekly Sharpe."""
     harness = _Harness(inputs, post, pre, decisions)
     monkeypatch.setattr(research, "PersistenceMatchedRanker", harness.factory)
     monkeypatch.setattr(research, "simulate_reference", harness.simulate)
     monkeypatch.setattr(research, "carry_metrics", harness.metrics)
+    monkeypatch.setattr(research, "weekly_sharpe_only", harness.weekly)
     return harness
+
+
+def test_null_draws_read_the_weekly_only_sharpe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T8: a draw reads the Monday-only weekly Sharpe; only the §4 reports build a full report."""
+    inputs = _inputs(tmp_path, name="weeklyonly")
+    harness = _install_fakes(monkeypatch, inputs, [0.5, 0.6, 0.7], [1.0, 1.1, 1.2])
+
+    result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
+
+    assert harness.weekly_runs == [0.5, 0.6, 0.7, 1.0, 1.1, 1.2]  # the post-cost draws, then pre-cost
+    assert harness.report_calls == 5  # strategy, pre-cost strategy, placebo, 2x fees, capped
+    assert result["p_value"] == 1 / 4  # 1.0 strategy beats all three post-cost draws
+    assert result["p_value_pre_cost"] == 1 / 4  # 1.5 beats 1.0/1.1/1.2
+
+
+def test_ruined_draw_from_the_weekly_seam_is_inf_and_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R36/CF1: a ruin the weekly seam reports is ``-inf`` and counted, never dropped."""
+    inputs = _inputs(tmp_path, name="weeklyruin")
+    ruin = float("-inf")  # the harness's marker: this draw's ruin comes from the weekly seam
+    harness = _install_fakes(monkeypatch, inputs, [0.5, ruin, 2.0], [1.6, ruin, 1.5])
+
+    result = research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
+
+    assert harness.weekly_runs == [0.5, 2.0, 1.6, 1.5]  # the ruined draw reports no value
+    assert result["ruined_draws"] == 1  # the pre-cost pass's ruin is not double counted
+    assert result["p_value"] == 0.5  # only the 2.0 draw reaches the 1.0 strategy: (1 + 1) / 4
+    assert result["p_value_pre_cost"] == 0.75  # 1.6 and the equal 1.5 beat the 1.5 strategy
 
 
 def test_ruined_draw_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

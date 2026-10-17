@@ -48,7 +48,12 @@ from vibe_quant.overfitting.dsr import (
     daily_sharpe_inputs,
     mtm_dsr_calculate,
 )
-from vibe_quant.portfolio.metrics import _WEEKS_PER_YEAR, _annualised_sharpe, carry_metrics
+from vibe_quant.portfolio.metrics import (
+    _WEEKS_PER_YEAR,
+    _annualised_sharpe,
+    carry_metrics,
+    weekly_sharpe_only,
+)
 from vibe_quant.portfolio.reference import simulate_reference
 from vibe_quant.portfolio.signal import Settlements, carry_hours
 from vibe_quant.portfolio.spec import DAY_NS, CarryEquityTooSmall
@@ -242,20 +247,29 @@ def _p_value(strategy_sharpe: float | None, null_sharpes: Sequence[float]) -> fl
 def _draw_sharpes(
     inputs: CarryInputs, p_keep: float, seed: int, draws: int, fee_multiplier: float
 ) -> tuple[list[float], int]:
-    """Weekly Sharpes of ``draws`` persistence-matched null runs; ruined -> ``-inf`` (R36)."""
+    """Weekly Sharpes of ``draws`` persistence-matched null runs; ruined -> ``-inf`` (R36).
+
+    Each draw reads only the Monday boundaries its weekly Sharpe needs
+    (:func:`~vibe_quant.portfolio.metrics.weekly_sharpe_only`) instead of the full
+    :func:`~vibe_quant.portfolio.metrics.carry_metrics` report -- 226 boundary
+    equities instead of 1,581 on the pinned 4-coin book -- and gets the report's
+    ``weekly_sharpe`` bit for bit. A null draw therefore never builds the §4 report:
+    :func:`~vibe_quant.portfolio.metrics._legs`,
+    :func:`~vibe_quant.portfolio.metrics._turnover_by_decision` and
+    :func:`~vibe_quant.portfolio.metrics._require_cost_identity` do not run for it.
+    """
     sharpes: list[float] = []
     ruined = 0
     for index in range(draws):
         ranker = PersistenceMatchedRanker(p_keep, seed + index)
         try:
-            report = carry_metrics(
+            sharpe = weekly_sharpe_only(
                 simulate_reference(inputs, ranker=ranker, fee_multiplier=fee_multiplier), inputs
             )
         except CarryEquityTooSmall:
             ruined += 1
             sharpes.append(float("-inf"))
             continue
-        sharpe = report.summary["weekly_sharpe"]
         sharpes.append(float("-inf") if sharpe is None else sharpe)
     return sharpes, ruined
 

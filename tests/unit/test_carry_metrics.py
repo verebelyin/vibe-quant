@@ -21,11 +21,16 @@ import pytest
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.portfolio.ledger import CarryFill, CarryRun, FundingPayment
 from vibe_quant.portfolio.metrics import (
+    _RUIN_ERROR,
     _annualised_sharpe,
+    _approx_equity_path,
+    _boundary_equity,
     _lo_se,
     _require_cost_identity,
+    _ruin_band,
     _weekly_sharpe,
     carry_metrics,
+    weekly_sharpe_only,
 )
 from vibe_quant.portfolio.sizing import Decision, InstrumentSpec
 from vibe_quant.portfolio.spec import (
@@ -783,3 +788,241 @@ def test_sharpe_collapses_on_float_noise_floor() -> None:
     assert report.summary["weekly_sharpe"] is None
     assert report.summary["weekly_sharpe_lo_se"] is None
     assert report.by_year[0]["weekly_sharpe"] is None
+
+
+# --- T8: ``weekly_sharpe_only``, the Monday-only headline the research draws read ---------
+
+# one close per week (the Mondays): the four weekly returns of the fixture below
+_WEEKLY_CLOSES = (101_000.0, 99_000.0, 102_000.0, 100_500.0, 103_000.0, 98_000.0)
+
+
+def _weekly_fixture(
+    initial_balance: float = 10_000.0, weeks: int = 4
+) -> tuple[CarrySpec, CarryInputs, CarryRun]:
+    """A ``weeks``-long run holding 0.1 BTC (bought at 100000 on D0) with a close per day.
+
+    Every day of a week carries that week's Monday close, so ``E(M_j) == 0.1 * close_j``
+    and the weekly return series is the one ``carry_metrics`` builds.
+    """
+    end_ns = _START + weeks * 7 * _DAY
+    spec = CarrySpec(
+        symbols=(_BTC, _ETH), start_ns=_START, end_ns=end_ns, initial_balance=initial_balance
+    )
+    fills = [_fill(_BTC, _START + _HOUR, 100, price=100_000.0)]
+    prices = {
+        _START + day * _DAY: _WEEKLY_CLOSES[(day - 1) // 7] for day in range(1, weeks * 7 + 1)
+    }
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+    return spec, inputs, run
+
+
+def test_weekly_sharpe_only_equals_the_report() -> None:
+    """T8: the Monday-only helper IS ``carry_metrics``'s headline weekly Sharpe, bit for bit."""
+    _, inputs, run = _weekly_fixture()
+    report = carry_metrics(run, inputs)
+
+    assert report.summary["weekly_sharpe"] is not None
+    assert report.summary["weeks"] == 4
+    assert weekly_sharpe_only(run, inputs) == report.summary["weekly_sharpe"]
+
+
+def test_weekly_sharpe_only_reads_only_the_monday_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T8 speed-up: a 28-day run costs 5 equity reads (the Mondays), not 29 (every boundary)."""
+    _, inputs, run = _weekly_fixture()
+    seen: list[int] = []
+
+    def spy(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:
+        seen.append(at_ns)
+        return _boundary_equity(run, inputs, at_ns)
+
+    monkeypatch.setattr("vibe_quant.portfolio.metrics._boundary_equity", spy)
+
+    assert weekly_sharpe_only(run, inputs) is not None
+    assert seen == [_START + week * 7 * _DAY for week in range(5)]
+    assert seen != [_START + day * _DAY for day in range(29)]
+
+
+def test_weekly_sharpe_only_none_below_three_weeks() -> None:
+    """R50b: one week gives two Mondays and one return -> null, exactly like the report."""
+    _, inputs, run = _weekly_fixture(weeks=1)
+
+    assert weekly_sharpe_only(run, inputs) is None
+    assert carry_metrics(run, inputs).summary["weekly_sharpe"] is None
+
+
+def test_weekly_sharpe_only_ruin_is_the_reports_ruin() -> None:
+    """R22/R36: ``E(M) <= 0`` raises ``CarryEquityTooSmall`` from the helper and from the report.
+
+    The 10,000 fee on a 0.1 BTC leg drives ``E == -1000`` from the first day on, so
+    the report (every daily boundary) and the Monday-only helper agree on the ruin.
+    """
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 28 * _DAY)
+    fills = [_fill(_BTC, _START + _HOUR, 100, price=100_000.0, fee=11_000.0)]
+    prices = {_START + day * _DAY: 100_000.0 for day in range(1, 29)}
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+
+    with pytest.raises(CarryEquityTooSmall):
+        carry_metrics(run, inputs)
+    with pytest.raises(CarryEquityTooSmall):
+        weekly_sharpe_only(run, inputs)
+
+
+def test_weekly_sharpe_only_keeps_the_missing_close_data_error() -> None:
+    """CF1/R22: a held symbol without a close on a NON-Monday day still fails closed.
+
+    The daily scan must hand that boundary to the exact ``equity_at`` (the float64 path
+    marks it ``-inf``), so the ``CarryDataError`` survives; a scan that cleared the day
+    from the approximation alone -- the cash left over once the missing mark is skipped --
+    would report a Sharpe instead. The Tuesday D1 is the day a Monday-only scan never reads.
+    """
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 28 * _DAY)
+    fills = [_fill(_BTC, _START + _HOUR, 10, price=100_000.0)]  # 0.01 BTC: cash -1000
+    prices = {_START + day * _DAY: 100_000.0 for day in range(1, 29)}
+    del prices[_START + _DAY]  # the Tuesday close is missing while BTC is held
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+
+    # the skipped mark would leave a POSITIVE approximation (10_000 - 1_000), well clear of
+    # the band -- so only the exact recompute can see the missing close
+    approx, gross = _approx_equity_path(run, inputs, [_START + _DAY])
+    assert approx == [float("-inf")]
+    assert _ruin_band(spec.initial_balance, gross) < 10_000.0 - 1_000.0
+
+    with pytest.raises(CarryDataError, match="no price for held BTCUSDT"):
+        weekly_sharpe_only(run, inputs)
+
+
+@pytest.mark.parametrize(("equity", "raises"), [(0.0, True), (-1e-9, True), (1e-9, False)])
+def test_daily_ruin_scan_guard_is_not_positive_only(
+    monkeypatch: pytest.MonkeyPatch, equity: float, raises: bool
+) -> None:
+    """R22/CF1: the daily scan decides with ``not (equity > 0.0)`` -- exactly 0.0 is ruin.
+
+    The near-zero boundary is the TUESDAY D1, which a Monday-only ruin scan never reads:
+    the band puts it inside the exact-recompute set and the guard judges the exact value.
+    """
+    _, inputs, run = _weekly_fixture()
+    boundaries = [_START + day * _DAY for day in range(29)]
+    monkeypatch.setattr(
+        "vibe_quant.portfolio.metrics._approx_equity_path",
+        lambda *args: ([10_000.0, equity] + [10_000.0] * 27, 0.0),
+    )
+
+    def exact(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:
+        return equity if at_ns == boundaries[1] else 10_000.0 + (at_ns - _START) // _DAY
+
+    monkeypatch.setattr("vibe_quant.portfolio.metrics._boundary_equity", exact)
+
+    if raises:
+        with pytest.raises(CarryEquityTooSmall):
+            weekly_sharpe_only(run, inputs)
+    else:
+        assert weekly_sharpe_only(run, inputs) is not None
+
+
+@pytest.mark.parametrize("exact_equity", [0.0, -1e-9])
+def test_daily_ruin_scan_recomputes_exactly_inside_the_band(
+    monkeypatch: pytest.MonkeyPatch, exact_equity: float
+) -> None:
+    """CF1: inside the band the EXACT equity decides, never the (positive) approximation.
+
+    The Tuesday D1 sits inside the band (``approx == +1e-9 <= _ruin_band(10_000.0, 0.0)``)
+    but its exact equity is ``<= 0``. A scan that trusted the float64 value in the band
+    (``equity = approx``) would clear the day and report a Sharpe; the exact recompute must
+    raise ``CarryEquityTooSmall``. The existing guard test cannot see this: there ``approx``
+    equals the exact value, so both pass -- only a sign split pins the recompute.
+    """
+    _, inputs, run = _weekly_fixture()
+    boundaries = [_START + day * _DAY for day in range(29)]
+    approx_inside_band = 1e-9  # positive, and inside _ruin_band(10_000.0, gross=0.0) == 0.01
+    monkeypatch.setattr(
+        "vibe_quant.portfolio.metrics._approx_equity_path",
+        lambda *args: ([10_000.0, approx_inside_band] + [10_000.0] * 27, 0.0),
+    )
+
+    def exact(run: CarryRun, inputs: CarryInputs, at_ns: int) -> float:
+        return exact_equity if at_ns == boundaries[1] else 10_000.0 + (at_ns - _START) // _DAY
+
+    monkeypatch.setattr("vibe_quant.portfolio.metrics._boundary_equity", exact)
+
+    # the setup is exactly the survivor's blind spot: approximation positive, exact not
+    assert 0.0 < approx_inside_band <= _ruin_band(10_000.0, 0.0)
+    assert not (exact_equity > 0.0)
+    with pytest.raises(CarryEquityTooSmall) as error:
+        weekly_sharpe_only(run, inputs)
+    assert error.value.decision_ns == boundaries[1]
+
+
+def test_ruin_mid_week_with_positive_mondays_still_raises() -> None:
+    """CF1: a Tuesday dip ``<= 0`` ruins the book though every Monday is positive.
+
+    The 0.1 BTC leg (bought at 100000, 2.5 fee) is marked 101000 on D1..D7 and 20.0 on
+    the D8 Tuesday, so ``E(D8) == -0.5`` while the five Monday equities are 10,000 /
+    10,097.5 / 10,047.5 / 10,047.5 / 10,047.5. Monday-only ruin detection reports a
+    Sharpe here; ``carry_metrics`` -- and the scan (CF1) -- ruin the same boundary.
+    """
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 28 * _DAY)
+    fills = [_fill(_BTC, _START + _HOUR, 100, price=100_000.0, fee=2.5)]
+    prices = {
+        _START + day * _DAY: (101_000.0 if day <= 7 else 20.0 if day == 8 else 100_500.0)
+        for day in range(1, 29)
+    }
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+    tuesday = _START + 8 * _DAY
+
+    assert [_boundary_equity(run, inputs, _START + week * 7 * _DAY) for week in range(5)] == (
+        pytest.approx([10_000.0, 10_097.5, 10_047.5, 10_047.5, 10_047.5])
+    )
+    assert _boundary_equity(run, inputs, tuesday) == pytest.approx(-0.5)
+
+    with pytest.raises(CarryEquityTooSmall) as reported:
+        carry_metrics(run, inputs)
+    with pytest.raises(CarryEquityTooSmall) as scanned:
+        weekly_sharpe_only(run, inputs)
+
+    assert reported.value.decision_ns == scanned.value.decision_ns == tuesday
+
+
+def test_daily_ruin_scan_band_covers_the_approximation_error() -> None:
+    """CF1: the float64 path's error stays orders below ``_ruin_band``, so its sign verdict holds."""
+    _, inputs, run = _weekly_fixture()
+    boundaries = [_START + day * _DAY for day in range(29)]
+    approx, gross = _approx_equity_path(run, inputs, boundaries)
+    exact = [_boundary_equity(run, inputs, boundary) for boundary in boundaries]
+    error = max(abs(a - e) for a, e in zip(approx, exact, strict=True))
+
+    assert error <= _RUIN_ERROR * gross  # the stated error bound holds on this run
+    assert _ruin_band(10_000.0, gross) > 100 * error  # and the band it sizes is far wider
+
+
+def test_weekly_sharpe_only_rejects_inconsistent_size_increments() -> None:
+    """R47: the scan keeps ``equity_at``'s step check -- same exception, same message."""
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 7 * _DAY)
+    first = _fill(_BTC, _START + _HOUR, 100, price=100_000.0)
+    second = replace(first, ts=_START + 3 * _DAY, steps=200, qty=first.qty * 4.0)
+    prices = {_START + day * _DAY: 100_000.0 for day in range(1, 8)}
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, [first, second], [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+
+    with pytest.raises(CarryExecutionError, match="inconsistent size increment"):
+        weekly_sharpe_only(run, inputs)
+
+
+def test_weekly_sharpe_only_sorts_two_fills_in_the_same_tick() -> None:
+    """Two fills of one symbol in the SAME tick must not be tuple-compared (they sort by ts alone)."""
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + 21 * _DAY)
+    same_tick = _START + _HOUR
+    fills = [
+        _fill(_BTC, same_tick, 100, price=100_000.0),
+        _fill(_BTC, same_tick, -40, price=101_000.0),
+    ]
+    prices = {_START + day * _DAY: 100_000.0 + 500.0 * day for day in range(1, 22)}
+    inputs = _inputs(spec, {_BTC: prices, _ETH: {}})
+    run = _run(spec, fills, [], (_decision(_START, 10_000.0, weights={_BTC: 0.5}),))
+
+    assert weekly_sharpe_only(run, inputs) == carry_metrics(run, inputs).summary["weekly_sharpe"]
