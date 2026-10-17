@@ -40,16 +40,20 @@ from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
 from vibe_quant.logging.events import Event, EventType, create_event
 from vibe_quant.logging.writer import EventWriter
+from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
 from vibe_quant.paper.config import (
     DEFAULT_MARGIN_TYPE,
     DEFAULT_VALIDATION_LEVERAGE,
     ConfigurationError,
     PaperTradingConfig,
     check_paper_exposure,
+    effective_max_margin_pct,
+    effective_max_position_pct,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.force_orders import build_binance_fetch
 from vibe_quant.paper.guard import (
+    MARGIN_DENIAL_PREFIX,
     OPERATOR_RESUMABLE_HALTS,
     RESTORED_HALT_PREFIX,
     RESTORED_HALTS,
@@ -78,10 +82,12 @@ from vibe_quant.paper.persistence import (
     StoreWorker,
     wait_future,
 )
+from vibe_quant.sizing_settings import DEFAULT_MAX_POSITION_PCT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from concurrent.futures import Future
+    from decimal import Decimal
     from types import ModuleType
 
     from vibe_quant.alerts.telegram import TelegramBot
@@ -99,6 +105,11 @@ _BACKTEST_ONLY_PARAMS = frozenset(
         "execution_delay_seed",
         "command_release",
         "command_release_bar_type",
+        # Paper enforces the margin limit in the guard, on the venue-VERIFIED leverage; a
+        # strategy config must not carry the backtest's rule (the template would default
+        # margin_leverage to 10).
+        "max_margin_pct",
+        "margin_leverage",
     }
 )
 
@@ -213,6 +224,9 @@ class ResolvedRunConfig:
     margin_type: str
     validated: dict[str, object] | None = None
     diff: list[dict[str, object]] = field(default_factory=list)
+    #: The guard's margin cushion (fraction of equity) and the per-symbol cap it is judged by.
+    max_margin_pct: Decimal = DEFAULT_PAPER_MAX_MARGIN_PCT
+    max_position_pct: float = DEFAULT_MAX_POSITION_PCT
 
 
 class OrderRejectedError(Exception):
@@ -379,6 +393,9 @@ class _GuardBridge(GuardListener):
     def on_warning(self, message: str) -> None:
         self._node._on_guard_warning(message)
 
+    def on_entry_allowed(self, symbol: str) -> None:
+        self._node._margin_alerted.discard(symbol)
+
 
 def _is_tier_error(exc: Exception) -> bool:
     """True for the liquidation rule's own domain errors (expected, reported as a reason)."""
@@ -429,6 +446,8 @@ class PaperTradingNode:
         self._cmd_worker = StoreWorker("vq-paper-cmd")
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
+        #: Symbols whose margin-limit refusal was already alerted (re-armed by an allowed entry).
+        self._margin_alerted: set[str] = set()
         self._restored_halt: RestoredHalt | None = None
         self._resolved: ResolvedRunConfig | None = None
         self._shutdown_event = asyncio.Event()
@@ -760,7 +779,14 @@ class PaperTradingNode:
             leverage_override=cfg.leverage,
         )
 
+        max_margin_pct = effective_max_margin_pct(
+            run_parameters, cfg.sizing.max_margin_pct, validation_run_id=cfg.validation_run_id
+        )
         resolved = ResolvedRunConfig(
+            max_margin_pct=max_margin_pct,
+            max_position_pct=effective_max_position_pct(
+                run_parameters, cfg.sizing.max_position_pct
+            ),
             symbols=symbols,
             strategy_params=params,
             leverage=leverage,
@@ -988,6 +1014,27 @@ class PaperTradingNode:
         node.build()
         return node
 
+    def _warn_margin_cushion(self, resolved: ResolvedRunConfig) -> None:
+        """Q3: warn (never refuse) when every symbol at its cap would exceed the cushion."""
+        possible = len(resolved.symbols) * resolved.max_position_pct / resolved.leverage
+        cushion = float(resolved.max_margin_pct)
+        if possible <= cushion:
+            return
+        message = (
+            f"max possible margin {possible:.0%} exceeds cushion {cushion:.0%}; "
+            "entries beyond it will be refused"
+        )
+        logger.warning("paper %s: %s", self._config.trader_id, message)
+        self._write_event(
+            EventType.SIGNAL,
+            {
+                "action": "margin_cushion_warning",
+                "message": message,
+                "max_possible_margin_pct": possible,
+                "max_margin_pct": cushion,
+            },
+        )
+
     def _build_guard(self, risk_engine: Any) -> TradingGuard:
         risk = self._config.risk
         return TradingGuard(
@@ -996,6 +1043,11 @@ class PaperTradingNode:
                 max_daily_loss_pct=risk.max_daily_loss_pct,
                 max_consecutive_losses=risk.max_consecutive_losses,
                 max_position_count=risk.max_position_count,
+                max_margin_pct=float(
+                    self._resolved.max_margin_pct
+                    if self._resolved is not None
+                    else DEFAULT_PAPER_MAX_MARGIN_PCT
+                ),
             ),
             strategies=self._compiled_strategies,
             risk_engine=risk_engine,
@@ -1601,7 +1653,24 @@ class PaperTradingNode:
         timestamp = _ns_to_dt(event.ts_init)
         # oledr/k8oei: only a risk-engine denial alerts today, so only it goes through
         # the helper; a gate denial still writes without alerting.
-        if not by_gate:
+        reason = str(event.reason)
+        symbol = str(event.instrument_id)
+        if (
+            by_gate
+            and reason.startswith(MARGIN_DENIAL_PREFIX)
+            and symbol not in self._margin_alerted
+        ):
+            # One alert per symbol until an entry for it passes again (latch set before the
+            # write, like every per-tick report).
+            self._margin_alerted.add(symbol)
+            self._write_then_alert(
+                EventType.ORDER,
+                payload,
+                "warning",
+                f"Entry refused (margin limit): {reason}\n{symbol}",
+                timestamp=timestamp,
+            )
+        elif not by_gate:
             self._write_then_alert(
                 EventType.ORDER,
                 payload,
@@ -2054,8 +2123,10 @@ class PaperTradingNode:
                 "margin_type": resolved.margin_type,
                 "strategy_params": resolved.strategy_params,
                 "config_diff": resolved.diff,
+                "max_margin_pct": float(resolved.max_margin_pct),
             },
         )
+        self._warn_margin_cushion(resolved)
         if resolved.validated is None:
             logger.warning(
                 "paper %s not started from a validation run: trading compiled DSL "

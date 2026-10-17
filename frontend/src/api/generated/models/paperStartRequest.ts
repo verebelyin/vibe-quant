@@ -26,6 +26,8 @@ export interface PaperStartRequest {
   sizing_method?: 'fixed_fractional' | null;
   max_leverage?: number | null;
   max_position_pct?: number | null;
+  /** Margin cushion: refuse entries beyond this fraction of equity (default: the validation run's value, else 0.5). */
+  max_margin_pct?: number | null;
   risk_per_trade?: number | null;
   max_drawdown_pct?: number | null;
   max_daily_loss_pct?: number | null;

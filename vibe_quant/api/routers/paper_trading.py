@@ -259,6 +259,9 @@ async def start_paper(
         sizing["max_position_pct"] = str(body.max_position_pct)
     if body.risk_per_trade is not None:
         sizing["risk_per_trade"] = str(body.risk_per_trade)
+    if body.max_margin_pct is not None:
+        # A JSON number, not a string: the node's loader validates it as SizingSettings does.
+        sizing["max_margin_pct"] = body.max_margin_pct
     risk: dict[str, object] = {}
     if body.max_drawdown_pct is not None:
         risk["max_drawdown_pct"] = str(body.max_drawdown_pct)

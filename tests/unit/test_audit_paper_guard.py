@@ -147,6 +147,21 @@ class Scheduler(Actor):
             )
 
 
+class VerifiedLeverage(Actor):
+    """Records a venue-VERIFIED leverage on the account, as the live exec client does from
+    symbolConfig (DR1): the margin limit refuses entries on an instrument without one."""
+
+    def __init__(self, instrument_ids: list[InstrumentId], leverage: Decimal) -> None:
+        super().__init__()
+        self._ids = instrument_ids
+        self._leverage = leverage
+
+    def on_start(self) -> None:
+        account = self.cache.account_for_venue(Venue("BINANCE"))
+        for iid in self._ids:
+            account.set_leverage(iid, self._leverage)
+
+
 # --------------------------------------------------------------------------- harness
 
 
@@ -295,6 +310,11 @@ def build(
         risk_state=risk_state,
     )
     listener.clock_ns = lambda: guard.clock.timestamp_ns()
+    engine.add_actor(
+        VerifiedLeverage(
+            [InstrumentId.from_str(f"{symbol}-PERP.BINANCE") for symbol in symbols], Decimal("10")
+        )
+    )
     engine.add_actor(guard)
     for s in strategies:
         engine.add_strategy(s)
@@ -715,6 +735,9 @@ def test_compiled_dsl_strategy_dd_halt_flattens_and_stops() -> None:
         listener=listener,
     )
     listener.clock_ns = lambda: guard.clock.timestamp_ns()
+    engine.add_actor(
+        VerifiedLeverage([InstrumentId.from_str("BTCUSDT-PERP.BINANCE")], Decimal("10"))
+    )
     engine.add_actor(guard)
     engine.add_strategy(strat)
     h = Harness(engine=engine, guard=guard, strategies=[strat], listener=listener)

@@ -47,6 +47,7 @@ from nautilus_trader.model.identifiers import AccountId, ClientId, Venue
 from nautilus_trader.trading.strategy import Strategy
 
 from tests.unit.test_audit_paper_node import DSL, _config
+from vibe_quant.data.catalog import create_instrument
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
 from vibe_quant.nt_compat import retain_log_guard
@@ -371,3 +372,140 @@ async def test_paper_node_refused_connect_starts_nothing_and_shuts_down_clean(
     assert node._persistence is None
     assert node._event_writer is None
     assert trading_node.is_running() is False
+
+
+# ------------------------------------- R30d: same-step entries on a LIVE TradingNode
+
+_REACHED: list[str] = []
+
+
+class _VerifiedExecClient(_StubExecClient):
+    """Healthy venue: 1000 USDT, verified 10x on BTC/ETH, and every submit is recorded."""
+
+    async def _connect(self) -> None:
+        from decimal import Decimal
+
+        from nautilus_trader.model.identifiers import InstrumentId
+        from nautilus_trader.model.objects import AccountBalance, Money
+
+        self.connect_attempts += 1
+        for symbol in ("BTCUSDT", "ETHUSDT"):
+            self._cache.add_instrument(create_instrument(symbol))
+        self._set_account_id(AccountId("BINANCE-001"))
+        balance = AccountBalance(Money(1000, USDT), Money(0, USDT), Money(1000, USDT))
+        self.generate_account_state(balances=[balance], margins=[], reported=True, ts_event=0)
+        account = self._cache.account_for_venue(_VENUE)
+        for symbol in ("BTCUSDT", "ETHUSDT"):
+            account.set_leverage(InstrumentId.from_str(f"{symbol}-PERP.BINANCE"), Decimal(10))
+
+    async def _submit_order(self, command: Any) -> None:
+        from nautilus_trader.model.identifiers import VenueOrderId
+
+        order = command.order
+        _REACHED.append(str(order.instrument_id))
+        ts = self._clock.timestamp_ns()
+        self.generate_order_submitted(
+            order.strategy_id, order.instrument_id, order.client_order_id, ts
+        )
+        self.generate_order_accepted(
+            order.strategy_id,
+            order.instrument_id,
+            order.client_order_id,
+            VenueOrderId(f"V{len(_REACHED)}"),
+            ts,
+        )
+
+
+class _VerifiedExecFactory(LiveExecClientFactory):
+    @staticmethod
+    def create(  # type: ignore[override]
+        loop: Any,
+        name: str,
+        config: LiveExecClientConfig,
+        msgbus: MessageBus,
+        cache: Cache,
+        clock: LiveClock,
+    ) -> _VerifiedExecClient:
+        return _VerifiedExecClient(loop, msgbus, cache, clock)
+
+
+async def test_same_step_entries_are_margin_checked_on_a_live_node(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R30d: on a LIVE TradingNode a gate-admitted entry stays INITIALIZED (the live risk
+    engine only enqueues it), in neither orders_open nor orders_inflight. Two entries
+    submitted in ONE synchronous step (equity 1000, verified 10x, cushion 0.5: BTC margin
+    400 + ETH margin 200 = 600 > 500) must still see each other: ETH is DENIED and never
+    reaches the exec client."""
+    from decimal import Decimal
+
+    import nautilus_trader.adapters.binance.factories as binance_factories
+    from nautilus_trader.model.enums import OrderSide, OrderStatus
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    _REACHED.clear()
+    monkeypatch.setattr(binance_factories, "BinanceLiveExecClientFactory", _VerifiedExecFactory)
+    monkeypatch.setattr(binance_factories, "BinanceLiveDataClientFactory", _StubDataFactory)
+    monkeypatch.setattr("nautilus_trader.live.config.TradingNodeConfig", _FastNodeConfig)
+
+    async def _idle_watch() -> None:
+        await asyncio.Event().wait()
+
+    node = PaperTradingNode(_config(seeded, trader_id="PAPER-009"))
+    monkeypatch.setattr(node, "_liquidation_loop", _idle_watch)
+    submitted: list[str] = []
+
+    def _submit(strategy: Any, symbol: str, qty: str, price: str) -> None:
+        iid = InstrumentId.from_str(f"{symbol}-PERP.BINANCE")
+        inst = strategy.cache.instrument(iid)
+        order = strategy.order_factory.limit(
+            instrument_id=iid,
+            order_side=OrderSide.BUY,
+            quantity=inst.make_qty(Decimal(qty)),
+            price=inst.make_price(Decimal(price)),
+        )
+        submitted.append(symbol)
+        strategy.submit_order(order)
+
+    def _entries_in_one_step(self: Any, _original: Any = None) -> None:
+        assert _original is not None
+        _original(self)
+        _submit(self, "BTCUSDT", "0.1", "40000")  # 4000 notional -> 400
+        _submit(self, "ETHUSDT", "1", "2000")  # 2000 notional -> 200 (600 > 500)
+
+    await node._initialize()
+    trading_node: Any = node._trading_node
+    assert trading_node is not None
+    strategy_type = type(node._compiled_strategies[0])
+    monkeypatch.setattr(
+        strategy_type,
+        "on_start",
+        lambda self, _o=strategy_type.on_start: _entries_in_one_step(self, _o),
+    )
+
+    run_loop = asyncio.create_task(node._run_loop())
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
+        while len(submitted) < 2:
+            assert loop.time() < deadline, "the strategy never submitted both entries"
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(1.0)  # let the queued risk engine / exec client drain
+        statuses = {str(o.instrument_id): o.status for o in trading_node.cache.orders()}
+        guard = node._guard
+        assert guard is not None
+        node._shutdown_event.set()
+        await asyncio.wait_for(run_loop, timeout=10.0)
+    finally:
+        node._shutdown_event.set()
+        if not run_loop.done():
+            run_loop.cancel()
+            await asyncio.gather(run_loop, return_exceptions=True)
+        await asyncio.wait_for(node._shutdown(), timeout=5.0)
+        retain_log_guard(trading_node)  # type: ignore[arg-type]
+
+    assert submitted == ["BTCUSDT", "ETHUSDT"]
+    assert _REACHED == ["BTCUSDT-PERP.BINANCE"], "the over-limit ETH entry reached execution"
+    assert statuses["ETHUSDT-PERP.BINANCE"] == OrderStatus.DENIED
+    assert statuses["BTCUSDT-PERP.BINANCE"] != OrderStatus.DENIED
+    assert guard.gate_denials == 1

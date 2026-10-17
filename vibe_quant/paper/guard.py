@@ -44,7 +44,7 @@ from nautilus_trader.config import ActorConfig
 from nautilus_trader.core.rust.common import ComponentState
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import SubmitOrder, SubmitOrderList
-from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.enums import OrderSide, PriceType
 from nautilus_trader.model.events import (
     OrderDenied,
     OrderRejected,
@@ -54,6 +54,13 @@ from nautilus_trader.model.events import (
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Currency
 
+from vibe_quant.margin_limit import (
+    DEFAULT_PAPER_MAX_MARGIN_PCT,
+    MarginItem,
+    check_entry_margin,
+    unique_pending_entries,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -61,6 +68,9 @@ logger = logging.getLogger(__name__)
 
 #: Prefix on every OrderDenied reason produced by the guard's gate.
 GATE_DENIAL_PREFIX = "VQ_GUARD"
+
+#: Prefix on a gate denial produced by the margin limit (node alerts once per symbol).
+MARGIN_DENIAL_PREFIX = f"{GATE_DENIAL_PREFIX}: margin limit: "
 
 _RISK_ENDPOINT = "RiskEngine.execute"
 _TICK_TIMER = "TradingGuard.tick"
@@ -249,6 +259,9 @@ class GuardListener:
     def on_warning(self, message: str) -> None:
         """Non-fatal condition the operator should know about."""
 
+    def on_entry_allowed(self, symbol: str) -> None:
+        """An entry for ``symbol`` passed the margin limit (re-arms its refusal alert)."""
+
 
 class TradingGuardConfig(ActorConfig, frozen=True):  # type: ignore[misc]
     """Configuration for :class:`TradingGuard`."""
@@ -260,6 +273,8 @@ class TradingGuardConfig(ActorConfig, frozen=True):  # type: ignore[misc]
     max_consecutive_losses: int = 10
     max_position_count: int = 5
     check_interval_secs: int = 5
+    #: Margin cushion (fraction of equity) for new entries; paper default 50%.
+    max_margin_pct: float = float(DEFAULT_PAPER_MAX_MARGIN_PCT)
 
 
 def _dec_str(value: Decimal | None) -> str | None:
@@ -477,14 +492,11 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 f"{GATE_DENIAL_PREFIX}: {instrument_id} already has net position {net}; "
                 "order would add to or flip it"
             )
-        pending = [
-            o
-            for o in (
-                *self.cache.orders_open(instrument_id=instrument_id),
-                *self.cache.orders_inflight(instrument_id=instrument_id),
-            )
-            if not o.is_reduce_only and o.client_order_id != order.client_order_id
-        ]
+        pending = unique_pending_entries(
+            self._unclosed_orders(instrument_id=instrument_id),
+            (),
+            exclude_client_order_id=order.client_order_id,
+        )
         if pending:
             return (
                 f"{GATE_DENIAL_PREFIX}: entry order {pending[0].client_order_id} for "
@@ -496,7 +508,114 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 f"{GATE_DENIAL_PREFIX}: {open_count} open positions >= "
                 f"max_position_count {self._limits.max_position_count}"
             )
+        return self._margin_denial(order)
+
+    # ----------------------------------------------------------- margin limit
+
+    def _margin_denial(self, order: Any) -> str | None:
+        """Refuse an entry whose margin (with every open position and pending entry) would
+        exceed ``max_margin_pct`` of equity. Venue-verified leverage only (DR1); an entry
+        is never shrunk. Runs LAST so state/net/pending/count denials keep precedence."""
+        reason = self._margin_reason(order)
+        if reason is not None:
+            return f"{MARGIN_DENIAL_PREFIX}{reason}"
+        try:
+            self._listener.on_entry_allowed(str(order.instrument_id))
+        except Exception as exc:
+            logger.error("entry-allowed notify failed (%s)", type(exc).__name__)
         return None
+
+    def _margin_reason(self, order: Any) -> str | None:
+        account = self.portfolio.account(self._venue)
+        pct = self._cfg.max_margin_pct
+        if account is None:
+            # No account means neither equity nor leverage is known; the equity reason
+            # is the one the operator can act on.
+            return check_entry_margin(
+                open_items=[],
+                pending_items=[],
+                new_item=MarginItem(Decimal(0), 1),
+                equity=None,
+                max_margin_pct=pct,
+            ).reason
+        open_items: list[MarginItem] = []
+        for pos in self.cache.positions_open(venue=self._venue):
+            iid = pos.instrument_id
+            notional = (
+                abs(Decimal(str(pos.quantity)))
+                * Decimal(str(pos.avg_px_open))
+                * self._multiplier(iid)
+            )
+            open_items.append(MarginItem(notional, self._verified_leverage(account, iid), str(iid)))
+        pending_items: list[MarginItem] = []
+        pending = unique_pending_entries(
+            self._unclosed_orders(venue=self._venue),
+            (),
+            exclude_client_order_id=order.client_order_id,
+        )
+        for pending_order in pending:
+            item = self._order_item(account, pending_order, Decimal(str(pending_order.leaves_qty)))
+            if isinstance(item, str):
+                return item
+            pending_items.append(item)
+        new_item = self._order_item(account, order, Decimal(str(order.quantity)))
+        if isinstance(new_item, str):
+            return new_item
+        return check_entry_margin(
+            open_items=open_items,
+            pending_items=pending_items,
+            new_item=new_item,
+            equity=self.current_equity(),
+            max_margin_pct=pct,
+        ).reason
+
+    def _unclosed_orders(self, **filters: Any) -> list[Any]:
+        """Every order that is not closed: INITIALIZED + open + inflight + emulated.
+
+        An entry this gate admitted stays INITIALIZED until the (queued, on a live node)
+        risk engine and exec client pick it up, and NT indexes it in neither
+        ``orders_open`` nor ``orders_inflight``: a second entry in the same synchronous step
+        would see no pending margin or pending entry. The cache scan needs no bookkeeping
+        of its own (nothing to prune when an order is denied, rejected, cancelled or filled)
+        and is the ONE pending set for both the pending-entry check and the margin sum.
+        """
+        return [o for o in self.cache.orders(**filters) if not o.is_closed]
+
+    def _order_item(self, account: Any, order: Any, qty: Decimal) -> MarginItem | str:
+        """The margin item of an order, or the refusal text when it cannot be priced."""
+        iid = order.instrument_id
+        px = self._reference_price(order)
+        if px is None:
+            return f"no reference price for {iid}"
+        notional = qty * px * self._multiplier(iid)
+        return MarginItem(notional, self._verified_leverage(account, iid), str(iid))
+
+    def _reference_price(self, order: Any) -> Decimal | None:
+        """Order price, then trigger price, then the cache's LAST, then MID."""
+        for attr in ("price", "trigger_price"):
+            value = getattr(order, attr, None)
+            if value is not None:
+                return Decimal(str(value))
+        for price_type in (PriceType.LAST, PriceType.MID):
+            value = self.cache.price(order.instrument_id, price_type)
+            if value is not None:
+                return Decimal(str(value))
+        return None
+
+    def _multiplier(self, instrument_id: Any) -> Decimal:
+        instrument = self.cache.instrument(instrument_id)
+        return Decimal(str(instrument.multiplier)) if instrument is not None else Decimal(1)
+
+    @staticmethod
+    def _verified_leverage(account: Any, instrument_id: Any) -> Decimal | None:
+        """``account.leverage(id)``: what the venue's symbolConfig recorded, else None."""
+        getter = getattr(account, "leverage", None)
+        raw = getter(instrument_id) if callable(getter) else None
+        if raw is None:
+            return None
+        value = Decimal(str(raw))
+        # Out of the rule's domain is as unverified as missing: never raise in the gate.
+        return value if Decimal(1) <= value <= Decimal(125) else None
 
     def _deny(self, order: Any, reason: str) -> None:
         if order.is_closed:
@@ -817,6 +936,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
 __all__ = [
     "GATE_DENIAL_PREFIX",
+    "MARGIN_DENIAL_PREFIX",
     "RESTORED_HALTS",
     "RESTORED_HALT_PREFIX",
     "CloseAllResult",

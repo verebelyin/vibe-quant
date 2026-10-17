@@ -138,3 +138,43 @@ async def test_start_default_unchanged(ctx: Ctx) -> None:
     r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.default_run})
     assert r.status_code == 201, r.text
     assert len(ctx.launched) == 1
+
+
+def _launched_config(ctx: Ctx) -> dict[str, Any]:
+    import json
+    from pathlib import Path
+
+    command = ctx.launched[-1]
+    path = next(Path(part) for part in command if part.endswith(".json"))
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+async def test_start_forwards_max_margin_pct_as_a_number(ctx: Ctx) -> None:
+    """The cushion override reaches the node's config file as a JSON number; absent stays absent."""
+    r = await ctx.ac.post(
+        "/api/paper/start", json={"validation_run_id": ctx.default_run, "max_margin_pct": 0.3}
+    )
+    assert r.status_code == 201, r.text
+    assert _launched_config(ctx)["sizing"]["max_margin_pct"] == 0.3
+
+    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.default_run})
+    assert r.status_code == 201, r.text
+    assert "max_margin_pct" not in _launched_config(ctx).get("sizing", {})
+
+
+@pytest.mark.parametrize("bad", [0, -0.1, 1.01, True])
+async def test_start_rejects_bad_max_margin_pct(ctx: Ctx, bad: object) -> None:
+    before = ctx.run_count()
+    r = await ctx.ac.post(
+        "/api/paper/start", json={"validation_run_id": ctx.default_run, "max_margin_pct": bad}
+    )
+    assert r.status_code == 422, r.text
+    assert ctx.run_count() == before and ctx.launched == []
+
+
+async def test_start_accepts_max_margin_pct_of_exactly_one(ctx: Ctx) -> None:
+    r = await ctx.ac.post(
+        "/api/paper/start", json={"validation_run_id": ctx.default_run, "max_margin_pct": 1}
+    )
+    assert r.status_code == 201, r.text

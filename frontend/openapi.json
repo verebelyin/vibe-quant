@@ -4265,6 +4265,7 @@
           "system"
         ],
         "summary": "Get Status",
+        "description": "Report the persisted kill state.\n\nA row that went missing is re-created ENGAGED by the read (a deleted\nkill-switch record is never reported as unlocked); an unreadable-and-\nunreseedable state is a 503, never a 200 default.",
         "operationId": "get_status_api_system_status_get",
         "responses": {
           "200": {
@@ -4286,7 +4287,7 @@
           "system"
         ],
         "summary": "Kill",
-        "description": "Engage the system-wide kill switch.\n\n- Persists kill state to the DB so restarts stay halted (nodes poll it).\n- Queues a ``kill`` command for every active paper session (no signals:\n  a recycled PID can never receive it).\n- Broadcasts `system_killed` over the trading WebSocket.",
+        "description": "Engage the system-wide kill switch.\n\n- Persists kill state to the DB so restarts stay halted (nodes poll it).\n- Queues a ``kill`` command for every active paper session (no signals:\n  a recycled PID can never receive it).\n- Broadcasts `system_killed` over the trading WebSocket.\n\nIf persisting fails the cascade still runs (live sessions must stop even\nwhen the DB write does not land) and the response is a 503 naming the error\nclass and how many sessions were told to kill \u2014 a kill that is not on disk\nmust never look like a successful kill.",
         "operationId": "kill_api_system_kill_post",
         "requestBody": {
           "content": {
@@ -4328,7 +4329,7 @@
           "system"
         ],
         "summary": "Unlock",
-        "description": "Clear the kill switch. Requires ``acknowledge=true``.",
+        "description": "Clear the kill switch. Requires ``acknowledge=true``.\n\nIf the row went missing in the meantime the unlock is a 409: the row has\njust been re-created ENGAGED and the operator must unlock again.",
         "operationId": "unlock_api_system_unlock_post",
         "requestBody": {
           "content": {
@@ -7790,6 +7791,20 @@
               }
             ],
             "title": "Max Position Pct"
+          },
+          "max_margin_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Margin Pct",
+            "description": "Margin cushion: refuse entries beyond this fraction of equity (default: the validation run's value, else 0.5)."
           },
           "risk_per_trade": {
             "anyOf": [

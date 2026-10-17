@@ -27,6 +27,7 @@ from vibe_quant.paper.config import (
     credential_env_names,
 )
 from vibe_quant.paper.node import run_paper_trading, validated_leverage_override
+from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,6 +47,22 @@ def _optional_decimal(data: dict[str, object], key: str) -> Decimal | None:
     if isinstance(value, (str, int, float)):
         return _decimal_from_str(value)
     raise ConfigurationError(f"{key} must be a number, got {type(value).__name__}")
+
+
+def _margin_cushion(sizing_data: dict[str, object]) -> Decimal | None:
+    """``sizing.max_margin_pct``: absent = None (paper default); a stored null is an error.
+
+    The T3 validator (:meth:`SizingSettings.from_params`) decides, not a second copy.
+    """
+    if "max_margin_pct" not in sizing_data:
+        return None
+    try:
+        value = SizingSettings.from_params(
+            {"max_margin_pct": sizing_data["max_margin_pct"]}
+        ).max_margin_pct
+    except SizingConfigError as exc:
+        raise ConfigurationError(f"sizing.max_margin_pct: {exc}") from exc
+    return None if value is None else Decimal(str(value))
 
 
 def load_config_from_json(config_path: Path) -> PaperTradingConfig:
@@ -86,6 +103,7 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
         method=sizing_data.get("method", "fixed_fractional"),
         max_leverage=_decimal_from_str(sizing_data.get("max_leverage", 20)),
         max_position_pct=_optional_decimal(sizing_data, "max_position_pct"),
+        max_margin_pct=_margin_cushion(sizing_data),
         risk_per_trade=_optional_decimal(sizing_data, "risk_per_trade"),
         kelly_fraction=_decimal_from_str(sizing_data.get("kelly_fraction", 0.5)),
         atr_multiplier=_decimal_from_str(sizing_data.get("atr_multiplier", 2.0)),
@@ -162,6 +180,11 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
                 str(config.sizing.max_position_pct)
                 if config.sizing.max_position_pct is not None
                 else None
+            ),
+            **(
+                {"max_margin_pct": float(config.sizing.max_margin_pct)}
+                if config.sizing.max_margin_pct is not None
+                else {}
             ),
             "risk_per_trade": (
                 str(config.sizing.risk_per_trade)

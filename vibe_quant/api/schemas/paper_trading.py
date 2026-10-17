@@ -32,6 +32,14 @@ class PaperStartRequest(BaseModel):
     sizing_method: Literal["fixed_fractional"] | None = None
     max_leverage: float | None = Field(default=None, ge=1, le=125)
     max_position_pct: float | None = Field(default=None, gt=0, le=125)
+    max_margin_pct: float | None = Field(
+        default=None,
+        gt=0,
+        le=1,
+        strict=True,  # a boolean is not a number (lax mode turns true into 1.0 = 100%)
+        description="Margin cushion: refuse entries beyond this fraction of equity "
+        "(default: the validation run's value, else 0.5).",
+    )
     risk_per_trade: float | None = Field(default=None, gt=0, le=0.5)
     max_drawdown_pct: float | None = Field(default=None, gt=0, le=1)
     max_daily_loss_pct: float | None = Field(default=None, gt=0, le=1)

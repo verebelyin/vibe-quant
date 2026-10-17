@@ -393,3 +393,48 @@ class TestRunWithConfig:
         assert "RuntimeError: kaboom" in fake_manager.completed_calls[0][1]
         assert stop_calls["count"] == 1
         assert fake_manager.closed
+
+
+class TestMarginCushionConfig:
+    """sizing.max_margin_pct in the node's config file: absent = paper default, null = error."""
+
+    @staticmethod
+    def _write(tmp_path: Path, sizing: dict[str, object]) -> Path:
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                    "sizing": sizing,
+                }
+            )
+        )
+        return path
+
+    def test_absent_is_none_and_value_round_trips(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        assert load_config_from_json(self._write(tmp_path, {})).sizing.max_margin_pct is None
+        loaded = load_config_from_json(self._write(tmp_path, {"max_margin_pct": 0.3}))
+        assert loaded.sizing.max_margin_pct == Decimal("0.3")
+        out = tmp_path / "out.json"
+        save_config_to_json(loaded, out)
+        assert json.loads(out.read_text())["sizing"]["max_margin_pct"] == 0.3
+        again = load_config_from_json(out)
+        assert again.sizing.max_margin_pct == Decimal("0.3")
+        save_config_to_json(load_config_from_json(self._write(tmp_path, {})), out)
+        assert "max_margin_pct" not in json.loads(out.read_text())["sizing"]
+
+    @pytest.mark.parametrize("bad", [None, 0, -0.5, 1.5, True, "0.3", float("nan")])
+    def test_invalid_is_an_error(self, tmp_path: Path, bad: object) -> None:
+        with pytest.raises(ConfigurationError, match="max_margin_pct"):
+            load_config_from_json(self._write(tmp_path, {"max_margin_pct": bad}))
+
+    def test_one_is_allowed(self, tmp_path: Path) -> None:
+        from decimal import Decimal
+
+        loaded = load_config_from_json(self._write(tmp_path, {"max_margin_pct": 1}))
+        assert loaded.sizing.max_margin_pct == Decimal("1")

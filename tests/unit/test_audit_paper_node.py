@@ -23,6 +23,7 @@ from tests.unit.test_audit_paper_guard import (
     _ENGINES,
     NaiveConfig,
     NaiveStrategy,
+    VerifiedLeverage,
     _flat_bars,
     _new_engine,
 )
@@ -562,6 +563,9 @@ def _engine_node(seeded: dict[str, Any], strategy: NaiveStrategy) -> tuple[Any, 
     node._compiled_strategies = [strategy]
     guard = node._build_guard(engine.kernel.risk_engine)
     node._guard = guard
+    engine.add_actor(
+        VerifiedLeverage([InstrumentId.from_str("BTCUSDT-PERP.BINANCE")], Decimal("10"))
+    )
     engine.add_actor(guard)
     engine.add_strategy(strategy)
     return engine, node

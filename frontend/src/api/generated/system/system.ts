@@ -38,6 +38,11 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
+ * Report the persisted kill state.
+
+A row that went missing is re-created ENGAGED by the read (a deleted
+kill-switch record is never reported as unlocked); an unreadable-and-
+unreseedable state is a 503, never a 200 default.
  * @summary Get Status
  */
 export type getStatusApiSystemStatusGetResponse200 = {
@@ -154,6 +159,11 @@ export function useGetStatusApiSystemStatusGet<TData = Awaited<ReturnType<typeof
 - Queues a ``kill`` command for every active paper session (no signals:
   a recycled PID can never receive it).
 - Broadcasts `system_killed` over the trading WebSocket.
+
+If persisting fails the cascade still runs (live sessions must stop even
+when the DB write does not land) and the response is a 503 naming the error
+class and how many sessions were told to kill — a kill that is not on disk
+must never look like a successful kill.
  * @summary Kill
  */
 export type killApiSystemKillPostResponse200 = {
@@ -244,6 +254,9 @@ export const useKillApiSystemKillPost = <TError = HTTPValidationError,
     }
     /**
  * Clear the kill switch. Requires ``acknowledge=true``.
+
+If the row went missing in the meantime the unlock is a 409: the row has
+just been re-created ENGAGED and the operator must unlock again.
  * @summary Unlock
  */
 export type unlockApiSystemUnlockPostResponse200 = {

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
+from vibe_quant.margin_limit import DEFAULT_PAPER_MAX_MARGIN_PCT
 from vibe_quant.sizing_settings import (
     DEFAULT_MAX_POSITION_PCT,
     SizingConfigError,
@@ -135,6 +136,46 @@ def check_paper_exposure(
         ) from exc
 
 
+def effective_max_margin_pct(
+    run_parameters: object,
+    override: Decimal | float | None,
+    *,
+    validation_run_id: int | None = None,
+) -> Decimal:
+    """The margin cushion paper's guard enforces (fraction of equity).
+
+    An explicit paper override wins, else the validation run's recorded
+    ``max_margin_pct``, else the paper default of 50% -- ALSO when the run had no limit
+    (user Q2): paper always runs with a cushion. Shared validator:
+    :class:`SizingSettings`, so 0, negatives, booleans and values above 1 are errors.
+
+    Raises:
+        ConfigurationError: The override or the run's recorded value is invalid.
+    """
+    if override is not None:
+        try:
+            value = SizingSettings(
+                max_margin_pct=float(override) if isinstance(override, Decimal) else override
+            ).max_margin_pct
+        except SizingConfigError as exc:
+            raise ConfigurationError(f"paper max_margin_pct override: {exc}") from exc
+        return Decimal(str(value))
+    try:
+        recorded = recorded_sizing(run_parameters).max_margin_pct
+    except SizingConfigError as exc:
+        raise ConfigurationError(
+            f"Validation run {validation_run_id} has invalid sizing settings: {exc}"
+        ) from exc
+    return DEFAULT_PAPER_MAX_MARGIN_PCT if recorded is None else Decimal(str(recorded))
+
+
+def effective_max_position_pct(run_parameters: object, override: Decimal | float | None) -> float:
+    """The per-symbol exposure cap paper trades with (override, run's recorded, default)."""
+    if override is not None:
+        return float(override)
+    return recorded_sizing(run_parameters).max_position_pct
+
+
 #: NautilusTrader TraderId is ``NAME-TAG``. Constructing ``TraderId`` with an
 #: invalid value panics in Rust and ABORTS the process (no Python exception),
 #: so validate with a pure-Python pattern. Also restricted to the characters
@@ -196,6 +237,8 @@ class SizingModuleConfig:
         method: Sizing method; only ``fixed_fractional`` is implemented.
         max_leverage: Upper bound for the venue leverage.
         max_position_pct: Max position notional as fraction of equity (override).
+        max_margin_pct: Margin cushion the guard enforces, fraction of equity in (0, 1]
+            (override). ``None`` = the validation run's recorded value, else 50%.
         risk_per_trade: Risk per trade as fraction of equity (override).
         kelly_fraction: Unused until Kelly sizing is wired into strategies.
         atr_multiplier: Unused until ATR sizing is wired into strategies.
@@ -204,6 +247,7 @@ class SizingModuleConfig:
     method: str = "fixed_fractional"
     max_leverage: Decimal = field(default_factory=lambda: Decimal("20"))
     max_position_pct: Decimal | None = None
+    max_margin_pct: Decimal | None = None
     risk_per_trade: Decimal | None = None
     kelly_fraction: Decimal = field(default_factory=lambda: Decimal("0.5"))
     atr_multiplier: Decimal = field(default_factory=lambda: Decimal("2.0"))
@@ -219,8 +263,8 @@ class RiskModuleConfig:
         max_consecutive_losses: Consecutive losing positions that halt.
         max_position_count: Maximum concurrent open positions (gate-enforced).
         max_portfolio_drawdown_pct: Not enforced (single-account node: same as max_drawdown_pct).
-        max_total_exposure_pct: Not enforced.
-        max_single_instrument_pct: Not enforced.
+        max_total_exposure_pct: Superseded by ``sizing.max_margin_pct``; not read.
+        max_single_instrument_pct: Superseded by ``sizing.max_margin_pct``; not read.
     """
 
     max_drawdown_pct: Decimal = field(default_factory=lambda: Decimal("0.15"))
@@ -304,6 +348,13 @@ class PaperTradingConfig:
         mpp = self.sizing.max_position_pct
         if mpp is not None and (mpp <= 0 or mpp > Decimal("125")):
             errors.append("max_position_pct must be > 0 (fraction of equity)")
+
+        mmp = self.sizing.max_margin_pct
+        if mmp is not None:
+            try:
+                SizingSettings(max_margin_pct=float(mmp))
+            except SizingConfigError as exc:
+                errors.append(str(exc))
 
         if self.sizing.max_leverage < 1 or self.sizing.max_leverage > 125:
             errors.append("max_leverage must be between 1 and 125")
@@ -396,6 +447,11 @@ def create_trading_node_config(config: PaperTradingConfig) -> dict[str, Any]:
             "max_position_pct": (
                 str(config.sizing.max_position_pct)
                 if config.sizing.max_position_pct is not None
+                else None
+            ),
+            "max_margin_pct": (
+                str(config.sizing.max_margin_pct)
+                if config.sizing.max_margin_pct is not None
                 else None
             ),
             "risk_per_trade": (
