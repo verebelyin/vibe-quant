@@ -8,12 +8,16 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  type BankrollGridForm,
   buildDiscoveryLaunchBody,
   type DiscoveryLaunchForm,
+  gridCrossCheckLeverage,
+  MAX_BANKROLL_CELLS,
+  parseBankrollGrid,
   parseCrossWindowMonths,
 } from "@/components/discovery/discoveryLaunchBody";
 import { DEFAULT_LEVERAGE } from "@/lib/liquidation";
-import { DEFAULT_MAX_POSITION_PCT, DEFAULT_RISK_PCT } from "@/lib/sizing";
+import { DEFAULT_MAX_POSITION_PCT, DEFAULT_RISK_PCT, sizingProblems } from "@/lib/sizing";
 
 function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLaunchForm {
   return {
@@ -51,8 +55,21 @@ function defaultForm(overrides: Partial<DiscoveryLaunchForm> = {}): DiscoveryLau
     riskPct: DEFAULT_RISK_PCT,
     // Margin limit (T6): "" is the empty field = OFF.
     maxMarginPct: "",
+    // Bankroll grid (T8): disabled = the section is off and no key is sent.
+    bankrollGrid: { enabled: false, modes: [], leverages: "", maxMarginPcts: "" },
     selectedIndicators: [],
     ...overrides,
+  };
+}
+
+/** An enabled grid form, overridable per case (T8 input table). */
+function grid(over: Partial<BankrollGridForm> = {}): BankrollGridForm {
+  return {
+    enabled: true,
+    modes: ["isolated", "cross"],
+    leverages: "5, 10",
+    maxMarginPcts: "25, 50",
+    ...over,
   };
 }
 
@@ -237,5 +254,189 @@ describe("buildDiscoveryLaunchBody margin limit", () => {
 
   it("sends the inclusive 100% edge as 1", () => {
     expect(buildDiscoveryLaunchBody(defaultForm({ maxMarginPct: "100" })).max_margin_pct).toBe(1);
+  });
+});
+
+/**
+ * T8/T9 (bead vibe-quant-t8nrv): the discovery bankroll grid. The section is opt-in; a
+ * disabled section parses to `off` and the body carries NO `bankroll_grid` key, so an old
+ * launch stays byte-identical. This is the frontend mirror of `vibe_quant.bankroll_grid`
+ * (mode x leverage x cushion, whole leverages from 1x, at most 12 cells).
+ */
+describe("parseBankrollGrid", () => {
+  it("is off when the section is disabled, whatever the fields hold", () => {
+    expect(parseBankrollGrid({ ...grid(), enabled: false })).toStrictEqual({ kind: "off" });
+    expect(
+      parseBankrollGrid({ enabled: false, modes: [], leverages: "x", maxMarginPcts: "" }),
+    ).toStrictEqual({ kind: "off" });
+  });
+
+  it("needs at least one margin mode", () => {
+    const parsed = parseBankrollGrid(grid({ modes: [] }));
+    expect(parsed.kind).toBe("invalid");
+  });
+
+  it("accepts whole leverages 1..125, de-duplicated and sorted", () => {
+    expect(
+      parseBankrollGrid(
+        grid({ modes: ["isolated"], leverages: "10, 1, 5, 5", maxMarginPcts: "50" }),
+      ),
+    ).toStrictEqual({
+      kind: "on",
+      count: 3,
+      payload: { modes: ["isolated"], leverages: [1, 5, 10], max_margin_pcts: [0.5] },
+    });
+    expect(
+      parseBankrollGrid(grid({ modes: ["cross"], leverages: "1", maxMarginPcts: "50" })),
+    ).toMatchObject({ kind: "on" });
+  });
+
+  it("rejects a zero, fractional, non-numeric or empty leverage list", () => {
+    for (const bad of ["0", "1.5", "abc", ""]) {
+      expect(parseBankrollGrid(grid({ leverages: bad })).kind).toBe("invalid");
+    }
+  });
+
+  it("parses a fractional cushion written with a dot", () => {
+    expect(
+      parseBankrollGrid(grid({ modes: ["cross"], leverages: "5", maxMarginPcts: "25.5" })),
+    ).toStrictEqual({
+      kind: "on",
+      count: 1,
+      payload: { modes: ["cross"], leverages: [5], max_margin_pcts: [0.255] },
+    });
+    expect(
+      parseBankrollGrid(grid({ modes: ["cross"], leverages: "5", maxMarginPcts: "50" })),
+    ).toMatchObject({ payload: { max_margin_pcts: [0.5] } });
+  });
+
+  it("splits a list on comma+space, a semicolon, or a whitespace run", () => {
+    for (const list of ["25, 50", "25;50", "25 50"]) {
+      expect(
+        parseBankrollGrid(grid({ modes: ["cross"], leverages: "5", maxMarginPcts: list })),
+      ).toStrictEqual({
+        kind: "on",
+        count: 2,
+        payload: { modes: ["cross"], leverages: [5], max_margin_pcts: [0.25, 0.5] },
+      });
+    }
+  });
+
+  it("refuses a bare comma between digits in a list as ambiguous (chief ruling T9-R1)", () => {
+    const ambiguous = (token: string) =>
+      `Ambiguous value '${token}': write 25.5 for one value or '25, 50' for two`;
+    for (const bad of ["25,50", "25,5"]) {
+      expect(parseBankrollGrid(grid({ maxMarginPcts: bad }))).toStrictEqual({
+        kind: "invalid",
+        message: ambiguous(bad),
+      });
+    }
+    expect(parseBankrollGrid(grid({ leverages: "5,10" }))).toStrictEqual({
+      kind: "invalid",
+      message: ambiguous("5,10"),
+    });
+    expect(
+      parseBankrollGrid(grid({ modes: ["cross"], leverages: "5, 10", maxMarginPcts: "50" })),
+    ).toMatchObject({ kind: "on", payload: { leverages: [5, 10] } });
+  });
+
+  it("rejects a cushion of 0, above 100% or non-numeric", () => {
+    for (const bad of ["0", "101", "x"]) {
+      expect(parseBankrollGrid(grid({ maxMarginPcts: bad })).kind).toBe("invalid");
+    }
+  });
+
+  it("orders the modes isolated before cross", () => {
+    const parsed = parseBankrollGrid(
+      grid({ modes: ["cross", "isolated"], leverages: "1", maxMarginPcts: "50" }),
+    );
+    expect(parsed.kind === "on" && parsed.payload.modes).toStrictEqual(["isolated", "cross"]);
+  });
+
+  it("accepts exactly the 12-cell cap", () => {
+    const parsed = parseBankrollGrid(
+      grid({ modes: ["isolated", "cross"], leverages: "1, 2, 3", maxMarginPcts: "10, 20" }),
+    );
+    expect(parsed).toMatchObject({ kind: "on", count: MAX_BANKROLL_CELLS });
+  });
+
+  it("rejects more than 12 cells, naming the count and the cap", () => {
+    const parsed = parseBankrollGrid(
+      grid({
+        modes: ["isolated", "cross"],
+        leverages: "1, 2, 3, 4, 5",
+        maxMarginPcts: "10, 20, 30, 40, 50, 60",
+      }),
+    );
+    expect(parsed.kind).toBe("invalid");
+    expect(parsed.kind === "invalid" && parsed.message).toContain("60");
+    expect(parsed.kind === "invalid" && parsed.message).toContain("12");
+  });
+});
+
+describe("buildDiscoveryLaunchBody bankroll grid", () => {
+  it("sends no bankroll_grid key for a disabled grid (old launches unchanged)", () => {
+    expect("bankroll_grid" in buildDiscoveryLaunchBody(defaultForm())).toBe(false);
+  });
+
+  it("sends the grid lists when the grid is on", () => {
+    const body = buildDiscoveryLaunchBody(defaultForm({ bankrollGrid: grid() }));
+    expect(body.bankroll_grid).toStrictEqual({
+      modes: ["isolated", "cross"],
+      leverages: [5, 10],
+      max_margin_pcts: [0.25, 0.5],
+    });
+  });
+
+  it("drops the run-level liquidation, leverage and margin keys a grid excludes", () => {
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({
+        liquidationMode: "isolated",
+        leverage: 20,
+        maxMarginPct: "50",
+        bankrollGrid: grid({ modes: ["isolated"] }),
+      }),
+    );
+    expect(body.bankroll_grid).toBeDefined();
+    expect("liquidation_mode" in body).toBe(false);
+    expect("leverage" in body).toBe(false);
+    expect("max_margin_pct" in body).toBe(false);
+  });
+});
+
+/**
+ * T9 (bead vibe-quant-t8nrv): the run-level exposure-cap cross-check against the grid.
+ * A grid checks the cap at EVERY cell, so the binding leverage is the SMALLEST grid
+ * leverage; with the grid off it is the run-level leverage, and an invalid grid is
+ * checked against nothing (its own message is the one shown).
+ */
+describe("gridCrossCheckLeverage", () => {
+  it("uses the run-level leverage while the grid is off", () => {
+    const off = parseBankrollGrid({ ...grid(), enabled: false });
+    expect(gridCrossCheckLeverage(off, 20)).toBe(20);
+  });
+
+  it("uses the smallest grid leverage while the grid is on", () => {
+    const on = parseBankrollGrid(
+      grid({ modes: ["isolated"], leverages: "5, 10", maxMarginPcts: "50" }),
+    );
+    expect(gridCrossCheckLeverage(on, 20)).toBe(5);
+  });
+
+  it("fires the cap cross-check at the equality edge of the smallest grid leverage", () => {
+    const on = parseBankrollGrid(
+      grid({ modes: ["isolated"], leverages: "5, 10", maxMarginPcts: "50" }),
+    );
+    const leverage = gridCrossCheckLeverage(on, 20);
+    expect(sizingProblems(5, 2, leverage)).toStrictEqual([]);
+    expect(sizingProblems(6, 2, leverage)).toStrictEqual([
+      "Max exposure (6 × equity) must not exceed leverage (5)",
+    ]);
+  });
+
+  it("cross-checks nothing while the grid is on but invalid", () => {
+    const invalid = parseBankrollGrid(grid({ leverages: "" }));
+    expect(Number.isNaN(gridCrossCheckLeverage(invalid, 20))).toBe(true);
+    expect(sizingProblems(10, 2, gridCrossCheckLeverage(invalid, 20))).toStrictEqual([]);
   });
 });

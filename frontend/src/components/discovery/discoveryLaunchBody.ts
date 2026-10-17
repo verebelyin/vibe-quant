@@ -7,12 +7,160 @@
  * a default form sends neither key, so stored run parameters stay unchanged.
  */
 import type { DiscoveryLaunchRequest } from "@/api/generated/models";
-import { parseMaxMarginPct } from "@/components/backtest/marginLimit";
-import { type LiquidationMode, leveragePayload, liquidationPayload } from "@/lib/liquidation";
+import { MAX_MARGIN_PCT, parseMaxMarginPct } from "@/components/backtest/marginLimit";
+import {
+  type LiquidationMode,
+  leveragePayload,
+  liquidationPayload,
+  MAX_LEVERAGE,
+  MIN_LEVERAGE,
+} from "@/lib/liquidation";
 import { riskPctToFraction, sizingPayload } from "@/lib/sizing";
 
 export type DiscoveryDirection = "long" | "short" | "both" | "random";
 export type DiscoverySymbolAgg = "portfolio" | "worst";
+
+/** The modes a bankroll grid may run, in cell order (mirrors `bankroll_grid.GRID_MODES`). */
+export const BANKROLL_GRID_MODES: ReadonlyArray<BankrollGridMode> = ["isolated", "cross"];
+
+/** The most cells one bankroll grid may have (mirrors `bankroll_grid.MAX_CELLS`). */
+export const MAX_BANKROLL_CELLS = 12;
+
+export type BankrollGridMode = "isolated" | "cross";
+
+/**
+ * The opt-in bankroll-grid section of the launch form (T8/T9, bead vibe-quant-t8nrv): the
+ * margin modes to search, and comma-separated leverage / cushion lists. Empty lists are a
+ * problem when the section is on, never a silent skip.
+ */
+export interface BankrollGridForm {
+  enabled: boolean;
+  modes: BankrollGridMode[];
+  /** Comma-separated whole leverages, e.g. "1, 5, 10". */
+  leverages: string;
+  /** Comma-separated cushions in PERCENT, e.g. "25, 50"; a fractional one uses a dot ("25.5"). */
+  maxMarginPcts: string;
+}
+
+/** The `bankroll_grid` request payload: the lists the API re-validates and expands. */
+export interface BankrollGridPayload {
+  modes: BankrollGridMode[];
+  leverages: number[];
+  max_margin_pcts: number[];
+}
+
+/** A parsed grid section: off, a valid grid (with its cell count), or the reason it is refused. */
+export type BankrollGridParse =
+  | { kind: "off" }
+  | { kind: "on"; payload: BankrollGridPayload; count: number }
+  | { kind: "invalid"; message: string };
+
+/** The one message for a bare comma inside a grid list token (chief ruling T9-R1). */
+function ambiguousComma(token: string): string {
+  return `Ambiguous value '${token}': write 25.5 for one value or '25, 50' for two`;
+}
+
+/** The tokens of a grid list, plus the first token that carries an ambiguous comma. */
+interface GridListTokens {
+  tokens: string[];
+  ambiguous: string | null;
+}
+
+/**
+ * The list tokens of a grid input. Items are separated by a comma followed by whitespace, a
+ * semicolon, or a whitespace run, so "25, 50", "25;50" and "25 50" each read as two items. A
+ * comma BETWEEN TWO DIGITS with no space ("25,50", "25,5") is AMBIGUOUS — it could be one
+ * decimal-comma value or two items — and is named rather than guessed (chief ruling T9-R1);
+ * a fractional value in a list is written with a dot ("25.5").
+ */
+function splitGridList(raw: string): GridListTokens {
+  const tokens = raw
+    .split(/,\s+|;|\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return { tokens, ambiguous: tokens.find((token) => /\d,\d/.test(token)) ?? null };
+}
+
+/**
+ * The one rule for the grid section: no section -> off; otherwise the modes, whole leverages
+ * (1..125) and cushions (0..100% of equity) must each name at least one value, deduplicate to
+ * the API's sorted order, and make at most {@link MAX_BANKROLL_CELLS} cells. Mirrors
+ * `vibe_quant.bankroll_grid.build_cells` so the form refuses what the API would 422.
+ */
+export function parseBankrollGrid(form: BankrollGridForm): BankrollGridParse {
+  if (!form.enabled) return { kind: "off" };
+
+  const modes = BANKROLL_GRID_MODES.filter((mode) => form.modes.includes(mode));
+  if (modes.length === 0) {
+    return {
+      kind: "invalid",
+      message: "Bankroll grid needs at least one margin mode (isolated or cross)",
+    };
+  }
+
+  const leverageList = splitGridList(form.leverages);
+  if (leverageList.ambiguous !== null) {
+    return { kind: "invalid", message: ambiguousComma(leverageList.ambiguous) };
+  }
+  const leverageTokens = leverageList.tokens;
+  if (leverageTokens.length === 0) {
+    return { kind: "invalid", message: "Bankroll grid needs at least one leverage" };
+  }
+  const leverages: number[] = [];
+  for (const token of leverageTokens) {
+    const value = Number(token);
+    if (!/^\d+$/.test(token) || value < MIN_LEVERAGE || value > MAX_LEVERAGE) {
+      return {
+        kind: "invalid",
+        message: `Bankroll leverage must be a whole number between ${MIN_LEVERAGE} and ${MAX_LEVERAGE} (you entered ${token})`,
+      };
+    }
+    if (!leverages.includes(value)) leverages.push(value);
+  }
+  leverages.sort((a, b) => a - b);
+
+  const cushionList = splitGridList(form.maxMarginPcts);
+  if (cushionList.ambiguous !== null) {
+    return { kind: "invalid", message: ambiguousComma(cushionList.ambiguous) };
+  }
+  const cushionTokens = cushionList.tokens;
+  if (cushionTokens.length === 0) {
+    return { kind: "invalid", message: "Bankroll grid needs at least one cushion" };
+  }
+  const maxMarginPcts: number[] = [];
+  for (const token of cushionTokens) {
+    const parsed = parseMaxMarginPct(token);
+    if (parsed.kind !== "on") {
+      return {
+        kind: "invalid",
+        message: `Bankroll cushion must be more than 0% and at most ${MAX_MARGIN_PCT}% of equity (you entered ${token})`,
+      };
+    }
+    if (!maxMarginPcts.includes(parsed.fraction)) maxMarginPcts.push(parsed.fraction);
+  }
+  maxMarginPcts.sort((a, b) => a - b);
+
+  const count = modes.length * leverages.length * maxMarginPcts.length;
+  if (count > MAX_BANKROLL_CELLS) {
+    return {
+      kind: "invalid",
+      message: `Bankroll grid has ${count} setups; at most ${MAX_BANKROLL_CELLS} are allowed`,
+    };
+  }
+  return { kind: "on", payload: { modes, leverages, max_margin_pcts: maxMarginPcts }, count };
+}
+
+/**
+ * The leverage the launch form's run-level exposure-cap cross-check uses against a grid (T9,
+ * bead vibe-quant-t8nrv): the run-level leverage with the grid OFF; the SMALLEST grid leverage
+ * with the grid ON, because a grid checks the cap at every cell so the smallest cell binds
+ * first; and `NaN` with the grid ON but invalid, so no cross-check fires and the grid's own
+ * message is the one shown.
+ */
+export function gridCrossCheckLeverage(grid: BankrollGridParse, leverage: number): number {
+  if (grid.kind === "off") return leverage;
+  return grid.kind === "on" ? Math.min(...grid.payload.leverages) : Number.NaN;
+}
 
 /** Raw form state of DiscoveryConfig, one field per input the launch reads. */
 export interface DiscoveryLaunchForm {
@@ -56,6 +204,8 @@ export interface DiscoveryLaunchForm {
    * top-level request field, not a run parameter.
    */
   maxMarginPct: string;
+  /** The opt-in bankroll-grid section (T8/T9): off unless the user turns it on. */
+  bankrollGrid: BankrollGridForm;
   selectedIndicators: string[];
 }
 
@@ -75,6 +225,12 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
     .filter(Boolean);
   const crossWindowMonths = parseCrossWindowMonths(form.crossWindowMonths);
   const margin = parseMaxMarginPct(form.maxMarginPct);
+  // A grid OWNS the margin mode, leverage and cushion: while the section is on, the run-level
+  // fields are exclusive (the API 422s a mixture), so they are dropped from the body. The grid
+  // key itself appears only when the section holds a valid grid.
+  const grid = parseBankrollGrid(form.bankrollGrid);
+  const gridOn = grid.kind === "on";
+  const gridEnabled = form.bankrollGrid.enabled;
 
   return {
     population: form.population,
@@ -115,11 +271,13 @@ export function buildDiscoveryLaunchBody(form: DiscoveryLaunchForm): DiscoveryLa
         bootstrap_min_sharpe: Number(form.bootstrapMinSharpe),
       }),
     ...(form.bnbDiscount && { bnb_discount: true }),
-    ...liquidationPayload(form.liquidationMode),
-    ...leveragePayload(form.liquidationMode, form.leverage),
+    ...(gridOn ? { bankroll_grid: grid.payload } : {}),
+    ...(gridEnabled ? {} : liquidationPayload(form.liquidationMode)),
+    ...(gridEnabled ? {} : leveragePayload(form.liquidationMode, form.leverage)),
     // Non-default sizing keys only, so a default launch body is unchanged.
     ...sizingPayload(form.maxPositionPct, riskPctToFraction(form.riskPct)),
-    // The margin limit (T6) is a top-level discovery field, sent only when set.
-    ...(margin.kind === "on" && { max_margin_pct: margin.fraction }),
+    // The margin limit (T6) is a top-level discovery field, sent only when set; a grid
+    // replaces it with the per-cell cushion, so it is dropped while the grid is on.
+    ...(margin.kind === "on" && !gridEnabled ? { max_margin_pct: margin.fraction } : {}),
   } as DiscoveryLaunchRequest;
 }

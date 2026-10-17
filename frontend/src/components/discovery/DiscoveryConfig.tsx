@@ -38,7 +38,16 @@ import {
   sizingProblems,
 } from "@/lib/sizing";
 import { formatApiErrorDetail } from "./apiErrorDetail";
-import { buildDiscoveryLaunchBody, parseCrossWindowMonths } from "./discoveryLaunchBody";
+import {
+  BANKROLL_GRID_MODES,
+  type BankrollGridForm,
+  type BankrollGridMode,
+  buildDiscoveryLaunchBody,
+  gridCrossCheckLeverage,
+  MAX_BANKROLL_CELLS,
+  parseBankrollGrid,
+  parseCrossWindowMonths,
+} from "./discoveryLaunchBody";
 
 export interface DiscoveryConvergenceConfig {
   convergenceWindow: number;
@@ -110,12 +119,30 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   const [riskPct, setRiskPct] = useState<number | "">(DEFAULT_RISK_PCT);
   // Margin limit (T6, vibe-quant-t8nrv): a percent of equity, "" = no limit at all.
   const [maxMarginPct, setMaxMarginPct] = useState<string>("");
+  // Bankroll grid (T8/T9, vibe-quant-t8nrv): opt-in; searches margin mode x leverage x
+  // cushion and is EXCLUSIVE with the run-level Liquidation/Leverage/Max margin fields.
+  const [bankrollGridEnabled, setBankrollGridEnabled] = useState(false);
+  const [bankrollModes, setBankrollModes] = useState<BankrollGridMode[]>(["isolated", "cross"]);
+  const [bankrollLeverages, setBankrollLeverages] = useState("5, 10");
+  const [bankrollMaxMarginPcts, setBankrollMaxMarginPcts] = useState("25, 50");
+  const bankrollGridForm: BankrollGridForm = {
+    enabled: bankrollGridEnabled,
+    modes: bankrollModes,
+    leverages: bankrollLeverages,
+    maxMarginPcts: bankrollMaxMarginPcts,
+  };
+  const bankrollGrid = parseBankrollGrid(bankrollGridForm);
+
   // The margin limit (T6) is optional — an empty field means OFF — but a value outside
   // (0, 100] is refused here, before the launch.
   const marginLimit = parseMaxMarginPct(maxMarginPct);
+  // A grid checks the exposure cap at EVERY cell, so the run-level leverage cross-check uses
+  // the smallest grid leverage (the binding one); an invalid grid is named instead.
+  const crossCheckLeverage = gridCrossCheckLeverage(bankrollGrid, leverage);
   const sizingIssues = [
-    ...sizingProblems(maxPos, riskPct, leverage),
+    ...sizingProblems(maxPos, riskPct, crossCheckLeverage),
     ...(marginLimit.kind === "invalid" ? [marginLimit.message] : []),
+    ...(bankrollGrid.kind === "invalid" ? [bankrollGrid.message] : []),
   ];
 
   const symbolCount = symbols.split(",").filter((s) => s.trim() !== "").length;
@@ -232,6 +259,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           maxPositionPct: maxPos,
           riskPct,
           maxMarginPct,
+          bankrollGrid: bankrollGridForm,
           selectedIndicators,
         }),
       },
@@ -510,6 +538,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             <Select
               value={liquidationMode}
               onValueChange={(v) => setLiquidationMode(v as LiquidationMode)}
+              disabled={bankrollGridEnabled}
             >
               <SelectTrigger id="disc-liquidation-mode" className="w-full">
                 <SelectValue />
@@ -533,6 +562,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               step={1}
               value={leverage}
               onChange={(e) => setLeverage(Number(e.target.value))}
+              disabled={bankrollGridEnabled}
             />
             <p className="text-xs text-muted-foreground">
               Venue leverage; changes results only with Liquidation on.
@@ -580,6 +610,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
               placeholder="off"
               value={maxMarginPct}
               onChange={(e) => setMaxMarginPct(e.target.value)}
+              disabled={bankrollGridEnabled}
             />
             <p className="text-xs text-muted-foreground">
               Refuse an entry that would push the margin in use over this share of the account (50 =
@@ -592,6 +623,94 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                 <li key={m}>{m}</li>
               ))}
             </ul>
+          )}
+        </div>
+
+        {/* Bankroll grid (T8/T9, vibe-quant-t8nrv): an opt-in sweep over margin mode x
+            leverage x cushion. Exclusive with the run-level Liquidation/Leverage/Max margin
+            fields above — while it is on they are disabled and the launch sends neither. */}
+        <div className="space-y-2 rounded-md border border-border bg-input/30 p-3">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="disc-bankroll-grid"
+              checked={bankrollGridEnabled}
+              onCheckedChange={(v) => setBankrollGridEnabled(v === true)}
+            />
+            <Label
+              htmlFor="disc-bankroll-grid"
+              className="cursor-pointer text-xs font-semibold uppercase tracking-wider"
+            >
+              Bankroll grid
+            </Label>
+          </div>
+          {bankrollGridEnabled && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-4">
+                {BANKROLL_GRID_MODES.map((mode) => (
+                  <div key={mode} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`disc-bg-${mode}`}
+                      checked={bankrollModes.includes(mode)}
+                      onCheckedChange={(v) =>
+                        setBankrollModes((prev) =>
+                          v === true ? [...prev, mode] : prev.filter((m) => m !== mode),
+                        )
+                      }
+                    />
+                    <Label htmlFor={`disc-bg-${mode}`} className="cursor-pointer text-xs">
+                      {mode === "isolated" ? "Isolated" : "Cross"}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="disc-bg-leverages">Leverages</Label>
+                  <Input
+                    id="disc-bg-leverages"
+                    type="text"
+                    placeholder="1, 5, 10"
+                    value={bankrollLeverages}
+                    onChange={(e) => setBankrollLeverages(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Whole numbers from 1x up, comma-separated.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="disc-bg-cushions">Cushions (% of equity)</Label>
+                  <Input
+                    id="disc-bg-cushions"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="25, 50"
+                    value={bankrollMaxMarginPcts}
+                    onChange={(e) => setBankrollMaxMarginPcts(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Each setup's max margin in use (50 = half). List items are separated by a space,
+                    "; " or ", "; write a fractional value with a dot (e.g. 25.5).
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-1 text-xs">
+                <p
+                  className={
+                    bankrollGrid.kind === "invalid" ? "text-destructive" : "text-foreground"
+                  }
+                >
+                  {bankrollGrid.kind === "on"
+                    ? `${bankrollGrid.count} setups (max ${MAX_BANKROLL_CELLS}) · about ${bankrollGrid.count}x longer`
+                    : bankrollGrid.kind === "invalid"
+                      ? bankrollGrid.message
+                      : `up to ${MAX_BANKROLL_CELLS} setups`}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  Every setup counts as a trial in the overfitting test, so a grid expects a
+                  stronger champion for the same evidence.
+                </p>
+              </div>
+            </div>
           )}
         </div>
       </div>

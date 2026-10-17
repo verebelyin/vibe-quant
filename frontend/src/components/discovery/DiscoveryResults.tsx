@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { bankrollCellLabel } from "@/lib/bankrollGrid";
 import { liqBadge } from "@/lib/liquidationDisplay";
 import { formatFractionPct } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
@@ -239,6 +240,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               <TableHead className="text-xs">PF</TableHead>
               <TableHead className="text-xs">Fee drag</TableHead>
               <TableHead className="text-xs">Liq</TableHead>
+              <TableHead className="text-xs">Bankroll</TableHead>
               <TableHead className="text-xs">Indicators</TableHead>
               <TableHead className="w-20 text-xs">Actions</TableHead>
             </TableRow>
@@ -253,6 +255,7 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
               const trades = num(s, "trades") ?? num(s, "total_trades");
               const pf = num(s, "pf") ?? num(s, "profit_factor");
               const liq = liqBadge(s);
+              const bankroll = bankrollCellLabel(s.bankroll);
               // Extract indicator info from DSL config
               const dsl = s.dsl as Record<string, unknown> | undefined;
               const dslIndicators = dsl?.indicators;
@@ -340,6 +343,13 @@ export function DiscoveryResults({ runId }: DiscoveryResultsProps) {
                       </Badge>
                     ) : (
                       <span className="text-muted-foreground">--</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {bankroll != null && (
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        {bankroll}
+                      </Badge>
                     )}
                   </TableCell>
                   <TableCell
