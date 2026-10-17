@@ -4,6 +4,16 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-17: PRE-REGISTRATION H-NF-1 — short crowded longs on the new coins (FUNDING_Z fade), + wave 8 feature checks
+
+Written before any data on this rule is looked at. **Idea:** H-2 (2026-10-14) found long FUNDING_Z(90) > 2 continuation flipped sign in 2022-26 on BTC/ETH/SOL/BNB (net/trade -0.681630908785598 USD). The fade (short when longs pay extreme funding) was never tested, and SUI/NEAR/ZEC were never in any funding test — an out-of-universe test of a mechanism (crowded leverage unwinds), not of a fitted rule.
+**Rule (fixed, N=1, no tuning):** SUI/NEAR/ZEC 4h, short-only; enter when FUNDING_Z(90) > 2; exit when FUNDING_Z(90) < 0.5; stop 2×ATR(14), take-profit 4×ATR(14); default sizing, liquidation off, 10x.
+**Window:** 2023-06-01..2026-10-15, plus split halves 2023-06-01..2024-12-31 and 2025-01-01..2026-10-15.
+**Falsifier:** reject unless full-window screening Sharpe ≥ 0.6 AND ≥ 30 trades AND return > 0 in BOTH halves; a survivor must keep Sharpe ≥ 0.6 in validation.
+**Feature checks alongside (no edge claims):** bankroll grid at scale (1d BTC/ETH/SOL/BNB 2021-01-01..2026-10-15, cells isolated+cross × 3,10 × 0.5) and the runtime estimate; VIDYA (248) post-only validation over the full window, run alone, to finish the speed measurement (bead vibe-quant-6b6qa).
+
+---
+
 ## 2026-10-17: RESULTS job 20261017-newfeat-hunt — new coins, context indicators, adaptive MAs, liquidation/margin/bankroll features (runs 920–949, 0 champions) + 3 launch/data fixes
 
 Job dir `data/swarm/20261017-newfeat-hunt/` (brief, ledger, handoffs op-w1..op-w7). Every run ≤ ~6 min, ≤ 3 in parallel, all gates on, falsifiers pre-registered in the entries below. Engine main f5807625 → 0654553d (the fixes change no numbers: exactness_239 single + `--validation-multi` IDENTICAL, carry IDENTICAL).
