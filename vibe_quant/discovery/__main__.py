@@ -6,9 +6,17 @@ import argparse
 import logging
 import random
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from vibe_quant.bankroll_grid import (
+    BankrollCell,
+    BankrollGridError,
+    bankroll_grid_note,
+    build_cells,
+    reject_run_level_with_grid,
+)
 from vibe_quant.discovery.config_check import (
     WindowPlan,
     parse_cross_window_months,
@@ -183,6 +191,100 @@ def _check_data_available(symbols: list[str]) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class _CellFns:
+    """The backtest functions of one discovery run: train, holdout and the cross-window / WFA factory."""
+
+    backtest_fn: object
+    holdout_backtest_fn: object = None
+    backtest_fn_factory: object = None
+
+
+@dataclass(frozen=True)
+class _SeedRun:
+    """One pipeline run of a pooled search: its seed, its functions and (grid) its cell."""
+
+    seed: int
+    fns: _CellFns
+    cell: BankrollCell | None = None
+
+
+def _make_cell_fns(
+    *,
+    use_mock: bool,
+    symbols: list[str],
+    timeframe: str,
+    symbol_agg: SymbolAgg,
+    fee_schedule: FeeSchedule,
+    entry_order: str,
+    liquidation: LiquidationSettings,
+    sizing: SizingSettings,
+    train_start: str,
+    train_end: str,
+    eval_windows: list[tuple[str, str]] | None,
+    min_trades: int,
+    holdout: tuple[str, str] | None,
+    needs_factory: bool,
+) -> _CellFns:
+    """The train / holdout / cross-window + WFA functions of ONE bankroll setup.
+
+    ``main`` calls it once for a run-level setup and :func:`_run_bankroll_grid` once per cell, so
+    every stage of a run is built from the same ``liquidation`` + ``sizing`` (bead
+    vibe-quant-t8nrv). ``holdout`` is ``(start, end)`` or ``None`` (no split).
+    """
+    if use_mock:
+        return _CellFns(
+            backtest_fn=_mock_backtest,
+            holdout_backtest_fn=_mock_backtest if holdout else None,
+            backtest_fn_factory=(lambda s, e: _mock_backtest) if needs_factory else None,
+        )
+    backtest_fn = _make_nt_backtest_fn(
+        symbols=symbols,
+        timeframe=timeframe,
+        start_date=train_start,
+        end_date=train_end,
+        windows=eval_windows,
+        min_trades=min_trades,
+        symbol_agg=symbol_agg,
+        fee_schedule=fee_schedule,
+        entry_order=entry_order,
+        liquidation=liquidation,
+        sizing=sizing,
+    )
+    holdout_backtest_fn = (
+        _make_nt_backtest_fn(
+            symbols=symbols,
+            timeframe=timeframe,
+            start_date=holdout[0],
+            end_date=holdout[1],
+            symbol_agg=symbol_agg,
+            fee_schedule=fee_schedule,
+            entry_order=entry_order,
+            liquidation=liquidation,
+            sizing=sizing,
+        )
+        if holdout
+        else None
+    )
+    backtest_fn_factory = None
+    if needs_factory:
+        _syms = symbols
+        _tf = timeframe
+        _agg: SymbolAgg = symbol_agg
+        _fee = fee_schedule
+        _entry = entry_order
+        _liq = liquidation
+        _sz = sizing
+
+        def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
+            return NTBacktestFn(
+                _syms, _tf, s, e, symbol_agg=_agg, fee_schedule=_fee,
+                entry_order=_entry, liquidation=_liq, sizing=_sz,
+            )
+
+    return _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
+
+
 def _run_multi_seed(
     num_seeds: int,
     config: DiscoveryConfig,
@@ -212,6 +314,56 @@ def _run_multi_seed(
     Returns:
         Merged DiscoveryResult with aggregated stats.
     """
+    fns = _CellFns(backtest_fn, holdout_backtest_fn, backtest_fn_factory)
+    runs = [_SeedRun(base_seed + seed_idx * 7919, fns) for seed_idx in range(num_seeds)]
+    result, _cells = _pool_runs(runs, config, progress_file, seed_chromosomes)
+    return result
+
+
+def _run_bankroll_grid(
+    cells: list[BankrollCell],
+    num_seeds: int,
+    config: DiscoveryConfig,
+    fns_for_cell: Callable[[BankrollCell], _CellFns],
+    progress_file: str,
+    seed_chromosomes: list[StrategyChromosome] | None = None,
+    base_seed: int = 42,
+) -> tuple[DiscoveryResult, list[BankrollCell]]:
+    """Run one discovery per (cell, seed) and pool them like a multi-seed run.
+
+    Every run gets the train / holdout / cross-window / WFA functions of ITS cell, so a champion
+    is gated at the bankroll it was found under. The pick is made across all cells x seeds, so
+    the DSR trial count N is the sum of every run's evaluations (bead vibe-quant-t8nrv, R50/R58).
+    Seeds are shared across cells: cell ``c`` run ``i`` uses ``base_seed + i * 7919`` like any
+    multi-seed run, which keeps the cells comparable and the whole grid replayable from one seed.
+
+    Returns:
+        ``(merged result, the cell of each merged top strategy)``, index-aligned with
+        ``result.top_strategies``.
+    """
+    runs: list[_SeedRun] = []
+    for cell in cells:
+        fns = fns_for_cell(cell)
+        runs.extend(
+            _SeedRun(base_seed + seed_idx * 7919, fns, cell) for seed_idx in range(num_seeds)
+        )
+    result, picked = _pool_runs(runs, config, progress_file, seed_chromosomes)
+    return result, [cell for cell in picked if cell is not None]
+
+
+def _pool_runs(
+    runs: list[_SeedRun],
+    config: DiscoveryConfig,
+    progress_file: str,
+    seed_chromosomes: list[StrategyChromosome] | None,
+) -> tuple[DiscoveryResult, list[BankrollCell | None]]:
+    """Run every pipeline of ``runs``, group the champions and re-check them with the POOLED N.
+
+    The shared core of :func:`_run_multi_seed` and :func:`_run_bankroll_grid`. Returns the merged
+    result plus the cell (``None`` outside a grid) of each merged top strategy.
+    """
+    num_seeds = len(runs)
+    backtest_fn = runs[0].fns.backtest_fn
     import math
     import statistics
 
@@ -232,26 +384,38 @@ def _run_multi_seed(
     any_converged = False
     convergence_gen: int | None = None
     result_metadata: DiscoveryResult | None = None
+    cell_of: dict[int, BankrollCell] = {}  # id(per-run result) -> the cell it ran under
 
-    for seed_idx in range(num_seeds):
-        seed_val = base_seed + seed_idx * 7919  # Deterministic but varied seeds
+    for seed_idx, run in enumerate(runs):
+        seed_val = run.seed  # Deterministic but varied seeds
         random.seed(seed_val)
 
         logger.info(
             "=== MULTI-SEED RUN %d/%d (seed=%d) ===",
             seed_idx + 1, num_seeds, seed_val,
         )
+        if run.cell is not None:
+            logger.info("  bankroll cell %s", run.cell.label)
 
         pipeline = DiscoveryPipeline(
             config=config,
-            backtest_fn=backtest_fn,  # type: ignore[arg-type]
+            backtest_fn=run.fns.backtest_fn,  # type: ignore[arg-type]
             progress_file=progress_file,
-            holdout_backtest_fn=holdout_backtest_fn,  # type: ignore[arg-type]
-            backtest_fn_factory=backtest_fn_factory,  # type: ignore[arg-type]
+            holdout_backtest_fn=run.fns.holdout_backtest_fn,  # type: ignore[arg-type]
+            backtest_fn_factory=run.fns.backtest_fn_factory,  # type: ignore[arg-type]
             seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
-        pooled_fitness_cache.update(pipeline._fitness_cache)
+        if run.cell is not None:
+            cell_of[id(result)] = run.cell
+        if run.cell is None:
+            pooled_fitness_cache.update(pipeline._fitness_cache)
+        else:
+            # Cells share seeds, so the same DSL recurs in every cell with its own series:
+            # keyed by (cell, DSL) so the informational non_flat / N_eff see each of them.
+            pooled_fitness_cache.update(
+                {f"{run.cell.label}|{key}": fit for key, fit in pipeline._fitness_cache.items()}
+            )
         if result_metadata is None:
             result_metadata = result
 
@@ -419,6 +583,12 @@ def _run_multi_seed(
         ]
         all_rejections.append(rejection)
     selected_entries = [e for e in selected_entries if id(e[0]) in kept_ids]
+    # Cells share seeds, so a uid recurs across cells (and seeds): the union above keeps the last
+    # run's record. Each selected champion's buy-and-hold evidence is the one ITS run produced.
+    for chrom, _fit, result, _idx in selected_entries:
+        own = result.buy_hold_records.get(chrom.uid)  # type: ignore[union-attr]
+        if own is not None:
+            buy_hold_records[chrom.uid] = own  # type: ignore[union-attr]
 
     top_strategies = [(chrom, fit) for chrom, fit, _, _ in selected_entries]
     holdout_results = [
@@ -442,7 +612,7 @@ def _run_multi_seed(
         len(top_strategies), len(all_strategies), len(groups),
     )
 
-    return DiscoveryResult(
+    merged = DiscoveryResult(
         generations=all_generations,
         top_strategies=top_strategies,  # type: ignore[arg-type]
         total_candidates_evaluated=total_evaluated,
@@ -467,6 +637,7 @@ def _run_multi_seed(
         buy_hold_records=buy_hold_records,
         buy_hold_gate=result_metadata.buy_hold_gate if result_metadata else None,
     )
+    return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]
 
 
 def _load_seed_chromosomes(
@@ -1093,6 +1264,27 @@ def build_parser() -> argparse.ArgumentParser:
         "parameters).",
     )
     parser.add_argument(
+        "--bankroll-modes",
+        type=str,
+        default=None,
+        help="Bankroll grid (give all three --bankroll-* flags): comma-separated margin modes, "
+        "isolated and/or cross. Discovery then searches every mode x leverage x cushion cell "
+        "(at most 12) and each champion records its cell. Excludes --liquidation-mode, "
+        "--leverage and --max-margin-pct.",
+    )
+    parser.add_argument(
+        "--bankroll-leverages",
+        type=str,
+        default=None,
+        help="Bankroll grid: comma-separated leverages, whole numbers from 1 to 125.",
+    )
+    parser.add_argument(
+        "--bankroll-max-margin-pcts",
+        type=str,
+        default=None,
+        help="Bankroll grid: comma-separated margin limits (numbers in (0, 1]).",
+    )
+    parser.add_argument(
         "--immigrant-fraction",
         type=float,
         default=0.15,
@@ -1140,6 +1332,50 @@ def plan_from_args(args: argparse.Namespace) -> WindowPlan:
         eval_windows=args.eval_windows,
         cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
         wfa_oos_step_days=args.wfa_oos_step_days,
+    )
+
+
+def _grid_flags_given(args: argparse.Namespace) -> bool:
+    """Whether any ``--bankroll-*`` flag was passed (all three are then required)."""
+    flags = (args.bankroll_modes, args.bankroll_leverages, args.bankroll_max_margin_pcts)
+    if all(f is None for f in flags):
+        return False
+    if any(f is None for f in flags):
+        msg = (
+            "give all three of --bankroll-modes, --bankroll-leverages and "
+            "--bankroll-max-margin-pcts together"
+        )
+        raise BankrollGridError(msg)
+    reject_run_level_with_grid(
+        liquidation_mode=args.liquidation_mode,
+        leverage=args.leverage,
+        liquidation_leverage=args.liquidation_leverage,
+        max_margin_pct=args.max_margin_pct,
+    )
+    return True
+
+
+def _grid_cells_from_args(args: argparse.Namespace, sizing: SizingSettings) -> list[BankrollCell]:
+    """The cells of ``--bankroll-*`` (validated against the run's exposure cap)."""
+
+    def _items(text: str) -> list[str]:
+        return [item.strip() for item in text.split(",") if item.strip()]
+
+    def _numbers(name: str, text: str) -> list[object]:
+        out: list[object] = []
+        for item in _items(text):
+            try:
+                out.append(float(item))
+            except ValueError as exc:
+                msg = f"{name} must be comma-separated numbers, got {item!r}"
+                raise BankrollGridError(msg) from exc
+        return out
+
+    return build_cells(
+        _items(args.bankroll_modes),
+        _numbers("--bankroll-leverages", args.bankroll_leverages),
+        _numbers("--bankroll-max-margin-pcts", args.bankroll_max_margin_pcts),
+        sizing,
     )
 
 
@@ -1204,6 +1440,7 @@ def main() -> int:
         # first given win and fails the run when the two disagree. Validated up
         # front so a bad leverage fails the run with the message rather than a
         # silent 10x.
+        grid_run = _grid_flags_given(args)  # BankrollGridError -> exit 2, before anything runs
         resolved_leverage = resolve_leverage(
             MISSING if args.leverage is None else args.leverage,
             MISSING if args.liquidation_leverage is None else args.liquidation_leverage,
@@ -1232,7 +1469,12 @@ def main() -> int:
                 if value is not None
             }
         )
-        sizing.check_leverage(cast("float", resolved_leverage))
+        # A grid has no run-level leverage: every cell checks the cap at its own leverage.
+        cells = _grid_cells_from_args(args, sizing) if grid_run else None
+        if cells is None:
+            sizing.check_leverage(cast("float", resolved_leverage))
+        else:
+            logger.info("Discovery bankroll grid: %d cells", len(cells))
         logger.info("Discovery sizing settings: %s", sizing)
 
         # Train/test split + eval/cross/WFA windows: one shared check (the API
@@ -1330,7 +1572,6 @@ def main() -> int:
         use_mock = bool(args.mock)
         if use_mock:
             logger.warning("Using MOCK backtest — forced via --mock. Results are synthetic.")
-            backtest_fn = _mock_backtest
         else:
             if not _check_data_available(symbols):
                 msg = (
@@ -1339,62 +1580,37 @@ def main() -> int:
                 )
                 raise RuntimeError(msg)
             logger.info("Using real NautilusTrader backtest for symbols=%s", symbols)
-            backtest_fn = _make_nt_backtest_fn(
-                symbols=symbols,
-                timeframe=args.timeframe,
-                start_date=train_start,
-                end_date=train_end,
-                windows=eval_windows,
-                min_trades=config.min_trades,
-                symbol_agg=args.symbol_agg,
-                fee_schedule=fee_schedule,
-                entry_order=entry_order,
-                liquidation=liquidation,
-                sizing=sizing,
-            )
-
-        # Create holdout backtest function if train/test split enabled
-        holdout_backtest_fn = None
-        if split_ratio > 0 and holdout_start and holdout_end:
-            if use_mock:
-                holdout_backtest_fn = _mock_backtest
-            else:
-                holdout_backtest_fn = _make_nt_backtest_fn(
-                    symbols=symbols,
-                    timeframe=args.timeframe,
-                    start_date=holdout_start,
-                    end_date=holdout_end,
-                    symbol_agg=args.symbol_agg,
-                    fee_schedule=fee_schedule,
-                    entry_order=entry_order,
-                    liquidation=liquidation,
-                    sizing=sizing,
-                )
-        elif split_ratio <= 0:
+        if split_ratio <= 0:
             logger.warning(
                 "No holdout (--train-test-split 0): champions get NO out-of-sample gate"
             )
 
-        # Create backtest factory for cross-window and/or WFA validation
-        backtest_fn_factory = None
+        # Train, holdout (when the train/test split is on) and the factory for
+        # cross-window and/or WFA validation: one set per bankroll setup.
+        holdout_range = (
+            (holdout_start, holdout_end)
+            if split_ratio > 0 and holdout_start and holdout_end
+            else None
+        )
         needs_factory = bool(cross_window_months) or args.wfa_oos_step_days > 0
-        if needs_factory:
-            if use_mock:
-                backtest_fn_factory = lambda s, e: _mock_backtest  # noqa: E731
-            else:
-                _syms = symbols
-                _tf = args.timeframe
-                _agg: SymbolAgg = args.symbol_agg
-                _fee = fee_schedule
-                _entry = entry_order
-                _liq = liquidation
-                _sz = sizing
 
-                def backtest_fn_factory(s: str, e: str) -> NTBacktestFn:
-                    return NTBacktestFn(
-                        _syms, _tf, s, e, symbol_agg=_agg, fee_schedule=_fee,
-                        entry_order=_entry, liquidation=_liq, sizing=_sz,
-                    )
+        def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> _CellFns:
+            return _make_cell_fns(
+                use_mock=use_mock,
+                symbols=symbols,
+                timeframe=args.timeframe,
+                symbol_agg=args.symbol_agg,
+                fee_schedule=fee_schedule,
+                entry_order=entry_order,
+                liquidation=liq,
+                sizing=siz,
+                train_start=train_start,
+                train_end=train_end,
+                eval_windows=eval_windows,
+                min_trades=config.min_trades,
+                holdout=holdout_range,
+                needs_factory=needs_factory,
+            )
 
         # Load seed chromosomes from prior run if requested
         seed_chromosomes = None
@@ -1416,35 +1632,52 @@ def main() -> int:
                 )
 
         num_seeds = max(1, args.num_seeds)
+        top_cells: list[BankrollCell] | None = None  # grid: the cell of each top strategy
         progress_file = str(log_dir() / f"discovery_{args.run_id}_progress.json")
         # A leftover file (another DB's run with the same id) would be served by
         # the progress API as ours until our first generation overwrites it.
         Path(progress_file).unlink(missing_ok=True)
 
-        if num_seeds == 1:
+        if cells is not None:
+            # Bankroll grid: one pipeline per (cell, seed), pooled like a multi-seed run;
+            # each cell gets its own functions so every gate runs at the champion's bankroll.
+            seed = _resolve_seed(args.seed)
+            logger.info("Discovery seed: %d", seed)
+            result, top_cells = _run_bankroll_grid(
+                cells,
+                num_seeds,
+                config,
+                lambda cell: fns_for(cell.liquidation, cell.sizing(sizing)),
+                progress_file,
+                seed_chromosomes=seed_chromosomes,
+                base_seed=seed,
+            )
+        elif num_seeds == 1:
             # Single-seed run (default)
+            fns = fns_for(liquidation, sizing)
             seed = _resolve_seed(args.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
             pipeline = DiscoveryPipeline(
                 config=config,
-                backtest_fn=backtest_fn,
+                backtest_fn=fns.backtest_fn,  # type: ignore[arg-type]
                 progress_file=progress_file,
-                holdout_backtest_fn=holdout_backtest_fn,
-                backtest_fn_factory=backtest_fn_factory,
+                holdout_backtest_fn=fns.holdout_backtest_fn,  # type: ignore[arg-type]
+                backtest_fn_factory=fns.backtest_fn_factory,  # type: ignore[arg-type]
                 seed_chromosomes=seed_chromosomes,
             )
             result = pipeline.run()
         else:
             # Multi-seed ensemble: run N times with different seeds
+            fns = fns_for(liquidation, sizing)
             seed = args.seed if args.seed is not None else 42
             result = _run_multi_seed(
                 num_seeds=num_seeds,
                 config=config,
-                backtest_fn=backtest_fn,
+                backtest_fn=fns.backtest_fn,
                 progress_file=progress_file,
-                holdout_backtest_fn=holdout_backtest_fn,
-                backtest_fn_factory=backtest_fn_factory,
+                holdout_backtest_fn=fns.holdout_backtest_fn,
+                backtest_fn_factory=fns.backtest_fn_factory,
                 seed_chromosomes=seed_chromosomes,
                 base_seed=seed,
             )
@@ -1473,6 +1706,10 @@ def main() -> int:
             liquidation=liquidation,
             sizing=sizing,
         )
+        if cells is not None:
+            # A grid run has no run-level liquidation / leverage / max_margin_pct: the cells
+            # are the setups, and each champion records its own (R51).
+            run_notes["bankroll_grid"] = bankroll_grid_note(cells)
 
         if not result.top_strategies:
             # No champion passed every gate (guardrails / cross-window / WFA /
@@ -1544,22 +1781,28 @@ def main() -> int:
         needs_full_range = not use_mock and (
             eval_windows_count >= 2 or split_ratio > 0 or worst_multi
         )
-        full_range_fn = (
-            _make_nt_backtest_fn(
-                symbols=symbols,
-                timeframe=args.timeframe,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                symbol_agg=args.symbol_agg,
-                fee_schedule=fee_schedule,
-                entry_order=entry_order,
-                liquidation=liquidation,
-                sizing=sizing,
-            )
-            if needs_full_range
-            else None
-        )
-        if full_range_fn is not None:
+        # One full-range function per distinct bankroll setup: a grid champion is measured at ITS
+        # cell, never at the outer run settings (a replay child inherits that cell, so the
+        # headline must be the number the replay reproduces). Without a grid it is the single
+        # run-level function, built lazily so a zero-champion run builds none.
+        full_range_fns: dict[BankrollCell | None, NTBacktestFn] = {}
+
+        def full_range_fn_for(cell: BankrollCell | None) -> NTBacktestFn:
+            if cell not in full_range_fns:
+                full_range_fns[cell] = _make_nt_backtest_fn(
+                    symbols=symbols,
+                    timeframe=args.timeframe,
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    symbol_agg=args.symbol_agg,
+                    fee_schedule=fee_schedule,
+                    entry_order=entry_order,
+                    liquidation=cell.liquidation if cell is not None else liquidation,
+                    sizing=cell.sizing(sizing) if cell is not None else sizing,
+                )
+            return full_range_fns[cell]
+
+        if needs_full_range:
             logger.info(
                 "Computing full-range headline for top-%d champions over %s..%s "
                 "(multi-window/split fitness != continuous replay; bd-rewru)",
@@ -1575,15 +1818,18 @@ def main() -> int:
                 dsr=result.dsr_records.get(chrom.uid),
                 buy_hold=result.buy_hold_records.get(chrom.uid),
             )
+            cell = top_cells[idx] if top_cells is not None else None
+            if cell is not None:
+                entry["bankroll"] = cell.to_note()
             # Full-range headline (single continuous backtest) for like-for-like
             # promotion/replay_drift; sharpe/trades above stay as the multi-window
-            # robustness aggregate. full_range_fn(chrom) raises
+            # robustness aggregate. The function raises
             # DataUnavailableError on missing data (the run fails); other
             # backtest errors are swallowed into failure metrics. bd
             # vibe-quant-rewru.
             entry.update(
                 full_range_headline(
-                    full_range_fn(chrom) if full_range_fn is not None else None,
+                    full_range_fn_for(cell)(chrom) if needs_full_range else None,
                     fallback_sharpe=fitness.sharpe_ratio,
                     fallback_trades=fitness.total_trades,
                     fallback_max_dd=fitness.max_drawdown,
@@ -1623,6 +1869,7 @@ def main() -> int:
         wfa_efficiency: float | None = None
         if result.holdout_results and result.train_dates and result.holdout_dates:
             if eval_windows_count >= 2 and not use_mock:
+                best_cell = top_cells[0] if top_cells is not None else None
                 train_metrics = _make_nt_backtest_fn(
                     symbols=symbols,
                     timeframe=args.timeframe,
@@ -1631,8 +1878,8 @@ def main() -> int:
                     symbol_agg=args.symbol_agg,
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
-                    liquidation=liquidation,
-                    sizing=sizing,
+                    liquidation=best_cell.liquidation if best_cell is not None else liquidation,
+                    sizing=best_cell.sizing(sizing) if best_cell is not None else sizing,
                 )(best_chrom)
                 train_return = float(train_metrics.get("total_return", 0.0))
             else:
@@ -1686,7 +1933,8 @@ def main() -> int:
         import traceback
 
         traceback.print_exc()
-        return 1
+        # A bad bankroll grid is an operator error (argparse's own exit code), not a crash.
+        return 2 if isinstance(exc, BankrollGridError) else 1
     finally:
         stop_heartbeat()
         state.close()

@@ -15,6 +15,12 @@ from pydantic import (
 )
 
 from vibe_quant.api.schemas.finite import reject_non_finite
+from vibe_quant.bankroll_grid import (
+    BankrollCell,
+    BankrollGridError,
+    build_cells,
+    reject_run_level_with_grid,
+)
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
     MISSING,
@@ -22,6 +28,20 @@ from vibe_quant.liquidation_settings import (
     resolve_leverage,
 )
 from vibe_quant.sizing_settings import SizingSettings
+
+
+class BankrollGridRequest(BaseModel):
+    """A discovery bankroll grid: margin mode x leverage x margin cushion (bead vibe-quant-t8nrv).
+
+    The rule (domain, ordering, the 12-cell cap, the per-cell exposure-cap check) is
+    ``vibe_quant.bankroll_grid``; ``strict`` keeps a bool or a numeric string out of the lists.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    modes: list[str]
+    leverages: list[float]
+    max_margin_pcts: list[float]
 
 
 class DiscoveryLaunchRequest(BaseModel):
@@ -96,6 +116,10 @@ class DiscoveryLaunchRequest(BaseModel):
     # an explicit null is a 422, never a silent off. Forwarded and stored only when
     # set, so a default launch keeps its stored params and argv unchanged.
     max_margin_pct: float | None = None
+    # Bankroll grid (bead vibe-quant-t8nrv, T8): discovery searches every mode x leverage x
+    # cushion cell and each champion records its cell. Excludes the run-level fields above;
+    # omitted = discovery runs exactly as without a grid.
+    bankroll_grid: BankrollGridRequest | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -183,9 +207,38 @@ class DiscoveryLaunchRequest(BaseModel):
     # declaration order, so the leverage alias is resolved before the cap is compared to it.
     @model_validator(mode="after")
     def _check_sizing_leverage(self) -> DiscoveryLaunchRequest:
-        """S13/S27: a cap above the run's margin leverage would be unmarginable (422)."""
-        self.sizing_settings().check_leverage(self.liquidation_settings().leverage)
+        """S13/S27: a cap above the run's margin leverage would be unmarginable (422).
+
+        A grid has no run-level leverage: each cell checks the cap at its own leverage.
+        """
+        if self.bankroll_grid is None:
+            self.sizing_settings().check_leverage(self.liquidation_settings().leverage)
         return self
+
+    @model_validator(mode="after")
+    def _check_bankroll_grid(self) -> DiscoveryLaunchRequest:
+        """R52/R53/R54: a grid excludes run-level settings and every cell must be valid (422)."""
+        if self.bankroll_grid is not None:
+            try:
+                reject_run_level_with_grid(
+                    liquidation_mode=self.liquidation_mode,
+                    leverage=self.leverage,
+                    liquidation_leverage=self.liquidation_leverage,
+                    max_margin_pct=self.max_margin_pct,
+                )
+                self.bankroll_cells()
+            except BankrollGridError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
+
+    def bankroll_cells(self) -> list[BankrollCell]:
+        """The grid's validated cells (empty without a grid)."""
+        grid = self.bankroll_grid
+        if grid is None:
+            return []
+        return build_cells(
+            grid.modes, grid.leverages, grid.max_margin_pcts, self.sizing_settings()
+        )
 
     def liquidation_settings(self) -> LiquidationSettings:
         """The run's validated settings (the launch router's single source)."""

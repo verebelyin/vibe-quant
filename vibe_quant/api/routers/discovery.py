@@ -26,6 +26,7 @@ from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
 
 if TYPE_CHECKING:
+    from vibe_quant.bankroll_grid import BankrollCell
     from vibe_quant.jobs.manager import JobInfo
     from vibe_quant.liquidation_settings import LiquidationSettings
 
@@ -164,8 +165,41 @@ def _inherited_fee_params(
     return fee_params, "discovery_notes"
 
 
-def _inherited_liquidation_params(state: StateManager, run_id: int) -> dict[str, object]:
+def _grid_champion_cell(
+    payload: dict[str, object], run_id: int, strategy_index: int | None
+) -> BankrollCell | None:
+    """The bankroll cell a child of a GRID run must inherit (``None`` for a non-grid run).
+
+    A grid run (``notes.bankroll_grid`` present) has no run-level setup: each champion carries
+    its own ``bankroll``. A missing / null / wrong-type / invalid one fails closed with a 422
+    naming the champion (bead vibe-quant-t8nrv, R56b) instead of reverting to a default.
+    """
+    from vibe_quant.bankroll_grid import BankrollCell, BankrollGridError
+
+    if "bankroll_grid" not in payload:
+        return None
+    top = payload.get("top_strategies")
+    try:
+        if strategy_index is None or not isinstance(top, list) or not 0 <= strategy_index < len(top):
+            raise BankrollGridError("no champion to read a bankroll from")
+        entry = top[strategy_index]
+        if not isinstance(entry, dict):
+            raise BankrollGridError("champion entry is not an object")
+        return BankrollCell.from_note(entry.get("bankroll"))
+    except BankrollGridError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"discovery run {run_id} strategy {strategy_index} has no valid bankroll setup",
+        ) from exc
+
+
+def _inherited_liquidation_params(
+    state: StateManager, run_id: int, *, strategy_index: int | None = None
+) -> dict[str, object]:
     """Liquidation run parameters for a child of discovery run ``run_id``.
+
+    A grid run hands the child ITS CHAMPION's cell (``strategy_index``); see
+    :func:`_grid_champion_cell`.
 
     The parent's ``notes.liquidation`` (mode-on) and ``notes.leverage`` (a
     mode-off run at a non-default leverage) are authoritative: a promoted or
@@ -188,6 +222,9 @@ def _inherited_liquidation_params(state: StateManager, run_id: int) -> dict[str,
     )
 
     payload = _load_discovery_payload(state, run_id)
+    cell = _grid_champion_cell(payload, run_id, strategy_index)
+    if cell is not None:
+        return cell.liquidation.to_params()
     raw = payload.get("liquidation")
     # An explicit null is a value (rejected below), not an absent key.
     raw_leverage = payload.get("leverage", MISSING)
@@ -215,7 +252,9 @@ def _inherited_liquidation_params(state: StateManager, run_id: int) -> dict[str,
     return settings.to_params()
 
 
-def _inherited_sizing_params(state: StateManager, run_id: int) -> dict[str, float]:
+def _inherited_sizing_params(
+    state: StateManager, run_id: int, *, strategy_index: int | None = None
+) -> dict[str, float]:
     """Sizing run parameters for a child of discovery run ``run_id`` (S23-S23d).
 
     The parent's ``notes.sizing`` is authoritative: a promoted or replayed child must
@@ -225,6 +264,9 @@ def _inherited_sizing_params(state: StateManager, run_id: int) -> dict[str, floa
     cap the child's inherited leverage cannot cover — fails closed (409) instead of
     silently reverting to the default (S23b/S23d).
 
+    A grid run (T8) adds its champion's margin cushion (``strategy_index``) to the run's cap and
+    risk, and checks the cap at the CHAMPION's leverage.
+
     Returns:
         ``SizingSettings.to_params()`` of the parent (``{}`` when the parent ran at
         the defaults).
@@ -233,9 +275,11 @@ def _inherited_sizing_params(state: StateManager, run_id: int) -> dict[str, floa
     from vibe_quant.sizing_settings import SizingSettings
 
     payload = _load_discovery_payload(state, run_id)
-    if "sizing" not in payload:
+    cell = _grid_champion_cell(payload, run_id, strategy_index)
+    if cell is None and "sizing" not in payload:
         return {}
-    raw = payload["sizing"]  # present: null / non-object / invalid fails closed below
+    # present: null / non-object / invalid fails closed below (a grid run may omit it = defaults)
+    raw = payload.get("sizing", {})
     try:
         if not isinstance(raw, dict):
             raise ValueError(f"expected an object, got {raw!r}")
@@ -243,7 +287,13 @@ def _inherited_sizing_params(state: StateManager, run_id: int) -> dict[str, floa
         # The child runs at the parent's inherited leverage; a cap above it would
         # be unmarginable (S13/S23d). Resolved here from the same notes the child's
         # liquidation params come from.
-        leverage = _inherited_liquidation_params(state, run_id).get("leverage", DEFAULT_LEVERAGE)
+        if cell is not None:
+            settings = cell.sizing(settings)
+            leverage: object = cell.leverage
+        else:
+            leverage = _inherited_liquidation_params(state, run_id).get(
+                "leverage", DEFAULT_LEVERAGE
+            )
         settings.check_leverage(float(leverage))  # type: ignore[arg-type]
     except (ValueError, TypeError) as exc:
         raise HTTPException(
@@ -430,6 +480,13 @@ def _discovery_cli_args(
     # only when it is set, so an off limit keeps the argv unchanged.
     if "max_margin_pct" in sizing_params:
         command.extend(["--max-margin-pct", str(sizing_params["max_margin_pct"])])
+    # A bankroll grid is forwarded as the three flags, exactly as the request gave it (the CLI
+    # re-validates through the same rule); a grid launch carries no run-level setup above.
+    if body.bankroll_grid is not None:
+        grid = body.bankroll_grid
+        command.extend(["--bankroll-modes", ",".join(grid.modes)])
+        command.extend(["--bankroll-leverages", ",".join(str(x) for x in grid.leverages)])
+        command.extend(["--bankroll-max-margin-pcts", ",".join(str(x) for x in grid.max_margin_pcts)])
     return command
 
 
@@ -516,6 +573,8 @@ async def launch_discovery(
     # inherit the set the champion was found under. Only the keys moved off the
     # default are stored, so a default launch keeps its parameters unchanged (S27).
     params.update(body.sizing_settings().to_params())
+    if body.bankroll_grid is not None:
+        params["bankroll_grid"] = body.bankroll_grid.model_dump()
 
     timeframe = body.timeframes[0] if body.timeframes else "4h"
     today = datetime.now()
@@ -539,10 +598,12 @@ async def launch_discovery(
     # A mode-on run scans MARK 1m bars across every stage of the span; refuse
     # before any run row exists rather than failing the run in a worker
     # (vibe-quant-592lt).
-    if settings.on:
+    # A grid is always liquidation-on (its modes are isolated / cross only).
+    grid_cells = body.bankroll_cells()
+    if settings.on or grid_cells:
         await asyncio.to_thread(
             mark_precheck.precheck_discovery,
-            settings.mode,
+            settings.mode if settings.on else grid_cells[0].mode,
             body.symbols,
             start_date,
             end_date,
@@ -1067,10 +1128,10 @@ async def promote_discovered_strategy(
     # strategy row exists: an unreadable parent note fails closed (409) without
     # leaking a strategies row (vibe-quant-dtj5h).
     fee_params, fee_source = _inherited_fee_params(state, run_id)
-    liquidation_params = _inherited_liquidation_params(state, run_id)
+    liquidation_params = _inherited_liquidation_params(state, run_id, strategy_index=strategy_index)
     # Sizing is resolved BEFORE the strategy row (S23b/S23d: an unreadable
     # notes.sizing is a 409 with no strategies/backtest_runs row created).
-    sizing_params = _inherited_sizing_params(state, run_id)
+    sizing_params = _inherited_sizing_params(state, run_id, strategy_index=strategy_index)
 
     # Export genome to strategies table (matched by DSL content, not name)
     import json
@@ -1218,10 +1279,10 @@ async def replay_discovered_strategy(
             )
 
     fee_params, fee_source = _inherited_fee_params(state, run_id)
-    liquidation_params = _inherited_liquidation_params(state, run_id)
+    liquidation_params = _inherited_liquidation_params(state, run_id, strategy_index=strategy_index)
     # Sizing is resolved BEFORE the run row: an unreadable notes.sizing is a 409
     # with no backtest_runs row created (S23b/S23d).
-    sizing_params = _inherited_sizing_params(state, run_id)
+    sizing_params = _inherited_sizing_params(state, run_id, strategy_index=strategy_index)
     replay_run_id = state.create_backtest_run(
         strategy_id=None,
         run_mode="screening",

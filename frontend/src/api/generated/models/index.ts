@@ -14,6 +14,7 @@ export * from './backtestResultResponseCrossRegimeResults';
 export * from './backtestResultResponseCrossWindowResults';
 export * from './backtestRunResponse';
 export * from './backtestRunResponseParameters';
+export * from './bankrollGridRequest';
 export * from './browseDataApiDataBrowseSymbolGetParams';
 export * from './browseDataResponse';
 export * from './browseDataResponseDataItem';

@@ -5219,6 +5219,40 @@
         ],
         "title": "BacktestRunResponse"
       },
+      "BankrollGridRequest": {
+        "properties": {
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modes"
+          },
+          "leverages": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Leverages"
+          },
+          "max_margin_pcts": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Max Margin Pcts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "modes",
+          "leverages",
+          "max_margin_pcts"
+        ],
+        "title": "BankrollGridRequest",
+        "description": "A discovery bankroll grid: margin mode x leverage x margin cushion (bead vibe-quant-t8nrv).\n\nThe rule (domain, ordering, the 12-cell cap, the per-cell exposure-cap check) is\n``vibe_quant.bankroll_grid``; ``strict`` keeps a bool or a numeric string out of the lists."
+      },
       "BrowseDataResponse": {
         "properties": {
           "symbol": {
@@ -6078,6 +6112,16 @@
               }
             ],
             "title": "Max Margin Pct"
+          },
+          "bankroll_grid": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BankrollGridRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

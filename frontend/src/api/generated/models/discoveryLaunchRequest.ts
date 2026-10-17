@@ -4,6 +4,7 @@
  * vibe-quant API
  * OpenAPI spec version: 0.1.0
  */
+import type { BankrollGridRequest } from './bankrollGridRequest';
 import type { DiscoveryLaunchRequestLiquidationMode } from './discoveryLaunchRequestLiquidationMode';
 import type { DiscoveryLaunchRequestSymbolAgg } from './discoveryLaunchRequestSymbolAgg';
 
@@ -73,4 +74,5 @@ export interface DiscoveryLaunchRequest {
   max_position_pct?: number | null;
   risk_per_trade?: number | null;
   max_margin_pct?: number | null;
+  bankroll_grid?: BankrollGridRequest | null;
 }
