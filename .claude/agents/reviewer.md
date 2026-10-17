@@ -37,6 +37,7 @@ Hunt for these, in priority order:
   - State saved by a periodic checkpoint: probe the checkpoint written BEFORE the component exists (initialise, early-failure shutdown) — does it drop restored state? (rev-hs-p3b-1 SF1).
   - Per-item loops that must continue after a failure: put the failing item FIRST; a `break`-instead-of-`continue` mutant is invisible when nothing follows it (rev-hs-p3a2-2).
   - A value derived from another setting (margin type from liquidation mode): test it with the derivation OVERRIDDEN to the other value; a same-value test lets a hard-coded constant pass (rev-hs-p2a-1 M3).
+- **Design mode, seams with stubs** (job 20261017-grind): for a design that adds a field to a value object built from a monkeypatched seam (`FundingCalculator.settlements`, a runner's `_run_backtest`), `rg` the seam's `monkeypatch.setattr` stubs and confirm the new field comes from the same call or degrades to the old default under the stub (rev-gr-design-1 SF1: `test_carry_ticks._stub_settlements` would have broken 4 tests).
 - **Forwarded-text and precedence probes** (job 20261017-grind):
   - A value the code FORWARDS into a pinned string (exception class name, symbol, status): run the test with at least two unrelated inputs and assert each expected string from a literal; hard-code one input's text in production as the mutant (rev-gr-guard-1 SF1: a hard-coded `_MarginError` survived 6/6 tests).
   - An ordering contract that names a chain (check A before B before C): one test per adjacent pair, on every entry point that has the chain (rev-gr-api-1 N1: the validation guard moved after the MARK precheck survived 5 tests).
@@ -103,6 +104,10 @@ DeepSeek (Command Code, via T3) is the workhorse that writes most diffs; you are
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`. `status: done` means no blocking findings. `status: failed` means at least one blocking finding, and the orchestrator will send it back.
 
+## Worktree hygiene (job 20261017-grind)
+
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `/tmp/<your id>/`. A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
+
 ## Swarm board (shared memory + chat — use it)
 
 Every agent in this repo shares a persistent message board (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`). Your brief may give you a job bus (`SWARM_BUS`) and a name; otherwise use the shared lobby with `--as <your-role>`.
@@ -164,3 +169,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (job 20261016-safety-bankroll, T7 round 3 sweep): singleton recovery via cached+fresh paths, sub-precision excess probes, persisted-null consumer probes. Evidence: rev-sb-t1-1, rev-sb-t3-1 (18df1ab8bfdb6570-1376), rev-sb-t7-1 (18df1b06fad710b8-5445), rev-sb-t7-2 (18df1b707e9a5388-3925).
 - 2026-10-17 (job 20261016-safety-bankroll): settings-grid pooling probes. Evidence: rev-sb-t8-1 proposal 18df45bd43d2b688-8506.
 - 2026-10-17 (job 20261017-grind): forwarded-text + precedence-chain probes. Evidence: rev-gr-guard-1 SF1, rev-gr-api-1 N1.
+- 2026-10-17 (job 20261017-grind): never checkout/switch/reset in a maker worktree; read with git show, test in a git archive copy. Evidence: vq-gr-hn HEAD detached to the reviewer's pinned sha.

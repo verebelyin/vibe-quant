@@ -37,6 +37,10 @@ Each finding: severity (blocking / should-fix / nit), file:line, a concrete fail
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`: `status: done` (no blocking findings), `failed` (blocking findings), or `needs-decision` (escalate to `reviewer`).
 
+## Worktree hygiene (job 20261017-grind)
+
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `/tmp/<your id>/`. A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
+
 ## Swarm board (shared memory + chat — use it)
 
 Every agent in this repo shares a persistent message board (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`). Your brief may give you a job bus (`SWARM_BUS`) and a name; otherwise use the shared lobby with `--as reviewer-lite`.
@@ -83,3 +87,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (Land, job 20261016-followups2): no `-p no:logging` in mutant runs. Evidence: revl-fu2-markp1-2 improve line. Applied automatically.
 - 2026-10-16 (Land, job 20261016-sizing): docs check names the code outcome of each behaviour verb — evidence revl-sz-docs-1 (min-qty skip vs clamp-up). Applied by the chief.
 - 2026-10-16 (Land, job 20261016-followups3): -W overrides ini filterwarnings; probe without it — evidence revl-fu3-swarmtest-1. Applied by the chief.
+- 2026-10-17 (job 20261017-grind): never checkout/switch/reset in a maker worktree; read with git show, test in a git archive copy. Evidence: vq-gr-hn HEAD detached to the reviewer's pinned sha.

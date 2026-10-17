@@ -26,6 +26,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
    - Pass = the criterion is visible or behaves as specified on screen. Code that typechecks but never renders is a fail.
    - Always finish with `scripts/agents/ui-check.sh down <worktree>`, pass or fail.
    - Before an isolated-liquidation UI check, query MARK coverage and cap `end_date` at the MARK end, clear of holes (ver-hl-lev runs 923/924).
+   - Number inputs keep a leading 0 after a Backspace clear (`0100`, `075`); it still parses, so assert the result (toast/run row), not the field text (ver-gr-2).
    - agent-browser refs go stale after any dropdown/DOM change: re-snapshot before each click; click covered Radix options via eval on `[role=option]`.
 
 ## Rules
@@ -83,3 +84,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (Land, job 20261016-sizing): choose live-AC windows from the first trade date — evidence ver-sz-job-1 runs 920/921. Applied by the chief.
 - 2026-10-16 (job 20261016-easy-beads-3): seeded render-only fallback for rare-row UI criteria — evidence: nq6vg runs 920/921 produced no liquidated rows.
 - 2026-10-17 (job 20261016-safety-bankroll): clearing inputs in agent-browser. Evidence: ver-sb-1 improve line.
+- 2026-10-17 (job 20261017-grind): number-input leading-0 note. Evidence: ver-gr-2.
