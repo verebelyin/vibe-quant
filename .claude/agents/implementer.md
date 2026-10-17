@@ -65,6 +65,8 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - **Evidence first:** every change cites what went wrong or was missing (handoff, board post id, failing command, reviewer finding). No speculative rewrites; keep the diff small and in the voice of the file.
 - Changes take effect for the **next** agent spawned with this definition (definitions load at session start).
 
+- Tests of NautilusTrader order-set or queue semantics (pending/inflight/INITIALIZED orders, same-step submissions) run on a LIVE `TradingNode` with a stub exec client, not a `BacktestEngine`: the backtest engine is synchronous, so a second order already sees the first as open (job 20261016-safety-bankroll T4: R35c passed on BacktestEngine while the live probe sent an over-limit entry).
+
 ## Changelog
 
 - 2026-10-09: self-improvement + changelog sections added (user request: agents may improve their own prompts; chief reviews).
@@ -82,3 +84,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-14: Bash: no trailing cd outside the worktree; rm scratch alone; long gates in background — evidence: job 20261014-honest-lev: impl-hl-data-gap lost ~4 turns to "no active turn" x3.
 - 2026-10-15: macOS mutants with `sed -i ''` or Python; equality-edge tests for every money comparison — evidence: job 20261015-honest-safe impl-hs-p3b-2 (two mutants silently unapplied), V1a/V1b extra rounds.
 - 2026-10-16 (Land, job 20261016-safety-bugs): fix rounds may narrow the board search but must post done. Evidence: both Sonnet fixers in this job skipped the search and the done post. Applied automatically.
+- 2026-10-17 (job 20261016-safety-bankroll): live TradingNode for NT order-set semantics — evidence: risk-sb-t4-1 F1, impl-sb-t4-1 improve line.

@@ -67,6 +67,8 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 
 - **A UI criterion that needs a rare data row** (e.g. a liquidated discovery champion) and tiny runs (pop 4-6, 1-2 gens) produce none: after at most 2 tiny runs, seed the row into the ui-check DB COPY only (e.g. `liquidation_count` in `backtest_results.notes`), label it SEEDED, and report it as a render-only proof; the criterion stays NOT MET for real data (ver job 20261016-easy-beads-3: runs 920/921 at isolated 125x gave 0 rows).
 
+- Browser automation: `agent-browser fill @ref ''` does not clear a field; clear it with `focus` + repeated `press Backspace` and check the input value before reading a launch body (ver-sb-1: the first empty-field launch still carried "25,5").
+
 ## Changelog
 
 - 2026-10-09: self-improvement + changelog sections added (user request: agents may improve their own prompts; chief reviews).
@@ -80,3 +82,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (Land, job 20261016-safety-bugs): real-DB smoke recipe (Path, backup copy, main-vs-branch baseline). Evidence: ver-sf-job improve line + unresolved migration finding. Applied automatically.
 - 2026-10-16 (Land, job 20261016-sizing): choose live-AC windows from the first trade date — evidence ver-sz-job-1 runs 920/921. Applied by the chief.
 - 2026-10-16 (job 20261016-easy-beads-3): seeded render-only fallback for rare-row UI criteria — evidence: nq6vg runs 920/921 produced no liquidated rows.
+- 2026-10-17 (job 20261016-safety-bankroll): clearing inputs in agent-browser. Evidence: ver-sb-1 improve line.
