@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Word budgets (`len(text.split())`), ~10% above the distilled size.
 BUDGETS: dict[str, int] = {
-    "CLAUDE.md": 3400,
+    "CLAUDE.md": 3100,
     ".claude/skills/orchestrate/SKILL.md": 1650,
     ".claude/skills/grind/SKILL.md": 700,
     ".claude/skills/discovery-run/SKILL.md": 1900,
@@ -37,11 +37,16 @@ BUDGETS: dict[str, int] = {
     "docs/orchestration/README.md": 1780,
     "docs/orchestration/cheap-agents.md": 610,
     "docs/orchestration/brief-checklist.md": 860,
-    "docs/orchestration/research-swarm.md": 1230,
+    "docs/orchestration/research-swarm.md": 700,
     "docs/orchestration/prompts/cmd-task.md": 500,
     "docs/orchestration/prompts/review-task.md": 220,
     "docs/orchestration/prompts/bus-protocol.md": 270,
     "docs/orchestration/prompts/commit-message.md": 350,
+    "docs/claude/discovery.md": 1560,
+    "docs/claude/engine-modes.md": 480,
+    "docs/claude/nautilus-gotchas.md": 800,
+    "docs/claude/beads.md": 910,
+    "docs/claude/ui-testing.md": 300,
 }
 
 MAX_LINE_CHARS = 1300
