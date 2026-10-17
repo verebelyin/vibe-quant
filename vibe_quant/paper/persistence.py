@@ -423,8 +423,11 @@ class StatePersistence:
 
             except asyncio.CancelledError:
                 break
-            except Exception:
-                logger.exception("checkpoint loop error")
+            except Exception as exc:
+                # jf7c3 J4: class only. The text and the active exception's ``__context__``
+                # chain can carry a fetched signed URL / api key, and ``logger.exception``
+                # would print both plus the traceback.
+                logger.error("checkpoint loop error (%s)", type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +540,23 @@ class PaperCommandQueue:
                 claimed.append(cmd)
         self.conn.commit()
         return claimed
+
+    def fail_stale_running(self, trader_id: str, message: str) -> int:
+        """Fail every row this trader left ``running`` (a previous process claimed it).
+
+        A claimed row is finished only by the process that claimed it, so a row still
+        ``running`` when a node starts can never reach an outcome and the API polls it
+        forever. Other traders' rows and ``pending`` rows are untouched; returns the
+        number of rows failed.
+        """
+        cur = self.conn.execute(
+            "UPDATE paper_commands SET status = ?, error = ?, "
+            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+            "WHERE trader_id = ? AND status = 'running'",
+            (COMMAND_FAILED, message, trader_id),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def complete(self, command_id: int, result: JsonDict) -> None:
         self._finish(command_id, COMMAND_DONE, result, None)

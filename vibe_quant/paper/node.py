@@ -474,6 +474,9 @@ class PaperTradingNode:
         # the one ERROR halt per stale streak.
         self._kill_monitor = KillSwitchMonitor(lambda: StateManager(config.db_path))
         self._kill_read_halted: bool = False
+        #: J5: True once the executing close_all has issued its flatten orders; read by
+        #: ``process_commands`` when that command is cancelled while the flatten confirms.
+        self._flatten_issued: bool = False
         self._kill_watch_task: asyncio.Task[None] | None = None
         self._previous_state: NodeState | None = None  # pre-start halt fallback
         self._trades_day: date | None = None
@@ -1473,6 +1476,9 @@ class PaperTradingNode:
             raise
         for index, cmd in enumerate(claimed):
             finishing = False  # True once the command ran and its outcome is being written
+            # J5: set by a close_all once its flatten orders are out; read by the
+            # CancelledError handler below so such a row does not claim it never ran.
+            self._flatten_issued = False
             try:
                 try:
                     ok, result, error = await self._execute_command(cmd)
@@ -1498,10 +1504,24 @@ class PaperTradingNode:
             except asyncio.CancelledError:
                 # A command whose outcome write was in flight keeps that write.
                 rest = claimed[index + 1 :] if finishing else claimed[index:]
-                self._cmd_worker.submit(self._fail_claimed, commands, None, rest)
+                # J5: the head of ``rest`` is the command that was executing, and only a
+                # command still executing (``not finishing``) can have just issued a flatten.
+                self._cmd_worker.submit(
+                    self._fail_claimed,
+                    commands,
+                    None,
+                    rest,
+                    self._flatten_issued and not finishing,
+                )
                 raise
 
     _NOT_EXECUTED = "node stopping; command not executed"
+    #: J2: what a row left ``running`` by a previous process gets - its outcome is unknown.
+    _STALE_RUNNING = (
+        "node restarted; command outcome unknown (was running when the node stopped)"
+    )
+    #: J5: a close_all cancelled after its flatten orders went out, flat still unconfirmed.
+    _FLAT_NOT_CONFIRMED = "node stopping; close_all issued, flat not confirmed"
 
     @classmethod
     def _fail_claimed(
@@ -1509,13 +1529,19 @@ class PaperTradingNode:
         commands: PaperCommandQueue,
         claim: Future[list[PaperCommand]] | None,
         rest: list[PaperCommand],
+        flatten_issued: bool = False,
     ) -> None:
-        """Worker job: fail claimed-but-unexecuted commands (runs after the claim returned)."""
+        """Worker job: fail claimed-but-unexecuted commands (runs after the claim returned).
+
+        ``flatten_issued``: the first unexecuted command (``rest[0]``) is a close_all whose
+        flatten orders are already out, so its row says so instead of "not executed".
+        """
         pending = list(rest)
         if claim is not None and not claim.cancelled() and claim.exception() is None:
             pending.extend(claim.result())
-        for cmd in pending:
-            commands.fail(cmd.id, cls._NOT_EXECUTED)
+        for index, cmd in enumerate(pending):
+            error = cls._FLAT_NOT_CONFIRMED if index == 0 and flatten_issued else cls._NOT_EXECUTED
+            commands.fail(cmd.id, error)
 
     async def _execute_command(self, cmd: PaperCommand) -> tuple[bool, dict[str, Any], str | None]:
         payload = cmd.payload or {}
@@ -1535,6 +1561,9 @@ class PaperTradingNode:
         if cmd.command == "close_all":
             wait = float(payload.get("wait_secs", 10.0))
             result = self.close_all_positions()
+            # J5: from here on the flatten orders are out; a cancellation landing in
+            # ``_wait_flat`` must not report this command as never executed.
+            self._flatten_issued = True
             still_open = await self._wait_flat(wait)
             out: dict[str, Any] = {**result.to_dict(), "still_open": still_open}
             errors = list(result.errors)
@@ -2155,6 +2184,20 @@ class PaperTradingNode:
         )
         self._restore_from_checkpoint()
         self._commands = PaperCommandQueue(self._config.db_path)
+        # jf7c3 J2: rows a previous process left 'running' can never reach an outcome, so
+        # they are failed before this process claims anything - on the queue's own worker
+        # thread, like every other queue call - and never at the cost of the start.
+        try:
+            swept = await self._cmd_worker.run(
+                self._commands.fail_stale_running,
+                self._config.trader_id,
+                self._STALE_RUNNING,
+            )
+        except Exception as exc:
+            logger.error("stale command sweep failed (%s)", type(exc).__name__)
+        else:
+            if swept >= 1:
+                logger.warning("failed %d stale running paper command(s) at startup", swept)
 
         self._trading_node = self._create_live_trading_node()
         await self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint())
