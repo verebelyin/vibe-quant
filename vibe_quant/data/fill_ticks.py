@@ -160,6 +160,13 @@ def _to_ns(value: datetime | str | int) -> int:
     return int(ts.value)
 
 
+def _iso_ns(ns: int) -> str:
+    """UTC ``YYYY-MM-DD HH:MM:SS UTC`` for a nanosecond timestamp (seconds kept)."""
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(ns / 1e9, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
 def _build_one(symbol: str, timeframe: str, catalog_path: Path, root: Path) -> Path:
     """Return the immutable dir for the symbol's current 1m data, building if absent."""
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
@@ -282,9 +289,15 @@ def resolve_fill_ticks(
         elif ts.size == 0 or in_win.size == 0:
             problem = "no ticks in the window"
         elif int(ts[0]) > start_ns + tf_ns:
-            problem = f"first tick {int(ts[0])} > start+tf"
+            problem = (
+                f"first tick {_iso_ns(int(ts[0]))} is after the window start plus one "
+                f"{timeframe} bar ({_iso_ns(start_ns + tf_ns)})"
+            )
         elif int(ts[-1]) < end_ns - tf_ns:
-            problem = f"last tick {int(ts[-1])} < end-tf"
+            problem = (
+                f"last tick {_iso_ns(int(ts[-1]))} is before the window end minus one "
+                f"{timeframe} bar ({_iso_ns(end_ns - tf_ns)})"
+            )
         if problem:
             raise MissingBarDataError(
                 f"fill ticks for {symbol} {timeframe} do not cover the run window: {problem}"

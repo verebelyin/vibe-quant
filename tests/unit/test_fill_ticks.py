@@ -209,6 +209,30 @@ def test_absent_or_partial_coverage_raises(tmp_path: Path) -> None:
         resolve_fill_ticks(["BTCUSDT", "ETHUSDT"], "1h", DAY0, DAY0 + 2 * HOUR, cat)
 
 
+def test_coverage_error_names_the_last_tick_and_the_cutoff(tmp_path: Path) -> None:
+    cat = _full_day_catalog(tmp_path)
+    with pytest.raises(MissingBarDataError) as exc:
+        resolve_fill_ticks(["BTCUSDT"], "1h", DAY0, DAY0 + 30 * HOUR, cat)
+    assert str(exc.value) == (
+        "fill ticks for BTCUSDT 1h do not cover the run window: "
+        "last tick 2024-01-01 23:01:59 UTC is before the window end minus one 1h bar "
+        "(2024-01-02 05:00:00 UTC)"
+    )
+
+
+def test_coverage_error_names_the_first_tick_and_the_cutoff(tmp_path: Path) -> None:
+    cat = _write_catalog(
+        tmp_path / "catalog", _minutes(DAY0 + 2 * HOUR, 5 * 60), symbol="ETHUSDT"
+    )
+    with pytest.raises(MissingBarDataError) as exc:
+        resolve_fill_ticks(["ETHUSDT"], "1h", DAY0, DAY0 + 5 * HOUR, cat)
+    assert str(exc.value) == (
+        "fill ticks for ETHUSDT 1h do not cover the run window: "
+        "first tick 2024-01-01 02:00:59 UTC is after the window start plus one 1h bar "
+        "(2024-01-01 01:00:00 UTC)"
+    )
+
+
 def test_gap_in_middle_is_counted_not_fatal(tmp_path: Path) -> None:
     opens = [o for o in _minutes(DAY0, 6 * 60) if o not in (DAY0 + 3 * HOUR, DAY0 + 3 * HOUR + MIN)]
     cat = _write_catalog(tmp_path / "catalog", opens)
