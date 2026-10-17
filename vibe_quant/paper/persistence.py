@@ -10,6 +10,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -26,6 +28,69 @@ logger = logging.getLogger(__name__)
 
 # Type alias for JSON-serializable dict
 JsonDict = dict[str, Any]
+
+
+class StoreWorker:
+    """One worker thread that owns one store connection (R19d).
+
+    Every call into the store goes through ``submit`` / ``run`` (FIFO, one at a
+    time), so a hung statement stalls this worker only and never the trading event
+    loop. ``begin_stop`` queues the store's ``close`` as the LAST job and shuts the
+    executor down without joining: the worker closes its own connection after its
+    last job (eventual close). Nothing closes a connection from another thread.
+    """
+
+    def __init__(self, thread_name: str) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=thread_name)
+        self._close_future: Future[None] | None = None
+
+    @property
+    def executor(self) -> ThreadPoolExecutor:
+        return self._executor
+
+    def submit(self, fn: Callable[..., Any], *args: Any) -> Future[Any]:
+        """Queue ``fn(*args)`` behind every earlier job (capture order = write order)."""
+        return self._executor.submit(fn, *args)
+
+    async def run(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Await ``fn(*args)`` on the worker without blocking the event loop."""
+        return await asyncio.get_running_loop().run_in_executor(self._executor, fn, *args)
+
+    def begin_stop(self, close: Callable[[], None]) -> Future[None]:
+        """Queue ``close`` as the last job and stop accepting work; never blocks. Idempotent."""
+        if self._close_future is None:
+            self._close_future = self._executor.submit(close)
+            self._executor.shutdown(wait=False)
+        return self._close_future
+
+    def stop(self, close: Callable[[], None], timeout_s: float) -> bool:
+        """``begin_stop`` and wait at most ``timeout_s``; True when the worker closed the store.
+
+        On a timeout the worker is still busy (a hung statement): it closes the
+        connection after the job returns.
+        """
+        fut = self.begin_stop(close)
+        deadline = time.monotonic() + timeout_s
+        while not fut.done():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return fut.exception() is None
+
+
+async def wait_future(fut: Future[Any], timeout_s: float) -> bool:
+    """Poll a worker future without blocking the loop; True when it finished in time.
+
+    Polling (not ``wrap_future``) means a job finishing after the loop is gone never
+    calls back into a closed loop.
+    """
+    deadline = time.monotonic() + timeout_s
+    while not fut.done():
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.02)
+    return True
+
 
 # SQL to create paper trading checkpoint table
 CHECKPOINT_TABLE_SQL = """
@@ -297,15 +362,19 @@ class StatePersistence:
     async def start_periodic_checkpointing(
         self,
         state_callback: Callable[[], StateCheckpoint | None],
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         """Start periodic checkpointing background task.
 
         Args:
             state_callback: Callable that returns current StateCheckpoint.
                 Can be sync or async.
+            executor: Single-worker executor that owns every write (R19). The
+                capture runs on the loop, the save + prune on the executor, so
+                capture order = write order.
         """
         self._running = True
-        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(state_callback))
+        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(state_callback, executor))
 
     async def stop_periodic_checkpointing(self) -> None:
         """Stop periodic checkpointing."""
@@ -316,14 +385,20 @@ class StatePersistence:
                 await self._checkpoint_task
             self._checkpoint_task = None
 
+    def _save_and_prune(self, checkpoint: StateCheckpoint) -> None:
+        self.save_checkpoint(checkpoint)
+        self.delete_old_checkpoints()
+
     async def _checkpoint_loop(
         self,
         state_callback: Callable[[], StateCheckpoint | None],
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         """Periodic checkpoint loop.
 
         Args:
             state_callback: Callable returning StateCheckpoint.
+            executor: Runs save + prune off the loop (None: inline, as before).
         """
         while self._running:
             try:
@@ -338,8 +413,13 @@ class StatePersistence:
                     checkpoint = state_callback()
 
                 if checkpoint is not None:
-                    self.save_checkpoint(checkpoint)
-                    self.delete_old_checkpoints()
+                    if executor is None:
+                        self._save_and_prune(checkpoint)
+                    else:
+                        # Submitted in the same loop step as the capture: no await in between.
+                        await asyncio.get_running_loop().run_in_executor(
+                            executor, self._save_and_prune, checkpoint
+                        )
 
             except asyncio.CancelledError:
                 break

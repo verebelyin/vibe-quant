@@ -22,7 +22,12 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import is_valid_trader_id
 from vibe_quant.paper.node import PaperTradingNode
-from vibe_quant.paper.persistence import PaperCommandQueue, StateCheckpoint, StatePersistence
+from vibe_quant.paper.persistence import (
+    PaperCommandQueue,
+    StateCheckpoint,
+    StatePersistence,
+    StoreWorker,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -320,6 +325,7 @@ async def test_raised_command_error_never_reaches_api_detail(
     node = PaperTradingNode.__new__(PaperTradingNode)
     node._config = SimpleNamespace(trader_id=trader_id)  # type: ignore[assignment]
     node._commands = PaperCommandQueue(tmp_db)
+    node._cmd_worker = StoreWorker("vq-test-cmd")
     monkeypatch.setattr(node, "_execute_command", _boom)
 
     stop = asyncio.Event()

@@ -803,6 +803,7 @@ def test_on_guard_state_change_persists_the_halt_when_the_write_fails(
 
     assert caught.value is error
     assert spy.order == ["write", "alert"]
+    node._db_worker.submit(lambda: None).result(5)  # the save is queued on the FIFO worker
     try:
         checkpoint = persistence.load_latest_checkpoint()
         assert checkpoint is not None
@@ -839,6 +840,7 @@ def test_checkpoint_failure_does_not_replace_the_write_error(
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
 
     assert caught.value is error
+    node._db_worker.submit(lambda: None).result(5)  # the save is queued on the FIFO worker
     assert persistence.calls == 1
     assert spy.order == ["write", "alert"]
 
@@ -858,6 +860,7 @@ def test_save_checkpoint_now_failure_log_is_class_only(
     with caplog.at_level(logging.DEBUG), pytest.raises(OSError) as caught:
         node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "drawdown", {})
 
+    node._db_worker.submit(lambda: None).result(5)  # the save is queued on the FIFO worker
     assert caught.value is error
     assert spy.order == ["write", "alert"]
     assert "RuntimeError" in caplog.text

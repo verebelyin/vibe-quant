@@ -75,9 +75,13 @@ from vibe_quant.paper.persistence import (
     PaperCommandQueue,
     StateCheckpoint,
     StatePersistence,
+    StoreWorker,
+    wait_future,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from concurrent.futures import Future
     from types import ModuleType
 
     from vibe_quant.alerts.telegram import TelegramBot
@@ -101,6 +105,10 @@ _BACKTEST_ONLY_PARAMS = frozenset(
 #: R42b: how long the venue may stay unconnected before the node reports the startup
 #: refusal (an exchange that refuses the margin change leaves the node not trading).
 STARTUP_CONNECT_TIMEOUT_S = 120
+# R19c: the final shutdown checkpoint is waited at most this long; R19d: a store worker's
+# close is waited at most this long (a hung statement closes after it returns).
+SHUTDOWN_CHECKPOINT_WAIT_S = 10.0
+STORE_CLOSE_WAIT_S = 2.0
 
 #: ``PositionOpened.side`` (a ``PositionSide``) -> the sign the solvency formula wants.
 _POSITION_SIDE_SIGNS = {"LONG": 1, "SHORT": -1}
@@ -414,6 +422,11 @@ class PaperTradingNode:
         self._trading_node: _TradingNodeLifecycle | None = None
         self._persistence: StatePersistence | None = None
         self._commands: PaperCommandQueue | None = None
+        # T2b/B2: ALL checkpoint writes go through one FIFO worker (capture order =
+        # write order) and the command queue has its own worker; each worker closes
+        # its own store after its last job (R19d), so the loop never blocks on the DB.
+        self._db_worker = StoreWorker("vq-paper-db")
+        self._cmd_worker = StoreWorker("vq-paper-cmd")
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
         self._restored_halt: RestoredHalt | None = None
@@ -1396,24 +1409,61 @@ class PaperTradingNode:
 
     async def process_commands(self) -> None:
         """Execute queued operator commands for this trader."""
-        if self._commands is None:
+        commands = self._commands
+        if commands is None:
             return
-        for cmd in self._commands.claim_pending(self._config.trader_id):
+        claim = self._cmd_worker.submit(commands.claim_pending, self._config.trader_id)
+        try:
+            claimed: list[PaperCommand] = await asyncio.wrap_future(claim)
+        except asyncio.CancelledError:
+            # The worker may still finish the claim: fail those rows (never leave 'running').
+            self._cmd_worker.submit(self._fail_claimed, commands, claim, [])
+            raise
+        for index, cmd in enumerate(claimed):
+            finishing = False  # True once the command ran and its outcome is being written
             try:
-                ok, result, error = await self._execute_command(cmd)
-            except Exception as exc:
-                # ott8r: class only (R1b) - the command name identifies the command,
-                # while ``logger.exception`` would print its text and the active
-                # exception's ``__context__`` chain (a fetch error with signature/apiKey).
-                logger.error("paper command %s failed (%s)", cmd.command, type(exc).__name__)
-                self._commands.fail(
-                    cmd.id, f"{type(exc).__name__}: command failed; see the paper node log"
-                )
-                continue
-            if ok:
-                self._commands.complete(cmd.id, result)
-            else:
-                self._commands.fail(cmd.id, error or "failed", result)
+                try:
+                    ok, result, error = await self._execute_command(cmd)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # ott8r: class only (R1b) - the command name identifies the command,
+                    # while ``logger.exception`` would print its text and the active
+                    # exception's ``__context__`` chain (a fetch error with signature/apiKey).
+                    logger.error("paper command %s failed (%s)", cmd.command, type(exc).__name__)
+                    finishing = True
+                    await self._cmd_worker.run(
+                        commands.fail,
+                        cmd.id,
+                        f"{type(exc).__name__}: command failed; see the paper node log",
+                    )
+                    continue
+                finishing = True
+                if ok:
+                    await self._cmd_worker.run(commands.complete, cmd.id, result)
+                else:
+                    await self._cmd_worker.run(commands.fail, cmd.id, error or "failed", result)
+            except asyncio.CancelledError:
+                # A command whose outcome write was in flight keeps that write.
+                rest = claimed[index + 1 :] if finishing else claimed[index:]
+                self._cmd_worker.submit(self._fail_claimed, commands, None, rest)
+                raise
+
+    _NOT_EXECUTED = "node stopping; command not executed"
+
+    @classmethod
+    def _fail_claimed(
+        cls,
+        commands: PaperCommandQueue,
+        claim: Future[list[PaperCommand]] | None,
+        rest: list[PaperCommand],
+    ) -> None:
+        """Worker job: fail claimed-but-unexecuted commands (runs after the claim returned)."""
+        pending = list(rest)
+        if claim is not None and not claim.cancelled() and claim.exception() is None:
+            pending.extend(claim.result())
+        for cmd in pending:
+            commands.fail(cmd.id, cls._NOT_EXECUTED)
 
     async def _execute_command(self, cmd: PaperCommand) -> tuple[bool, dict[str, Any], str | None]:
         payload = cmd.payload or {}
@@ -1818,12 +1868,22 @@ class PaperTradingNode:
         if self._persistence is None:
             return
         try:
-            self._persistence.save_checkpoint(self._capture_checkpoint())
+            # Capture on the loop, write on the FIFO worker: no DB call on the loop.
+            future = self._db_worker.submit(
+                self._persistence.save_checkpoint, self._capture_checkpoint()
+            )
+            future.add_done_callback(self._log_checkpoint_failure)
         except Exception as exc:
             # s3pqx: class only - this now always runs in a finally after a failed
             # guard-transition write (bykze), so an active exception is present and
             # ``logger.exception`` would print that error and its ``__context__`` chain
             # next to this one. Same rule as _check_connectivity / _write_then_alert.
+            logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
+
+    @staticmethod
+    def _log_checkpoint_failure(future: Future[Any]) -> None:
+        """Done-callback of a worker save: class only (see ``_save_checkpoint_now``)."""
+        if not future.cancelled() and (exc := future.exception()) is not None:
             logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
 
     def _restore_from_checkpoint(self) -> None:
@@ -2026,7 +2086,7 @@ class PaperTradingNode:
         self._commands = PaperCommandQueue(self._config.db_path)
 
         self._trading_node = self._create_live_trading_node()
-        self._persistence.save_checkpoint(self._capture_checkpoint())
+        await self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint())
 
     async def _run_loop(self) -> None:
         """Main event loop for paper trading.
@@ -2055,7 +2115,9 @@ class PaperTradingNode:
         )
 
         if self._persistence is not None:
-            await self._persistence.start_periodic_checkpointing(self._capture_checkpoint)
+            await self._persistence.start_periodic_checkpointing(
+                self._capture_checkpoint, self._db_worker.executor
+            )
 
         self._control_task = asyncio.create_task(self._control_loop())
         self._kill_watch_task = asyncio.create_task(self._kill_watch_loop())
@@ -2119,6 +2181,43 @@ class PaperTradingNode:
         except Exception as exc:
             logger.error("kill-switch monitor stop failed (%s)", type(exc).__name__)
 
+    async def _final_checkpoint(self, persistence: StatePersistence) -> None:
+        """R19c: submit the final save and wait at most ``SHUTDOWN_CHECKPOINT_WAIT_S`` for it.
+
+        A hung store costs this wait, not the shutdown: the trading engine stops either way.
+        """
+        try:
+            future = self._db_worker.submit(persistence.save_checkpoint, self._capture_checkpoint())
+        except Exception as exc:
+            logger.error("final checkpoint not submitted (%s)", type(exc).__name__)
+            return
+        if not await wait_future(future, SHUTDOWN_CHECKPOINT_WAIT_S):
+            logger.error(
+                "final checkpoint not saved within %.0f s; continuing shutdown",
+                SHUTDOWN_CHECKPOINT_WAIT_S,
+            )
+        elif (final_exc := future.exception()) is not None:
+            logger.error("final checkpoint failed (%s)", type(final_exc).__name__)
+
+    async def _close_store(
+        self, worker: StoreWorker, close: Callable[[], None], label: str
+    ) -> None:
+        """R19d: the store's own worker closes it after its last job; wait a bounded time.
+
+        Nothing closes the connection from the loop. On a hung statement the wait ends
+        after ``STORE_CLOSE_WAIT_S`` and the worker closes once the statement returns.
+        A raising close is logged class only.
+        """
+
+        def guarded_close() -> None:
+            try:
+                close()
+            except Exception as exc:
+                logger.error("%s close failed (%s); continuing shutdown", label, type(exc).__name__)
+
+        if not await wait_future(worker.begin_stop(guarded_close), STORE_CLOSE_WAIT_S):
+            logger.error("%s still busy; its worker closes it when the job returns", label)
+
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""
         if self._status.state != NodeState.ERROR:
@@ -2151,12 +2250,20 @@ class PaperTradingNode:
         await self._stop_liquidation_loop()
 
         if self._persistence is not None:
+            persistence = self._persistence
             with contextlib.suppress(Exception):
-                self._persistence.save_checkpoint(self._capture_checkpoint())
-            with contextlib.suppress(Exception):
-                await self._persistence.stop_periodic_checkpointing()
-            with contextlib.suppress(Exception):
-                self._persistence.close()
+                await persistence.stop_periodic_checkpointing()
+            # 18def66b680c20f8-4926: nothing before stop_async may raise past here.
+            try:
+                await self._final_checkpoint(persistence)
+                await self._close_store(
+                    self._db_worker, persistence.close, "paper checkpoint store"
+                )
+            except Exception as exc:
+                logger.error(
+                    "paper checkpoint store shutdown failed (%s); continuing shutdown",
+                    type(exc).__name__,
+                )
             self._persistence = None
 
         # otrm3: like the R6 writer close below, a raising ``close()`` is caught and
@@ -2165,10 +2272,12 @@ class PaperTradingNode:
         # key text) and its traceback out of the log.
         if self._commands is not None:
             try:
-                self._commands.close()
+                await self._close_store(
+                    self._cmd_worker, self._commands.close, "paper command queue"
+                )
             except Exception as exc:
                 logger.error(
-                    "paper command queue close failed (%s); continuing shutdown",
+                    "paper command queue shutdown failed (%s); continuing shutdown",
                     type(exc).__name__,
                 )
             self._commands = None
