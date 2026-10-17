@@ -182,6 +182,43 @@ def test_default_timestamp_is_taken_at_submit(
         _stop_event_worker(node)
 
 
+@pytest.mark.parametrize("event_type", [EventType.SIGNAL, EventType.LIFECYCLE])
+def test_write_event_snapshots_the_payload_at_submit(
+    event_type: EventType,
+    seeded: dict[str, Any],  # noqa: F811
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R3c: the payload is captured at submit, so a caller mutating its dict while the
+    write is stalled (value, new key, nested list, nested dict) cannot change the line."""
+    node = _node(seeded)
+    writer = EventWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
+    node._event_writer = writer
+    _entered, release = _gate_real_writer(monkeypatch, writer)
+    levels: list[int] = [1, 2]
+    nested: dict[str, str] = {"side": "long"}
+    payload: dict[str, object] = {"action": "signal", "levels": levels, "nested": nested}
+    try:
+        future = node._write_event(event_type, payload)
+        assert future is not None
+        assert _entered.wait(5), "the write is stalled and has not serialized yet"
+
+        payload["action"] = "changed"
+        payload["added"] = "later"
+        levels.append(3)
+        nested["side"] = "short"
+
+        release.set()
+        node._event_log.barrier().result(10)
+        line = _lines(tmp_path / "logs" / f"{node._config.trader_id}.jsonl")[-1]
+        assert line["event"] == event_type.value
+        assert line["data"] == {"action": "signal", "levels": [1, 2], "nested": {"side": "long"}}
+    finally:
+        release.set()
+        monkeypatch.undo()
+        _stop_event_worker(node)
+
+
 async def test_write_after_shutdown_is_a_no_op(
     seeded: dict[str, Any],  # noqa: F811
     tmp_path: Path,

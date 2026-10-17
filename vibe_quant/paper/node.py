@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import math
@@ -2179,6 +2180,10 @@ class PaperTradingNode:
         resolves when it is on disk (or carries the write error / ``EventLogFullError``),
         ``None`` when there is no writer. The timestamp is taken here, at submit.
 
+        The payload is deep-copied here, at submit: the worker serializes the event
+        later, so a caller that mutates its dict after this returns (a new key, a new
+        value, a nested list/dict) must not change the written line.
+
         Position events use the typed classes (their fields are the payload);
         everything else is written as a base ``Event`` because the typed
         SIGNAL/RISK_CHECK classes drop unknown keys (and default ``passed``
@@ -2188,13 +2193,14 @@ class PaperTradingNode:
             return None
         strategy_name = self._strategy.name if self._strategy else "unknown"
         ts = timestamp or datetime.now(UTC)
+        payload = copy.deepcopy(data)
         event: Event
         if event_type in (EventType.POSITION_OPEN, EventType.POSITION_CLOSE):
             event = create_event(
                 event_type=event_type,
                 run_id=self._config.trader_id,
                 strategy_name=strategy_name,
-                data=data,
+                data=payload,
                 timestamp=ts,
             )
         else:
@@ -2203,7 +2209,7 @@ class PaperTradingNode:
                 event_type=event_type,
                 run_id=self._config.trader_id,
                 strategy_name=strategy_name,
-                data=data,
+                data=payload,
             )
         return self._event_log.submit(self._event_writer, event)
 
