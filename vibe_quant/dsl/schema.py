@@ -6,9 +6,17 @@ conditions, time filters, stop loss, take profit, and sweep parameters.
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar
+from collections.abc import Mapping
+from typing import Annotated, Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 # Valid timeframes supported by the system
 VALID_TIMEFRAMES = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
@@ -34,6 +42,83 @@ VALID_DAYS = frozenset(
         "Sunday",
     }
 )
+
+
+# Registry param_schema key -> IndicatorConfig field name, for the types whose
+# spellings differ (STOCH's spline periods).
+_PARAM_FIELD_RENAMES: dict[str, str] = {"period_k": "period", "period_d": "d_period"}
+
+
+def allowed_indicator_params(ind_type: str) -> frozenset[str] | None:
+    """Param names ``ind_type`` declares, in :class:`IndicatorConfig` field names.
+
+    The registry's ``param_schema`` is the single source of truth, mapped onto
+    the schema's own field names (STOCH ``period_k``/``period_d`` ->
+    ``period``/``d_period``). Returns ``None`` for an unregistered type: the
+    ``type`` validator rejects that before any param check can run.
+    """
+    from vibe_quant.dsl.indicators import indicator_registry
+
+    spec = indicator_registry.get(str(ind_type).upper())
+    if spec is None:
+        return None
+    return frozenset(_PARAM_FIELD_RENAMES.get(key, key) for key in spec.param_schema)
+
+
+def _first_validation_message(exc: ValidationError) -> str:
+    """The first pydantic error's own message, without pydantic's wrapper text."""
+    errors = exc.errors()
+    if not errors:
+        return str(exc)
+    first = errors[0]
+    error = (first.get("ctx") or {}).get("error")
+    if isinstance(error, ValueError):
+        return str(error)
+    return str(first.get("msg", exc))
+
+
+def check_strategy_indicator_params(dsl_config: Mapping[str, Any]) -> None:
+    """Reject indicator params the indicator's type does not declare (SF1).
+
+    Indicator-only: ``conditions``, ``risk`` and ``general`` are never
+    translated, so an unrelated error there (an unsupported
+    ``risk.trailing_stop_pct``, a bad condition) cannot block a save. A config
+    with no ``indicators`` (absent, ``None`` or empty) is a no-op — some stored
+    strategies carry none.
+
+    Args:
+        dsl_config: frontend ``DslConfig`` (``indicators`` list) or canonical
+            ``StrategyDSL`` dict (``indicators`` mapping).
+
+    Raises:
+        ValueError: naming the offending indicator and its valid params.
+    """
+    if not isinstance(dsl_config, Mapping):
+        return
+    raw = dsl_config.get("indicators")
+    if not raw:
+        return
+    if isinstance(raw, list):
+        from vibe_quant.dsl.translator import translate_indicators
+
+        # An explicit null is "not set" (the editor emits ``std_dev: null``): drop it
+        # before translation, where ``float(None)`` would raise a 500 instead of a 422.
+        cleaned = [
+            {**ind, "params": {k: v for k, v in ind["params"].items() if v is not None}}
+            if isinstance(ind, Mapping) and isinstance(ind.get("params"), Mapping)
+            else ind
+            for ind in raw
+        ]
+        configs = list(translate_indicators(cleaned).values())
+    elif isinstance(raw, Mapping):
+        configs = list(raw.values())
+    else:
+        return
+    for config in configs:
+        try:
+            IndicatorConfig.model_validate(config)
+        except ValidationError as exc:
+            raise ValueError(_first_validation_message(exc)) from exc
 
 
 class IndicatorConfig(BaseModel):
@@ -178,6 +263,28 @@ class IndicatorConfig(BaseModel):
             "omit 'source' or use 'close'"
         )
         raise ValueError(msg)
+
+    @model_validator(mode="after")
+    def validate_used_params(self) -> IndicatorConfig:
+        """Reject a builtin param the indicator's type does not declare.
+
+        Ordered before :meth:`validate_indicator_params` fills defaults, so
+        ``model_fields_set`` holds only params the caller actually gave — a
+        filled default is not a user param. A ``None`` value is ignored (the
+        editor may emit ``std_dev: null``).
+        """
+        allowed = allowed_indicator_params(self.type)
+        if allowed is None:
+            return self
+        for key in sorted(self.model_fields_set & self._BUILTIN_PARAM_FIELDS):
+            if getattr(self, key) is None or key in allowed:
+                continue
+            msg = (
+                f"Indicator '{self.type}' does not use param '{key}'. "
+                f"Valid params: {sorted(allowed)}"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_indicator_params(self) -> IndicatorConfig:

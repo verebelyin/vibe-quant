@@ -487,8 +487,16 @@ def _gene_to_indicator_config(gene: StrategyGene) -> dict[str, object]:
         cfg["period"] = _as_int(params.get("period", 20))
         cfg["std_dev"] = float(params.get("std_dev", 2.0))
     else:
-        # RSI, ATR, plugins, ... -- "period" plus any extra declared params
-        cfg["period"] = _as_int(params.get("period", 14))
+        # RSI, ATR, plugins, ... -- "period" plus any extra declared params. Only
+        # inject ``period`` when the spec declares it: a type without it
+        # (SQUEEZE_MOM, SQUEEZE_RATIO, TREND_ENSEMBLE) got a dead ``period=14``
+        # that the compute path never read (the compiler emitted
+        # ``<name>_period``) and that StrategyDSL now rejects.
+        from vibe_quant.dsl.indicators import indicator_registry
+
+        spec = indicator_registry.get(gene.indicator_type)
+        if spec is None or "period" in spec.param_schema:
+            cfg["period"] = _as_int(params.get("period", 14))
         ind_def = INDICATOR_POOL.get(gene.indicator_type)
         int_params = ind_def.int_params if ind_def is not None else frozenset()
         for pname, pval in params.items():

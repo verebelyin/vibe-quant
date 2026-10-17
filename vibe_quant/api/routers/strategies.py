@@ -17,6 +17,7 @@ from vibe_quant.api.schemas.strategy import (
     ValidationResult,
 )
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dsl.schema import check_strategy_indicator_params
 from vibe_quant.strategies.templates._metadata import list_template_payloads
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 StateMgr = Annotated[StateManager, Depends(get_state_manager)]
+
+
+def _reject_unused_indicator_params(dsl_config: dict[str, object]) -> None:
+    """422 on an indicator param its type does not declare (vibe-quant-q7v3f).
+
+    ``check_strategy_indicator_params`` raises ``ValueError``; pydantic's
+    ``ValidationError`` is a subclass, so one handler covers both.
+    """
+    try:
+        check_strategy_indicator_params(dsl_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("", response_model=StrategyListResponse)
@@ -53,6 +66,7 @@ async def get_strategy(strategy_id: int, mgr: StateMgr) -> StrategyResponse:
 
 @router.post("", response_model=StrategyResponse, status_code=201)
 async def create_strategy(body: StrategyCreate, mgr: StateMgr) -> StrategyResponse:
+    _reject_unused_indicator_params(body.dsl_config)
     existing = mgr.get_strategy_by_name(body.name)
     if existing is not None:
         # Names stay reserved after a (soft) delete: is_active=0 rows keep the
@@ -81,6 +95,8 @@ async def update_strategy(
     body: StrategyUpdate,
     mgr: StateMgr,
 ) -> StrategyResponse:
+    if body.dsl_config is not None:
+        _reject_unused_indicator_params(body.dsl_config)
     existing = mgr.get_strategy(strategy_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Strategy not found")

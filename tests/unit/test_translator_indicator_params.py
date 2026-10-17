@@ -308,7 +308,6 @@ def test_fractional_numeric_string_legacy_int_param_raises_as_fractional(
     [
         ("MACD", {"fast": True, "slow": 26, "signal": 9}, "fast_period"),
         ("MACD", {"fast": "abc", "slow": 26, "signal": 9}, "fast_period"),
-        ("STOCH", {"k_period": None, "d_period": 3}, "period"),
     ],
 )
 def test_non_numeric_legacy_int_param_raises(
@@ -320,6 +319,20 @@ def test_non_numeric_legacy_int_param_raises(
         ValueError, match=rf"(?s)(?=.*{ind_type})(?=.*'{bad}')(?=.*must be a number)"
     ):
         translate_dsl_config(cfg, strategy_name="t_non_numeric")
+
+
+def test_null_legacy_int_param_is_dropped_not_rejected() -> None:
+    # T7-R4 (supersedes vibe-quant-yubhb): an explicit null param means "not set", so
+    # {k_period: None} no longer raises "must be a number"; it translates like the key absent.
+    with_null = translate_dsl_config(
+        _cfg([{"type": "STOCH", "params": {"k_period": None, "d_period": 3}}]),
+        strategy_name="t_null",
+    )
+    without = translate_dsl_config(
+        _cfg([{"type": "STOCH", "params": {"d_period": 3}}]), strategy_name="t_null"
+    )
+    assert with_null == without
+    assert with_null["indicators"]["stoch"] == {"type": "STOCH", "d_period": 3}
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from typing import Any
 
 # Editor indicator types whose StrategyDSL registry name differs. Only the config `type`
@@ -255,12 +256,22 @@ def _norm_ref(ref: str) -> str:
     return f"{m.group(1)}({','.join(args)})"
 
 
+def _drop_none_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop ``None``-valued params: an explicit null means "not set" (T7-R4).
+
+    The editor emits ``std_dev: null`` and a stored config may carry a legacy null;
+    treating it as absent makes such a config translate and launch exactly like the
+    same config without the key. Must run before any ``float()``/``int()`` coercion.
+    """
+    return {key: value for key, value in params.items() if value is not None}
+
+
 def _translate_indicators(indicators_raw: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Convert DslConfig indicator array to StrategyDSL indicators dict."""
     result: dict[str, dict[str, Any]] = {}
     for ind in indicators_raw:
         ind_type = str(ind.get("type", "EMA")).upper()
-        params = ind.get("params", {}) or {}
+        params = _drop_none_params(ind.get("params", {}) or {})
         name = _generate_indicator_name(ind_type, params, set(result.keys()))
 
         config: dict[str, Any] = {"type": _TYPE_ALIASES.get(ind_type, ind_type)}
@@ -299,6 +310,11 @@ def _translate_indicators(indicators_raw: list[dict[str, Any]]) -> dict[str, dic
 
         result[name] = config
     return result
+
+
+# Public alias of the indicator-only translation path, used by
+# ``schema.check_strategy_indicator_params`` (the save guard).
+translate_indicators = _translate_indicators
 
 
 def _type_refs(type_name: str, params: dict[str, Any], canonical: dict[str, Any]) -> list[str]:
@@ -351,7 +367,7 @@ def _build_ref_map(
     via_alias: dict[str, list[str]] = {}
     for ind, canonical in zip(indicators_raw, canonical_names, strict=True):
         ind_type = str(ind.get("type", "EMA")).upper()
-        params = ind.get("params", {}) or {}
+        params = _drop_none_params(ind.get("params", {}) or {})
         canonical_params = _canonical_params(ind_type, params)
 
         for ref in _type_refs(ind_type, params, canonical_params):
@@ -495,11 +511,29 @@ def _ensure_atr_reference(
         cfg["indicator"] = ref
 
 
+def _strip_none_indicator_params(raw: dict[str, Any]) -> dict[str, Any]:
+    """Canonical-format config with a stored null builtin param made equal to the key being absent.
+
+    ``translate_dsl_config`` returns canonical input unchanged; a legacy ``std_dev: null``
+    must not survive into ``IndicatorConfig``/launch, so it is dropped here (T7-R4).
+    """
+    indicators = raw.get("indicators")
+    if not isinstance(indicators, Mapping):
+        return raw
+    return {
+        **raw,
+        "indicators": {
+            name: _drop_none_params(cfg) if isinstance(cfg, Mapping) else cfg
+            for name, cfg in indicators.items()
+        },
+    }
+
+
 def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -> dict[str, Any]:
     """Translate frontend DslConfig dict to canonical StrategyDSL dict.
 
     If the input is already in StrategyDSL format (no 'general' key, indicators is a dict),
-    it is returned unchanged.
+    it is returned with any ``None``-valued indicator param dropped (T7-R4).
 
     Args:
         raw: The dsl_config dict from the database.
@@ -510,7 +544,7 @@ def translate_dsl_config(raw: dict[str, Any], strategy_name: str = "strategy") -
     """
     if not _is_dsl_config_format(raw):
         # Already canonical StrategyDSL format
-        return raw
+        return _strip_none_indicator_params(raw)
 
     general = raw.get("general", {}) or {}
     timeframe = str(general.get("timeframe", "1h"))

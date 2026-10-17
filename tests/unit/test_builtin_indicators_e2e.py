@@ -53,7 +53,7 @@ def _sub_value_for(spec: IndicatorSpec) -> str | None:
 # satisfies both the schema and the spec's @model_validator checks.
 _DSL_CONFIG_OVERRIDES: dict[str, dict[str, Any]] = {
     "STOCH": {"period": 14, "d_period": 3},
-    "ICHIMOKU": {"period": 9},  # tenkan; kijun/senkou come from spec defaults
+    "ICHIMOKU": {"tenkan": 9},  # tenkan; kijun/senkou come from spec defaults
     "MACD": {"fast_period": 12, "slow_period": 26, "signal_period": 9},
     "BBANDS": {"period": 20, "std_dev": 2.0},
     "KC": {"period": 20, "atr_multiplier": 2.0},
