@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -393,6 +394,98 @@ class TestRunWithConfig:
         assert "RuntimeError: kaboom" in fake_manager.completed_calls[0][1]
         assert stop_calls["count"] == 1
         assert fake_manager.closed
+
+
+class TestMarkCompletedFailure:
+    """R29: a heartbeat failure never changes the run's exit code, and logs class only."""
+
+    @staticmethod
+    def _write_minimal_config(path: Path) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                }
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_path_failure_logs_and_keeps_zero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        class _FakeManager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                raise RuntimeError("mark failed: HEARTBEAT_SECRET_MARKER")
+
+            def close(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (_FakeManager(), lambda: None),
+        )
+
+        async def _ok_run(_config: PaperTradingConfig) -> None:
+            return
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _ok_run)
+
+        with caplog.at_level(logging.ERROR):
+            rc = await run_with_config(config_path, run_id=7)
+
+        assert rc == 0
+        records = [r for r in caplog.records if "heartbeat mark_completed failed" in r.getMessage()]
+        assert len(records) == 1
+        assert "RuntimeError" in records[0].getMessage()
+        assert records[0].exc_info is None
+        assert "HEARTBEAT_SECRET_MARKER" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_error_path_failure_logs_keeps_one_and_hides_chain(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        class _FakeManager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                raise SystemError("mark failed: HEARTBEAT_SECRET_MARKER")
+
+            def close(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (_FakeManager(), lambda: None),
+        )
+
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            raise RuntimeError("run failed: CHAINED_SECRET_MARKER")
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+        with caplog.at_level(logging.ERROR):
+            rc = await run_with_config(config_path, run_id=7)
+
+        assert rc == 1
+        records = [r for r in caplog.records if "heartbeat mark_completed failed" in r.getMessage()]
+        assert len(records) == 1
+        assert "SystemError" in records[0].getMessage()
+        assert records[0].exc_info is None
+        assert "HEARTBEAT_SECRET_MARKER" not in caplog.text
+        assert "CHAINED_SECRET_MARKER" not in caplog.text
 
 
 class TestMarginCushionConfig:

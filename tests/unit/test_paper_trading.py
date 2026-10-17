@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 from decimal import Decimal
@@ -15,6 +16,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+from vibe_quant.alerts.telegram import ConfigurationError as TelegramConfigurationError
 from vibe_quant.paper.config import (
     BinanceTestnetConfig,
     ConfigurationError,
@@ -935,6 +937,410 @@ class TestPaperTradingNode:
         _json.dumps(checkpoint.positions)
         _json.dumps(checkpoint.orders)
         _json.dumps(checkpoint.balance)
+
+
+class _FakeId:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _CacheItem:
+    """One position/order/account: each failure point is opt-in (P2 R21-R25)."""
+
+    def __init__(
+        self,
+        item_id: str = "X-1",
+        *,
+        id_exc: type[Exception] | None = None,
+        to_dict_exc: type[Exception] | None = None,
+        balances_exc: type[Exception] | None = None,
+    ) -> None:
+        self._item_id = item_id
+        self._id_exc = id_exc
+        self._to_dict_exc = to_dict_exc
+        self._balances_exc = balances_exc
+        self.instrument_id = f"{item_id}-INSTR"
+
+    @property
+    def id(self):  # noqa: ANN201
+        if self._id_exc is not None:
+            raise self._id_exc("unreadable id: SNAPSHOT_SECRET_MARKER")
+        return _FakeId(self._item_id)
+
+    @property
+    def client_order_id(self):  # noqa: ANN201
+        return self.id
+
+    def to_dict(self) -> dict[str, str]:
+        if self._to_dict_exc is not None:
+            raise self._to_dict_exc("cannot serialize: SNAPSHOT_SECRET_MARKER")
+        return {"kind": "item", "id": self._item_id}
+
+    def balances_total(self):  # noqa: ANN201
+        if self._balances_exc is not None:
+            raise self._balances_exc("no balance: SNAPSHOT_SECRET_MARKER")
+        return {"USDT": "5000"}
+
+
+class _SnapshotCache:
+    """A TradingNode cache whose listings can each be made to raise."""
+
+    def __init__(
+        self,
+        positions: list[object] | None = None,
+        orders: list[object] | None = None,
+        accounts: list[object] | None = None,
+        *,
+        positions_error: type[Exception] | None = None,
+        orders_error: type[Exception] | None = None,
+        accounts_error: type[Exception] | None = None,
+    ) -> None:
+        self._positions = positions or []
+        self._orders = orders or []
+        self._accounts = accounts or []
+        self._positions_error = positions_error
+        self._orders_error = orders_error
+        self._accounts_error = accounts_error
+
+    def positions_open(self):  # noqa: ANN202
+        if self._positions_error is not None:
+            raise self._positions_error("positions listing failed: SNAPSHOT_SECRET_MARKER")
+        return list(self._positions)
+
+    def orders_open(self):  # noqa: ANN202
+        if self._orders_error is not None:
+            raise self._orders_error("orders listing failed: SNAPSHOT_SECRET_MARKER")
+        return list(self._orders)
+
+    def accounts(self):  # noqa: ANN202
+        if self._accounts_error is not None:
+            raise self._accounts_error("accounts listing failed: SNAPSHOT_SECRET_MARKER")
+        return list(self._accounts)
+
+
+class _Portfolio:
+    def __init__(self, *, exc: type[Exception] | None = None) -> None:
+        self._exc = exc
+
+    def unrealized_pnl(self, instrument_id: str) -> float:
+        if self._exc is not None:
+            raise self._exc("pnl failed: SNAPSHOT_SECRET_MARKER")
+        return 1.5
+
+
+class _StopNode:
+    def __init__(self, *, error: type[Exception] | None = None) -> None:
+        self.stop_calls = 0
+        self._error = error
+
+    async def stop_async(self) -> None:
+        self.stop_calls += 1
+        if self._error is not None:
+            raise self._error("stop failed: STOP_SECRET_MARKER")
+
+
+class TestCaptureCheckpointIsolation:
+    """P2 R20-R26: one bad item must not hide the others (20261017-silent-handlers)."""
+
+    @staticmethod
+    def _node(db_path: Path) -> PaperTradingNode:
+        return PaperTradingNode(
+            PaperTradingConfig(
+                trader_id="PAPER-001",
+                binance=BinanceTestnetConfig("key", "secret"),
+                symbols=["BTCUSDT"],
+                strategy_id=1,
+                db_path=db_path,
+            )
+        )
+
+    def test_capture_checkpoint_clean_has_no_snapshot_errors(self, db_path: Path) -> None:
+        """R20: a clean capture looks exactly like today - no snapshot_errors key."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(
+                positions=[_CacheItem("P-1")],
+                orders=[_CacheItem("O-1")],
+                accounts=[_CacheItem("A-1")],
+            )
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert list(checkpoint.positions) == ["P-1"]
+        assert list(checkpoint.orders) == ["O-1"]
+        assert list(checkpoint.balance) == ["A-1"]
+        assert "snapshot_errors" not in checkpoint.node_status
+
+    def test_capture_checkpoint_isolates_failing_position(self, db_path: Path) -> None:
+        """R21: the MIDDLE position fails, so P-1 and P-3 both survive."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(
+                positions=[
+                    _CacheItem("P-1"),
+                    _CacheItem("P-2", to_dict_exc=TypeError),
+                    _CacheItem("P-3"),
+                ]
+            )
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert list(checkpoint.positions) == ["P-1", "P-3"]
+        assert checkpoint.node_status["snapshot_errors"] == ["position P-2: TypeError"]
+        assert node.status.positions == 3
+
+    def test_capture_checkpoint_positions_listing_failure_keeps_status(self, db_path: Path) -> None:
+        """R22: a raising positions_open() empties the snapshot but keeps status.positions."""
+        node = self._node(db_path)
+        node._status.positions = 5
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(positions_error=RuntimeError)
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert checkpoint.positions == {}
+        assert checkpoint.node_status["snapshot_errors"] == ["positions: RuntimeError"]
+        assert node.status.positions == 5
+
+    def test_capture_checkpoint_orders_failure_shapes(self, db_path: Path) -> None:
+        """R23: the MIDDLE order fails and both neighbours survive; a raising listing is named."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(
+                orders=[
+                    _CacheItem("O-1"),
+                    _CacheItem("O-2", to_dict_exc=KeyError),
+                    _CacheItem("O-3"),
+                ]
+            )
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+        checkpoint = node._capture_checkpoint()
+        assert list(checkpoint.orders) == ["O-1", "O-3"]
+        assert checkpoint.node_status["snapshot_errors"] == ["order O-2: KeyError"]
+
+        class _FailListing:
+            cache = _SnapshotCache(orders_error=ValueError)
+
+        node._trading_node = _FailListing()  # type: ignore[assignment]
+        checkpoint = node._capture_checkpoint()
+        assert checkpoint.orders == {}
+        assert checkpoint.node_status["snapshot_errors"] == ["orders: ValueError"]
+
+    def test_capture_checkpoint_accounts_failure_shapes(self, db_path: Path) -> None:
+        """R23: the MIDDLE account fails and both neighbours survive; a raising listing is named."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(
+                accounts=[
+                    _CacheItem("A-1"),
+                    _CacheItem("A-2", balances_exc=ValueError),
+                    _CacheItem("A-3"),
+                ]
+            )
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+        checkpoint = node._capture_checkpoint()
+        assert list(checkpoint.balance) == ["A-1", "A-3"]
+        assert checkpoint.node_status["snapshot_errors"] == ["account A-2: ValueError"]
+
+        class _FailListing:
+            cache = _SnapshotCache(accounts_error=RuntimeError)
+
+        node._trading_node = _FailListing()  # type: ignore[assignment]
+        checkpoint = node._capture_checkpoint()
+        assert checkpoint.balance == {}
+        assert checkpoint.node_status["snapshot_errors"] == ["accounts: RuntimeError"]
+
+    def test_capture_checkpoint_unrealized_pnl_failure(self, db_path: Path) -> None:
+        """R24: a raising unrealized_pnl keeps the position with pnl None, and is named."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(positions=[_CacheItem("P-1")])
+            portfolio = _Portfolio(exc=ValueError)
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert list(checkpoint.positions) == ["P-1"]
+        assert checkpoint.positions["P-1"]["unrealized_pnl"] is None
+        assert checkpoint.node_status["snapshot_errors"] == ["unrealized_pnl P-1: ValueError"]
+
+    def test_capture_checkpoint_unreadable_position_id(self, db_path: Path) -> None:
+        """R25: an unreadable id becomes an indexed label, not a crash."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(positions=[_CacheItem(id_exc=AttributeError)])
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        checkpoint = node._capture_checkpoint()
+
+        assert checkpoint.positions == {}
+        assert checkpoint.node_status["snapshot_errors"] == ["position #1: AttributeError"]
+
+    def test_capture_checkpoint_logs_once_per_process(
+        self, db_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """R26: the entry is in both checkpoints, logged once, and never the text."""
+        node = self._node(db_path)
+
+        class _FakeTradingNode:
+            cache = _SnapshotCache(positions_error=RuntimeError)
+
+        node._trading_node = _FakeTradingNode()  # type: ignore[assignment]
+
+        # F3: the capture runs under an active exception (a failing guard-transition
+        # write leaves its error chained), so neither the item's text nor the outer
+        # exception's `__context__` may reach the log, and no record carries exc_info.
+        with caplog.at_level(logging.ERROR):
+            try:
+                raise ValueError("OUTER_CONTEXT_MARKER")
+            except ValueError:
+                first = node._capture_checkpoint()
+                second = node._capture_checkpoint()
+
+        expected = ["positions: RuntimeError"]
+        assert first.node_status["snapshot_errors"] == expected
+        assert second.node_status["snapshot_errors"] == expected
+        records = [
+            r for r in caplog.records if "checkpoint snapshot item failed" in r.getMessage()
+        ]
+        assert len(records) == 1
+        assert "positions: RuntimeError" in records[0].getMessage()
+        assert "SNAPSHOT_SECRET_MARKER" not in caplog.text
+        assert "OUTER_CONTEXT_MARKER" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_logs_stop_async_failure_class_only(
+        self, db_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """R27: a raising stop_async is logged by class; the rest of teardown still runs."""
+        node = self._node(db_path)
+
+        class _Telegram:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def close(self) -> None:
+                self.closed = True
+
+        class _StateManager:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        telegram = _Telegram()
+        state_manager = _StateManager()
+        trading_node = _StopNode(error=RuntimeError)
+        node._telegram = telegram  # type: ignore[assignment]
+        node._state_manager = state_manager  # type: ignore[assignment]
+        node._trading_node = trading_node  # type: ignore[assignment]
+
+        with caplog.at_level(logging.ERROR):
+            try:
+                raise ValueError("OUTER_CONTEXT_MARKER")
+            except ValueError:
+                await node._shutdown()
+
+        assert trading_node.stop_calls == 1
+        assert telegram.closed
+        assert state_manager.closed
+        records = [r for r in caplog.records if "trading node stop failed" in r.getMessage()]
+        assert len(records) == 1
+        assert "RuntimeError" in records[0].getMessage()
+        assert records[0].exc_info is None
+        assert "STOP_SECRET_MARKER" not in caplog.text
+        assert "OUTER_CONTEXT_MARKER" not in caplog.text
+
+    def test_telegram_init_configuration_error_logs_info(
+        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R28: a missing-token ConfigurationError keeps today's info line."""
+
+        def _raise() -> object:
+            raise TelegramConfigurationError("missing TELEGRAM_BOT_TOKEN")
+
+        monkeypatch.setattr("vibe_quant.alerts.telegram.TelegramBot.from_env", _raise)
+
+        with caplog.at_level(logging.INFO):
+            node = self._node(db_path)
+
+        assert node._telegram is None
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Telegram alerts disabled" in m and "not set" in m for m in messages)
+        assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+    def test_telegram_init_other_error_logs_error_class_only(
+        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R28: any other init failure is an error, class only, and _telegram stays None."""
+
+        def _raise() -> object:
+            raise RuntimeError("init blew up: TELEGRAM_SECRET_MARKER")
+
+        monkeypatch.setattr("vibe_quant.alerts.telegram.TelegramBot.from_env", _raise)
+
+        with caplog.at_level(logging.ERROR):
+            node = self._node(db_path)
+
+        assert node._telegram is None
+        records = [
+            r for r in caplog.records if "Telegram alerts disabled: init failed" in r.getMessage()
+        ]
+        assert len(records) == 1
+        assert "RuntimeError" in records[0].getMessage()
+        assert "TELEGRAM_SECRET_MARKER" not in caplog.text
+
+    def test_telegram_init_import_failure_degrades_gracefully(
+        self, db_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F1/R28: an unimportable telegram module disables alerts, never crashes the node."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fail_telegram_import(
+            name: str,
+            _globals: object = None,
+            _locals: object = None,
+            fromlist: tuple[str, ...] = (),
+            level: int = 0,
+        ) -> object:
+            if name == "vibe_quant.alerts" and "telegram" in fromlist:
+                raise ImportError("telegram unavailable: TELEGRAM_IMPORT_SECRET_MARKER")
+            return real_import(name, _globals, _locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _fail_telegram_import)
+
+        with caplog.at_level(logging.ERROR):
+            node = self._node(db_path)
+
+        assert node._telegram is None
+        records = [
+            r for r in caplog.records if "Telegram alerts disabled: import failed" in r.getMessage()
+        ]
+        assert len(records) == 1
+        assert "ImportError" in records[0].getMessage()
+        assert "TELEGRAM_IMPORT_SECRET_MARKER" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
 
 
 class TestNodeStateEnum:

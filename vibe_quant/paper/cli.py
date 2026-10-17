@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import sys
 from decimal import Decimal
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from vibe_quant.jobs.manager import BacktestJobManager
+
+logger = logging.getLogger(__name__)
 
 
 def _decimal_from_str(value: str | float | int) -> Decimal:
@@ -256,13 +259,19 @@ async def run_with_config(
     try:
         await run_paper_trading(config)
         if run_id is not None and heartbeat_manager is not None:
-            with contextlib.suppress(Exception):
+            try:
                 heartbeat_manager.mark_completed(run_id)
+            except Exception as exc:
+                logger.error("heartbeat mark_completed failed (%s)", type(exc).__name__)
         return 0
     except Exception as e:
         if run_id is not None and heartbeat_manager is not None:
-            with contextlib.suppress(Exception):
+            try:
                 heartbeat_manager.mark_completed(run_id, error=f"{type(e).__name__}: {e}")
+            except Exception as exc:
+                # R29: class only, never ``logger.exception`` - this runs inside an
+                # active except, so the chained error's text must not reach the log.
+                logger.error("heartbeat mark_completed failed (%s)", type(exc).__name__)
         print(f"Paper trading error: {e}", file=sys.stderr)
         return 1
     finally:

@@ -498,15 +498,26 @@ class PaperTradingNode:
         self._kill_watch_task: asyncio.Task[None] | None = None
         self._previous_state: NodeState | None = None  # pre-start halt fallback
         self._trades_day: date | None = None
+        # R26: entries already logged, so a repeated snapshot failure logs once.
+        self._snapshot_failures_logged: set[str] = set()
 
         # Optional Telegram alerts (if env vars configured)
         self._telegram: TelegramBot | None = None
         try:
-            from vibe_quant.alerts.telegram import TelegramBot as _TBot
-
-            self._telegram = _TBot.from_env()
-        except Exception:
-            logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
+            from vibe_quant.alerts import telegram as _telegram_module
+        except Exception as exc:
+            # R28/F1: an unimportable alerts module must not crash node construction;
+            # class only, so a chained error's text never reaches the log.
+            logger.error("Telegram alerts disabled: import failed (%s)", type(exc).__name__)
+        else:
+            try:
+                self._telegram = _telegram_module.TelegramBot.from_env()
+            except _telegram_module.ConfigurationError:
+                logger.info("Telegram alerts disabled (TELEGRAM_BOT_TOKEN/CHAT_ID not set)")
+            except Exception as exc:
+                # R28: any other init failure is a real problem (not just "not set");
+                # class only, so no token from a chained exception reaches the log.
+                logger.error("Telegram alerts disabled: init failed (%s)", type(exc).__name__)
 
     @property
     def config(self) -> PaperTradingConfig:
@@ -2002,27 +2013,81 @@ class PaperTradingNode:
         is unavailable — in those cases we emit an empty snapshot rather
         than propagate an exception that would kill the periodic
         checkpoint loop.
+
+        R21-R26: one unreadable item (or a listing that itself raises) must
+        not hide the others. Each failure lands in
+        ``node_status["snapshot_errors"]`` as ``"<kind> <id>: <ExceptionClass>"``
+        and is logged once per process; a clean capture adds no key.
         """
         positions: dict[str, object] = {}
         orders: dict[str, object] = {}
         balance: dict[str, object] = {}
+        snapshot_errors: list[str] = []
 
         cache = getattr(self._trading_node, "cache", None)
         portfolio = getattr(self._trading_node, "portfolio", None)
         if cache is not None:
-            with contextlib.suppress(Exception):
-                for pos in cache.positions_open():
-                    data = pos.to_dict()
-                    data["unrealized_pnl"] = self._unrealized_pnl(portfolio, pos)
+            try:
+                open_positions = list(cache.positions_open())
+            except Exception as exc:
+                self._log_snapshot_failure("positions", exc, snapshot_errors)
+            else:
+                for index, pos in enumerate(open_positions, start=1):
+                    try:
+                        position_id = str(pos.id.value)
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"position #{index}", exc, snapshot_errors)
+                        continue
+                    try:
+                        data = pos.to_dict()
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"position {position_id}", exc, snapshot_errors)
+                        continue
+                    try:
+                        data["unrealized_pnl"] = self._unrealized_pnl(portfolio, pos)
+                    except Exception as exc:
+                        data["unrealized_pnl"] = None
+                        self._log_snapshot_failure(
+                            f"unrealized_pnl {position_id}", exc, snapshot_errors
+                        )
                     data["leverage"] = self._resolved.leverage if self._resolved else None
-                    positions[pos.id.value] = data
-            with contextlib.suppress(Exception):
-                for order in cache.orders_open():
-                    orders[order.client_order_id.value] = order.to_dict()
-            with contextlib.suppress(Exception):
-                for account in cache.accounts():
-                    balance[account.id.value] = self._serialize_account_balance(account)
-            self._status.positions = len(positions)
+                    positions[position_id] = data
+                # R21/R22: the live count, so one unserializable position keeps the
+                # others and the API still reports how many the venue holds. Only a
+                # raising listing leaves the previous value untouched.
+                self._status.positions = len(open_positions)
+
+            try:
+                open_orders = list(cache.orders_open())
+            except Exception as exc:
+                self._log_snapshot_failure("orders", exc, snapshot_errors)
+            else:
+                for index, order in enumerate(open_orders, start=1):
+                    try:
+                        order_id = str(order.client_order_id.value)
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"order #{index}", exc, snapshot_errors)
+                        continue
+                    try:
+                        orders[order_id] = order.to_dict()
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"order {order_id}", exc, snapshot_errors)
+
+            try:
+                open_accounts = list(cache.accounts())
+            except Exception as exc:
+                self._log_snapshot_failure("accounts", exc, snapshot_errors)
+            else:
+                for index, account in enumerate(open_accounts, start=1):
+                    try:
+                        account_id = str(account.id.value)
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"account #{index}", exc, snapshot_errors)
+                        continue
+                    try:
+                        balance[account_id] = self._serialize_account_balance(account)
+                    except Exception as exc:
+                        self._log_snapshot_failure(f"account {account_id}", exc, snapshot_errors)
 
         node_status: dict[str, object] = dict(self._status.to_dict())
         node_status["trader_id"] = self._config.trader_id
@@ -2048,6 +2113,8 @@ class PaperTradingNode:
             # saves, an early-failure shutdown, a failed watcher) must not drop the
             # restored cursors and `seen`, or the downtime gap is never rescanned.
             node_status["liquidation_watch"] = self._unstarted_watch_state()
+        if snapshot_errors:
+            node_status["snapshot_errors"] = snapshot_errors
 
         return StateCheckpoint(
             trader_id=self._config.trader_id,
@@ -2057,14 +2124,27 @@ class PaperTradingNode:
             node_status=node_status,
         )
 
+    def _log_snapshot_failure(
+        self, item: str, exc: BaseException, errors: list[str]
+    ) -> None:
+        """Record one unserializable checkpoint item; log it once per process.
+
+        Class only: a capture can run under an active exception (a failing
+        guard-transition write leaves its error chained), so the exception
+        text - and its ``__context__`` - must never reach the log.
+        """
+        entry = f"{item}: {type(exc).__name__}"
+        errors.append(entry)
+        if entry in self._snapshot_failures_logged:
+            return
+        self._snapshot_failures_logged.add(entry)
+        logger.error("checkpoint snapshot item failed: %s", entry)
+
     @staticmethod
     def _unrealized_pnl(portfolio: Any, pos: Any) -> float | None:
         if portfolio is None:
             return None
-        try:
-            pnl = portfolio.unrealized_pnl(pos.instrument_id)
-        except Exception:
-            return None
+        pnl = portfolio.unrealized_pnl(pos.instrument_id)
         return float(pnl) if pnl is not None else None
 
     @staticmethod
@@ -2613,8 +2693,14 @@ class PaperTradingNode:
         # event loop (it was designed for ``run()`` which owns its own loop),
         # so we intentionally skip it.
         if self._trading_node is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await self._trading_node.stop_async()
+            except Exception as exc:
+                # R27: class only (the stop can run under an active exception), and
+                # the rest of teardown - event writer, telegram, state manager - runs.
+                logger.error(
+                    "trading node stop failed (%s); continuing shutdown", type(exc).__name__
+                )
             self._trading_node = None
 
         # ogd37: after stop_async (events NT emits while stopping are kept). Later
