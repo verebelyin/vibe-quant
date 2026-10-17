@@ -4,8 +4,8 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
-            "type": "command"
+            "type": "command",
+            "command": "python3 scripts/agents/memory_index.py 2>/dev/null || true"
           }
         ],
         "matcher": ""
@@ -15,8 +15,8 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
-            "type": "command"
+            "type": "command",
+            "command": "python3 scripts/agents/memory_index.py 2>/dev/null || true"
           },
           {
             "type": "command",

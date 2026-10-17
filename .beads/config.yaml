@@ -17,6 +17,8 @@
 no-daemon: true
 sync:
     remote: "git+https://github.com/verebelyin/vibe-quant"
+prime:
+    max-memories: 1
 
 # Disable auto-flush of database to JSONL after mutations
 # no-auto-flush: false
