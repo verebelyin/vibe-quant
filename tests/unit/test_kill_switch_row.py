@@ -19,7 +19,7 @@ Contract rows:
 * R3  row deleted under a cached conn -> the same row, returned engaged.
 * R3b reseed INSERT raises ``OperationalError`` -> ``SystemStateMissingError``
       with the exact "could not be re-created" text.
-* R3c ``require_row=True`` and ``require_row=False`` are accepted and ignored:
+* R3c (T1 accepted-and-ignored kwarg; removed in T2a) the read takes no kwargs:
       both return the same (engaged) result.
 * R4  ``set_kill_switch("r", "op")`` on a missing row upserts it.
 * R5  ``clear_kill_switch("op")`` on a missing row re-seeds it engaged and
@@ -197,19 +197,19 @@ def test_unreseedable_row_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 # --------------------------------------------------------------- R3c
 
 
-def test_require_row_kwarg_ignored(tmp_path: Path) -> None:
-    """R3c: T1 keeps the ``require_row`` kwarg accepted and ignored - both
-    values are a plain read and return the same engaged result."""
+def test_require_row_kwarg_removed(tmp_path: Path) -> None:
+    """R3c (T2a): the ignored ``require_row`` kwarg is gone; the plain read of a
+    deleted row is the engaged re-seed."""
     sm = StateManager(tmp_path / "state.db")
     try:
         _delete_row(sm)
-        required = sm.get_system_state(require_row=True)
-        default = sm.get_system_state(require_row=False)
+        with pytest.raises(TypeError):
+            sm.get_system_state(require_row=True)  # type: ignore[call-arg]
+        state = sm.get_system_state()
     finally:
         sm.close()
-    assert required == default
-    assert required["kill_switch"] is True
-    assert required["reason"] == REASON
+    assert state["kill_switch"] is True
+    assert state["reason"] == REASON
 
 
 # --------------------------------------------------------------- R4
@@ -473,7 +473,7 @@ async def test_status_missing_row_reads_engaged(api: dict[str, Any]) -> None:
 async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """R6b: an unreadable-and-unreseatable state is a 503, never a 200 default."""
 
-    def boom(*, require_row: bool = True) -> dict[str, Any]:
+    def boom() -> dict[str, Any]:
         raise SystemStateMissingError(_UNRESEEDABLE)
 
     monkeypatch.setattr(api["state"], "get_system_state", boom)

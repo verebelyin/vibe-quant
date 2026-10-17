@@ -507,19 +507,13 @@ class StateManager:
             "updated_at": row[4],
         }
 
-    def get_system_state(self, *, require_row: bool = True) -> JsonDict:
+    def get_system_state(self) -> JsonDict:
         """Read the singleton system_state row, re-creating it ENGAGED if absent.
 
         A missing row is never answered with disengaged defaults: the row is
         re-created engaged (with ``SYSTEM_STATE_RESEEDED_REASON``), committed and
         re-selected, so every caller -- the paper API refusal, the node poll, the
         header status endpoint -- sees the halt (vibe-quant-tdjop).
-
-        Args:
-            require_row: Ignored. Kept only so the node's money-path caller
-                (``paper/node.py``) keeps type-checking; task T2a removes the
-                kwarg together with its last callers. Both values of this flag
-                return exactly the same result.
 
         Returns:
             Dict with keys: kill_switch (bool), reason (str|None),

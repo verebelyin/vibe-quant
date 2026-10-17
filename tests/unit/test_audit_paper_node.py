@@ -381,6 +381,7 @@ def _node_with_fake_guard(seeded: dict[str, Any]) -> tuple[PaperTradingNode, _Fa
     node._guard = guard  # type: ignore[assignment]
     node._trading_node = _RuntimeNode()  # type: ignore[assignment]
     node._commands = PaperCommandQueue(seeded["db"])
+    node._kill_monitor.poll_once(node._state_manager)  # a fresh clean snapshot (no thread)
     return node, guard
 
 
@@ -477,10 +478,13 @@ async def test_raised_command_error_is_class_only(
 async def test_kill_switch_is_polled_and_blocks_resume(seeded: dict[str, Any]) -> None:
     node, guard = _node_with_fake_guard(seeded)
     sm = StateManager(seeded["db"])
+    poll = node._kill_monitor.poll_once  # one synchronous read cycle (the thread's step)
     try:
+        poll(node._state_manager)
         node._check_kill_switch()
         assert guard.calls == []
         sm.set_kill_switch("ops kill")
+        poll(node._state_manager)
         node._check_kill_switch()
         assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
         node._check_kill_switch()  # already killed: no repeat
@@ -489,6 +493,7 @@ async def test_kill_switch_is_polled_and_blocks_resume(seeded: dict[str, Any]) -
         assert not ok and "kill switch" in msg
         assert guard.calls[-1] == ("resume", True)
         sm.clear_kill_switch("ops")
+        poll(node._state_manager)
         ok, _ = node.resume()
         assert ok
     finally:

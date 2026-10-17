@@ -1,42 +1,29 @@
-"""Kill switch fail-closed reads (bead vibe-quant-s40h9, task K1).
+"""Kill switch fail-closed reads (beads vibe-quant-s40h9 K1, vibe-quant-dt065 T2a).
 
-A raising kill-switch state read counts as engaged for that check and as a
-consecutive read failure: three consecutive failures halt the node with reason
-ERROR, startup and resume refuse while the state is unreadable, and the control
-loop runs each step in its own try so a failing command claim (same state DB)
-can never skip the kill-switch poll.
+The node never reads the kill switch on its event loop: a reader thread
+publishes a snapshot (``vibe_quant/paper/kill_switch_monitor.py``) and the
+watcher (``_check_kill_switch``), ``resume()`` and startup read ONLY that
+snapshot. A failed read is not engaged; the node fails closed (halt ERROR) when
+the last CLEAN read is 8.0 s old, startup refuses without a clean read, and
+resume needs a clean read at most 2.0 s old. These tests drive the monitor with
+a fake clock and a scripted reader (outcomes ``E`` raises, ``F`` clean and not
+engaged, ``T`` clean and engaged, ``P`` an unparseable state); the R-row timing
+tests with a REAL thread live in ``test_paper_kill_switch_monitor.py``.
 
-Contract rows (brief cc-sz-kill; K16/K17 from the chief's post-review rulings):
-
-* K1  E        -> no halt; one ERROR log ``could not read system kill switch
-                  (OperationalError); 1 consecutive failure(s)``, no exc_info
-* K2  E,E      -> no halt (the limit is 3, counted per read)
-* K3  E,E,E    -> ``guard.calls == [("halt", ERROR)]`` with message
-                  ``system kill switch unreadable for 3 consecutive reads
-                  (OperationalError); failing closed``
-* K4  E x5     -> still one halt call (the latch is set before the halt)
-* K5  E,E,F,E,E -> no halt (a clean read resets the counter)
-* K6  E,E,E,F  -> the guard stays HALTED/ERROR (no auto-resume), then an
-                  operator resume succeeds
-* K7  resume while the last read failed -> refused with the exact message and
-                  ``guard.resume`` is never called
-* K8  E at _initialize -> ``ConfigurationError`` with the exact message and no
-                  TradingNode built
-* K9  log hygiene -> the exception class is logged; the message text, the
-                  ``__context__`` chain and any traceback are not
-* K10 control loop -> a ``process_commands`` failure must not skip the kill
-                  check (its own try): ``halt(KILL_SWITCH)`` on the FIRST
-                  iteration, one ``paper control loop iteration failed
-                  (OSError)`` per failing step
-* K11 E,E,T    -> ``halt(KILL_SWITCH)`` at the third read, counter reset
-* K12 E,E,E (ERROR halt) then T -> the engaged switch escalates: the real guard
-                  replaces ERROR with KILL_SWITCH (priority 6 > 2)
-* K15 ``KILL_SWITCH_READ_FAILURE_LIMIT == 3``; failures are counted per read
-* K16 a raising state parse (``sys_state.get``) counts as a failed read
-* M4  E,E,E -> ERROR halt, a clean read releases the latch, an operator
-                  resume, then E,E,E again -> a SECOND ERROR halt
-* M5  ``_kill_switch`` on a failed read returns exactly ``(True, "kill switch
-                  state unreadable (<Class>)")`` - never a bare ``False``
+* K1  one failed read after a clean one -> no halt, one class-only ERROR log
+* K2  two failed reads, snapshot still fresh -> no halt (no read COUNT rule)
+* K3  last clean read 8.0 s old -> one ERROR halt with the exact text
+* K4  stale for longer -> still one halt (the latch)
+* K5  a clean read resets the failure count and the latch
+* K6  clean read after the halt -> HALTED/ERROR stays, then an operator resume works
+* K7  resume while the snapshot has a failed read -> refused, guard never reached
+* K8  startup without a clean read -> ConfigurationError, no TradingNode
+* K10 failing process_commands never skips the kill check (own watcher task)
+* K11 failed reads then an engaged read -> halt(KILL_SWITCH)
+* K12 ERROR halt then an engaged read -> the real guard escalates to KILL_SWITCH
+* K16 a raising state parse counts as a failed read
+* M4  second stale streak after an operator resume halts ERROR again
+* F2  the reader asks ``get_system_state()`` with no kwargs (the T2a SF2 completion)
 """
 
 from __future__ import annotations
@@ -52,7 +39,8 @@ from tests.unit.test_audit_paper_node import DSL, _config, _FakeTradingNode
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import GuardState, HaltReason, TradingGuard, TradingGuardConfig
-from vibe_quant.paper.node import KILL_SWITCH_READ_FAILURE_LIMIT, PaperTradingNode
+from vibe_quant.paper.kill_switch_monitor import KillSwitchMonitor
+from vibe_quant.paper.node import PaperTradingNode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -112,22 +100,19 @@ class _BadParseState:
 
 
 class _ScriptedReads:
-    """``get_system_state`` following a script of outcomes: E raises, F is clean
-    and not engaged, T is clean and engaged, P returns an unparseable state.
+    """The reader thread's DB handle following a script of outcomes: E raises, F is
+    clean and not engaged, T is clean and engaged, P returns an unparseable state.
 
-    When the script runs out, its last outcome repeats. ``reads`` records one
-    entry per call, so a test can pin that each check consumes exactly one read
-    (failures are counted per read, not per second). ``require_row_calls``
-    records the ``require_row`` flag each call was made with (F2:
-    vibe-quant-lickf)."""
+    When the script runs out, its last outcome repeats. ``reads`` records one entry
+    per call. ``get_system_state`` takes NO kwargs (F2: the ``require_row`` flag is
+    gone), so a caller passing one raises ``TypeError``."""
 
     def __init__(self, outcomes: str) -> None:
         self._outcomes = list(outcomes)
         self.reads: list[str] = []
-        self.require_row_calls: list[bool] = []
+        self.closed = 0
 
-    def get_system_state(self, *, require_row: bool = False) -> dict[str, Any]:
-        self.require_row_calls.append(require_row)
+    def get_system_state(self) -> dict[str, Any]:
         index = min(len(self.reads), len(self._outcomes) - 1)
         outcome = self._outcomes[index]
         self.reads.append(outcome)
@@ -139,13 +124,46 @@ class _ScriptedReads:
             return {"kill_switch": True, "reason": "ops"}
         return {"kill_switch": False}
 
+    def close(self) -> None:
+        self.closed += 1
 
-def _patch_reads(
-    monkeypatch: pytest.MonkeyPatch, node: PaperTradingNode, outcomes: str
-) -> _ScriptedReads:
-    script = _ScriptedReads(outcomes)
-    monkeypatch.setattr(node._state_manager, "get_system_state", script.get_system_state)
-    return script
+
+class FakeClock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class Rig:
+    """A node wired to a fake-clock monitor over a scripted reader (no thread).
+
+    ``read(dt)`` moves the clock ``dt`` seconds and runs one read cycle (the
+    snapshot's ``last_ok_mono`` is the clock after the read); ``check(dt)`` moves
+    the clock and runs the watcher once."""
+
+    def __init__(self, node: PaperTradingNode, outcomes: str) -> None:
+        self.node = node
+        self.clock = FakeClock()
+        self.script = _ScriptedReads(outcomes)
+        self.monitor = KillSwitchMonitor(lambda: self.script, clock=self.clock)
+        node._kill_monitor = self.monitor
+        node._mono = self.clock  # type: ignore[method-assign]
+
+    def read(self, dt: float = 1.0) -> None:
+        self.clock.now += dt
+        self.monitor.poll_once(self.script)
+
+    def check(self, dt: float = 0.0) -> None:
+        self.clock.now += dt
+        self.node._check_kill_switch()
+
+
+def _rig(node: PaperTradingNode, outcomes: str) -> Rig:
+    return Rig(node, outcomes)
 
 
 class _RecordGuard:
@@ -207,31 +225,23 @@ def _node_with_guard(seeded: dict[str, Any], guard: Any) -> PaperTradingNode:
     return node
 
 
-# --------------------------------------------------------------- K15
-
-
-def test_limit_constant() -> None:
-    """K15: three consecutive read failures before the node fails closed; the
-    cadence rationale (worst case ~33 s: 3 iterations x (1 s poll + up to 5 s
-    busy_timeout on claim_pending + up to 5 s on the kill-switch read)) lives in
-    the constant's comment."""
-    assert KILL_SWITCH_READ_FAILURE_LIMIT == 3
-
-
-# --------------------------------------------------------------- K1/K2/K4/K5
+# --------------------------------------------------------------- K1/K2/K3/K4/K5
 
 
 async def test_single_failure_tolerated(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """K1: one failed read - no halt, one class-only ERROR log, no exc_info."""
+    """K1: one failed read after a clean one - no halt, one class-only ERROR log,
+    no exc_info (the snapshot is 1 s old, far below the 8 s limit)."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "E")
+    rig = _rig(node, "FE")
     try:
+        rig.read()
         with caplog.at_level(logging.ERROR):
-            node._check_kill_switch()
-        assert script.reads == ["E"]
+            rig.read()
+        rig.check()
+        assert rig.script.reads == ["F", "E"]
         assert guard.calls == []
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(errors) == 1
@@ -244,75 +254,77 @@ async def test_single_failure_tolerated(
         await node._shutdown()
 
 
-async def test_two_failures_tolerated(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K2: two consecutive failures - still no halt (the limit is 3, counted per
-    read: two calls must consume exactly two reads)."""
+async def test_two_failures_tolerated(seeded: dict[str, Any]) -> None:
+    """K2: two failed reads while the last clean read is still fresh - no halt:
+    the rule is the age of the last clean read, not a count of failed reads."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "E")
+    rig = _rig(node, "FEE")
     try:
-        node._check_kill_switch()
-        node._check_kill_switch()
-        assert script.reads == ["E", "E"]
+        for _ in range(3):
+            rig.read()
+            rig.check()
+        assert rig.script.reads == ["F", "E", "E"]
+        assert node._kill_monitor.snapshot().consecutive_failures == 2
         assert guard.calls == []
-        assert node._kill_read_failures == 2
     finally:
         await node._shutdown()
 
 
-async def test_third_consecutive_failure_halts_error(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K3: the third consecutive failure halts with reason ERROR and the exact
-    fail-closed message."""
+async def test_stale_snapshot_halts_error_with_exact_text(seeded: dict[str, Any]) -> None:
+    """K3: the last clean read is 8.0 s old - ERROR halt with the exact text."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "E")
+    rig = _rig(node, "FE")
     try:
-        for _ in range(3):
-            node._check_kill_switch()
-        assert script.reads == ["E", "E", "E"]
+        rig.read()
+        rig.read()
+        rig.check(7.0)
         assert guard.calls == [("halt", HaltReason.ERROR)]
         assert guard.messages == [
-            "system kill switch unreadable for 3 consecutive reads (OperationalError); failing closed"
+            "system kill switch unreadable for 8.0 s (OperationalError); failing closed"
         ]
     finally:
         await node._shutdown()
 
 
-async def test_halt_once_per_failure_streak(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K4: five consecutive failures - still exactly one halt (the latch is set
-    before the halt, so the streak never repeats it)."""
+async def test_halt_once_per_failure_streak(seeded: dict[str, Any]) -> None:
+    """K4: stale for five more watcher ticks - still exactly one halt (the latch
+    is set before the halt, so the streak never repeats it)."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "E")
+    rig = _rig(node, "FE")
     try:
+        rig.read()
+        rig.read()
+        rig.check(7.0)
         for _ in range(5):
-            node._check_kill_switch()
-        assert script.reads == ["E"] * 5
+            rig.check(0.5)
         assert guard.calls == [("halt", HaltReason.ERROR)]
         assert len(guard.messages) == 1
     finally:
         await node._shutdown()
 
 
-async def test_success_resets_counter(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K5: E,E,F,E,E - the clean read resets the counter, so the streak never
-    reaches the limit and nothing halts."""
+async def test_success_resets_counter_and_latch(seeded: dict[str, Any]) -> None:
+    """K5: a clean read after the stale halt clears the failure state and the
+    latch (the node stays halted; only an operator resume lifts it)."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "EEFEE")
+    rig = _rig(node, "FEEF")
     try:
-        for _ in range(5):
-            node._check_kill_switch()
-        assert script.reads == ["E", "E", "F", "E", "E"]
-        assert guard.calls == []
+        rig.read()
+        rig.read()
+        rig.read()
+        rig.check(6.0)
+        assert node._kill_read_halted is True
+        assert node._kill_monitor.snapshot().consecutive_failures == 2
+        rig.read()
+        rig.check()
+        snap = node._kill_monitor.snapshot()
+        assert (snap.consecutive_failures, snap.error_class) == (0, None)
+        assert node._kill_read_halted is False
+        assert guard.calls == [("halt", HaltReason.ERROR)]
     finally:
         await node._shutdown()
 
@@ -320,21 +332,20 @@ async def test_success_resets_counter(
 # --------------------------------------------------------------- K6/K7
 
 
-async def test_recovery_needs_operator_resume(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_recovery_needs_operator_resume(seeded: dict[str, Any]) -> None:
     """K6: after the fail-closed ERROR halt a clean read does NOT auto-resume;
     the guard stays HALTED/ERROR until an operator resumes (which then works)."""
     guard = _real_guard()
     node = _node_with_guard(seeded, guard)
-    _patch_reads(monkeypatch, node, "EEEF")
+    rig = _rig(node, "FEF")
     try:
-        node._check_kill_switch()
-        node._check_kill_switch()
-        node._check_kill_switch()
+        rig.read()
+        rig.read()
+        rig.check(7.0)
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.ERROR
-        node._check_kill_switch()  # clean read: recovery alone resumes nothing
+        rig.read()  # clean read: recovery alone resumes nothing
+        rig.check()
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.ERROR
         ok, _msg = node.resume()
@@ -344,25 +355,22 @@ async def test_recovery_needs_operator_resume(
         await node._shutdown()
 
 
-async def test_resume_refused_while_unreadable(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K7: resume while the last read failed is refused with the exact message
-    and never reaches the guard."""
+async def test_resume_refused_while_unreadable(seeded: dict[str, Any]) -> None:
+    """K7: resume while the snapshot carries a failed read is refused with the
+    exact (cached, fresh-based) message and never reaches the guard."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    _patch_reads(monkeypatch, node, "E")
+    rig = _rig(node, "FE")
     try:
-        node._check_kill_switch()
+        rig.read()
+        rig.read()
         ok, msg = node.resume()
         assert ok is False
         assert (
-            msg
-            == "system kill switch state unreadable (OperationalError); cannot resume until it"
+            msg == "system kill switch state not fresh (OperationalError); cannot resume until it"
             " reads cleanly"
         )
         assert guard.calls == []
-        assert ("resume", False) not in guard.calls
     finally:
         await node._shutdown()
 
@@ -375,10 +383,12 @@ async def test_startup_refuses_when_unreadable(
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """K8: a failed read at _initialize refuses to start with the exact message,
-    before any TradingNode is built."""
+    """K8: every read failing at _initialize refuses to start with the failing
+    class, before any TradingNode is built (the wait is shortened for the test)."""
+    monkeypatch.setattr("vibe_quant.paper.node.KILL_SWITCH_STARTUP_TIMEOUT_S", 0.3)
     node = PaperTradingNode(_config(seeded))
-    _patch_reads(monkeypatch, node, "E")
+    script = _ScriptedReads("E")
+    node._kill_monitor = KillSwitchMonitor(lambda: script, poll_s=0.02)
     try:
         with pytest.raises(ConfigurationError) as exc_info:
             await node._initialize()
@@ -389,76 +399,74 @@ async def test_startup_refuses_when_unreadable(
         assert fake_tradingnode.instances == []
     finally:
         await node._shutdown()
-
-
-# --------------------------------------------------------------- K9
-
-
-async def test_failure_log_is_class_only(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """K9: the failure log carries the exception class only - the error text
-    (``ZZLEAK9``), the ``__context__`` chain's text (``QQLEAK7``) and any
-    traceback stay out of the log."""
-    guard = _RecordGuard()
-    node = _node_with_guard(seeded, guard)
-    _patch_reads(monkeypatch, node, "E")
-    try:
-        with caplog.at_level(logging.ERROR):
-            node._check_kill_switch()
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert len(errors) == 1
-        assert errors[0].getMessage() == (
-            "could not read system kill switch (OperationalError); 1 consecutive failure(s)"
-        )
-        assert errors[0].exc_info is None
-        assert "OperationalError" in caplog.text
-        assert _LEAK not in caplog.text
-        assert _CTX_LEAK not in caplog.text
-        assert "Traceback" not in caplog.text
-    finally:
-        await node._shutdown()
+    assert script.closed == 1, "shutdown stops the monitor and the reader thread closes its handle"
 
 
 # --------------------------------------------------------------- K10
+
+
+async def test_control_loop_does_not_poll_the_kill_switch(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K10: the kill check moved to its own watcher task, so a control-loop
+    iteration (commands + connectivity) never calls it."""
+    node = _node_with_guard(seeded, _RecordGuard())
+    monkeypatch.setattr(node._config, "control_poll_interval", 0.0)
+    calls: list[str] = []
+    monkeypatch.setattr(node, "_check_kill_switch", lambda: calls.append("kill"))
+
+    iterations = 0
+
+    def connectivity() -> None:
+        nonlocal iterations
+        iterations += 1
+        if iterations >= 2:
+            node._shutdown_event.set()
+
+    monkeypatch.setattr(node, "_check_connectivity", connectivity)
+    try:
+        await asyncio.wait_for(node._control_loop(), 5)
+        assert iterations == 2
+        assert calls == []
+    finally:
+        await node._shutdown()
 
 
 async def test_kill_check_runs_when_commands_fail(
     seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """K10: ``process_commands`` raising every iteration must not skip the
-    kill-switch poll (its own try): the switch is engaged and the node halts
-    KILL_SWITCH on the FIRST iteration, with one control-loop error log per
-    failing step."""
+    kill-switch poll: the watcher task halts KILL_SWITCH on its FIRST iteration
+    while the control loop keeps logging one class-only error per failing step."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    _patch_reads(monkeypatch, node, "T")
+    rig = _rig(node, "T")
+    rig.read()
     monkeypatch.setattr(node._config, "control_poll_interval", 0.0)
-    snapshots: list[list[tuple[str, Any]]] = []
+    monkeypatch.setattr("vibe_quant.paper.node.KILL_SWITCH_WATCH_TICK_S", 0.0)
+    monkeypatch.setattr(node, "_check_connectivity", lambda: None)
+    commands = 0
 
     async def failing_commands() -> None:
-        snapshots.append(list(guard.calls))
+        nonlocal commands
+        commands += 1
         raise OSError("disk full")
 
-    checks = 0
-
-    def connectivity() -> None:
-        nonlocal checks
-        checks += 1
-        if checks >= 2:
-            node._shutdown_event.set()
-
     monkeypatch.setattr(node, "process_commands", failing_commands)
-    monkeypatch.setattr(node, "_check_connectivity", connectivity)
     try:
         with caplog.at_level(logging.ERROR):
-            await asyncio.wait_for(node._control_loop(), 5)
-        assert snapshots == [[], [("halt", HaltReason.KILL_SWITCH)]], (
-            "the kill check must halt on the first iteration despite the failing commands"
-        )
+            control = asyncio.create_task(node._control_loop())
+            watch = asyncio.create_task(node._kill_watch_loop())
+            for _ in range(200):
+                if guard.calls:
+                    break
+                await asyncio.sleep(0)
+            node._shutdown_event.set()
+            await asyncio.wait_for(asyncio.gather(control, watch), 5)
         assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
+        assert commands >= 1
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert len(errors) == 2
+        assert errors
         for record in errors:
             assert record.getMessage() == "paper control loop iteration failed (OSError)"
             assert record.exc_info is None
@@ -466,44 +474,72 @@ async def test_kill_check_runs_when_commands_fail(
         await node._shutdown()
 
 
-# --------------------------------------------------------------- K11/K12
-
-
-async def test_engaged_read_after_failures_halts_kill(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+async def test_watch_loop_survives_a_raising_check(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """K11: E,E,T - the engaged read after two failures goes down the engaged
-    path (KILL_SWITCH) and resets the failure counter."""
-    guard = _RecordGuard()
-    node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "EET")
+    """K10: the watcher has its own try - a raising check is logged by class
+    only and the next tick still runs."""
+    node = _node_with_guard(seeded, _RecordGuard())
+    monkeypatch.setattr("vibe_quant.paper.node.KILL_SWITCH_WATCH_TICK_S", 0.0)
+    ticks = 0
+
+    def check() -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks == 1:
+            try:
+                raise RuntimeError(f"fetch failed {_CTX_LEAK}")
+            except RuntimeError:
+                raise OSError(f"disk {_LEAK}")  # noqa: B904  # keep __context__
+        node._shutdown_event.set()
+
+    monkeypatch.setattr(node, "_check_kill_switch", check)
     try:
-        node._check_kill_switch()
-        node._check_kill_switch()
-        node._check_kill_switch()
-        assert script.reads == ["E", "E", "T"]
-        assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
-        assert node._kill_read_failures == 0
+        with caplog.at_level(logging.ERROR):
+            await asyncio.wait_for(node._kill_watch_loop(), 5)
+        assert ticks == 2
+        assert _LEAK not in caplog.text
+        assert _CTX_LEAK not in caplog.text
+        assert "Traceback" not in caplog.text
+        assert "OSError" in caplog.text
     finally:
         await node._shutdown()
 
 
-async def test_engaged_switch_escalates_fail_closed_halt(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """K12: E,E,E (ERROR halt) then T - the engaged switch still halts
-    KILL_SWITCH and the REAL guard replaces the fail-closed ERROR halt
-    (priority 6 > 2)."""
+# --------------------------------------------------------------- K11/K12
+
+
+async def test_engaged_read_after_failures_halts_kill(seeded: dict[str, Any]) -> None:
+    """K11: failed reads then an engaged read go down the engaged path
+    (KILL_SWITCH) and reset the failure count."""
+    guard = _RecordGuard()
+    node = _node_with_guard(seeded, guard)
+    rig = _rig(node, "FEET")
+    try:
+        for _ in range(4):
+            rig.read()
+            rig.check()
+        assert rig.script.reads == ["F", "E", "E", "T"]
+        assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
+        assert node._kill_monitor.snapshot().consecutive_failures == 0
+    finally:
+        await node._shutdown()
+
+
+async def test_engaged_switch_escalates_fail_closed_halt(seeded: dict[str, Any]) -> None:
+    """K12: a stale ERROR halt, then an engaged read - the REAL guard replaces
+    the fail-closed ERROR halt with KILL_SWITCH (priority 6 > 2)."""
     guard = _real_guard()
     node = _node_with_guard(seeded, guard)
-    _patch_reads(monkeypatch, node, "EEET")
+    rig = _rig(node, "FET")
     try:
-        node._check_kill_switch()
-        node._check_kill_switch()
-        node._check_kill_switch()
+        rig.read()
+        rig.read()
+        rig.check(7.0)
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.ERROR
-        node._check_kill_switch()  # engaged switch escalates past the ERROR halt
+        rig.read()
+        rig.check()  # engaged switch escalates past the ERROR halt
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.KILL_SWITCH
     finally:
@@ -514,19 +550,21 @@ async def test_engaged_switch_escalates_fail_closed_halt(
 
 
 async def test_state_parse_error_counts_as_failure(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """K16: a raising state parse (``sys_state.get``) is a failed read - it is
-    counted and logged like a read error, never raised out of the check."""
+    """K16: a raising state parse (``state.get``) is a failed read - recorded and
+    logged like a read error, never raised out of the monitor, and the previous
+    clean view stays."""
     guard = _RecordGuard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "P")
+    rig = _rig(node, "FP")
     try:
+        rig.read()
         with caplog.at_level(logging.ERROR):
-            node._check_kill_switch()
-        assert script.reads == ["P"]
-        assert node._kill_read_failures == 1
-        assert guard.calls == []
+            rig.read()
+        snap = node._kill_monitor.snapshot()
+        assert (snap.error_class, snap.consecutive_failures) == ("RuntimeError", 1)
+        assert snap.engaged is False
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(errors) == 1
         assert (
@@ -537,68 +575,42 @@ async def test_state_parse_error_counts_as_failure(
         await node._shutdown()
 
 
-# --------------------------------------------------------------- M4/M5
+# --------------------------------------------------------------- M4
 
 
-async def test_second_streak_re_halts_after_operator_resume(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """M4: E,E,E -> ERROR halt; the clean read releases the per-streak latch; an
-    operator resume returns the real guard to RUNNING; a second E,E,E streak
-    must halt ERROR again. A success path that stopped resetting
-    ``_kill_read_halted`` would leave the node silently failed-open here."""
+async def test_second_streak_re_halts_after_operator_resume(seeded: dict[str, Any]) -> None:
+    """M4: stale -> ERROR halt; the clean read releases the per-streak latch; an
+    operator resume returns the real guard to RUNNING; a second stale streak must
+    halt ERROR again. A success path that stopped resetting ``_kill_read_halted``
+    would leave the node silently failed-open here."""
     guard = _real_guard()
     node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "EEEFFFEEE")
+    rig = _rig(node, "FEFE")
     try:
-        for _ in range(3):
-            node._check_kill_switch()
+        rig.read()
+        rig.read()
+        rig.check(7.0)
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.ERROR
         assert node._kill_read_halted is True
 
-        node._check_kill_switch()  # clean read: releases the latch
-        assert node._kill_read_failures == 0
+        rig.read()  # clean read
+        rig.check()  # releases the latch
+        assert node._kill_read_halted is False
 
-        ok, _msg = node.resume()  # consumes one more clean read
+        ok, _msg = node.resume()
         assert ok
         assert guard.guard_state == GuardState.RUNNING
         assert guard.halt_reason is None
 
-        node._check_kill_switch()  # clean read
-        for _ in range(3):
-            node._check_kill_switch()
-        assert script.reads == ["E", "E", "E", "F", "F", "F", "E", "E", "E"]
+        rig.read()  # E: the last clean read is now 1 s old
+        rig.check(6.5)
+        assert guard.guard_state == GuardState.RUNNING
+        rig.check(0.5)  # 8.0 s since the clean read
+        assert rig.script.reads == ["F", "E", "F", "E"]
         assert guard.guard_state == GuardState.HALTED
         assert guard.halt_reason == HaltReason.ERROR
         assert node._kill_read_halted is True
-    finally:
-        await node._shutdown()
-
-
-@pytest.mark.parametrize(
-    ("outcome", "cls"),
-    [("E", "OperationalError"), ("P", "RuntimeError")],
-)
-async def test_failed_read_returns_engaged_tuple(
-    seeded: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-    outcome: str,
-    cls: str,
-) -> None:
-    """M5: ``_kill_switch`` answers a failed read with exactly
-    ``(True, "kill switch state unreadable (<Class>)")`` - engaged, with the
-    exception class in the reason. Returning ``False`` there fails open."""
-    guard = _RecordGuard()
-    node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, outcome)
-    try:
-        result = node._kill_switch()
-        assert script.reads == [outcome]
-        assert result == (True, f"kill switch state unreadable ({cls})")
-        assert result[0] is True
-        assert node._kill_read_failures == 1
-        assert node._kill_read_error == cls
     finally:
         await node._shutdown()
 
@@ -606,18 +618,18 @@ async def test_failed_read_returns_engaged_tuple(
 # --------------------------------------------------------------- F2
 
 
-async def test_kill_switch_read_asks_for_the_singleton_row(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """F2 (vibe-quant-lickf): the node's read asks for the singleton row, so a
-    deleted system_state row is a failed read and never the defaults dict (a
-    no-arg read would return ``kill_switch: False`` and fail open)."""
-    guard = _RecordGuard()
-    node = _node_with_guard(seeded, guard)
-    script = _patch_reads(monkeypatch, node, "F")
+def test_reader_asks_for_the_row_without_a_kwarg(tmp_path: Path) -> None:
+    """F2/SF2 completion: ``get_system_state`` has no ``require_row`` kwarg any
+    more (a missing row is re-created engaged by T1, so the flag meant nothing)
+    and the monitor reads a real state manager through the plain call."""
+    import inspect
+
+    assert list(inspect.signature(StateManager.get_system_state).parameters) == ["self"]
+    sm = StateManager(tmp_path / "state.db")
     try:
-        node._kill_switch()
-        assert script.require_row_calls == [True]
-        assert script.reads == ["F"]
+        monitor = KillSwitchMonitor(lambda: sm)
+        monitor.poll_once(sm)
+        snap = monitor.snapshot()
     finally:
-        await node._shutdown()
+        sm.close()
+    assert (snap.engaged, snap.error_class, snap.last_ok_mono is not None) == (False, None, True)

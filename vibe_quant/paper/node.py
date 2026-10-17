@@ -25,7 +25,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import signal
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -60,6 +62,13 @@ from vibe_quant.paper.guard import (
     TradingGuard,
     TradingGuardConfig,
 )
+from vibe_quant.paper.kill_switch_monitor import (
+    KILL_SWITCH_RESUME_FRESH_S,
+    KILL_SWITCH_STALE_LIMIT_S,
+    KILL_SWITCH_STARTUP_TIMEOUT_S,
+    KILL_SWITCH_WATCH_TICK_S,
+    KillSwitchMonitor,
+)
 from vibe_quant.paper.liquidation_watch import LiquidationWatcher
 from vibe_quant.paper.persistence import (
     PaperCommand,
@@ -76,22 +85,6 @@ if TYPE_CHECKING:
     from vibe_quant.paper.force_orders import ForceOrder
 
 logger = logging.getLogger(__name__)
-
-#: Consecutive kill-switch read failures tolerated before the node fails closed
-#: (halt with reason ERROR). One read per ``control_poll_interval`` poll (1.0 s;
-#: API configs never set it), and a SQLITE_BUSY read has already waited the state
-#: DB's 5 s busy_timeout, so a streak spans >= 2 s (instant errors: polls at t,
-#: t+1, t+2) and worst case ~33 s (3 iterations x (1 s poll + up to 5 s
-#: busy_timeout on claim_pending + up to 5 s on the kill-switch read)). One
-#: WAL-checkpoint stall must not flatten a live book; three failures in a row
-#: mean the node can neither see the kill switch nor receive operator commands
-#: (same DB), so it halts. The halt reason is ERROR (priority 2), never
-#: KILL_SWITCH (priority 6): a kill-switch reason would turn a non-resumable
-#: MAX_DRAWDOWN halt into a resumable one. An engaged switch read later still
-#: escalates to KILL_SWITCH; ERROR halts are restored after restart and need an
-#: operator resume, which is refused while the state is unreadable. No
-#: auto-resume on recovery.
-KILL_SWITCH_READ_FAILURE_LIMIT = 3
 
 # ValidationRunner._build_strategy_params skips these meta keys.
 _RUN_META_KEYS = frozenset({"sweep", "overfitting_filters"})
@@ -444,11 +437,12 @@ class PaperTradingNode:
         self._connected: bool | None = None
         self._startup_timeout_reported = False
         self._kill_reason_seen: str | None = None
-        # Fail-closed kill-switch reads: consecutive failures, the last read's
-        # error class, and the one halt per failure streak.
-        self._kill_read_failures: int = 0
-        self._kill_read_error: str | None = None
+        # The kill switch is read on a reader thread that owns its own state-DB
+        # handle (T2a/B2); the loop only ever looks at its snapshot. The latch is
+        # the one ERROR halt per stale streak.
+        self._kill_monitor = KillSwitchMonitor(lambda: StateManager(config.db_path))
         self._kill_read_halted: bool = False
+        self._kill_watch_task: asyncio.Task[None] | None = None
         self._previous_state: NodeState | None = None  # pre-start halt fallback
         self._trades_day: date | None = None
 
@@ -790,7 +784,11 @@ class PaperTradingNode:
             )
         if validated.get("symbols") != resolved.symbols:
             diff.append(
-                {"field": "symbols", "validated": validated.get("symbols"), "paper": resolved.symbols}
+                {
+                    "field": "symbols",
+                    "validated": validated.get("symbols"),
+                    "paper": resolved.symbols,
+                }
             )
         # R43: validation that ran with liquidation off never exercised the
         # liquidation the venue will apply, so paper cannot claim parity - name it
@@ -1017,42 +1015,11 @@ class PaperTradingNode:
         loop.add_signal_handler(signal.SIGUSR1, halt_handler, signal.SIGUSR1)
         loop.add_signal_handler(signal.SIGUSR2, resume_handler, signal.SIGUSR2)
 
-    def _kill_switch(self) -> tuple[bool, str | None]:
-        """Read the system kill switch; an unreadable state counts as engaged.
-
-        A read failure (locked/corrupt state DB, a deleted singleton row, or a
-        raising parse of the state row) is recorded as a consecutive failure and
-        returned as engaged, so this check fails closed; a clean read resets the
-        failure streak.
-        """
-        try:
-            sys_state = self._state_manager.get_system_state(require_row=True)
-            engaged = bool(sys_state.get("kill_switch"))
-            reason = sys_state.get("reason")
-        except Exception as exc:
-            # Class only (R1b): the error text can carry SQL/paths, and the
-            # active exception's ``__context__`` chain may hold a fetch error
-            # (signed URL / api key); no exc_info for the same reason.
-            cls = type(exc).__name__
-            self._kill_read_failures += 1
-            self._kill_read_error = cls
-            logger.error(
-                "could not read system kill switch (%s); %d consecutive failure(s)",
-                cls,
-                self._kill_read_failures,
-            )
-            return True, f"kill switch state unreadable ({cls})"
-        self._kill_read_failures = 0
-        self._kill_read_error = None
-        self._kill_read_halted = False
-        return engaged, reason
-
     async def _control_loop(self) -> None:
-        """Poll operator commands, the kill switch and connectivity.
+        """Poll operator commands and connectivity.
 
-        Each step runs in its own try: a failing command claim (the same state
-        DB the kill switch is read from) must never skip that iteration's
-        kill-switch poll - the check fails closed only when it actually runs.
+        Each step runs in its own try. The kill switch has its own watcher task
+        (``_kill_watch_loop``), so a stalled command claim cannot delay it.
         """
         interval = self._config.control_poll_interval
         while not self._shutdown_event.is_set():
@@ -1066,12 +1033,6 @@ class PaperTradingNode:
                 # signed URL / api key - plus its traceback.
                 logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
             try:
-                self._check_kill_switch()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
-            try:
                 self._check_connectivity()
             except asyncio.CancelledError:
                 raise
@@ -1079,23 +1040,41 @@ class PaperTradingNode:
                 logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
             await asyncio.sleep(interval)
 
+    def _mono(self) -> float:
+        """Monotonic seconds (one seam for the kill-switch snapshot age)."""
+        return time.monotonic()
+
+    async def _kill_watch_loop(self) -> None:
+        """Look at the kill-switch snapshot every ``KILL_SWITCH_WATCH_TICK_S`` until shutdown.
+
+        Own task, own try per tick: nothing else on the loop can skip the check.
+        """
+        while not self._shutdown_event.is_set():
+            try:
+                self._check_kill_switch()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("paper kill-switch watch iteration failed (%s)", type(exc).__name__)
+            await asyncio.sleep(KILL_SWITCH_WATCH_TICK_S)
+
     def _check_kill_switch(self) -> None:
-        engaged, reason = self._kill_switch()
-        if self._kill_read_error is not None:
-            # Fail closed: below the limit nothing is assumed and nothing is
-            # cleared; at the limit the node halts (ERROR) once per streak - the
-            # latch is set first, so later failures of the streak are silent.
-            if (
-                self._kill_read_failures >= KILL_SWITCH_READ_FAILURE_LIMIT
-                and not self._kill_read_halted
-            ):
+        """Fail closed on a stale snapshot, escalate on an engaged one. No DB access."""
+        snap = self._kill_monitor.snapshot()
+        age = snap.age(self._mono())
+        if age >= KILL_SWITCH_STALE_LIMIT_S:
+            # The latch is set first, so later stale ticks are silent. ERROR, never
+            # KILL_SWITCH (a kill reason would make a MAX_DRAWDOWN halt resumable).
+            if not self._kill_read_halted:
                 self._kill_read_halted = True
+                detail = snap.error_class or "no clean read"
                 self.halt(
                     HaltReason.ERROR,
-                    f"system kill switch unreadable for {self._kill_read_failures} "
-                    f"consecutive reads ({self._kill_read_error}); failing closed",
+                    f"system kill switch unreadable for {age:.1f} s ({detail}); failing closed",
                 )
             return
+        self._kill_read_halted = False
+        engaged, reason = snap.engaged, snap.reason
         if not engaged:
             self._kill_reason_seen = None
             return
@@ -1974,14 +1953,16 @@ class PaperTradingNode:
         self._status.state = NodeState.INITIALIZING
         self._status.updated_at = datetime.now(UTC)
 
-        engaged, reason = self._kill_switch()
-        if self._kill_read_error is not None:
+        self._kill_monitor.start()
+        snap = await self._kill_monitor.wait_first_read(KILL_SWITCH_STARTUP_TIMEOUT_S)
+        if snap.last_ok_mono is None:
             raise ConfigurationError(
-                f"System kill switch state unreadable ({self._kill_read_error}); refusing to start"
+                f"System kill switch state unreadable ({snap.error_class or 'no read within 10 s'});"
+                " refusing to start"
             )
-        if engaged:
+        if snap.engaged:
             raise ConfigurationError(
-                f"System kill switch engaged ({reason or 'no reason'}); refusing to start"
+                f"System kill switch engaged ({snap.reason or 'no reason'}); refusing to start"
             )
 
         # Create event writer
@@ -2077,6 +2058,7 @@ class PaperTradingNode:
             await self._persistence.start_periodic_checkpointing(self._capture_checkpoint)
 
         self._control_task = asyncio.create_task(self._control_loop())
+        self._kill_watch_task = asyncio.create_task(self._kill_watch_loop())
         self._start_liquidation_task()
 
         # Run Nautilus on our event loop (run_async) instead of in a worker
@@ -2105,7 +2087,9 @@ class PaperTradingNode:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await self._stop_control_loop()
+            await self._stop_kill_watch()
             await self._stop_liquidation_loop()
+            self._stop_kill_monitor()
 
         if run_exc is not None:
             raise run_exc
@@ -2118,6 +2102,22 @@ class PaperTradingNode:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+
+    async def _stop_kill_watch(self) -> None:
+        task = self._kill_watch_task
+        self._kill_watch_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    def _stop_kill_monitor(self) -> None:
+        """Signal the reader thread and wait a bounded time (idempotent, never raises)."""
+        try:
+            self._kill_monitor.stop()
+        except Exception as exc:
+            logger.error("kill-switch monitor stop failed (%s)", type(exc).__name__)
 
     async def _shutdown(self) -> None:
         """Graceful shutdown of node components."""
@@ -2145,6 +2145,8 @@ class PaperTradingNode:
             )
 
         await self._stop_control_loop()
+        await self._stop_kill_watch()
+        self._stop_kill_monitor()
         # R53: before the final checkpoint, so the watch state it captures is still there.
         await self._stop_liquidation_loop()
 
@@ -2283,12 +2285,17 @@ class PaperTradingNode:
 
     def resume(self) -> tuple[bool, str]:
         """Resume from pause / operator-resumable halt. Never while killed."""
-        engaged, _ = self._kill_switch()
-        if self._kill_read_error is not None:
+        snap = self._kill_monitor.snapshot()
+        age = snap.age(self._mono())
+        if snap.error_class is not None or age > KILL_SWITCH_RESUME_FRESH_S:
+            detail = snap.error_class or (
+                "no clean read" if math.isinf(age) else f"{age:.1f} s old"
+            )
             return False, (
-                f"system kill switch state unreadable ({self._kill_read_error}); "
+                f"system kill switch state not fresh ({detail}); "
                 "cannot resume until it reads cleanly"
             )
+        engaged = snap.engaged
         if self._guard is not None:
             return self._guard.resume(kill_switch_engaged=engaged)
         if engaged:

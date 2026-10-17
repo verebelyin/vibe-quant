@@ -13,10 +13,10 @@ end-to-end coverage: what the paper NODE and the paper API do on a missing row.
 
 Contract rows:
 
-* L1 a read on a deleted row (cached conn, ``require_row`` either way) re-seeds
+* L1 a read on a deleted row (cached conn) re-seeds
       it engaged and returns the reseed reason; a present row reads live.
-* L2 ``PaperTradingNode._kill_switch`` reads the re-seeded row as engaged
-      (no failure streak, no class-only ERROR log) and ``_check_kill_switch``
+* L2 the node's kill-switch monitor reads the re-seeded row as engaged
+      (no failure, no class-only ERROR log) and ``_check_kill_switch``
       halts KILL_SWITCH once with the reseed reason.
 * L3 startup refuses with the engaged text (never the "unreadable" one) and
       resume is refused because the switch is engaged.
@@ -118,12 +118,12 @@ def test_cached_conn_read_reseeds_engaged(tmp_path: Path) -> None:
     sm = StateManager(tmp_path / "state.db")
     try:
         _drop_state_row(sm)
-        state = sm.get_system_state(require_row=True)
+        state = sm.get_system_state()
         row = sm.conn.execute(
             "SELECT id, kill_switch, reason, killed_at, killed_by FROM system_state"
         ).fetchone()
         assert row is not None, "the read must have re-created the row"
-        again = sm.get_system_state(require_row=True)
+        again = sm.get_system_state()
     finally:
         sm.close()
     assert state["kill_switch"] is True
@@ -139,21 +139,20 @@ def test_default_read_reseeds_engaged_never_defaults(tmp_path: Path) -> None:
     sm = StateManager(tmp_path / "state.db")
     try:
         _drop_state_row(sm)
-        state = sm.get_system_state(require_row=False)
+        state = sm.get_system_state()
     finally:
         sm.close()
     assert state["kill_switch"] is True
     assert state["reason"] == _REASON
 
 
-def test_require_row_reads_live_row_when_present(tmp_path: Path) -> None:
-    """L1: with the row present ``require_row=True`` is a plain read (and must
-    not be a synonym for 'raise')."""
+def test_present_row_reads_live(tmp_path: Path) -> None:
+    """L1: with the row present the read is a plain read."""
     sm = StateManager(tmp_path / "state.db")
     try:
-        assert sm.get_system_state(require_row=True)["kill_switch"] is False
+        assert sm.get_system_state()["kill_switch"] is False
         sm.set_kill_switch("ops", "tester")
-        state = sm.get_system_state(require_row=True)
+        state = sm.get_system_state()
         assert state["kill_switch"] is True
         assert state["reason"] == "ops"
         assert state["killed_by"] == "tester"
@@ -175,11 +174,12 @@ async def test_node_reads_reseeded_engaged(
     _drop_state_row(node._state_manager)
     try:
         with caplog.at_level(logging.ERROR):
-            engaged, reason = node._kill_switch()
-        assert engaged is True
-        assert reason == _REASON
-        assert node._kill_read_failures == 0, "a re-seeded engaged row is not a failed read"
-        assert node._kill_read_error is None
+            node._kill_monitor.poll_once(node._state_manager)
+        snap = node._kill_monitor.snapshot()
+        assert snap.engaged is True
+        assert snap.reason == _REASON
+        assert snap.consecutive_failures == 0, "a re-seeded engaged row is not a failed read"
+        assert snap.error_class is None
         assert guard.calls == []
         assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
         assert any(r.levelno == logging.CRITICAL for r in caplog.records), (
@@ -197,6 +197,7 @@ async def test_node_missing_row_halts_kill_switch_once(seeded: dict[str, Any]) -
     node._guard = guard  # type: ignore[assignment]
     _drop_state_row(node._state_manager)
     try:
+        node._kill_monitor.poll_once(node._state_manager)
         for _ in range(3):
             node._check_kill_switch()
         assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
@@ -232,6 +233,7 @@ async def test_resume_refused_when_row_missing(seeded: dict[str, Any]) -> None:
     node._guard = guard  # type: ignore[assignment]
     _drop_state_row(node._state_manager)
     try:
+        node._kill_monitor.poll_once(node._state_manager)
         assert node.resume() == (
             False,
             "system kill switch is engaged; unlock it before resuming",
@@ -365,9 +367,10 @@ async def test_node_read_unchanged_when_row_present(seeded: dict[str, Any]) -> N
     node = PaperTradingNode(_config(seeded))
     node._guard = guard  # type: ignore[assignment]
     try:
-        assert node._kill_switch() == (False, None)
-        assert node._kill_read_failures == 0
-        assert node._kill_read_error is None
+        node._kill_monitor.poll_once(node._state_manager)
+        snap = node._kill_monitor.snapshot()
+        assert (snap.engaged, snap.reason) == (False, None)
+        assert (snap.consecutive_failures, snap.error_class) == (0, None)
         assert guard.calls == []
     finally:
         await node._shutdown()

@@ -596,11 +596,16 @@ async def test_resume_refused_while_killed(
     node = PaperTradingNode(_config(seeded))
     await node._initialize()
     try:
-        monkeypatch.setattr(
-            node._state_manager,
-            "get_system_state",
-            lambda **_: {"kill_switch": True, "reason": "ops"},
-        )
+        node._kill_monitor.stop()  # the thread would overwrite the injected read
+
+        class _Engaged:
+            def get_system_state(self) -> dict[str, object]:
+                return {"kill_switch": True, "reason": "ops"}
+
+            def close(self) -> None:
+                return None
+
+        node._kill_monitor.poll_once(_Engaged())
         assert node.resume() == (
             False,
             "system kill switch is engaged; unlock it before resuming",

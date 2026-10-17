@@ -511,6 +511,7 @@ class TestPaperTradingNode:
         )
 
         node = PaperTradingNode(config)
+        node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
 
         # Set to running first
         node._status.state = NodeState.RUNNING

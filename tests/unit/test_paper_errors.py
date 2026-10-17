@@ -350,6 +350,7 @@ class TestNodeErrorIntegration:
             db_path=db_path,
         )
         node = PaperTradingNode(config)
+        node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
         node._status.state = NodeState.RUNNING
 
         # Trigger error halt
@@ -434,6 +435,7 @@ class TestStateTransitions:
             db_path=db_path,
         )
         node = PaperTradingNode(config)
+        node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
         node._status.state = NodeState.RUNNING
         node._status.state = NodeState.HALTED
         node._status.halt_reason = HaltReason.ERROR
@@ -474,6 +476,7 @@ class TestStateTransitions:
             db_path=db_path,
         )
         node = PaperTradingNode(config)
+        node._kill_monitor.poll_once(node._state_manager)  # fresh clean kill-switch snapshot
         node._status.state = NodeState.PAUSED
 
         # Halt via error
