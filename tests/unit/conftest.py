@@ -182,6 +182,51 @@ def _restore_aux_data_paths() -> Iterator[None]:
     aux.configure(archive, catalog)
 
 
+@pytest.fixture(autouse=True)
+def _restore_ga_indicator_pool() -> Iterator[None]:
+    """Undo ``_apply_indicator_pool_filter`` leaks: it deletes module-global keys.
+
+    ``DiscoveryPipeline._apply_indicator_pool_filter`` filters
+    ``operators.INDICATOR_POOL`` (and the derived ``_INDICATOR_NAMES`` list) IN
+    PLACE -- correct in production, where discovery runs as a subprocess, but an
+    in-process test that runs the pipeline leaves every later test on the same
+    xdist worker with a filtered pool. The default pool drops the needs_context
+    specs (BTC_TREND, BTC_ROC, OWN_TREND, FUNDING, FUNDING_Z), so a later launch
+    test validating a context pool dies with "indicator_pool contains names not
+    available for GA discovery: ['BTC_TREND']" instead of its own assertion.
+    ``_ensure_pool`` only rebuilds an EMPTY dict, so a filtered pool persists
+    (vibe-quant-73khn: the ordered pair
+    ``test_discovery_pipeline.py test_launch_data_precheck.py`` fails 1/87;
+    the parallel gate missed it because xdist split the two files apart).
+
+    Snapshot-and-restore rather than rebuild from the registry: the first test of
+    a worker starts from the real pool, so restoring the pre-test value is what
+    makes a single-file run and a full-suite run see identical state. The import
+    is deferred to fixture time and skipped entirely when the discovery package
+    is not loaded yet -- importing it at conftest module scope would pull
+    ``vibe_quant.discovery`` into every unit collection (see
+    ``_NT_EAGER_IMPORT_TEST_MODULES`` in tests/conftest.py for why that matters).
+
+    ``THRESHOLD_RANGES`` / ``_MA_NAMES`` / ``_INT_PARAMS`` / ``_PARAM_DEFAULTS``
+    are built from the genome, not from ``INDICATOR_POOL``, and only the pool and
+    the name list are ever filtered in place, so they need no restore here.
+    """
+    ops = sys.modules.get("vibe_quant.discovery.operators")
+    if ops is None:
+        yield
+        return
+
+    saved_pool = dict(ops.INDICATOR_POOL)
+    saved_names = list(ops._INDICATOR_NAMES)
+
+    yield
+
+    ops.INDICATOR_POOL.clear()
+    ops.INDICATOR_POOL.update(saved_pool)
+    ops._INDICATOR_NAMES.clear()
+    ops._INDICATOR_NAMES.extend(saved_names)
+
+
 def _noop_data_precheck(*args: object, **kwargs: object) -> None:
     """Stand-in for a launch data precheck (see ``_stub_launch_data_precheck``)."""
 
