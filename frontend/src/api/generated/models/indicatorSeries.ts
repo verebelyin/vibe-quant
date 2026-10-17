@@ -15,4 +15,6 @@ export interface IndicatorSeries {
   pane: string;
   params: IndicatorSeriesParams;
   data: IndicatorSeriesPoint[];
+  unsupported?: boolean;
+  unsupported_reason?: string | null;
 }

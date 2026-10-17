@@ -70,6 +70,12 @@ class IndicatorSeries(BaseModel):
     pane: str  # "overlay" | "oscillator"
     params: dict[str, object]
     data: list[IndicatorSeriesPoint]
+    # Explicit marker for a requested type the chart overlay cannot compute from
+    # OHLCV bars alone (context-dependent or NautilusTrader-only). Such an entry
+    # carries the display label and reason but no data, so it is visible in the
+    # response instead of silently vanishing.
+    unsupported: bool = False
+    unsupported_reason: str | None = None
 
 
 class IndicatorsResponse(BaseModel):

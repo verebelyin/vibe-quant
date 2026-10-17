@@ -7318,6 +7318,22 @@
             },
             "type": "array",
             "title": "Data"
+          },
+          "unsupported": {
+            "type": "boolean",
+            "title": "Unsupported",
+            "default": false
+          },
+          "unsupported_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unsupported Reason"
           }
         },
         "type": "object",

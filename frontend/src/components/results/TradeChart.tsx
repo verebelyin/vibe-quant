@@ -25,6 +25,7 @@ import {
 import { useGetStrategyApiStrategiesStrategyIdGet } from "@/api/generated/strategies/strategies";
 import { candlesFromBrowseRows, volumeFromCandles } from "@/components/results/candleSeriesData";
 import { indicatorConfigsFromDsl } from "@/components/results/indicatorConfigs";
+import { unsupportedIndicatorNote } from "@/components/results/unsupportedIndicatorNote";
 import {
   Select,
   SelectContent,
@@ -201,7 +202,26 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
   const indicatorSeries = useMemo(() => {
     const resp = indicatorQuery.data;
     if (!resp || resp.status !== 200) return [];
-    return resp.data.series;
+    // Unsupported entries carry no data (they cannot be computed from OHLCV
+    // bars alone); they get a note below instead of an empty chart line.
+    return resp.data.series.filter((s) => !s.unsupported);
+  }, [indicatorQuery.data]);
+
+  const unsupportedNotes = useMemo(() => {
+    const resp = indicatorQuery.data;
+    if (!resp || resp.status !== 200) return [];
+    const notes: { key: string; note: string; reason: string | null }[] = [];
+    for (const s of resp.data.series) {
+      const note = unsupportedIndicatorNote(s);
+      if (note !== null) {
+        notes.push({
+          key: `${s.indicator_type}-${s.output_name}`,
+          note,
+          reason: s.unsupported_reason ?? null,
+        });
+      }
+    }
+    return notes;
   }, [indicatorQuery.data]);
 
   // Count oscillator panes for dynamic height
@@ -595,6 +615,19 @@ export function TradeChart({ runId, highlightedTradeId }: TradeChartProps) {
               </button>
             );
           })}
+        </div>
+      )}
+      {unsupportedNotes.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {unsupportedNotes.map((item) => (
+            <span
+              key={item.key}
+              title={item.reason ?? undefined}
+              className="inline-flex items-center rounded-full border border-dashed border-border px-2.5 py-0.5 text-xs text-muted-foreground"
+            >
+              {item.note}
+            </span>
+          ))}
         </div>
       )}
       {isLoading && (

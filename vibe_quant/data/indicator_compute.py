@@ -2,6 +2,13 @@
 
 Used by the /api/data/indicators/{symbol} endpoint to compute indicator
 series for chart overlays. No storage — computed fresh each request.
+
+Plugins are computed over the full request history. The strategy runtime
+instead feeds compute_fn a capped rolling buffer, so path-dependent
+indicators (e.g. ADAPTIVE_RSI, VIDYA) can differ slightly between the chart
+and the strategy for the same bars (follow-up bead). Values still come from
+the same compute_fn with the same effective params, so differences are
+confined to that buffer-truncation effect.
 """
 
 from __future__ import annotations
@@ -14,9 +21,19 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from vibe_quant.api.schemas.data import IndicatorSeries, IndicatorSeriesPoint
-from vibe_quant.dsl.indicators import indicator_registry
+from vibe_quant.dsl.indicators import indicator_registry, invoke_compute_fn
 
 logger = logging.getLogger(__name__)
+
+
+class _UnsupportedIndicatorError(Exception):
+    """Requested type has no OHLCV-only computation path.
+
+    Raised by :func:`_compute_single` for a registry spec that needs non-price
+    context or only exists as a NautilusTrader runtime object, and for a type
+    that is not in the registry at all. :func:`compute_indicators` turns it into
+    an explicit per-indicator ``unsupported`` marker instead of dropping it.
+    """
 
 
 def _classify_pane(indicator_type: str) -> str:
@@ -278,8 +295,35 @@ def _compute_single(
             return []
         return [("value", result)]
 
-    logger.warning("Unknown indicator type for computation: %s", indicator_type)
-    return []
+    # Generic registry fallback: any registered type without a hard-coded
+    # branch above is computed through the spec's own compute_fn — the same
+    # function (and params) the strategy compiler calls, so chart values equal
+    # strategy values. Specs that cannot run on OHLCV alone raise
+    # _UnsupportedIndicatorError, which compute_indicators reports explicitly.
+    spec = indicator_registry.get(upper)
+    if spec is None:
+        logger.warning("Unknown indicator type for computation: %s", indicator_type)
+        raise _UnsupportedIndicatorError("unknown indicator type")
+    if spec.needs_context:
+        raise _UnsupportedIndicatorError(
+            "needs external context (not available in chart overlays)"
+        )
+    if spec.compute_fn is None:
+        raise _UnsupportedIndicatorError(
+            "computed by NautilusTrader at runtime; no chart formula"
+        )
+
+    # Merge the spec's defaults under the request params — the same base the
+    # compiler's StrategyCompiler._merge_effective_params starts from. Without
+    # this, a request that omits params ({} or a partial set) lets a plugin's
+    # internal fallback (e.g. PRICE_POSITION's period 14) differ from the
+    # spec default the strategy path uses (52), so chart and strategy values
+    # diverge. Response params still echo the request verbatim.
+    merged = {**spec.default_params, **params}
+    result = invoke_compute_fn(spec, df, merged)
+    if isinstance(result, dict):
+        return [(name, result[name]) for name in spec.output_names if name in result]
+    return [(spec.output_names[0], result)]
 
 
 def compute_indicators(
@@ -312,6 +356,23 @@ def compute_indicators(
 
         try:
             outputs = _compute_single(df, ind_type, params)
+        except _UnsupportedIndicatorError as exc:
+            spec = indicator_registry.get(ind_type)
+            output_name = spec.output_names[0] if spec is not None else "value"
+            results.append(
+                IndicatorSeries(
+                    name=base_name,
+                    output_name=output_name,
+                    indicator_type=ind_type,
+                    display_label=_make_display_label(ind_type, output_name, params),
+                    pane=pane,
+                    params=params,
+                    data=[],
+                    unsupported=True,
+                    unsupported_reason=str(exc),
+                )
+            )
+            continue
         except Exception:
             logger.exception("Failed to compute indicator %s", ind_type)
             continue
