@@ -2161,3 +2161,87 @@ class TestBusInboxCursorBounds:
         (d / "cursors" / "sa.offset").write_text(value)
         chk = swarm_check.bus_inbox_check(_cfg(tmp_path, repo, bus=str(d), bus_agent="sa"))
         assert chk.status == "FAIL" and "sa.offset" in chk.detail and value in chk.detail
+
+
+class TestInheritedSwarmEnv:
+    """A unit test must never read or post to a real swarm bus through the caller's env.
+
+    The gate runs ``pytest tests/unit`` as a child that inherits the worker shell's env
+    (swarm_check.py:218 merges ``os.environ``) while ``main`` resolves ``cfg.bus`` from
+    ``$SWARM_BUS`` -- so the ``<worktree>: GATE PASS`` DMs that landed in the gate's own live
+    job bus during a worker's gate run were written from inside these tests: every class above
+    that calls ``swarm_check.main()`` without ``--bus`` (TestPassCache, TestBusInbox*,
+    TestStubs) posts to whatever bus the env names. tests/unit/conftest.py's
+    ``_forbid_inherited_swarm_env`` strips the caller's SWARM_* vars before each test body.
+    """
+
+    def test_no_swarm_env_in_a_unit_test_body(self) -> None:
+        """The guard. Run with SWARM_BUS/SWARM_AGENT exported this is the leak condition; the
+        child-pytest test below recreates that condition, so the pin holds in a clean env too."""
+        inherited = {k: v for k, v in os.environ.items() if k.startswith("SWARM_")}
+        assert inherited == {}, f"a unit test inherited swarm env: {inherited}"
+
+    def test_gate_run_from_a_test_posts_no_dm_without_an_explicit_bus(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The guard on the leak path: with the inherited bus stripped the gate has nowhere to
+        post, while the contrast run (SWARM_BUS set deliberately, as cmd-task.sh exports it)
+        writes exactly one DM -- so the guard, not the absence of a bus, keeps the real bus
+        clean, and this is the code path that used to spam it."""
+        repo = _init_pass_repo(tmp_path)
+        argv = [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never"]
+        assert swarm_check.main(argv, run=FakeRunner()) == 0
+        assert "GATE PASS" in capsys.readouterr().out
+        assert list(tmp_path.glob("**/messages.jsonl")) == []
+
+        explicit = tmp_path / "explicit_bus"
+        explicit.mkdir()
+        monkeypatch.setenv("SWARM_BUS", str(explicit))
+        monkeypatch.setenv("SWARM_AGENT", "sa")
+        assert swarm_check.main(argv, run=FakeRunner()) == 0
+        bodies = [
+            json.loads(ln)["body"]
+            for ln in (explicit / "messages.jsonl").read_text().splitlines()
+        ]
+        assert len(bodies) == 1 and "GATE PASS" in bodies[0]
+
+    def test_no_swarm_env_resurrection_by_a_monkeypatch_undo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The trap the guard must not fall into: TestPassCache::test_stamp_write_is_atomic calls
+        ``monkeypatch.undo()`` mid-test, which undoes everything the *shared* monkeypatch recorded
+        -- so a guard built on it resurrects the caller's bus and the gate runs after the undo post
+        into it (that test produced the last live-bus DM of a worker's gate run)."""
+        monkeypatch.setenv("SWARM_BUS", "/nonexistent/live-bus")  # stands in for cmd-task.sh
+        monkeypatch.undo()
+        assert "SWARM_BUS" not in os.environ, "monkeypatch.undo() resurrected the caller's bus"
+
+    def test_guard_holds_in_a_child_pytest_with_swarm_env_exported(self, tmp_path: Path) -> None:
+        """End-to-end: the leak path is a *child* pytest of the gate, so run one with the worker
+        shell's SWARM_BUS/SWARM_AGENT exported -- it selects the two ``no_swarm_env`` guard pins
+        above plus ``gate_run_from_a_test``, the posting test whose live-bus assert is the one
+        that has to fire, since the env they all need is exactly what this test provides -- and
+        assert the child passes, that it really selected that posting test, and that the bus it
+        points at stays empty. A guard that is missing, or that the shared ``monkeypatch`` can
+        undo, fails there even when the outer run has a clean env."""
+        live_bus = tmp_path / "live_bus"
+        live_bus.mkdir()
+        root = Path(__file__).resolve().parents[2]
+        env = {
+            **os.environ,
+            "SWARM_BUS": str(live_bus),
+            "SWARM_AGENT": "probe",
+            "PYTHONPATH": str(root),
+        }
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(root / "tests/unit/test_swarm_check.py"),
+             "-k", "no_swarm_env or gate_run_from_a_test", "-v", "-p", "no:randomly",
+             "-o", "addopts="],
+            cwd=str(root), env=env, capture_output=True, text=True, timeout=300,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        # -v, so the selection itself is pinned: under a bare ``-k no_swarm_env`` the posting
+        # test -- the only child test that runs the gate and could write into ``live_bus`` --
+        # was never selected, and this is the assertion that a revert of the -k fails.
+        assert "test_gate_run_from_a_test_posts_no_dm_without_an_explicit_bus" in proc.stdout
+        assert not (live_bus / "messages.jsonl").exists()

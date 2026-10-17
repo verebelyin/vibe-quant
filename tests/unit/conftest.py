@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 import sys
 from typing import TYPE_CHECKING, Any
@@ -117,6 +118,48 @@ def _forbid_network(
         )
 
     monkeypatch.setattr(BinanceHttpClient, "send_request", guarded_send_request)
+
+
+# ------------------------------------------------------- inherited swarm env guard
+#
+# The gate runs ``pytest tests/unit`` as a child of the worker's shell and ``real_run``
+# merges ``os.environ`` into every tool subprocess (swarm_check.py:218), so the unit suite
+# inherits the SWARM_* vars that scripts/agents/cmd-task.sh exports. ``swarm_check.main``
+# resolves ``cfg.bus`` from ``$SWARM_BUS`` (swarm_check.py:1072) and ``bus_post`` then
+# writes ``<worktree>: GATE PASS`` into that directory, so every gate test calling
+# ``main()`` without ``--bus`` posted DMs into the LIVE job bus: one worker's gate run
+# collected ~30 of them. An inherited ``SWARM_AGENT`` alone is a bus-inbox FAIL, which
+# made TestIntegration::test_script_gate_pass/_fail red too. A unit test must never read
+# or write a real swarm bus, board or telemetry ledger.
+#
+# Tests that need one of these variables set it themselves *after* this fixture (a
+# function-scoped autouse fixture runs before the test body): test_swarm_bus.py's
+# _fast_poll (SWARM_BOARD) and test_telemetry.py's _isolated_ledger (SWARM_TELEMETRY)
+# both re-point theirs at tmp dirs anyway, and the SWARM_CHECK_* stub tests in
+# test_swarm_check.py set theirs in the test body. monkeypatch restores the caller's env
+# at teardown.
+#
+# Read somewhere under scripts/agents: SWARM_BUS, SWARM_AGENT, SWARM_BOARD, SWARM_JOBS
+# (bus.py); SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST /
+# SWARM_CHECK_ALLOW_STUBS (swarm_check.py); SWARM_TELEMETRY, SWARM_BUS_ANNOUNCE,
+# SWARM_HOOKS. The prefix sweep is deliberate -- a new SWARM_* var must not need this
+# fixture edited before the suite stays hermetic.
+#
+# It holds its OWN MonkeyPatch instance rather than the shared ``monkeypatch`` fixture:
+# TestPassCache::test_stamp_write_is_atomic calls ``monkeypatch.undo()`` mid-test, which
+# undoes everything that instance recorded -- the strip included -- and the gate runs after
+# the undo then posted to the caller's bus again (measured with a timestamped -v run:
+# the last live-bus DM of a worker's gate run came from exactly that test).
+
+
+@pytest.fixture(autouse=True)
+def _forbid_inherited_swarm_env() -> Iterator[None]:
+    """Strip the caller's SWARM_* vars so no test can reach a real swarm bus/board/ledger."""
+    guard = pytest.MonkeyPatch()
+    for name in [key for key in os.environ if key.startswith("SWARM_")]:
+        guard.delenv(name, raising=False)
+    yield
+    guard.undo()
 
 
 @pytest.fixture(autouse=True)
