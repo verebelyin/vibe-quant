@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, runtime_checkable
 
@@ -103,6 +104,9 @@ def load_builtin_sources(*, force: bool = False) -> list[str]:
     """Import every `.py` under this package so its `@register_source` runs.
 
     Idempotent: subsequent calls return the cached load list unless `force=True`.
+    A forced call re-registers every source, reloading modules that are already
+    in `sys.modules` (their decorators only run on re-execution), so the registry
+    is repopulated after `_reset_for_tests()`.
     A failing module is logged and recorded in `_load_errors` — other sources
     still load.
     """
@@ -119,8 +123,17 @@ def load_builtin_sources(*, force: bool = False) -> list[str]:
         if name.startswith("_"):
             continue
         qualified = f"{__name__}.{name}"
+        cached = sys.modules.get(qualified)
         try:
-            importlib.import_module(qualified)
+            if force and cached is not None:
+                # A cached submodule is returned as-is, so its decorators never
+                # re-run. Reload it instead, dropping the entries it owns so the
+                # re-registration doesn't raise "already registered".
+                for key in [key for key, cls in _registry.items() if cls.__module__ == qualified]:
+                    del _registry[key]
+                importlib.reload(cached)
+            else:
+                importlib.import_module(qualified)
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to load research source %s: %s", qualified, exc)
             _load_errors.append(
@@ -139,7 +152,10 @@ def load_builtin_sources(*, force: bool = False) -> list[str]:
 
 
 def _reset_for_tests() -> None:
-    """Test-only hook: clear the registry + loaded flag."""
+    """Test-only hook: clear the registry + loaded flag.
+
+    `load_builtin_sources(force=True)` re-registers the builtins afterwards.
+    """
     global _loaded
     _registry.clear()
     _load_errors.clear()

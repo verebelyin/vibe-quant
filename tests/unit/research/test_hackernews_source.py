@@ -418,17 +418,12 @@ def test_registry_lists_hackernews() -> None:
     """The builtin loader registers hackernews.
 
     Order-independent: `tests/unit/api/test_research_router*.py` call
-    `_reset_for_tests()`, which empties the registry, and a plain
-    `load_builtin_sources(force=True)` cannot re-register anything afterwards —
-    the source modules stay in `sys.modules`, so `@register_source` never re-runs
-    and `list_sources()` stays `[]`.
+    `_reset_for_tests()`, which empties the registry. The source modules stay in
+    `sys.modules`, so `load_builtin_sources(force=True)` has to reload them for
+    `@register_source` to run again.
     """
-    import sys
-
     from vibe_quant.research.sources import _reset_for_tests, list_sources, load_builtin_sources
 
     _reset_for_tests()
-    for name in [n for n in sys.modules if n.startswith("vibe_quant.research.sources.")]:
-        del sys.modules[name]
     load_builtin_sources(force=True)
     assert "hackernews" in list_sources()
