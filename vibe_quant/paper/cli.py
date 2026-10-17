@@ -141,6 +141,10 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
             f"validation run), got {raw_margin_type!r}"
         )
 
+    start_fresh = data.get("start_fresh", False)
+    if not isinstance(start_fresh, bool):
+        raise ConfigurationError("start_fresh must be true or false")
+
     return PaperTradingConfig(
         trader_id=data["trader_id"],
         binance=binance,
@@ -154,6 +158,7 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
         db_path=Path(db_path_str) if db_path_str else None,
         logs_path=Path(logs_path_str),
         state_persistence_interval=int(data.get("state_persistence_interval", 60)),
+        start_fresh=start_fresh,
     )
 
 
@@ -206,6 +211,7 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
         "db_path": str(config.db_path) if config.db_path else None,
         "logs_path": str(config.logs_path),
         "state_persistence_interval": config.state_persistence_interval,
+        "start_fresh": config.start_fresh,
     }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)

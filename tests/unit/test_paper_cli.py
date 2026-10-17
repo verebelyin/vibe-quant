@@ -219,6 +219,7 @@ class TestSaveConfigToJson:
         assert reloaded.trader_id == "PAPER-TEST"
         assert reloaded.symbols == ["BTCUSDT", "ETHUSDT"]
         assert reloaded.strategy_id == 123
+        assert reloaded.start_fresh is False
 
     def test_save_creates_directory(self, tmp_path: Path) -> None:
         """Save creates parent directory if needed."""
@@ -591,3 +592,47 @@ class TestMarginCushionConfig:
 
         loaded = load_config_from_json(self._write(tmp_path, {"max_margin_pct": 1}))
         assert loaded.sizing.max_margin_pct == Decimal("1")
+
+
+class TestStartFresh:
+    """R20/R20b: the ``start_fresh`` config key (skip inheriting the last session)."""
+
+    @staticmethod
+    def _write(tmp_path: Path, extra: dict[str, object]) -> Path:
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                    **extra,
+                }
+            )
+        )
+        return path
+
+    def test_load_start_fresh_rows(self, tmp_path: Path) -> None:
+        assert load_config_from_json(self._write(tmp_path, {})).start_fresh is False
+        assert load_config_from_json(self._write(tmp_path, {"start_fresh": True})).start_fresh
+        assert (
+            load_config_from_json(self._write(tmp_path, {"start_fresh": False})).start_fresh
+            is False
+        )
+
+    @pytest.mark.parametrize("bad", [None, "yes", 1, 0, "true"])
+    def test_load_start_fresh_rejects_non_bool(self, tmp_path: Path, bad: object) -> None:
+        with pytest.raises(ConfigurationError, match="start_fresh must be true or false"):
+            load_config_from_json(self._write(tmp_path, {"start_fresh": bad}))
+
+    def test_start_fresh_round_trip(self, tmp_path: Path) -> None:
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=BinanceTestnetConfig(api_key="k", api_secret="s", testnet=True),
+            start_fresh=True,
+        )
+        out = tmp_path / "out.json"
+        save_config_to_json(config, out)
+        assert json.loads(out.read_text())["start_fresh"] is True
+        assert load_config_from_json(out).start_fresh is True

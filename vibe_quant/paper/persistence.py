@@ -294,6 +294,66 @@ class StatePersistence:
             return None
         return self._row_to_checkpoint(row)
 
+    def load_latest_account_checkpoint(
+        self, trader_id: str, account: str
+    ) -> StateCheckpoint | None:
+        """Newest checkpoint of ``trader_id`` that belongs to ``account``.
+
+        A row belongs to ``account`` when its ``account`` key equals it or is missing
+        (legacy); rows of another account (testnet vs live, another key) are skipped.
+        A row whose ``node_status`` is not valid JSON counts (it fails closed when
+        parsed). Same predicate as the own-id threshold of
+        :meth:`load_newer_account_checkpoint`.
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM paper_trading_checkpoints
+               WHERE trader_id = ?
+                 AND CASE WHEN json_valid(node_status)
+                          THEN COALESCE(json_extract(node_status, '$.account'), ?)
+                          ELSE ? END = ?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (trader_id, account, account, account),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_checkpoint(row)
+
+    def load_newer_account_checkpoint(
+        self, account: str, trader_id: str
+    ) -> StateCheckpoint | None:
+        """Newest checkpoint of ANOTHER trader on ``account`` newer than ``trader_id``'s own.
+
+        "Newer" is a higher row id than ``trader_id``'s newest row ON THIS
+        ``account`` (0 when it has none; its rows without an ``account`` key count as
+        this account, rows of another account do not). Rows whose ``node_status`` is not valid JSON are skipped (their
+        account cannot be known; ``json_valid`` makes that independent of scan
+        order). The CHOSEN row is parsed strictly: a parse failure raises, so the
+        caller fails closed.
+
+        Returns:
+            The checkpoint, or None if no other trader on the account is newer.
+        """
+        cursor = self.conn.execute(
+            """SELECT * FROM paper_trading_checkpoints
+               WHERE trader_id != ?
+                 AND json_valid(node_status)
+                 AND json_extract(node_status, '$.account') = ?
+                 AND id > (SELECT COALESCE(MAX(id), 0) FROM paper_trading_checkpoints
+                           WHERE trader_id = ?
+                             AND CASE WHEN json_valid(node_status)
+                                      THEN COALESCE(json_extract(node_status, '$.account'), ?)
+                                      ELSE ? END = ?)
+               ORDER BY id DESC
+               LIMIT 1""",
+            (trader_id, account, trader_id, account, account, account),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_checkpoint(row)
+
     def list_checkpoints(
         self, trader_id: str | None = None, limit: int = 100
     ) -> list[StateCheckpoint]:

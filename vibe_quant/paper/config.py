@@ -12,6 +12,7 @@ config files or the API:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -276,6 +277,16 @@ class RiskModuleConfig:
     max_single_instrument_pct: Decimal = field(default_factory=lambda: Decimal("0.30"))
 
 
+def account_id(binance: BinanceTestnetConfig) -> str:
+    """Stable, secret-free account identity: venue + env + sha256(api_key)[:16].
+
+    Only the API KEY is hashed (never the secret). Testnet and live never match, and
+    a key rotation gives a new identity (the session then starts with fresh limits).
+    """
+    env = "testnet" if binance.testnet else "live"
+    return f"binance:{env}:{hashlib.sha256(binance.api_key.encode()).hexdigest()[:16]}"
+
+
 @dataclass
 class PaperTradingConfig:
     """Complete configuration for paper trading node.
@@ -297,6 +308,9 @@ class PaperTradingConfig:
         logs_path: Path for event log files.
         state_persistence_interval: Seconds between state snapshots.
         control_poll_interval: Seconds between command/kill-switch polls.
+        start_fresh: Skip inheriting the last session's risk state (peak, daily
+            baseline, losing streak, ERROR halt) from another trader on the same
+            account. The trader's OWN checkpoint is never discarded.
     """
 
     trader_id: str
@@ -312,6 +326,7 @@ class PaperTradingConfig:
     logs_path: Path = field(default_factory=lambda: DEFAULT_PAPER_LOGS_PATH)
     state_persistence_interval: int = 60
     control_poll_interval: float = 1.0
+    start_fresh: bool = False
 
     def validate(self) -> list[str]:
         """Validate configuration.

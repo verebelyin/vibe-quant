@@ -27,6 +27,7 @@ import copy
 import json
 import logging
 import math
+import re
 import signal
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,9 @@ from vibe_quant.paper.config import (
     check_paper_exposure,
     effective_max_margin_pct,
     effective_max_position_pct,
+)
+from vibe_quant.paper.config import (
+    account_id as binance_account_id,
 )
 from vibe_quant.paper.errors import ErrorContext, ErrorHandler
 from vibe_quant.paper.event_log import EventLogWorker, EventWriteTimeoutError
@@ -375,6 +379,23 @@ def restored_halt_from_status(node_status: object, checkpoint_time: str) -> Rest
     )
 
 
+#: One leading prefix of a stored halt message: this module's own restore prefix or an
+#: inherited one. Stripped in a loop so messages do not grow along a chain of sessions.
+_HALT_PREFIX_RE = re.compile(rf"(?:{re.escape(RESTORED_HALT_PREFIX)}|inherited from [A-Za-z0-9_-]+: )")
+
+
+def inherited_halt_message(trader_id: str, message: str) -> str:
+    """Message of an ERROR halt inherited from ``trader_id``'s last checkpoint.
+
+    Strips every leading restored/inherited prefix, then prefixes exactly one
+    ``inherited from <trader_id>: `` (R14e: no growth along a chain of sessions).
+    """
+    rest = message
+    while match := _HALT_PREFIX_RE.match(rest):
+        rest = rest[match.end() :]
+    return f"inherited from {trader_id}: {rest}"
+
+
 class _GuardBridge(GuardListener):
     """Forwards guard callbacks to the node."""
 
@@ -466,6 +487,8 @@ class PaperTradingNode:
         self._event_log_streak: tuple[int, int] | None = None
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
+        #: trader_id whose checkpoint supplied ``_restored_risk`` when it is not our own.
+        self._risk_inherited_from: str | None = None
         #: Symbols whose margin-limit refusal was already alerted (re-armed by an allowed entry).
         self._margin_alerted: set[str] = set()
         #: Symbols whose raising-entry-check refusal was already alerted (re-armed on entry).
@@ -1112,6 +1135,7 @@ class PaperTradingNode:
             listener=_GuardBridge(self),
             risk_state=self._restored_risk,
             restored_halt=self._restored_halt,
+            risk_source=self._risk_inherited_from,
         )
 
     # ------------------------------------------------------------ control
@@ -2082,6 +2106,9 @@ class PaperTradingNode:
         node_status: dict[str, object] = dict(self._status.to_dict())
         node_status["trader_id"] = self._config.trader_id
         node_status["testnet"] = self._config.binance.testnet
+        # 3fqw9: the account identity (secret-free fingerprint) lets the next session
+        # on this account find the newest checkpoint whatever its trader_id.
+        node_status["account"] = binance_account_id(self._config.binance)
         if self._guard is not None:
             guard_status = self._guard.status()
             node_status["risk"] = guard_status["risk"]
@@ -2184,41 +2211,96 @@ class PaperTradingNode:
             logger.error("immediate checkpoint failed (%s)", type(exc).__name__)
 
     def _restore_from_checkpoint(self) -> None:
-        """Load the latest checkpoint for this trader_id (restart / /restore).
+        """Restore the risk state (and halt) of the previous session.
 
-        Restores the risk bookkeeping (high water mark, UTC-day baseline,
-        consecutive losses) so a restart cannot reset the drawdown/daily-loss
-        limits. Positions and orders come from NautilusTrader's venue
-        reconciliation (claimed via ``external_order_claims``); the checkpoint
-        copy is only logged for comparison.
+        The trader's own latest checkpoint (restart / /restore) is read as before.
+        Unless ``start_fresh``, the newest checkpoint of ANOTHER trader on the same
+        account that is newer than the own one is the source of the risk bookkeeping
+        (high water mark, UTC-day baseline, consecutive losses), so a new session id
+        cannot reset the drawdown/daily-loss limits. Halts: the own halt always
+        wins; from another session only an ERROR halt is inherited (an unrecognised
+        reason counts as ERROR). ``start_fresh`` never discards the own checkpoint.
+        Positions and orders come from NautilusTrader's venue reconciliation
+        (claimed via ``external_order_claims``); the checkpoint copy is only logged.
         """
         if self._persistence is None:
             return
+        account = binance_account_id(self._config.binance)
         try:
-            prior = self._persistence.load_latest_checkpoint(self._config.trader_id)
-            if prior is None:
+            # P-R7/P-R7b: only a row of THIS account (or a legacy row without the key)
+            # is ours; the same trader_id on another account (testnet vs live, another
+            # key) carries nothing, but its older matching history is still restored.
+            own = self._persistence.load_latest_account_checkpoint(
+                self._config.trader_id, account
+            )
+            newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
+            if newest is not None:
+                newest_account = newest.node_status.get("account")
+                if newest_account is not None and newest_account != account:
+                    logger.warning(
+                        "paper %s: own checkpoint is for account %s, not %s; ignored",
+                        self._config.trader_id,
+                        newest_account,
+                        account,
+                    )
+            inherited = (
+                None
+                if self._config.start_fresh
+                else self._persistence.load_newer_account_checkpoint(
+                    account, self._config.trader_id
+                )
+            )
+            source = inherited if inherited is not None else own
+            if source is None:
+                if not self._config.start_fresh:
+                    logger.warning(
+                        "paper %s: no prior session for account %s; "
+                        "limits start at current equity",
+                        self._config.trader_id,
+                        account,
+                    )
                 return
-            # R50b/R50c: any checkpoint restores the watch state; the ones written before
-            # the watcher existed still cover the downtime gap through their timestamp.
-            self._restored_watch_ms = self._checkpoint_ms(prior.timestamp)
-            self._restored_watch = self._restored_watch_state(
-                prior.node_status.get("liquidation_watch")
-            )
+            if own is not None:
+                # R50b/R50c: any own checkpoint restores the watch state; the ones written
+                # before the watcher existed still cover the downtime gap through their
+                # timestamp. The watch is never inherited from another session.
+                self._restored_watch_ms = self._checkpoint_ms(own.timestamp)
+                self._restored_watch = self._restored_watch_state(
+                    own.node_status.get("liquidation_watch")
+                )
             self._restored_risk, problems = RiskState.from_checkpoint(
-                prior.node_status.get("risk")
+                source.node_status.get("risk")
             )
-            self._restored_halt = restored_halt_from_status(
-                prior.node_status, prior.timestamp.isoformat()
+            self._risk_inherited_from = source.trader_id if inherited is not None else None
+            self._restored_halt = (
+                restored_halt_from_status(own.node_status, own.timestamp.isoformat())
+                if own is not None
+                else None
             )
+            if self._restored_halt is None and inherited is not None:
+                other = restored_halt_from_status(
+                    inherited.node_status, inherited.timestamp.isoformat()
+                )
+                if other is not None and other.reason == HaltReason.ERROR:
+                    self._restored_halt = RestoredHalt(
+                        reason=other.reason,
+                        message=inherited_halt_message(inherited.trader_id, other.message),
+                        checkpoint_time=other.checkpoint_time,
+                    )
         except Exception as exc:
             # R18/R19: an unreadable checkpoint row (failed load / parse, non-dict
             # node_status, or any raise below) fails closed. A non-None risk state and
             # a restored ERROR halt keep BOTH in the failure checkpoint the shutdown
             # writes, so the next restart is HALTED, never a blank RUNNING state (H19).
+            # The risk state really is blank here, and the guard re-baselines at the
+            # first equity read.
             self._restored_risk = RiskState()
             self._restored_halt = RestoredHalt(
                 reason=HaltReason.ERROR,
-                message=f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({type(exc).__name__})",
+                message=(
+                    f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({type(exc).__name__}); "
+                    "limits re-baselined at current equity"
+                ),
                 checkpoint_time=datetime.now(UTC).isoformat(),
             )
             self._status.state = NodeState.HALTED
@@ -2242,6 +2324,8 @@ class PaperTradingNode:
                     "restored_risk": self._restored_risk.to_dict(),
                     "restored_halt": HaltReason.ERROR.value,
                     "risk_problems": [],
+                    "risk_source_trader_id": None,
+                    "risk_source_checkpoint_time": None,
                 },
             )
             return
@@ -2259,7 +2343,7 @@ class PaperTradingNode:
                     f"({', '.join(problems)}); limits re-baselined at current equity; "
                     "owned and claimed positions flattened"
                 ),
-                checkpoint_time=prior.timestamp.isoformat(),
+                checkpoint_time=source.timestamp.isoformat(),
             )
         if problems:
             # R12/R13: one logger.error, values only (never exc_info - this can run
@@ -2279,22 +2363,38 @@ class PaperTradingNode:
             EventType.SIGNAL,
             {
                 "action": "restore",
-                "checkpoint_time": prior.timestamp.isoformat(),
-                "prior_state": prior.node_status.get("state"),
-                "prior_halt_reason": prior.node_status.get("halt_reason"),
-                "prior_positions": sorted(prior.positions),
-                "prior_orders": sorted(prior.orders),
+                "checkpoint_time": own.timestamp.isoformat() if own is not None else None,
+                "prior_state": own.node_status.get("state") if own is not None else None,
+                "prior_halt_reason": (
+                    own.node_status.get("halt_reason") if own is not None else None
+                ),
+                "prior_positions": sorted(own.positions) if own is not None else [],
+                "prior_orders": sorted(own.orders) if own is not None else [],
                 "restored_risk": self._restored_risk.to_dict(),
                 "restored_halt": (
                     self._restored_halt.reason.value if self._restored_halt else None
                 ),
                 "risk_problems": list(problems),
+                "risk_source_trader_id": source.trader_id,
+                "risk_source_checkpoint_time": source.timestamp.isoformat(),
             },
         )
+        if self._risk_inherited_from is not None:
+            # P-R8: a new trader id silently arming the old limits would surprise.
+            logger.warning(
+                "paper %s: inherited risk state from %s (high water mark %s, "
+                "%d consecutive losses); a limit breach halts at the first equity read; "
+                "start fresh resets",
+                self._config.trader_id,
+                self._risk_inherited_from,
+                self._restored_risk.high_water_mark,
+                self._restored_risk.consecutive_losses,
+            )
         logger.info(
-            "restored risk state for %s from checkpoint %s: %s",
+            "restored risk state for %s from checkpoint %s of %s: %s",
             self._config.trader_id,
-            prior.timestamp.isoformat(),
+            source.timestamp.isoformat(),
+            source.trader_id,
             self._restored_risk.to_dict(),
         )
 
@@ -2423,6 +2523,8 @@ class PaperTradingNode:
                 "strategy_params": resolved.strategy_params,
                 "config_diff": resolved.diff,
                 "max_margin_pct": float(resolved.max_margin_pct),
+                "start_fresh": self._config.start_fresh,
+                "account": binance_account_id(self._config.binance),
             },
         )
         self._warn_margin_cushion(resolved)

@@ -1517,7 +1517,8 @@ async def test_r18_unreadable_checkpoint_row_halts_and_keeps_risk(
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.ERROR
         assert node.status.error_message == (
-            f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({expected_class})"
+            f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({expected_class}); "
+            "limits re-baselined at current equity"
         )
         assert node._restored_risk is not None
     finally:
@@ -1563,7 +1564,8 @@ async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.ERROR
         assert node.status.error_message == (
-            f"{RESTORED_HALT_PREFIX}checkpoint unreadable (RuntimeError)"
+            f"{RESTORED_HALT_PREFIX}checkpoint unreadable (RuntimeError); "
+            "limits re-baselined at current equity"
         )
         assert node._restored_risk == RiskState()
 
@@ -1587,6 +1589,8 @@ async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
                 "restored_risk": RiskState().to_dict(),
                 "restored_halt": "error",
                 "risk_problems": [],
+                "risk_source_trader_id": None,
+                "risk_source_checkpoint_time": None,
             }
         ]
         assert "ZZLEAK9" not in repr(restores[0][2]), "the raised message leaked into the event"

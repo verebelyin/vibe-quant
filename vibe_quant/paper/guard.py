@@ -424,6 +424,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         listener: GuardListener | None = None,
         risk_state: RiskState | None = None,
         restored_halt: RestoredHalt | None = None,
+        risk_source: str | None = None,
     ) -> None:
         super().__init__(config)
         self._cfg = config
@@ -437,6 +438,12 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._risk_engine = risk_engine
         self._listener = listener or GuardListener()
         self._risk = risk_state or RiskState()
+        # Trader whose checkpoint supplied the risk state (None: this trader's own).
+        self._risk_hint = (
+            f" (limits inherited from {risk_source}; start fresh to reset)"
+            if risk_source is not None
+            else ""
+        )
         self._venue = Venue(config.venue)
         self._currency = Currency.from_str(config.settlement_currency)
         self._state = GuardState.RUNNING
@@ -848,7 +855,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
             self.halt(
                 HaltReason.MAX_DRAWDOWN,
                 f"drawdown {dd:.2%} >= limit {self._limits.max_drawdown_pct:.2%} "
-                f"(equity {equity}, high water mark {risk.high_water_mark})",
+                f"(equity {equity}, high water mark {risk.high_water_mark})"
+                f"{self._risk_hint}",
                 metrics={**metrics, "drawdown_pct": str(dd)},
             )
             return
@@ -856,7 +864,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
             self.halt(
                 HaltReason.MAX_CONSECUTIVE_LOSSES,
                 f"{risk.consecutive_losses} consecutive losing positions >= limit "
-                f"{self._limits.max_consecutive_losses}",
+                f"{self._limits.max_consecutive_losses}{self._risk_hint}",
                 metrics=metrics,
             )
             return
