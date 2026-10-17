@@ -652,21 +652,38 @@ def get_years_months_to_download(years: int = 2) -> list[tuple[int, int]]:
     return get_months_in_range(start, now)
 
 
-def get_months_in_range(start: datetime, end: datetime) -> list[tuple[int, int]]:
+def get_months_in_range(
+    start: datetime, end: datetime, *, now: datetime | None = None
+) -> list[tuple[int, int]]:
     """Get list of (year, month) for complete months in a date range.
 
-    Only includes months that are fully completed (before the current month).
+    A month is complete once it has ended and it is not the current month.
     Binance Vision publishes monthly archives after the month ends.
+
+    The end month ``M`` is included when ``end`` is the last calendar day of
+    ``M`` and ``M`` is strictly before the current UTC month, so a range whose
+    end is a finished month's last day counts that month while the current
+    (unfinished) month is never included. Otherwise the range stops at the
+    previous month relative to ``end``.
 
     Args:
         start: Start date (inclusive).
         end: End date (upper bound).
+        now: Reference instant in UTC; injectable for tests. Defaults to
+            ``datetime.now(UTC)``.
 
     Returns:
         List of (year, month) tuples for complete months.
     """
-    # End at the previous complete month relative to end date
-    if end.month == 1:
+    import calendar
+
+    if now is None:
+        now = datetime.now(UTC)
+
+    end_is_last_day = end.day == calendar.monthrange(end.year, end.month)[1]
+    if end_is_last_day and (end.year, end.month) < (now.year, now.month):
+        last_complete = end.replace(day=1)
+    elif end.month == 1:
         last_complete = end.replace(year=end.year - 1, month=12, day=1)
     else:
         last_complete = end.replace(month=end.month - 1, day=1)
