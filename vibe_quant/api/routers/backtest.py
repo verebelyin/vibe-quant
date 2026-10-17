@@ -26,6 +26,7 @@ from vibe_quant.api.schemas.backtest import (
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.data.catalog import CatalogManager
 from vibe_quant.db.state_manager import StateManager
+from vibe_quant.dsl.schema import check_strategy_indicator_params
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.utils import log_dir
@@ -88,6 +89,28 @@ def _ensure_strategy(state: StateManager, strategy_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
 
+def _reject_unused_indicator_params(state: StateManager, strategy_id: int) -> None:
+    """422 an indicator param its type does not declare, before any run row.
+
+    The launch used to accept a stored strategy the save guard rejects (``EMA``
+    with ``std_dev``): the run row was created and the job started, and the run
+    only failed later. Same check and same message as the strategy save
+    (``strategies.py::_reject_unused_indicator_params``), run right after
+    ``_ensure_strategy`` and before the post-only / MARK prechecks
+    (vibe-quant-9pj1w).
+    """
+    strategy = state.get_strategy(strategy_id)
+    if strategy is None:  # pragma: no cover - _ensure_strategy raised already
+        return
+    dsl_config = strategy["dsl_config"]
+    if not isinstance(dsl_config, dict):
+        return
+    try:
+        check_strategy_indicator_params(dsl_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _stored_parameters(parameters: dict[str, object]) -> dict[str, object]:
     """A run's parameters with the sizing keys it did not move off the default stripped.
 
@@ -112,6 +135,7 @@ async def launch_screening(
     ws: WsMgr,
 ) -> BacktestRunResponse:
     _ensure_strategy(state, body.strategy_id)
+    _reject_unused_indicator_params(state, body.strategy_id)
     # Post-only maker entries are validation-only (screening fills resting
     # limits against the whole strategy bar, so parity is unproven) — refuse
     # before any run row exists (bd vibe-quant-2gyk1.4).
@@ -199,6 +223,7 @@ async def launch_validation(
     ws: WsMgr,
 ) -> BacktestRunResponse:
     _ensure_strategy(state, body.strategy_id)
+    _reject_unused_indicator_params(state, body.strategy_id)
     # A mode-on run scans MARK 1m bars over the window validation will actually
     # run on; refuse before any run row exists rather than failing the run
     # inside apply_liquidation (vibe-quant-592lt).
