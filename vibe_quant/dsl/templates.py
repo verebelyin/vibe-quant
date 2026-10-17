@@ -213,7 +213,8 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         if getattr(self.config, 'command_release', ''):
             self._outbox.append((self.clock.timestamp_ns(), fn, args))
             return
-        fn(*args)
+        if self._entry_command_ok(fn, args):
+            fn(*args)
 
     def _flush_outbox(self, ts: int, price: float) -> None:
         """Send queued commands with queue ts < ts, in order (strict: a datum at
@@ -227,8 +228,71 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         self._outbox = [cmd for cmd in self._outbox if cmd[0] >= ts]
         self._release_px = price
         for _ts, fn, args in ready:
-            fn(*args)
+            if self._entry_command_ok(fn, args, price):
+                fn(*args)
         self._release_px = None
+
+    def _entry_command_ok(self, fn, args, price: float | None = None) -> bool:
+        """Margin gate of a market ENTRY at its venue-call instant (False = refused, the
+        command is dropped). ``price`` is the releasing datum's; immediate sends use the current
+        bar close. Post-only intents gate themselves in _place_entry_intent."""
+        if getattr(fn, '__name__', '') == 'submit_order' and not args[0].is_reduce_only:
+            px = self._last_close if price is None else price
+            return self._entry_margin_ok(args[0].quantity, px, args[0].client_order_id)
+        return True
+
+    def _entry_margin_ok(self, qty, price: float, exclude_id=None) -> bool:
+        """Backtest margin limit (the one rule of vibe_quant.margin_limit): open positions +
+        pending entries + this entry must fit ``max_margin_pct`` of NT equity. Every item
+        uses the run leverage (``margin_leverage``). Off (None): True, reads nothing."""
+        limit = getattr(self.config, 'max_margin_pct', None)
+        if limit is None:
+            return True
+        venue = self.instrument_id.venue
+        ccy = self.instrument.get_settlement_currency()
+        money = self.portfolio.equity(venue).get(ccy)
+        leverage = self.config.margin_leverage
+
+        def item(iid, quantity, px) -> MarginItem:
+            multiplier = self.cache.instrument(iid).multiplier.as_decimal()
+            return MarginItem(
+                abs(quantity.as_decimal()) * Decimal(str(px)) * multiplier, leverage, str(iid)
+            )
+
+        open_items = [
+            item(pos.instrument_id, pos.quantity, pos.avg_px_open)
+            for pos in self.cache.positions_open(venue=venue)
+        ]
+        pending_items = []
+        unpriced = None
+        for order in unique_pending_entries(
+            self.cache.orders_open(venue=venue),
+            self.cache.orders_inflight(venue=venue),
+            exclude_client_order_id=exclude_id,
+        ):
+            px = getattr(order, 'price', None)
+            if px is None:
+                px = self.cache.price(order.instrument_id, PriceType.LAST)
+            if px is None:
+                unpriced = order.instrument_id
+                break
+            pending_items.append(item(order.instrument_id, order.leaves_qty, px))
+        if unpriced is not None:
+            reason = f"no reference price for pending {unpriced}"
+        else:
+            decision = check_entry_margin(
+                open_items=open_items,
+                pending_items=pending_items,
+                new_item=item(self.instrument_id, qty, price),
+                equity=None if money is None else money.as_decimal(),
+                max_margin_pct=limit,
+            )
+            if decision.allowed:
+                return True
+            reason = decision.reason
+        self.log.warning(f"Margin: entry refused -- {reason}")
+        self._margin_refusals += 1
+        return False
 
     def _submit_long_entry(self, bar: Bar) -> None:
         """Submit a long market entry (SL/TP follow on PositionOpened)."""
@@ -314,6 +378,8 @@ ORDER_METHODS_LINES: tuple[str, ...] = _lines(
         px = self._release_px if self._release_px is not None else self._last_close
         offset = self.config.maker_offset_ticks * float(self.instrument.price_increment)
         limit_px = px - offset if side == OrderSide.BUY else px + offset
+        if not self._entry_margin_ok(qty, limit_px):
+            return
         order = self.order_factory.limit(
             instrument_id=self.instrument_id,
             order_side=side,

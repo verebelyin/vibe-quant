@@ -7,19 +7,22 @@ Generated: <timestamp-stripped>
 from __future__ import annotations
 
 from datetime import time as dt_time
+from decimal import Decimal
 from typing import TYPE_CHECKING
 import random
 import zoneinfo
 
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.model.data import Bar, BarType, TradeTick
-from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, TimeInForce
+from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, PriceType, TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionClosed, PositionOpened
 from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder
 from nautilus_trader.trading.strategy import Strategy, StrategyConfig
+
+from vibe_quant.margin_limit import MarginItem, check_entry_margin, unique_pending_entries
 
 # Indicator imports
 from nautilus_trader.indicators.volatility import AverageTrueRange
@@ -48,6 +51,8 @@ class MacdCrossoverConfig(StrategyConfig):
     # Position sizing (override via ImportableStrategyConfig.config)
     risk_per_trade: float = 0.02  # 2% risk per trade
     max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)
+    max_margin_pct: float | None = None  # Backtest margin limit (fraction of equity); None = off, nothing is read
+    margin_leverage: float = 10.0  # Run leverage the margin limit divides notionals by
     execution_delay_probability: float = 0.0  # One-bar exec delay: screening/discovery=1.0 (always), sub-5m validation=0.3
     execution_delay_seed: int = 42  # Seed for probabilistic delay draws (reproducible replays)
     command_release: str = ""  # Command outbox release: "" off (live/paper/1m), "trade_tick", "bar"
@@ -100,6 +105,8 @@ class MacdCrossoverStrategy(Strategy):
         # Post-only maker entries: mode flag, releasing datum price, resting age
         self._post_only = getattr(config, 'entry_order', 'market') == 'post_only'
         self._release_px: float | None = None
+        # Entries the margin limit refused (screening logs it, validation notes it)
+        self._margin_refusals = 0
         self._maker_bars = 0
         # Seeded RNG for the probabilistic execution-delay path so
         # identical validation replays are byte-reproducible.
@@ -529,7 +536,8 @@ class MacdCrossoverStrategy(Strategy):
         if getattr(self.config, 'command_release', ''):
             self._outbox.append((self.clock.timestamp_ns(), fn, args))
             return
-        fn(*args)
+        if self._entry_command_ok(fn, args):
+            fn(*args)
 
     def _flush_outbox(self, ts: int, price: float) -> None:
         """Send queued commands with queue ts < ts, in order (strict: a datum at
@@ -543,8 +551,71 @@ class MacdCrossoverStrategy(Strategy):
         self._outbox = [cmd for cmd in self._outbox if cmd[0] >= ts]
         self._release_px = price
         for _ts, fn, args in ready:
-            fn(*args)
+            if self._entry_command_ok(fn, args, price):
+                fn(*args)
         self._release_px = None
+
+    def _entry_command_ok(self, fn, args, price: float | None = None) -> bool:
+        """Margin gate of a market ENTRY at its venue-call instant (False = refused, the
+        command is dropped). ``price`` is the releasing datum's; immediate sends use the current
+        bar close. Post-only intents gate themselves in _place_entry_intent."""
+        if getattr(fn, '__name__', '') == 'submit_order' and not args[0].is_reduce_only:
+            px = self._last_close if price is None else price
+            return self._entry_margin_ok(args[0].quantity, px, args[0].client_order_id)
+        return True
+
+    def _entry_margin_ok(self, qty, price: float, exclude_id=None) -> bool:
+        """Backtest margin limit (the one rule of vibe_quant.margin_limit): open positions +
+        pending entries + this entry must fit ``max_margin_pct`` of NT equity. Every item
+        uses the run leverage (``margin_leverage``). Off (None): True, reads nothing."""
+        limit = getattr(self.config, 'max_margin_pct', None)
+        if limit is None:
+            return True
+        venue = self.instrument_id.venue
+        ccy = self.instrument.get_settlement_currency()
+        money = self.portfolio.equity(venue).get(ccy)
+        leverage = self.config.margin_leverage
+
+        def item(iid, quantity, px) -> MarginItem:
+            multiplier = self.cache.instrument(iid).multiplier.as_decimal()
+            return MarginItem(
+                abs(quantity.as_decimal()) * Decimal(str(px)) * multiplier, leverage, str(iid)
+            )
+
+        open_items = [
+            item(pos.instrument_id, pos.quantity, pos.avg_px_open)
+            for pos in self.cache.positions_open(venue=venue)
+        ]
+        pending_items = []
+        unpriced = None
+        for order in unique_pending_entries(
+            self.cache.orders_open(venue=venue),
+            self.cache.orders_inflight(venue=venue),
+            exclude_client_order_id=exclude_id,
+        ):
+            px = getattr(order, 'price', None)
+            if px is None:
+                px = self.cache.price(order.instrument_id, PriceType.LAST)
+            if px is None:
+                unpriced = order.instrument_id
+                break
+            pending_items.append(item(order.instrument_id, order.leaves_qty, px))
+        if unpriced is not None:
+            reason = f"no reference price for pending {unpriced}"
+        else:
+            decision = check_entry_margin(
+                open_items=open_items,
+                pending_items=pending_items,
+                new_item=item(self.instrument_id, qty, price),
+                equity=None if money is None else money.as_decimal(),
+                max_margin_pct=limit,
+            )
+            if decision.allowed:
+                return True
+            reason = decision.reason
+        self.log.warning(f"Margin: entry refused -- {reason}")
+        self._margin_refusals += 1
+        return False
 
     def _submit_long_entry(self, bar: Bar) -> None:
         """Submit a long market entry (SL/TP follow on PositionOpened)."""
@@ -630,6 +701,8 @@ class MacdCrossoverStrategy(Strategy):
         px = self._release_px if self._release_px is not None else self._last_close
         offset = self.config.maker_offset_ticks * float(self.instrument.price_increment)
         limit_px = px - offset if side == OrderSide.BUY else px + offset
+        if not self._entry_margin_ok(qty, limit_px):
+            return
         order = self.order_factory.limit(
             instrument_id=self.instrument_id,
             order_side=side,

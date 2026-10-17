@@ -914,6 +914,16 @@ class ValidationRunner:
         )
         if liquidation_note is not None:
             aggregate.notes["liquidation"] = liquidation_note
+        margin_notes = [
+            cast("dict[str, Any]", r.notes["margin_limit"])
+            for r in window_results
+            if "margin_limit" in r.notes
+        ]
+        if margin_notes:
+            aggregate.notes["margin_limit"] = {
+                "max_margin_pct": margin_notes[0]["max_margin_pct"],
+                "refused_entries": sum(int(n["refused_entries"]) for n in margin_notes),
+            }
         return aggregate
 
     @staticmethod
@@ -1276,6 +1286,20 @@ class ValidationRunner:
             timeframe=dsl.timeframe,
             has_detail_data=detail_timeframe is not None,
         )
+        # The backtest margin limit divides notionals by the RUN leverage (the venue's own),
+        # and only when the limit is on, so an off run's config stays byte-identical.
+        raw_run_params = run_config.get("parameters")
+        strategy_params.update(
+            {
+                key: value
+                for key, value in SizingSettings.from_params(
+                    raw_run_params if isinstance(raw_run_params, dict) else {}
+                )
+                .strategy_params(liquidation_settings.leverage)
+                .items()
+                if key == "margin_leverage"
+            }
+        )
         # Market-mode twin: same run, market entries (D3-6).
         if entry_order_override is not None:
             strategy_params["entry_order"] = entry_order_override
@@ -1491,6 +1515,15 @@ class ValidationRunner:
                     * 1_000_000_000,
                     maker_entry_timeout_bars=timeout_bars,
                 )
+
+            if strategy_params.get("max_margin_pct") is not None:
+                result.notes["margin_limit"] = {
+                    "max_margin_pct": strategy_params["max_margin_pct"],
+                    "refused_entries": sum(
+                        int(getattr(strategy, "_margin_refusals", 0))
+                        for strategy in engine.trader.strategies()
+                    ),
+                }
 
             return result
         finally:

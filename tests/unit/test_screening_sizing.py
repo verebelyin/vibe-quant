@@ -204,6 +204,99 @@ def test_dotted_sizing_alias_rejected_everywhere(
         assert str(excinfo.value) == expected
 
 
+def test_max_margin_not_sweepable() -> None:
+    """R42: ``max_margin_pct`` is a run-level sizing setting; ``margin_leverage`` (what the
+    runner derives from the run leverage) is runner-owned, so neither can be swept."""
+    fields = ("instrument_id", "ema_period", "max_margin_pct", "margin_leverage")
+    with pytest.raises(UnknownStrategyParamError) as excinfo:
+        resolve_strategy_params({"max_margin_pct": 0.5}, fields)
+    assert str(excinfo.value) == (
+        "max_margin_pct is a run-level sizing setting (parameters.max_margin_pct), "
+        "not a sweep parameter"
+    )
+    with pytest.raises(UnknownStrategyParamError, match="margin_leverage"):
+        resolve_strategy_params({"margin_leverage": 1.0}, fields)
+
+
+def test_margin_limit_reaches_the_strategy_config_with_run_leverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R36/R37: on, the config gets the limit AND the run leverage; off, neither key exists."""
+    off = _strategy_config(tmp_path, monkeypatch, leverage=4)
+    assert "max_margin_pct" not in off
+    assert "margin_leverage" not in off
+    on = _strategy_config(
+        tmp_path, monkeypatch, leverage=4, sizing=SizingSettings(max_margin_pct=0.5)
+    )
+    assert on["max_margin_pct"] == 0.5
+    assert on["margin_leverage"] == 4.0
+
+
+def test_screening_logs_refused_entry_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R40 (screening half): refused entries are summed over the strategies and logged;
+    an off run logs nothing about the limit."""
+    import nautilus_trader.backtest.node as nt_node
+
+    import vibe_quant.screening.nt_runner as ntr
+
+    strategies = [SimpleNamespace(_margin_refusals=2), SimpleNamespace(_margin_refusals=3)]
+    engine = SimpleNamespace(
+        get_result=lambda: SimpleNamespace(total_orders=0, total_events=0),
+        trader=SimpleNamespace(strategies=lambda: strategies),
+        kernel=SimpleNamespace(
+            get_log_guard=lambda: None,
+            portfolio=SimpleNamespace(
+                analyzer=SimpleNamespace(register_statistic=lambda _s: None)
+            ),
+        ),
+        reset=lambda: None,
+    )
+
+    class _Node:
+        def __init__(self, configs: object) -> None:
+            pass
+
+        def build(self) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+        def get_engines(self) -> list[Any]:
+            return [engine]
+
+        def get_engine(self, _id: object) -> Any:
+            return engine
+
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(nt_node, "BacktestNode", _Node)
+    monkeypatch.setattr(ntr, "cleanup_epoch_parquet", lambda *_a, **_k: None, raising=False)
+    for sizing, expected in (
+        (SizingSettings(max_margin_pct=0.5), True),
+        (SizingSettings(), False),
+    ):
+        runner = _runner(tmp_path, sizing=sizing)
+        runner._resolved_catalog_path = tmp_path  # noqa: SLF001
+        monkeypatch.setattr(
+            runner, "_build_run_config", lambda _p: (SimpleNamespace(id="r"), [])
+        )
+        monkeypatch.setattr(
+            runner, "_extract_metrics", lambda params, *_a, **_k: SimpleNamespace(
+                sharpe_ratio=0.0, total_trades=0, total_return=0.0, max_drawdown=0.0,
+                execution_time_seconds=0.0,
+            ),
+        )
+        caplog.clear()
+        with caplog.at_level("INFO", logger="vibe_quant.screening.nt_runner"):
+            runner._run_backtest({}, time.time())  # noqa: SLF001
+        logged = [r.getMessage() for r in caplog.records if "margin limit" in r.getMessage()]
+        assert logged == (["Screening: margin limit refused 5 entries"] if expected else [])
+
+
 # ------------------------------------------------- S19: the default config is untouched
 
 

@@ -82,7 +82,9 @@ _COMPILE_CACHE: dict[str, tuple[str, str, str, frozenset[str], str]] = {}
 
 # Generated-config fields the runner sets itself (screening fill mode); a
 # sweep/override may never set them.
-_RUNNER_OWNED_FIELDS = frozenset({"command_release", "command_release_bar_type"})
+_RUNNER_OWNED_FIELDS = frozenset(
+    {"command_release", "command_release_bar_type", "margin_leverage"}
+)
 
 
 class UnknownStrategyParamError(ValueError):
@@ -621,7 +623,7 @@ class NTScreeningRunner:
         # combination can never smuggle them past the sweep-key rejection above. Only the
         # keys this run moved off the default are added, so an all-default run builds the
         # exact config dict it built before.
-        strategy_params.update(self._sizing.to_params())
+        strategy_params.update(self._sizing.strategy_params(self._leverage))
 
         # Data configs
         data_configs: list[BacktestDataConfig] = []
@@ -789,6 +791,13 @@ class NTScreeningRunner:
                 )
             else:
                 bt_result = engine.get_result()
+                if self._sizing.max_margin_pct is not None:
+                    # Screening records no per-row column for it: the count is a log line.
+                    refused = sum(
+                        int(getattr(strategy, "_margin_refusals", 0))
+                        for strategy in engine.trader.strategies()
+                    )
+                    logger.info("Screening: margin limit refused %d entries", refused)
                 metrics = self._extract_metrics(
                     params,
                     bt_result,

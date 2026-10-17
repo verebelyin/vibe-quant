@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 _ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "__future__",
     "datetime",
+    "decimal",
     "random",
     "typing",
     "warnings",
@@ -405,19 +406,22 @@ class StrategyCompiler:
             "from __future__ import annotations",
             "",
             "from datetime import time as dt_time",
+            "from decimal import Decimal",
             "from typing import TYPE_CHECKING",
             "import random",
             "import zoneinfo",
             "",
             "from nautilus_trader.core.uuid import UUID4",
             "from nautilus_trader.model.data import Bar, BarType, TradeTick",
-            "from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, TimeInForce",
+            "from nautilus_trader.model.enums import OrderSide, OrderType, PositionSide, PriceType, TimeInForce",
             "from nautilus_trader.model.identifiers import InstrumentId",
             "from nautilus_trader.model.instruments import Instrument",
             "from nautilus_trader.model.objects import Price, Quantity",
             "from nautilus_trader.model.events import OrderFilled, PositionChanged, PositionClosed, PositionOpened",
             "from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopMarketOrder",
             "from nautilus_trader.trading.strategy import Strategy, StrategyConfig",
+            "",
+            "from vibe_quant.margin_limit import MarginItem, check_entry_margin, unique_pending_entries",
         ]
 
         # Single pass: collect NT classes, compute_fn imports, and derived helpers.
@@ -518,6 +522,13 @@ class StrategyCompiler:
         lines.append("    risk_per_trade: float = 0.02  # 2% risk per trade")
         lines.append(
             "    max_position_pct: float = 0.5  # Max position as fraction of equity (0.5=50%, 2.0=2x leverage)"
+        )
+        lines.append(
+            "    max_margin_pct: float | None = None  "
+            "# Backtest margin limit (fraction of equity); None = off, nothing is read"
+        )
+        lines.append(
+            "    margin_leverage: float = 10.0  # Run leverage the margin limit divides notionals by"
         )
         lines.append(
             "    execution_delay_probability: float = 0.0  "
@@ -719,6 +730,8 @@ class StrategyCompiler:
             "        # Post-only maker entries: mode flag, releasing datum price, resting age",
             "        self._post_only = getattr(config, 'entry_order', 'market') == 'post_only'",
             "        self._release_px: float | None = None",
+            "        # Entries the margin limit refused (screening logs it, validation notes it)",
+            "        self._margin_refusals = 0",
             "        self._maker_bars = 0",
             "        # Seeded RNG for the probabilistic execution-delay path so",
             "        # identical validation replays are byte-reproducible.",

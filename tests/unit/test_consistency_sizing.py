@@ -218,3 +218,26 @@ def test_invalid_dict_notes_sizing_is_skipped(state: StateManager) -> None:
     sid = state.create_strategy("genome_abc123", {"name": "genome_abc123"})
     _discovery_with_notes(state, _champion_notes(sizing={"max_position_pct": -1}))
     assert find_screening_reference(state, sid, "genome_abc123", val_sizing={}) is None
+
+
+def test_max_margin_filtered(state: StateManager) -> None:
+    """R41: ``max_margin_pct`` is a run-level sizing field, so it never blocks the exact-row
+    match and a reference at another margin limit is not like-for-like."""
+    sid = state.create_strategy("s1", {"name": "s1"})
+    limited = _screening(
+        state, sid, {"max_margin_pct": 0.5},
+        rows=[({"rsi_period": 14}, 2.0, 50), ({"rsi_period": 21}, 9.9, 60)],
+    )
+    plain = _screening(state, sid, {}, rows=[({}, 7.0, 50)])
+    assert plain > limited
+    ref = _scoped(
+        state, sid, validated_params={"rsi.period": 14, "max_margin_pct": 0.5},
+        val_sizing={"max_margin_pct": 0.5},
+    )
+    assert ref is not None
+    assert ref.source == f"screening_run:{limited}", "margin key blocked the exact-row match"
+    assert ref.sharpe == 2.0
+    # the default-margin (off) validation run does not compare against the limited run
+    off = _scoped(state, sid, val_sizing={})
+    assert off is not None
+    assert off.source == f"screening_run:{plain}"
