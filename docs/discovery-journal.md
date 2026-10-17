@@ -4,6 +4,29 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: RESULT P-1 layer 1 — gates have NO power at production N (V1 FAIL, V2 PASS); DSR trial count is the binding gate
+
+Pre-registration P-1 (648438d5). `scripts/research/power/layer1.py --reps 500 --selection-reps 200 --workers 8` on main 648438d5, wall 2:09.67, output `data/swarm/20261017-power-paper/power/layer1.{json,md,log}`. Sharpe in √365 units (repo logs √252 = 0.83×).
+
+**Verdicts (verbatim):**
+- `V1(a) chain_recent: W3@N=22121=0.0000 W6@N=167=0.0340 -> adequate=False`
+- `V1(b) chain_recent_minus_bh: W3@N=22121=0.0000 W6@N=167=0.0340 -> adequate=False`
+- `V2 nulls: single max=0.0120; selection [W3:rho=0.0=0.0000, W3:rho=0.5=0.0000, W6:rho=0.0=0.0000, W6:rho=0.5=0.0000] max=0.0000 -> PASS`
+- `V3 W3 (N=22121): lowest marginal dsr@22121=0.0000; d_bh=0.0000 d_dsr=0.2820 d_dsr_bh=0.3520; dominant=['dsr', 'dsr_bh']`
+- `V3 W6 (N=167): lowest marginal dsr@167=0.0380; d_bh=0.0000 d_dsr=0.6300 d_dsr_bh=0.6320; dominant=['dsr', 'dsr_bh']`
+- `S50 W3: N=1:1.549 N=7:1.970 N=9:2.099 N=11:2.176 N=12:2.221 N=167:2.817 N=752:3.210 N=3901:3.496 N=22121:3.744`
+- `S50 W6: N=1:1.010 N=7:1.477 N=9:1.527 N=11:1.566 N=12:1.575 N=167:2.047 N=752:2.325 N=3901:2.485 N=22121:2.623`
+- neff info (S 1.2, n 150): W3 N=7 0.0940, 9 0.0640, 11 0.0540, 12 0.0500; W6 N=7 0.2940, 9 0.2420, 11 0.2080, 12 0.2020.
+- `--check`: `R18: 7 of 270 cells outside band` (diagnostic, W-R5).
+
+**Pass rate of the whole recent chain at true S = 1.2, 150 train trades:** W3/4h N=1 0.282, N=167 0.002, N=22121 0.0; W6/1d N=1 0.664, N=167 0.034, N=22121 0.004. Without DSR and buy-and-hold: W3 0.352, W6 0.666. Marginals W3 (S 1.2): bootstrap 0.438, buy-hold 0.466, WFA 0.41, cross-window 0.782, holdout 0.8, min_return 0.814. W6: bootstrap 0.754, buy-hold 0.846, WFA 0.528, holdout 0.892.
+
+**Reading:** predictions held. (1) At the trial counts the runs used, the gates pass a true Sharpe-1.2 strategy ≤ 3.4% of the time (0% on 4h); even Sharpe 2.0 passes 0.6% (4h, N 22121) / 47.6% (1d, N 167). So runs 920–954 and earlier "0 champions" do NOT show absence of edges below S50 (≈ 3.7 on 4h, ≈ 2.0 on 1d at production N). (2) The gates are not lenient: no-edge strategies pass ≤ 1.2% (single) and 0% (top-5 selection null). (3) DSR with cumulative raw N is the dominant gate; but even at N = 1 a 2.4-year 4h window passes S 1.2 only 28% of the time (bootstrap CI, WFA and buy-hold each cut ~half) — short samples alone cannot certify Sharpe ≈ 1. (4) At the runs' own effective N (7–12) power at S 1.2 is 5–9% (4h) and 20–29% (1d).
+
+**Next:** layer 2 (planted edge through real discovery, V4/V5) is being built; the N policy (raw cumulative gate_n vs effective N) is a user decision — no gate is changed by this entry.
+
+---
+
 ## 2026-10-18: PRE-REGISTRATION P-1 — gate power test (can discovery + gates pass a real edge?)
 
 Committed before the full layer-1 run. Job 20261017-power-paper; design `data/swarm/20261017-power-paper/design-power.md` (r2, fixed 2026-10-17 22:14, Opus architect + Opus design review) and chief rulings W-R1..W-R5 in that job's `brief.md`. Code on main: `scripts/research/power/{synth,gatechain,plant,layer1}.py` (4cfb43af..7c28c8af).
