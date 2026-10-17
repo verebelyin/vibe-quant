@@ -39,6 +39,13 @@ import {
 } from "@/lib/sizing";
 import { formatApiErrorDetail } from "./apiErrorDetail";
 import {
+  discoveryEvalEstimate,
+  EVAL_CORES,
+  evalBudget,
+  gridSetupCount,
+  SEC_PER_EVAL,
+} from "./discoveryEstimate";
+import {
   BANKROLL_GRID_MODES,
   type BankrollGridForm,
   type BankrollGridMode,
@@ -1058,10 +1065,13 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       {/* ETA Estimate + Runtime Warning */}
       {(() => {
         const crossWindowMultiplier = Math.max(1, parsedCrossWindowMonths.length);
-        const totalEvals = population * generations * numSeeds * crossWindowMultiplier;
-        const secPerEval = 15;
-        const cores = 8;
-        const parallelSec = Math.ceil(totalEvals / cores) * secPerEval;
+        const { totalEvals, parallelSec } = discoveryEvalEstimate({
+          population,
+          generations,
+          numSeeds,
+          crossWindowMultiplier,
+          gridCount: gridSetupCount(bankrollGrid),
+        });
         const fmt = (s: number) => {
           if (s < 60) return `${s}s`;
           if (s < 3600) return `${Math.round(s / 60)}m`;
@@ -1069,8 +1079,9 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           const m = Math.round((s % 3600) / 60);
           return m > 0 ? `${h}h ${m}m` : `${h}h`;
         };
-        const danger = totalEvals > 500;
-        const warn = totalEvals > 200;
+        const budget = evalBudget(totalEvals);
+        const danger = budget === "danger";
+        const warn = budget === "warn";
         const borderCls = danger
           ? "border-red-500/50 bg-red-500/10 text-red-200"
           : warn
@@ -1085,11 +1096,11 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   {totalEvals.toLocaleString()}
                 </span>
               </span>
-              <span>~{fmt(secPerEval)}/eval</span>
+              <span>~{fmt(SEC_PER_EVAL)}/eval</span>
             </div>
             <div className="mt-1 flex items-center justify-between">
               <span>
-                Parallel ({cores} cores):{" "}
+                Parallel ({EVAL_CORES} cores):{" "}
                 <span className="font-mono font-semibold text-foreground">{fmt(parallelSec)}</span>
               </span>
             </div>
