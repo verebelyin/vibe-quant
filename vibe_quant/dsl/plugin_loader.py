@@ -219,7 +219,7 @@ def _discover_env_path_plugins(
             after = set(indicator_registry.list_indicators())
             _plugin_registered_names.update(after - before)
             loaded.append(qualified)
-            logger.info(
+            logger.debug(
                 "Loaded VQ_PLUGIN_PATH indicator plugin: %s (%s)",
                 qualified,
                 py_file,
@@ -255,7 +255,7 @@ def _discover_entry_point_plugins(strict: bool, loaded: list[str]) -> None:
         after = set(indicator_registry.list_indicators())
         _plugin_registered_names.update(after - before)
         loaded.append(qualified)
-        logger.info("Loaded entry-point indicator plugin: %s", qualified)
+        logger.debug("Loaded entry-point indicator plugin: %s", qualified)
 
 
 def load_builtin_plugins() -> list[str]:
@@ -296,7 +296,7 @@ def load_builtin_plugins() -> list[str]:
         after = set(indicator_registry.list_indicators())
         _plugin_registered_names.update(after - before)
         loaded.append(qualified)
-        logger.info("Loaded indicator plugin: %s", qualified)
+        logger.debug("Loaded indicator plugin: %s", qualified)
 
     # Source 2: VQ_PLUGIN_PATH directories.
     _discover_env_path_plugins(indicator_registry, strict, loaded)
