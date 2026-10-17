@@ -1,0 +1,92 @@
+{
+  "models": {
+    "deepseek-flash": {
+      "runtime": "t3",
+      "target": {
+        "providerInstanceId": "commandcode_command",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "options": {
+          "effort": "high"
+        }
+      },
+      "enabled": true,
+      "until": null,
+      "note": "only Command Code model allowed (user 2026-10-16)"
+    },
+    "gpt-sol": {
+      "runtime": "t3",
+      "target": {
+        "providerInstanceId": "codex",
+        "model": "gpt-6.1-sol",
+        "options": {
+          "reasoningEffort": "high"
+        }
+      },
+      "enabled": false,
+      "until": null,
+      "note": "user 2026-10-17: don't use Sol for review (no limit left); turn on with: scripts/agents/models.py set gpt-sol --on"
+    },
+    "sonnet": {
+      "runtime": "claude",
+      "target": {
+        "model": "sonnet"
+      },
+      "enabled": true,
+      "until": null,
+      "note": ""
+    },
+    "haiku": {
+      "runtime": "claude",
+      "target": {
+        "model": "haiku",
+        "effort": "high"
+      },
+      "enabled": true,
+      "until": null,
+      "note": "effort high or xhigh only, never lower, never max"
+    },
+    "opus": {
+      "runtime": "claude",
+      "target": {
+        "model": "opus",
+        "effort": "medium"
+      },
+      "enabled": true,
+      "until": null,
+      "note": "planning/architecture"
+    }
+  },
+  "routes": {
+    "maker": [
+      "deepseek-flash",
+      "sonnet"
+    ],
+    "fixer-small": [
+      "deepseek-flash",
+      "sonnet"
+    ],
+    "fixer": [
+      "sonnet"
+    ],
+    "reviewer": [
+      "gpt-sol",
+      "sonnet"
+    ],
+    "reviewer-lite": [
+      "haiku"
+    ],
+    "verifier": [
+      "sonnet"
+    ],
+    "architect": [
+      "opus"
+    ],
+    "design-review": [
+      "opus"
+    ],
+    "money-verdict": [
+      "opus"
+    ]
+  },
+  "changed": "2026-10-17T20:04:23.730404+02:00"
+}
