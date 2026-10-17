@@ -291,3 +291,16 @@ def test_a_bar_opening_past_the_level_is_a_candidate():
     }
     limit = refine_resting_exits([_exit(kind="limit", falls=False, level=105.0)], gapped, _FOUR_H)
     assert limit.scan_ts[("p@0", 0)] == _ts(0)
+
+
+def test_missing_exit_bars_is_data_unavailable():
+    """R18: ``MissingExitBars`` is re-parented to ``DataUnavailableError`` (still a
+    ``ValueError``), so a MODE-OFF screening run that hits it fails closed instead of scoring a
+    silent ``-inf`` row. The mode-on wrapping text is unchanged (see
+    ``test_screening_liquidation_exit_timing``)."""
+    from vibe_quant.errors import DataUnavailableError
+
+    assert issubclass(MissingExitBars, DataUnavailableError)
+    assert issubclass(MissingExitBars, ValueError)
+    assert str(MissingExitBars("BTCUSDT: no 1m LAST series")) == "BTCUSDT: no 1m LAST series"
+

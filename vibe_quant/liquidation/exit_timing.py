@@ -45,6 +45,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
+from vibe_quant.errors import DataUnavailableError
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -61,8 +63,13 @@ _MINUTE_NS = 60_000_000_000
 _ACTIVE_EPS = _MINUTE_NS - _ONE_MS  # 59.999 s: the R21 "strictly after active_from" offset
 
 
-class MissingExitBars(ValueError):
-    """A symbol with a boundary resting fill has no 1m LAST series to refine it (R26)."""
+class MissingExitBars(DataUnavailableError):
+    """A symbol with a boundary resting fill has no 1m LAST series to refine it (R26).
+
+    A :class:`~vibe_quant.errors.DataUnavailableError` (hence still a ``ValueError``), so a
+    MODE-OFF screening run that hits it fails closed instead of scoring a silent ``-inf`` row
+    (R18).
+    """
 
 
 class BarLike(Protocol):

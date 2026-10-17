@@ -24,9 +24,10 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
 )
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
+from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from nautilus_trader.config import BacktestRunConfig
 
@@ -54,6 +55,33 @@ def _no_exit_timing() -> dict[str, Any]:
     EVERY mode-on screening run.
     """
     return {"refined": 0, "kept_bar_close": 0, "by_symbol": {}}
+
+
+# One 8h funding period in ns: the smallest execution bar whose close can host a settlement
+# that validation's 1m fill never charged (vibe-quant-6osqd). A bar of exactly this length is
+# NOT refined (R9b: the guard is a strict ``>``).
+_FUNDING_REFINE_MIN_BAR_NS = FUNDING_PERIOD_HOURS * 3_600 * 1_000_000_000
+
+
+def _funding_close_ns(
+    pos: Any,
+    scan_fill_ts: Mapping[str, Mapping[int, int]] | None,
+    execution_bar_ns: int,
+) -> int:
+    """Funding exit of a CLOSED position: its closing fill's refined ts, else ``ts_closed``.
+
+    R9/R9b: only an execution bar strictly longer than 8h is refined; anything else (and an
+    empty scan) returns the NT ``ts_closed`` without importing ``vibe_quant.liquidation``.
+    R6: the CLOSING fill is ``events[len - 1]``, so a partial exit refined earlier does not
+    move the funding exit.
+    """
+    nt = int(pos.ts_closed)
+    if execution_bar_ns <= _FUNDING_REFINE_MIN_BAR_NS or not scan_fill_ts:
+        return nt
+    from vibe_quant.screening.liquidation_metrics import position_key
+
+    refined = (scan_fill_ts.get(position_key(pos)) or {}).get(len(pos.events) - 1)
+    return nt if refined is None else refined
 
 
 def refuse_non_market_entry(entry_order: str) -> None:
@@ -999,6 +1027,18 @@ class NTScreeningRunner:
         liquidation_on = self._liquidation_mode != "off"
         overlay: OverlayResult | None = None
         scan_funding: dict[str, FundingAccrual] = {}
+        # 6osqd D1: the funding exit of a position whose closing fill is a refined boundary
+        # resting exit is that refined 1m instant, for an execution bar strictly longer than
+        # 8h (mode off AND on). scan_fill_ts is mode on: the scan's own dict, mode off: the
+        # one _funding_scan_ts built; None whenever no bar > 8h runs.
+        scan_fill_ts: dict[str, dict[int, int]] | None = None
+        from vibe_quant.validation.extraction import _TIMEFRAME_SECONDS
+
+        execution_bar_ns = (
+            _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
+            if execution_tf in _TIMEFRAME_SECONDS
+            else 0
+        )
         # ONE guard on the mode-on liquidation path (bead vibe-quant-2gyk1.1.8): any failure
         # while the mode is on -- the MARK scan, its survivor marks, or the truncated-ledger
         # recompute -- fails the run closed as LiquidationIntegrityError (a
@@ -1011,7 +1051,7 @@ class NTScreeningRunner:
                 # valued by the overlay, never by LAST bars (a missing LAST bar cannot make
                 # it vanish). Only survivors are marked; one without a LAST bar in the final
                 # bar fails closed.
-                overlay, open_marks, scan_funding = self._scan_with_survivor_marks(
+                overlay, open_marks, scan_funding, scan_fill_ts = self._scan_with_survivor_marks(
                     engine,
                     closed,
                     still_open,
@@ -1023,6 +1063,13 @@ class NTScreeningRunner:
                     catalog_path=catalog_path,
                 )
             else:
+                # R10/R10c: mode off refines the funding exit BEFORE the run-end marking, so a
+                # 1d run whose closing fill is a boundary resting exit fails closed on missing
+                # 1m LAST instead of scoring -inf (a bare ValueError would be masked).
+                if execution_tf is not None:
+                    scan_fill_ts = self._funding_scan_ts(
+                        engine, [*closed, *still_open], execution_tf, catalog_path
+                    )
                 open_marks = mark_open_positions(
                     engine,
                     still_open,
@@ -1045,15 +1092,20 @@ class NTScreeningRunner:
                 realized = float(pos.realized_pnl)
                 if mark is None:
                     exit_ns = int(pos.ts_closed)
+                    # R8: a CLOSED position only; an open mark funds to its mark (R15/R16).
+                    funding_exit_ns = _funding_close_ns(pos, scan_fill_ts, execution_bar_ns)
                 else:
                     exit_ns = mark.ts
+                    funding_exit_ns = mark.ts
                     total_fees += mark.exit_fee
                     realized += mark.unrealized - mark.exit_fee
                     unrealized_at_end += mark.unrealized - mark.exit_fee
                     instrument_cash.append((mark.ts, -mark.exit_fee))
                 # Funding is modeled post-hoc (NT's engine applies none) with
                 # the same calculator validation uses (bd vibe-quant-e70tl.20).
-                accrual = accrue_position_funding(funding_calc, pos, exit_ns=exit_ns)
+                # R15: only the funding exit moves; realized PnL, the ledger and the cash
+                # flows keep the NT fill timestamp (exit_ns).
+                accrual = accrue_position_funding(funding_calc, pos, exit_ns=funding_exit_ns)
                 total_funding += accrual.total
                 funding_fallbacks += accrual.fallback_settlements
                 trade_pnls.append(realized - accrual.total)
@@ -1304,7 +1356,8 @@ class NTScreeningRunner:
         engine: Any,
         positions: list[Any],
         execution_bar_ns: int,
-        catalog_path: Path | str,
+        catalog_path: Path | str | None,
+        purpose: str = "liquidation scan",
     ) -> tuple[dict[str, dict[int, int]] | None, dict[str, Any]]:
         """Refined scan timestamps of the run's boundary resting exits, plus their R25b notes.
 
@@ -1335,28 +1388,70 @@ class NTScreeningRunner:
                 (exit_.ts + _ONE_MS - execution_bar_ns, exit_.ts)
             )
         bars_1m: dict[str, Any] = {}
-        for symbol, spans in windows.items():
-            series = load_bar_windows(
-                catalog_path,
-                f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL",
-                spans,
-            )
-            if series is not None:
-                bars_1m[symbol] = series
+        if catalog_path is not None:  # R10c: no catalog -> no 1m LAST -> MissingExitBars
+            for symbol, spans in windows.items():
+                series = load_bar_windows(
+                    catalog_path,
+                    f"{symbol}-PERP.BINANCE-{step}-{agg.name}-LAST-EXTERNAL",
+                    spans,
+                )
+                if series is not None:
+                    bars_1m[symbol] = series
         timing = refine_resting_exits(exits, bars_1m, execution_bar_ns)
         if timing.kept_bar_close:
+            suffix = (
+                f" (liquidation_mode={self._liquidation_mode})"
+                if purpose == "liquidation scan"
+                else ""
+            )
             logger.warning(
-                "Exit refinement (liquidation_mode=%s): %d of %d boundary resting fill(s) kept "
+                "Exit refinement for the %s: %d of %d boundary resting fill(s) kept "
                 "their NT strategy-bar timestamp (no 1m bar reached the order's level); the "
-                "scan may run past the real exit",
-                self._liquidation_mode,
+                "%s may run past the real exit%s",
+                purpose,
                 timing.kept_bar_close,
                 timing.refined + timing.kept_bar_close,
+                purpose,
+                suffix,
             )
         scan_fill_ts: dict[str, dict[int, int]] = {}
         for (key, index), ts in timing.scan_ts.items():
             scan_fill_ts.setdefault(key, {})[index] = ts
         return scan_fill_ts, timing.to_notes()
+
+    def _funding_scan_ts(
+        self,
+        engine: Any,
+        positions: list[Any],
+        execution_tf: str | None,
+        catalog_path: Path | str | None,
+    ) -> dict[str, dict[int, int]] | None:
+        """The MODE-OFF refined fill timestamps the funding exit is read from (R9/R10-R10c).
+
+        R9/R14: an execution timeframe at or below 8h is excluded before any input is read, so
+        no boundary scan runs and no ``vibe_quant.liquidation`` module is imported (R9d). A
+        ``MissingExitBars`` from the scan is a :class:`DataUnavailableError` and re-raised
+        unchanged (R10/R10c); any other failure becomes one naming the timeframe (R10b). The
+        R25b notes of the scan are dropped: mode off records no exit timing (R16).
+        """
+        from vibe_quant.validation.extraction import _TIMEFRAME_SECONDS
+
+        if execution_tf not in _TIMEFRAME_SECONDS:
+            return None
+        bar_ns = _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
+        if bar_ns <= _FUNDING_REFINE_MIN_BAR_NS:
+            return None
+        try:
+            scan_fill_ts, _notes = self._boundary_exit_scan_ts(
+                engine, positions, bar_ns, catalog_path, purpose="funding"
+            )
+        except DataUnavailableError:
+            raise
+        except Exception as exc:
+            raise DataUnavailableError(
+                f"funding exit refinement ({execution_tf}): {type(exc).__name__}: {exc}"
+            ) from exc
+        return scan_fill_ts
 
     def _scan_with_survivor_marks(
         self,
@@ -1370,7 +1465,12 @@ class NTScreeningRunner:
         end_ns: int | None,
         execution_tf: str | None,
         catalog_path: Path | str | None,
-    ) -> tuple[OverlayResult, list[OpenPositionMark], dict[str, FundingAccrual]]:
+    ) -> tuple[
+        OverlayResult,
+        list[OpenPositionMark],
+        dict[str, FundingAccrual],
+        dict[str, dict[int, int]] | None,
+    ]:
         """ONE liquidation scan, then the run-end marks of the positions that SURVIVE it.
 
         Before the scan every open position gets its valuation horizon: the ts of its
@@ -1422,10 +1522,23 @@ class NTScreeningRunner:
             )
             raise ValueError(msg)
         bar_ns = _TIMEFRAME_SECONDS[execution_tf] * 1_000_000_000
+        # vjno2 (R17-R30): a coarser-than-1m run fills a resting exit at the strategy bar's
+        # close, a whole bar after the 1m bar validation filled it on. Refine those boundary
+        # fills to their real 1m instant so the scan's exposure ends when the position did.
+        # 6osqd D1: the SAME refined timestamps move the funding exit of a CLOSED position
+        # whose closing fill is such an exit (_funding_close_ns); the ledgers, realized PnL and
+        # MTM keep the NT timestamps (R15/R24), and the notes go onto the run's liquidation
+        # summary whatever the outcome (R25b). Run before the accruals: they read it.
+        positions = [*closed, *still_open]
+        scan_fill_ts, self._last_exit_timing_notes = self._boundary_exit_scan_ts(
+            engine, positions, bar_ns, catalog_path
+        )
         last_bar: dict[str, int | None] = {}  # instrument -> ts of its last LAST bar
         horizons: dict[str, int | None] = {}
         accruals = {
-            position_key(p): accrue_position_funding(funding_calc, p, exit_ns=int(p.ts_closed))
+            position_key(p): accrue_position_funding(
+                funding_calc, p, exit_ns=_funding_close_ns(p, scan_fill_ts, bar_ns)
+            )
             for p in closed
         }
         for pos in still_open:
@@ -1440,15 +1553,6 @@ class NTScreeningRunner:
             accruals[position_key(pos)] = accrue_position_funding(
                 funding_calc, pos, exit_ns=end_ns - 1 if horizon is None else horizon
             )
-        # vjno2 (R17-R30): a coarser-than-1m run fills a resting exit at the strategy bar's
-        # close, a whole bar after the 1m bar validation filled it on. Refine those boundary
-        # fills to their real 1m instant so the scan's exposure ends when the position did.
-        # The ledgers, funding and MTM keep the NT timestamps (R24), and the notes go onto the
-        # run's liquidation summary whatever the outcome (R25b).
-        positions = [*closed, *still_open]
-        scan_fill_ts, self._last_exit_timing_notes = self._boundary_exit_scan_ts(
-            engine, positions, bar_ns, catalog_path
-        )
         overlay = apply_liquidation(
             positions,
             mode=self._liquidation_mode,  # type: ignore[arg-type]  # "off" excluded by caller
@@ -1510,7 +1614,7 @@ class NTScreeningRunner:
                     at -= 1
                 events.insert(at, LedgerEvent(ts=mark.ts, cash=-mark.exit_fee))
             overlay = replace(overlay, ledgers=ledgers)
-        return overlay, marks, accruals
+        return overlay, marks, accruals, scan_fill_ts
 
 
 def _last_execution_bar_ts(
