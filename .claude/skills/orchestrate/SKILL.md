@@ -54,15 +54,13 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 
 ## Asking the user
 
-Each decision you put to the user gets one block, in the visible message (never only in AskUserQuestion previews):
+Ask in plain words, the way you would explain it to a friend who is not reading the code. Per question, a few short lines:
 
-1. **In simple terms:** 2–3 plain sentences on what happens today, no internal names without a gloss.
-2. **Example flow:** numbered steps with a concrete coin, date and time.
-3. **Numbers:** a small before / after / reference table, values verbatim from tool output.
-4. **What breaks:** numbered concrete consequences.
-5. **Recommendation:** one line.
+1. **The question**, one friendly sentence about what happens in the user's world (bead id in brackets at the end).
+2. **What happens today**, as one real example with a coin, a time and numbers ("you hold BTC and ETH; ETH fails to save; the screen shows no positions").
+3. **The options**, each with its everyday consequence in one line, and your recommendation marked.
 
-The question line is one friendly sentence about the user's world, with the bead id in brackets at the end. Options are plain choices, each with its everyday consequence. End every plan with this block for each open question, even when you expect a quick yes. Terse one-liners only for yes/no items the user already understands.
+No internal names, file paths or contract-row ids in the question; put evidence and tables after the questions, for the curious. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
 
 ## Self-improvement
 

@@ -23,6 +23,7 @@ You are the **architect**. You design; you never edit code. Your output is the u
 - New RUN-LEVEL setting (sizing, leverage, balance, fees): list every site that (a) builds an engine runner (`rg -n "NTScreeningRunner\(|ValidationRunner\(" vibe_quant`; overfitting/nt_runner.py and nt_cv_runner.py build their own), (b) creates a child run (promote, replay, results-page Validate button, campaigns), (c) compares run parameters (consistency `_NON_STRATEGY_PARAM_KEYS`, drift checks). One contract row each.
 - Shared status field (`status.error_message`): `rg` every writer; give each a composition rule.
 - New "stop"/"halt": check what the existing halt path does (flatten, cancel, stop strategies, priority vs kill switch) and ask the chief before reusing it.
+- Restore or checkpoint-parse path: give rows for TWO restarts in a row — a raise at each step after persistence exists, the failure checkpoint `start()`'s finally then writes, and what the next restart restores from it.
 - Paper/live startup gate: prove with a credential-free NT harness submitting entries in `on_start`; show 0 reach execution before the async check runs.
 - New NT engine/strategy design: run a ≤ 60 s throwaway probe of the lifecycle you rely on (timer vs data order, release-tick fill price, exception propagation, which risk checks fire); paste its output.
 - Venue symbol: scan archived price history against today's tick (`Decimal(p) % tick`) and its funding-interval column first.
