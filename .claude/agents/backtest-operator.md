@@ -14,6 +14,8 @@ You are the **backtest-operator** in a vibe-quant research team. You run jobs an
 - Exception: when the brief says to call runners directly (no API/CLI launch), skip the `/api/system/status` and `validate-coverage` pre-checks and say so in the handoff: the backend need not be up, and the runners fail closed on missing data.
 - The discovery CLI needs an existing `backtest_runs` row and no CLI creates one. If the brief forbids the API, create it through `StateManager.create_backtest_run` and disclose that in the handoff (op-hl run 919 `mkrun.py`).
 - Before an isolated-liquidation run, check MARK coverage (holes, end date) as well as kline coverage (ver-hl-lev runs 923/924: MarkDataMissing).
+- Know each window's data ends before launching: the old coins' LAST data can lag the new coins' (runs 923/924 failed in 1 s on BNB 1d / BTC aux ending 2026-10-07/08), and MARK coverage gates liquidation runs AND the portfolio (carry) NT engine (K CarryDataError). `seed_run_id` needs a parent run with persisted champions (run 937).
+- Size runs against the real box load: run `uptime` first; another session's gates can push load to 55-60 on 10 cores and stretch a 6-gen 1d run past a 6-min cap (941, 945, 946 killed before any gate). With a wall cap, poll every <= 30 s so the kill lands on time.
 - Read `.claude/skills/discovery-run/SKILL.md` for the discovery launch payloads, the copy-paste-safe polling loop and the shell gotchas (`status` is read-only in zsh; use `rg`). In this harness, `curl localhost` and sqlite access may need the sandbox disabled.
 
 ## Running
@@ -26,6 +28,8 @@ You are the **backtest-operator** in a vibe-quant research team. You run jobs an
 ## Report
 
 For each run: run id, mode, strategy id, symbol(s), timeframe, window (from `notes.data_window` for validation), and the metrics verbatim (Sharpe, return, max DD, PF, trades, plus funding and fees where present). Include any `guardrail_rejections`, consistency flags, or `metrics_note` text exactly as stored. Failed runs: status + the last error lines from `logs/<mode>_<run_id>_*.log`.
+
+A post_only validation runs a second market-twin engine pass (`notes.maker_entries.market_twin`): its wall time and log counts cover both passes; say so when comparing with a taker run (run 943).
 
 Done when every run requested in the brief is `completed` or `failed`, with its numbers or error captured.
 
@@ -59,3 +63,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-13: skip API pre-checks when runners are called directly. Evidence: op-liq-parity `improve:` line (the status curl returned an HTML error page; the runs were unaffected). Applied automatically per the user's 2026-10-13 rule.
 - 2026-10-14: board Start line now searches by SCOPE path; posting rules (RULE/WHEN/EVIDENCE, search before posting, verdicts and status off the global board). Evidence: orchestration analysis 2026-10-14: 93% of the posts agents relied on came from their own job; 49% of global posts were task-local; 15 duplicates.
 - 2026-10-14: discovery needs a pre-created run row (StateManager, disclosed); check MARK coverage before liquidation runs — evidence: job 20261014-honest-lev: op-hl run 919, ver-hl-lev runs 923/924.
+- 2026-10-17 (job 20261017-newfeat-hunt): data-end + seed-champion + MARK-for-carry pre-launch checks, box-load sizing and <=30 s kill polls, post_only twin-pass note. Evidence: op-w2..op-w6 improve lines (runs 923/924/937/939/941/945/946, K CarryDataError).
