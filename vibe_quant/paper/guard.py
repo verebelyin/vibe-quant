@@ -163,6 +163,22 @@ class RiskLimits:
             raise ValueError("max_position_count must be >= 1")
 
 
+#: RiskState keys a checkpoint round-trips (see :meth:`RiskState.to_dict`); the
+#: derived ``drawdown_pct`` / ``daily_loss_pct`` are ignored on restore (R10).
+_RISK_STATE_KEYS: tuple[str, ...] = (
+    "high_water_mark",
+    "day",
+    "day_start_equity",
+    "consecutive_losses",
+    "last_equity",
+)
+
+#: Decimal fields whose restored value must be strictly positive to be a usable
+#: baseline: a zero/negative high water mark or UTC-day start would re-baseline
+#: the drawdown / daily-loss limits (R20).
+_RISK_POSITIVE_DECIMAL_KEYS: frozenset[str] = frozenset({"high_water_mark", "day_start_equity"})
+
+
 @dataclass
 class RiskState:
     """Mutable risk bookkeeping, persisted in checkpoints so restarts keep limits."""
@@ -204,18 +220,65 @@ class RiskState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> RiskState:
-        """Restore from :meth:`to_dict` output; unknown/missing keys -> defaults."""
+    def from_checkpoint(cls, data: object) -> tuple[RiskState, tuple[str, ...]]:
+        """Restore from :meth:`to_dict` output and never raise.
+
+        Returns ``(state, problems)``. ``None``, ``{}`` and an all-null dict are a
+        clean fresh state; any other non-dict value is a ``risk=<type>`` problem.
+        A non-empty dict with at least one field set and at least one null/absent
+        field is partial (R21): each null/absent field becomes a ``"<key> missing"``
+        problem and each unreadable value a ``"<key>=<repr>"`` one. Only an all-null
+        or all-set dict restores cleanly.
+        """
+        if data is None:
+            return cls(), ()
+        if not isinstance(data, dict):
+            return cls(), (f"risk={type(data).__name__}",)
         if not data:
-            return cls()
-        day_raw = data.get("day")
-        losses_raw = data.get("consecutive_losses", 0)
-        return cls(
-            high_water_mark=_dec_or_none(data.get("high_water_mark")),
-            day=date.fromisoformat(day_raw) if isinstance(day_raw, str) else None,
-            day_start_equity=_dec_or_none(data.get("day_start_equity")),
-            consecutive_losses=int(losses_raw) if isinstance(losses_raw, (int, str)) else 0,
-            last_equity=_dec_or_none(data.get("last_equity")),
+            return cls(), ()
+
+        def _unset(key: str) -> bool:
+            if key not in data or data[key] is None:
+                return True
+            # consecutive_losses=0 is the field's own default: not "set".
+            return key == "consecutive_losses" and data[key] == 0
+
+        if all(_unset(key) for key in _RISK_STATE_KEYS):
+            return cls(), ()
+
+        problems: list[str] = []
+        high_water_mark: Decimal | None = None
+        day: date | None = None
+        day_start_equity: Decimal | None = None
+        consecutive_losses = 0
+        last_equity: Decimal | None = None
+        for key in _RISK_STATE_KEYS:
+            if key not in data or data[key] is None:
+                problems.append(f"{key} missing")
+                continue
+            raw = data[key]
+            problem: str | None
+            if key == "day":
+                day, problem = _restore_day(raw)
+            elif key == "consecutive_losses":
+                consecutive_losses, problem = _restore_losses(raw)
+            elif key == "high_water_mark":
+                high_water_mark, problem = _restore_decimal(key, raw)
+            elif key == "day_start_equity":
+                day_start_equity, problem = _restore_decimal(key, raw)
+            else:
+                last_equity, problem = _restore_decimal(key, raw)
+            if problem is not None:
+                problems.append(problem)
+        return (
+            cls(
+                high_water_mark=high_water_mark,
+                day=day,
+                day_start_equity=day_start_equity,
+                consecutive_losses=consecutive_losses,
+                last_equity=last_equity,
+            ),
+            tuple(problems),
         )
 
 
@@ -284,15 +347,61 @@ def _dec_str(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
 
 
-def _dec_or_none(value: object) -> Decimal | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float, str, Decimal)):
+def _restore_decimal(key: str, raw: object) -> tuple[Decimal | None, str | None]:
+    """Parse one persisted Decimal field; returns ``(value, problem)``, never raises.
+
+    A bool, a non-scalar, a non-finite ``Decimal`` ("NaN"/"Infinity"/"sNaN") or (for
+    the baseline fields) a non-positive value is a problem (R4-R6, R20); the value
+    is not restored.
+    """
+    problem = f"{key}={repr(raw)[:40]}"
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str, Decimal)):
+        return None, problem
+    try:
+        value = Decimal(str(raw))
+    except (ArithmeticError, ValueError):
+        return None, problem
+    if not value.is_finite():
+        return None, problem
+    if key in _RISK_POSITIVE_DECIMAL_KEYS and value <= 0:
+        return None, problem
+    return value, None
+
+
+def _restore_day(raw: object) -> tuple[date | None, str | None]:
+    """Parse the persisted UTC ``day``; returns ``(value, problem)``, never raises."""
+    problem = f"day={repr(raw)[:40]}"
+    if isinstance(raw, str):
         try:
-            return Decimal(str(value))
-        except ArithmeticError:
-            return None
-    return None
+            return date.fromisoformat(raw), None
+        except ValueError:
+            return None, problem
+    if isinstance(raw, date):
+        return raw, None
+    return None, problem
+
+
+def _restore_losses(raw: object) -> tuple[int, str | None]:
+    """Parse ``consecutive_losses``; returns ``(value, problem)``, never raises.
+
+    Only a non-negative ``int`` or a bare (no whitespace, no sign, no dot) string
+    of Unicode decimal digits is accepted; a float, bool, negative or otherwise
+    unreadable value is a problem and restores the default 0 (R9/R9b). ``isdecimal``
+    (not ``isdigit``) is the guard: ``'³'.isdigit()`` is True but ``int('³')``
+    raises, and a decimal string past ``int()``'s digit limit raises too - so the
+    conversion stays inside a ``try``.
+    """
+    problem = f"consecutive_losses={repr(raw)[:40]}"
+    if isinstance(raw, bool):
+        return 0, problem
+    if isinstance(raw, int):
+        return (raw, None) if raw >= 0 else (0, problem)
+    if isinstance(raw, str) and raw == raw.strip() and raw.isdecimal():
+        try:
+            return int(raw), None
+        except ValueError:
+            return 0, problem
+    return 0, problem
 
 
 def _order_reduces(side: OrderSide, quantity: Decimal, net_position: Decimal) -> bool:

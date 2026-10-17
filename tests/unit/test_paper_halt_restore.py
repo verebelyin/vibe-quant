@@ -21,7 +21,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -49,6 +48,13 @@ from nautilus_trader.model.enums import OrderSide
 
 #: The prior checkpoint of contract row H1 and its restored message.
 _ISO = "2026-10-15T10:00:00+00:00"
+#: R12: the exact restored-halt message for an unreadable risk state (R12m: the
+#: risk-officer's flatten note is part of the message the alert text is built from).
+_GARBLED_HWM_MESSAGE = (
+    f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
+    "(high_water_mark='10600x'); limits re-baselined at current equity; "
+    "owned and claimed positions flattened"
+)
 _PRIOR_MANUAL: dict[str, object] = {
     "state": "stopped",
     "halt_reason": "manual",
@@ -244,9 +250,8 @@ def _restored_harness(
     restored = restored_halt_from_status(_PRIOR_MANUAL, _ISO)
     assert restored is not None
     monkeypatch.setattr(harness, "RecordingListener", _MetricsListener)
-    monkeypatch.setattr(harness, "TradingGuard", partial(TradingGuard, restored_halt=restored))
     monkeypatch.setattr(harness, "NaiveStrategy", _StartupStrategy)
-    return harness.build(**build_kw)
+    return harness.build(restored_halt=restored, **build_kw)
 
 
 def _bars(h: harness.Harness, closes: list[float]) -> list[Any]:
@@ -980,9 +985,10 @@ def test_restored_notify_failure_does_not_abort_start(
     monkeypatch.setattr(harness, "RecordingListener", _RaisingListener)
     restored = restored_halt_from_status(_PRIOR_MANUAL, _ISO)
     assert restored is not None
-    monkeypatch.setattr(harness, "TradingGuard", partial(TradingGuard, restored_halt=restored))
     monkeypatch.setattr(harness, "NaiveStrategy", _StartupStrategy)
-    h = harness.build(symbols=("BTCUSDT", "ETHUSDT"), strategy_kwargs={"mode": "every_bar"})
+    h = harness.build(
+        restored_halt=restored, symbols=("BTCUSDT", "ETHUSDT"), strategy_kwargs={"mode": "every_bar"}
+    )
     snaps: dict[str, Any] = {}
     with caplog.at_level(logging.ERROR):
         harness.run(h, _bars(h, [100.0] * 5), actions=[(h.at(0.5), h.snap(snaps, "t0.5"))])
@@ -1024,3 +1030,642 @@ async def test_explicit_trader_id_inherits_halt(
         assert other._restored_halt is None
     finally:
         await other._shutdown()
+
+
+# --------------------------------------------------------------- R12
+
+
+async def test_garbled_high_water_mark_restores_error_halt(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R12: a checkpoint whose risk high_water_mark is unreadable ("10600x")
+    restarts HALTED/ERROR with the exact message (R12m: the flatten note is in the
+    alert text), the restore event carries ``risk_problems``, exactly one
+    logger.error is emitted (class/values only, no exc_info), and the halt notify
+    produces the one CRITICAL circuit_breaker alert."""
+    risk = {
+        "high_water_mark": "10600x",
+        "day": "2026-10-15",
+        "day_start_equity": "10000",
+        "consecutive_losses": 3,
+        "last_equity": "10000",
+    }
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=risk)
+    node, trace = _trace_node(monkeypatch, seeded)
+    try:
+        with caplog.at_level(logging.ERROR):
+            await node._initialize()
+
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.ERROR
+        assert node.status.error_message == _GARBLED_HWM_MESSAGE
+
+        restores = [c for c in trace.calls if c[0] == "write" and c[2].get("action") == "restore"]
+        assert restores and restores[0][2]["risk_problems"] == ["high_water_mark='10600x'"]
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert [r.getMessage() for r in errors] == [
+            "paper PAPER-007: unreadable risk state in checkpoint "
+            "(high_water_mark='10600x'); halting"
+        ]
+        assert errors[0].exc_info is None
+
+        trace.calls.clear()
+        node._on_guard_state_change(
+            GuardState.HALTED,
+            HaltReason.ERROR,
+            _GARBLED_HWM_MESSAGE,
+            {"restored": True, "checkpoint_time": _ISO},
+        )
+        alerts = [c for c in trace.calls if c[0] == "alert"]
+        assert alerts == [
+            ("alert", "circuit_breaker", f"HALT (error): {_GARBLED_HWM_MESSAGE}", True)
+        ]
+    finally:
+        await node._shutdown()
+
+
+# ------------------------------------------------------- RiskState.from_checkpoint
+
+
+def _full_risk(**overrides: object) -> dict[str, object]:
+    """A full, clean ``to_dict`` payload with one field overridable."""
+    base: dict[str, object] = {
+        "high_water_mark": "10600",
+        "day": "2026-10-15",
+        "day_start_equity": "10000",
+        "consecutive_losses": 3,
+        "last_equity": "10000",
+        "drawdown_pct": "0.05660377358490566037735849057",
+        "daily_loss_pct": "0",
+    }
+    base.update(overrides)
+    return base
+
+
+_NULL_RISK: dict[str, object] = {
+    "high_water_mark": None,
+    "day": None,
+    "day_start_equity": None,
+    "consecutive_losses": 0,
+    "last_equity": None,
+}
+
+
+def test_r1_no_risk_is_fresh_and_clean() -> None:
+    """R1: no risk / null / {} / an all-null dict -> fresh state, no problems."""
+    for data in (None, {}, _NULL_RISK):
+        state, problems = RiskState.from_checkpoint(data)
+        assert problems == (), data
+        assert state == RiskState(), data
+
+
+def test_r2_full_to_dict_restores_exactly() -> None:
+    """R2: a fully-populated ``to_dict`` round-trips without problems."""
+    original = RiskState(
+        high_water_mark=Decimal("10600"),
+        day=date(2026, 10, 15),
+        day_start_equity=Decimal("10000"),
+        consecutive_losses=3,
+        last_equity=Decimal("10000"),
+    )
+    state, problems = RiskState.from_checkpoint(original.to_dict())
+    assert problems == ()
+    assert state == original
+    assert state.to_dict() == original.to_dict()
+
+
+def test_r3_null_field_is_none_no_problem() -> None:
+    """R3: a null field restores as None with no problem."""
+    state, problems = RiskState.from_checkpoint({"high_water_mark": None})
+    assert state.high_water_mark is None
+    assert problems == ()
+
+
+def test_r4_garbled_high_water_mark_is_a_problem() -> None:
+    """R4: "10600x" -> None + the exact problem string."""
+    state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark="10600x"))
+    assert state.high_water_mark is None
+    assert problems == ("high_water_mark='10600x'",)
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "sNaN"])
+def test_r5_non_finite_decimal_is_a_problem(raw: str) -> None:
+    """R5: a non-finite Decimal value (today: start raises InvalidOperation) is a
+    problem and restores None."""
+    state, problems = RiskState.from_checkpoint(_full_risk(last_equity=raw))
+    assert state.last_equity is None
+    assert problems == (f"last_equity={raw!r}",)
+
+
+@pytest.mark.parametrize("raw", [[1], {}, True])
+def test_r6_wrong_type_decimal_is_a_problem(raw: object) -> None:
+    """R6: a list/dict/bool in a decimal field is a problem and restores None."""
+    state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
+    assert state.high_water_mark is None
+    assert problems == (f"high_water_mark={raw!r}",)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (10600.5, Decimal("10600.5")),
+        (10600, Decimal("10600")),
+        ("1E+4", Decimal("1E+4")),
+        (" 10600 ", Decimal("10600")),
+    ],
+)
+def test_r7_usable_decimal_values_restore(raw: object, expected: Decimal) -> None:
+    """R7: float/int/scientific/padded strings parse to Decimals with no problem."""
+    state, problems = RiskState.from_checkpoint(_full_risk(high_water_mark=raw))
+    assert state.high_water_mark == expected
+    assert problems == ()
+
+
+def test_r7b_sub_unit_values_are_accepted_then_rejected_as_baselines() -> None:
+    """R7b (as overridden by R20): "-5"/"0" still parse to Decimals, but a non-positive
+    high_water_mark / day_start_equity is a problem (last_equity stays unrestricted)."""
+    state, problems = RiskState.from_checkpoint(_full_risk(last_equity="-5"))
+    assert state.last_equity == Decimal("-5")
+    assert problems == ()
+
+    rejected, bad = RiskState.from_checkpoint(
+        _full_risk(high_water_mark="10600", day_start_equity="0")
+    )
+    assert rejected.day_start_equity is None
+    assert bad == ("day_start_equity='0'",)
+
+
+@pytest.mark.parametrize("raw", ["2026-13-45", 20261017])
+def test_r8_bad_day_is_a_problem(raw: object) -> None:
+    """R8: an impossible date and a non-string day are both problems."""
+    state, problems = RiskState.from_checkpoint(_full_risk(day=raw))
+    assert state.day is None
+    assert problems == (f"day={raw!r}",)
+
+
+@pytest.mark.parametrize("raw", [3, "3"])
+def test_r9_consecutive_losses_accepts_int_and_digits(raw: object) -> None:
+    """R9: an int or a digit string restores as 3."""
+    state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
+    assert state.consecutive_losses == 3
+    assert problems == ()
+
+
+@pytest.mark.parametrize("raw", [3.0, True, -1, "x", " 3", "3.0", "1_0", "+3", "\u00b3"])
+def test_r9b_consecutive_losses_rejects_non_int(raw: object) -> None:
+    """R9b: float/bool/negative/padded/sign/underscore/non-digit -> 0 + a problem.
+    F1 (round 2): ``'³'.isdigit()`` is True but ``'³'.isdecimal()`` is False and
+    ``int('³')`` raises, so the parser must reject it (never raise). ``'1_0'`` and
+    ``'+3'`` are the guard's teeth: ``int()`` would happily read them as 10 and 3."""
+    state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
+    assert state.consecutive_losses == 0
+    assert problems == (f"consecutive_losses={raw!r}",)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("\u0661\u0662", 12),
+        ("1" * 5000, 0),
+    ],
+)
+def test_r9b_decimal_strings_never_raise(raw: str, expected: int) -> None:
+    """R9b (F1, round 2): a string of Unicode decimal digits parses (Arabic-Indic
+    ``"١٢"`` -> 12, since ``isdecimal()`` and ``int()`` agree), while one past
+    ``int()``'s digit limit is a problem with value 0 - never an exception."""
+    state, problems = RiskState.from_checkpoint(_full_risk(consecutive_losses=raw))
+    assert state.consecutive_losses == expected
+    if expected == 0:
+        assert problems == ("consecutive_losses=" + repr(raw)[:40],)
+    else:
+        assert problems == ()
+
+
+def test_r10_missing_key_is_a_problem_and_derived_keys_ignored() -> None:
+    """R10: a stored key absent from a non-empty dict -> default + "<key> missing";
+    the derived drawdown_pct/daily_loss_pct never count as state."""
+    state, problems = RiskState.from_checkpoint({"high_water_mark": "10600"})
+    assert state.high_water_mark == Decimal("10600")
+    assert problems == (
+        "day missing",
+        "day_start_equity missing",
+        "consecutive_losses missing",
+        "last_equity missing",
+    )
+
+    derived_only, derived_problems = RiskState.from_checkpoint(
+        {"drawdown_pct": "0.5", "daily_loss_pct": "0.1"}
+    )
+    assert (derived_only, derived_problems) == (RiskState(), ())
+
+
+@pytest.mark.parametrize(("raw", "kind"), [("garbage", "str"), (5, "int"), ([], "list")])
+def test_r11_non_dict_risk_is_a_problem(raw: object, kind: str) -> None:
+    """R11: a non-dict risk value -> fresh state + "risk=<type>"."""
+    state, problems = RiskState.from_checkpoint(raw)
+    assert state == RiskState()
+    assert problems == (f"risk={kind}",)
+
+
+@pytest.mark.parametrize(
+    ("key", "raw"),
+    [("high_water_mark", "0"), ("high_water_mark", "-5"), ("day_start_equity", "0")],
+)
+def test_r20_non_positive_baseline_is_a_problem(key: str, raw: str) -> None:
+    """R20: a non-positive high_water_mark / day_start_equity is a problem."""
+    state, problems = RiskState.from_checkpoint(_full_risk(**{key: raw}))
+    assert getattr(state, key) is None
+    assert problems == (f"{key}={raw!r}",)
+
+
+def test_r20_last_equity_non_positive_is_accepted() -> None:
+    """R20 pins only high_water_mark/day_start_equity; last_equity <= 0 still restores."""
+    state, problems = RiskState.from_checkpoint(_full_risk(last_equity="0"))
+    assert state.last_equity == Decimal("0")
+    assert problems == ()
+
+
+def test_r21_partial_dict_is_a_problem_but_all_null_is_clean() -> None:
+    """R21: a non-empty dict with some fields set and some null is partial -> a
+    "<key> missing" problem per null field; an all-null dict stays clean (R1/R3)."""
+    state, problems = RiskState.from_checkpoint(
+        _full_risk(day=None, last_equity=None, consecutive_losses=0)
+    )
+    assert state.high_water_mark == Decimal("10600")
+    assert state.day_start_equity == Decimal("10000")
+    assert problems == ("day missing", "last_equity missing")
+
+    clean, clean_problems = RiskState.from_checkpoint(_NULL_RISK)
+    assert (clean, clean_problems) == (RiskState(), ())
+
+
+# --------------------------------------------------------- node restore rows
+
+
+@pytest.mark.parametrize(
+    ("raw", "kind"),
+    [
+        ("foo", "restored after restart: unrecognised prior halt_reason 'foo'"),
+        (5, "restored after restart: unrecognised prior halt_reason 5"),
+    ],
+)
+async def test_r13b_garbled_halt_reason_is_error(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    raw: object,
+    kind: str,
+) -> None:
+    """R13b: a fine risk dict with a garbled halt_reason (unknown string or non-string)
+    restores HALTED/ERROR via the existing behaviour, pinned here."""
+    _write_checkpoint(
+        seeded["db"],
+        {"state": "stopped", "halt_reason": raw, "error_message": "x"},
+        risk=_full_risk(),
+    )
+    node = PaperTradingNode(_config(seeded))
+    await node._initialize()
+    try:
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.ERROR
+        assert node.status.error_message == kind
+    finally:
+        await node._shutdown()
+
+
+async def test_r13_problems_with_prior_halt_keeps_the_prior_halt(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R13: problems alongside a restored MANUAL halt keep the prior reason+message;
+    the problems go to the event and one logger.error, with no extra alert."""
+    status = {"state": "halted", "halt_reason": "manual", "error_message": "halt via API"}
+    _write_checkpoint(seeded["db"], status, risk=_full_risk(high_water_mark="10600x"))
+    node, trace = _trace_node(monkeypatch, seeded)
+    try:
+        with caplog.at_level(logging.ERROR):
+            await node._initialize()
+
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.MANUAL
+        assert node.status.error_message == _RESTORED_MESSAGE
+
+        restores = [c for c in trace.calls if c[0] == "write" and c[2].get("action") == "restore"]
+        assert restores[0][2]["restored_halt"] == "manual"
+        assert restores[0][2]["risk_problems"] == ["high_water_mark='10600x'"]
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert [r.getMessage() for r in errors] == [
+            "paper PAPER-007: unreadable risk state in checkpoint "
+            "(high_water_mark='10600x'); halting"
+        ]
+        assert [c for c in trace.calls if c[0] == "alert"] == []
+    finally:
+        await node._shutdown()
+
+
+async def test_r14_prior_risk_halt_plus_garbled_risk_never_running(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+) -> None:
+    """R14: a prior max_drawdown status (not restored from the field) plus a garbled
+    HWM -> ERROR halt, never RUNNING."""
+    _write_checkpoint(
+        seeded["db"],
+        {"state": "stopped", "halt_reason": "max_drawdown", "error_message": "breach"},
+        risk=_full_risk(high_water_mark="10600x"),
+    )
+    node = PaperTradingNode(_config(seeded))
+    await node._initialize()
+    try:
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.ERROR
+        assert node.status.state != NodeState.RUNNING
+    finally:
+        await node._shutdown()
+
+
+async def test_r15_restart_after_r12_stays_error(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+) -> None:
+    """R15: after a clean shutdown of an R12 restart, restart 2 is still HALTED/ERROR
+    and the prefix is not doubled."""
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
+    node = PaperTradingNode(_config(seeded))
+    await node._initialize()
+    assert node.status.state == NodeState.HALTED
+    assert node.status.halt_reason == HaltReason.ERROR
+    assert node.status.error_message == _GARBLED_HWM_MESSAGE
+    await node._shutdown()
+
+    node2 = PaperTradingNode(_config(seeded))
+    await node2._initialize()
+    try:
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason == HaltReason.ERROR
+        assert node2.status.error_message == _GARBLED_HWM_MESSAGE
+    finally:
+        await node2._shutdown()
+
+
+async def test_r15b_pre_first_tick_death_rearms_flatten(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R15b: a process that dies before the first guard tick (the checkpoint R12's
+    restart writes in ``_initialize``) still restores ERROR on the next restart, and
+    the guard built from it re-arms the deferred flatten."""
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
+    node = PaperTradingNode(_config(seeded))
+    await node._initialize()
+    # "dies" here: read the checkpoint written before any tick, then shut down.
+    latest = _latest_checkpoint(seeded["db"])
+    assert latest is not None
+    assert latest.node_status["halt_reason"] == "error"
+    await node._shutdown()
+
+    node2 = PaperTradingNode(_config(seeded))
+    await node2._initialize()
+    try:
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason == HaltReason.ERROR
+    finally:
+        await node2._shutdown()
+
+    restored = restored_halt_from_status(latest.node_status, _ISO)
+    assert restored is not None
+    assert restored.reason == HaltReason.ERROR
+    monkeypatch.setattr(harness, "NaiveStrategy", _StartupStrategy)
+    h = harness.build(restored_halt=restored, strategy_kwargs={"mode": "every_bar"})
+    calls = _count_flatten(h.guard)
+    harness.run(h, _bars(h, [100.0] * 4))
+    assert len(calls) == 1, "the restored flatten must be re-armed and run once"
+    assert h.guard.guard_state == GuardState.HALTED
+    assert h.guard.halt_reason == HaltReason.ERROR
+    assert h.filled_entries() == []
+    h.engine.dispose()
+
+
+async def test_r16_failed_restart_keeps_error_halt_and_risk(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R16: R12 then a venue build failure on restart 1 -> the failure checkpoint keeps
+    halt_reason=error AND the risk dict; restart 2 is HALTED/ERROR."""
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk(high_water_mark="10600x"))
+    node = PaperTradingNode(_config(seeded))
+    monkeypatch.setattr(node, "_create_live_trading_node", _raises_venue_build)
+    with pytest.raises(RuntimeError, match="venue build failed"):
+        await node._initialize()
+    await node._shutdown()
+
+    latest = _latest_checkpoint(seeded["db"])
+    assert latest is not None
+    assert latest.node_status["halt_reason"] == "error"
+    # The checkpoint keeps whatever risk was restored (the readable fields survive the
+    # garbled high_water_mark), not a blank state.
+    restored_risk, problems = RiskState.from_checkpoint(_full_risk(high_water_mark="10600x"))
+    assert problems == ("high_water_mark='10600x'",)
+    assert latest.node_status["risk"] == restored_risk.to_dict()
+
+    node2 = PaperTradingNode(_config(seeded))
+    await node2._initialize()
+    try:
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason == HaltReason.ERROR
+    finally:
+        await node2._shutdown()
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected_class"),
+    [
+        ("node_status", "not json", "JSONDecodeError"),
+        ("node_status", "[]", "AttributeError"),
+        ("created_at", "not a date", "ValueError"),
+    ],
+)
+async def test_r18_unreadable_checkpoint_row_halts_and_keeps_risk(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    column: str,
+    value: str,
+    expected_class: str,
+) -> None:
+    """R18: an unreadable checkpoint row (bad JSON node_status, a non-dict node_status,
+    a bad created_at) -> ERROR halt "checkpoint unreadable (<class>)" with a non-None
+    risk state, so restart 2 is still HALTED/ERROR."""
+    import sqlite3
+
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk())
+    con = sqlite3.connect(seeded["db"])
+    with con:
+        con.execute(f"UPDATE paper_trading_checkpoints SET {column} = ?", (value,))
+    con.close()
+
+    node = PaperTradingNode(_config(seeded))
+    await node._initialize()
+    try:
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.ERROR
+        assert node.status.error_message == (
+            f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({expected_class})"
+        )
+        assert node._restored_risk is not None
+    finally:
+        await node._shutdown()
+
+    latest = _latest_checkpoint(seeded["db"])
+    assert latest is not None
+    assert latest.node_status["halt_reason"] == "error"
+    node2 = PaperTradingNode(_config(seeded))
+    await node2._initialize()
+    try:
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason == HaltReason.ERROR
+    finally:
+        await node2._shutdown()
+
+
+async def test_r19_raise_before_risk_is_set_halts_and_keeps_risk(
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R19: any raise inside ``_restore_from_checkpoint`` before ``_restored_risk`` is
+    set behaves like R18 (fresh risk state, ERROR halt, restart 2 HALTED).
+
+    F1 (round 3): the class-only ``logger.error`` on that path must carry NO
+    ``exc_info`` and no exception text. The raise is chained (``ZZLEAK9`` from
+    ``ZZINNER4``) because a traceback log prints both the raised message and its
+    ``from`` cause: neither marker may reach the captured log, the restore event
+    payload, or ``status.error_message``.
+    """
+    _write_checkpoint(seeded["db"], {"state": "running"}, risk=_full_risk())
+    node, trace = _trace_node(monkeypatch, seeded)
+
+    def _boom(_timestamp: datetime) -> int:
+        raise RuntimeError("restore boom ZZLEAK9") from ValueError("ZZINNER4")
+
+    monkeypatch.setattr(node, "_checkpoint_ms", _boom)
+    with caplog.at_level(logging.ERROR):
+        await node._initialize()
+    try:
+        assert node.status.state == NodeState.HALTED
+        assert node.status.halt_reason == HaltReason.ERROR
+        assert node.status.error_message == (
+            f"{RESTORED_HALT_PREFIX}checkpoint unreadable (RuntimeError)"
+        )
+        assert node._restored_risk == RiskState()
+
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert [r.getMessage() for r in errors] == [
+            "paper PAPER-007: checkpoint unreadable (RuntimeError); halting"
+        ]
+        assert all(r.exc_info is None for r in errors), "the failure is logged with a traceback"
+        assert "ZZLEAK9" not in caplog.text, "the raised message leaked into the log"
+        assert "ZZINNER4" not in caplog.text, "the chained cause leaked into the log"
+
+        restores = [c for c in trace.calls if c[0] == "write" and c[2].get("action") == "restore"]
+        assert [c[2] for c in restores] == [
+            {
+                "action": "restore",
+                "checkpoint_time": None,
+                "prior_state": None,
+                "prior_halt_reason": None,
+                "prior_positions": [],
+                "prior_orders": [],
+                "restored_risk": RiskState().to_dict(),
+                "restored_halt": "error",
+                "risk_problems": [],
+            }
+        ]
+        assert "ZZLEAK9" not in repr(restores[0][2]), "the raised message leaked into the event"
+        assert "ZZINNER4" not in repr(restores[0][2]), "the chained cause leaked into the event"
+        assert "ZZLEAK9" not in node.status.error_message
+        assert "ZZINNER4" not in node.status.error_message
+    finally:
+        await node._shutdown()
+
+    latest = _latest_checkpoint(seeded["db"])
+    assert latest is not None
+    assert latest.node_status["halt_reason"] == "error"
+    assert latest.node_status["risk"] == RiskState().to_dict()
+    node2 = PaperTradingNode(_config(seeded))
+    await node2._initialize()
+    try:
+        assert node2.status.state == NodeState.HALTED
+        assert node2.status.halt_reason == HaltReason.ERROR
+    finally:
+        await node2._shutdown()
+
+
+class _SettablePortfolio:
+    """A portfolio whose USDT equity the test can move between ticks."""
+
+    def __init__(self, equity: str) -> None:
+        self.equity_value = Decimal(equity)
+
+    def account(self, venue: Any) -> object:
+        return object()
+
+    def missing_price_instruments(self, venue: Any) -> list[Any]:
+        return []
+
+    def equity(self, venue: Any) -> dict[Any, Any]:
+        return {self._currency(): _FakeMoney(str(self.equity_value))}
+
+    @staticmethod
+    def _currency() -> Any:
+        from nautilus_trader.model.objects import Currency
+
+        return Currency.from_str("USDT")
+
+
+class _SettableGuard(_UnitGuard):
+    def __init__(self, *args: Any, equity: str = "9000", **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._settled = _SettablePortfolio(equity)
+
+    @property
+    def portfolio(self) -> Any:  # type: ignore[override]
+        return self._settled
+
+
+def test_r17_operator_resume_after_r12_rebaselines_and_re_halts() -> None:
+    """R17: after an operator resume of an R12 ERROR halt at equity 9000 the HWM is
+    re-baselined to 9000; the next drawdown halt fires at <= 7650, not at 7651."""
+    guard = _SettableGuard(
+        TradingGuardConfig(max_drawdown_pct=Decimal("0.15"), max_daily_loss_pct=Decimal("0.5")),
+        strategies=[],
+        risk_engine=_RiskEngine(),
+        restored_halt=RestoredHalt(HaltReason.ERROR, _GARBLED_HWM_MESSAGE, _ISO),
+        equity="9000",
+    )
+    assert guard.guard_state == GuardState.HALTED
+    assert guard.halt_reason == HaltReason.ERROR
+
+    guard.evaluate_risk()
+    assert guard.risk_state.high_water_mark == Decimal("9000")
+    assert guard.guard_state == GuardState.HALTED, "no breach yet, the ERROR halt stands"
+
+    assert guard.resume() == (True, "resumed from halt")
+    assert guard.guard_state == GuardState.RUNNING
+
+    guard._settled.equity_value = Decimal("7651")
+    guard.evaluate_risk()
+    assert guard.guard_state == GuardState.RUNNING, "7651 is one unit above the limit"
+
+    guard._settled.equity_value = Decimal("7650")
+    guard.evaluate_risk()
+    assert guard.guard_state == GuardState.HALTED
+    assert guard.halt_reason == HaltReason.MAX_DRAWDOWN

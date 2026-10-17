@@ -2124,20 +2124,81 @@ class PaperTradingNode:
         """
         if self._persistence is None:
             return
-        prior = self._persistence.load_latest_checkpoint(self._config.trader_id)
-        if prior is None:
+        try:
+            prior = self._persistence.load_latest_checkpoint(self._config.trader_id)
+            if prior is None:
+                return
+            # R50b/R50c: any checkpoint restores the watch state; the ones written before
+            # the watcher existed still cover the downtime gap through their timestamp.
+            self._restored_watch_ms = self._checkpoint_ms(prior.timestamp)
+            self._restored_watch = self._restored_watch_state(
+                prior.node_status.get("liquidation_watch")
+            )
+            self._restored_risk, problems = RiskState.from_checkpoint(
+                prior.node_status.get("risk")
+            )
+            self._restored_halt = restored_halt_from_status(
+                prior.node_status, prior.timestamp.isoformat()
+            )
+        except Exception as exc:
+            # R18/R19: an unreadable checkpoint row (failed load / parse, non-dict
+            # node_status, or any raise below) fails closed. A non-None risk state and
+            # a restored ERROR halt keep BOTH in the failure checkpoint the shutdown
+            # writes, so the next restart is HALTED, never a blank RUNNING state (H19).
+            self._restored_risk = RiskState()
+            self._restored_halt = RestoredHalt(
+                reason=HaltReason.ERROR,
+                message=f"{RESTORED_HALT_PREFIX}checkpoint unreadable ({type(exc).__name__})",
+                checkpoint_time=datetime.now(UTC).isoformat(),
+            )
+            self._status.state = NodeState.HALTED
+            self._status.halt_reason = HaltReason.ERROR
+            self._status.error_message = self._restored_halt.message
+            self._status.updated_at = datetime.now(UTC)
+            logger.error(
+                "paper %s: checkpoint unreadable (%s); halting",
+                self._config.trader_id,
+                type(exc).__name__,
+            )
+            self._write_event(
+                EventType.SIGNAL,
+                {
+                    "action": "restore",
+                    "checkpoint_time": None,
+                    "prior_state": None,
+                    "prior_halt_reason": None,
+                    "prior_positions": [],
+                    "prior_orders": [],
+                    "restored_risk": self._restored_risk.to_dict(),
+                    "restored_halt": HaltReason.ERROR.value,
+                    "risk_problems": [],
+                },
+            )
             return
-        # R50b/R50c: any checkpoint restores the watch state; the ones written before
-        # the watcher existed still cover the downtime gap through their timestamp.
-        self._restored_watch_ms = self._checkpoint_ms(prior.timestamp)
-        self._restored_watch = self._restored_watch_state(
-            prior.node_status.get("liquidation_watch")
-        )
-        risk_raw = prior.node_status.get("risk") if isinstance(prior.node_status, dict) else None
-        self._restored_risk = RiskState.from_dict(risk_raw if isinstance(risk_raw, dict) else None)
-        self._restored_halt = restored_halt_from_status(
-            prior.node_status, prior.timestamp.isoformat()
-        )
+        if self._restored_halt is None and problems:
+            # R12/R12m: an unreadable or partly missing risk state restarts HALTED
+            # with an ERROR halt through the existing restored-halt path (guard
+            # starts HALTED, on_start arms the deferred flatten, the first tick
+            # flattens owned+claimed positions and stops strategies). The risk
+            # limits are re-baselined at the current equity (the restored values
+            # could not be trusted).
+            self._restored_halt = RestoredHalt(
+                reason=HaltReason.ERROR,
+                message=(
+                    f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
+                    f"({', '.join(problems)}); limits re-baselined at current equity; "
+                    "owned and claimed positions flattened"
+                ),
+                checkpoint_time=prior.timestamp.isoformat(),
+            )
+        if problems:
+            # R12/R13: one logger.error, values only (never exc_info - this can run
+            # under an active fetch error; see _check_connectivity / _write_then_alert).
+            logger.error(
+                "paper %s: unreadable risk state in checkpoint (%s); halting",
+                self._config.trader_id,
+                ", ".join(problems),
+            )
         if self._restored_halt is not None:
             # H19: every checkpoint written before _run_loop keeps the halt.
             self._status.state = NodeState.HALTED
@@ -2157,6 +2218,7 @@ class PaperTradingNode:
                 "restored_halt": (
                     self._restored_halt.reason.value if self._restored_halt else None
                 ),
+                "risk_problems": list(problems),
             },
         )
         logger.info(

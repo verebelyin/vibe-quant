@@ -35,9 +35,11 @@ from vibe_quant.data.catalog import create_instrument, get_bar_type
 from vibe_quant.nt_compat import retain_log_guard
 from vibe_quant.paper.guard import (
     GATE_DENIAL_PREFIX,
+    RESTORED_HALT_PREFIX,
     GuardListener,
     GuardState,
     HaltReason,
+    RestoredHalt,
     RiskState,
     TradingGuard,
     TradingGuardConfig,
@@ -279,6 +281,7 @@ def build(
     latency_ns: int | None = None,
     starting_usdt: int = 10_000,
     risk_state: RiskState | None = None,
+    restored_halt: RestoredHalt | None = None,
 ) -> Harness:
     engine = _new_engine()
     engine.add_venue(
@@ -308,6 +311,7 @@ def build(
         risk_engine=engine.kernel.risk_engine,
         listener=listener,
         risk_state=risk_state,
+        restored_halt=restored_halt,
     )
     listener.clock_ns = lambda: guard.clock.timestamp_ns()
     engine.add_actor(
@@ -673,13 +677,47 @@ def test_order_rejection_reaches_listener() -> None:
 
 def test_risk_state_restored_from_checkpoint_keeps_drawdown_limit() -> None:
     """A restart must not reset the high water mark (DD measured from pre-restart peak)."""
-    restored = RiskState.from_dict(
+    restored = RiskState.from_checkpoint(
         RiskState(high_water_mark=Decimal("10600"), consecutive_losses=0).to_dict()
-    )
+    )[0]
     h = build(limits={"max_drawdown_pct": Decimal("0.05")}, risk_state=restored)
     run(h, _flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0] * 3))
     # 10000 equity vs 10600 HWM = 5.66% drawdown -> halted before any trade fills.
     assert h.guard.halt_reason == HaltReason.MAX_DRAWDOWN
+    assert h.filled_entries() == []
+
+
+def test_r12b_production_guard_halts_on_garbled_hwm_checkpoint() -> None:
+    """R12b: on a real BacktestEngine an equity-10000 book whose restored HWM is
+    unreadable ("10600x") halts with ERROR before any entry fills. The node hands the
+    guard the restored ERROR halt built from the checkpoint problems; without it the
+    old code re-baselined the HWM to 10000 and filled 1 entry."""
+    problems_source = {
+        "high_water_mark": "10600x",
+        "day": "2026-10-15",
+        "day_start_equity": "10000",
+        "consecutive_losses": 3,
+        "last_equity": "10000",
+    }
+    state, problems = RiskState.from_checkpoint(problems_source)
+    assert state.high_water_mark is None
+    assert problems == ("high_water_mark='10600x'",)
+
+    message = (
+        f"{RESTORED_HALT_PREFIX}unreadable risk state in checkpoint "
+        "(high_water_mark='10600x'); limits re-baselined at current equity; "
+        "owned and claimed positions flattened"
+    )
+    h = build(
+        limits={"max_drawdown_pct": Decimal("0.05")},
+        risk_state=state,
+        restored_halt=RestoredHalt(HaltReason.ERROR, message, START.isoformat()),
+    )
+    run(h, _flat_bars(get_bar_type("BTCUSDT", "1m"), [10000.0] * 3))
+
+    assert h.guard.guard_state == GuardState.HALTED
+    assert h.guard.halt_reason == HaltReason.ERROR
+    assert h.entry_orders(), "entries were attempted ..."
     assert h.filled_entries() == []
 
 
