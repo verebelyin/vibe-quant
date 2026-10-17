@@ -333,3 +333,37 @@ def test_pre_commit_lint_skip_lint_env(tmp_path: Path) -> None:
         env=_git_env({"VQ_RUFF": str(ruff), "SKIP_LINT": "1"}),
     )
     assert result.returncode == 0
+
+
+def _run_lint_budget(repo: Path, budget_cmd: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(repo / "scripts" / "git-hooks" / "pre-commit-lint.sh")],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_git_env({"VQ_RUFF": "/nonexistent-ruff", "VQ_BUDGET_CMD": budget_cmd}),
+    )
+
+
+@pytest.mark.parametrize(
+    "path", ["CLAUDE.md", ".claude/agents/reviewer.md", "docs/orchestration/README.md", "docs/claude/x.md"]
+)
+def test_pre_commit_runs_budget_check_for_staged_steering_file(tmp_path: Path, path: str) -> None:
+    repo = _make_repo(tmp_path)
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("words\n", encoding="utf-8")
+    _git(repo, "add", path)
+
+    failing = _run_lint_budget(repo, "false")
+    assert failing.returncode == 1
+    assert "budget check failed" in failing.stderr
+    assert _run_lint_budget(repo, "true").returncode == 0
+
+
+def test_pre_commit_skips_budget_check_for_other_markdown(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "README.md").write_text("words\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+
+    assert _run_lint_budget(repo, "false").returncode == 0
