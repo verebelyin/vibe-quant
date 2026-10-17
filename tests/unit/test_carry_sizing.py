@@ -406,6 +406,29 @@ def test_decide_non_positive_equity_fails_closed(equity: float, live: bool) -> N
     assert decide(_START, 1e-9, dict.fromkeys(_SYMBOLS), {}, {}, {}, specs, spec).rounding_drift == 0.0
 
 
+@pytest.mark.parametrize(
+    "equity", [0.0, -1.0, float("nan")], ids=["zero", "negative", "nan"]
+)
+def test_equity_guard_precedes_held_unpriced(equity: float) -> None:
+    """R1: with BOTH a non-positive equity and a held-but-unpriced leg, ``CarryEquityTooSmall`` wins.
+
+    ``decide`` checks ``not (equity > 0.0)`` before it walks the signals, so the
+    book-level payload is raised even though ``BTCUSDT`` is held (``current`` 10)
+    and has no sizing price. Swapping the two checks would raise ``CarryDataError``.
+    """
+    spec = CarrySpec(**_kwargs(symbols=_SYMBOLS))
+    specs = _specs()
+    signals = {"BTCUSDT": 0.003, "ETHUSDT": 0.002, "SOLUSDT": 0.001, "BNBUSDT": -0.001}
+    prices = {"ETHUSDT": 3000.0, "SOLUSDT": 100.0, "BNBUSDT": 400.0}  # BTCUSDT absent
+
+    with pytest.raises(CarryEquityTooSmall) as error:
+        decide(_START, equity, signals, {}, prices, {"BTCUSDT": 10}, specs, spec)
+
+    assert error.value.symbol == "<book>"
+    assert error.value.decision_ns == _START
+    assert error.value.required == 0.0
+
+
 def test_nt_commission_matches_formula() -> None:
     """§5: the Decimal copy of NT's taker branch; Decimal(1) is exact."""
     instrument = create_instrument("BTCUSDT")

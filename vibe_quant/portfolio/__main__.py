@@ -323,16 +323,23 @@ def _check_out_dir(out_dir: Path, force: bool) -> None:
 
 
 def _replace_dir(staging: Path, out_dir: Path) -> None:
-    """Rename the staged dir into place; an existing dir is moved aside first (non-atomic)."""
-    if out_dir.exists():
-        aside = staging.with_name(f"{staging.name}.old")
-        out_dir.rename(aside)
-        try:
-            staging.rename(out_dir)
-        finally:
-            shutil.rmtree(aside, ignore_errors=True)
+    """Rename the staged dir into place; an existing dir is moved aside first (non-atomic).
+
+    If the second rename fails the old dir is renamed back into place before the
+    error propagates, so a failed replace restores the previous output instead of
+    destroying it (the pre-fix ``finally: rmtree(aside)`` deleted the old dir).
+    """
+    if not out_dir.exists():
+        staging.rename(out_dir)
         return
-    staging.rename(out_dir)
+    aside = staging.with_name(f"{staging.name}.old")
+    out_dir.rename(aside)
+    try:
+        staging.rename(out_dir)
+    except BaseException:
+        aside.rename(out_dir)  # restore the old output, then re-raise
+        raise
+    shutil.rmtree(aside, ignore_errors=True)
 
 
 def _write_outputs(

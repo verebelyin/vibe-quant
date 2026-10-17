@@ -54,6 +54,9 @@ _MONDAY = 4  # day 0 (1970-01-01) was a Thursday, so Monday is day % 7 == 4
 # the equity path differ by last-bit noise (stdev ~1e-16), so `stdev == 0.0` is not enough.
 _STDEV_FLOOR = 1e-12
 _MIN_PERIODS = 3  # R50b: the same minimum for the weekly, daily and per-year Sharpe
+# R3a/R24: the run's P&L decomposition must equal E(end) - E0 within this relative
+# tolerance (design §4: the per-year identity uses ``1e-9 * E0``).
+_COST_IDENTITY_TOL = 1e-9
 
 
 @dataclass(frozen=True)
@@ -273,6 +276,28 @@ def _by_year(
     return rows
 
 
+def _require_cost_identity(
+    run: CarryRun, initial_balance: float, summary: dict[str, Any], equity_end: float
+) -> None:
+    """R3a/R24: fail closed unless ``price - funding - fees == E(end) - E0``.
+
+    The decomposition (``_legs``) and the equity path (``equity_at``) are computed
+    independently, so nothing else ties them together: a silent accounting bug
+    would leave the headline numbers internally inconsistent. The tolerance is
+    relative to E0, as the per-year identity of design §4 uses (``1e-9 * E0``).
+    """
+    identity = math.fsum(
+        (summary["price_pnl_total"], -summary["funding_paid_total"], -summary["fees_total"])
+    )
+    equity_delta = equity_end - initial_balance
+    tolerance = _COST_IDENTITY_TOL * max(1.0, abs(initial_balance))
+    if abs(identity - equity_delta) > tolerance:
+        raise CarryExecutionError(
+            f"cost identity violated for the {run.engine} run: "
+            f"price-fees-funding {identity!r} != E(end) - E0 {equity_delta!r}"
+        )
+
+
 def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
     """Daily/weekly equity, headline ratios and the P&L decomposition of one run.
 
@@ -337,6 +362,7 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         "min_notional_skips": sum(decision.min_notional_skips for decision in run.decisions),
         "liquidation": "not_modelled",
     }
+    _require_cost_identity(run, spec.initial_balance, summary, values[-1])
     return CarryReport(
         summary=summary,
         daily=daily,

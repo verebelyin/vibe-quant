@@ -12,6 +12,7 @@ weekly Sharpe fixture pins the exact float ``4.163331998932265`` / Lo SE
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -19,7 +20,13 @@ import pytest
 
 from vibe_quant.data.catalog import create_instrument
 from vibe_quant.portfolio.ledger import CarryFill, CarryRun, FundingPayment
-from vibe_quant.portfolio.metrics import _annualised_sharpe, _lo_se, _weekly_sharpe, carry_metrics
+from vibe_quant.portfolio.metrics import (
+    _annualised_sharpe,
+    _lo_se,
+    _require_cost_identity,
+    _weekly_sharpe,
+    carry_metrics,
+)
 from vibe_quant.portfolio.sizing import Decision, InstrumentSpec
 from vibe_quant.portfolio.spec import (
     CarryDataError,
@@ -274,6 +281,52 @@ def test_cost_identity_single_leg() -> None:
     identity = report.summary["price_pnl_total"] - report.summary["funding_paid_total"] - report.summary["fees_total"]
     assert identity == pytest.approx(equity_end - 10_000.0, abs=1e-9 * 10_000.0)
     assert equity_end - 10_000.0 == pytest.approx(93.45, abs=1e-9 * 10_000.0)
+
+
+def test_cost_identity_violation_fails_closed() -> None:
+    """R3a: a run whose legs and equity path disagree raises ``CarryExecutionError``.
+
+    ``_legs`` marks a position held at the end with the catalog's ``spec.step``
+    while ``equity_at`` infers its step from ``fill.qty / fill.steps``: a doctored
+    fill (``qty`` 2x the exact step) breaks ``price - funding - fees == E(end) - E0``
+    beyond ``1e-9 * E0``, which the runtime check must refuse.
+    """
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
+    fill = _fill(_BTC, _START + _HOUR, 100, price=50000.0, fee=2.5)
+    doctored = replace(fill, qty=fill.qty * 2.0)
+    inputs = _inputs(spec, {_BTC: {_START + _DAY: 51000.0}, _ETH: {}})
+    decisions = (_decision(_START, 10_000.0, weights={_BTC: 0.5}),)
+
+    # The same run with the exact quantity satisfies the identity (the control).
+    control = carry_metrics(_run(spec, [fill], [], decisions), inputs)
+    assert control.summary["price_pnl_total"] == 100.0
+    assert control.summary["price_pnl_total"] - control.summary["fees_total"] == pytest.approx(
+        control.daily[-1][1] - 10_000.0
+    )
+
+    with pytest.raises(CarryExecutionError, match="cost identity"):
+        carry_metrics(_run(spec, [doctored], [], decisions), inputs)
+
+
+def test_cost_identity_tolerance_is_relative_to_e0() -> None:
+    """R3a: the tolerance is exactly ``1e-9 * E0`` -- pinned at both edges.
+
+    ``test_cost_identity_violation_fails_closed`` above breaks the identity by about
+    ``E0``; this pair pins the tolerance WIDTH instead. With ``E0 == 10_000`` the
+    tolerance is ``1e-5``, so a gap of ``1e-7 * E0 == 1e-3`` (100x too big) must
+    raise while ``1e-11 * E0 == 1e-7`` (100x within it) must pass. Loosening
+    ``_COST_IDENTITY_TOL`` to ``1e-1`` (tolerance ``1e-1 * E0 == 1000``) lets the
+    violation through; dropping the ``abs(initial_balance)`` scale to ``1.0``
+    (tolerance ``1e-9``) makes the passing gap raise.
+    """
+    e0 = 10_000.0
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_START, end_ns=_START + _DAY)
+    run = _run(spec, [], [])
+    summary = {"price_pnl_total": 0.0, "funding_paid_total": 0.0, "fees_total": 0.0}
+
+    with pytest.raises(CarryExecutionError, match="cost identity"):
+        _require_cost_identity(run, e0, summary, e0 + 1e-7 * e0)
+    _require_cost_identity(run, e0, summary, e0 + 1e-11 * e0)
 
 
 def test_flip_attribution() -> None:

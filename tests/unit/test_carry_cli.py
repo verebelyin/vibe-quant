@@ -455,6 +455,105 @@ def test_out_dir_appearing_during_the_run_is_refused(
     assert list(out_dir.parent.glob(f".{out_dir.name}.tmp-*")) == []
 
 
+def test_replace_dir_restores_the_old_dir_when_the_second_rename_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4: a failed ``staging.rename(out_dir)`` restores the old dir and propagates.
+
+    ``_replace_dir`` moves the existing ``out_dir`` aside, then renames the staged
+    dir in. If that second rename fails (the ``finally`` in the fix would instead
+    ``rmtree`` the aside) the old output must be renamed back into place -- the
+    ``aside -> out_dir`` restore -- before the error is re-raised.
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / carry_cli.SUMMARY_FILE).write_text("old")
+    (out_dir / "keep.txt").write_text("keep me")
+    staging = tmp_path / f".{out_dir.name}.tmp-x"
+    staging.mkdir()
+    (staging / carry_cli.SUMMARY_FILE).write_text("new")
+
+    real_rename = Path.rename
+    calls = {"n": 0}
+
+    def flaky_rename(self: Path, target: Path) -> Path:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the staging -> out_dir rename, after out_dir -> aside
+            raise OSError("rename failed")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky_rename)
+
+    with pytest.raises(OSError, match="rename failed"):
+        carry_cli._replace_dir(staging, out_dir)
+
+    assert calls["n"] == 3  # aside -> out_dir restore is the third rename
+    assert (out_dir / "keep.txt").read_text() == "keep me"
+    assert (out_dir / carry_cli.SUMMARY_FILE).read_text() == "old"
+
+
+def test_replace_dir_restores_the_old_dir_on_a_non_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4b: the restore must trigger on ANY exception, not only ``OSError``.
+
+    A ``RuntimeError`` raised by the second rename (a callback, an interrupt handler,
+    a ``KeyboardInterrupt``-like abort) is not an ``OSError``, so an
+    ``except OSError`` restore leaves ``out_dir`` missing and the old output stranded
+    at the aside path. The old dir must be renamed back and the error re-raised.
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / carry_cli.SUMMARY_FILE).write_text("old")
+    (out_dir / "keep.txt").write_text("keep me")
+    staging = tmp_path / f".{out_dir.name}.tmp-x"
+    staging.mkdir()
+    (staging / carry_cli.SUMMARY_FILE).write_text("new")
+
+    real_rename = Path.rename
+    calls = {"n": 0}
+
+    def flaky_rename(self: Path, target: Path) -> Path:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the staging -> out_dir rename, after out_dir -> aside
+            raise RuntimeError("rename boom")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky_rename)
+
+    with pytest.raises(RuntimeError, match="rename boom"):
+        carry_cli._replace_dir(staging, out_dir)
+
+    assert calls["n"] == 3  # aside -> out_dir restore is the third rename
+    assert (out_dir / "keep.txt").read_text() == "keep me"
+    assert (out_dir / carry_cli.SUMMARY_FILE).read_text() == "old"
+
+
+def test_write_outputs_failure_leaves_the_old_dir_and_no_staging(tmp_path: Path) -> None:
+    """R4: a frame writer that raises mid-write never touches the old ``out_dir``.
+
+    The staged dir is built beside ``out_dir`` and only renamed in at the end, so a
+    failure while writing one parquet file leaves the previous output intact and the
+    staging dir cleaned up.
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / carry_cli.SUMMARY_FILE).write_text("old")
+
+    class _BoomFrame:
+        def to_parquet(self, path: object, index: bool = False) -> None:
+            raise RuntimeError("frame boom")
+
+    with pytest.raises(RuntimeError, match="frame boom"):
+        carry_cli._write_outputs(
+            out_dir, {"weekly_sharpe": 1.0}, {"daily.parquet": _BoomFrame()}, force=True
+        )
+
+    assert {path.name for path in out_dir.iterdir()} == {carry_cli.SUMMARY_FILE}
+    assert (out_dir / carry_cli.SUMMARY_FILE).read_text() == "old"
+    assert list(tmp_path.glob(f".{out_dir.name}.tmp-*")) == []
+
+
 def test_force_refuses_a_non_carry_out_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

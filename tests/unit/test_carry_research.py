@@ -46,7 +46,12 @@ from vibe_quant.portfolio.parity import compare_runs
 from vibe_quant.portfolio.reference import simulate_reference
 from vibe_quant.portfolio.signal import Settlements
 from vibe_quant.portfolio.sizing import Decision, InstrumentSpec, nt_commission
-from vibe_quant.portfolio.spec import CarryEquityTooSmall, CarrySpec, decision_times
+from vibe_quant.portfolio.spec import (
+    CarryDataError,
+    CarryEquityTooSmall,
+    CarrySpec,
+    decision_times,
+)
 from vibe_quant.portfolio.ticks import CarryInputs, PriceTick
 from vibe_quant.validation.funding import (
     _RATE_CACHE,
@@ -263,6 +268,8 @@ class _Harness:
             value = (self.post if fee_multiplier == 1.0 else self.pre)[ranker.seed - _SEED0]
             if value == "ruined":
                 raise CarryEquityTooSmall("<book>", 0, 1.0, 2.0)
+            if value == "data_error":
+                raise CarryDataError(f"no price for held BTCUSDT at draw {ranker.seed - _SEED0}")
             return _FakeRun(float(value))
         if ranker is not None:
             self.other_kinds.append(("placebo", fee_multiplier))
@@ -317,6 +324,21 @@ def test_ruined_draw_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     # reading the post-cost draws here (or the post-cost strategy) would give 0.5 / 1.0
     assert result["p_value_pre_cost"] == 0.75
     assert harness.factory_calls  # the factory really built the draws
+
+
+def test_data_error_in_one_null_draw_aborts_the_whole_evaluate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R5: a ``CarryDataError`` in a later null draw (k>0) propagates -- never skipped.
+
+    Only a ruined draw (``CarryEquityTooSmall``) is absorbed; a missing price is a
+    fail-closed data error, so ``evaluate`` must not catch it and keep going.
+    """
+    inputs = _inputs(tmp_path, name="abort")
+    _install_fakes(monkeypatch, inputs, [0.5, "data_error", 2.0], [1.6, "ruined", 1.5])
+
+    with pytest.raises(CarryDataError, match="draw 1"):
+        research.evaluate(inputs, draws=3, seed=_SEED0, trials_path=tmp_path / "trials.jsonl")
 
 
 def test_cost_passes_use_the_right_fee_multiplier(
