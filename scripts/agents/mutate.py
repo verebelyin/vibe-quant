@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""One-command mutation check: copy the tree, mutate one file, run the tests, restore.
+
+    scripts/agents/mutate.py [--repo DIR] --file PATH --old TEXT --new TEXT
+                             [--name NAME] [--rev SHA] [--timeout SEC] -- <test command...>
+    scripts/agents/mutate.py [--repo DIR] --spec mutants.json [--rev SHA] [--timeout SEC] -- <test command...>
+
+Worked example (the mutant is killed when the tests fail on it):
+
+    scripts/agents/mutate.py --file vibe_quant/x.py --old 'a <= b' --new 'a < b' -- .venv/bin/python -m pytest tests/unit/test_x.py -q -x
+
+`--repo` defaults to the current directory. One scratch copy is built per invocation with
+`tempfile.mkdtemp(prefix="mutate-")`: every file git reports with
+`git ls-files -z --cached --others --exclude-standard` is copied (so uncommitted edits are
+what gets tested), and `<repo>/data/catalog` and `<repo>/data/archive` are symlinked in when
+they exist (tests need market data). With `--rev SHA` the copy is instead built from
+`git archive SHA` — the pinned commit, so the maker's uncommitted working tree is ignored.
+The copy is NOT a git repo and the original repo is never written. `old` must occur exactly
+once in the file (plain text, no regex, no partial match); the mutant is applied in the copy,
+the test command runs there with cwd = copy, `PYTHONPATH` = copy and
+`PYTHONDONTWRITEBYTECODE` = 1, and the file's original bytes are restored and verified
+afterwards. (The bytecode flag is required, not cosmetic: CPython invalidates a .pyc by the
+source's size and whole-second mtime, so two same-length mutants run within one second would
+otherwise both load the FIRST mutant's cached bytecode — a mutant reported as killed or
+survived that was never actually executed.) A relative executable in the test command that is
+not in the copy (e.g. `.venv/bin/python`, which git never copies) is taken from `--repo`, or
+from the main checkout (the parent of `git rev-parse --git-common-dir`) when `--repo` is a
+task worktree, whose `.venv` lives there.
+
+The test command runs once unmutated before any mutant; if it fails, the run aborts with
+`ERROR baseline: tests fail without mutation` and exit 2. Each mutant prints exactly one
+line:
+
+    KILLED <name> (exit N, Xs)   tests failed on the mutant (good)
+    SURVIVED <name> (Xs)         tests still passed on the mutant
+    ERROR <name>: <why>          the mutant could not be applied (count != 1, missing file)
+    INVALID <name>: test command exit N (collection/usage error, no assertion ran)
+    TIMEOUT <name>               the test command exceeded --timeout (counts as killed)
+
+When the test command runs pytest (a `pytest`/`py.test` argv element, so `-m pytest` counts)
+exit 2, 3, 4 or 5 means the tests could not even be collected or the command was misused: no
+assertion ran, so that is an invalid probe rather than a kill, and it is reported as INVALID
+and counted as an error (exit 2 overall). Only exit 1 — tests ran and failed — is a kill.
+Non-pytest commands are unchanged: any non-zero exit is a kill.
+
+`<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
+`--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
+`MUTANTS killed=K survived=S errors=E`; exit 0 when S=0 and E=0, 1 when anything survived,
+2 on any error. The scratch copy is removed at the end, including on Ctrl-C or an exception.
+Stdlib only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
+
+TOOL_TIMEOUT = 300.0  # seconds; --timeout overrides
+DATA_LINKS = ("data/catalog", "data/archive")
+# pytest: 2 interrupted/collection error, 3 internal error, 4 usage error, 5 no tests collected
+PYTEST_NO_ASSERTION = (2, 3, 4, 5)
+PYTEST_NAMES = ("pytest", "py.test")
+
+
+@dataclass(frozen=True)
+class Mutant:
+    name: str  # "" = derive `<file>:<line of the match>`
+    file: str  # repo-relative
+    old: str
+    new: str
+
+
+@dataclass(frozen=True)
+class RunResult:
+    exit_code: int | None  # None when the command could not be started
+    seconds: float
+    timed_out: bool = False
+    error: str = ""
+    output: str = ""
+
+
+if TYPE_CHECKING:
+    RunFn = Callable[[Sequence[str], Path, Mapping[str, str], float], RunResult]
+
+
+def run_command(cmd: Sequence[str], cwd: Path, env: Mapping[str, str], timeout: float) -> RunResult:
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [str(c) for c in cmd],
+            cwd=str(cwd),
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return RunResult(124, time.monotonic() - start, timed_out=True)
+    except OSError as exc:  # missing binary
+        return RunResult(None, time.monotonic() - start, error=f"cannot run {cmd[0]}: {exc}")
+    return RunResult(proc.returncode, time.monotonic() - start, output=proc.stdout + proc.stderr)
+
+
+def list_files(repo: Path) -> list[str]:
+    """Every file git knows about, including uncommitted/untracked ones git does not ignore."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git ls-files failed in {repo}: {detail}")
+    return [os.fsdecode(name) for name in proc.stdout.split(b"\0") if name]
+
+
+def build_copy(repo: Path, dest: Path) -> None:
+    """Copy the working tree (never the index) into `dest`, then link in the data dirs."""
+    for name in list_files(repo):
+        src = repo / name
+        dst = dest / name
+        if not (src.is_file() or src.is_symlink()):  # tracked but deleted in the worktree
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if os.path.lexists(dst):
+            dst.unlink()
+        if src.is_symlink():
+            dst.symlink_to(os.readlink(src))
+        else:
+            shutil.copy2(src, dst)
+    link_data_dirs(repo, dest)
+
+
+def link_data_dirs(repo: Path, dest: Path) -> None:
+    for rel in DATA_LINKS:
+        src = repo / rel
+        dst = dest / rel
+        if src.exists() and not os.path.lexists(dst):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.symlink_to(src.resolve())
+
+
+def extract_rev(repo: Path, dest: Path, rev: str) -> None:
+    """Write the files of commit `rev` into `dest` (`git archive`), then link in the data dirs."""
+    archive = subprocess.run(
+        ["git", "-C", str(repo), "archive", "--format=tar", rev], capture_output=True
+    )
+    if archive.returncode != 0:
+        detail = archive.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git archive {rev} failed in {repo}: {detail}")
+    untar = subprocess.run(
+        ["tar", "-x", "-C", str(dest)], input=archive.stdout, capture_output=True
+    )
+    if untar.returncode != 0:
+        detail = untar.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"tar -x failed in {dest}: {detail}")
+    link_data_dirs(repo, dest)
+
+
+def main_checkout(repo: Path) -> Path | None:
+    """The main checkout when `repo` is a linked worktree — where its `.venv` actually lives."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    common = proc.stdout.strip()
+    return Path(common).parent if common else None
+
+
+def resolve_executable(cmd: Sequence[str], repo: Path, workdir: Path) -> list[str]:
+    """Resolve a relative `<dir>/<exe>` in the test command against --repo, then the main
+    checkout, when the copy does not have it: `.venv/bin/python` is gitignored, so the copy
+    never contains it and a task worktree has no `.venv` of its own. The path is kept as
+    found, never symlink-resolved: `.venv/bin/python` is a symlink to the base interpreter,
+    and resolving it loses the venv's site-packages (pytest is then `No module named`)."""
+    out = [str(c) for c in cmd]
+    first = out[0]
+    if os.sep not in first or (workdir / first).exists():
+        return out
+    root = repo if (repo / first).exists() else main_checkout(repo)
+    if root is not None and (root / first).exists():
+        out[0] = str(root / first)
+    return out
+
+
+def is_pytest_command(cmd: Sequence[str]) -> bool:
+    """True when argv runs pytest (`-m pytest` puts `pytest` itself in argv, so its basename
+    matches too)."""
+    return any(Path(str(arg)).name in PYTEST_NAMES for arg in cmd)
+
+
+def check_mutant(
+    workdir: Path,
+    mutant: Mutant,
+    cmd: Sequence[str],
+    env: Mapping[str, str],
+    timeout: float,
+    run: RunFn,
+    pytest_like: bool,
+) -> tuple[bool, bool, str]:
+    """Apply one mutant in the copy and run the tests. Returns (killed, is_error, line)."""
+    path = workdir / mutant.file
+    if not path.is_file():
+        return False, True, f"ERROR {mutant.name or mutant.file}: no such file: {mutant.file}"
+    original = path.read_bytes()
+    try:
+        text = original.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, True, f"ERROR {mutant.name or mutant.file}: {mutant.file} is not utf-8"
+
+    index = text.find(mutant.old)
+    line_no = text.count("\n", 0, index) + 1 if index >= 0 else 0
+    name = mutant.name or (f"{mutant.file}:{line_no}" if index >= 0 else mutant.file)
+
+    count = text.count(mutant.old)
+    if count != 1:
+        return False, True, f"ERROR {name}: old text found {count} times in {mutant.file}"
+
+    path.write_bytes(text.replace(mutant.old, mutant.new, 1).encode("utf-8"))
+    try:
+        result = run(cmd, workdir, env, timeout)
+    finally:
+        path.write_bytes(original)
+    if path.read_bytes() != original:
+        return False, True, f"ERROR {name}: could not restore {mutant.file}"
+
+    if result.error:
+        return False, True, f"ERROR {name}: {result.error}"
+    if result.timed_out:
+        return True, False, f"TIMEOUT {name}"
+    seconds = f"{result.seconds:.1f}s"
+    if result.exit_code == 0:
+        return False, False, f"SURVIVED {name} ({seconds})"
+    if pytest_like and result.exit_code in PYTEST_NO_ASSERTION:
+        # pytest could not collect/start the tests: no assertion ran, so this is not a kill.
+        return (
+            False,
+            True,
+            f"INVALID {name}: test command exit {result.exit_code} "
+            "(collection/usage error, no assertion ran)",
+        )
+    return True, False, f"KILLED {name} (exit {result.exit_code}, {seconds})"
+
+
+def load_spec(path: Path) -> list[Mutant]:
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(entries, list):
+        raise ValueError("spec must be a JSON list of {name, file, old, new}")
+    mutants: list[Mutant] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise TypeError(f"spec entry is not an object: {entry!r}")
+        mutants.append(
+            Mutant(
+                name=str(entry.get("name") or ""),
+                file=str(entry["file"]),
+                old=str(entry["old"]),
+                new=str(entry["new"]),
+            )
+        )
+    return mutants
+
+
+def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="mutate.py", description="One-command mutation check")
+    parser.add_argument("--repo", default=".", help="repo to copy (default: the current dir)")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", help="repo-relative file to mutate")
+    source.add_argument("--spec", help="JSON list of {name, file, old, new}")
+    parser.add_argument("--old", help="text to replace; must occur exactly once")
+    parser.add_argument("--new", help="replacement text")
+    parser.add_argument("--name", default=None, help="mutant name (default <file>:<line>)")
+    parser.add_argument(
+        "--rev", default=None, help="build the copy from this committed rev (git archive)"
+    )
+    parser.add_argument("--timeout", type=float, default=TOOL_TIMEOUT, help="seconds per run")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="test command, after `--`")
+    args = parser.parse_args(argv)
+
+    cmd = list(args.command)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        parser.error("no test command: pass it after `--`")
+
+    if args.file:
+        if args.old is None or args.new is None:
+            parser.error("--file needs --old and --new")
+        mutants = [Mutant(args.name or "", args.file, args.old, args.new)]
+    else:
+        try:
+            mutants = load_spec(Path(args.spec))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"ERROR spec: {exc}")
+            return 2
+
+    repo = Path(args.repo).resolve()
+    runner: RunFn = run or run_command
+    workdir = Path(tempfile.mkdtemp(prefix="mutate-"))
+    try:
+        try:
+            if args.rev:
+                extract_rev(repo, workdir, args.rev)
+            else:
+                build_copy(repo, workdir)
+        except (OSError, RuntimeError) as exc:
+            print(f"ERROR repo: {exc}")
+            return 2
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(workdir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
+        cmd = resolve_executable(cmd, repo, workdir)
+        pytest_like = is_pytest_command(cmd)
+
+        baseline = runner(cmd, workdir, env, args.timeout)
+        if baseline.error or baseline.timed_out or baseline.exit_code != 0:
+            print("ERROR baseline: tests fail without mutation")
+            if baseline.timed_out:
+                print(f"baseline timed out after {args.timeout:g}s (raise --timeout)", file=sys.stderr)
+            detail = (baseline.error or baseline.output).strip()
+            if detail:
+                print(detail[-2000:], file=sys.stderr)
+            return 2
+
+        killed = survived = errors = 0
+        for mutant in mutants:
+            was_killed, is_error, line = check_mutant(
+                workdir, mutant, cmd, env, args.timeout, runner, pytest_like
+            )
+            print(line)
+            if is_error:
+                errors += 1
+            elif was_killed:
+                killed += 1
+            else:
+                survived += 1
+        print(f"MUTANTS killed={killed} survived={survived} errors={errors}")
+        if errors:
+            return 2
+        return 1 if survived else 0
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
