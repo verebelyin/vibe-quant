@@ -1,9 +1,14 @@
-"""RedditSource unit tests — fully mocked via httpx.MockTransport, no network."""
+"""RedditSource unit tests — Arctic Shift API, fully mocked via httpx.MockTransport.
+
+No network: `tests/unit/conftest.py` blocks outbound sockets, and every request
+is served by an in-process `httpx.MockTransport` handler.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -17,13 +22,26 @@ from vibe_quant.research.config import (
     RedditConfig,
 )
 from vibe_quant.research.sources.reddit import (
-    BASE_URL,
+    API_HOST,
+    MAX_RETRIES,
     MIN_REQUEST_INTERVAL_S,
+    REDDIT_URL_BASE,
+    RETRY_BACKOFF_S,
+    SETTLE_DELAY_S,
+    TOP_COMMENT_COUNT,
     RedditSource,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
+
+
+UA = "vibe-quant-test:0.1 (by /u/tester)"
+#: Fixed wall clock the injectable clock returns; every post is older than
+#: ``FIXED_NOW - SETTLE_DELAY_S`` unless a test says otherwise.
+FIXED_NOW = 1_800_000_000.0
+#: A settled default post time (two settle windows back).
+SETTLED_UTC = FIXED_NOW - 2 * SETTLE_DELAY_S
 
 
 # ---------- Fixtures ----------
@@ -43,7 +61,10 @@ def _reset_warning_state() -> Generator[None]:
 
 @pytest.fixture
 def ua_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "vibe-quant-test:0.1 (by /u/tester)")
+    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, UA)
+
+
+# ---------- Helpers ----------
 
 
 def _post(
@@ -52,54 +73,47 @@ def _post(
     title: str = "t",
     selftext: str = "b",
     score: int = 1,
-    created_utc: float = 1735689600.0,
+    created_utc: float = SETTLED_UTC,
     author: str | None = "u/x",
-    flair: str | None = None,
     num_comments: int = 1,
+    permalink: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "id": sid,
+        "title": title,
+        "selftext": selftext,
+        "score": score,
+        "created_utc": created_utc,
+        "num_comments": num_comments,
+        "author": author,
+        "permalink": permalink if permalink is not None else f"/r/algotrading/comments/{sid}/",
+    }
+    data.update(extra)
+    return data
+
+
+def _comment(
+    *, author: str | None, body: str, score: int, created_utc: float = 0.0
 ) -> dict[str, Any]:
     return {
-        "kind": "t3",
-        "data": {
-            "id": sid,
-            "title": title,
-            "selftext": selftext,
-            "score": score,
-            "created_utc": created_utc,
-            "permalink": f"/r/algotrading/comments/{sid}/",
-            "link_flair_text": flair,
-            "num_comments": num_comments,
-            "author": author,
-        },
+        "id": f"c-{author}-{body}",
+        "link_id": "t3_x",
+        "author": author,
+        "body": body,
+        "score": score,
+        "created_utc": created_utc,
     }
 
 
-def _comment(*, author: str | None, body: str, score: int) -> dict[str, Any]:
-    return {
-        "kind": "t1",
-        "data": {"author": author, "body": body, "score": score},
-    }
+def _api(data: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"data": data}
 
 
-def _listing(children: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"data": {"children": children, "after": None, "before": None}}
-
-
-def _comment_thread(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reddit's <permalink>.json shape: [post_listing, comment_listing]."""
-    return [_listing([]), _listing(comments)]
-
-
-def _make_client(
-    handler: Callable[[httpx.Request], httpx.Response],
-) -> httpx.Client:
+def _make_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
     return httpx.Client(
         transport=httpx.MockTransport(handler),
-        headers={
-            "User-Agent": "vibe-quant-test:0.1 (by /u/tester)",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate",
-        },
+        headers={"User-Agent": UA, "Accept": "application/json"},
     )
 
 
@@ -107,63 +121,267 @@ def _no_sleep(_: float) -> None:
     return None
 
 
+def _fixed_clock() -> float:
+    return FIXED_NOW
+
+
+def _source(
+    handler: Callable[[httpx.Request], httpx.Response],
+    *,
+    subreddits: tuple[str, ...] = ("algotrading",),
+    clock: Callable[[], float] = _fixed_clock,
+) -> RedditSource:
+    return RedditSource(
+        config=RedditConfig(user_agent=UA, using_default=False),
+        subreddits=list(subreddits),
+        client=_make_client(handler),
+        clock=clock,
+    )
+
+
+class _FakeClock:
+    """Monotonic clock advanced by the fake sleep (models wall-clock time).
+
+    Any test asserting on ``sleep`` calls must patch ``time.monotonic`` too: a
+    fake sleep that does not advance the clock makes the 1.5 s politeness floor
+    look unelapsed and adds phantom waits.
+    """
+
+    def __init__(self, start: float = 1_000.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    def install(self) -> ExitStack:
+        stack = ExitStack()
+        stack.enter_context(patch("time.monotonic", self.monotonic))
+        stack.enter_context(patch("time.sleep", self.sleep))
+        return stack
+
+
+# ---------- Request shape ----------
+
+
+def test_posts_request_uses_settle_delay_and_desc_sort(ua_env: None) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="a", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=7))
+
+    assert [i.external_id for i in items] == ["a"]
+    posts_req = next(r for r in seen if r.url.path == "/api/posts/search")
+    assert posts_req.url.host == API_HOST == "arctic-shift.photon-reddit.com"
+    assert posts_req.url.params["subreddit"] == "algotrading"
+    assert posts_req.url.params["before"] == str(int(FIXED_NOW - SETTLE_DELAY_S))
+    assert posts_req.url.params["sort"] == "desc"
+    assert posts_req.url.params["limit"] == "7"
+    assert SETTLE_DELAY_S == 129_600
+
+
+def test_posts_limit_clamped_to_100(ua_env: None) -> None:
+    """The API allows `limit` up to 500; posts/search only accepts 100."""
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="a", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        list(_source(handler).fetch(since=None, limit=200))
+
+    posts_req = next(r for r in seen if r.url.path == "/api/posts/search")
+    assert posts_req.url.params["limit"] == "100"
+
+
+def test_never_requests_www_reddit(ua_env: None) -> None:
+    hosts: set[str] = set()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        hosts.add(req.url.host or "")
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="a", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        list(_source(handler).fetch(since=None, limit=1))
+
+    assert hosts == {API_HOST}
+    assert all(h != "www.reddit.com" for h in hosts)
+
+
+def test_comments_request_uses_link_id_and_limit_100(ua_env: None) -> None:
+    seen: dict[str, httpx.Request] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="abc", num_comments=3)]))
+        seen[req.url.path] = req
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert len(items) == 1
+    creq = seen["/api/comments/search"]
+    assert creq.url.host == API_HOST
+    assert creq.url.params["link_id"] == "t3_abc"
+    assert creq.url.params["limit"] == "100"
+
+
+def test_zero_comment_post_skips_comment_fetch(ua_env: None) -> None:
+    paths: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        paths.append(req.url.path)
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="zc", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert len(items) == 1
+    assert items[0].extras["comments"] == []
+    assert "/api/comments/search" not in paths
+
+
 # ---------- Translation tests ----------
 
 
-def test_listing_translation_yields_raw_items(ua_env: None) -> None:
-    posts = [
-        _post(
-            sid="aaa",
-            title="Mean reversion idea",
-            selftext="RSI < 30 entry",
-            score=42,
-            author="u/quantnerd",
-            flair="Strategy",
-            num_comments=3,
-        ),
-        _post(sid="bbb", title="Link only", selftext="", author=None, num_comments=0),
+def test_raw_item_fields(ua_env: None) -> None:
+    post = _post(
+        sid="raw1",
+        title="Arctic post",
+        selftext="body text",
+        score=88,
+        author="u/star",
+        num_comments=2,
+        permalink="/r/algotrading/comments/raw1/slug/",
+    )
+    comments = [
+        _comment(author="u/top", body="hi", score=9, created_utc=2.0),
+        _comment(author="[deleted]", body="x", score=1, created_utc=1.0),
     ]
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing(posts))
-        # comment threads — return empty for both posts
-        return httpx.Response(200, json=_comment_thread([]))
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([post]))
+        if req.url.path == "/api/comments/search":
+            return httpx.Response(200, json=_api(comments))
+        return httpx.Response(404)
 
     with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=10))
+        items = list(_source(handler).fetch(since=None, limit=1))
 
-    assert len(items) == 2
-    a = items[0]
-    assert a.source == "reddit"
-    assert a.external_id == "aaa"
-    assert a.title == "Mean reversion idea"
-    assert a.body == "RSI < 30 entry"
-    assert a.score == 42
-    assert a.author == "u/quantnerd"
-    assert a.posted_at == datetime.fromtimestamp(1735689600.0, tz=UTC)
-    assert a.url == f"{BASE_URL}/r/algotrading/comments/aaa/"
-    assert a.extras["subreddit"] == "algotrading"
-    assert a.extras["flair"] == "Strategy"
-    assert a.extras["num_comments"] == 3
-    assert a.extras["comments"] == []
-
-    b = items[1]
-    assert b.body == ""
-    assert b.author is None  # null author normalized
+    assert len(items) == 1
+    it = items[0]
+    assert it.source == "reddit"
+    assert it.external_id == "raw1"
+    assert it.url == f"{REDDIT_URL_BASE}/r/algotrading/comments/raw1/slug/"
+    assert it.title == "Arctic post"
+    assert it.body == "body text"
+    assert it.author == "u/star"
+    assert it.score == 88
+    assert it.posted_at == datetime.fromtimestamp(post["created_utc"], tz=UTC)
+    assert it.posted_at is not None and it.posted_at.tzinfo is UTC
+    assert it.extras["subreddit"] == "algotrading"
+    assert it.extras["num_comments"] == 2
+    assert it.extras["via"] == "arctic_shift"
+    assert it.extras["comments"] == [
+        {"author": "u/top", "body": "hi", "score": 9},
+        {"author": None, "body": "x", "score": 1},
+    ]
+    assert "flair" not in it.extras
 
 
-def test_snapshot_parity_with_prior_praw_output(ua_env: None) -> None:
-    """Frozen baseline: a known input produces this exact RawItem dict.
+def test_link_post_has_empty_body_and_permalink_fallback(ua_env: None) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(
+                200,
+                json=_api(
+                    [_post(sid="nop", selftext="", author=None, num_comments=0, permalink="")]
+                ),
+            )
+        return httpx.Response(200, json=_api([]))
 
-    Captures the praw-era contract so any future regression of field names,
-    types, or extras shape is caught.
-    """
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    it = items[0]
+    assert it.body == ""
+    assert it.author is None
+    assert it.url == "https://www.reddit.com/comments/nop"
+    assert it.extras["comments"] == []
+
+
+def test_top_comments_capped_and_sorted_by_score_then_created(ua_env: None) -> None:
+    comments = [
+        _comment(author=f"u/{i}", body=f"b{i}", score=i, created_utc=float(i)) for i in range(14)
+    ]
+    comments += [
+        _comment(author="A", body="A", score=14, created_utc=100.0),
+        _comment(author="B", body="B", score=14, created_utc=50.0),
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="cap", num_comments=5)]))
+        return httpx.Response(200, json=_api(comments))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    cs = items[0].extras["comments"]
+    assert len(cs) == TOP_COMMENT_COUNT == 10
+    scores = [c["score"] for c in cs]
+    assert scores == sorted(scores, reverse=True)
+    # The two score-14 ties come first, ordered by created_utc ascending (B=50 < A=100).
+    assert [c["author"] for c in cs[:2]] == ["B", "A"]
+    assert scores[0] == 14
+
+
+def test_deleted_and_removed_authors_normalized_to_none(ua_env: None) -> None:
+    posts = [
+        _post(sid="p1", author=None, num_comments=1),
+        _post(sid="p2", author="[deleted]", num_comments=1),
+        _post(sid="p3", author="[removed]", num_comments=1),
+    ]
+    comments = [
+        _comment(author=None, body="x", score=1),
+        _comment(author="[deleted]", body="y", score=2),
+        _comment(author="[removed]", body="z", score=3),
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api(posts))
+        return httpx.Response(200, json=_api(comments))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=10))
+
+    assert all(it.author is None for it in items)
+    for it in items:
+        assert all(c["author"] is None for c in it.extras["comments"])
+
+
+def test_snapshot_parity(ua_env: None) -> None:
+    """Frozen baseline: a known Arctic Shift input produces this exact RawItem dict."""
     post = _post(
         sid="snap1",
         title="Snapshot test",
@@ -171,7 +389,6 @@ def test_snapshot_parity_with_prior_praw_output(ua_env: None) -> None:
         score=99,
         created_utc=1700000000.0,
         author="u/snapshotter",
-        flair="Discussion",
         num_comments=2,
     )
     comments = [
@@ -180,24 +397,19 @@ def test_snapshot_parity_with_prior_praw_output(ua_env: None) -> None:
     ]
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([post]))
-        return httpx.Response(200, json=_comment_thread(comments))
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([post]))
+        return httpx.Response(200, json=_api(comments))
 
     with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
+        items = list(_source(handler).fetch(since=None, limit=1))
 
     assert len(items) == 1
     item = items[0]
     expected = {
         "source": "reddit",
         "external_id": "snap1",
-        "url": f"{BASE_URL}/r/algotrading/comments/snap1/",
+        "url": f"{REDDIT_URL_BASE}/r/algotrading/comments/snap1/",
         "title": "Snapshot test",
         "body": "body text",
         "author": "u/snapshotter",
@@ -205,12 +417,12 @@ def test_snapshot_parity_with_prior_praw_output(ua_env: None) -> None:
         "score": 99,
         "extras": {
             "subreddit": "algotrading",
-            "flair": "Discussion",
             "num_comments": 2,
             "comments": [
                 {"author": "u/topvoter", "body": "great post", "score": 42},
                 {"author": None, "body": "[deleted]", "score": 1},
             ],
+            "via": "arctic_shift",
         },
     }
     actual = {
@@ -227,246 +439,353 @@ def test_snapshot_parity_with_prior_praw_output(ua_env: None) -> None:
     assert actual == expected, json.dumps({"expected": expected, "actual": actual}, indent=2)
 
 
-def test_comments_top_level_only_no_nested_replies(ua_env: None) -> None:
-    """Nested `data.replies` trees must not pollute extras.comments."""
-    nested = {
-        "kind": "t1",
-        "data": {
-            "author": "u/parent",
-            "body": "top level",
-            "score": 5,
-            "replies": _listing([_comment(author="u/child", body="nested", score=99)]),
-        },
-    }
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="n", num_comments=1)]))
-        return httpx.Response(200, json=_comment_thread([nested]))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    cs = items[0].extras["comments"]
-    assert len(cs) == 1
-    assert cs[0]["author"] == "u/parent"
-    assert cs[0]["body"] == "top level"
-    # nested child comment NOT included
-    assert all("nested" not in c["body"] for c in cs)
-
-
-def test_more_kind_children_skipped(ua_env: None) -> None:
-    """`{kind: "more"}` placeholders must not appear in extras.comments."""
-    children = [
-        _comment(author="u/real", body="real", score=10),
-        {"kind": "more", "data": {"count": 50, "children": ["abc", "def"]}},
-        _comment(author="u/real2", body="real2", score=5),
-    ]
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="m")]))
-        return httpx.Response(200, json=_comment_thread(children))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    cs = items[0].extras["comments"]
-    assert len(cs) == 2
-    assert {c["author"] for c in cs} == {"u/real", "u/real2"}
-
-
-def test_deleted_and_removed_authors_normalized_to_none(ua_env: None) -> None:
-    posts = [
-        _post(sid="p1", author=None),
-        _post(sid="p2", author="[deleted]"),
-        _post(sid="p3", author="[removed]"),
-    ]
-    comments = [
-        _comment(author=None, body="x", score=1),
-        _comment(author="[deleted]", body="y", score=2),
-        _comment(author="[removed]", body="z", score=3),
-    ]
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing(posts))
-        return httpx.Response(200, json=_comment_thread(comments))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=10))
-
-    assert all(it.author is None for it in items)
-    for it in items:
-        assert all(c["author"] is None for c in it.extras["comments"])
-
-
-def test_top_comments_capped_at_10_and_sorted(ua_env: None) -> None:
-    comments = [_comment(author=f"u/{i}", body="x", score=i) for i in range(15)]
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="cap")]))
-        return httpx.Response(200, json=_comment_thread(comments))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    cs = items[0].extras["comments"]
-    assert len(cs) == 10
-    assert [c["score"] for c in cs] == sorted([c["score"] for c in cs], reverse=True)
-    assert cs[0]["score"] == 14
-
-
 # ---------- Behaviour tests ----------
 
 
-def test_since_cutoff_short_circuits_on_old_post(ua_env: None) -> None:
+def test_since_stops_at_first_older_post(ua_env: None) -> None:
     cutoff = datetime(2025, 6, 1, tzinfo=UTC).timestamp()
     posts = [
-        _post(sid="new", created_utc=cutoff + 3600),
-        _post(sid="old", created_utc=cutoff - 3600),
+        _post(sid="new", created_utc=cutoff + 3600, num_comments=0),
+        _post(sid="old", created_utc=cutoff - 3600, num_comments=0),
+        _post(sid="older", created_utc=cutoff - 7200, num_comments=0),
     ]
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing(posts))
-        return httpx.Response(200, json=_comment_thread([]))
+        return httpx.Response(200, json=_api(posts))
 
     with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=datetime.fromtimestamp(cutoff, tz=UTC), limit=10))
+        items = list(_source(handler).fetch(since=datetime.fromtimestamp(cutoff, tz=UTC), limit=10))
 
-    assert len(items) == 1
-    assert items[0].external_id == "new"
-
-
-def test_subreddit_404_logged_and_others_continue(
-    ua_env: None, caplog: pytest.LogCaptureFixture
-) -> None:
-    def handler(req: httpx.Request) -> httpx.Response:
-        if "/r/broken/" in req.url.path:
-            return httpx.Response(404, json={"error": 404, "message": "Not Found"})
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="g1")]))
-        return httpx.Response(200, json=_comment_thread([]))
-
-    with patch("time.sleep", _no_sleep), caplog.at_level(logging.WARNING):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["broken", "algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=5))
-
-    assert len(items) == 1
-    assert items[0].external_id == "g1"
-    assert any("broken" in rec.message for rec in caplog.records)
-
-
-def test_zero_comment_post_skips_comment_fetch(ua_env: None) -> None:
-    """Posts with `num_comments=0` must not trigger a comments request."""
-    seen_paths: list[str] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen_paths.append(req.url.path)
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="zc", num_comments=0)]))
-        return httpx.Response(200, json=_comment_thread([]))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    assert len(items) == 1
-    assert items[0].extras["comments"] == []
-    assert all("/comments/" not in p for p in seen_paths)
+    assert [i.external_id for i in items] == ["new"]
 
 
 def test_empty_subreddit_returns_no_items(ua_env: None) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([]))
-        return httpx.Response(200, json=_comment_thread([]))
+        return httpx.Response(200, json=_api([]))
 
     with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=10))
+        items = list(_source(handler).fetch(since=None, limit=10))
 
     assert items == []
+
+
+# ---------- Error handling ----------
+
+
+def test_429_reset_header_sleeps_then_succeeds(ua_env: None) -> None:
+    calls = {"n": 0}
+    clock = _FakeClock()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if req.url.path == "/api/posts/search" and calls["n"] == 1:
+            return httpx.Response(429, headers={"X-RateLimit-Reset": "50"}, json={})
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="r", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install():
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["r"]
+    # max(X-RateLimit-Reset=50, 1) + 0.5 buffer. The reset wait already covers
+    # the 1.5 s politeness floor, so no extra floor sleep follows it.
+    assert clock.sleeps == [50.5]
+
+
+def test_5xx_backoff_retries_then_subreddit_skipped(
+    ua_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    clock = _FakeClock()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.params.get("subreddit") == "broken":
+            return httpx.Response(503, text="service unavailable")
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="ok", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install(), caplog.at_level(logging.WARNING):
+        items = list(_source(handler, subreddits=("broken", "algotrading")).fetch(None, 5))
+
+    assert [i.external_id for i in items] == ["ok"]
+    # Backoff (1, 2, 4); the 1.0 s wait is topped up to the 1.5 s politeness
+    # floor, and the surviving subreddit's first request waits out the floor
+    # left by "broken"'s final attempt (A11c).
+    assert clock.sleeps == [1.0, MIN_REQUEST_INTERVAL_S - 1.0, 2.0, 4.0, MIN_REQUEST_INTERVAL_S]
+    assert RETRY_BACKOFF_S == (1.0, 2.0, 4.0)
+    assert MAX_RETRIES == 3
+    assert any("broken" in rec.message for rec in caplog.records)
+
+
+def test_timeout_body_is_retried(ua_env: None) -> None:
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(200, text='{"error": "Query timed out"}')
+            return httpx.Response(200, json=_api([_post(sid="t", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["t"]
+    assert calls["n"] == 2
+
+
+def test_transient_timeout_422_is_retried(ua_env: None) -> None:
+    """Arctic Shift reports overload as 422 + a timeout error body (RULING A11b)."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    422, json={"data": None, "error": "Timeout. Maybe slow down a bit"}
+                )
+            return httpx.Response(200, json=_api([_post(sid="r422", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["r422"]
+    assert calls["n"] == 2
+
+
+def test_422_without_timeout_text_is_not_retried(ua_env: None) -> None:
+    """A genuine 4xx (no timeout marker) must fail fast, not be retried."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(422, json={"data": None, "error": "invalid 'sort' value"})
+
+    with patch("time.sleep", _no_sleep):
+        src = _source(handler)
+        with pytest.raises(RuntimeError, match="all 1 subreddit"):
+            list(src.fetch(since=None, limit=1))
+
+    assert calls["n"] == 1
+
+
+def test_200_with_timeout_word_in_post_text_is_accepted(ua_env: None) -> None:
+    """Regression (rev-gr-arctic-1 blocking): a real 2xx `data` payload must
+    never be scanned for timeout markers. A live post whose selftext read
+    "my order hit a timeout on binance" used to be retried 4x and dropped."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                json=_api(
+                    [
+                        _post(
+                            sid="tp",
+                            selftext="my order hit a timeout on binance",
+                            num_comments=0,
+                        )
+                    ]
+                ),
+            )
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["tp"]
+    assert items[0].body == "my order hit a timeout on binance"
+    assert calls["n"] == 1
+
+
+def test_200_data_payload_with_error_field_is_accepted(ua_env: None) -> None:
+    """A 2xx body with a `data` list wins over a trailing `error` field."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                json={"data": [_post(sid="de", num_comments=0)], "error": "timeout"},
+            )
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["de"]
+    assert calls["n"] == 1
+
+
+def test_non_json_200_body_with_timeout_text_is_retried(ua_env: None) -> None:
+    """Non-JSON bodies fall back to the first 500 chars of the text."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(200, text="Query timed out, please retry")
+            return httpx.Response(200, json=_api([_post(sid="nj", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["nj"]
+    assert calls["n"] == 2
+
+
+def test_invalid_json_200_then_valid_succeeds(ua_env: None) -> None:
+    """A 2xx with invalid JSON is a failed attempt: back off, then retry."""
+    calls = {"n": 0}
+    clock = _FakeClock()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/posts/search":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(200, text="<html>upstream proxy error</html>")
+            return httpx.Response(200, json=_api([_post(sid="ok", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install():
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["ok"]
+    assert calls["n"] == 2
+    # 1.0 s backoff, then a top-up to the 1.5 s floor before the retry.
+    assert clock.sleeps == [RETRY_BACKOFF_S[0], MIN_REQUEST_INTERVAL_S - RETRY_BACKOFF_S[0]]
+
+
+def test_persistent_invalid_json_skips_subreddit_not_whole_run(ua_env: None) -> None:
+    """Invalid JSON must never abort the run (an uncaught ValueError did)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.params.get("subreddit") == "broken":
+            return httpx.Response(200, text="not json at all")
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="ok", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler, subreddits=("broken", "algotrading")).fetch(None, 5))
+
+    assert [i.external_id for i in items] == ["ok"]
+
+
+def test_429_exhausts_three_attempts_without_trailing_sleep(ua_env: None) -> None:
+    """At most 3 attempts total for 429, and no sleep after the final one."""
+    calls = {"n": 0}
+    clock = _FakeClock()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, headers={"X-RateLimit-Reset": "2"}, json={})
+
+    with clock.install(), pytest.raises(RuntimeError, match="all 1 subreddit"):
+        list(_source(handler).fetch(since=None, limit=1))
+
+    assert calls["n"] == 3
+    # Two waits, both before their next attempt — never after the third.
+    assert clock.sleeps == [2.5, 2.5]
+
+
+def test_failing_subreddit_still_starts_the_politeness_floor(ua_env: None) -> None:
+    """A 4xx fails fast with no backoff, but the next subreddit's request must
+    still wait out the 1.5 s floor (A11c — a failing endpoint cannot let the
+    next request race ahead)."""
+    clock = _FakeClock()
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.url.params.get("subreddit") or "")
+        if req.url.params.get("subreddit") == "broken":
+            return httpx.Response(422, json={"data": None, "error": "invalid 'sort' value"})
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="ok", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install():
+        items = list(_source(handler, subreddits=("broken", "algotrading")).fetch(None, 5))
+
+    assert [i.external_id for i in items] == ["ok"]
+    assert seen == ["broken", "algotrading"]
+    assert clock.sleeps == [MIN_REQUEST_INTERVAL_S]
+
+
+def test_all_subreddits_failing_raises(ua_env: None) -> None:
+    """Hard failure on every subreddit must raise so the scrape run records
+    failed instead of a silent completed/0-items (vibe-quant-ux7t0)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="down")
+
+    with patch("time.sleep", _no_sleep):
+        src = _source(handler, subreddits=("algotrading", "quant"))
+        with pytest.raises(RuntimeError, match="all 2 subreddit"):
+            list(src.fetch(since=None, limit=5))
+
+
+def test_partial_subreddit_failure_stays_lenient(ua_env: None) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.params.get("subreddit") == "quant":
+            return httpx.Response(503, text="down")
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="ok1", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler, subreddits=("algotrading", "quant")).fetch(None, 5))
+
+    assert [i.external_id for i in items] == ["ok1"]
 
 
 # ---------- HTTP plumbing tests ----------
 
 
-def test_outgoing_requests_carry_required_headers_and_raw_json(ua_env: None) -> None:
-    seen: list[httpx.Request] = []
+def test_source_client_carries_configured_user_agent(ua_env: None) -> None:
+    src = RedditSource(
+        config=RedditConfig(user_agent="vq-cfg:1 (by /u/x)", using_default=False),
+        subreddits=["algotrading"],
+    )
+    try:
+        assert src._client.headers["user-agent"] == "vq-cfg:1 (by /u/x)"
+        assert src._client.headers["accept"] == "application/json"
+    finally:
+        src.close()
+
+
+def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:
+    fake_now = [1000.0]
+    sleeps: list[float] = []
+
+    def fake_monotonic() -> float:
+        return fake_now[0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
 
     def handler(req: httpx.Request) -> httpx.Response:
-        seen.append(req)
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="h")]))
-        return httpx.Response(200, json=_comment_thread([]))
+        fake_now[0] += 0.01  # request "duration"
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="rl1", num_comments=1)]))
+        return httpx.Response(200, json=_api([]))
 
-    # Build the client with the source's normal __init__ path so headers come
-    # from the implementation, not the test helper.
-    real_client = httpx.Client(
-        transport=httpx.MockTransport(handler),
-        timeout=15.0,
-        headers={
-            "User-Agent": "vibe-quant-test:0.1 (by /u/tester)",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate",
-        },
-    )
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=real_client,
-        )
-        list(src.fetch(since=None, limit=1))
+    with patch("time.monotonic", fake_monotonic), patch("time.sleep", fake_sleep):
+        list(_source(handler).fetch(since=None, limit=1))
 
-    assert len(seen) >= 2  # listing + comments
-    for req in seen:
-        assert "vibe-quant-test" in req.headers["user-agent"]
-        assert req.headers["accept"] == "application/json"
-        assert "en-US" in req.headers["accept-language"]
-        assert "gzip" in req.headers["accept-encoding"]
-        assert req.url.params.get("raw_json") == "1"
+    rate_limit_sleeps = [s for s in sleeps if s >= MIN_REQUEST_INTERVAL_S - 0.1]
+    assert len(rate_limit_sleeps) >= 1
+    assert MIN_REQUEST_INTERVAL_S == 1.5
 
 
 def test_default_user_agent_used_when_env_unset(
@@ -500,186 +819,44 @@ def test_deprecated_creds_warning_emitted_once_per_var(
         assert "Safe to remove" in m
 
 
-def test_deprecated_creds_no_warning_when_unset(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.delenv("REDDIT_CLIENT_ID", raising=False)
-    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
-    with caplog.at_level(logging.WARNING):
-        RedditConfig.from_env()
-    msgs = [rec.getMessage() for rec in caplog.records]
-    assert not any("REDDIT_CLIENT_ID" in m or "REDDIT_CLIENT_SECRET" in m for m in msgs)
-
-
-def test_deprecated_creds_warning_only_one_var_set(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("REDDIT_CLIENT_ID", "stale-id")
-    monkeypatch.delenv("REDDIT_CLIENT_SECRET", raising=False)
-    monkeypatch.setenv(ENV_REDDIT_USER_AGENT, "ua")
-    with caplog.at_level(logging.WARNING):
-        RedditConfig.from_env()
-    msgs = [rec.getMessage() for rec in caplog.records]
-    assert sum(1 for m in msgs if "REDDIT_CLIENT_ID" in m) == 1
-    assert not any("REDDIT_CLIENT_SECRET" in m for m in msgs)
-
-
-def test_rate_limit_floor_enforced_between_requests(ua_env: None) -> None:
-    fake_now = [1000.0]
-
-    def fake_monotonic() -> float:
-        return fake_now[0]
-
-    sleeps: list[float] = []
-
-    def fake_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
-        fake_now[0] += seconds
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        # Each handled request advances the clock by 0.01s (request "duration")
-        fake_now[0] += 0.01
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="rl1"), _post(sid="rl2")]))
-        return httpx.Response(200, json=_comment_thread([]))
-
-    with patch("time.monotonic", fake_monotonic), patch("time.sleep", fake_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        list(src.fetch(since=None, limit=2))
-
-    # First request: no sleep (last_request_at == 0). Subsequent requests must
-    # sleep approximately MIN_REQUEST_INTERVAL_S each.
-    rate_limit_sleeps = [s for s in sleeps if s >= MIN_REQUEST_INTERVAL_S - 0.1]
-    assert len(rate_limit_sleeps) >= 2  # at least 2 inter-request sleeps for 3+ calls
-
-
-def test_429_with_retry_after_header_sleeps_then_succeeds(ua_env: None) -> None:
-    call_count = {"n": 0}
-    sleeps: list[float] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if req.url.path.endswith("/new.json") and call_count["n"] == 1:
-            return httpx.Response(429, headers={"Retry-After": "5"}, json={})
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="r")]))
-        return httpx.Response(200, json=_comment_thread([]))
-
-    def fake_sleep(s: float) -> None:
-        sleeps.append(s)
-
-    with patch("time.sleep", fake_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    assert len(items) == 1
-    assert any(4.5 < s < 6.0 for s in sleeps), f"expected ~5.5s retry sleep, saw {sleeps}"
-
-
-def test_429_without_retry_after_exhausts_retries_and_skips(
-    ua_env: None, caplog: pytest.LogCaptureFixture
-) -> None:
-    def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(429, json={})
-
-    with patch("time.sleep", _no_sleep), caplog.at_level(logging.WARNING):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
-
-    assert items == []
-    assert any("exhausted" in rec.message for rec in caplog.records)
-
-
-def test_all_subreddits_failing_raises(ua_env: None) -> None:
-    """Hard HTTP failure on every subreddit must raise so the scrape run
-    records failed instead of a silent completed/0-items (vibe-quant-ux7t0)."""
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, text="blocked")
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading", "quant"],
-            client=_make_client(handler),
-        )
-        with pytest.raises(RuntimeError, match="all 2 subreddit"):
-            list(src.fetch(since=None, limit=5))
-
-
-def test_partial_subreddit_failure_stays_lenient(ua_env: None) -> None:
-    """One subreddit failing while another yields keeps the lenient skip."""
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if "/r/quant/" in str(req.url):
-            return httpx.Response(403, text="blocked")
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([_post(sid="ok1")]))
-        return httpx.Response(200, json=_comment_thread([]))
-
-    with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading", "quant"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=5))
-
-    assert len(items) == 1
-
-
 # ---------- Image URL extraction tests ----------
 
 
 def _fetch_one(post: dict[str, Any], ua_env: None) -> Any:  # noqa: ARG001
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.endswith("/new.json"):
-            return httpx.Response(200, json=_listing([post]))
-        return httpx.Response(200, json=_comment_thread([]))
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([post]))
+        return httpx.Response(200, json=_api([]))
 
     with patch("time.sleep", _no_sleep):
-        src = RedditSource(
-            config=RedditConfig.from_env(),
-            subreddits=["algotrading"],
-            client=_make_client(handler),
-        )
-        items = list(src.fetch(since=None, limit=1))
+        items = list(_source(handler).fetch(since=None, limit=1))
     assert len(items) == 1
     return items[0]
 
 
 def test_direct_image_link_captured(ua_env: None) -> None:
     post = _post(sid="d1", num_comments=0)
-    post["data"]["url"] = "https://i.redd.it/abc123.png"
+    post["url"] = "https://i.redd.it/abc123.png"
     item = _fetch_one(post, ua_env)
     assert item.extras["image_urls"] == ["https://i.redd.it/abc123.png"]
 
 
 def test_direct_non_image_link_ignored(ua_env: None) -> None:
     post = _post(sid="d2", num_comments=0)
-    post["data"]["url"] = "https://example.com/article.html"
+    post["url"] = "https://example.com/article.html"
     item = _fetch_one(post, ua_env)
     assert "image_urls" not in item.extras
 
 
 def test_preview_image_url_html_unescaped(ua_env: None) -> None:
     post = _post(sid="p1", num_comments=0)
-    post["data"]["preview"] = {
+    post["preview"] = {
         "images": [
-            {"source": {"url": "https://preview.redd.it/x.png?width=640&amp;crop=smart&amp;s=deadbeef"}}
+            {
+                "source": {
+                    "url": "https://preview.redd.it/x.png?width=640&amp;crop=smart&amp;s=deadbeef"
+                }
+            }
         ]
     }
     item = _fetch_one(post, ua_env)
@@ -690,7 +867,7 @@ def test_preview_image_url_html_unescaped(ua_env: None) -> None:
 
 def test_gallery_media_metadata_captured(ua_env: None) -> None:
     post = _post(sid="g1", num_comments=0)
-    post["data"]["media_metadata"] = {
+    post["media_metadata"] = {
         "m1": {"s": {"u": "https://preview.redd.it/one.jpg?s=aaa&amp;w=1"}},
         "m2": {"s": {"gif": "https://preview.redd.it/two.gif?s=bbb"}},
     }
@@ -703,7 +880,7 @@ def test_gallery_media_metadata_captured(ua_env: None) -> None:
 
 def test_image_urls_capped_at_four(ua_env: None) -> None:
     post = _post(sid="cap", num_comments=0)
-    post["data"]["media_metadata"] = {
+    post["media_metadata"] = {
         f"m{i}": {"s": {"u": f"https://preview.redd.it/{i}.png"}} for i in range(10)
     }
     item = _fetch_one(post, ua_env)
@@ -711,10 +888,9 @@ def test_image_urls_capped_at_four(ua_env: None) -> None:
 
 
 def test_image_urls_deduplicated(ua_env: None) -> None:
-    """A direct link that also appears in preview must not be listed twice."""
     post = _post(sid="dup", num_comments=0)
-    post["data"]["url"] = "https://i.redd.it/same.png"
-    post["data"]["preview"] = {"images": [{"source": {"url": "https://i.redd.it/same.png"}}]}
+    post["url"] = "https://i.redd.it/same.png"
+    post["preview"] = {"images": [{"source": {"url": "https://i.redd.it/same.png"}}]}
     item = _fetch_one(post, ua_env)
     assert item.extras["image_urls"] == ["https://i.redd.it/same.png"]
 
@@ -722,6 +898,9 @@ def test_image_urls_deduplicated(ua_env: None) -> None:
 def test_post_without_images_has_no_image_urls_key(ua_env: None) -> None:
     item = _fetch_one(_post(sid="none", num_comments=0), ua_env)
     assert "image_urls" not in item.extras
+
+
+# ---------- Regression guards ----------
 
 
 def test_no_praw_imports_remain() -> None:

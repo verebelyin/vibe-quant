@@ -36,6 +36,18 @@ class ResearchSource(Protocol):
 the archive serialises it to JSON. Common keys we use today:
 
 - `comments: list[dict]` — Reddit/HN: `{author, body, score}` per comment.
+- `image_urls: list[str]` — Reddit: image URLs on the post (top level only).
+- `via: str` — which backend served the item (e.g. `arctic_shift`).
+
+## Reddit source (Arctic Shift)
+
+`reddit.py` reads a subreddit's settled posts and their top comments from the
+free [Arctic Shift](https://arctic-shift.photon-reddit.com) API
+(`/api/posts/search`, `/api/comments/search`) — no key and no browser spoofing.
+Politeness floor: one request per second (`MIN_REQUEST_INTERVAL_S`); a 429 is
+honoured via `X-RateLimit-Reset`. Freshness: a post's score and comment count
+settle ~36 h after it lands, so the source asks only for posts older than
+`SETTLE_DELAY_S` (36 h, via `before=`) and gets settled numbers in one pass.
 
 ## Minimal example
 

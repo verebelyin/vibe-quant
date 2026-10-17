@@ -1,11 +1,22 @@
-"""Reddit source: scrape r/<subreddit>/new + top comments via the public .json endpoint.
+"""Reddit research source backed by the free Arctic Shift API.
 
-No auth, no app, no account — just polite use of the long-standing
-`https://www.reddit.com/r/<sub>/new.json` and `https://www.reddit.com<permalink>.json`
-URLs that Reddit has served unauthenticated for 15+ years.
+Reddit 403s unauthenticated ``www.reddit.com/.../*.json`` access (2026-05), so
+this source reads posts + top comments from the community-run Arctic Shift
+archive at ``https://arctic-shift.photon-reddit.com`` instead. No account, no
+API key, no browser spoofing.
 
-Rate limit: ~10 req/min for unauthenticated traffic per IP. We enforce a 6s
-inter-request floor and respect Retry-After on 429.
+Arctic Shift is best-effort with "no uptime or performance guarantees": a
+couple of requests per second is fine, the limits are dynamic, and a 429 reply
+carries ``X-RateLimit-Reset`` (seconds until reset). Overloaded queries answer
+with a non-payload body carrying a timeout error (200 ``Query timed out``, or
+422 ``Timeout. Maybe slow down a bit``) — those are retried with backoff, as is
+a 2xx body that is not valid JSON. A 2xx JSON body with a ``data`` list is a
+real payload and is never scanned for those markers (RULING A11b).
+
+Freshness: a new post's ``score``/``num_comments`` stay 0/1 for roughly 36 h
+(README), so one pass only asks for posts older than ``SETTLE_DELAY_S`` (36 h)
+via the ``before`` parameter — that single pass then sees settled scores, the
+comment count and the comments themselves.
 """
 
 from __future__ import annotations
@@ -19,17 +30,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from vibe_quant.research.config import (
-    RedditConfig,
-    subreddits_from_env,
-    use_challenge_from_env,
-)
+from vibe_quant.research.config import RedditConfig, subreddits_from_env
 from vibe_quant.research.schema import RawItem
 from vibe_quant.research.sources import register_source
-from vibe_quant.research.sources._reddit_challenge import ChallengeClient
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
 
 class _HttpGetter(Protocol):
@@ -39,18 +45,41 @@ class _HttpGetter(Protocol):
 
     def close(self) -> None: ...
 
+
+class ArcticShiftError(httpx.HTTPError):
+    """A retryable Arctic Shift failure (5xx, transport error, timeout body)."""
+
+
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.reddit.com"
-MIN_REQUEST_INTERVAL_S = 6.0
-RETRY_BACKOFF_S = (6.0, 12.0, 24.0)
+API_BASE_URL = "https://arctic-shift.photon-reddit.com"
+API_HOST = "arctic-shift.photon-reddit.com"
+POSTS_PATH = "/api/posts/search"
+COMMENTS_PATH = "/api/comments/search"
+#: Permalinks in ``RawItem.url`` always point at the canonical Reddit post.
+REDDIT_URL_BASE = "https://www.reddit.com"
+
+#: Only posts older than this (seconds) are requested: Arctic Shift scores and
+#: comment counts settle ~36 h after the post lands.
+SETTLE_DELAY_S = 129_600
+#: Politeness floor between our own requests (README: "a couple requests/sec").
+MIN_REQUEST_INTERVAL_S = 1.5
+RETRY_BACKOFF_S = (1.0, 2.0, 4.0)
 MAX_RETRIES = len(RETRY_BACKOFF_S)
-RETRY_AFTER_BUFFER_S = 0.5
+#: 429 gets its own, smaller budget: 3 attempts total (RULING A11b).
+MAX_RATE_LIMIT_ATTEMPTS = 3
+RATE_LIMIT_BUFFER_S = 0.5
 HTTP_TIMEOUT_S = 15.0
 TOP_COMMENT_COUNT = 10
+COMMENTS_LIMIT = 100
+#: ``/api/posts/search`` rejects a ``limit`` above 100 (the scrape API allows 500).
+MAX_POSTS_LIMIT = 100
+#: How much of a non-JSON body is scanned for the transient-overload markers.
+MAX_ERROR_BODY_CHARS = 500
 DELETED_AUTHOR_PLACEHOLDERS = frozenset({"[deleted]", "[removed]"})
-KIND_POST = "t3"
-KIND_COMMENT = "t1"
+#: Substrings of the transient-overload error bodies Arctic Shift returns.
+TIMEOUT_MARKERS = ("timed out", "timeout")
+VIA = "arctic_shift"
 
 # Reddit strategy posts often carry the real content in screenshots (rule
 # tables, TradingView setups, equity curves). Capture their URLs so the
@@ -60,13 +89,10 @@ MAX_IMAGES_PER_POST = 4
 IMAGE_URL_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 REDDIT_IMAGE_HOSTS = frozenset({"i.redd.it"})
 
-VALID_LISTINGS = frozenset({"new", "top", "hot", "rising"})
-VALID_TIME_FILTERS = frozenset({"hour", "day", "week", "month", "year", "all"})
-
 
 @register_source("reddit")
 class RedditSource:
-    """Read-only Reddit source over the public unauthenticated `.json` endpoint."""
+    """Read-only Reddit source over the free Arctic Shift search API."""
 
     name: ClassVar[str] = "reddit"
 
@@ -75,38 +101,19 @@ class RedditSource:
         config: RedditConfig | None = None,
         subreddits: list[str] | None = None,
         client: _HttpGetter | None = None,
-        listing: str = "new",
-        time_filter: str | None = None,
-        use_challenge: bool | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
-        if listing not in VALID_LISTINGS:
-            raise ValueError(f"listing must be one of {sorted(VALID_LISTINGS)}, got {listing!r}")
-        if time_filter is not None and time_filter not in VALID_TIME_FILTERS:
-            raise ValueError(
-                f"time_filter must be one of {sorted(VALID_TIME_FILTERS)} or None, got {time_filter!r}"
-            )
-        if time_filter is not None and listing != "top":
-            raise ValueError(f"time_filter only applies to listing='top' (got listing={listing!r})")
-        self._listing = listing
-        self._time_filter = time_filter
         self._config = config or RedditConfig.from_env()
         self._subreddits = subreddits if subreddits is not None else subreddits_from_env()
-        use_challenge = use_challenge_from_env() if use_challenge is None else use_challenge
+        self._clock = clock or time.time
         if client is not None:
             self._client: _HttpGetter = client
-        elif use_challenge:
-            # ToS-grey stopgap until OAuth is approved — see _reddit_challenge.
-            # Uses a browser User-Agent (its default) to match the spoofed TLS
-            # fingerprint; the API-style config UA would defeat the impersonation.
-            self._client = ChallengeClient()
         else:
             self._client = httpx.Client(
                 timeout=HTTP_TIMEOUT_S,
                 headers={
                     "User-Agent": self._config.user_agent,
                     "Accept": "application/json",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept-Encoding": "gzip, deflate",
                 },
             )
         self._last_request_at: float = 0.0
@@ -115,13 +122,12 @@ class RedditSource:
         self._client.close()
 
     def fetch(self, since: datetime | None, limit: int) -> Iterable[RawItem]:
-        """Yield RawItems from each configured subreddit's `/new` listing.
+        """Yield RawItems from each configured subreddit's settled posts.
 
         Args:
             since: If set, stop yielding once a post older than `since` is
-                seen (Reddit's `/new` is reverse-chronological so this is a
-                cheap early exit).
-            limit: Per-subreddit cap on submissions to inspect.
+                seen (`sort=desc` makes that a cheap early exit).
+            limit: Per-subreddit cap on posts to inspect.
         """
         since_ts = since.timestamp() if since is not None else None
         failures: list[tuple[str, httpx.HTTPError]] = []
@@ -137,7 +143,7 @@ class RedditSource:
                 continue
         # Every subreddit failed and nothing was yielded: raise so the scrape
         # run records status=failed instead of a silent completed/0-items
-        # (e.g. Reddit hard-403s the whole IP — vibe-quant-ux7t0).
+        # (vibe-quant-ux7t0).
         if failures and not yielded and len(failures) == len(self._subreddits):
             names = ", ".join(name for name, _ in failures)
             raise RuntimeError(
@@ -147,77 +153,59 @@ class RedditSource:
     def _fetch_subreddit(
         self, subreddit: str, since_ts: float | None, limit: int
     ) -> Iterable[RawItem]:
-        listing = self._fetch_listing(subreddit, limit)
-        if listing is None:
-            return
-        for child in listing:
-            if child.get("kind") != KIND_POST:
-                continue
-            data = child.get("data") or {}
+        for data in self._fetch_posts(subreddit, limit):
             if since_ts is not None:
-                created_utc = float(data.get("created_utc", 0.0))
+                created_utc = float(data.get("created_utc") or 0.0)
                 if created_utc < since_ts:
-                    # /new is reverse-chronological → stop. /top is score-ordered
-                    # so a stale post doesn't imply the rest are stale → skip one.
-                    if self._listing == "new":
-                        return
-                    continue
+                    # sort=desc → the first stale post means the rest are stale.
+                    return
             yield self._to_raw_item(data, subreddit)
 
-    def _fetch_listing(self, subreddit: str, limit: int) -> list[dict[str, Any]] | None:
-        url = f"{BASE_URL}/r/{subreddit}/{self._listing}.json"
-        params = {"limit": str(limit), "raw_json": "1"}
-        if self._listing == "top" and self._time_filter is not None:
-            params["t"] = self._time_filter
-        body = self._request(url, params)
-        if body is None:
-            return None
-        children = (body.get("data") or {}).get("children") or []
-        return list(children)
+    def _fetch_posts(self, subreddit: str, limit: int) -> list[dict[str, Any]]:
+        params = {
+            "subreddit": subreddit,
+            "before": str(int(self._clock() - SETTLE_DELAY_S)),
+            "limit": str(min(limit, MAX_POSTS_LIMIT)),
+            "sort": "desc",
+        }
+        body = self._request(f"{API_BASE_URL}{POSTS_PATH}", params)
+        return _data_rows(body)
 
-    def _fetch_comments(self, permalink: str) -> list[dict[str, Any]]:
-        # Top-level only — nested replies (`data.replies`) are ignored.
-        # The URL passes `sort=top&limit=N`; the local sort+slice are a defensive
-        # fallback for API drift and exercised by tests.
-        url = f"{BASE_URL}{permalink.rstrip('/')}.json"
-        params = {"limit": str(TOP_COMMENT_COUNT), "sort": "top", "raw_json": "1"}
-        body = self._request(url, params)
-        if body is None or not isinstance(body, list) or len(body) < 2:
-            return []
-        comment_listing = body[1] or {}
-        children = (comment_listing.get("data") or {}).get("children") or []
-        comments: list[dict[str, Any]] = []
-        for c in children:
-            if c.get("kind") != KIND_COMMENT:
-                continue  # skip "more" placeholders
-            data = c.get("data") or {}
-            comments.append(
-                {
-                    "author": _normalize_author(data.get("author")),
-                    "body": str(data.get("body") or ""),
-                    "score": int(data.get("score") or 0),
-                }
-            )
-        comments.sort(key=lambda c: c["score"], reverse=True)
-        return comments[:TOP_COMMENT_COUNT]
+    def _fetch_comments(self, post_id: str) -> list[dict[str, Any]]:
+        # Top-level comments only (`link_id` scopes them to the post); the
+        # response is score-ordered but we re-sort and slice locally so a
+        # server-side ordering drift cannot change what we archive.
+        params = {"link_id": f"t3_{post_id}", "limit": str(COMMENTS_LIMIT)}
+        body = self._request(f"{API_BASE_URL}{COMMENTS_PATH}", params)
+        selected = sorted(_data_rows(body), key=_comment_order_key)[:TOP_COMMENT_COUNT]
+        return [
+            {
+                "author": _normalize_author(row.get("author")),
+                "body": str(row.get("body") or ""),
+                "score": int(row.get("score") or 0),
+            }
+            for row in selected
+        ]
 
     def _to_raw_item(self, data: dict[str, Any], subreddit: str) -> RawItem:
-        permalink = str(data.get("permalink") or "")
+        post_id = str(data.get("id") or "")
         num_comments = int(data.get("num_comments") or 0)
-        comments = self._fetch_comments(permalink) if permalink and num_comments > 0 else []
+        comments = self._fetch_comments(post_id) if post_id and num_comments > 0 else []
+        permalink = str(data.get("permalink") or "")
+        url = f"{REDDIT_URL_BASE}{permalink}" if permalink else f"{REDDIT_URL_BASE}/comments/{post_id}"
         extras: dict[str, Any] = {
             "subreddit": subreddit,
-            "flair": data.get("link_flair_text"),
             "num_comments": num_comments,
             "comments": comments,
+            "via": VIA,
         }
         image_urls = _extract_image_urls(data)
         if image_urls:
             extras["image_urls"] = image_urls
         return RawItem(
             source="reddit",
-            external_id=str(data.get("id") or ""),
-            url=f"{BASE_URL}{permalink}",
+            external_id=post_id,
+            url=url,
             title=str(data.get("title") or ""),
             body=str(data.get("selftext") or ""),
             author=_normalize_author(data.get("author")),
@@ -227,27 +215,58 @@ class RedditSource:
         )
 
     def _request(self, url: str, params: dict[str, str]) -> Any:
-        # Returns parsed JSON, or None on retry exhaustion (caller skips).
-        for attempt in range(MAX_RETRIES):
+        last_exc: httpx.HTTPError | None = None
+        rate_limit_attempts = 0
+        for attempt in range(MAX_RETRIES + 1):
             self._respect_rate_limit()
-            response = self._client.get(url, params=params)
-            if response.status_code == 429:
-                sleep_s = _parse_retry_after(response) or RETRY_BACKOFF_S[attempt]
-                logger.warning(
-                    "429 on %s (attempt %d/%d); sleeping %.1fs",
-                    url,
-                    attempt + 1,
-                    MAX_RETRIES,
-                    sleep_s,
-                )
-                # Don't stamp _last_request_at — the Retry-After sleep covers the gap.
-                time.sleep(sleep_s + RETRY_AFTER_BUFFER_S)
-                continue
-            response.raise_for_status()
-            self._last_request_at = time.monotonic()
-            return response.json()
-        logger.warning("exhausted %d retries on %s — skipping", MAX_RETRIES, url)
-        return None
+            response: httpx.Response | None = None
+            try:
+                response = self._client.get(url, params=params)
+            except httpx.HTTPError as e:
+                last_exc = e
+            finally:
+                # Count every attempt, success or failure, so an endpoint that
+                # keeps erroring cannot bypass the politeness floor (A11c).
+                self._last_request_at = time.monotonic()
+            if response is not None:
+                if response.status_code == 429:
+                    rate_limit_attempts += 1
+                    last_exc = ArcticShiftError(f"429 Too Many Requests from {url}")
+                    if rate_limit_attempts >= MAX_RATE_LIMIT_ATTEMPTS:
+                        # Budget spent — don't sleep after the final attempt.
+                        break
+                    wait_s = max(_parse_reset_after(response) or 0.0, 1.0)
+                    logger.warning(
+                        "429 on %s (attempt %d/%d); sleeping %.1fs",
+                        url,
+                        rate_limit_attempts,
+                        MAX_RATE_LIMIT_ATTEMPTS,
+                        wait_s,
+                    )
+                    time.sleep(wait_s + RATE_LIMIT_BUFFER_S)
+                    continue
+                if response.status_code >= 500 or _is_timeout_body(response):
+                    last_exc = ArcticShiftError(
+                        f"retryable status {response.status_code} from {url}"
+                    )
+                elif response.status_code >= 400:
+                    # A real 4xx (no timeout marker): fail this subreddit now.
+                    response.raise_for_status()
+                else:
+                    try:
+                        payload = response.json()
+                    except ValueError as e:
+                        # A 2xx body that is not JSON is a failed attempt, not a
+                        # run-aborting ValueError (httpx.DecodingError is an
+                        # httpx.HTTPError, so `fetch` skips this subreddit).
+                        last_exc = httpx.DecodingError(f"invalid JSON from {url}: {e}")
+                    else:
+                        return payload
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_S[attempt])
+        logger.warning("exhausted retries on %s — skipping", url)
+        assert last_exc is not None
+        raise last_exc
 
     def _respect_rate_limit(self) -> None:
         if self._last_request_at == 0.0:
@@ -255,6 +274,53 @@ class RedditSource:
         elapsed = time.monotonic() - self._last_request_at
         if elapsed < MIN_REQUEST_INTERVAL_S:
             time.sleep(MIN_REQUEST_INTERVAL_S - elapsed)
+
+
+def _data_rows(body: Any) -> list[dict[str, Any]]:
+    if not isinstance(body, dict):
+        return []
+    rows = body.get("data")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _comment_order_key(row: Mapping[str, Any]) -> tuple[int, float]:
+    """Top comments: score desc, ties broken by created_utc asc (oldest first)."""
+    return (-int(row.get("score") or 0), float(row.get("created_utc") or 0.0))
+
+
+def _is_timeout_body(response: httpx.Response) -> bool:
+    """True when the body reports a transient Arctic Shift overload.
+
+    A JSON body carrying a ``data`` list is a real payload and is never
+    scanned — a post whose text merely contains "timeout" must not be retried
+    (rev-gr-arctic-1). Otherwise the JSON ``error`` field is checked, falling
+    back to the first ``MAX_ERROR_BODY_CHARS`` of a non-JSON body, whatever the
+    status (RULING A11b).
+    """
+    payload = _json_or_none(response)
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            return False
+        error = str(payload.get("error") or "").lower()
+        return any(marker in error for marker in TIMEOUT_MARKERS)
+    text = _response_text(response)[:MAX_ERROR_BODY_CHARS].lower()
+    return any(marker in text for marker in TIMEOUT_MARKERS)
+
+
+def _json_or_none(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _response_text(response: httpx.Response) -> str:
+    try:
+        return response.text
+    except (httpx.HTTPError, UnicodeDecodeError):
+        return ""
 
 
 def _is_image_link(url: str) -> bool:
@@ -266,7 +332,7 @@ def _is_image_link(url: str) -> bool:
 
 
 def _extract_image_urls(data: dict[str, Any]) -> list[str]:
-    """Pull image URLs off a Reddit post JSON, top-level post only.
+    """Pull image URLs off a Reddit-shaped post, top-level post only.
 
     Covers three shapes: a direct image `data.url` (i.redd.it or an image
     suffix), the `data.preview.images[].source.url` thumbnails, and gallery
@@ -312,8 +378,8 @@ def _normalize_author(value: Any) -> str | None:
     return s
 
 
-def _parse_retry_after(response: httpx.Response) -> float | None:
-    raw = response.headers.get("Retry-After")
+def _parse_reset_after(response: httpx.Response) -> float | None:
+    raw = response.headers.get("X-RateLimit-Reset")
     if not raw:
         return None
     try:

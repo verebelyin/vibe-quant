@@ -11,7 +11,6 @@ from vibe_quant.alerts.telegram import ConfigurationError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.research.pipeline import run_scrape
 from vibe_quant.research.sources import get_source, list_sources, load_builtin_sources
-from vibe_quant.research.sources.reddit import VALID_LISTINGS, VALID_TIME_FILTERS
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +33,6 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="Adopt an existing scrape_run row (used by API-spawned subprocesses)",
-    )
-    scrape.add_argument(
-        "--reddit-listing",
-        choices=sorted(VALID_LISTINGS),
-        default=None,
-        help="Reddit-only: which listing to pull from (default: new)",
-    )
-    scrape.add_argument(
-        "--reddit-time-filter",
-        choices=sorted(VALID_TIME_FILTERS),
-        default=None,
-        help="Reddit-only: time window when --reddit-listing=top (e.g. week, month)",
     )
     scrape.add_argument("--log-level", default="INFO")
 
@@ -91,12 +78,6 @@ def main(argv: list[str] | None = None) -> int:
                 except FileNotFoundError as e:
                     logger.warning("extractor unavailable: %s; items will land at extraction_status=pending", e)
                     extract_fn = None
-            source_kwargs: dict[str, object] = {}
-            if args.source == "reddit":
-                if args.reddit_listing is not None:
-                    source_kwargs["listing"] = args.reddit_listing
-                if args.reddit_time_filter is not None:
-                    source_kwargs["time_filter"] = args.reddit_time_filter
             try:
                 summary = run_scrape(
                     sm=sm,
@@ -104,7 +85,6 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                     extract_fn=extract_fn,
                     scrape_run_id=args.scrape_run_id,
-                    source_kwargs=source_kwargs or None,
                 )
             except ConfigurationError as e:
                 print(f"error: {e}", file=sys.stderr)
