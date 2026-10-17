@@ -307,7 +307,8 @@ def test_spec_runs_every_mutant(tmp_path: Path, capsys: pytest.CaptureFixture[st
     out = _lines(capsys)
     assert rc == 1
     assert out[0].startswith("KILLED strict (exit 1, ")
-    assert out[1].startswith("SURVIVED equivalent (")
+    assert out[1].startswith("  first failure: ")
+    assert out[2].startswith("SURVIVED equivalent (")
     assert out[-1] == "MUTANTS killed=1 survived=1 errors=0"
 
 
@@ -510,3 +511,57 @@ def test_unknown_rev_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[s
     out = _lines(capsys)
     assert rc == 2
     assert out[0].startswith("ERROR repo: git archive deadbeef failed")
+
+
+def test_killed_mutant_shows_first_failing_test_and_assertion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    old, new = _KILL
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
+    out = _lines(capsys)
+    assert out[0].startswith("KILLED ")
+    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_zero: ")
+    assert "assert not True" in out[1]
+    assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
+
+
+def test_killed_by_runtime_error_shows_error_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _make_repo(tmp_path)
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return 1 // 0 > x")
+    out = _lines(capsys)
+    assert out[0].startswith("KILLED ")
+    assert out[1].startswith("  first failure: tests/unit/test_mod.py::test_")
+    assert "ZeroDivisionError" in out[1]
+
+
+def test_quiet_kills_hides_failure_detail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _make_repo(tmp_path)
+    old, new = _KILL
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--quiet-kills")
+    out = _lines(capsys)
+    assert len(out) == 2
+    assert out[0].startswith("KILLED ")
+
+
+def test_survivor_has_no_failure_detail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _make_repo(tmp_path)
+    old, new = _SURVIVE
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
+    assert len(_lines(capsys)) == 2
+
+
+def test_first_failure_parses_parametrized_id_with_spaces(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "tests" / "unit" / "test_ids.py").write_text(
+        "import pytest\nfrom vibe_quant.mod import is_positive\n\n\n"
+        "@pytest.mark.parametrize('v', [pytest.param(-1, id='with spaces')])\n"
+        "def test_value(v: int) -> None:\n    assert not is_positive(v + 1)\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "ids")
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return x >= 0",
+         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"])
+    out = _lines(capsys)
+    assert out[0].startswith("KILLED ")
+    assert out[1].startswith("  first failure: tests/unit/test_ids.py::test_value[with spaces]: ")

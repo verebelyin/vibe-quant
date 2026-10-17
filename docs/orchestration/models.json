@@ -22,9 +22,9 @@
           "reasoningEffort": "high"
         }
       },
-      "enabled": false,
+      "enabled": true,
       "until": null,
-      "note": "user 2026-10-17: don't use Sol for review (no limit left); turn on with: scripts/agents/models.py set gpt-sol --on"
+      "note": "user 2026-10-17: Sol OK for review again"
     },
     "sonnet": {
       "runtime": "claude",
@@ -88,5 +88,5 @@
       "opus"
     ]
   },
-  "changed": "2026-10-17T20:04:23.730404+02:00"
+  "changed": "2026-10-17T21:40:10.234347+02:00"
 }

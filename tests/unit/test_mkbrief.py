@@ -239,7 +239,7 @@ def test_review_mode_pins_merge_base_after_parent_moves(
     assert f"BASE_SHA: {fork}" in text
     assert f"HEAD_SHA: {head}" in text
     assert f"RANGE: {fork}..{head}" in text
-    assert f"REVIEW_PACK: scripts/agents/review_pack.py {repo} --range {fork}..{head}" in text
+    assert f"REVIEW_PACK: python3 scripts/agents/review_pack.py {repo} --range {fork}..{head}" in text
     assert parent_tip not in text
 
 
@@ -375,3 +375,90 @@ def test_set_file_and_append_are_rendered(
     text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
     assert "- row one" in text
     assert text.rstrip().endswith(f"WT={repo}")
+
+
+def _commit(repo: Path, fname: str) -> str:
+    (repo / fname).write_text("X = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", fname)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_stacked_worktree_without_base_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    _git(repo, "checkout", "-qb", "swarm/b")
+    _commit(repo, "b1.py")
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "stacked worktree: pass --base <fork point>" in err
+    assert a_tip in err
+    assert not (tmp_path / "job" / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_stacked_worktree_with_base_passes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    _git(repo, "checkout", "-qb", "swarm/b")
+    _commit(repo, "b1.py")
+    argv = _argv(_job(tmp_path), _template(tmp_path), worktree=repo, extra=["--base", a_tip])
+    assert mkbrief.main(argv) == 0
+
+
+def test_merge_commit_branch_without_base_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "side")
+    _commit(repo, "s1.py")
+    _git(repo, "checkout", "-qb", "feat", "main")
+    _commit(repo, "f1.py")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    _git(repo, "branch", "-q", "-D", "side")
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
+    assert rc == 2
+    assert "stacked worktree" in capsys.readouterr().err
+
+
+def test_plain_worktree_cut_from_older_main_passes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feat")
+    _commit(repo, "f1.py")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "m2.py")  # main moved on; feat is still a plain branch from main
+    _git(repo, "checkout", "-q", "feat")
+    assert mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo)) == 0
+
+
+def test_fix_task_template_renders_with_findings_and_bus_block(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "prompts"
+    job = _job(tmp_path)
+    findings = tmp_path / "findings.md"
+    findings.write_text("F1: off-by-one at {EDGE} in a.py\n")
+    argv = _argv(job, root / "fix-task.md", request_id="impl-demo-2", worktree=_repo(tmp_path))
+    argv += ["--set-file", f"PRIOR_FINDINGS={findings}", "--set", "RULINGS=none", "--set", "PEERS=none"]
+    argv += ["--append", str(root / "bus-protocol.md")]
+    assert mkbrief.main(argv) == 0
+    text = (job / "prompts" / "impl-demo-2.md").read_text()
+    assert "round 2" in text
+    assert "F1: off-by-one at {EDGE} in a.py" in text
+    assert "SWARM BUS" in text
+    assert "swarm-check.sh" in text
+
+
+def test_child_branch_at_parent_tip_without_commits_is_stacked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    a_tip = _commit(repo, "a1.py")
+    _git(repo, "checkout", "-qb", "swarm/b")  # no commits of its own
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "m2.py")  # main advanced too
+    _git(repo, "checkout", "-q", "swarm/b")
+    rc = mkbrief.main(_argv(_job(tmp_path), _template(tmp_path), worktree=repo))
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert f"swarm/a {a_tip}" in err
+    assert "swarm/b " not in err  # the worktree's own branch is never a candidate

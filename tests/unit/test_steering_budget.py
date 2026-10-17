@@ -39,6 +39,7 @@ BUDGETS: dict[str, int] = {
     "docs/orchestration/brief-checklist.md": 860,
     "docs/orchestration/research-swarm.md": 700,
     "docs/orchestration/prompts/cmd-task.md": 500,
+    "docs/orchestration/prompts/fix-task.md": 200,
     "docs/orchestration/prompts/review-task.md": 220,
     "docs/orchestration/prompts/bus-protocol.md": 270,
     "docs/orchestration/prompts/commit-message.md": 350,

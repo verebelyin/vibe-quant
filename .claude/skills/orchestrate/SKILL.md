@@ -35,7 +35,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 
 ## Waiting well
 
-- Keep one Monitor on `bus.py --as chief tail --to chief --durable --kinds question,blocker,done`. Re-arm it when its expiry notice arrives, then run `bus.py --as chief status`.
+- Keep one Monitor on `bus.py --as chief tail --to chief --durable --kinds question,blocker` (completions arrive as task notifications). Re-arm it when its expiry notice arrives, then run `bus.py --as chief status`.
 - A notification that carries nothing new (a task already ledgered, a duplicate completion) gets no prose turn: end the turn silently. Read `task_status` only when you need a result mid-turn and the handoff is not already on the bus.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
 - When the user asks whether messages reach agents, paste `bus.py --as chief status`.

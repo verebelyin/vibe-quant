@@ -3,6 +3,7 @@
 `scripts/agents/mkbrief.py` already guarantees: the brief file exists before dispatch, the dispatched text carries the TELEMETRY line, every SCOPE glob matches a file (`+path` for new files), the gate command is literal, and reviewer ranges come from `git merge-base`. This list covers what a script can't check. Each line cost at least one extra round when missed.
 
 ## Scope: find every file the task must touch
+- A helper module with a single consumer goes in the same task as its consumer.
 - Tests that build what changes, including monkeypatched doubles and lambdas of any function whose signature changes: `rg -l '<symbol>' tests/`.
 - A rename or move: also `rg` the old dotted path as a string (`setattr("pkg.mod._old"`) and every double of a method whose kwargs change.
 - Changed message, help or error text: `rg` the old text in `tests/` and docs; put every hit in SCOPE (the gate's `pinned-text` check catches what you miss, one round late).

@@ -2,7 +2,7 @@
 """One-command mutation check: copy the tree, mutate one file, run the tests, restore.
 
     scripts/agents/mutate.py [--repo DIR] --file PATH --old TEXT --new TEXT
-                             [--name NAME] [--rev SHA] [--timeout SEC] -- <test command...>
+                             [--name NAME] [--rev SHA] [--timeout SEC] [--quiet-kills] -- <test command...>
     scripts/agents/mutate.py [--repo DIR] --spec mutants.json [--rev SHA] [--timeout SEC] -- <test command...>
 
 Worked example (the mutant is killed when the tests fail on it):
@@ -43,6 +43,9 @@ assertion ran, so that is an invalid probe rather than a kill, and it is reporte
 and counted as an error (exit 2 overall). Only exit 1 — tests ran and failed — is a kill.
 Non-pytest commands are unchanged: any non-zero exit is a kill.
 
+Each KILLED line of a pytest command is followed by `  first failure: <node id>: <first
+assertion/error line>` (tells an assertion kill from an import/SQL error); `--quiet-kills` drops it.
+
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
 `--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
 `MUTANTS killed=K survived=S errors=E`; exit 0 when S=0 and E=0, 1 when anything survived,
@@ -55,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +207,20 @@ def is_pytest_command(cmd: Sequence[str]) -> bool:
     return any(Path(str(arg)).name in PYTEST_NAMES for arg in cmd)
 
 
+_FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$", re.MULTILINE)
+_E_LINE_RE = re.compile(r"^E\s+(\S.*)$", re.MULTILINE)
+
+
+def first_failure(output: str) -> str:
+    """`  first failure: <node id>: <first assertion/error line>` from pytest output, or ""."""
+    node = _FAILED_RE.search(output)
+    if node is None:
+        return ""
+    err = _E_LINE_RE.search(output)
+    detail = err.group(1) if err else (node.group(2) or "")
+    return f"  first failure: {node.group(1)}: {detail.strip()}"
+
+
 def check_mutant(
     workdir: Path,
     mutant: Mutant,
@@ -211,6 +229,7 @@ def check_mutant(
     timeout: float,
     run: RunFn,
     pytest_like: bool,
+    show_failures: bool = True,
 ) -> tuple[bool, bool, str]:
     """Apply one mutant in the copy and run the tests. Returns (killed, is_error, line)."""
     path = workdir / mutant.file
@@ -253,7 +272,9 @@ def check_mutant(
             f"INVALID {name}: test command exit {result.exit_code} "
             "(collection/usage error, no assertion ran)",
         )
-    return True, False, f"KILLED {name} (exit {result.exit_code}, {seconds})"
+    line = f"KILLED {name} (exit {result.exit_code}, {seconds})"
+    failure = first_failure(result.output) if show_failures and pytest_like else ""
+    return True, False, f"{line}\n{failure}" if failure else line
 
 
 def load_spec(path: Path) -> list[Mutant]:
@@ -288,6 +309,10 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         "--rev", default=None, help="build the copy from this committed rev (git archive)"
     )
     parser.add_argument("--timeout", type=float, default=TOOL_TIMEOUT, help="seconds per run")
+    parser.add_argument(
+        "--quiet-kills", action="store_true",
+        help="do not print each kill's first failing test and assertion/error line",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="test command, after `--`")
     args = parser.parse_args(argv)
 
@@ -340,7 +365,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         killed = survived = errors = 0
         for mutant in mutants:
             was_killed, is_error, line = check_mutant(
-                workdir, mutant, cmd, env, args.timeout, runner, pytest_like
+                workdir, mutant, cmd, env, args.timeout, runner, pytest_like, not args.quiet_kills
             )
             print(line)
             if is_error:

@@ -27,6 +27,8 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     stripped from the rendered ``SCOPE``);
   * ``tests/unit/**/*.py`` in ``--scope`` without ``tests/unit/*.py`` (the
     gate's fnmatch needs a subdirectory for ``**``);
+  * ``--worktree`` without ``--base`` whose HEAD is stacked on another local branch or holds
+    merge commits relative to ``main`` (the gate's default base would count that work as ours);
   * the output file already exists (unless ``--force``).
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
@@ -171,6 +173,32 @@ def _git(cwd: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
+def stacked_candidates(worktree: Path) -> list[str]:
+    """Fork-point candidates when ``worktree`` HEAD is not a plain branch cut from main, else [].
+
+    Stacked = main..HEAD holds a merge commit, or the tip of another local branch, also one at HEAD (work the
+    gate's default base would count as ours). Candidates are ``<branch> <sha>`` / merge-base.
+    Not a git checkout, or no ``main`` ref: [] (nothing to compare against).
+    """
+    try:
+        own = _git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
+        _git(worktree, "rev-parse", "--verify", "-q", "main")
+        merges = _git(worktree, "rev-list", "--merges", "main..HEAD")
+        inside = set(_git(worktree, "rev-list", "main..HEAD").split())
+        refs = _git(worktree, "for-each-ref", "refs/heads", "--format=%(refname:short) %(objectname)")
+        fork = _git(worktree, "merge-base", "main", "HEAD")
+    except (subprocess.CalledProcessError, OSError):
+        return []
+    found = []
+    for ref in refs.splitlines():
+        name, _, sha = ref.partition(" ")
+        if sha in inside and name not in (own, "main"):
+            found.append(f"{name} {sha}")
+    if found:
+        return found
+    return [f"main {fork}"] if merges else []
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mkbrief.py", description="Generate and validate a swarm brief."
@@ -236,8 +264,16 @@ def main(argv: list[str] | None = None) -> int:
         values["HEAD_SHA"] = head_sha
         values["RANGE"] = f"{base_sha}..{head_sha}"
         values["REVIEW_PACK"] = (
-            f"scripts/agents/review_pack.py {args.worktree} --range {values['RANGE']}"
+            f"python3 scripts/agents/review_pack.py {args.worktree} --range {values['RANGE']}"
         )
+
+    if args.worktree and not args.base and not args.review:
+        candidates = stacked_candidates(Path(args.worktree).resolve())
+        if candidates:
+            print(f"stacked worktree: pass --base <fork point> (e.g. {candidates[0].split()[1]})", file=sys.stderr)
+            for candidate in candidates:
+                print(f"  git merge-base candidate: {candidate}", file=sys.stderr)
+            return 2
 
     for key, value in _key_value(list(args.set), "--set"):
         values[key] = value

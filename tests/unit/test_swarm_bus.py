@@ -1230,3 +1230,54 @@ def test_bus_shim_invokes_bus_py(tmp_path: Path) -> None:
         capture_output=True, text=True, env=env,
     )  # fmt: skip
     assert posted.returncode == 0 and "via the shim" in posted.stdout
+
+
+_GOOD_HANDOFF = "## Handoff\nstatus: done\nrole: implementer\nevidence:\n- red then green\nimprove: none\n"
+
+
+def _done(job: Path, *extra: str) -> int:
+    return bus.main(["--bus", str(job / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "done", "--body", "ok", *extra])
+
+
+def test_done_refused_without_handoff_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "bus").mkdir()
+    with pytest.raises(SystemExit) as exc:
+        _done(tmp_path)
+    assert exc.value.code == 2
+    assert str(tmp_path / "handoffs" / "w1.md") in capsys.readouterr().err
+    assert bus.inbox(tmp_path / "bus", "chief") == []
+
+
+def test_done_refused_when_handoff_fails_lint(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "bus").mkdir()
+    (tmp_path / "handoffs").mkdir()
+    (tmp_path / "handoffs" / "w1.md").write_text("## Handoff\nstatus: done\n")
+    with pytest.raises(SystemExit) as exc:
+        _done(tmp_path)
+    assert exc.value.code == 2
+    assert "MISSING evidence" in capsys.readouterr().err
+    assert bus.inbox(tmp_path / "bus", "chief") == []
+
+
+def test_done_posts_with_valid_handoff(tmp_path: Path) -> None:
+    (tmp_path / "bus").mkdir()
+    (tmp_path / "handoffs").mkdir()
+    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF)
+    assert _done(tmp_path) == 0
+    assert [m["body"] for m in bus.inbox(tmp_path / "bus", "chief")] == ["ok"]
+
+
+def test_done_reviewer_handoff_needs_verdict(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "bus").mkdir()
+    (tmp_path / "handoffs").mkdir()
+    (tmp_path / "handoffs" / "w1.md").write_text(_GOOD_HANDOFF + "verdict: MAYBE\n")
+    with pytest.raises(SystemExit) as exc:
+        _done(tmp_path)
+    assert exc.value.code == 2
+    assert "BAD verdict" in capsys.readouterr().err
+
+
+def test_done_escape_hatch_and_other_kinds_unchecked(tmp_path: Path) -> None:
+    (tmp_path / "bus").mkdir()
+    assert _done(tmp_path, "--no-handoff-check") == 0
+    assert bus.main(["--bus", str(tmp_path / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "info", "--body", "hi"]) == 0

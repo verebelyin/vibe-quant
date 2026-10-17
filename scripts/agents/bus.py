@@ -4,7 +4,7 @@
 Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per job:
 ``data/swarm/<job>/bus/messages.jsonl`` (append-only, flock-guarded) plus per-agent read cursors.
 
-    bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT]
+    bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT] [--no-handoff-check]
     bus.py inbox [--peek]            # new messages for me (to me or to all), advances my cursor
     bus.py pending [--global]        # questions/blockers addressed to me with no reply yet, oldest first,
                                      # one bounded line each (the body is cut to 60 chars); --global =
@@ -59,8 +59,10 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -372,6 +374,21 @@ def post(
         if gdir.resolve() != bus.resolve():
             _append(gdir, {**stored, "job": bus.resolve().parent.name})
     return stored
+
+
+def _require_handoff(bus: Path, me: str) -> None:
+    """A `done` post needs `<job dir>/handoffs/<me>.md` holding a lint-clean handoff block (exit 2)."""
+    path = bus.resolve().parent / "handoffs" / f"{me}.md"
+    if not path.is_file():
+        _refuse(f"bus: write your final handoff block to {path}, lint it with handoff_lint.py, then post done")
+    spec = importlib.util.spec_from_file_location("handoff_lint", Path(__file__).with_name("handoff_lint.py"))
+    assert spec and spec.loader
+    lint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lint)
+    text = path.read_text()
+    problems = lint.check(text, "reviewer" if re.search(r"^\s*verdict\s*:", text, re.IGNORECASE | re.MULTILINE) else None)
+    if problems:
+        _refuse(f"bus: {path} fails handoff lint:\n" + "\n".join(problems))
 
 
 def _all(bus: Path) -> list[dict[str, object]]:
@@ -879,6 +896,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--body", required=True)
     p.add_argument("--ref")
     p.add_argument("--client-id", help="idempotency key: a repeat post with the same (sender, id) is a no-op")
+    p.add_argument("--no-handoff-check", action="store_true", help="skip the handoff-file check of --kind done")
     i = sub.add_parser("inbox")
     i.add_argument("--peek", action="store_true")
     pd = sub.add_parser("pending")
@@ -957,6 +975,8 @@ def main(argv: list[str] | None = None) -> int:
     bus = _bus_dir(args)
 
     if args.cmd == "post":
+        if args.kind == "done" and not args.no_handoff_check:
+            _require_handoff(bus, _me(args))
         print(fmt(post(bus, _me(args), args.to, args.kind, args.body, args.ref, client_id=args.client_id)))
     elif args.cmd == "inbox":
         msgs = inbox(bus, _me(args), args.peek)
