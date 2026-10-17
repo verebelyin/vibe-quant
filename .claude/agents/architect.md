@@ -77,7 +77,7 @@ Size tasks so one implementer finishes each in one sitting (roughly ≤ 300 chan
 
 Done when every task has paths, criteria, a first test, dependencies and a runtime, and no two tasks in the same parallel group touch the same file.
 
-End with the handoff contract from `docs/orchestration/README.md#handoff-contract`, with the design inline above it. Put questions only the user can answer under `status: needs-decision`, each with a recommended answer.
+End with the handoff contract from `docs/orchestration/README.md#handoff-contract`, with the design inline above it. Put questions only the user can answer under `status: needs-decision`, each with a recommended answer. Give each one the material for the chief's user format (orchestrate skill § Asking the user): a plain-terms line, a concrete example flow (coin, date, time) and the measured before/after numbers.
 
 ## Swarm board (shared memory + chat — use it)
 
@@ -121,3 +121,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-16 (job 20261016-safety-bankroll, design round 3): stall-term + worker-owned-close rows for fail-closed timing bounds; confirmed leverage and order-set union for margin math. Evidence: rev-sb-design-1 B1/B2/B4, rev-sb-design-2 B2 residual; proposals 18df18789d25e010-7418 and arch-sb r2 improve line.
 - 2026-10-16 (job 20261016-safety-bankroll, T7 round 3): normalization rules at the shared consumer. Evidence: rev-sb-t7-2 B1 residual, ruling T7-R4.
 - 2026-10-17 (job 20261016-safety-bankroll): live vs backtest engine rows for order-flow contracts. Evidence: risk-sb-t4-1 F1 (R30d added mid-job).
+- 2026-10-17: needs-decision items carry plain terms + example flow + numbers for the user format. Evidence: job 20261017-grind user feedback on the 6osqd/lcf12 explanations.
