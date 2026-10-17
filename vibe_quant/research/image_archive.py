@@ -13,8 +13,8 @@ rebuildable runtime data, never committed):
 * total count cap so a gallery can't balloon the archive,
 * per-file timeout,
 * skip-on-failure — one bad URL must never fail the whole item,
-* a browser User-Agent retry when a redd.it CDN 403s a plain request (mirrors
-  the challenge client's UA).
+* a browser User-Agent retry when a redd.it CDN 403s a plain request (the CDN
+  rejects the plain research UA).
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
-
-from vibe_quant.research.sources._reddit_challenge import BROWSER_USER_AGENT
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -40,6 +38,11 @@ MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per file
 DOWNLOAD_TIMEOUT_S = 20.0
 _CHUNK_SIZE = 65536
+
+#: A browser User-Agent: the redd.it CDN 403s our plain research UA.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0"
+)
 
 _ALLOWED_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 _EXT_BY_CONTENT_TYPE = {

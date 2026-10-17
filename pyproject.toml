@@ -13,7 +13,6 @@ dependencies = [
     "pydantic>=2.14.0",
     "python-telegram-bot>=22.8",
     "httpx>=0.28.1",
-    "curl_cffi>=0.16.3",
     "scipy>=1.18.1",
     "eth_account>=0.13.7",
     "python-socketio[asyncio_client]>=5.17.0",
