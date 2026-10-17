@@ -9,6 +9,11 @@ the run's leverage), plus the chief rulings S1-M1..S1-M6 (exact error wording,
 ``check_leverage``, ``from_params``, ``recorded_sizing``, import isolation,
 ``to_params``).
 
+Task T3 adds the margin limit: R26 (an absent ``max_margin_pct`` is OFF and stores
+nothing), R26b (an explicit ``null`` is an error, never "off"), R26c (bool/string/0/above-1/
+nan are the same error quoting the raw value) and R26d (an explicit 0.5 is stored, and
+``strategy_params(leverage)`` rides the run leverage along as ``margin_leverage``).
+
 The rule is an exposure CAP, not a target: ``min(risk/stop%, cap)`` is the template's
 call, out of scope here.
 """
@@ -40,6 +45,7 @@ CAP_MESSAGE = "max_position_pct must be a number in (0, 125], got"
 RISK_MESSAGE = (
     "risk_per_trade must be more than 0 and at most 0.5 (50% of equity per trade), got"
 )
+MARGIN_MESSAGE = "max_margin_pct must be a number in (0, 1], got"
 
 # Either field accepts the same domain: (0, upper] for finite numbers, nothing else.
 INPUT_DOMAIN = [
@@ -290,6 +296,8 @@ _FALSEY_EXPLICIT = [
     pytest.param("max_position_pct", 0, CAP_MESSAGE, id="cap-zero"),
     pytest.param("risk_per_trade", None, RISK_MESSAGE, id="risk-None"),
     pytest.param("risk_per_trade", 0, RISK_MESSAGE, id="risk-zero"),
+    pytest.param("max_margin_pct", None, MARGIN_MESSAGE, id="margin-None"),
+    pytest.param("max_margin_pct", 0, MARGIN_MESSAGE, id="margin-zero"),
 ]
 
 
@@ -349,9 +357,62 @@ def test_to_params_stores_only_non_defaults() -> None:
     assert all(type(v) is float for v in stored.values())
 
 
-def test_sizing_fields_names_the_two_settings() -> None:
-    """The registry later tasks use to reject a sizing key inside a sweep."""
-    assert SIZING_FIELDS == ("max_position_pct", "risk_per_trade")
+def test_sizing_fields_names_the_three_settings() -> None:
+    """The registry later tasks use to reject a run-level sizing key inside a sweep."""
+    assert SIZING_FIELDS == ("max_position_pct", "risk_per_trade", "max_margin_pct")
+
+
+def test_max_margin_absent_is_off() -> None:
+    """R26: an absent margin limit is OFF — nothing stored and no leverage forwarded."""
+    settings = SizingSettings.from_params({})
+    assert settings.max_margin_pct is None
+    assert settings.to_params() == {}
+    assert settings.strategy_params(10) == {}
+
+
+def test_max_margin_null_rejected() -> None:
+    """R26b: an explicit null is an error, never quietly "off"."""
+    with pytest.raises(SizingConfigError) as excinfo:
+        SizingSettings.from_params({"max_margin_pct": None})
+    assert str(excinfo.value) == f"{MARGIN_MESSAGE} None"
+
+
+@pytest.mark.parametrize(
+    "value", [True, "0.5", 0, 1.5, math.nan], ids=["bool", "string", "zero", "above-one", "nan"]
+)
+def test_max_margin_invalid_rejected(value: object) -> None:
+    """R26c: a bool, a numeric string, 0, 1.5 and nan are one error quoting the raw value."""
+    with pytest.raises(SizingConfigError) as excinfo:
+        SizingSettings.from_params({"max_margin_pct": value})
+    assert str(excinfo.value) == f"{MARGIN_MESSAGE} {value!r}"
+
+
+def test_max_margin_bounds_inclusive() -> None:
+    """R26c/R26d: the domain is (0, 1]; both a tiny fraction and exactly 1 are valid."""
+    assert SizingSettings(max_margin_pct=1e-9).max_margin_pct == 1e-9
+    assert SizingSettings(max_margin_pct=1).max_margin_pct == 1.0
+    assert type(SizingSettings(max_margin_pct=1).max_margin_pct) is float
+    for value in (0, -0.0, 1.0000001, math.inf, -math.inf):
+        with pytest.raises(SizingConfigError):
+            SizingSettings(max_margin_pct=value)
+
+
+def test_max_margin_constructor_validates_too() -> None:
+    """R26b/R26c: the dataclass itself accepts None (the OFF default) and rejects the rest."""
+    assert SizingSettings(max_margin_pct=None).max_margin_pct is None
+    assert SizingSettings().max_margin_pct is None
+    assert SizingSettings(max_margin_pct=0.5).max_margin_pct == 0.5
+
+
+def test_max_margin_strategy_params() -> None:
+    """R26d: an explicit 0.5 is stored and the run leverage rides along as margin_leverage."""
+    settings = SizingSettings.from_params({"max_margin_pct": 0.5})
+    assert settings.max_margin_pct == 0.5
+    assert settings.to_params() == {"max_margin_pct": 0.5}
+    params = settings.strategy_params(20)
+    assert params == {"max_margin_pct": 0.5, "margin_leverage": 20.0}
+    assert all(type(value) is float for value in params.values())
+    assert settings.strategy_params(1) == {"max_margin_pct": 0.5, "margin_leverage": 1.0}
 
 
 def test_importing_adds_no_heavy_modules() -> None:
