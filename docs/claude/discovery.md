@@ -21,6 +21,7 @@ Read before running discovery, interpreting or comparing its results, or changin
 - **Fails loudly:** an all-errored eval batch raises `DiscoveryEvaluationError` → run `failed`, not "0 champions".
 - Validation's consistency check (`validation/consistency.py`) flags screening→validation collapse against the same window; holdout-validated champions are compared on their holdout metrics.
 - **Compiler version hash** (`compiler_version_hash()`, stored in run notes for staleness) changes with indicator/codegen changes: `bd recall discovery:compiler-hash`. Champion rankings: `bd recall discovery:champions`.
+- **HYPE's short history constrains multi-symbol runs:** HYPE has ~16.6 months (2025-05-30 10:30 → 2026-10-16, ~504 d; ~403 d train / ~101 d holdout at the default 20%, `eval_windows=3` → ~134 d per window; `OWN_TREND(200)` is NaN for its first ~200 daily bars). A multi-symbol run including HYPE must start >= 2025-05-31, which drags BTC & co. into the same short window (fill-tick coverage fails closed otherwise); HYPE-only champions are low-confidence (user decision 2026-10-17). HYPE settles funding every 4h, so its one archived venue skip (2026-06-24 04:00) is charged as a single flagged fallback (0.01% per 8h scaled 4/8 = `0.00005 x notional`), counted in `funding_fallback_settlements`.
 - **1m is slow:** Rust-native indicators (SMA/EMA/CCI/STOCH/ATR) run ~10× faster than pandas-path ones (ADX/MACD/BBANDS/KAMA).
 
 ## Comparability breaks

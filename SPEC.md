@@ -304,7 +304,9 @@ CREATE INDEX idx_raw_funding_symbol_time ON raw_funding_rates(symbol, funding_ti
 
 ### Data Ingestion Pipeline
 
-**Initial bulk load (3 symbols, 2 years, 1-minute):**
+**Supported symbols (8):** `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`, `SUIUSDT` (Vision data from 2023-05), `ZECUSDT` (from 2020-02), `NEARUSDT` (from 2020-10) and `HYPEUSDT` (from 2025-05); HYPE settles funding every 4h, the others every 8h. A new coin's first ingest goes through the CLI or `POST /api/data/ingest`; the UI ingest form lists archive symbols only.
+
+**Initial bulk load (example: 3 symbols, 2 years, 1-minute):**
 
 ```
 data.binance.vision (monthly CSV archives)
