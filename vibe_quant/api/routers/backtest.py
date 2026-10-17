@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from vibe_quant.api import mark_precheck
+from vibe_quant.api import data_precheck, mark_precheck
 from vibe_quant.api.deps import (
     get_catalog_manager,
     get_job_manager,
@@ -150,6 +150,25 @@ async def launch_screening(
                 "(screening maker-fill parity unproven, bead vibe-quant-7eek0)"
             ),
         )
+    # The run's strategy timeframe needs fill ticks over the window, and its
+    # context indicators need aux data; refuse before any run row exists rather
+    # than failing the run in a subprocess (vibe-quant-b5xfj). The parameters go
+    # along because a launch may carry a dsl_override, which the screening CLI
+    # runs INSTEAD of the stored DSL (vibe_quant/screening/__main__.py) — the
+    # check must use the DSL the run will actually parse.
+    strategy = state.get_strategy(body.strategy_id)
+    if strategy is None:  # pragma: no cover - _ensure_strategy raised already
+        raise HTTPException(status_code=404, detail=f"Strategy {body.strategy_id} not found")
+    dsl_config = strategy["dsl_config"]
+    await asyncio.to_thread(
+        data_precheck.precheck_screening_data,
+        dsl_config if isinstance(dsl_config, dict) else {},
+        body.symbols,
+        body.start_date,
+        body.end_date,
+        str(strategy["name"]),
+        body.parameters,
+    )
     # A mode-on run scans MARK 1m bars; refuse before any run row exists rather
     # than failing the run inside apply_liquidation (vibe-quant-592lt).
     if body.liquidation_mode != "off":

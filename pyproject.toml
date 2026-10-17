@@ -93,6 +93,7 @@ addopts = "-v --tb=short"
 markers = [
     "timing: asserts relative wall-clock speed; run serially (-m timing), never in the parallel pass",
     "allow_network: skip the unit-suite network guard; the test may open a real socket",
+    "real_data_precheck: do not stub the launch data prechecks; the test drives them against a tmp catalog",
 ]
 
 # nautilus_trader 1.231.0's compiled BacktestEngine._run calls pandas

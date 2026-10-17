@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from vibe_quant.api import mark_precheck
+from vibe_quant.api import data_precheck, mark_precheck
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
 from vibe_quant.api.schemas.discovery import (
     DiscoveryJobResponse,
@@ -611,6 +611,18 @@ async def launch_discovery(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     _precheck_discovery_config(cli_args)
 
+    # The run fills on ticks for its timeframe and needs aux data for every
+    # context indicator in its pool; refuse before any run row exists rather
+    # than failing the run inside a worker (vibe-quant-b5xfj).
+    await asyncio.to_thread(
+        data_precheck.precheck_discovery_data,
+        timeframe,
+        body.symbols,
+        body.indicator_pool,
+        start_date,
+        end_date,
+    )
+
     # A mode-on run scans MARK 1m bars across every stage of the span; refuse
     # before any run row exists rather than failing the run in a worker
     # (vibe-quant-592lt).
@@ -624,9 +636,9 @@ async def launch_discovery(
             start_date,
             end_date,
         )
-        # The await above let another launch in: re-check capacity right before
-        # the run row, with no await between here and start_job (M16).
-        _refuse_if_discovery_full(jobs)
+    # The awaits above let another launch in: re-check capacity right before the
+    # run row, with no await between here and start_job (M16).
+    _refuse_if_discovery_full(jobs)
 
     # Use strategy_id=None for discovery (no pre-existing strategy)
     run_id = state.create_backtest_run(

@@ -180,3 +180,28 @@ def _restore_aux_data_paths() -> Iterator[None]:
         return
     archive, catalog = saved if saved is not None else (None, None)
     aux.configure(archive, catalog)
+
+
+def _noop_data_precheck(*args: object, **kwargs: object) -> None:
+    """Stand-in for a launch data precheck (see ``_stub_launch_data_precheck``)."""
+
+
+@pytest.fixture(autouse=True)
+def _stub_launch_data_precheck(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neutralise the launch data prechecks (fill ticks, context-indicator aux data).
+
+    ``vibe_quant.api.data_precheck`` reads the catalog (and the funding archive /
+    BTC daily bars for context indicators), so a launch test with fake
+    symbols/dates would 422 on machine data -- and worktrees symlink the real
+    2 GB ``data/archive``. The tests that pin its behaviour opt out with
+    ``@pytest.mark.real_data_precheck`` and point it at a tmp catalog
+    (vibe-quant-b5xfj).
+    """
+    if request.node.get_closest_marker("real_data_precheck") is not None:
+        return
+    from vibe_quant.api import data_precheck
+
+    monkeypatch.setattr(data_precheck, "precheck_discovery_data", _noop_data_precheck)
+    monkeypatch.setattr(data_precheck, "precheck_screening_data", _noop_data_precheck)
