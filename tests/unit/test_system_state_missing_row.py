@@ -1,26 +1,26 @@
-"""A missing ``system_state`` row fails closed (bead vibe-quant-lickf, task F2).
+"""A missing ``system_state`` row is re-created ENGAGED (bead vibe-quant-tdjop, task T1).
 
-``init_schema`` seeds the singleton row with
-``INSERT OR IGNORE INTO system_state (id, kill_switch) VALUES (1, 0)``, so a
-missing row id=1 means someone deleted it or the DB is broken. Before this
-change every reader got the defensive defaults dict (``kill_switch: False``),
-so a deleted row silently disabled the global kill switch everywhere. The paper
-node and the paper API now read the row with ``require_row=True`` and treat a
-missing row as an unreadable switch; ``/api/system/status`` keeps returning the
-defaults (unchanged).
+This file used to pin the previous fail-closed read (a missing row raised
+``SystemStateMissingError`` from ``require_row=True`` reads, and the node/API
+texts said "state unavailable"/"unreadable"). Task T1 replaced that rule (design
+20261016-safety-bankroll, "Existing assertions this contract changes"): a deleted
+kill-switch record is now re-created ENGAGED on the spot, so every reader sees an
+engaged switch instead of a failed read.
+
+The row-level coverage of the new rule lives in
+``tests/unit/test_kill_switch_row.py`` (rows R1-R8); this file keeps the
+end-to-end coverage: what the paper NODE and the paper API do on a missing row.
 
 Contract rows:
 
-* L1 ``get_system_state(require_row=True)`` with no row raises
-      ``SystemStateMissingError`` (a ``RuntimeError``) with the exact message;
-      the default ``require_row=False`` read still returns the defaults dict and
-      a present row reads live.
-* L2 ``PaperTradingNode._kill_switch`` counts a missing row as a failed read
-      (engaged for that check, streak +1, class-only log); three in a row halt
-      ERROR with the same fail-closed message as s40h9.
-* L3 startup and resume refuse with the existing unreadable-read texts and the
-      exception class ``SystemStateMissingError``.
-* L4 ``/api/paper/start|restore|resume`` refuse with HTTP 503 and the exact
+* L1 a read on a deleted row (cached conn, ``require_row`` either way) re-seeds
+      it engaged and returns the reseed reason; a present row reads live.
+* L2 ``PaperTradingNode._kill_switch`` reads the re-seeded row as engaged
+      (no failure streak, no class-only ERROR log) and ``_check_kill_switch``
+      halts KILL_SWITCH once with the reseed reason.
+* L3 startup refuses with the engaged text (never the "unreadable" one) and
+      resume is refused because the switch is engaged.
+* L4 ``/api/paper/start|restore|resume`` refuse with HTTP 423 and the engaged
       detail, creating no run row and no job.
 * L5 a present row is unchanged everywhere.
 """
@@ -37,7 +37,8 @@ from tests.unit.test_audit_paper_node import _config, _FakeTradingNode
 from tests.unit.test_paper_kill_switch_fail_closed import _RecordGuard
 from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
-from vibe_quant.db.state_manager import StateManager, SystemStateMissingError
+from vibe_quant.db.schema import SYSTEM_STATE_RESEEDED_REASON
+from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.guard import HaltReason
@@ -57,18 +58,21 @@ DSL = {
     "take_profit": {"type": "fixed_pct", "percent": 4.0},
 }
 
-_MISSING = "system_state row id=1 is missing"
-_REFUSAL = "System kill switch state unavailable (system_state row missing); refusing"
+_REASON = SYSTEM_STATE_RESEEDED_REASON
+#: API refusal detail (``_refuse_if_killed``).
+_ENGAGED = f"System kill switch engaged: {_REASON}"
+#: Startup refusal text (``PaperTradingNode._initialize``).
+_ENGAGED_START = f"System kill switch engaged ({_REASON}); refusing to start"
 
 
 def _drop_state_row(state: StateManager) -> None:
     """Delete the singleton row through ``state``'s own connection.
 
-    ``init_schema`` re-inserts the row on every fresh connection, so the delete
-    must happen after the connection that will serve the read is open (and is
-    asserted to have taken effect).
+    The delete must happen after the connection that will serve the read is open
+    (and is asserted to have taken effect), so the read under test really sees a
+    missing row.
     """
-    _ = state.conn  # open + init schema (re-inserts the row) before deleting it
+    _ = state.conn  # open + init schema before deleting the row
     state.conn.execute("DELETE FROM system_state")
     state.conn.commit()
     count = state.conn.execute("SELECT COUNT(*) FROM system_state").fetchone()[0]
@@ -108,35 +112,38 @@ def fake_tradingnode(monkeypatch: pytest.MonkeyPatch) -> type[_FakeTradingNode]:
 # --------------------------------------------------------------- L1
 
 
-def test_require_row_raises_when_row_missing(tmp_path: Path) -> None:
-    """L1: ``require_row=True`` with no row raises the dedicated error, whose
-    message is the exact one the paper API/ node texts are built around."""
+def test_cached_conn_read_reseeds_engaged(tmp_path: Path) -> None:
+    """L1: the read on a deleted row re-creates it engaged and returns the
+    reseed reason - it never raises and never answers "not killed"."""
     sm = StateManager(tmp_path / "state.db")
     try:
         _drop_state_row(sm)
-        with pytest.raises(SystemStateMissingError) as exc_info:
-            sm.get_system_state(require_row=True)
-        assert isinstance(exc_info.value, RuntimeError)
-        assert str(exc_info.value) == _MISSING
+        state = sm.get_system_state(require_row=True)
+        row = sm.conn.execute(
+            "SELECT id, kill_switch, reason, killed_at, killed_by FROM system_state"
+        ).fetchone()
+        assert row is not None, "the read must have re-created the row"
+        again = sm.get_system_state(require_row=True)
     finally:
         sm.close()
+    assert state["kill_switch"] is True
+    assert state["reason"] == _REASON
+    assert (row[0], row[1], row[2], row[4]) == (1, 1, _REASON, "system")
+    assert row[3] is not None
+    assert again["kill_switch"] is True, "the row stays engaged after the read"
 
 
-def test_default_read_keeps_defaults_when_row_missing(tmp_path: Path) -> None:
-    """L1: the default read (``require_row=False``, what /api/system/status
-    calls) still answers with the defaults dict instead of raising."""
+def test_default_read_reseeds_engaged_never_defaults(tmp_path: Path) -> None:
+    """L1: the no-arg read (what /api/system/status calls) also re-creates the
+    row engaged - the old disengaged defaults dict is gone."""
     sm = StateManager(tmp_path / "state.db")
     try:
         _drop_state_row(sm)
-        assert sm.get_system_state() == {
-            "kill_switch": False,
-            "reason": None,
-            "killed_at": None,
-            "killed_by": None,
-            "updated_at": None,
-        }
+        state = sm.get_system_state(require_row=False)
     finally:
         sm.close()
+    assert state["kill_switch"] is True
+    assert state["reason"] == _REASON
 
 
 def test_require_row_reads_live_row_when_present(tmp_path: Path) -> None:
@@ -157,10 +164,11 @@ def test_require_row_reads_live_row_when_present(tmp_path: Path) -> None:
 # --------------------------------------------------------------- L2
 
 
-async def test_node_treats_missing_row_as_failed_read(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+async def test_node_reads_reseeded_engaged(
+    seeded: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """L2: a missing row is a failed read - engaged, streak +1, class-only log."""
+    """L2: a deleted row is a clean engaged read for the node - engaged with the
+    reseed reason, no failure streak, no ERROR log, no guard call."""
     guard = _RecordGuard()
     node = PaperTradingNode(_config(seeded))
     node._guard = guard  # type: ignore[assignment]
@@ -169,23 +177,21 @@ async def test_node_treats_missing_row_as_failed_read(
         with caplog.at_level(logging.ERROR):
             engaged, reason = node._kill_switch()
         assert engaged is True
-        assert reason == "kill switch state unreadable (SystemStateMissingError)"
-        assert node._kill_read_failures == 1
-        assert node._kill_read_error == "SystemStateMissingError"
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert len(errors) == 1
-        assert errors[0].getMessage() == (
-            "could not read system kill switch (SystemStateMissingError); 1 consecutive failure(s)"
-        )
-        assert errors[0].exc_info is None
-        assert _MISSING not in caplog.text, "the log stays class-only"
+        assert reason == _REASON
+        assert node._kill_read_failures == 0, "a re-seeded engaged row is not a failed read"
+        assert node._kill_read_error is None
         assert guard.calls == []
+        assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
+        assert any(r.levelno == logging.CRITICAL for r in caplog.records), (
+            "the re-seed is recorded at CRITICAL"
+        )
     finally:
         await node._shutdown()
 
 
-async def test_node_three_missing_row_reads_halt_error(seeded: dict[str, Any]) -> None:
-    """L2: three consecutive missing-row reads halt ERROR with the s40h9 text."""
+async def test_node_missing_row_halts_kill_switch_once(seeded: dict[str, Any]) -> None:
+    """L2: repeated checks on the re-seeded row halt KILL_SWITCH exactly once
+    (the latch), with the reseed reason - never the 'unreadable' ERROR halt."""
     guard = _RecordGuard()
     node = PaperTradingNode(_config(seeded))
     node._guard = guard  # type: ignore[assignment]
@@ -193,11 +199,8 @@ async def test_node_three_missing_row_reads_halt_error(seeded: dict[str, Any]) -
     try:
         for _ in range(3):
             node._check_kill_switch()
-        assert guard.calls == [("halt", HaltReason.ERROR)]
-        assert guard.messages == [
-            "system kill switch unreadable for 3 consecutive reads"
-            " (SystemStateMissingError); failing closed"
-        ]
+        assert guard.calls == [("halt", HaltReason.KILL_SWITCH)]
+        assert guard.messages == [f"system kill switch: {_REASON}"]
     finally:
         await node._shutdown()
 
@@ -208,24 +211,22 @@ async def test_node_three_missing_row_reads_halt_error(seeded: dict[str, Any]) -
 async def test_startup_refuses_when_row_missing(
     seeded: dict[str, Any], fake_tradingnode: type[_FakeTradingNode]
 ) -> None:
-    """L3: a missing row at _initialize refuses like any unreadable read, before
-    any TradingNode is built."""
+    """L3: a deleted row at _initialize refuses like any engaged switch (the
+    reason names the re-seed), before any TradingNode is built."""
     node = PaperTradingNode(_config(seeded))
     _drop_state_row(node._state_manager)
     try:
         with pytest.raises(ConfigurationError) as exc_info:
             await node._initialize()
-        assert str(exc_info.value) == (
-            "System kill switch state unreadable (SystemStateMissingError); refusing to start"
-        )
+        assert str(exc_info.value) == _ENGAGED_START
         assert fake_tradingnode.instances == []
     finally:
         await node._shutdown()
 
 
 async def test_resume_refused_when_row_missing(seeded: dict[str, Any]) -> None:
-    """L3: resume with a missing row is refused with the unreadable-read text and
-    never reaches the guard."""
+    """L3: resume with a deleted row is refused because the row is engaged, and
+    the refusal reaches the guard as ``kill_switch_engaged=True``."""
     guard = _RecordGuard()
     node = PaperTradingNode(_config(seeded))
     node._guard = guard  # type: ignore[assignment]
@@ -233,10 +234,9 @@ async def test_resume_refused_when_row_missing(seeded: dict[str, Any]) -> None:
     try:
         assert node.resume() == (
             False,
-            "system kill switch state unreadable (SystemStateMissingError);"
-            " cannot resume until it reads cleanly",
+            "system kill switch is engaged; unlock it before resuming",
         )
-        assert guard.calls == []
+        assert guard.calls == [("resume", True)]
     finally:
         await node._shutdown()
 
@@ -325,7 +325,8 @@ async def api(
 async def test_paper_control_refused_when_row_missing(
     api: _ApiCtx, path: str, body: dict[str, Any] | None
 ) -> None:
-    """L4: start/restore/resume all fail closed with 503 - no run row, no job.
+    """L4: start/restore/resume all refuse with 423 and the re-seed reason - no
+    run row, no job.
 
     ``validation_run_id`` is patched to this fixture's run because it is created
     per-test; the refusal must fire before any run lookup anyway.
@@ -338,8 +339,8 @@ async def test_paper_control_refused_when_row_missing(
 
     r = await api.ac.post(path, json=body)
 
-    assert r.status_code == 503, r.text
-    assert r.json()["detail"] == _REFUSAL
+    assert r.status_code == 423, r.text
+    assert r.json()["detail"] == _ENGAGED
     assert api.run_count() == before, "the refusal must not create a backtest run row"
     assert api.launched == [], "the refusal must not start a job"
 
@@ -348,8 +349,8 @@ async def test_paper_control_refused_when_row_missing(
 
 
 async def test_present_row_unchanged(api: _ApiCtx) -> None:
-    """L5: with the row present the paper API still starts (and the default
-    status read still answers) - the missing-row path must not touch it."""
+    """L5: with the row present the paper API still starts (and the status read
+    still answers) - the missing-row path must not touch it."""
     r = await api.ac.post("/api/paper/start", json={"validation_run_id": api.run_id})
     assert r.status_code == 201, r.text
     assert len(api.launched) == 1

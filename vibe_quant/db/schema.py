@@ -200,7 +200,8 @@ CREATE TABLE IF NOT EXISTS consistency_checks (
 );
 
 -- System state (singleton row, id=1). Persistent kill-switch + halt metadata.
--- One row, updated in place; never deleted.
+-- One row, updated in place; a missing row is re-created ENGAGED (fail closed) by
+-- ``reseed_system_state`` -- never re-seeded disengaged (bead vibe-quant-tdjop).
 CREATE TABLE IF NOT EXISTS system_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     kill_switch INTEGER NOT NULL DEFAULT 0,
@@ -209,7 +210,6 @@ CREATE TABLE IF NOT EXISTS system_state (
     killed_by TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-INSERT OR IGNORE INTO system_state (id, kill_switch) VALUES (1, 0);
 
 -- External research pipeline (Reddit, arxiv, ...). Source-agnostic items + LLM extractions.
 CREATE TABLE IF NOT EXISTS research_items (
@@ -390,8 +390,7 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         (
             "research_extractions",
             "completeness",
-            "REAL CHECK (completeness IS NULL OR "
-            "(completeness >= 0.0 AND completeness <= 1.0))",
+            "REAL CHECK (completeness IS NULL OR (completeness >= 0.0 AND completeness <= 1.0))",
         ),
         ("research_extractions", "screen_sharpe", "REAL"),
         ("research_extractions", "screen_status", "TEXT"),
@@ -533,6 +532,60 @@ ZERO_TRADE_ERROR_PATTERN = "%produced 0 trades%"
 # PRAGMA user_version marker for _migrate_v16_dedupe_results (one-time data fix).
 _USER_VERSION_V16 = 16
 
+#: Reason stamped on the ``system_state`` row when it had to be re-created
+#: because it went missing. A deleted kill-switch record is re-created ENGAGED
+#: (fail closed), never disengaged (bead vibe-quant-tdjop).
+SYSTEM_STATE_RESEEDED_REASON = "kill-switch record was missing; re-created engaged"
+# ``killed_by`` of the re-created row until the operator's first unlock attempt
+# has been refused; the refusal rewrites it to the acknowledged value so the
+# next unlock goes through. Persisted in the row, not in a StateManager, so the
+# evidence survives whichever connection (StateManager, job manager, CLI) ran
+# the lazy re-creation.
+SYSTEM_STATE_RESEEDED_BY = "system"
+SYSTEM_STATE_UNLOCK_ACK_BY = "system (unlock acknowledged)"
+SYSTEM_STATE_UNRESEEDABLE_MSG = "system_state row id=1 is missing and could not be re-created"
+
+
+class SystemStateMissingError(RuntimeError):
+    """Raised when the singleton ``system_state`` row (id=1) cannot be read.
+
+    A missing row is normally re-created ENGAGED on the spot (see
+    :func:`reseed_system_state`), so this error means the row was absent *and*
+    could not be re-created (on a cached connection or while a fresh connection
+    initialised the schema), or that an unlock found it absent. Callers that
+    guard money (the paper node, the paper API) must treat it as an unreadable
+    kill switch rather than as "not killed" (vibe-quant-lickf, vibe-quant-tdjop).
+    """
+
+
+def reseed_system_state(conn: sqlite3.Connection, *, engaged: bool) -> bool:
+    """Re-create the singleton ``system_state`` row if it is absent.
+
+    ``INSERT OR IGNORE`` keeps a present row untouched, so this is safe to call
+    on every open. ``engaged`` says whether the row was missing from an *existing*
+    database (True -> re-create ENGAGED, fail closed, and log CRITICAL once) or
+    whether this is a brand-new database (False -> seed disengaged).
+
+    Returns True when this call inserted the row (``rowcount == 1``).
+    """
+    if engaged:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO system_state
+                   (id, kill_switch, reason, killed_at, killed_by, updated_at)
+               VALUES (1, 1, ?, datetime('now'), ?, datetime('now'))""",
+            (SYSTEM_STATE_RESEEDED_REASON, SYSTEM_STATE_RESEEDED_BY),
+        )
+    else:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO system_state
+                   (id, kill_switch, reason, killed_at, killed_by, updated_at)
+               VALUES (1, 0, NULL, NULL, NULL, datetime('now'))"""
+        )
+    inserted = cursor.rowcount == 1
+    if inserted and engaged:
+        logger.critical("system_state row was missing; re-created ENGAGED")
+    return inserted
+
 
 def _trade_attempt_segments(rows: list[sqlite3.Row]) -> list[list[int]]:
     """Split one run's trade rows (ordered by id) into per-attempt segments.
@@ -669,7 +722,9 @@ def _migrate_v16_dedupe_results(conn: sqlite3.Connection) -> None:
         for run_id, total_trades, error in stuck:
             if total_trades is not None and total_trades > 0:
                 # A later attempt succeeded; the error belongs to the stale attempt.
-                conn.execute("UPDATE backtest_runs SET error_message = NULL WHERE id = ?", (run_id,))
+                conn.execute(
+                    "UPDATE backtest_runs SET error_message = NULL WHERE id = ?", (run_id,)
+                )
             else:
                 conn.execute("UPDATE backtest_runs SET status = 'failed' WHERE id = ?", (run_id,))
                 conn.execute(
@@ -703,10 +758,35 @@ def _migrate_v16_dedupe_results(conn: sqlite3.Connection) -> None:
 def init_schema(conn: sqlite3.Connection) -> None:
     """Initialize database schema.
 
+    The ``system_state`` row is (re-)created here, not in ``SCHEMA_SQL``: an
+    existing database whose singleton row went missing gets it back ENGAGED
+    (fail closed), while a brand-new database is seeded disengaged.
+
     Args:
         conn: SQLite connection with WAL mode enabled.
     """
+    existed = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='system_state'"
+        ).fetchone()
+        is not None
+    )
     conn.executescript(SCHEMA_SQL)
+    # Only a genuinely absent row is (re-)created, and only a failure of THAT
+    # insert is reported as an unreseedable kill-switch row: a held writer lock
+    # while the row is present must stay the plain OperationalError.
+    if conn.execute("SELECT 1 FROM system_state WHERE id = 1").fetchone() is None:
+        try:
+            reseed_system_state(conn, engaged=existed)
+        except sqlite3.Error as exc:
+            # A transient writer lock (BUSY/LOCKED) stays the raw error: the next
+            # access retries the whole init (see StateManager.conn).
+            if getattr(exc, "sqlite_errorcode", 0) & 0xFF in (
+                sqlite3.SQLITE_BUSY,
+                sqlite3.SQLITE_LOCKED,
+            ):
+                raise
+            raise SystemStateMissingError(SYSTEM_STATE_UNRESEEDABLE_MSG) from exc
     _migrate_add_columns(conn)
     _migrate_research_items_allow_queued(conn)
     conn.commit()

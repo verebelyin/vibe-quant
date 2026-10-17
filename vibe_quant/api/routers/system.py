@@ -11,19 +11,25 @@ not auto-resume sessions.
 
 from __future__ import annotations
 
+import json
 import logging
-from pathlib import Path
-from typing import Annotated
+import sqlite3
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from vibe_quant.api.deps import get_job_manager, get_state_manager, get_ws_manager
 from vibe_quant.api.ws.manager import ConnectionManager
+from vibe_quant.db.connection import get_connection
+from vibe_quant.db.schema import SystemStateMissingError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import default_paper_trader_id
 from vibe_quant.paper.persistence import PaperCommandQueue
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +63,44 @@ class SystemStatusResponse(BaseModel):
     updated_at: str | None
 
 
+def _paper_trader_id(db_path: Path | None, run_id: int) -> str:
+    """The run's ``parameters.trader_id`` (default id if absent or unreadable).
+
+    Reads through its own plain connection: ``StateManager`` may be exactly the
+    thing that cannot initialise (the cascade must still run).
+    """
+    default = default_paper_trader_id(run_id)
+    try:
+        conn = get_connection(db_path)
+        try:
+            row = conn.execute(
+                "SELECT parameters FROM backtest_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        params = json.loads(row[0]) if row is not None else None
+    except (sqlite3.Error, TypeError, ValueError):
+        return default
+    if not isinstance(params, dict):
+        return default
+    return str(params.get("trader_id") or default)
+
+
 @router.get("/status", response_model=SystemStatusResponse)
 async def get_status(state: StateMgr) -> SystemStatusResponse:
-    return SystemStatusResponse(**state.get_system_state())
+    """Report the persisted kill state.
+
+    A row that went missing is re-created ENGAGED by the read (a deleted
+    kill-switch record is never reported as unlocked); an unreadable-and-
+    unreseedable state is a 503, never a 200 default.
+    """
+    try:
+        return SystemStatusResponse(**state.get_system_state())
+    except SystemStateMissingError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"kill switch state unavailable: {exc}",
+        ) from exc
 
 
 @router.post("/kill", response_model=SystemStatusResponse, status_code=200)
@@ -75,26 +116,38 @@ async def kill(
     - Queues a ``kill`` command for every active paper session (no signals:
       a recycled PID can never receive it).
     - Broadcasts `system_killed` over the trading WebSocket.
+
+    If persisting fails the cascade still runs (live sessions must stop even
+    when the DB write does not land) and the response is a 503 naming the error
+    class and how many sessions were told to kill — a kill that is not on disk
+    must never look like a successful kill.
     """
-    state.set_kill_switch(body.reason, body.killed_by)
-    logger.warning(
-        "system kill engaged reason=%r by=%r", body.reason, body.killed_by
-    )
+    persist_error: Exception | None = None
+    try:
+        state.set_kill_switch(body.reason, body.killed_by)
+    except (sqlite3.Error, SystemStateMissingError) as exc:
+        persist_error = exc
+        logger.error("system kill NOT persisted (%s); cascading kill anyway", type(exc).__name__)
+    else:
+        logger.warning("system kill engaged reason=%r by=%r", body.reason, body.killed_by)
 
     # Fast-path cascade. Never raise here — the persisted flag is the source
     # of truth and every node polls it independently.
-    db_file = state.get_database_file()
-    queue = PaperCommandQueue(Path(db_file) if db_file else None)
+    # Nothing below may touch ``state``'s connection: when the persist failed
+    # because the StateManager's initializer fails, every ``state`` call would
+    # re-run that failing initializer and abort the cascade (500, no commands).
+    # The path comes from the configured value and trader ids from a plain
+    # connection of their own.
+    queue = PaperCommandQueue(state.db_path)
+    sent = 0
     try:
         for job in jobs.list_active_jobs():
             if job.job_type != "paper":
                 continue
-            run = state.get_backtest_run(job.run_id) or {}
-            raw_params = run.get("parameters")
-            params: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
-            trader_id = str(params.get("trader_id") or default_paper_trader_id(job.run_id))
             try:
+                trader_id = _paper_trader_id(state.db_path, job.run_id)
                 queue.enqueue(trader_id, "kill", {"message": f"kill switch: {body.reason}"})
+                sent += 1
                 logger.info("queued kill for paper trader_id=%s run_id=%d", trader_id, job.run_id)
             except Exception as exc:
                 logger.warning("kill cascade failed run_id=%d err=%s", job.run_id, exc)
@@ -105,6 +158,15 @@ async def kill(
         "trading",
         {"type": "system_killed", "reason": body.reason, "killed_by": body.killed_by},
     )
+
+    if persist_error is not None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"kill switch NOT persisted ({type(persist_error).__name__}); "
+                f"kill commands sent to {sent} paper session(s)"
+            ),
+        )
     return SystemStatusResponse(**state.get_system_state())
 
 
@@ -114,13 +176,20 @@ async def unlock(
     state: StateMgr,
     ws: WsMgr,
 ) -> SystemStatusResponse:
-    """Clear the kill switch. Requires ``acknowledge=true``."""
+    """Clear the kill switch. Requires ``acknowledge=true``.
+
+    If the row went missing in the meantime the unlock is a 409: the row has
+    just been re-created ENGAGED and the operator must unlock again.
+    """
     if not body.acknowledge:
         raise HTTPException(
             status_code=400,
             detail="unlock requires acknowledge=true — operator must confirm",
         )
-    state.clear_kill_switch(body.cleared_by)
+    try:
+        state.clear_kill_switch(body.cleared_by)
+    except SystemStateMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     logger.warning("system kill cleared by=%r", body.cleared_by)
     await ws.broadcast(
         "trading",

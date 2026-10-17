@@ -29,7 +29,8 @@ from vibe_quant.api.schemas.paper_trading import (
     PaperStatusResponse,
 )
 from vibe_quant.api.ws.manager import ConnectionManager
-from vibe_quant.db.state_manager import StateManager, SystemStateMissingError
+from vibe_quant.db.schema import SystemStateMissingError
+from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -103,15 +104,17 @@ def _require_credentials(testnet: bool) -> None:
 
 def _refuse_if_killed(state: StateManager) -> None:
     try:
-        sys_state = state.get_system_state(require_row=True)
+        sys_state = state.get_system_state()
     except SystemStateMissingError as exc:
-        # A missing singleton row is as unreadable as a locked DB: never let the
-        # kill switch read as released (vibe-quant-lickf).
+        # The row was absent AND could not be re-created: as unreadable as a
+        # locked DB, never let the kill switch read as released (vibe-quant-lickf).
         raise HTTPException(
             status_code=503,
             detail="System kill switch state unavailable (system_state row missing); refusing",
         ) from exc
     if sys_state.get("kill_switch"):
+        # A missing row is re-created engaged by the read (vibe-quant-tdjop), so
+        # this now also refuses with the reseed reason.
         # 423 Locked is the canonical code for resource-in-a-locked-state.
         raise HTTPException(
             status_code=423,

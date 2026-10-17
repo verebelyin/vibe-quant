@@ -8,7 +8,15 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
-from vibe_quant.db.schema import init_schema
+from vibe_quant.db.schema import (
+    SYSTEM_STATE_RESEEDED_BY,
+    SYSTEM_STATE_RESEEDED_REASON,
+    SYSTEM_STATE_UNLOCK_ACK_BY,
+    SYSTEM_STATE_UNRESEEDABLE_MSG,
+    SystemStateMissingError,
+    init_schema,
+    reseed_system_state,
+)
 from vibe_quant.sizing_settings import SizingConfigError, recorded_sizing
 
 if TYPE_CHECKING:
@@ -40,15 +48,6 @@ def _recorded_sizing_params(parameters_json: object) -> dict[str, float] | None:
 class DuplicateResearchItem(Exception):
     """Raised when a research_item with (source, external_id) already exists."""
 
-
-class SystemStateMissingError(RuntimeError):
-    """Raised when the singleton ``system_state`` row (id=1) is absent.
-
-    ``init_schema`` seeds that row, so its absence means it was deleted or the
-    database is broken. Callers that guard money (the paper node, the paper API)
-    read with ``require_row=True`` so a missing row is treated as an unreadable
-    kill switch rather than as "not killed" (vibe-quant-lickf).
-    """
 
 # Type alias for JSON-like dict structures from database
 JsonDict = dict[str, Any]
@@ -206,6 +205,11 @@ class StateManager:
                     raise
                 self._conn = conn
             return self._conn
+
+    @property
+    def db_path(self) -> Path | None:
+        """Configured database path (``None`` = the default); never opens a connection."""
+        return self._db_path
 
     def close(self) -> None:
         """Close database connection.
@@ -483,41 +487,18 @@ class StateManager:
 
     # --- System state (kill switch) ---
 
-    def get_system_state(self, *, require_row: bool = False) -> JsonDict:
-        """Read the singleton system_state row.
+    def _select_system_state_locked(self) -> JsonDict | None:
+        """The singleton row as a dict, or None when id=1 is absent.
 
-        Args:
-            require_row: When True a missing row id=1 raises
-                :class:`SystemStateMissingError` instead of returning the
-                defensive defaults dict. The money-path guards (paper node,
-                paper API) read with True so a deleted row can never be mistaken
-                for an un-killed switch; ``/api/system/status`` keeps the default
-                (False) and reports the defaults.
-
-        Returns:
-            Dict with keys: kill_switch (bool), reason (str|None),
-            killed_at (str|None), killed_by (str|None), updated_at (str).
-
-        Raises:
-            SystemStateMissingError: If ``require_row`` is True and the row is
-                missing.
+        Caller holds ``_write_lock`` (the name keeps this true under the
+        structural lock test).
         """
-        with self._write_lock:
-            row = self.conn.execute(
-                "SELECT kill_switch, reason, killed_at, killed_by, updated_at "
-                "FROM system_state WHERE id = 1"
-            ).fetchone()
+        row = self.conn.execute(
+            "SELECT kill_switch, reason, killed_at, killed_by, updated_at "
+            "FROM system_state WHERE id = 1"
+        ).fetchone()
         if row is None:
-            if require_row:
-                raise SystemStateMissingError("system_state row id=1 is missing")
-            # Defensive: row should have been inserted by init_schema.
-            return {
-                "kill_switch": False,
-                "reason": None,
-                "killed_at": None,
-                "killed_by": None,
-                "updated_at": None,
-            }
+            return None
         return {
             "kill_switch": bool(row[0]),
             "reason": row[1],
@@ -526,20 +507,96 @@ class StateManager:
             "updated_at": row[4],
         }
 
+    def get_system_state(self, *, require_row: bool = True) -> JsonDict:
+        """Read the singleton system_state row, re-creating it ENGAGED if absent.
+
+        A missing row is never answered with disengaged defaults: the row is
+        re-created engaged (with ``SYSTEM_STATE_RESEEDED_REASON``), committed and
+        re-selected, so every caller -- the paper API refusal, the node poll, the
+        header status endpoint -- sees the halt (vibe-quant-tdjop).
+
+        Args:
+            require_row: Ignored. Kept only so the node's money-path caller
+                (``paper/node.py``) keeps type-checking; task T2a removes the
+                kwarg together with its last callers. Both values of this flag
+                return exactly the same result.
+
+        Returns:
+            Dict with keys: kill_switch (bool), reason (str|None),
+            killed_at (str|None), killed_by (str|None), updated_at (str).
+
+        Raises:
+            SystemStateMissingError: If the row is absent and re-creating it
+                fails (the INSERT raised a ``sqlite3.Error``, or the row is still
+                not readable afterwards).
+        """
+        with self._write_lock:
+            return self._read_or_reseed_system_state_locked()
+
+    def _read_or_reseed_system_state_locked(self) -> JsonDict:
+        """Read, or re-create engaged and re-read. Caller holds ``_write_lock``."""
+        state = self._select_system_state_locked()
+        if state is not None:
+            return state
+        try:
+            reseed_system_state(self.conn, engaged=True)
+            self.conn.commit()
+            state = self._select_system_state_locked()
+        except sqlite3.Error as exc:
+            raise SystemStateMissingError(SYSTEM_STATE_UNRESEEDABLE_MSG) from exc
+        if state is None:
+            raise SystemStateMissingError(SYSTEM_STATE_UNRESEEDABLE_MSG)
+        return state
+
     def set_kill_switch(self, reason: str, killed_by: str | None = None) -> None:
-        """Engage the kill switch. Idempotent — re-setting updates reason."""
+        """Engage the kill switch. Idempotent - re-setting updates reason.
+
+        An upsert: a missing row is inserted, not silently skipped (the old
+        UPDATE-only form was a no-op on a deleted row, so the kill command could
+        report success while nothing was persisted).
+        """
         with self._write_lock:
             self.conn.execute(
-                "UPDATE system_state SET kill_switch = 1, reason = ?, "
-                "killed_at = datetime('now'), killed_by = ?, updated_at = datetime('now') "
-                "WHERE id = 1",
+                """INSERT INTO system_state
+                       (id, kill_switch, reason, killed_at, killed_by, updated_at)
+                   VALUES (1, 1, ?, datetime('now'), ?, datetime('now'))
+                   ON CONFLICT(id) DO UPDATE SET
+                       kill_switch = 1,
+                       reason = excluded.reason,
+                       killed_at = excluded.killed_at,
+                       killed_by = excluded.killed_by,
+                       updated_at = excluded.updated_at""",
                 (reason, killed_by),
             )
             self.conn.commit()
 
     def clear_kill_switch(self, cleared_by: str | None = None) -> None:
-        """Release the kill switch. Logs who cleared it in ``killed_by``."""
+        """Release the kill switch. Logs who cleared it in ``killed_by``.
+
+        On a missing row the release cannot succeed: the row is re-created
+        ENGAGED and ``SystemStateMissingError`` is raised telling the operator to
+        unlock again -- an unlock must never leave the switch fail-open.
+        """
         with self._write_lock:
+            row = self.conn.execute(
+                "SELECT reason, killed_by FROM system_state WHERE id = 1"
+            ).fetchone()
+            # Missing row, or the row a lazy re-creation made (this manager's
+            # schema init, another connection's, or a cached read): the unlock
+            # is refused once so the operator sees the halt before releasing it.
+            if row is None or (
+                row[0] == SYSTEM_STATE_RESEEDED_REASON and row[1] == SYSTEM_STATE_RESEEDED_BY
+            ):
+                if row is None:
+                    reseed_system_state(self.conn, engaged=True)
+                self.conn.execute(
+                    "UPDATE system_state SET killed_by = ? WHERE id = 1",
+                    (SYSTEM_STATE_UNLOCK_ACK_BY,),
+                )
+                self.conn.commit()
+                raise SystemStateMissingError(
+                    "system_state row id=1 was missing; re-created engaged - unlock again"
+                )
             self.conn.execute(
                 "UPDATE system_state SET kill_switch = 0, reason = NULL, "
                 "killed_at = NULL, killed_by = ?, updated_at = datetime('now') "
