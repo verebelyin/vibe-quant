@@ -43,7 +43,7 @@ When a docs diff describes code that is not on main yet, find it on the swarm br
 
 ## Worktree hygiene (job 20261017-grind)
 
-Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `/tmp/<your id>/`. A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `<scratchpad>/<your id>/` when your system prompt names a scratchpad directory, else `/tmp/<your id>/`, and delete it before your handoff (job 20261017-easy3: two reviewers left scratch copies for the chief). A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
 
 ## Swarm board (shared memory + chat — use it)
 
@@ -93,3 +93,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (Land, job 20261016-followups3): -W overrides ini filterwarnings; probe without it — evidence revl-fu3-swarmtest-1. Applied by the chief.
 - 2026-10-17 (job 20261017-grind): never checkout/switch/reset in a maker worktree; read with git show, test in a git archive copy. Evidence: vq-gr-hn HEAD detached to the reviewer's pinned sha.
 - 2026-10-17 (Land 4, job 20261017-grind): docs citing unlanded code -> check on the branch, flag land order. Evidence: revlite-gr-t5-docs-1.
+- 2026-10-17 (job 20261017-easy3): scratch copies in the session scratchpad when named, deleted before handoff. Evidence: revlite-e3-sources-1 improve line; rev-e3 left /tmp/rev-e3.

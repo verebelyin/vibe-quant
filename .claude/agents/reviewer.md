@@ -106,7 +106,7 @@ End with the handoff contract from `docs/orchestration/README.md#handoff-contrac
 
 ## Worktree hygiene (job 20261017-grind)
 
-Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `/tmp/<your id>/`. A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
+Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `<scratchpad>/<your id>/` when your system prompt names a scratchpad directory, else `/tmp/<your id>/`, and delete it before your handoff (job 20261017-easy3: two reviewers left scratch copies for the chief). A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
 
 ## Swarm board (shared memory + chat — use it)
 
@@ -170,3 +170,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-17 (job 20261016-safety-bankroll): settings-grid pooling probes. Evidence: rev-sb-t8-1 proposal 18df45bd43d2b688-8506.
 - 2026-10-17 (job 20261017-grind): forwarded-text + precedence-chain probes. Evidence: rev-gr-guard-1 SF1, rev-gr-api-1 N1.
 - 2026-10-17 (job 20261017-grind): never checkout/switch/reset in a maker worktree; read with git show, test in a git archive copy. Evidence: vq-gr-hn HEAD detached to the reviewer's pinned sha.
+- 2026-10-17 (job 20261017-easy3): scratch copies in the session scratchpad when named, deleted before handoff. Evidence: revlite-e3-sources-1 improve line; rev-e3 left /tmp/rev-e3.
