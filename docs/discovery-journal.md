@@ -4,6 +4,130 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-17: RESULTS job 20261017-newfeat-hunt — new coins, context indicators, adaptive MAs, liquidation/margin/bankroll features (runs 920–949, 0 champions) + 3 launch/data fixes
+
+Job dir `data/swarm/20261017-newfeat-hunt/` (brief, ledger, handoffs op-w1..op-w7). Every run ≤ ~6 min, ≤ 3 in parallel, all gates on, falsifiers pre-registered in the entries below. Engine main f5807625 → 0654553d (the fixes change no numbers: exactness_239 single + `--validation-multi` IDENTICAL, carry IDENTICAL).
+
+**Verdict: no edge found. Every pre-registered falsifier fired.**
+
+| Run | Config | Decisive result | Verdict |
+|---|---|---|---|
+| 921 | SUI/NEAR/ZEC 1h oscillators | zero_score 8/8 both gens (best genome 6030 trades, return -0.9960442622235627) | REJECT |
+| 920 | ZEC 15m | best rejection e4f18102194c sharpe 1.093, 97 trades, DSR p 0.925788404900211 (N=752), bootstrap LB -0.07 | REJECT (near-miss → re-test 932) |
+| 922 | SUI/NEAR/ZEC 4h, bankroll grid isolated+cross × 5x × 0.5 | zero_score 8/8 in both cells | REJECT |
+| 926 | 7 coins 1d 2023-06..2026-10-07 | rejection bbe71116d758 sharpe 0.132, 105 trades, DSR p 0.9380332411367858 (N=105) | REJECT |
+| 927 | SUI/NEAR/ZEC 4h context pool (FUNDING_Z/OWN_TREND/BTC_TREND/BTC_ROC/RSI/CCI) | zero_score 10/10 both gens | REJECT |
+| 925 | NEAR 15m | killed at 6 min, zero_score 16/16 gens 1–2 | REJECT |
+| 929/930/931 | KAMA / FRAMA / VIDYA fixed DSL, SUI/NEAR/ZEC/SOL 4h 2023-06..2026-10-07 (bar: Sharpe ≥ 1.0 and > EW buy-hold 1.2669803074665231) | sharpe 0.05064356564891855 / -0.7925356454080653 / 0.4164589461794973 | REJECT all |
+| 933 | VIDYA validation (taker) | sharpe 0.26169428494681873, 537 trades (same as screening), return 0.18100129878890753; "consistent with screening" | REJECT |
+| 932 | ZEC near-miss on unseen 2023-01..2024-10-14 | sharpe -0.9632485534954037, 109 trades, return -0.3183736427004032 | REJECT (the 920 near-miss was noise) |
+| 928 / 940 | HYPE 1h | 928: rejection de75a2f74a8d sharpe 0.854, 305 trades, DSR p 0.9741676151950068 (N=3341); 940: zero_score 12/12 | REJECT |
+| 938 | SUI/NEAR/ZEC 15m `symbol_agg` worst | rejection 86be58b38e87: NEAR train return ≤ 0 and trades 47 < 50 (per-symbol scores SUI 0.5346, NEAR 0.0, ZEC 0.4045) | REJECT |
+| 941 / 944 / 945 | 6 coins 1d 2021-01..2026-09-30 (both / long / short) | 941 killed after gen 3 (best Sharpe 0.23, 50 trades); 944 long zero_score 12/12, 0 rejections; 945 killed after gen 1 | REJECT |
+| carry7 | funding-carry NT book, 7 coins, 2023-06-01..2026-09-30 | weekly_sharpe 0.042703700714813095, total_return -0.15447369804274347, max_dd 0.6657250818810732; by year 2.618 / 1.141 / -0.383 / -1.884 | no lead |
+
+**Feature checks (MEASURED, behave as designed):**
+- New coins SUI/NEAR/ZEC/HYPE load and run in discovery, screening, validation and the carry book.
+- Bankroll grid: `notes.bankroll_grid` records both cells; with 0 champions no champion cell exists to promote.
+- Liquidation + margin limit on VIDYA (248): screening isolated 5x 0.5 (934) 1 liquidation, forfeited 1.209188428514853; cross (935) 0 and equal to mode-off (936) on every stored metric; validation isolated (947, to 2026-10-15 with October MARK) sharpe 0.29638525623722295, 541 trades, 1 liquidation, forfeited 1.2145190989900705, margin limit refused 0; cross screening (948) sharpe 0.444415181170933, 541 trades.
+- Post-only maker entries (943, 2 months): 19/19 filled, fees 4.73833323 vs taker 7.14135282, sharpe 1.58258389836178 vs 1.53615458160081; wall 25.38 s vs 18.10 s because post_only also runs a market-twin pass (the earlier ~10x slowdown in 939 was Likely CPU contention; bead vibe-quant-6b6qa).
+- Multi-seed (949): `notes.num_seeds` 2, `dsr_trials.raw` 8 = `gate_n` 8; per-seed DSR (N=4) runs first, pooled re-check (N=8) on survivors — fail closed by design.
+
+**Bugs found and fixed (landed c4793e2b, 3460ce2c, 0654553d):** launch accepted runs whose fill ticks / context data ended before the window and failed them 1 s later (923, 924) → 422 at launch (vibe-quant-b5xfj); a warm start from a run with no champions failed after launch (937) → 400 at launch (vibe-quant-r5g9v); `download-mark` used only monthly zips so MARK lagged up to a month → daily-zip tail (vibe-quant-6n2jo; MARK now to 2026-10-16). Follow-ups: vibe-quant-xug6o (all-zero GEN "Best" line), vibe-quant-vmdck (422 text prints raw ns), vibe-quant-6b6qa (post-only speed).
+
+**Lessons:** (1) 5-min budgets with pop ≤ 12 leave most runs at zero_score — the GA has no gradient at that size on these coins; (2) the EW buy-and-hold bar on the new coins is high (ZEC alone Sharpe 1.5135751737015601 over 2023-06..2026-10), so long-biased OHLCV rules lose to holding; (3) another session's gates pushed load to 55–60 on 10 cores and killed 941/945/946 before their gates — check `uptime` before sizing.
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 7 — feature checks on fresh October MARK data + multi-seed on a short window
+
+Wave 6 (runs 944–946): 944 (1d long) 0 champions / 0 rejections; 945, 946 killed at 6 min under another session's load (load avg 55–60). MARK 1m now covers 2026-10-01..2026-10-16 for all 8 coins (daily-zip fallback, bead vibe-quant-6n2jo, worktree code). Feature checks only — no edge claims:
+
+| Run | Config |
+|---|---|
+| Q | validation of strategy 248 (VIDYA), SUI/NEAR/ZEC/SOL 4h, 2023-06-01..2026-10-15, liquidation isolated, leverage 5, max_margin_pct 0.5 (validation liquidation path + October MARK) |
+| R | screening of 248, same window, liquidation cross, leverage 5, max_margin_pct 0.5 |
+| S | ZECUSDT 15m 2026-07-01..2026-10-15, num_seeds 2, pop 4 × 1 (multi-seed DSR counting) |
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 6 — 1d with fixed direction (long vs short), multi-seed
+
+Run 941 (1d, 6 coins, both directions, pop 24) was killed at 6 min after gen 3 with best score 0.4187 (Sharpe 0.23, 50 trades) — too slow to reach the gates. Wave 6 sizes 1d to finish and fixes the direction (verified-state rule: with most genomes at 0, direction drifts).
+
+| Run | Config | Falsifier |
+|---|---|---|
+| M | 1d, BTC/ETH/SOL/BNB/NEAR/ZEC, 2021-01-01..2026-09-30, direction long, pop 12 × 3 | 0 champions AND best Sharpe < 1.0 → reject; a long candidate must also beat EW buy-hold Sharpe 1.1605174081563192 (same window, the buy-hold gate) |
+| N | same, direction short | 0 champions AND best Sharpe < 1.0 → reject |
+| O | ZECUSDT 15m 2024-10-15..2026-10-15, num_seeds 2, pop 6 × 2 (feature check of the multi-seed ensemble; DSR N counts both seeds) | feature check only |
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 5 — 1d long history (lowest DSR N), carry on 7 coins, post-only speed probe
+
+Written before launch. Waves 1-4 (runs 920–940): 0 champions.
+
+| Run | Config | Falsifier |
+|---|---|---|
+| L | 1d discovery, BTC/ETH/SOL/BNB/NEAR/ZEC portfolio, 2021-01-01..2026-09-30, full default pool, both, pop 24 × 6, eval_windows 2 (1d prior N = 105, the lowest of any timeframe) | 0 champions AND best pooled MTM Sharpe < 1.0 → the 1d OHLCV pool has no edge on these coins |
+| K | carry book (NT) on 7 coins 2023-06-01..2026-09-30 | feature check; weekly Sharpe < 1.0 → no lead |
+| P | post-only vs taker validation of strategy 248, 2023-06-01..2023-08-01, run serially | speed probe only (bead vibe-quant-6b6qa) |
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 4 — warm start, worst-of-symbols on 15m, maker entries, carry on 7 coins
+
+Wave 3 (runs 928–936) rejected every candidate (numbers in the job summary entry). Written before launch:
+
+| Run | Config | Falsifier |
+|---|---|---|
+| H | HYPE 1h warm-started from run 928 (`seed_run_id` 928), pop 12 × 3, eval_windows 2, cross_window_months [1], wfa_oos_step_days 30 | 0 champions → reject HYPE 1h oscillators for now |
+| I | SUI/NEAR/ZEC 15m, 2024-10-15..2026-10-15, `symbol_agg` worst, pool ROC/DONCHIAN/RSI/CCI/NATR, pop 8 × 3 | 0 champions AND best Sharpe < 1.0 → reject |
+| J | VIDYA (strategy 248) validation with post-only maker entries + BNB fee discount, same window as run 933 | feature check; edge falsifier: Sharpe < 1.0 → VIDYA stays rejected (run 933 mode-off taker: 0.26169428494681873) |
+| K | funding-carry book (`vibe_quant.portfolio run`, NT engine) on BTC/ETH/SOL/BNB/SUI/NEAR/ZEC, 2023-06-01..2026-10-07 | feature check; a weekly Sharpe < 1.0 → no lead (in-sample, not evidence either way) |
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 3 — KAMA/FRAMA/VIDYA fixed tests, ZEC 15m near-miss re-test, HYPE 1h
+
+Written before launch. Fixed hand-authored strategies (`data/swarm/20261017-newfeat-hunt/strategies/H-ma-{kama,frama,vidya}.yaml`, no parameter search, declared N=3), 4h, portfolio SUI/NEAR/ZEC/SOL, 2023-06-01..2026-10-07, liquidation off, 10x, default sizing.
+
+- **Benchmark (MEASURED, `buyhold.py 2023-06-01 2026-10-07 SUIUSDT,NEARUSDT,ZECUSDT,SOLUSDT`):** EW buy-hold sharpe=1.2669803074665231 total_return=9.335455803558144 maxDD=0.600160700441384 (ZEC alone sharpe=1.5135751737015601).
+- **Falsifier per MA strategy:** reject unless screening Sharpe ≥ 1.0 AND > 1.2669803074665231 AND ≥ 50 trades AND return > 0. A survivor goes to validation (1m fills) and must keep Sharpe ≥ 1.0 there.
+- **ZEC 15m near-miss e4f18102194c** (run 920): ONE screening on unseen 2023-01-01..2024-10-14; pass = Sharpe ≥ 1.0, ≥ 50 trades, return > 0.
+- **HYPE 1h discovery** (low-confidence by user decision, 16 months of data): falsifier as wave 1.
+- **Feature checks (not edge evidence):** the best MA strategy is re-screened with liquidation isolated 5x + max_margin_pct 0.5 and validated; record liquidation counts and margin refusals.
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 2 — 1d on 7 coins, context indicators on new coins, NEAR 15m
+
+Wave 1 (runs 920–922) gave 0 champions; written before wave 2 launch. Same falsifier: 0 champions AND best train Sharpe < 1.0 → reject the family/config.
+
+| Run | Config |
+|---|---|
+| D | BTC/ETH/SOL/BNB/SUI/NEAR/ZEC portfolio, 1d, 2023-06-01..2026-10-15, full default pool, pop 16 × 4 |
+| E | SUI/NEAR/ZEC 4h, pool FUNDING_Z/OWN_TREND/BTC_TREND/BTC_ROC/RSI/CCI (context indicators), pop 10 × 2 |
+| G | NEARUSDT 15m, 2024-10-15..2026-10-15, pool ROC/DONCHIAN/RSI/CCI/NATR/STOCH/WILLR, pop 16 × 4 |
+
+Also pre-registered: wave-1 near-miss e4f18102194c (run 920, ZEC 15m, Sharpe 1.093) gets ONE fixed re-test on unseen ZEC 15m 2023-01-01..2024-10-14 (declared N=1). Pass = Sharpe ≥ 1.0 and ≥ 50 trades and return > 0; otherwise reject.
+
+---
+
+## 2026-10-17: PRE-REGISTRATION job 20261017-newfeat-hunt wave 1 — new coins (SUI/NEAR/ZEC), 15m/1h, bankroll grid
+
+Written before launch. Engine: main f5807625. Every run ≤ 5 min wall (killed at ~6 min), 3 in parallel, max_workers 3; all gates on.
+
+| Run | Config | Falsifier (stated now) |
+|---|---|---|
+| A | SUI+NEAR+ZEC portfolio, 1h, 2023-06-01..2026-10-15, pool CCI/STOCH/WILLR/RSI/ROC/DONCHIAN, both, eval_windows 2 | 0 champions AND best train MTM ann Sharpe < 1.0 → reject the oscillator family on new coins at 1h |
+| B | ZECUSDT 15m, 2024-10-15..2026-10-15, pool ROC/DONCHIAN/RSI/CCI/NATR, both, eval_windows 2 | same: 0 champions AND best Sharpe < 1.0 → reject |
+| C | SUI+NEAR+ZEC 4h, 2023-06-01..2026-10-15, bankroll grid isolated+cross × 5x × 50% margin cap | feature check (champion cell recorded / rejections carry liquidation counts); edge falsifier as A |
+
+A near-miss (best Sharpe ≥ 1.0, ≥ 50 trades, gate-rejected) only earns a fixed-DSL re-test with declared N ≤ 10 on a later window; it is not a result.
+
+---
+
 ## 2026-10-15: Funding-carry engine (backtest-only) + research synthesis
 
 Job 20261015-funding-carry, task T7 (docs), branch `swarm/fc-t7` on `swarm/fc-base-e`. Engine: `vibe_quant/portfolio/` (design `data/swarm/20261015-funding-carry/design.md`, semantics contract §7). Synthesis: `data/swarm/20261015-funding-carry/research/synthesis.md`.
