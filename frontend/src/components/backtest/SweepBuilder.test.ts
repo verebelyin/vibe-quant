@@ -30,6 +30,13 @@ type Dict = Record<string, unknown>;
 const fixtureJson = (v: unknown): string =>
   `${JSON.stringify(v, null, 2).replace(/\[([^\]]*)\]/g, (_m, inner: string) => `[${inner.replace(/\s*\n\s*/g, " ").trim()}]`)}\n`;
 const CATALOG = catalog as SweepCatalog;
+/** Synthetic plugin spec (never shipped): declares its own `fast` (float) and `signal` (int). */
+const NATIVE_CATALOG: SweepCatalog = {
+  TEST_NATIVE_ALIAS: {
+    default_params: { fast: 0.5, signal: 3 },
+    param_schema: { fast: "float", signal: "int" },
+  },
+};
 const TEMPLATES = templates as Array<{ name: string; dsl_config: Dict }>;
 
 /** What a user gets after "Initialize" + switching every param to a 2-value list `v, v+1`. */
@@ -244,9 +251,11 @@ describe("sweepableParamsFor with catalog defaults (what the editor really store
       general: {},
       indicators: [{ type, params }],
     });
-    expect(strategyTranslationProblem(raw("MACD", { fast: 12.5, slow: 26, signal: 9 }))).toBe(
-      "MACD param 'fast_period'=12.5 must be a whole number",
-    );
+    // Without the catalog a `fast` is ambiguous (a plugin may declare it natively), so only the
+    // loaded catalog can tell MACD's legacy alias from a native param: pin the block with it.
+    expect(
+      strategyTranslationProblem(raw("MACD", { fast: 12.5, slow: 26, signal: 9 }), CATALOG),
+    ).toBe("MACD param 'fast_period'=12.5 must be a whole number");
     expect(strategyTranslationProblem(raw("STOCH", { k_period: 14.5, d_period: 3 }))).toBe(
       "STOCH param 'period'=14.5 must be a whole number",
     );
@@ -573,6 +582,89 @@ describe("legacy spelling conflicts compare like the translator's _conflict_key"
   it("non-numeric strings conflict and print Python reprs", () => {
     expect(strategyTranslationProblem(macd({ fast_period: "a", fast: "b", slow: 26 }))).toBe(
       "Conflicting MACD params for 'fast_period': 'fast_period'='a', 'fast'='b'",
+    );
+  });
+});
+
+describe("plugin-native fast/slow/signal are the plugin's own params, not legacy aliases", () => {
+  // NATIVE_CATALOG's param_schema lets the UI tell a plugin param from a MACD alias.
+  const NATIVE = NATIVE_CATALOG;
+  const raw = (params: Record<string, unknown>) => ({
+    general: {},
+    indicators: [{ type: "TEST_NATIVE_ALIAS", params }],
+  });
+
+  it("sweeps the plugin's own <name>_fast key, never <name>_fast_period", () => {
+    expect(
+      sweepableParamsFor(raw({ fast: 0.5 }), NATIVE).map(
+        (p) => `${p.key}${p.integer ? ":int" : ":float"}`,
+      ),
+    ).toEqual(["test_native_alias_fast:float"]);
+  });
+
+  it("does not block a native float fast (the translator passes it through typed)", () => {
+    expect(strategyTranslationProblem(raw({ fast: 0.5 }), NATIVE)).toBeNull();
+    expect(strategyTranslationProblem(raw({ signal: 3 }), NATIVE)).toBeNull();
+  });
+
+  it("still folds the legacy MACD alias (no registry spec declares a native fast there)", () => {
+    const macdRaw = {
+      general: {},
+      indicators: [{ type: "MACD", params: { fast: 12, slow: 26, signal: 9 } }],
+    };
+    expect(sweepableParamsFor(macdRaw, CATALOG).map((p) => p.key)).toEqual([
+      "macd_fast_period",
+      "macd_slow_period",
+      "macd_signal_period",
+    ]);
+    expect(strategyTranslationProblem(macdRaw, CATALOG)).toBeNull();
+  });
+
+  it("mirrors the backend's native+legacy conflict for the same indicator", () => {
+    // the exact translator.py text, so both layers say the same thing about the same config
+    expect(strategyTranslationProblem(raw({ fast: 18, fast_period: 12 }), NATIVE)).toBe(
+      "TEST_NATIVE_ALIAS sets both its native param 'fast'=18 and the legacy alias " +
+        "'fast_period'=12; 'fast' is a native TEST_NATIVE_ALIAS param, not an alias of " +
+        "'fast_period': remove one",
+    );
+    expect(strategyTranslationProblem(raw({ signal: 3, signal_period: 9 }), NATIVE)).toBe(
+      "TEST_NATIVE_ALIAS sets both its native param 'signal'=3 and the legacy alias " +
+        "'signal_period'=9; 'signal' is a native TEST_NATIVE_ALIAS param, not an alias of " +
+        "'signal_period': remove one",
+    );
+  });
+});
+
+describe("strategyTranslationProblem fails open while the catalog is unknown", () => {
+  const plugin = (params: Record<string, number>) => ({
+    general: {},
+    indicators: [{ type: "TEST_NATIVE_ALIAS", params }],
+  });
+  const macd = (params: Record<string, number>) => ({
+    general: {},
+    indicators: [{ type: "MACD", params }],
+  });
+
+  it("does not false-block a plugin's native float fast (catalog loading, or the fetch failed)", () => {
+    expect(strategyTranslationProblem(plugin({ fast: 0.5 }))).toBeNull();
+    expect(strategyTranslationProblem(plugin({ signal: 3 }))).toBeNull();
+    // loaded: the spec declares `fast` natively, so it is the plugin's own param, not an alias
+    expect(strategyTranslationProblem(plugin({ fast: 0.5 }), NATIVE_CATALOG)).toBeNull();
+  });
+
+  it("blocks MACD's legacy alias once the catalog says the spec declares no native fast", () => {
+    // without the catalog the two are indistinguishable, so the backend's 422 decides
+    expect(strategyTranslationProblem(macd({ fast: 12.5, slow: 26 }))).toBeNull();
+    expect(strategyTranslationProblem(macd({ fast: 12.5, slow: 26 }), CATALOG)).toBe(
+      "MACD param 'fast_period'=12.5 must be a whole number",
+    );
+  });
+
+  it("only the int check fails open: other spellings and conflicts are still reported", () => {
+    const ema = { general: {}, indicators: [{ type: "EMA", params: { period: 12.5 } }] };
+    expect(strategyTranslationProblem(ema)).toBe("EMA param 'period'=12.5 must be a whole number");
+    expect(strategyTranslationProblem(plugin({ fast_period: 1, fast: 2 }))).toBe(
+      "Conflicting TEST_NATIVE_ALIAS params for 'fast_period': 'fast_period'=1, 'fast'=2",
     );
   });
 });

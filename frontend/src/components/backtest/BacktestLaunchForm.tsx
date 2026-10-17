@@ -127,21 +127,30 @@ export function BacktestLaunchForm() {
   const selectedStrategy = strategies.find((s) => String(s.id) === strategyId);
   // Int-ness of a param comes from the catalog: no sweep is built or launched without it
   const catalogReady = catalogQuery.data?.status === 200;
-  const sweepableParams = useMemo(() => {
-    if (!selectedStrategy) return [];
-    const catalog: SweepCatalog | undefined =
+  const catalog: SweepCatalog | undefined = useMemo(
+    () =>
       catalogQuery.data?.status === 200
         ? Object.fromEntries(catalogQuery.data.data.indicators.map((i) => [i.type_name, i]))
-        : undefined;
-    return sweepableParamsFor(selectedStrategy.dsl_config as Record<string, unknown>, catalog);
-  }, [selectedStrategy, catalogQuery.data]);
+        : undefined,
+    [catalogQuery.data],
+  );
+  const sweepableParams = useMemo(
+    () =>
+      selectedStrategy
+        ? sweepableParamsFor(selectedStrategy.dsl_config as Record<string, unknown>, catalog)
+        : [],
+    [selectedStrategy, catalog],
+  );
 
   const strategyProblem = useMemo(
     () =>
       selectedStrategy
-        ? strategyTranslationProblem(selectedStrategy.dsl_config as Record<string, unknown>)
+        ? strategyTranslationProblem(
+            selectedStrategy.dsl_config as Record<string, unknown>,
+            catalog,
+          )
         : null,
-    [selectedStrategy],
+    [selectedStrategy, catalog],
   );
 
   // The margin limit (T6) is optional — an empty field means OFF — but a value outside

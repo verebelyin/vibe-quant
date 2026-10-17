@@ -74,33 +74,76 @@ const STOCH_SYNONYMS: Array<[string, string[]]> = [
   ["period", ["period", "k_period", "period_k"]],
   ["d_period", ["d_period", "period_d"]],
 ];
+/** Spellings a registry spec may declare natively: the legacy side of `PARAM_SYNONYMS`. Only
+ * these can be a plugin's own param, so a type the catalog cannot describe may still own them. */
+const SPEC_NATIVE_ALIASES = new Set<string>();
+for (const [field, spellings] of PARAM_SYNONYMS) {
+  for (const key of spellings) if (key !== field) SPEC_NATIVE_ALIASES.add(key);
+}
 
 interface LegacyFields {
   /** StrategyDSL field -> source param key (the spelling whose value the translator uses) */
   fields: Map<string, string>;
-  /** Spellings of one param holding different values: translation raises ValueError */
-  conflicts: string[];
+  /** Why translation raises, in the translator's own order (first = the launch failure text) */
+  problems: string[];
   /** Every spelling the translator consumes (never an "extra") */
   handled: Set<string>;
 }
 
 /**
+ * Param names the indicator's catalog spec declares natively (dsl/translator.py
+ * `_native_param_names`), or undefined when the catalog cannot describe this type -- still
+ * loading, failed, or no entry for it. Without them nothing can tell a plugin's own `fast`
+ * from a legacy alias, so the checks that depend on it stay silent (the backend decides).
+ */
+function nativeParamNames(typeKey: string, catalog?: SweepCatalog): Set<string> | undefined {
+  const entry = catalog?.[TYPE_ALIASES[typeKey] ?? typeKey];
+  return entry === undefined ? undefined : new Set(Object.keys(entry.param_schema ?? {}));
+}
+
+/**
  * UI-format params -> StrategyDSL fields exactly as dsl/translator.py `_canonical_params`:
  * equal spellings (by `_conflict_key`) fold, different values are a conflict (the launch fails),
- * nothing is last-wins. Non-STOCH `period` is handled on its own, then std_dev / atr_multiplier.
+ * nothing is last-wins. A spelling the catalog declares natively is the indicator's own param,
+ * not an alias of the canonical field, so it is left to pass through (STOCH's registry-native
+ * period_k/period_d are the deliberate exception). Non-STOCH `period` is handled on its own,
+ * then std_dev / atr_multiplier.
  */
-function legacyNativeFields(type: string, params: Record<string, number>): LegacyFields {
+function legacyNativeFields(
+  type: string,
+  params: Record<string, number>,
+  native?: Set<string>,
+): LegacyFields {
   const fields = new Map<string, string>();
-  const conflicts: string[] = [];
+  const problems: string[] = [];
   const handled = new Set(["period", "std_dev", "atr_multiplier"]);
   if ("period" in params) fields.set("period", "period");
   const groups = type === "STOCH" ? [...PARAM_SYNONYMS, ...STOCH_SYNONYMS] : PARAM_SYNONYMS;
+  const stochFields = new Set(STOCH_SYNONYMS.map(([field]) => field));
+  const isNative = (k: string) => native?.has(k) === true;
   for (const [field, spellings] of groups) {
-    const found = spellings.filter((k) => k in params);
-    for (const k of spellings) handled.add(k);
+    // STOCH's k/d spellings fold even though the registry declares them (translator: no native
+    // precedence there); every other group is subject to it.
+    const nativePrecedence = !stochFields.has(field);
+    const isNativeAlias = (k: string) => nativePrecedence && k !== field && isNative(k);
+    if (nativePrecedence && field in params) {
+      // dsl/translator.py raises as soon as the canonical field and a spec-native spelling are
+      // both set: the plugin's own param and the legacy alias ask for two different things.
+      const shadowed = spellings.find((k) => k !== field && isNative(k) && k in params);
+      if (shadowed !== undefined) {
+        problems.push(
+          `${type} sets both its native param '${shadowed}'=${pyRepr(params[shadowed])} and ` +
+            `the legacy alias '${field}'=${pyRepr(params[field])}; '${shadowed}' is a native ` +
+            `${type} param, not an alias of '${field}': remove one`,
+        );
+        continue;
+      }
+    }
+    const found = spellings.filter((k) => k in params && !isNativeAlias(k));
+    for (const k of spellings) if (!isNativeAlias(k)) handled.add(k);
     if (new Set(found.map((k) => conflictKey(params[k]))).size > 1) {
       const shown = found.map((k) => `'${k}'=${pyRepr(params[k])}`).join(", ");
-      conflicts.push(`Conflicting ${type} params for '${field}': ${shown}`);
+      problems.push(`Conflicting ${type} params for '${field}': ${shown}`);
       fields.delete(field);
       continue;
     }
@@ -108,7 +151,7 @@ function legacyNativeFields(type: string, params: Record<string, number>): Legac
     if (first !== undefined) fields.set(field, first);
   }
   for (const k of ["std_dev", "atr_multiplier"]) if (k in params) fields.set(k, k);
-  return { fields, conflicts, handled };
+  return { fields, problems, handled };
 }
 
 // Plain decimal numeral, as dsl/translator.py `_DECIMAL`: `Number()` also takes `0x10`, Python `float` `1_000`.
@@ -241,18 +284,27 @@ function intParamProblem(type: string, field: string, value: unknown): string | 
 }
 
 /**
- * Why launching this UI-format strategy would fail in the translator (null = fine): two
- * spellings of one indicator param hold different values, or an int param holds a value the
- * translator rejects instead of silently truncating. Applies to every launch.
+ * Why launching this UI-format strategy would fail in the translator (null = fine): one
+ * indicator sets both a spec-native param and its legacy alias spelling, two spellings of one
+ * param hold different values, or an int param holds a value the translator rejects instead of
+ * silently truncating. Applies to every launch.
+ *
+ * `catalog` is what tells a plugin's native `fast` from a legacy alias; while it is unknown the
+ * int check for those spellings is skipped (fail open: the backend validates and answers 422).
  */
-export function strategyTranslationProblem(raw: Record<string, unknown>): string | null {
+export function strategyTranslationProblem(
+  raw: Record<string, unknown>,
+  catalog?: SweepCatalog,
+): string | null {
   if (isCanonicalDsl(raw)) return null;
   for (const ind of parseDslConfig(raw).indicators) {
     const type = ind.type.toUpperCase();
-    const { fields, conflicts } = legacyNativeFields(type, ind.params);
-    if (conflicts[0]) return conflicts[0];
+    const native = nativeParamNames(type, catalog);
+    const { fields, problems } = legacyNativeFields(type, ind.params, native);
+    if (problems[0]) return problems[0];
     for (const [field, key] of fields) {
       if (!NATIVE_INT_FIELDS.has(field)) continue;
+      if (native === undefined && SPEC_NATIVE_ALIASES.has(key)) continue;
       const problem = intParamProblem(type, field, ind.params[key]);
       if (problem) return problem;
     }
@@ -304,7 +356,7 @@ export function sweepableParamsFor(
           : ind.type.toLowerCase();
       name = base;
       for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
-      const legacy = legacyNativeFields(typeKey, ind.params);
+      const legacy = legacyNativeFields(typeKey, ind.params, nativeParamNames(typeKey, catalog));
       fields = [...legacy.fields]; // a conflicting spelling group has no field: the launch fails
       for (const key of Object.keys(ind.params)) {
         if (!legacy.handled.has(key) && declared.has(key)) fields.push([key, key]);

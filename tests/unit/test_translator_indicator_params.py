@@ -226,6 +226,54 @@ def test_plugin_native_string_param_survives_ui_translation(
 
 
 @pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        (
+            {"fast": 18, "fast_period": 12},
+            "TEST_NATIVE_ALIAS sets both its native param 'fast'=18 and the legacy alias "
+            "'fast_period'=12; 'fast' is a native TEST_NATIVE_ALIAS param, not an alias of "
+            "'fast_period': remove one",
+        ),
+        (
+            {"signal": True, "signal_period": 9},
+            "TEST_NATIVE_ALIAS sets both its native param 'signal'=True and the legacy alias "
+            "'signal_period'=9; 'signal' is a native TEST_NATIVE_ALIAS param, not an alias of "
+            "'signal_period': remove one",
+        ),
+    ],
+)
+def test_native_param_and_legacy_alias_together_raise(
+    alias_plugin: IndicatorSpec, params: dict[str, Any], message: str
+) -> None:
+    """A plugin's native ``fast``/``signal`` is not the legacy ``fast_period``/``signal_period``.
+
+    Setting both would hand the plugin its own value while the canonical field carried the legacy
+    one -- two different periods on one indicator, with no way to tell which the user meant.
+
+    The whole message is pinned (the UI mirrors it verbatim), not just the names in it.
+    """
+    cfg = _cfg([{"type": _PLUGIN_NAME, "params": params}])
+    with pytest.raises(ValueError) as exc:
+        translate_dsl_config(cfg, strategy_name="t_native_conflict")
+    assert str(exc.value) == message
+
+
+def test_native_param_alone_and_legacy_alias_alone_still_translate(
+    alias_plugin: IndicatorSpec,
+) -> None:
+    name = _PLUGIN_NAME.lower()
+    native_only = translate_dsl_config(
+        _cfg([{"type": _PLUGIN_NAME, "params": {"fast": 18}}]), strategy_name="t_native_only"
+    )
+    assert native_only["indicators"] == {name: {"type": _PLUGIN_NAME, "fast": 18}}
+    legacy_only = translate_dsl_config(
+        _cfg([{"type": _PLUGIN_NAME, "params": {"fast_period": 12}}]),
+        strategy_name="t_legacy_only",
+    )
+    assert legacy_only["indicators"] == {name: {"type": _PLUGIN_NAME, "fast_period": 12}}
+
+
+@pytest.mark.parametrize(
     ("ind_type", "params", "bad"),
     [
         ("EMA", {"period": 12.5}, "period"),

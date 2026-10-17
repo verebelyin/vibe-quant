@@ -124,6 +124,20 @@ def _canonical_params(ind_type: str, params: dict[str, Any]) -> dict[str, Any]:
             groups[target] = (spellings, False)
     out: dict[str, Any] = {}
     for target, (spellings, legacy_aliases) in groups.items():
+        if legacy_aliases and target in params:
+            # A spelling the spec declares natively is that indicator's own param, not an alias of
+            # the canonical field: setting both asks for two different things on one indicator.
+            shadowed = next(
+                (key for key in spellings if key != target and key in native and key in params),
+                None,
+            )
+            if shadowed is not None:
+                msg = (
+                    f"{ind_type} sets both its native param '{shadowed}'={params[shadowed]!r} and "
+                    f"the legacy alias '{target}'={params[target]!r}; '{shadowed}' is a native "
+                    f"{ind_type} param, not an alias of '{target}': remove one"
+                )
+                raise ValueError(msg)
         found = {
             key: params[key]
             for key in spellings
