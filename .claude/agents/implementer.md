@@ -31,6 +31,8 @@ When the brief carries a semantics contract (a boundary table) or chief rulings,
 - If you hit a case the contract does not decide, `ask --to chief` before picking a rule. That covers window edges, timestamp fields, cut-offs, missing data, and what mode-off should do. Never invent money semantics silently; the next reviewer will block on whichever rule you guessed.
 - When two tiers need the same rule, put it in the shared module the brief names. Don't copy it into your tier.
 
+- When work moves to a worker thread, any test helper that spins a FIXED number of zero-sleep loop cycles (`_until`) must wait by wall-clock time instead; it flakes under `-n auto` once the awaited result comes from a thread (impl-e4-evnode-1: test_paper_liquidation_detector.py `_until`).
+
 ## Scope
 
 - Touch only the paths in the brief's SCOPE. If something else needs changing, stop and report it under `open:`. Don't fix it.
@@ -85,3 +87,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-15: macOS mutants with `sed -i ''` or Python; equality-edge tests for every money comparison — evidence: job 20261015-honest-safe impl-hs-p3b-2 (two mutants silently unapplied), V1a/V1b extra rounds.
 - 2026-10-16 (Land, job 20261016-safety-bugs): fix rounds may narrow the board search but must post done. Evidence: both Sonnet fixers in this job skipped the search and the done post. Applied automatically.
 - 2026-10-17 (job 20261016-safety-bankroll): live TradingNode for NT order-set semantics — evidence: risk-sb-t4-1 F1, impl-sb-t4-1 improve line.
+- 2026-10-17 (job 20261017-easy4): wall-clock waits after moving work to a thread. Evidence: impl-e4-evnode-1.

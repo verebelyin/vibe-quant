@@ -31,6 +31,9 @@ You are the **architect** in a vibe-quant multi-agent team. The orchestrator sen
 - A new RUN-LEVEL setting (sizing, leverage, balance, fees): list every site that (a) builds an engine runner (`rg -n "NTScreeningRunner\(|ValidationRunner\(" vibe_quant` — overfitting/nt_runner.py and nt_cv_runner.py build their own), (b) CREATES a child run from a parent (promote, replay, the results-page sweep-row Validate button, campaigns), and (c) COMPARES run parameters (consistency `_NON_STRATEGY_PARAM_KEYS`, drift checks). Give each a contract row (arch-fu2 missed 2 runner sites until rg; rev-fu2-design SF2/SF3 found SweepAnalysis Validate and the consistency key filter).
 - A NEW NT engine/strategy design: run a ≤ 60 s throwaway probe of the exact lifecycle you rely on (timer vs data order, release-tick fill price, exception propagation, which risk checks fire) and paste its output into the design (arch-fc: the probe showed MARGIN accounts skip min_notional, `risk/engine.pyx:690`, which the research had assumed NT enforces).
 
+- Adding a venue symbol: scan its archived/Vision price history against today's tick (`Decimal(p) % tick`) and its funding-interval column before writing the spec row (arch-e4-coins-1: NEAR's tick was 0.0001 until 2022-02, HYPE settles every 4h with one venue skip; both only showed in sampled zips).
+- Moving a synchronous side effect off the loop (a write, a call): `rg` the tests that patch the COLLABORATOR (`writer.write`) versus the node seam (`_write_event`), and list which tests read or close the output right after a sync call; they must drain first or they flake (arch-e4-events-1, ogd37).
+
 ## Design content
 
 1. **Problem**: two or three sentences, including what is out of scope.
@@ -125,3 +128,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-17 (job 20261016-safety-bankroll): live vs backtest engine rows for order-flow contracts. Evidence: risk-sb-t4-1 F1 (R30d added mid-job).
 - 2026-10-17: needs-decision items carry plain terms + example flow + numbers for the user format. Evidence: job 20261017-grind user feedback on the 6osqd/lcf12 explanations.
 - 2026-10-17 (Land 2, job 20261017-grind): re-run prior probes through production objects; rg stubs of a dataclass's source when adding a field. Evidence: arch-gr-1 5byet IOC finding, rev-gr-design-1 SF1.
+- 2026-10-17 (job 20261017-easy4): venue-symbol history scan; off-loop moves list collaborator-patching tests. Evidence: arch-e4-coins-1, arch-e4-events-1 improve lines.
