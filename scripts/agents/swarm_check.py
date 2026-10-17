@@ -62,6 +62,34 @@ the MAIN checkout's scripts/agents/exactness_carry.py, except that a main withou
 script is a SKIP, not a FAIL (it lands with the carry engine; the trigger set is the
 funding-carry paths listed in EXACTNESS_CARRY_TRIGGERS).
 
+Base selection: an explicit --base is used verbatim. With NO --base the gate keeps `main`,
+except when the worktree's current branch is `main` and `origin/main` exists: it then gates
+`origin/main` and prints `INFO base: on main, using origin/main (pass --base to override)`
+(`--base main` is never rewritten). An empty diff against that auto-selected base FAILs with
+`empty diff vs origin/main: nothing unpushed to gate; pass --base <sha> to gate pushed commits`
+instead of the generic "empty diff" (failing closed, but with the fix in the message).
+Paths under docs/orchestration/board/ and docs/orchestration/telemetry/ are the bus's own
+mirror files (BOARD.md, messages.jsonl, tasks.jsonl): they are never scope offenders and
+never make a diff look non-empty.
+
+Gate log + run counter: EVERY run writes the full transcript for each tool it ran (command
+line, combined stdout+stderr, exit code) to
+`<main checkout>/data/swarm/_gate-logs/<worktree dir name>-<HEAD[:12]>-<UTC %Y%m%dT%H%M%SZ>.log`
+(the dir is created; the main checkout root is `_derive_main_root`), prints `LOG <abs path>`
+immediately before the final GATE line, and appends ` (full output: LOG above)` to every FAIL
+line of a tool check. A cached run writes a one-line log (no tool ran). A run that finds an
+existing log for the same worktree name + HEAD also prints
+`INFO gate run #<n+1> on this HEAD - ...` first (advisory only, never fails): the gate is
+meant to run once per round, so read the previous LOG instead of re-running.
+
+pinned-text: when the diff touches vibe_quant/**/*.py the gate collects the string literals
+(>= 12 chars after strip) that existed in the BASE version of each changed file and no longer
+appear anywhere in the worktree's vibe_quant/ (plain substring search over all .py files),
+then FAILs for each tests/**/test_*.py that still pins one of them UNLESS the gate already
+runs that file (it is a changed test file, an importer file, or the whole tests/unit runs).
+That catches a pin OUTSIDE the targeted set that stays green here and goes red in the full
+suite later.
+
 Tool commands can be stubbed via env (full command, shell-quoted):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
 the "<python> -m pytest" prefix and keeps the arguments). Stubs are refused (FAIL,
@@ -133,10 +161,25 @@ EXACTNESS_CARRY_TRIGGERS = (
     "uv.lock",
 )
 CHECK_ORDER = (
-    "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "exactness", "exactness-carry",
-    "frontend", "stubs", "internal",
+    "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
+    "exactness-carry", "frontend", "stubs", "internal",
 )
 UNTRACKED_OK = ("cmd-report.md",)
+# The bus writes these mirror files into the worktree on every job; they are never the
+# worker's change, so they must not fail the scope check nor make an empty diff look real.
+BOARD_PATH_PREFIXES = (
+    "docs/orchestration/board/",
+    "docs/orchestration/telemetry/",
+)
+# The per-run tool transcript (see the module docstring): <main checkout>/data/swarm/_gate-logs/.
+GATE_LOG_SUBDIR = ("data", "swarm", "_gate-logs")
+PINNED_TEXT_MIN_CHARS = 12  # a literal shorter than this is too generic to be a pinned string
+PINNED_TEXT_SHOWN_CHARS = 60  # how much of the removed literal a pinned-text FAIL quotes
+# Checks that shell out to a real tool: their FAIL lines carry the "(full output: LOG above)"
+# pointer. scope/clean/bus-inbox/stubs/internal are git/config facts with no tool transcript.
+TOOL_CHECK_NAMES = frozenset(
+    {"ruff", "mypy", "tests", "exactness", "exactness-carry", "frontend"}
+)
 LINT_ERROR_RE = re.compile(r"^Found (\d+) errors?\.", re.MULTILINE)
 SUMMARY_RE = re.compile(r"passed|failed|error|errors|no tests ran")
 SKIP_STEMS = frozenset({"__init__", "conftest", "__main__"})
@@ -192,6 +235,22 @@ class Config:
     json_out: Path | None = None
     bus: str = ""  # job bus dir (--bus / SWARM_BUS) for the bus-inbox check
     bus_agent: str = ""  # whose inbox to peek (--bus-agent / SWARM_AGENT)
+    # overrides the scope FAIL detail when the diff is empty; set only for the auto-selected
+    # origin/main base, where "empty diff" means "nothing unpushed to gate".
+    empty_diff_detail: str = ""
+
+
+@dataclass(frozen=True)
+class TestRun:
+    """The tests check result plus the pytest file set it ran, for the pinned-text check.
+
+    `explicit` is every test file the gate passed to pytest by path; `full_unit` says the
+    whole tests/unit ran (a conftest/__init__ change or more importer files than the cap).
+    """
+
+    check: Check
+    explicit: frozenset[str] = frozenset()
+    full_unit: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,6 +291,57 @@ def real_run(
     except OSError as exc:  # missing binary or missing cwd
         return 127, f"cannot run {cmd[0]}: {exc}"
     return proc.returncode, proc.stdout + proc.stderr
+
+
+class ToolLog:
+    """RunFn wrapper that records every tool call for the gate log (see the module docstring).
+
+    `git` calls are delegated but NOT recorded: the transcript is the tool output a FAIL would
+    otherwise lose (ruff/mypy/pytest/exactness/frontend), not the gate's own plumbing. Entries
+    are (command line, exit code, combined stdout+stderr).
+    """
+
+    def __init__(self, run: RunFn) -> None:
+        self._run = run
+        self.entries: list[tuple[str, int, str]] = []
+
+    def __call__(
+        self,
+        cmd: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None = None,
+        timeout: int = TOOL_TIMEOUT,
+    ) -> RunResult:
+        rc, out = self._run(cmd, cwd, env, timeout)
+        if str(cmd[0]) != "git":
+            self.entries.append((" ".join(str(c) for c in cmd), rc, out))
+        return rc, out
+
+
+def is_board_path(path: str) -> bool:
+    """True for the bus's own mirror files (board/telemetry), which are never the worker's diff."""
+    return path.startswith(BOARD_PATH_PREFIXES)
+
+
+def reviewable_paths(paths: Sequence[str]) -> list[str]:
+    return [p for p in paths if not is_board_path(p)]
+
+
+def resolve_base(wt: Path, base: str | None, run: RunFn) -> tuple[str, str]:
+    """(base ref, INFO line). With no explicit --base, gate origin/main when on main.
+
+    An explicit --base (including `--base main`) is returned verbatim so today's behaviour is
+    untouched. Only the no-flag, on-branch-`main`, origin/main-exists case is rewritten; the
+    INFO line is printed by main() and is "" when nothing changed.
+    """
+    if base is not None:
+        return base, ""
+    branch = _git_out(wt, run, "symbolic-ref", "--short", "HEAD")
+    if branch != "main":
+        return "main", ""
+    if not _git_out(wt, run, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"):
+        return "main", ""
+    return "origin/main", "INFO base: on main, using origin/main (pass --base to override)"
 
 
 def parse_porcelain(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -330,6 +440,107 @@ def needs_full_suite(paths: Sequence[str]) -> bool:
     """True if a changed .py has a stem k_expr drops (conftest/__init__/__main__): no -k
     selection can represent it, so the whole tests/unit must run."""
     return any(p.endswith(".py") and Path(p).stem in SKIP_STEMS for p in paths)
+
+
+def base_literals(source: str) -> set[str]:
+    """String literals of `source` worth pinning: len >= PINNED_TEXT_MIN_CHARS after stripping.
+
+    ast walk, so f-string literal parts and nested literals count; a file that does not parse
+    contributes nothing (ruff/mypy report it anyway) and never raises.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):  # ValueError: NUL bytes / a decode that slipped through
+        return set()
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            stripped = node.value.strip()
+            if len(stripped) >= PINNED_TEXT_MIN_CHARS:
+                out.add(stripped)
+    return out
+
+
+def _git_show(wt: Path, base: str, path: str, run: RunFn) -> str:
+    """The BASE version of `path` ("" when it did not exist at base or git failed)."""
+    rc, out = run(["git", "-C", str(wt), "show", f"{base}:{path}"], wt, None, TOOL_TIMEOUT)
+    return out if rc == 0 else ""
+
+
+def worktree_vibe_quant_text(wt: Path) -> str:
+    """Every vibe_quant/**/*.py of the worktree, concatenated for substring searches."""
+    root = wt / "vibe_quant"
+    if not root.is_dir():
+        return ""
+    chunks: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return "\n".join(chunks)
+
+
+def removed_base_literals(cfg: Config, changed_py: Sequence[str], run: RunFn) -> list[str]:
+    """Sorted base literals that survived in no worktree vibe_quant/ .py (plain substring)."""
+    literals: set[str] = set()
+    for path in changed_py:
+        literals |= base_literals(_git_show(cfg.worktree, cfg.base, path, run))
+    if not literals:
+        return []
+    wt_text = worktree_vibe_quant_text(cfg.worktree)
+    return sorted(lit for lit in literals if lit not in wt_text)
+
+
+def pinned_test_pins(wt: Path, literals: Sequence[str]) -> list[tuple[str, int, str]]:
+    """(test file, line, literal) for every tests/**/test_*.py that still contains a literal.
+
+    Only test files are scanned (a conftest/module pin is not what this check is for). The
+    line is the first occurrence, so the FAIL points at the pinning assertion.
+    """
+    if not literals:
+        return []
+    root = wt / "tests"
+    if not root.is_dir():
+        return []
+    out: list[tuple[str, int, str]] = []
+    for path in sorted(root.rglob("test_*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lit in literals:
+            idx = text.find(lit)
+            if idx >= 0:
+                out.append((path.relative_to(wt).as_posix(), text.count("\n", 0, idx) + 1, lit))
+    return out
+
+
+def test_already_run(path: str, test_run: TestRun) -> bool:
+    """True if the gate's own pytest selection already covers `path` (so it will go red here)."""
+    if path in test_run.explicit:
+        return True
+    return test_run.full_unit and path.startswith("tests/unit/")
+
+
+def pinned_text_check(cfg: Config, state: GitState, run: RunFn, test_run: TestRun) -> Check:
+    """FAIL when a test the gate does NOT run pins a string the diff removed from production."""
+    if state.error:
+        return Check("pinned-text", "SKIP", "git diff unknown (see scope)")
+    changed_py = [
+        p for p in state.changed if p.startswith("vibe_quant/") and p.endswith(".py")
+    ]
+    if not changed_py:
+        return Check("pinned-text", "SKIP", "no vibe_quant/**/*.py changed")
+    removed = removed_base_literals(cfg, changed_py, run)
+    offenders = [
+        f'{path}:{line} pins removed text "{lit[:PINNED_TEXT_SHOWN_CHARS]}"'
+        for path, line, lit in pinned_test_pins(cfg.worktree, removed)
+        if not test_already_run(path, test_run)
+    ]
+    if offenders:
+        return Check("pinned-text", "FAIL", "; ".join(offenders))
+    return Check("pinned-text", "PASS", f"{len(removed)} removed literals, no unrun test pins them")
 
 
 def _dotted(path: str) -> str:
@@ -606,6 +817,47 @@ def head_reflog_count(wt: Path, run: RunFn) -> int | None:
     return int(out) if out.isdigit() else None
 
 
+def gate_log_target(cfg: Config, run: RunFn) -> tuple[Path, int]:
+    """(this run's log path, number of prior logs for this worktree name + HEAD).
+
+    The name is `<worktree dir name>-<HEAD[:12]>-<UTC %Y%m%dT%H%M%SZ>.log` under the MAIN
+    checkout's data/swarm/_gate-logs (gitignored there). The prior count drives the
+    informational "gate run #<n+1>" line; a second run in the same second overwrites the
+    first log rather than counting it twice.
+    """
+    head = _git_out(cfg.worktree, run, "rev-parse", "HEAD") or "unknown"
+    head12 = head[:12]
+    log_dir = cfg.main_root.joinpath(*GATE_LOG_SUBDIR)
+    pattern = f"{cfg.worktree.name}-{head12}-*.log"
+    prior = list(log_dir.glob(pattern)) if log_dir.is_dir() else []
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return log_dir / f"{cfg.worktree.name}-{head12}-{ts}.log", len(prior)
+
+
+def write_gate_log(
+    path: Path, entries: Sequence[tuple[str, int, str]], header: str = ""
+) -> None:
+    """Write the tool transcript: command line, combined output, exit code per tool call."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        if header:
+            fh.write(header + "\n")
+        for cmd, rc, out in entries:
+            fh.write(f"$ {cmd}\n")
+            fh.write(out if out.endswith("\n") else out + "\n")
+            fh.write(f"[exit {rc}]\n")
+
+
+def annotate_tool_fails(checks: Sequence[Check]) -> list[Check]:
+    """Append the log pointer to every FAIL line for a check that ran an external tool."""
+    return [
+        Check(c.name, c.status, c.detail + " (full output: LOG above)")
+        if c.status == "FAIL" and c.name in TOOL_CHECK_NAMES
+        else c
+        for c in checks
+    ]
+
+
 def _cache_probe(cfg: Config, run: RunFn) -> tuple[str, GitState | None]:
     """(cache key, git state): the key is "" when a stamp must not be reused or written."""
     try:
@@ -711,15 +963,16 @@ def _tool_commands(cfg: Config) -> dict[str, list[str]]:
 
 def _run_tests(
     cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, wt_env: dict[str, str]
-) -> Check:
+) -> TestRun:
     python_changed = [p for p in state.changed if p.endswith(".py")]
     if not python_changed:
-        return Check("tests", "SKIP", "no python changed")
+        return TestRun(Check("tests", "SKIP", "no python changed"))
     targets = [p for p in changed_test_files(state.changed) if (cfg.worktree / p).exists()]
     expr = k_expr(state.changed)
     notes: list[str] = []
     # (args, rc5_is_skip, rc5_note)
     commands: list[tuple[list[str], bool, str]] = []
+    explicit: set[str] = set(targets)  # every file pytest is handed by path (for pinned-text)
     # A handful of targeted files runs serially (worker startup costs more than it
     # saves); timing-marked tests in them therefore run uncontended.
     if targets:
@@ -742,6 +995,7 @@ def _run_tests(
             )
         elif importers:
             notes.append(f"{len(importers)} importer files")
+            explicit.update(importers)
             # ONE parallel call with the timing-marked tests deselected, then those run
             # serially, exactly like the -k group below.
             commands.append(
@@ -765,7 +1019,9 @@ def _run_tests(
              f"no timing tests matched -k {expr}" if expr else "no timing tests matched")
         )
     if not commands:
-        return Check("tests", "SKIP", "nothing to run for changed python")
+        return TestRun(
+            Check("tests", "SKIP", "nothing to run for changed python"), frozenset(explicit), full
+        )
     summaries: list[str] = []
     failed = False
     passed = 0
@@ -781,10 +1037,12 @@ def _run_tests(
             passed += 1
     summaries.extend(notes)  # how many importer files ran, or why the full suite ran instead
     if failed:
-        return Check("tests", "FAIL", " | ".join(summaries))
-    if passed == 0:
-        return Check("tests", "SKIP", " | ".join(summaries))
-    return Check("tests", "PASS", " | ".join(summaries))
+        check = Check("tests", "FAIL", " | ".join(summaries))
+    elif passed == 0:
+        check = Check("tests", "SKIP", " | ".join(summaries))
+    else:
+        check = Check("tests", "PASS", " | ".join(summaries))
+    return TestRun(check, frozenset(explicit), full)
 
 
 def _run_exactness(cfg: Config, tools: dict[str, list[str]], run: RunFn) -> Check:
@@ -872,20 +1130,22 @@ def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
                 Check("stubs", "FAIL", f"stubs refused (set SWARM_CHECK_ALLOW_STUBS=1): {listed}")
             )
 
-    # 1. scope
+    # 1. scope (the bus's board/telemetry mirror files are never the worker's diff)
+    reviewable = reviewable_paths(state.changed)
     if state.error:
         checks.append(Check("scope", "FAIL", state.error))
-    elif not state.changed:
-        checks.append(Check("scope", "FAIL", f"empty diff vs {cfg.base} (nothing to review)"))
+    elif not reviewable:
+        detail = cfg.empty_diff_detail or f"empty diff vs {cfg.base} (nothing to review)"
+        checks.append(Check("scope", "FAIL", detail))
     elif cfg.scope:
-        offenders = scope_offenders(state.changed, cfg.scope)
+        offenders = scope_offenders(reviewable, cfg.scope)
         if offenders:
             shown = ", ".join(offenders[:5])
             more = f" (+{len(offenders) - 5} more)" if len(offenders) > 5 else ""
-            detail = f"{len(offenders)}/{len(state.changed)} paths out of scope: {shown}{more}"
+            detail = f"{len(offenders)}/{len(reviewable)} paths out of scope: {shown}{more}"
             checks.append(Check("scope", "FAIL", detail))
         else:
-            checks.append(Check("scope", "PASS", f"{len(state.changed)} paths in scope"))
+            checks.append(Check("scope", "PASS", f"{len(reviewable)} paths in scope"))
     else:
         checks.append(Check("scope", "SKIP", "no --scope given"))
 
@@ -903,11 +1163,15 @@ def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
         checks.append(Check(name, "PASS" if rc == 0 else "FAIL", tail_line(out)))
 
     unknown = "git diff unknown (see scope)"
-    # 5. tests
+    # 5. tests (+ the file set it ran, which the pinned-text check compares against)
     if state.error:
-        checks.append(Check("tests", "SKIP", unknown))
+        test_run = TestRun(Check("tests", "SKIP", unknown))
     else:
-        checks.append(_run_tests(cfg, state, tools, run, wt_env))
+        test_run = _run_tests(cfg, state, tools, run, wt_env)
+    checks.append(test_run.check)
+
+    # 5b. pinned-text: a test the gate does NOT run that pins a string the diff removed
+    checks.append(pinned_text_check(cfg, state, run, test_run))
 
     # 6. exactness
     if cfg.exactness == "never":
@@ -1044,7 +1308,9 @@ def bus_post(cfg: Config, checks: Sequence[Check], cached_head: str = "") -> Non
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pre-review gate for a worker's worktree")
     parser.add_argument("worktree")
-    parser.add_argument("--base", default="main")
+    parser.add_argument(
+        "--base", default=None, help="base ref; default main, or origin/main on branch main"
+    )
     parser.add_argument("--scope", default="")
     parser.add_argument("--exactness", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--frontend", choices=("auto", "always", "never"), default="auto")
@@ -1061,19 +1327,30 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         print(f"not a git worktree: {wt}")
         return 2
 
+    runner: RunFn = run or real_run
+    # No --base passed: on branch `main` with an origin/main, gate that instead of the local
+    # main the diff is measured against (which is HEAD there, hence always empty).
+    base, base_info = resolve_base(wt, args.base, runner)
+    if base_info:
+        print(base_info)
+
     cfg = Config(
         worktree=wt,
         main_root=_derive_main_root(wt),
-        base=args.base,
+        base=base,
         scope=tuple(g for g in (s.strip() for s in args.scope.split(",")) if g),
         exactness=args.exactness,
         frontend=args.frontend,
         json_out=Path(args.json_out) if args.json_out else None,
         bus=args.bus or os.environ.get("SWARM_BUS") or "",
         bus_agent=args.bus_agent or os.environ.get("SWARM_AGENT") or "",
+        empty_diff_detail=(
+            "empty diff vs origin/main: nothing unpushed to gate; "
+            "pass --base <sha> to gate pushed commits"
+            if base_info
+            else ""
+        ),
     )
-
-    runner: RunFn = run or real_run
 
     # B1: refuse the hand-back BEFORE spending a suite run (or even reading the cache) when the
     # chief's DM is already waiting. A DM that lands mid-run is still caught by the end-of-run
@@ -1084,6 +1361,14 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         print(gate_summary([pre_bus])[0])
         bus_post(cfg, [pre_bus])
         return 1
+
+    # The log target is fixed before the tools run so its prior count is the run counter.
+    log_path, prior_runs = gate_log_target(cfg, runner)
+    if prior_runs >= 1:
+        print(
+            f"INFO gate run #{prior_runs + 1} on this HEAD - the gate runs once per round; "
+            "read the LOG of the last run instead of re-running"
+        )
 
     key, _ = _cache_probe(cfg, runner) if not args.no_cache else ("", None)  # PRE-run key
     stamp = load_stamp(wt, runner, key)
@@ -1097,6 +1382,8 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         bus_check = bus_inbox_check(cfg)
         checks = [*stamp.checks, bus_check]
         print(format_line(bus_check))
+        write_gate_log(log_path, [], header=f"# cached run at {stamp.ts}: no tool ran")
+        print(f"LOG {log_path}")
         gate, failed = gate_summary(checks)
         print(gate)
         if cfg.json_out:
@@ -1112,12 +1399,16 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     # started, so the pre/post key compare cannot see it; the reflog length can (see N1 doc).
     reflog_before = head_reflog_count(wt, runner) if key else None
 
+    recorder = ToolLog(runner)
     try:
-        checks = run_checks(cfg) if run is None else run_checks(cfg, runner)
+        checks = run_checks(cfg, recorder)
     except Exception as exc:  # fail closed: a crashed gate is a failed gate
         checks = [Check("internal", "FAIL", f"gate crashed: {type(exc).__name__}: {exc}")]
+    checks = annotate_tool_fails(checks)
     for check in checks:
         print(format_line(check))
+    write_gate_log(log_path, recorder.entries)
+    print(f"LOG {log_path}")
     gate, failed = gate_summary(checks)
     print(gate)
 

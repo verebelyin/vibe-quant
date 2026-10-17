@@ -85,6 +85,9 @@ def _template_repo() -> Path:
 
 
 def _populate_repo(repo: Path) -> None:
+    # data/swarm/ is gitignored in the real repo: the per-run gate logs live there and must
+    # not show as untracked (the fixtures' main checkout IS the gated repo).
+    (repo / ".gitignore").write_text("data/swarm/\n")
     (repo / "vibe_quant").mkdir()
     (repo / "vibe_quant" / "keep.py").write_text("X = 1\n")
     (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 1\n")
@@ -604,12 +607,13 @@ class TestRunChecks:
         checks = swarm_check.run_checks(cfg, runner)
         by_name = {c.name: c for c in checks}
         assert [c.name for c in checks] == [
-            "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "exactness",
+            "scope", "clean", "bus-inbox", "ruff", "mypy", "tests", "pinned-text", "exactness",
             "exactness-carry", "frontend",
         ]
         assert by_name["scope"].status == "SKIP"
         assert by_name["bus-inbox"].status == "SKIP"
         assert by_name["tests"].status == "SKIP"
+        assert by_name["pinned-text"].status == "SKIP"
         assert by_name["exactness"].status == "SKIP"
         assert by_name["exactness-carry"].status == "SKIP"
         assert by_name["frontend"].status == "SKIP"
@@ -1350,7 +1354,7 @@ class TestFailClosed:
     def test_internal_crash_is_fail(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)
 
-        def boom(cfg: object) -> None:
+        def boom(cfg: object, run: object = None) -> None:
             raise RuntimeError("kaboom")
 
         monkeypatch.setattr(swarm_check, "run_checks", boom)
@@ -2245,3 +2249,227 @@ class TestInheritedSwarmEnv:
         # was never selected, and this is the assertion that a revert of the -k fails.
         assert "test_gate_run_from_a_test_posts_no_dm_without_an_explicit_bus" in proc.stdout
         assert not (live_bus / "messages.jsonl").exists()
+
+
+def _stub_runner(**responses: Any) -> FakeRunner:
+    runner = FakeRunner()
+    runner.responses = {
+        "ruff": (0, "All checks passed!"),
+        "mypy": (0, "Success"),
+        "pytest": (0, "1 passed in 0.01s"),
+        **responses,
+    }
+    return runner
+
+
+class TestBaseSelection:
+    """1. No --base on branch `main` gates origin/main; an explicit --base is untouched."""
+
+    def _repo_on_main_with_origin(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD").strip()
+        _git(repo, "update-ref", "refs/remotes/origin/main", head)
+        return repo
+
+    def test_picks_origin_main_when_on_main(self, tmp_path: Path) -> None:
+        repo = self._repo_on_main_with_origin(tmp_path)
+        base, info = swarm_check.resolve_base(repo, None, FakeRunner())
+        assert base == "origin/main"
+        assert info == "INFO base: on main, using origin/main (pass --base to override)"
+
+    def test_keeps_main_without_an_origin_ref(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)  # no refs/remotes/origin/main
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
+
+    def test_explicit_base_is_never_rewritten(self, tmp_path: Path) -> None:
+        repo = self._repo_on_main_with_origin(tmp_path)
+        assert swarm_check.resolve_base(repo, "main", FakeRunner()) == ("main", "")
+        assert swarm_check.resolve_base(repo, "origin/main", FakeRunner()) == ("origin/main", "")
+
+    def test_off_main_branch_keeps_main(self, tmp_path: Path) -> None:
+        repo = self._repo_on_main_with_origin(tmp_path)
+        _git(repo, "checkout", "-qb", "feature")
+        assert swarm_check.resolve_base(repo, None, FakeRunner()) == ("main", "")
+
+    def test_main_prints_info_and_the_unpushed_empty_diff_hint(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo_on_main_with_origin(tmp_path)  # HEAD == origin/main, clean tree
+        rc = swarm_check.main(
+            [str(repo), "--exactness", "never", "--frontend", "never"], run=_stub_runner()
+        )
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "INFO base: on main, using origin/main (pass --base to override)" in out
+        assert (
+            "FAIL scope: empty diff vs origin/main: nothing unpushed to gate; "
+            "pass --base <sha> to gate pushed commits"
+        ) in out
+
+    def test_explicit_base_main_keeps_todays_message(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo_on_main_with_origin(tmp_path)
+        rc = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never"],
+            run=_stub_runner(),
+        )
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "INFO base:" not in out
+        assert "FAIL scope: empty diff vs main (nothing to review)" in out
+
+
+class TestBoardPaths:
+    """2. The bus's board/telemetry mirror files are never the worker's diff."""
+
+    def test_board_file_is_not_a_scope_offender(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        board = repo / "docs" / "orchestration" / "board"
+        board.mkdir(parents=True)
+        (board / "messages.jsonl").write_text("{}\n")
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        cfg = _cfg(tmp_path, repo, base="HEAD", scope=("vibe_quant/*",),
+                   exactness="never", frontend="never")
+        scope = {c.name: c for c in swarm_check.run_checks(cfg, _stub_runner())}["scope"]
+        assert scope.status == "PASS" and "messages.jsonl" not in scope.detail
+
+    def test_board_only_change_never_makes_a_non_empty_diff(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        telemetry = repo / "docs" / "orchestration" / "telemetry"
+        telemetry.mkdir(parents=True)
+        (telemetry / "tasks.jsonl").write_text("{}\n")
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        scope = {c.name: c for c in swarm_check.run_checks(cfg, _stub_runner())}["scope"]
+        assert scope.status == "FAIL" and "empty diff" in scope.detail
+
+
+class TestGateLog:
+    """3+4. Every run writes the tool transcript, prints LOG before GATE, counts re-runs."""
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = _init_repo(tmp_path)
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 2\n")
+        return repo
+
+    def _main(self, repo: Path, runner: FakeRunner, *extra: str) -> int:
+        rc: int = swarm_check.main(
+            [str(repo), "--base", "main", "--exactness", "never", "--frontend", "never", *extra],
+            run=runner,
+        )
+        return rc
+
+    def test_log_line_precedes_gate_and_file_holds_the_transcript(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        runner = _stub_runner(pytest=(0, "3 passed in 0.05s"))
+        assert self._main(repo, runner) == 0
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert lines[-1] == "GATE PASS"
+        assert lines[-2].startswith("LOG ")
+        log = Path(lines[-2][len("LOG "):])
+        assert log.parent == repo / "data" / "swarm" / "_gate-logs"
+        head12 = _git(repo, "rev-parse", "HEAD").strip()[:12]
+        assert log.name.startswith(f"{repo.name}-{head12}-")
+        body = log.read_text()
+        assert "All checks passed!" in body and "3 passed in 0.05s" in body
+        assert "$ " in body and "pytest" in body and "[exit 0]" in body
+
+    def test_tool_fail_line_points_at_the_log(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        runner = _stub_runner(mypy=(1, "boom: 2 errors"))
+        assert self._main(repo, runner) == 1
+        out = capsys.readouterr().out
+        fail = next(ln for ln in out.splitlines() if ln.startswith("FAIL mypy:"))
+        assert fail.endswith(" (full output: LOG above)")
+        assert "boom: 2 errors" in fail  # the useful tail line is preserved
+
+    def test_non_tool_fail_line_has_no_log_pointer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "docs").mkdir()
+        (repo / "docs" / "x.md").write_text("x\n")
+        assert self._main(repo, _stub_runner(), "--scope", "vibe_quant/*") == 1
+        out = capsys.readouterr().out
+        fail = next(ln for ln in out.splitlines() if ln.startswith("FAIL scope:"))
+        assert "full output: LOG above" not in fail
+
+    def test_cached_run_still_writes_a_log(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = _init_pass_repo(tmp_path)  # a valid PASS stamp: the second call reuses it
+        assert self._main(repo, _stub_runner()) == 0
+        capsys.readouterr()
+        assert self._main(repo, _stub_runner()) == 0
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert lines[-1] == "GATE PASS"
+        assert lines[-2].startswith("LOG ")
+        assert "cached run" in Path(lines[-2][len("LOG "):]).read_text()
+
+    def test_run_counter_reports_the_second_run(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = _init_pass_repo(tmp_path)
+        head12 = _git(repo, "rev-parse", "HEAD").strip()[:12]
+        log_dir = repo / "data" / "swarm" / "_gate-logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / f"{repo.name}-{head12}-20240101T000000Z.log").write_text("$ x\n")
+        assert self._main(repo, _stub_runner()) == 0
+        assert "INFO gate run #2 on this HEAD" in capsys.readouterr().out
+
+
+_PIN = "the quick brown fox jumps over the lazy dog"
+
+
+def _pinned_repo(tmp_path: Path) -> Path:
+    """foo.py carries _PIN at base; the working-tree edit removes it and no longer has it."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    (repo / "vibe_quant" / "foo.py").write_text(f'MESSAGE = "{_PIN}"\n\n\ndef foo() -> int:\n    return 1\n')
+    (repo / "tests" / "unit" / "test_pin.py").write_text(
+        f'def test_pin() -> None:\n    assert "{_PIN}"\n'
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "pin the message")
+    (repo / "vibe_quant" / "foo.py").write_text(
+        'MESSAGE = "a totally different message"\n\n\ndef foo() -> int:\n    return 1\n'
+    )
+    return repo
+
+
+class TestPinnedText:
+    """5. A test the gate does NOT run that pins a string the diff removed is a FAIL."""
+
+    def _pin(self, tmp_path: Path, repo: Path) -> Any:
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        return {c.name: c for c in swarm_check.run_checks(cfg, _stub_runner())}["pinned-text"]
+
+    def test_unrun_test_pinning_a_removed_literal_fails(self, tmp_path: Path) -> None:
+        pin = self._pin(tmp_path, _pinned_repo(tmp_path))
+        assert pin.status == "FAIL"
+        assert "tests/unit/test_pin.py" in pin.detail
+        assert f'pins removed text "{_PIN}"' in pin.detail
+
+    def test_literal_still_present_elsewhere_passes(self, tmp_path: Path) -> None:
+        repo = _pinned_repo(tmp_path)
+        (repo / "vibe_quant" / "keep.py").write_text(f'X = "{_PIN}"\n')  # still in production
+        pin = self._pin(tmp_path, repo)
+        assert pin.status == "PASS" and "0 removed literals" in pin.detail
+
+    def test_pinning_test_already_run_passes(self, tmp_path: Path) -> None:
+        repo = _pinned_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_pin.py").write_text(
+            f'def test_pin() -> None:\n    # touched\n    assert "{_PIN}"\n'
+        )
+        pin = self._pin(tmp_path, repo)
+        assert pin.status == "PASS" and "1 removed literals" in pin.detail
+
+    def test_skips_without_a_vibe_quant_change(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "notes.txt").write_text("x\n")
+        pin = self._pin(tmp_path, repo)
+        assert pin.status == "SKIP" and "no vibe_quant" in pin.detail
