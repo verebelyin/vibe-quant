@@ -455,6 +455,10 @@ class PaperTradingNode:
         # ogd37: event-file appends have their own FIFO worker (not _db_worker, which
         # stops before the trading engine does), so a stalled disk never blocks the loop.
         self._event_log = EventLogWorker("vq-paper-events")
+        # R12/Q2: the counters as of the previous control tick, and the (failed, dropped)
+        # baseline of the outage streak now in progress (None while the log is healthy).
+        self._event_log_seen: tuple[int, int, int] | None = None
+        self._event_log_streak: tuple[int, int] | None = None
         self._guard: TradingGuard | None = None
         self._restored_risk: RiskState | None = None
         #: Symbols whose margin-limit refusal was already alerted (re-armed by an allowed entry).
@@ -1155,6 +1159,12 @@ class PaperTradingNode:
                 raise
             except Exception as exc:
                 logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
+            try:
+                self._check_event_log()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("paper control loop iteration failed (%s)", type(exc).__name__)
             await asyncio.sleep(interval)
 
     def _mono(self) -> float:
@@ -1305,6 +1315,59 @@ class PaperTradingNode:
                 "error",
                 message,
                 critical=True,
+            )
+
+    def _check_event_log(self) -> None:
+        """Alert once per event-log outage, report once when it writes again (R12/Q2).
+
+        ``health()`` is a lock-protected snapshot, so this never blocks the loop. An
+        increase in ``failed + dropped`` since the previous tick opens a streak: one
+        CRITICAL alert, with the counts accumulated since the streak began, is sent and
+        no later rising tick repeats it (writing an event line here would be pointless -
+        the log is exactly what is broken). The first tick that sees a new successful
+        write and no new failure closes the streak: one ``RISK_CHECK``
+        ``event_log_recovered`` line through the normal write path plus one
+        non-critical alert. Unchanged counters are silent in both directions.
+        """
+        health = self._event_log.health()
+        failed, dropped, written = health.failed, health.dropped, health.written
+        previous = self._event_log_seen
+        # Recorded before anything can raise: a failed alert must not re-fire next tick.
+        self._event_log_seen = (failed, dropped, written)
+        if previous is None:
+            return
+        prev_failed, prev_dropped, prev_written = previous
+        if failed + dropped > prev_failed + prev_dropped:
+            if self._event_log_streak is not None:
+                return
+            self._event_log_streak = (prev_failed, prev_dropped)
+            error_class = health.last_error_class if failed > prev_failed else "queue full"
+            self._send_telegram_alert(
+                "error",
+                f"paper {self._config.trader_id} event log not writing: "
+                f"{failed - prev_failed} failed, {dropped - prev_dropped} dropped "
+                f"({error_class}); trading continues",
+                critical=True,
+            )
+            return
+        if written > prev_written and self._event_log_streak is not None:
+            base_failed, base_dropped = self._event_log_streak
+            # Cleared before the write: if the recovery line itself fails to land, the
+            # next failing tick opens a fresh streak rather than repeating this one.
+            self._event_log_streak = None
+            recovered_failed = failed - base_failed
+            recovered_dropped = dropped - base_dropped
+            self._write_then_alert(
+                EventType.RISK_CHECK,
+                {
+                    "action": "event_log_recovered",
+                    "failed": recovered_failed,
+                    "dropped": recovered_dropped,
+                    "passed": True,
+                },
+                "error",
+                f"paper {self._config.trader_id} event log writing again "
+                f"({recovered_dropped} dropped, {recovered_failed} failed)",
             )
 
     # ----------------------------------------------- liquidation watch (T6)

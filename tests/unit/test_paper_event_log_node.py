@@ -618,3 +618,159 @@ async def test_event_write_not_behind_a_hung_checkpoint(
         persistence.release.set()
         node._db_worker.begin_stop(persistence.close)
         node._event_log.worker.begin_stop(node._event_writer.close)
+
+
+# ------------------------------------------------------------------- R12 / Q2
+
+
+class _FlakyWriter(EventWriter):
+    """A real writer that raises while ``broken`` is set, so the worker counts a failure."""
+
+    def __init__(self, run_id: str, base_path: Path) -> None:
+        super().__init__(run_id=run_id, base_path=base_path)
+        self.broken = False
+
+    def write(self, event: Event) -> None:
+        if self.broken:
+            raise OSError("disk full")
+        super().write(event)
+
+
+def _flaky_node(
+    seeded: dict[str, Any], tmp_path: Path  # noqa: F811
+) -> tuple[PaperTradingNode, _FlakyWriter]:
+    node = _node(seeded, logs_path=tmp_path / "logs")
+    writer = _FlakyWriter(run_id=node._config.trader_id, base_path=tmp_path / "logs")
+    node._event_writer = writer
+    return node, writer
+
+
+def _submit_and_settle(node: PaperTradingNode, action: str) -> None:
+    """Submit one event and wait for the worker to finish it, so ``health()`` is current."""
+    node._write_event(EventType.SIGNAL, {"action": action})
+    node._event_log.barrier().result(10)
+
+
+def test_event_log_degraded_alert_once_per_streak(
+    seeded: dict[str, Any],  # noqa: F811
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R12/Q2: one CRITICAL alert per outage, one recovery line + non-critical alert at
+    the end, and a second critical alert only when a second streak opens."""
+    node, writer = _flaky_node(seeded, tmp_path)
+    alerts = _Alerts()
+    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    trader = node._config.trader_id
+    critical = (
+        "error",
+        f"paper {trader} event log not writing: 1 failed, 0 dropped (OSError); trading continues",
+        True,
+    )
+    try:
+        node._check_event_log()  # first tick only takes the baseline
+        assert alerts.calls == []
+
+        writer.broken = True
+        _submit_and_settle(node, "a")
+        node._check_event_log()
+        assert alerts.calls == [critical]
+
+        # Three more failures inside the SAME streak: one alert; unchanged ticks are silent.
+        for action in ("b", "c", "d"):
+            _submit_and_settle(node, action)
+            node._check_event_log()
+            node._check_event_log()  # counters unchanged since the tick above
+        assert alerts.calls == [critical]
+        health = node._event_log.health()
+        assert (health.failed, health.dropped, health.pending) == (4, 0, 0)
+
+        # The disk writes again: exactly one recovery line and one non-critical alert.
+        writer.broken = False
+        _submit_and_settle(node, "ok")
+        node._check_event_log()
+        node._event_log.barrier().result(10)
+        assert alerts.calls == [
+            critical,
+            ("error", f"paper {trader} event log writing again (0 dropped, 4 failed)", False),
+        ]
+        recovered = [
+            e
+            for e in _lines(tmp_path / "logs" / f"{trader}.jsonl")
+            if e["data"].get("action") == "event_log_recovered"
+        ]
+        assert [(e["event"], e["data"]) for e in recovered] == [
+            (
+                "RISK_CHECK",
+                {"action": "event_log_recovered", "failed": 4, "dropped": 0, "passed": True},
+            )
+        ]
+
+        # A fresh outage opens a fresh streak with its own critical alert.
+        writer.broken = True
+        _submit_and_settle(node, "e")
+        node._check_event_log()
+        assert alerts.calls[-1] == critical
+        assert len(alerts.calls) == 3
+    finally:
+        _stop_event_worker(node)
+
+
+def test_event_log_drops_only_alert_says_queue_full(
+    seeded: dict[str, Any],  # noqa: F811
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R12/Q2: a full queue with no failed write reads "(queue full)", not a class name."""
+    node = _node(seeded, logs_path=tmp_path / "logs")
+    writer = _GateWriter()
+    node._event_writer = writer  # type: ignore[assignment]
+    node._event_log = EventLogWorker(_EVENT_THREAD, max_pending=1)
+    alerts = _Alerts()
+    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    try:
+        node._check_event_log()  # baseline
+        node._write_event(EventType.SIGNAL, {"action": "first"})
+        assert writer.entered.wait(5), "the first write is in flight, so pending is 1"
+        node._write_event(EventType.SIGNAL, {"action": "second"})  # refused, counted as dropped
+        assert node._event_log.health().dropped == 1
+
+        node._check_event_log()
+        assert alerts.calls == [
+            (
+                "error",
+                f"paper {node._config.trader_id} event log not writing: "
+                "0 failed, 1 dropped (queue full); trading continues",
+                True,
+            )
+        ]
+    finally:
+        writer.release.set()
+        _stop_event_worker(node)
+
+
+class _RaisingEventLog:
+    """A stand-in event log whose counter read always raises (carries a leak marker)."""
+
+    def health(self) -> Any:
+        raise RuntimeError("boom ZZLEAK9")
+
+
+async def test_raising_event_log_health_does_not_break_the_control_loop(
+    seeded: dict[str, Any],  # noqa: F811
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R12/Q2: a raising counter read is logged by class only and the loop survives it."""
+    node = _node(seeded, control_poll_interval=0.01)
+    node._event_log = _RaisingEventLog()  # type: ignore[assignment]
+    with caplog.at_level(logging.ERROR):
+        loop_task = asyncio.create_task(node._control_loop())
+        try:
+            await _until(
+                lambda: "paper control loop iteration failed (RuntimeError)" in caplog.text
+            )
+            assert not loop_task.done(), "the loop survived the raising health()"
+        finally:
+            node._shutdown_event.set()
+            await loop_task
+    assert "ZZLEAK9" not in caplog.text, "class-only log must not print the message"
