@@ -4,6 +4,27 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: PRE-REGISTRATION P-1 — gate power test (can discovery + gates pass a real edge?)
+
+Committed before the full layer-1 run. Job 20261017-power-paper; design `data/swarm/20261017-power-paper/design-power.md` (r2, fixed 2026-10-17 22:14, Opus architect + Opus design review) and chief rulings W-R1..W-R5 in that job's `brief.md`. Code on main: `scripts/research/power/{synth,gatechain,plant,layer1}.py` (4cfb43af..7c28c8af).
+
+**Question:** after ~9 pre-registered hypotheses and 50+ GA runs with 0 champions, is "0 champions" evidence of "no edge", or can the gates not pass a strategy that truly has one?
+
+**Layer 1 (statistical, real gate functions, no engine):** synthetic daily MTM series with exact true Sharpe S (√365 units; repo logs use √252 = 0.83×) at realized exposure; grid S {0, 0.8, 1.2, 2, 3, 4} × W3 (4h, train 2023-06-01..2025-10-24, holdout ..2026-06-01) n {70, 150, 500} × W6 (1d, 2021-01-01..2025-08-18) n {70, 150}; 500 reps per cell; DSR N {1, 7, 9, 11, 12, 167, 752, 3901, 22121} (7–12 = the runs' own recorded effective N, info only); selection null K = 167 random chromosomes, production top-5 `_select_diverse_top_k`, any-of-5, ρ {0, 0.5}, 200 reps.
+
+**Verdict rules (user approved thresholds 2026-10-18: "ok if you are confident that this is going to the right goal"):**
+- **V1 power:** adequate iff pass rate at S = 1.2, 150 train trades, production N ≥ 50% in BOTH 4h/W3/N=22121 and 1d/W6/N=167; stated for (a) chain_recent and (b) chain_recent without buy-and-hold. 4h also reported at N = 167.
+- **V2 false positives:** single null (S = 0, N = 1) ≤ 5% in every cell AND selection null at N = 167 ≤ 5%; else "too lenient".
+- **V3 binding gate:** lowest marginal at (S 1.2, 150, production N) + uplifts Δ_bh, Δ_dsr, Δ_both; dominant iff ≥ 20 pp. S50 per (window, N).
+- **Layer 2 (later, own entry):** V4 machinery — a planted Sharpe ≥ 4.5 (train) edge in a scratch copy of BTCUSDT passes every gate (else STOP: defect); V5 — GA finds a plant in ≥ 1 of 2 seeds.
+- **Mapping:** V1 FAIL + V2 PASS (+ V4 PASS) ⇒ "0 champions says nothing about edges below S50 at the current N".
+
+**Predictions (analytic, real DSR function, kurtosis 3 = upper bound on power):** V1 FAIL — DSR alone passes S = 1.2 with probability 0.0001 at 4h/N 22121 and 0.0381 at 1d/N 167 (critical Sharpe 3.6905 and 2.0253); at N 7–12, 0.07–0.12 (W3) and 0.23–0.33 (W6). V2 PASS. V3: DSR dominant at production N; buy-and-hold on W3 at N = 1 (W3 train B&H Sharpe 1.4978584161600617).
+
+**Disclosures (honest record):** (1) before this entry the layer-1 maker ran a 500-rep R18 diagnostic on 4 cells (W3 n150 S0.8 N 7/9/11/12, outside the analytic band, e.g. N9 0.050 vs [0.0035, 0.0483]; applied sample kurtosis mean 17.3 vs 9/f 26.25) and a 50-rep `--quick` smoke run whose verdict lines the chief saw (V1(a) W3@22121 0.0000, W6@167 0.0800; V2 max 0.0200). Rules and predictions above were fixed in the design before any run and are unchanged. (2) R18 is a diagnostic, not a verdict gate (W-R5). (3) Related finding (bead vibe-quant-inydc): `direction both` GA genomes trade long-only.
+
+---
+
 ## 2026-10-17: RESULT H-NF-1 — REJECTED (funding fade on SUI/NEAR/ZEC: Sharpe 0.33, extreme funding vanished in 2025-26) + wave 8 feature checks
 
 Strategy 250 (`h_nf1_funding_fade`, `data/swarm/20261017-newfeat-hunt/strategies/H-NF-1.yaml`), screening, SUI/NEAR/ZEC 4h, short-only, FUNDING_Z(90) > 2 entry / < 0.5 exit, 2×/4× ATR.
