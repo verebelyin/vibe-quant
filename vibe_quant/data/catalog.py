@@ -31,10 +31,14 @@ BINANCE_VENUE = Venue("BINANCE")
 # Instrument configurations for supported symbols.
 # Filters (price_increment=PRICE_FILTER.tickSize, size_increment/min_quantity=LOT_SIZE,
 # min_notional=MIN_NOTIONAL.notional) verified against Binance USDT-M
-# /fapi/v1/exchangeInfo on 2026-10-10; fixture in tests/fixtures/binance_exchange_info_usdtm.json.
+# /fapi/v1/exchangeInfo on 2026-10-17; fixture in tests/fixtures/binance_exchange_info_usdtm.json.
 # Static on purpose (no runtime network). Catalog instrument files are refreshed by
 # CatalogManager.write_instrument (replaces on change), called by ingest/rebuild and by
-# the validation runner. Exception: SOL price tick stays 0.001 (history; today's is 0.01).
+# the validation runner. Exceptions: SOL price tick stays 0.001 (history; today's is 0.01)
+# and NEARUSDT stays 0.0001 (history; today's is 0.001).
+# margin_init/margin_maint feed NT's LeveragedMarginModel, NOT the liquidation brackets: the
+# new coins reuse SOL/BNBUSDT's 0.02/0.01 (BNB's tier-1 MMR is 0.005, so the pair is not read
+# off the snapshot).
 # min_quantity: the sizing clamp (templates.py) may lift a tiny account above risk_per_trade.
 INSTRUMENT_CONFIGS = {
     "BTCUSDT": {
@@ -88,6 +92,66 @@ INSTRUMENT_CONFIGS = {
         "price_precision": 2,
         "size_precision": 2,
         "price_increment": "0.01",
+        "size_increment": "0.01",
+        "min_quantity": "0.01",
+        "min_notional": 5,
+        "max_leverage": Decimal("75"),
+        "margin_init": Decimal("0.02"),
+        "margin_maint": Decimal("0.01"),
+        "maker_fee": Decimal("0.0002"),
+        "taker_fee": Decimal("0.0005"),
+    },
+    "SUIUSDT": {
+        "base": "SUI",
+        "quote": "USDT",
+        "price_precision": 4,
+        "size_precision": 1,
+        "price_increment": "0.0001",
+        "size_increment": "0.1",
+        "min_quantity": "0.1",
+        "min_notional": 5,
+        "max_leverage": Decimal("75"),
+        "margin_init": Decimal("0.02"),
+        "margin_maint": Decimal("0.01"),
+        "maker_fee": Decimal("0.0002"),
+        "taker_fee": Decimal("0.0005"),
+    },
+    "ZECUSDT": {
+        "base": "ZEC",
+        "quote": "USDT",
+        "price_precision": 2,
+        "size_precision": 3,
+        "price_increment": "0.01",
+        "size_increment": "0.001",
+        "min_quantity": "0.001",
+        "min_notional": 5,
+        "max_leverage": Decimal("75"),
+        "margin_init": Decimal("0.02"),
+        "margin_maint": Decimal("0.01"),
+        "maker_fee": Decimal("0.0002"),
+        "taker_fee": Decimal("0.0005"),
+    },
+    "NEARUSDT": {
+        "base": "NEAR",
+        "quote": "USDT",
+        "price_precision": 4,
+        "size_precision": 0,
+        "price_increment": "0.0001",  # deliberate: today's tick is 0.001, but history is 0.0001 (see tests)
+        "size_increment": "1",
+        "min_quantity": "1",
+        "min_notional": 5,
+        "max_leverage": Decimal("75"),
+        "margin_init": Decimal("0.02"),
+        "margin_maint": Decimal("0.01"),
+        "maker_fee": Decimal("0.0002"),
+        "taker_fee": Decimal("0.0005"),
+    },
+    "HYPEUSDT": {
+        "base": "HYPE",
+        "quote": "USDT",
+        "price_precision": 3,
+        "size_precision": 2,
+        "price_increment": "0.001",
         "size_increment": "0.01",
         "min_quantity": "0.01",
         "min_notional": 5,

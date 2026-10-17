@@ -1,4 +1,4 @@
-"""Instrument specs must match Binance USDT-M exchangeInfo (fixture fetched 2026-10-10)."""
+"""Instrument specs must match Binance USDT-M exchangeInfo (fixture fetched 2026-10-17)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ _FIXTURE = Path(__file__).parent.parent / "fixtures" / "binance_exchange_info_us
 _INFO = {s["symbol"]: {f["filterType"]: f for f in s["filters"]} for s in json.loads(_FIXTURE.read_text())["symbols"]}
 
 
-_HISTORICAL_TICK = {"SOLUSDT": Decimal("0.001")}
+_HISTORICAL_TICK = {"SOLUSDT": Decimal("0.001"), "NEARUSDT": Decimal("0.0001")}
 
 
 def test_fixture_covers_all_configured_symbols() -> None:
@@ -41,6 +41,42 @@ def test_spec_matches_exchange_info(symbol: str) -> None:
 def test_sol_half_unit_not_rounded_to_zero() -> None:
     qty = create_instrument("SOLUSDT").make_qty(0.5, round_down=True)
     assert float(qty) == 0.5
+
+
+def test_near_history_tick_keeps_fourth_decimal() -> None:
+    """R3: NEAR's tick was 0.0001 until ~2022-02, so a 0.6175 close must survive.
+
+    With today's 0.001 tick NT would round the same input to 0.618 (MEASURED probe).
+    """
+    inst = create_instrument("NEARUSDT")
+    assert float(inst.make_price(0.6175)) == 0.6175
+    assert float(inst.make_price(0.61754)) == 0.6175
+
+
+@pytest.mark.parametrize(
+    ("symbol", "expected"),
+    [("SUIUSDT", 2.7), ("ZECUSDT", 2.777), ("NEARUSDT", 2), ("HYPEUSDT", 2.77)],
+)
+def test_new_coin_lot_rounding(symbol: str, expected: float) -> None:
+    """R4 / R4b: round_down to each new coin's size increment."""
+    assert float(create_instrument(symbol).make_qty(2.777, round_down=True)) == expected
+
+
+def test_near_sub_unit_lot_rounds_to_zero() -> None:
+    """R4: NEAR's step is 1, so a sub-1 lot rounds to zero; templates skip the entry."""
+    with pytest.raises(ValueError, match="rounded to zero due to size increment 1"):
+        create_instrument("NEARUSDT").make_qty(0.4, round_down=True)
+
+
+def test_new_coin_min_notional_edges() -> None:
+    """R5: min_notional is 5 for all four; templates.py:782 skips strictly below it."""
+    for symbol in ("SUIUSDT", "ZECUSDT", "NEARUSDT", "HYPEUSDT"):
+        inst = create_instrument(symbol)
+        assert inst.min_notional is not None
+        assert inst.min_notional.as_decimal() == Decimal(5)
+    qty = create_instrument("NEARUSDT").make_qty(2, round_down=True)
+    assert float(qty) * 2.5 == 5.0  # notional 5.0, not < 5 -> entered
+    assert float(qty) * 1.8 < 5  # notional 3.6 -> skipped
 
 
 def test_write_instrument_replaces_changed_and_skips_identical(tmp_path: Path) -> None:

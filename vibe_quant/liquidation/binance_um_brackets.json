@@ -1,6 +1,6 @@
 {
-  "version": "2026-10-12",
-  "fetched_at": "2026-10-12T21:36:03.857162+00:00",
+  "version": "2026-10-17",
+  "fetched_at": "2026-10-17T14:39:05.811756+00:00",
   "source": "https://www.binance.com/bapi/futures/v1/friendly/future/common/brackets",
   "note": "snapshot as of fetch date; historical bracket changes not modelled",
   "symbols": {
@@ -330,6 +330,282 @@
           "cap": 150000000.0,
           "mmr": 0.5,
           "cum": 25024810.0,
+          "max_leverage": 1
+        }
+      ],
+      "clearance_fee_rate": null,
+      "clearance_fee_source": "Binance trading rules; rate not public -> null = forfeit all remaining margin (conservative)"
+    },
+    "SUIUSDT": {
+      "brackets": [
+        {
+          "floor": 0.0,
+          "cap": 20000.0,
+          "mmr": 0.01,
+          "cum": 0.0,
+          "max_leverage": 75
+        },
+        {
+          "floor": 20000.0,
+          "cap": 200000.0,
+          "mmr": 0.015,
+          "cum": 100.0,
+          "max_leverage": 50
+        },
+        {
+          "floor": 200000.0,
+          "cap": 1000000.0,
+          "mmr": 0.02,
+          "cum": 1100.0,
+          "max_leverage": 25
+        },
+        {
+          "floor": 1000000.0,
+          "cap": 2000000.0,
+          "mmr": 0.025,
+          "cum": 6100.0,
+          "max_leverage": 20
+        },
+        {
+          "floor": 2000000.0,
+          "cap": 10000000.0,
+          "mmr": 0.05,
+          "cum": 56100.0,
+          "max_leverage": 10
+        },
+        {
+          "floor": 10000000.0,
+          "cap": 20000000.0,
+          "mmr": 0.1,
+          "cum": 556100.0,
+          "max_leverage": 5
+        },
+        {
+          "floor": 20000000.0,
+          "cap": 25000000.0,
+          "mmr": 0.125,
+          "cum": 1056100.0,
+          "max_leverage": 4
+        },
+        {
+          "floor": 25000000.0,
+          "cap": 50000000.0,
+          "mmr": 0.25,
+          "cum": 4181100.0,
+          "max_leverage": 2
+        },
+        {
+          "floor": 50000000.0,
+          "cap": 100000000.0,
+          "mmr": 0.5,
+          "cum": 16681100.0,
+          "max_leverage": 1
+        }
+      ],
+      "clearance_fee_rate": null,
+      "clearance_fee_source": "Binance trading rules; rate not public -> null = forfeit all remaining margin (conservative)"
+    },
+    "ZECUSDT": {
+      "brackets": [
+        {
+          "floor": 0.0,
+          "cap": 20000.0,
+          "mmr": 0.01,
+          "cum": 0.0,
+          "max_leverage": 75
+        },
+        {
+          "floor": 20000.0,
+          "cap": 200000.0,
+          "mmr": 0.015,
+          "cum": 100.0,
+          "max_leverage": 50
+        },
+        {
+          "floor": 200000.0,
+          "cap": 1000000.0,
+          "mmr": 0.02,
+          "cum": 1100.0,
+          "max_leverage": 25
+        },
+        {
+          "floor": 1000000.0,
+          "cap": 2000000.0,
+          "mmr": 0.025,
+          "cum": 6100.0,
+          "max_leverage": 20
+        },
+        {
+          "floor": 2000000.0,
+          "cap": 5000000.0,
+          "mmr": 0.05,
+          "cum": 56100.0,
+          "max_leverage": 10
+        },
+        {
+          "floor": 5000000.0,
+          "cap": 7500000.0,
+          "mmr": 0.1,
+          "cum": 306100.0,
+          "max_leverage": 5
+        },
+        {
+          "floor": 7500000.0,
+          "cap": 10000000.0,
+          "mmr": 0.125,
+          "cum": 493600.0,
+          "max_leverage": 4
+        },
+        {
+          "floor": 10000000.0,
+          "cap": 25000000.0,
+          "mmr": 0.25,
+          "cum": 1743600.0,
+          "max_leverage": 2
+        },
+        {
+          "floor": 25000000.0,
+          "cap": 60000000.0,
+          "mmr": 0.5,
+          "cum": 7993600.0,
+          "max_leverage": 1
+        }
+      ],
+      "clearance_fee_rate": null,
+      "clearance_fee_source": "Binance trading rules; rate not public -> null = forfeit all remaining margin (conservative)"
+    },
+    "NEARUSDT": {
+      "brackets": [
+        {
+          "floor": 0.0,
+          "cap": 20000.0,
+          "mmr": 0.01,
+          "cum": 0.0,
+          "max_leverage": 75
+        },
+        {
+          "floor": 20000.0,
+          "cap": 200000.0,
+          "mmr": 0.015,
+          "cum": 100.0,
+          "max_leverage": 50
+        },
+        {
+          "floor": 200000.0,
+          "cap": 1000000.0,
+          "mmr": 0.02,
+          "cum": 1100.0,
+          "max_leverage": 25
+        },
+        {
+          "floor": 1000000.0,
+          "cap": 2000000.0,
+          "mmr": 0.025,
+          "cum": 6100.0,
+          "max_leverage": 20
+        },
+        {
+          "floor": 2000000.0,
+          "cap": 10000000.0,
+          "mmr": 0.05,
+          "cum": 56100.0,
+          "max_leverage": 10
+        },
+        {
+          "floor": 10000000.0,
+          "cap": 20000000.0,
+          "mmr": 0.1,
+          "cum": 556100.0,
+          "max_leverage": 5
+        },
+        {
+          "floor": 20000000.0,
+          "cap": 25000000.0,
+          "mmr": 0.125,
+          "cum": 1056100.0,
+          "max_leverage": 4
+        },
+        {
+          "floor": 25000000.0,
+          "cap": 30000000.0,
+          "mmr": 0.25,
+          "cum": 4181100.0,
+          "max_leverage": 2
+        },
+        {
+          "floor": 30000000.0,
+          "cap": 35000000.0,
+          "mmr": 0.5,
+          "cum": 11681100.0,
+          "max_leverage": 1
+        }
+      ],
+      "clearance_fee_rate": null,
+      "clearance_fee_source": "Binance trading rules; rate not public -> null = forfeit all remaining margin (conservative)"
+    },
+    "HYPEUSDT": {
+      "brackets": [
+        {
+          "floor": 0.0,
+          "cap": 20000.0,
+          "mmr": 0.01,
+          "cum": 0.0,
+          "max_leverage": 75
+        },
+        {
+          "floor": 20000.0,
+          "cap": 200000.0,
+          "mmr": 0.015,
+          "cum": 100.0,
+          "max_leverage": 50
+        },
+        {
+          "floor": 200000.0,
+          "cap": 1000000.0,
+          "mmr": 0.02,
+          "cum": 1100.0,
+          "max_leverage": 25
+        },
+        {
+          "floor": 1000000.0,
+          "cap": 2000000.0,
+          "mmr": 0.025,
+          "cum": 6100.0,
+          "max_leverage": 20
+        },
+        {
+          "floor": 2000000.0,
+          "cap": 5000000.0,
+          "mmr": 0.05,
+          "cum": 56100.0,
+          "max_leverage": 10
+        },
+        {
+          "floor": 5000000.0,
+          "cap": 7500000.0,
+          "mmr": 0.1,
+          "cum": 306100.0,
+          "max_leverage": 5
+        },
+        {
+          "floor": 7500000.0,
+          "cap": 10000000.0,
+          "mmr": 0.125,
+          "cum": 493600.0,
+          "max_leverage": 4
+        },
+        {
+          "floor": 10000000.0,
+          "cap": 12500000.0,
+          "mmr": 0.25,
+          "cum": 1743600.0,
+          "max_leverage": 2
+        },
+        {
+          "floor": 12500000.0,
+          "cap": 15000000.0,
+          "mmr": 0.5,
+          "cum": 4868600.0,
           "max_leverage": 1
         }
       ],

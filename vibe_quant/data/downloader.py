@@ -46,7 +46,16 @@ BINANCE_VISION_FUNDING_BASE = "https://data.binance.vision/data/futures/um/month
 BINANCE_FUTURES_API = "https://fapi.binance.com"
 
 # Supported symbols (USDT-M perpetuals)
-SUPPORTED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+SUPPORTED_SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "SUIUSDT",
+    "ZECUSDT",
+    "NEARUSDT",
+    "HYPEUSDT",
+]
 
 # Transient-failure retry policy: delays between attempts (s).
 MONTHLY_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
@@ -166,7 +175,8 @@ def download_monthly_mark_klines(
     Same contract, zip layout and CSV format as :func:`download_monthly_klines`;
     only the ``markPriceKlines`` path differs. Available roughly from each
     symbol's listing month (BTCUSDT 2020-01, ETHUSDT 2020-01, BNBUSDT 2020-03,
-    SOLUSDT 2020-10); earlier months are a 404.
+    SOLUSDT 2020-10, SUIUSDT 2023-05, ZECUSDT 2020-02, NEARUSDT 2020-10,
+    HYPEUSDT 2025-05); earlier months are a 404.
 
     Args:
         symbol: Trading symbol (e.g., 'BTCUSDT').

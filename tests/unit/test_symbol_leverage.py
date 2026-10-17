@@ -24,10 +24,19 @@ from vibe_quant.discovery import __main__ as cli
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage, max_leverage
 
 ROOT = Path(__file__).resolve().parents[2]
-SNAPSHOT_DATE = "2026-10-12"
+SNAPSHOT_DATE = "2026-10-17"
 # The first bracket's max_leverage of each snapshot symbol = the coin maximum.
-COIN_MAXIMA = {"BTCUSDT": 150, "ETHUSDT": 150, "SOLUSDT": 100, "BNBUSDT": 75}
-MISSING_SYMBOL_MESSAGE = "no Binance leverage bracket for XRPUSDT (snapshot 2026-10-12)"
+COIN_MAXIMA = {
+    "BTCUSDT": 150,
+    "ETHUSDT": 150,
+    "SOLUSDT": 100,
+    "BNBUSDT": 75,
+    "SUIUSDT": 75,
+    "ZECUSDT": 75,
+    "NEARUSDT": 75,
+    "HYPEUSDT": 75,
+}
+MISSING_SYMBOL_MESSAGE = "no Binance leverage bracket for XRPUSDT (snapshot 2026-10-17)"
 
 
 def _backtest_body(**overrides: object) -> dict[str, object]:
@@ -59,7 +68,10 @@ def test_max_leverage_of_an_unknown_symbol_fails_closed() -> None:
     assert str(exc.value) == MISSING_SYMBOL_MESSAGE
 
 
-@pytest.mark.parametrize(("symbol", "leverage"), [("BNBUSDT", 75), ("SOLUSDT", 100)])
+@pytest.mark.parametrize(
+    ("symbol", "leverage"),
+    [("BNBUSDT", 75), ("SOLUSDT", 100), ("HYPEUSDT", 75)],
+)
 def test_check_leverage_at_the_maximum_is_allowed(symbol: str, leverage: int) -> None:
     """The equality edge: the maximum itself is launchable."""
     assert check_leverage([symbol], leverage) is None
@@ -71,10 +83,12 @@ def test_check_leverage_at_the_maximum_is_allowed(symbol: str, leverage: int) ->
     [
         ("BNBUSDT", 76, "leverage 76x exceeds the Binance maximum for BNBUSDT (75x)"),
         ("SOLUSDT", 101, "leverage 101x exceeds the Binance maximum for SOLUSDT (100x)"),
+        ("SUIUSDT", 76, "leverage 76x exceeds the Binance maximum for SUIUSDT (75x)"),
+        ("HYPEUSDT", 75.5, "leverage 75.5x exceeds the Binance maximum for HYPEUSDT (75x)"),
     ],
 )
 def test_check_leverage_one_above_the_maximum_is_refused(
-    symbol: str, leverage: int, message: str
+    symbol: str, leverage: float, message: str
 ) -> None:
     with pytest.raises(SymbolLeverageError) as exc:
         check_leverage([symbol], leverage)
@@ -98,6 +112,11 @@ def test_check_leverage_names_the_first_offending_symbol_in_order() -> None:
     with pytest.raises(SymbolLeverageError) as exc2:
         check_leverage(["BNBUSDT", "SOLUSDT"], 101)
     assert str(exc2.value) == "leverage 101x exceeds the Binance maximum for BNBUSDT (75x)"
+    # A fine first symbol must not stop the scan before the offending one.
+    with pytest.raises(SymbolLeverageError) as exc3:
+        check_leverage(["BTCUSDT", "ZECUSDT"], 100)
+    assert str(exc3.value) == "leverage 100x exceeds the Binance maximum for ZECUSDT (75x)"
+    assert check_leverage(["BTCUSDT"], 100) is None
 
 
 def test_importing_the_rule_never_imports_the_liquidation_package() -> None:
@@ -167,6 +186,18 @@ def test_backtest_launch_symbol_missing_from_the_snapshot_is_refused() -> None:
     with pytest.raises(ValidationError) as exc:
         BacktestLaunchRequest(**_backtest_body(symbols=["XRPUSDT"]))
     assert MISSING_SYMBOL_MESSAGE in str(exc.value)
+
+
+def test_new_coin_launch_above_75_refused() -> None:
+    """R6e: the new coins' 75x cap flows through the same screening/discovery validators."""
+    with pytest.raises(ValidationError) as backtest:
+        BacktestLaunchRequest(
+            **_backtest_body(symbols=["NEARUSDT"], parameters={"leverage": 76})
+        )
+    assert "exceeds the Binance maximum for NEARUSDT (75x)" in str(backtest.value)
+    with pytest.raises(ValidationError) as discovery:
+        DiscoveryLaunchRequest(symbols=["HYPEUSDT"], leverage=76)
+    assert "exceeds the Binance maximum for HYPEUSDT (75x)" in str(discovery.value)
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pytest
@@ -457,6 +458,44 @@ class TestInstrumentConfigs:
             assert instrument.size_precision == config["size_precision"]
             assert _decimal_places(config["price_increment"]) == config["price_precision"]
             assert _decimal_places(config["size_increment"]) == config["size_precision"]
+
+    def test_supported_symbols_is_the_eight_configured_coins(self) -> None:
+        """R17: the ingest/download/mark defaults are exactly the eight coins, in order."""
+        assert SUPPORTED_SYMBOLS == [
+            "BTCUSDT",
+            "ETHUSDT",
+            "SOLUSDT",
+            "BNBUSDT",
+            "SUIUSDT",
+            "ZECUSDT",
+            "NEARUSDT",
+            "HYPEUSDT",
+        ]
+
+    def test_new_coin_configs(self) -> None:
+        """R11: the four new rows match the exchangeInfo/design table field by field."""
+        expected = {
+            "SUIUSDT": ("SUI", 4, 1, "0.0001", "0.1", "0.1", 5),
+            "ZECUSDT": ("ZEC", 2, 3, "0.01", "0.001", "0.001", 5),
+            "NEARUSDT": ("NEAR", 4, 0, "0.0001", "1", "1", 5),
+            "HYPEUSDT": ("HYPE", 3, 2, "0.001", "0.01", "0.01", 5),
+        }
+        for symbol, row in expected.items():
+            base, price_precision, size_precision, price_increment, size_increment, min_qty, min_notional = row
+            config = INSTRUMENT_CONFIGS[symbol]
+            assert config["base"] == base
+            assert config["quote"] == "USDT"
+            assert config["price_precision"] == price_precision
+            assert config["size_precision"] == size_precision
+            assert config["price_increment"] == price_increment
+            assert config["size_increment"] == size_increment
+            assert config["min_quantity"] == min_qty
+            assert config["min_notional"] == min_notional
+            assert config["max_leverage"] == Decimal("75")
+            assert config["margin_init"] == Decimal("0.02")
+            assert config["margin_maint"] == Decimal("0.01")
+            assert config["maker_fee"] == Decimal("0.0002")
+            assert config["taker_fee"] == Decimal("0.0005")
 
     def test_bnbusdt_matches_binance_filters(self) -> None:
         """BNBUSDT tick/step mirror fapi/v1/exchangeInfo (tickSize 0.010, stepSize 0.01)."""

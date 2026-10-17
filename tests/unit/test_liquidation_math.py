@@ -208,7 +208,16 @@ class TestLoaderValidation:
 
 class TestShippedSnapshot:
     def test_symbol_set(self):
-        assert set(_TABLES) == {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"}
+        assert set(_TABLES) == {
+            "BTCUSDT",
+            "ETHUSDT",
+            "SOLUSDT",
+            "BNBUSDT",
+            "SUIUSDT",
+            "ZECUSDT",
+            "NEARUSDT",
+            "HYPEUSDT",
+        }
 
     def test_metadata(self):
         assert isinstance(_TABLES.version, str) and _TABLES.version
@@ -216,7 +225,16 @@ class TestShippedSnapshot:
 
     def test_shipped_brackets_pass_min_width(self):
         tables = load_tier_tables()
-        assert set(tables) == {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"}
+        assert set(tables) == {
+            "BTCUSDT",
+            "ETHUSDT",
+            "SOLUSDT",
+            "BNBUSDT",
+            "SUIUSDT",
+            "ZECUSDT",
+            "NEARUSDT",
+            "HYPEUSDT",
+        }
         for symbol, table in tables.items():
             assert min(bracket.cap - bracket.floor for bracket in table.brackets) >= 10000, symbol
 
@@ -235,11 +253,31 @@ class TestShippedSnapshot:
             ("ETHUSDT", (0.0, 300000.0, 0.004, 0.0)),
             ("SOLUSDT", (0.0, 50000.0, 0.005, 0.0)),
             ("BNBUSDT", (0.0, 10000.0, 0.005, 0.0)),
+            ("SUIUSDT", (0.0, 20000.0, 0.01, 0.0)),
+            ("ZECUSDT", (0.0, 20000.0, 0.01, 0.0)),
+            ("NEARUSDT", (0.0, 20000.0, 0.01, 0.0)),
+            ("HYPEUSDT", (0.0, 20000.0, 0.01, 0.0)),
         ],
     )
     def test_other_symbols_tier_one(self, symbol, tier_one):
         bracket = _TABLES[symbol].brackets[0]
         assert (bracket.floor, bracket.cap, bracket.mmr, bracket.cum) == tier_one
+
+    def test_new_coin_tier_two_continuity(self):
+        """R9: all four new coins share tier 1 and the tier-2 boundary at 20000 USDT."""
+        for symbol in ("SUIUSDT", "ZECUSDT", "NEARUSDT", "HYPEUSDT"):
+            table = _TABLES[symbol]
+            assert table.brackets[0].max_leverage == 75
+            assert table.maintenance_margin(19999.99) == pytest.approx(199.9999, abs=1e-9)
+            assert table.maintenance_margin(20000) == pytest.approx(200.0, abs=1e-9)  # 20000*0.015-100
+            second = table.bracket_for(20000)
+            assert (second.mmr, second.cum) == (0.015, 100.0)
+
+    def test_hype_past_the_last_cap_raises(self):
+        """R9b: a notional at/above the coin's last cap is refused, not silently clamped."""
+        with pytest.raises(TierTableExceeded) as exc:
+            _TABLES["HYPEUSDT"].bracket_for(15_000_000)
+        assert str(exc.value) == "HYPEUSDT: notional 15000000 >= last cap 15000000.0"
 
 
 class TestInputValidation:

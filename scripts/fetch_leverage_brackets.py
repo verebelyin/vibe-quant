@@ -8,7 +8,7 @@ snapshot tool: the engine must never call the endpoint at runtime — it loads
 the committed JSON instead.
 
     python scripts/fetch_leverage_brackets.py \
-        --symbols BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT \
+        --symbols BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,SUIUSDT,ZECUSDT,NEARUSDT,HYPEUSDT \
         --out vibe_quant/liquidation/binance_um_brackets.json
 
 Only the keyless snapshot is supported (no signed ``leverageBracket`` mode).
@@ -30,7 +30,7 @@ import httpx
 from vibe_quant.liquidation.tiers import TierTableError, load_tier_tables
 
 BRACKETS_ENDPOINT = "https://www.binance.com/bapi/futures/v1/friendly/future/common/brackets"
-DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,SUIUSDT,ZECUSDT,NEARUSDT,HYPEUSDT"
 DEFAULT_OUT = "vibe_quant/liquidation/binance_um_brackets.json"
 NOTE = "snapshot as of fetch date; historical bracket changes not modelled"
 CLEARANCE_FEE_SOURCE = (
