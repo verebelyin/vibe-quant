@@ -272,7 +272,10 @@ async def run_with_config(
                 # R29: class only, never ``logger.exception`` - this runs inside an
                 # active except, so the chained error's text must not reach the log.
                 logger.error("heartbeat mark_completed failed (%s)", type(exc).__name__)
-        print(f"Paper trading error: {e}", file=sys.stderr)
+        if run_id is not None:
+            print(f"Paper trading error: {type(e).__name__} (run {run_id})", file=sys.stderr)
+        else:
+            print(f"Paper trading error: {type(e).__name__}", file=sys.stderr)
         return 1
     finally:
         if stop_heartbeat is not None:

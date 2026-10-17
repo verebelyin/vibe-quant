@@ -487,6 +487,66 @@ class TestMarkCompletedFailure:
         assert "HEARTBEAT_SECRET_MARKER" not in caplog.text
         assert "CHAINED_SECRET_MARKER" not in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_stderr_shows_class_and_run_id_not_exception_text(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        class _FakeManager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                return
+
+            def close(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (_FakeManager(), lambda: None),
+        )
+
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            try:
+                raise ValueError("inner: CHAIN_SECRET_MARKER")
+            except ValueError as exc:
+                raise RuntimeError("boom: STDERR_SECRET_MARKER") from exc
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+        rc = await run_with_config(config_path, run_id=7)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == ["Paper trading error: RuntimeError (run 7)"]
+        assert "STDERR_SECRET_MARKER" not in err
+        assert "CHAIN_SECRET_MARKER" not in err
+
+    @pytest.mark.asyncio
+    async def test_stderr_shows_class_only_without_run_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            raise KeyError("STDERR_SECRET_MARKER")
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+        rc = await run_with_config(config_path, run_id=None)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == ["Paper trading error: KeyError"]
+        assert "STDERR_SECRET_MARKER" not in err
+
 
 class TestMarginCushionConfig:
     """sizing.max_margin_pct in the node's config file: absent = paper default, null = error."""
