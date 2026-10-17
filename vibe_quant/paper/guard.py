@@ -459,18 +459,30 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
     def _gate_execute(self, command: Any) -> None:
         if isinstance(command, SubmitOrder):
-            reason = self._denial_reason(command.order)
+            reason = self._checked_denial_reason(command.order)
             if reason is not None:
                 self._deny(command.order, reason)
                 return
         elif isinstance(command, SubmitOrderList):
             for order in command.order_list.orders:
-                reason = self._denial_reason(order)
+                reason = self._checked_denial_reason(order)
                 if reason is not None:
                     for o in command.order_list.orders:
                         self._deny(o, reason)
                     return
         self._risk_engine.execute(command)
+
+    def _checked_denial_reason(self, order: Any) -> str | None:
+        """``_denial_reason`` with a fail-safe wrapper: a raising entry check DENIES the
+        order instead of letting the exception escape. An escaped exception leaves the order
+        INITIALIZED, so ``_unclosed_orders`` keeps counting it (its notional in the margin
+        sum, its instrument pending-refused) until a restart. Logged by class only: the
+        check's own message may carry venue/account data."""
+        try:
+            return self._denial_reason(order)
+        except Exception as exc:
+            logger.error("entry check failed (%s); order denied", type(exc).__name__)
+            return f"{GATE_DENIAL_PREFIX}: entry check failed ({type(exc).__name__}); order denied"
 
     def _denial_reason(self, order: Any) -> str | None:
         if order.is_reduce_only:
