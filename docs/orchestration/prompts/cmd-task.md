@@ -24,11 +24,11 @@ STEPS:
 DONE WHEN: {DONE_WHEN}
 
 RULES
-- Test-first. Keep the red run for the handoff. For a fix to an existing file: `git stash push -- <fixed file>`, run the new tests (red), `git stash pop`. A new module's first red run may be an ImportError: also paste a one-command probe of the old behaviour. Docs-only work: an `rg` probe before/after instead of a test.
-- Tests with teeth: every comparison you add in money code gets a test at each equality edge; a value your code forwards (series, key, class name) is tested through the public entry point and over two unrelated inputs with literal expected values; anything launched asynchronously is tested by polling its final status; a volume-threshold gate gets full-volume fixture rows that cross it, then a rerun. Keep every step that can raise a skip error inside the same try as its siblings.
-- Before the gate, run every test file that uses what you changed: `rg -l '<symbol>' tests/unit` (and `frontend/src --glob '*.test.ts'`). Run them in ONE serial pytest call (`-p no:randomly`): the gate's parallel run splits files across workers and misses leaked module state.
+- Test-first. Keep the red run for the handoff. For a fix to an existing file: `git stash push -- <fixed file>`, run the new tests (red), `git stash pop`. A new module's ImportError red run also needs a one-command probe of the old behaviour. Docs-only work: an `rg` probe before/after instead of a test.
+- Tests with teeth: every comparison you add in money code gets a test at each equality edge; a value your code forwards (series, key, class name) is tested through the public entry point and over two unrelated inputs with literal expected values; anything launched asynchronously is tested by polling its final status; a new log call in a money-path `except` gets a test that an exception-text marker is absent from `caplog.text` (no `exc_info`); a volume-threshold gate gets full-volume fixture rows that cross it, then a rerun. Keep every step that can raise a skip error inside the same try as its siblings.
+- Before the gate, run every test file that uses what you changed: `rg -l '<symbol>' tests/unit` (and `frontend/src --glob '*.test.ts'`). Run them in ONE serial pytest call (`-p no:randomly`) to catch leaked module state.
 - Self-check with ≤ 3 mutants on lines you changed: `scripts/agents/mutate.py --file F --old '...' --new '...' -- <targeted pytest>`, in a turn of its own.
-- Batch independent reads and commands in one turn; chain checks: `ruff check && mypy && <targeted pytest>`. E2E: iterate with `-g "<scenario>"`, full spec once.
+- Chain checks: `ruff check && mypy && <targeted pytest>`. E2E: iterate with `-g "<scenario>"`, full spec once.
 - A sibling task's API not on your base yet: call it through one documented `# type: ignore[attr-defined]` and stub it in tests; the chief merges siblings.
 - Frontend: vitest collects only `src/**/*.test.ts` (node env, no jsdom), so test pure helpers; run `./node_modules/.bin/biome check --write <your files>`; `pnpm lint` must print no `Found N errors`; a new file name must not differ from a sibling only by case.
 - Never `git add -f`; never push; never touch main.
