@@ -4,6 +4,22 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-17: RESULT H-NF-1 — REJECTED (funding fade on SUI/NEAR/ZEC: Sharpe 0.33, extreme funding vanished in 2025-26) + wave 8 feature checks
+
+Strategy 250 (`h_nf1_funding_fade`, `data/swarm/20261017-newfeat-hunt/strategies/H-NF-1.yaml`), screening, SUI/NEAR/ZEC 4h, short-only, FUNDING_Z(90) > 2 entry / < 0.5 exit, 2×/4× ATR.
+
+| run | window | sharpe | trades | total_return | PF | max DD |
+|---|---|---|---|---|---|---|
+| 952 | 2023-06-01..2026-10-15 | 0.3304456138324597 | 105 | 0.1582587337869444 | 1.2321311553653183 | 0.15199908618000327 |
+| 953 | 2023-06-01..2024-12-31 | 0.3909628725876134 | 103 | 0.11943863605933351 | 1.1763442600121685 | 0.15199908618000327 |
+| 954 | 2025-01-01..2026-10-15 | 0.5586160469726403 | 2 | 0.0357427457246563 | 9.69913842533275 | 0.008292982948366728 |
+
+**Verdict: REJECT** — full Sharpe 0.3304456138324597 < 0.6. 103 of 105 trades fall in 2023-06..2024; FUNDING_Z(90) > 2 fired twice in 2025-26, so the mechanism (crowded longs paying extreme funding) has nearly disappeared on these coins, matching the carry book's funding-dispersion decay (2022 0.766 → 2026 0.064).
+
+**Feature checks:** bankroll grid at scale (run 950, BTC/ETH/SOL/BNB 1d 2021-01..2026-10-15, 4 cells isolated/cross × 3/10 × 0.5): 228 s, 0 champions; each cell rejected uid a083a1f3236b (sharpe 0.451, 71 trades, DSR p 0.691169793420464 at the per-cell N=137; pooled gate_n 167 = prior 127 + 40 raw); liquidation_count 0 in every cell. Post-only validation full window (run 951): sharpe 0.2810473224764371 vs taker twin 0.26169428494681873, fees 132.25545771999987 vs 192.530894765, fill_rate 0.994413407821229 (534/537, 3 expired); each engine pass ~3 min 21 s, so post-only is as fast as taker (bead vibe-quant-6b6qa closed, no perf bug).
+
+---
+
 ## 2026-10-17: PRE-REGISTRATION H-NF-1 — short crowded longs on the new coins (FUNDING_Z fade), + wave 8 feature checks
 
 Written before any data on this rule is looked at. **Idea:** H-2 (2026-10-14) found long FUNDING_Z(90) > 2 continuation flipped sign in 2022-26 on BTC/ETH/SOL/BNB (net/trade -0.681630908785598 USD). The fade (short when longs pay extreme funding) was never tested, and SUI/NEAR/ZEC were never in any funding test — an out-of-universe test of a mechanism (crowded leverage unwinds), not of a fitted rule.
