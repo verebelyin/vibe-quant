@@ -340,6 +340,33 @@ describe("parseBankrollGrid", () => {
     ).toMatchObject({ kind: "on", payload: { leverages: [5, 10] } });
   });
 
+  it("refuses a token that starts or ends with a comma (vibe-quant-zeqit)", () => {
+    const ambiguous = (token: string) =>
+      `Ambiguous value '${token}': write 25.5 for one value or '25, 50' for two`;
+    expect(parseBankrollGrid(grid({ maxMarginPcts: "25 ,50" }))).toStrictEqual({
+      kind: "invalid",
+      message: ambiguous(",50"),
+    });
+    expect(parseBankrollGrid(grid({ leverages: "5 ,10", maxMarginPcts: "50" }))).toStrictEqual({
+      kind: "invalid",
+      message: ambiguous(",10"),
+    });
+    expect(parseBankrollGrid(grid({ maxMarginPcts: "25," }))).toStrictEqual({
+      kind: "invalid",
+      message: ambiguous("25,"),
+    });
+    expect(parseBankrollGrid(grid({ maxMarginPcts: "," }))).toStrictEqual({
+      kind: "invalid",
+      message: ambiguous(","),
+    });
+  });
+
+  it("still reads a trailing separator as a list separator, not a token (vibe-quant-zeqit)", () => {
+    expect(
+      parseBankrollGrid(grid({ modes: ["cross"], leverages: "5", maxMarginPcts: "25, " })),
+    ).toMatchObject({ kind: "on", payload: { max_margin_pcts: [0.25] } });
+  });
+
   it("rejects a cushion of 0, above 100% or non-numeric", () => {
     for (const bad of ["0", "101", "x"]) {
       expect(parseBankrollGrid(grid({ maxMarginPcts: bad })).kind).toBe("invalid");

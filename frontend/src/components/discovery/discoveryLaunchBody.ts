@@ -71,14 +71,19 @@ interface GridListTokens {
  * semicolon, or a whitespace run, so "25, 50", "25;50" and "25 50" each read as two items. A
  * comma BETWEEN TWO DIGITS with no space ("25,50", "25,5") is AMBIGUOUS — it could be one
  * decimal-comma value or two items — and is named rather than guessed (chief ruling T9-R1);
- * a fractional value in a list is written with a dot ("25.5").
+ * a fractional value in a list is written with a dot ("25.5"). A token with a comma at either
+ * END ("25 ,50" -> ",50", "25,") is the same mistake written with the separator in the wrong
+ * place, and is refused with the same message rather than read as a bare decimal (zeqit).
  */
 function splitGridList(raw: string): GridListTokens {
   const tokens = raw
     .split(/,\s+|;|\s+/)
     .map((token) => token.trim())
     .filter(Boolean);
-  return { tokens, ambiguous: tokens.find((token) => /\d,\d/.test(token)) ?? null };
+  return {
+    tokens,
+    ambiguous: tokens.find((token) => /\d,\d/.test(token) || /^,|,$/.test(token)) ?? null,
+  };
 }
 
 /**
