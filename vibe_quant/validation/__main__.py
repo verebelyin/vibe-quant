@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> int:
@@ -44,11 +47,15 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
-        import contextlib
-
         error_msg = f"{type(exc).__name__}: {exc}"
-        with contextlib.suppress(Exception):
+        try:
             job_manager.mark_completed(args.run_id, error=error_msg)
+        except Exception as write_exc:
+            logger.error(
+                "could not record run %s as failed (%s)",
+                args.run_id,
+                type(write_exc).__name__,
+            )
         print(f"Validation failed: {exc}", file=sys.stderr)
         return 1
     finally:

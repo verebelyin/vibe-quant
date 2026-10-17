@@ -6,8 +6,11 @@ Provides run/list/status subcommands for screening backtests.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _store_compiler_version(state: object, run_id: int, version: str) -> None:
@@ -183,8 +186,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         try:
             state.update_backtest_run_status(args.run_id, "failed", error_message=error_msg)
             manager.mark_completed(args.run_id, error=error_msg)
-        except Exception:
-            pass
+        except Exception as write_exc:
+            logger.error(
+                "could not record run %s as failed (%s)",
+                args.run_id,
+                type(write_exc).__name__,
+            )
         print(f"Screening failed: {exc}")
         return 1
     finally:

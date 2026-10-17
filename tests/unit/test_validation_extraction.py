@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -90,6 +91,73 @@ def test_trades_already_sorted_unchanged() -> None:
     assert result.trades[0].entry_time == "2025-01-01T00:00:00+00:00"
     assert result.trades[-1].entry_time == "2025-03-01T00:00:00+00:00"
     assert result.cagr != 0.0
+
+
+def test_trade_duration_garbled_times_warn_without_changing_avg(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unparseable entry/exit pair is warned about and only that trade is dropped."""
+    bad = _make_trade("not-a-date", "also-not-a-date")
+    good = _make_trade("2025-01-01T00:00:00+00:00", "2025-01-02T00:00:00+00:00")
+    result = ValidationResult(total_return=0.10, trades=[bad, good])
+    result.total_trades = len(result.trades)
+
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
+        compute_extended_metrics(
+            result, run_start_date="2024-01-01", run_end_date="2024-12-31"
+        )
+
+    # Only the good trade contributes: exactly one day.
+    assert result.avg_trade_duration_hours == pytest.approx(24.0)
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "not-a-date" in m and "also-not-a-date" in m for m in messages
+    ), messages
+
+
+def test_cagr_unparseable_trade_span_warns_and_leaves_cagr_at_default(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A trade span that cannot be parsed warns and leaves CAGR at its default."""
+    result = ValidationResult(
+        total_return=0.10, trades=[_make_trade("nope", "also-nope")]
+    )
+    result.total_trades = 1
+
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
+        compute_extended_metrics(result)
+
+    assert result.cagr == 0.0
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("CAGR not computed" in m for m in messages), messages
+
+
+def test_cagr_unparseable_run_window_warns_and_falls_back_to_trade_span(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A run window that cannot be parsed warns (naming the dates) and uses the span."""
+    with_bad_window = ValidationResult(
+        total_return=0.10,
+        trades=[_make_trade("2024-03-01T00:00:00+00:00", "2024-04-01T00:00:00+00:00")],
+    )
+    with_bad_window.total_trades = 1
+    no_window = ValidationResult(
+        total_return=0.10,
+        trades=[_make_trade("2024-03-01T00:00:00+00:00", "2024-04-01T00:00:00+00:00")],
+    )
+    no_window.total_trades = 1
+
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
+        compute_extended_metrics(
+            with_bad_window, run_start_date="2024-01-01", run_end_date="garbage"
+        )
+    compute_extended_metrics(no_window)
+
+    assert with_bad_window.cagr != 0.0
+    # The failed window falls back to the trade span, exactly as when omitted.
+    assert with_bad_window.cagr == pytest.approx(no_window.cagr)
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("2024-01-01" in m and "garbage" in m for m in messages), messages
 
 
 class TestComputeMaxDrawdownFromTrades:

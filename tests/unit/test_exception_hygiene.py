@@ -73,7 +73,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/data/indicator_compute.py": 1,
     "vibe_quant/data/mark_bars.py": 3,
     "vibe_quant/data/verify.py": 1,
-    "vibe_quant/discovery/__main__.py": 9,
+    "vibe_quant/discovery/__main__.py": 5,
     "vibe_quant/discovery/campaign.py": 1,
     "vibe_quant/discovery/fitness.py": 4,
     "vibe_quant/discovery/genome.py": 2,
@@ -91,12 +91,11 @@ BASELINE: dict[str, int] = {
     "vibe_quant/paper/persistence.py": 2,
     "vibe_quant/portfolio/__main__.py": 1,
     "vibe_quant/portfolio/runner.py": 1,
-    "vibe_quant/screening/__main__.py": 3,
+    "vibe_quant/screening/__main__.py": 1,
     "vibe_quant/screening/nt_runner.py": 1,
     "vibe_quant/screening/replay_drift.py": 3,
-    "vibe_quant/validation/__main__.py": 2,
     "vibe_quant/validation/consistency.py": 6,
-    "vibe_quant/validation/extraction.py": 9,
+    "vibe_quant/validation/extraction.py": 5,
     "vibe_quant/validation/runner.py": 1,
 }
 
@@ -325,6 +324,14 @@ def test_scanner_flags_broad_unlogged_handler() -> None:
     swallows = find_swallows(source)
     assert len(swallows) == 1
     assert swallows[0].label == "except Exception: (no log)"
+
+
+def test_scanner_flags_broad_unlogged_tuple_handler() -> None:
+    """``Exception`` inside a tuple still makes the handler broad (unlogged)."""
+    source = "try:\n    f()\nexcept (OSError, Exception) as e:\n    r = g(e)\n"
+    swallows = find_swallows(source)
+    assert len(swallows) == 1
+    assert swallows[0].label == "except (OSError, Exception): (no log)"
 
 
 def test_scanner_ignores_broad_handler_with_debug_log() -> None:

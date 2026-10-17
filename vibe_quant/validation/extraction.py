@@ -678,7 +678,12 @@ def mark_open_positions(
         else:
             try:
                 taker = float(engine.kernel.cache.instrument(pos.instrument_id).taker_fee)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "open-position exit fee: no taker rate for %s (%s); using 0.0005",
+                    pos.instrument_id,
+                    type(exc).__name__,
+                )
                 taker = 0.0005
         mark = OpenPositionMark(
             position=pos,
@@ -1971,7 +1976,11 @@ def compute_extended_metrics(
                 if duration_h >= 0:
                     durations_hours.append(duration_h)
             except (ValueError, TypeError):
-                pass
+                logger.warning(
+                    "Trade duration not computed for entry %s / exit %s",
+                    trade.entry_time,
+                    trade.exit_time,
+                )
 
     result.max_consecutive_wins = max_con_wins
     result.max_consecutive_losses = max_con_losses
@@ -1995,6 +2004,11 @@ def compute_extended_metrics(
                     window_end = datetime.fromisoformat(run_end_date)
                     days = max((window_end - window_start).total_seconds() / 86400.0, 1.0)
                 except ValueError:
+                    logger.warning(
+                        "CAGR run window unparseable (%s..%s); using trade span",
+                        run_start_date,
+                        run_end_date,
+                    )
                     days = None
             if days is None:
                 # Fallback: trade span (inflates CAGR for sparse traders)
@@ -2012,8 +2026,8 @@ def compute_extended_metrics(
                 result.cagr = -1.0
             elif total_return_frac > -1.0:
                 result.cagr = ((1.0 + total_return_frac) ** (365.0 / days)) - 1.0
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            logger.warning("CAGR not computed (%s)", type(exc).__name__)
 
     # Note: computes volatility from individual trade returns, not daily
     # equity returns. This may differ from standard annual volatility

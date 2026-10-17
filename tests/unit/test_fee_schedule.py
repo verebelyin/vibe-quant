@@ -556,6 +556,42 @@ def test_open_mark_uses_schedule_taker() -> None:
         _dispose(engine)
 
 
+def test_open_mark_fee_fallback_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing instrument lookup must WARN and still charge the 0.0005 fallback.
+
+    The estimated exit fee is a reported number: silently swapping in 0.0005 hid
+    the fact that the instrument's taker rate was never read. The value is
+    unchanged (exactness); only the log is new.
+    """
+    import logging
+    from types import SimpleNamespace
+
+    class _BoomCache:
+        def bars(self, bar_type: object) -> list[object]:
+            return [
+                SimpleNamespace(
+                    ts_init=_MIN_NS, open=10000.0, high=10005.0, low=9995.0, close=10300.0
+                )
+            ]
+
+        def instrument(self, instrument_id: object) -> object:
+            raise KeyError(str(instrument_id))
+
+    engine = SimpleNamespace(kernel=SimpleNamespace(cache=_BoomCache()))
+    pos = SimpleNamespace(instrument_id=IID, signed_qty=_QTY, avg_px_open=10000.0)
+
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.validation.extraction"):
+        marks = mark_open_positions(engine, [pos], execution_timeframe="1m", log=False)
+
+    assert len(marks) == 1
+    assert marks[0].exit_fee == pytest.approx(abs(float(_QTY)) * 10300.0 * 0.0005)
+    assert marks[0].exit_fee == 0.2575
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "no taker rate for" in m and str(IID) in m and "KeyError" in m for m in messages
+    ), messages
+
+
 # ---------------------------------------------------------------------------
 # FeeSchedule
 # ---------------------------------------------------------------------------

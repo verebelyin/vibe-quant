@@ -970,6 +970,7 @@ def _prior_discovery_trials(
         try:
             notes = json.loads(raw) if raw else {}
         except (TypeError, ValueError):
+            logger.warning("prior trial count: run %s %s; skipped", row_id, "garbled notes")
             continue  # garbled notes -> skip the row
         if not isinstance(notes, dict) or notes.get("mock") or not notes.get("evaluated"):
             continue
@@ -981,6 +982,11 @@ def _prior_discovery_trials(
             try:
                 evaluated = int(notes["evaluated"])  # type: ignore[call-overload]
             except (TypeError, ValueError):
+                logger.warning(
+                    "prior trial count: run %s %s; skipped",
+                    row_id,
+                    "garbled evaluated count",
+                )
                 continue  # garbled evaluated count -> skip only this row
             total += evaluated
             ids.add(int(row_id))
@@ -1941,8 +1947,12 @@ def main() -> int:
         try:
             state.update_backtest_run_status(args.run_id, "failed", error_message=error)
             job_manager.mark_completed(args.run_id, error=error)
-        except Exception:
-            pass
+        except Exception as write_exc:
+            logger.error(
+                "could not record run %s as failed (%s)",
+                args.run_id,
+                type(write_exc).__name__,
+            )
         print(f"Discovery failed: {exc}")
         import traceback
 

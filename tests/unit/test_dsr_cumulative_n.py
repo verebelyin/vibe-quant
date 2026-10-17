@@ -13,6 +13,7 @@ deterministically at 500 series so O(m^3) cannot blow up.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 from array import array
@@ -224,6 +225,37 @@ def test_prior_trials_garbled_evaluated_skips_only_that_row() -> None:
     )
     n, run_ids = _prior_discovery_trials(_state(conn), 6, "4h", THIS_WINDOW)
     assert (n, run_ids) == (15, [1, 5])
+
+
+def test_prior_trials_garbled_rows_warn_and_do_not_change_n(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both skip reasons are logged (with the run id) and N is unchanged."""
+    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+
+    conn = _conn(
+        [
+            (1, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 10}),
+            # garbled notes JSON -> skipped, logged
+            (2, "discovery", "4h", "2024-01-01", "2024-06-01", "not json"),
+            # overlapping window but non-integer evaluated -> skipped, logged
+            (3, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": "n/a"}),
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vibe_quant.discovery.__main__"):
+        n, run_ids = _prior_discovery_trials(_state(conn), 4, "4h", THIS_WINDOW)
+
+    assert (n, run_ids) == (10, [1])
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2, messages
+    assert any(
+        "prior trial count" in m and "run 2" in m and "garbled notes" in m for m in messages
+    ), messages
+    assert any(
+        "prior trial count" in m and "run 3" in m and "garbled evaluated" in m
+        for m in messages
+    ), messages
 
 
 @pytest.mark.parametrize(
