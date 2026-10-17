@@ -415,7 +415,20 @@ def test_close_delegates_to_client() -> None:
 
 
 def test_registry_lists_hackernews() -> None:
-    from vibe_quant.research.sources import list_sources, load_builtin_sources
+    """The builtin loader registers hackernews.
 
+    Order-independent: `tests/unit/api/test_research_router*.py` call
+    `_reset_for_tests()`, which empties the registry, and a plain
+    `load_builtin_sources(force=True)` cannot re-register anything afterwards —
+    the source modules stay in `sys.modules`, so `@register_source` never re-runs
+    and `list_sources()` stays `[]`.
+    """
+    import sys
+
+    from vibe_quant.research.sources import _reset_for_tests, list_sources, load_builtin_sources
+
+    _reset_for_tests()
+    for name in [n for n in sys.modules if n.startswith("vibe_quant.research.sources.")]:
+        del sys.modules[name]
     load_builtin_sources(force=True)
     assert "hackernews" in list_sources()

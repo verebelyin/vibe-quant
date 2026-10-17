@@ -10,8 +10,10 @@ couple of requests per second is fine, the limits are dynamic, and a 429 reply
 carries ``X-RateLimit-Reset`` (seconds until reset). Overloaded queries answer
 with a non-payload body carrying a timeout error (200 ``Query timed out``, or
 422 ``Timeout. Maybe slow down a bit``) — those are retried with backoff, as is
-a 2xx body that is not valid JSON. A 2xx JSON body with a ``data`` list is a
-real payload and is never scanned for those markers (RULING A11b).
+a 2xx body that is not valid JSON. Any valid JSON body is a real payload and is
+never text-scanned for those markers: an object is judged only by its ``error``
+field (a ``data`` list always wins), and a bare list/number/string/null is
+accepted (RULING A11b).
 
 Freshness: a new post's ``score``/``num_comments`` stay 0/1 for roughly 36 h
 (README), so one pass only asks for posts older than ``SETTLE_DELAY_S`` (36 h)
@@ -127,7 +129,8 @@ class RedditSource:
         Args:
             since: If set, stop yielding once a post older than `since` is
                 seen (`sort=desc` makes that a cheap early exit).
-            limit: Per-subreddit cap on posts to inspect.
+            limit: Per-subreddit cap on posts to inspect — a per-source-unit
+                cap, not a run total (`fetch` applies it once per subreddit).
         """
         since_ts = since.timestamp() if since is not None else None
         failures: list[tuple[str, httpx.HTTPError]] = []
@@ -290,17 +293,25 @@ def _comment_order_key(row: Mapping[str, Any]) -> tuple[int, float]:
     return (-int(row.get("score") or 0), float(row.get("created_utc") or 0.0))
 
 
+#: Distinct from a JSON ``null`` body (which is a valid payload, not an error).
+_INVALID_JSON = object()
+
+
 def _is_timeout_body(response: httpx.Response) -> bool:
     """True when the body reports a transient Arctic Shift overload.
 
-    A JSON body carrying a ``data`` list is a real payload and is never
-    scanned — a post whose text merely contains "timeout" must not be retried
-    (rev-gr-arctic-1). Otherwise the JSON ``error`` field is checked, falling
-    back to the first ``MAX_ERROR_BODY_CHARS`` of a non-JSON body, whatever the
-    status (RULING A11b).
+    Only a body that is not valid JSON is scanned as text. Any body that parses
+    as JSON is a real payload and is never text-scanned — a post whose text
+    merely contains "timeout" must not be retried (rev-gr-arctic-1). A JSON
+    object is judged by its ``error`` field, with a ``data`` list always winning;
+    a JSON list/number/string/null carries no error field and is accepted. A
+    non-JSON body falls back to the first ``MAX_ERROR_BODY_CHARS`` of its text,
+    whatever the status (RULING A11b).
     """
-    payload = _json_or_none(response)
-    if isinstance(payload, dict):
+    payload = _json_or_invalid(response)
+    if payload is not _INVALID_JSON:
+        if not isinstance(payload, dict):
+            return False
         if isinstance(payload.get("data"), list):
             return False
         error = str(payload.get("error") or "").lower()
@@ -309,11 +320,11 @@ def _is_timeout_body(response: httpx.Response) -> bool:
     return any(marker in text for marker in TIMEOUT_MARKERS)
 
 
-def _json_or_none(response: httpx.Response) -> Any:
+def _json_or_invalid(response: httpx.Response) -> Any:
     try:
         return response.json()
     except ValueError:
-        return None
+        return _INVALID_JSON
 
 
 def _response_text(response: httpx.Response) -> str:

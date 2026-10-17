@@ -9,6 +9,10 @@ from pydantic import BaseModel, Field
 
 class ScrapeRequest(BaseModel):
     source: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
+    # Per source unit, not a run total: each configured query (hackernews) or
+    # subreddit (reddit) gets its own `limit`, so one run can fetch several
+    # times `limit` items. Deliberately a comment and not Field(description=...)
+    # — a description would change the published OpenAPI schema.
     limit: Annotated[int, Field(ge=1, le=500)] = 50
     extract: bool = True
 

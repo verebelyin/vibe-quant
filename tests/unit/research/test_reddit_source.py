@@ -25,6 +25,7 @@ from vibe_quant.research.sources.reddit import (
     API_HOST,
     MAX_RETRIES,
     MIN_REQUEST_INTERVAL_S,
+    RATE_LIMIT_BUFFER_S,
     REDDIT_URL_BASE,
     RETRY_BACKOFF_S,
     SETTLE_DELAY_S,
@@ -493,6 +494,34 @@ def test_429_reset_header_sleeps_then_succeeds(ua_env: None) -> None:
     assert clock.sleeps == [50.5]
 
 
+@pytest.mark.parametrize("reset_header", [None, "0", "0.2"])
+def test_429_sub_second_reset_sleeps_the_floor_plus_buffer(
+    ua_env: None, reset_header: str | None
+) -> None:
+    """A 429 whose X-RateLimit-Reset is missing, zero or sub-second still waits
+    the full 1.0 s floor (not just the 0.5 s buffer): a single sleep, and no
+    phantom politeness top-up on the next attempt."""
+    calls = {"n": 0}
+    clock = _FakeClock()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if req.url.path == "/api/posts/search" and calls["n"] == 1:
+            headers = {} if reset_header is None else {"X-RateLimit-Reset": reset_header}
+            return httpx.Response(429, headers=headers, json={})
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="f", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install():
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert [i.external_id for i in items] == ["f"]
+    # max(reset=0, floor=1.0) + 0.5 buffer; the 1.5 s wait also covers the
+    # politeness floor, so exactly one sleep is recorded.
+    assert clock.sleeps == [1.0 + RATE_LIMIT_BUFFER_S]
+
+
 def test_5xx_backoff_retries_then_subreddit_skipped(
     ua_env: None, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -624,6 +653,40 @@ def test_200_data_payload_with_error_field_is_accepted(ua_env: None) -> None:
     assert calls["n"] == 1
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [{"title": "timeout strategy"}],
+        "timeout strategy",
+        42,
+        None,
+    ],
+)
+def test_200_non_dict_json_body_is_not_scanned_or_retried(
+    ua_env: None, payload: Any
+) -> None:
+    """A body that parses as JSON is a payload, never a text error message. JSON
+    that is not a dict (a list, string, number or ``null``) has no ``error``
+    field to check and must be accepted — even when its raw text mentions
+    "timeout" (the raw-text fallback caught the list and the string and retried
+    them 4x before dropping the subreddit)."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            content=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    with patch("time.sleep", _no_sleep):
+        items = list(_source(handler).fetch(since=None, limit=1))
+
+    assert items == []
+    assert calls["n"] == 1
+
+
 def test_non_json_200_body_with_timeout_text_is_retried(ua_env: None) -> None:
     """Non-JSON bodies fall back to the first 500 chars of the text."""
     calls = {"n": 0}
@@ -719,6 +782,40 @@ def test_failing_subreddit_still_starts_the_politeness_floor(ua_env: None) -> No
     assert [i.external_id for i in items] == ["ok"]
     assert seen == ["broken", "algotrading"]
     assert clock.sleeps == [MIN_REQUEST_INTERVAL_S]
+
+
+def test_transport_error_still_starts_the_politeness_floor(ua_env: None) -> None:
+    """A transport error (no HTTP response at all) must still stamp the request
+    clock, so the next subreddit's first request waits out the 1.5 s floor. The
+    failing call is the LAST attempt of subreddit A, so no retry backoff sleeps
+    after it — the floor is the only thing between A's failure and B's request."""
+    clock = _FakeClock()
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        subreddit = req.url.params.get("subreddit") or ""
+        seen.append(subreddit)
+        if subreddit == "broken":
+            raise httpx.ConnectError("connection reset by peer")
+        if req.url.path == "/api/posts/search":
+            return httpx.Response(200, json=_api([_post(sid="ok", num_comments=0)]))
+        return httpx.Response(200, json=_api([]))
+
+    with clock.install():
+        items = list(_source(handler, subreddits=("broken", "algotrading")).fetch(None, 5))
+
+    assert [i.external_id for i in items] == ["ok"]
+    assert seen == ["broken"] * 4 + ["algotrading"]
+    # Backoffs after A's first three attempts, the 1.0 s one topped up to the
+    # 1.5 s floor; then A's 4th (final) attempt stamps the clock and B's first
+    # request waits the full floor. No sleep follows A's last attempt.
+    assert clock.sleeps == [
+        1.0,
+        MIN_REQUEST_INTERVAL_S - 1.0,
+        2.0,
+        4.0,
+        MIN_REQUEST_INTERVAL_S,
+    ]
 
 
 def test_all_subreddits_failing_raises(ua_env: None) -> None:

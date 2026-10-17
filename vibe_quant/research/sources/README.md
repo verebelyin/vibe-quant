@@ -18,6 +18,11 @@ class ResearchSource(Protocol):
     ) -> Iterable[RawItem]: ...
 ```
 
+`limit` is a **per source unit** cap, not a run total: `hackernews` applies it
+per configured query (5 queries × limit 3 can yield up to 15 stories, deduped),
+`reddit` per configured subreddit. A run can therefore fetch several times
+`limit` items across its queries/subreddits.
+
 `RawItem` (from `vibe_quant.research.schema`) is the canonical wire format:
 
 | Field         | Required | What goes here                                        |
@@ -44,7 +49,7 @@ the archive serialises it to JSON. Common keys we use today:
 `reddit.py` reads a subreddit's settled posts and their top comments from the
 free [Arctic Shift](https://arctic-shift.photon-reddit.com) API
 (`/api/posts/search`, `/api/comments/search`) — no key and no browser spoofing.
-Politeness floor: one request per second (`MIN_REQUEST_INTERVAL_S`); a 429 is
+Politeness floor: one request every 1.5 s (`MIN_REQUEST_INTERVAL_S`); a 429 is
 honoured via `X-RateLimit-Reset`. Freshness: a post's score and comment count
 settle ~36 h after it lands, so the source asks only for posts older than
 `SETTLE_DELAY_S` (36 h, via `before=`) and gets settled numbers in one pass.

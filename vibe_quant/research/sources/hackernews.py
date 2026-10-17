@@ -104,7 +104,8 @@ class HackerNewsSource:
 
         Args:
             since: If set, skip stories published before this instant.
-            limit: Per-query cap on hits requested (clamped to the API's 100).
+            limit: Per-query cap on hits requested, clamped to the API's 100.
+                Not a run total: each configured query gets its own `limit`.
         """
         since_ts = since.timestamp() if since is not None else None
         failures: list[tuple[str, httpx.HTTPError]] = []
