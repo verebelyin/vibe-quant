@@ -1,80 +1,65 @@
 # Multi-agent orchestration
 
-How one **orchestrator** (a Claude Code session running the [`orchestrate`](../../.claude/skills/orchestrate/SKILL.md) skill) splits large work across specialist agents. This file is the single source for the roster, the brief format, the handoff contract and the workspace layout. Other files cover the rest:
+How one **chief** (a Claude Code session running the [`orchestrate`](../../.claude/skills/orchestrate/SKILL.md) skill) splits large work across specialist agents. This file holds the roster, brief format, handoff contract, bus and workspace. Elsewhere:
 
-- [`cheap-agents.md`](cheap-agents.md): delegating mechanical tasks to Command Code (DeepSeek V4.1 Flash at effort high only) as T3 `delegate_task` subagents.
-- [`research-swarm.md`](research-swarm.md): the strategy-factory lane, plus what we took (and rejected) from the 2026 "AI hedge fund" agent-swarm posts.
-- [`prompts/`](prompts/): brief templates for Command Code tasks ([`prompts/cmd-task.md`](prompts/cmd-task.md)) and the bus protocol block.
-- Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/). Each file's body is the agent's system prompt.
+- [`models.json`](models.json) + `scripts/agents/models.py route <role>`: which model plays which role, and which models are off. The only routing source.
+- [`cheap-agents.md`](cheap-agents.md): dispatching T3 `delegate_task` children (DeepSeek makers, GPT reviewers).
+- [`brief-checklist.md`](brief-checklist.md): what to check before every dispatch.
+- [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the bus block (`bus-protocol.md`), the commit format (`commit-message.md`).
+- [`research-swarm.md`](research-swarm.md): the strategy-factory lane.
+- Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/); each body is the agent's system prompt.
+- [`history.md`](history.md): archived changelogs. Nothing loads it.
 
 ## Principles
 
-1. **Maker-checker.** Agents never grade their own output. Each artifact has a different agent (ideally on a different model) that can block it. Self-evaluation consistently overrates mediocre work, and this repo has seen it many times: every champion that was forced past the bootstrap-CI gate collapsed in validation.
-2. **One voice.** Only the orchestrator talks to the user, commits to `main`, pushes, closes beads and launches paper trading. Subagents return handoffs and nothing else.
-3. **Bounded briefs.** Every dispatch is one task with a checkable **done-when** criterion. "Investigate X" is not a brief; "list every caller of X with file:line" is.
-4. **Structured handoffs.** Every agent ends with the [handoff contract](#handoff-contract). The orchestrator reads handoffs, not transcripts.
-5. **Evidence over claims.** A claim without the command and output that prove it is UNVERIFIED. Before the orchestrator relays a result to the user, it re-runs the decisive command or has a checker do it.
-6. **Cheapest capable tier.** **DeepSeek V4.1 Flash (Command Code via T3) is the workhorse** — it writes the code for every task with clear acceptance criteria, because it is almost free (user, 2026-10-10). **Sonnet reviews** every diff and **fixes** when the review finds too many problems. Opus is kept for design (architect, design reviews) and for verdicts on money (overfit-auditor, risk-officer).
-7. **Gates block.** A failed gate means the work goes back to its maker, gets escalated, or gets dropped. Lowering a threshold to get something through is never an option (see CLAUDE.md § Verification Rules).
+1. **Maker-checker.** No agent grades its own output; a different agent, ideally on a different model family, can block each artifact.
+2. **One voice.** Only the chief talks to the user, commits to `main`, pushes, closes beads and starts paper trading.
+3. **Bounded briefs.** One task per dispatch, with a checkable done-when. "List every caller of X with file:line" is a brief; "investigate X" is not.
+4. **Evidence over claims.** A claim without the command and output that prove it is UNVERIFIED. The chief re-runs the decisive command, or has a checker do it, before telling the user.
+5. **Cheapest capable tier.** DeepSeek writes the code for every task with clear acceptance criteria; a stronger model reviews; Opus designs and gives money verdicts.
+6. **Gates block.** A failed gate sends work back, escalates it or drops it. Lowering a threshold is never the fix.
+7. **Checks over prose.** A recurring mistake gets a script, test or hook; prose is for judgement calls only (orchestrate skill § Self-improvement).
 
 ## Roster
 
-| Agent | Lane | Model | Writes | Job | Checked by |
-|---|---|---|---|---|---|
-| orchestrator | both | session model (Opus) | ledger, merges, beads | decompose, dispatch, integrate, talk to user | user gates |
-| `architect` | eng | opus, effort medium (user 2026-10-11) | design doc only | spec → design → task plan with acceptance criteria | user gate |
-| DeepSeek maker (`cmd`) | eng | `deepseek/deepseek-v4.1-flash` via T3 Command Code | code + tests, in a worktree | DEFAULT maker for every task with clear acceptance criteria, test-first | `reviewer` + `verifier` |
-| `implementer` | eng | sonnet | code + tests, in a worktree | fixer when the reviewer returns `fix-route: sonnet`; escalation after a DeepSeek stall or 2 failed rounds; tasks the chief judges too risky for DeepSeek | fresh `reviewer` + `verifier` |
-| `reviewer` | eng | GPT-6.1-Sol high via Codex T3 `delegate_task` (paste the agent body as the task; user 2026-10-11); sonnet when Codex is unavailable; opus in design mode | nothing | two verdicts: matches spec? well built? + `fix-route: deepseek / sonnet / none` | orchestrator |
-| `reviewer-lite` | eng | haiku (5.5), effort high (user rule: Haiku only at high/xhigh — never lower, never max) | nothing | fast first-pass review of mechanical diffs; escalates semantics to `reviewer` | orchestrator |
-| `verifier` | eng | sonnet | nothing | runs quality gates + exactness proofs | orchestrator |
-| `alpha-scout` | research | sonnet | hypothesis tickets | external sources → falsifiable hypotheses | `strategy-author` (feasibility), `overfit-auditor` |
-| `strategy-author` | research | sonnet | DSL YAML, indicator plugins | hypothesis → parser-valid strategy | `overfit-auditor` |
-| `backtest-operator` | research | sonnet | DB rows via API/CLI only | runs screening / discovery / validation, reports raw numbers | `overfit-auditor` |
-| `overfit-auditor` | research | opus | nothing | skeptic: PASS / REJECT against the repo's gates | `risk-officer` |
-| `risk-officer` | research | opus | nothing | veto before any paper/live step, no negotiation | user |
-| Command Code worker (`cmd`) | both | DeepSeek V4.1 Flash effort high only (T3 instance `commandcode_command`) | scoped files, in a worktree | mechanical bulk work, well-specified implementation | `verifier` or a deterministic check |
-
-Model choice follows maker-checker: DeepSeek writes, Sonnet checks (a different model family, so fewer shared blind spots); when Sonnet fixes, a fresh reviewer checks the fix. Opus does design and money verdicts. Override per dispatch with the Agent tool's `model` parameter when a task is harder or easier than usual.
-
-## Dispatch
-
-| Runtime | When | How |
-|---|---|---|
-| Claude subagent | default for judgement work | Agent tool, `subagent_type: "<name>"`. Writers work in a worktree from `scripts/agents/worktree.sh` (not `isolation: "worktree"`, which can only branch from `main` and lacks market data). |
-| Command Code worker | mechanical / bulk / well-specified | **T3 `delegate_task` only** (`orchestrator_capabilities` → `driverKind: commandcode`; `mode: "async"`; unique `clientRequestId`; keep the `taskId`). Never the Agent tool, `cmd-task.sh`, `t3_thread_launch` or `create_threads`. Protocol: [`cheap-agents.md`](cheap-agents.md) § Dispatch protocol |
-| T3 `delegate_task`, other providers | other providers (Codex, …) or a long-running background child | `orchestrator_capabilities` → `delegate_task`; paste the agent file's body as the task prompt |
-
-- **Worktrees:** `scripts/agents/worktree.sh <slug> [base-ref]` creates `../vq-<slug>` on `swarm/<slug>`, links the main checkout's `data/catalog` + `data/archive` (so catalog-backed tests and `exactness_239.py` run there) and prints the `run as` line. Paste that line into every worktree brief: the editable install points at the main checkout, so Python run without `PYTHONPATH=$PWD` tests main's code (CLAUDE.md #7).
-- **Shared state is single-writer.** `data/state/vibe_quant.db`, the backend on :8000 and the beads Dolt store each have one owner at a time. Only `backtest-operator` launches jobs, only the orchestrator mutates beads, and only one agent at a time restarts servers.
-- **WIP limit:** at most 3–5 parallel writers, which is about as many diffs as can be reviewed properly. Readers (scouts, reviewers) can fan out wider.
-- New or edited files in `.claude/agents/` load when a session starts. After changing them, restart the session (or use `/agents`) before dispatching.
+| Agent | Lane | Writes | Job | Checked by |
+|---|---|---|---|---|
+| chief | both | ledger, merges, beads | decompose, dispatch, integrate, talk to the user | user gates |
+| `architect` | eng | design doc | spec → design → task plan with acceptance criteria and contract table | user gate, design review |
+| maker (`cmd`, T3) | eng | code + tests in a worktree | default maker for every task with clear acceptance criteria, test-first | reviewer + verifier |
+| `implementer` | eng | code + tests in a worktree | fixer on `fix-route: sonnet`; takes over after a stall or 2 failed rounds; tasks too risky for the cheap maker | fresh reviewer + verifier |
+| `reviewer` | eng | nothing | two verdicts (spec, quality) + `fix-route` | chief |
+| `reviewer-lite` | eng | nothing | first pass on mechanical diffs; escalates semantics | chief |
+| `verifier` | eng | nothing | quality gates, exactness proofs, UI check | chief |
+| `alpha-scout` | research | hypothesis tickets | sources → falsifiable hypotheses | strategy-author, overfit-auditor |
+| `strategy-author` | research | DSL YAML, plugins | hypothesis → parser-valid strategy | overfit-auditor |
+| `backtest-operator` | research | DB rows via API/CLI | runs screening/discovery/validation, reports raw numbers | overfit-auditor |
+| `overfit-auditor` | research | nothing | PASS/REJECT against the repo's gates | risk-officer |
+| `risk-officer` | research | nothing | veto before any paper/live step | user |
 
 ## Profiles
 
-| Profile | Use when | Design | Build + check |
-|---|---|---|---|
-| **lean** (default) | ≤ ~500 changed lines, one package, no NT engine lifecycle, fill/metric semantics or DB schema change | orchestrator writes the plan from the bead AC | DeepSeek (T3) → `reviewer` (Sonnet) → fix round (DeepSeek, or Sonnet `implementer` on `fix-route: sonnet`) → `verifier` |
-| **full** | anything bigger, cross-package, or touching the areas above | `architect` → `reviewer` (design mode) → user gate | same as lean |
+| Profile | Use when | Design |
+|---|---|---|
+| **lean** (default) | ≤ ~500 changed lines, one package, no NT engine lifecycle, fill/metric semantics or DB schema change | the chief writes the plan from the bead acceptance criteria |
+| **full** | anything bigger, cross-package, or touching the areas above | `architect` → design review → user gate |
 
-Measured on job `20261008-discovery-robustness` (2 beads, +~330 lines, full profile): ~335k Claude subagent tokens + ~604k cmd tokens, ~1 h wall. The Opus review found 3 real defects; the architect step added little the bead AC didn't already say, and one design choice (seeded uids) caused a defect only a design review would have caught cheaply.
+Build and check are the same in both: maker → gate → reviewer → fix round → verifier.
+
+## Dispatch
+
+| Runtime | How |
+|---|---|
+| Claude subagent | Agent tool, `subagent_type: "<name>"`, `model` from `models.py route`. Writers use a worktree from `scripts/agents/worktree.sh` (not `isolation: "worktree"`, which branches only from `main` and lacks market data). |
+| T3 child (DeepSeek maker, GPT reviewer) | `delegate_task`, protocol in [`cheap-agents.md`](cheap-agents.md). |
+
+- `scripts/agents/worktree.sh <slug> [base]` creates `../vq-<slug>` on `swarm/<slug>`, links `data/catalog` + `data/archive`, and prints the `run as` line (the editable install points at the main checkout, so worktree code runs with `PYTHONPATH=$PWD`).
+- Shared state is single-writer: the state DB, the backend on :8000 and the beads store each have one owner at a time. Only `backtest-operator` launches jobs; only the chief mutates beads.
+- WIP: at most 5 parallel writers. Readers fan out wider.
 
 ## Brief format
 
-Every dispatch prompt, for any runtime, has these fields:
-
-```
-ROLE: <agent name>
-GOAL: <one sentence>
-CONTEXT: <bead id, files, run ids, prior handoff paths; paste the decisive facts instead of saying "see above">
-SCOPE: may touch <paths>; leave everything else unchanged
-LIVE: for each path in SCOPE, the importer/caller that makes it reachable (file:line), checked by the orchestrator with `rg`
-DONE WHEN: <checkable criterion: command + expected result, or an exhaustive list to produce>
-BUDGET: <max turns / time; what to do when exhausted>
-RETURN: handoff contract (docs/orchestration/README.md#handoff-contract)
-```
-
-The subagent can't see the orchestrator's conversation. Anything it needs has to be in the brief.
+Briefs are rendered by `scripts/agents/mkbrief.py` from [`prompts/cmd-task.md`](prompts/cmd-task.md) or [`prompts/review-task.md`](prompts/review-task.md). Every brief has: role and id, TELEMETRY line, worktree, GOAL, SCOPE (the only files to edit), FACTS (pasted excerpts), STEPS, DONE WHEN (command + expected result), the gate command, the bus block, and RETURN = the handoff contract. The child sees nothing of the chief's conversation.
 
 ## Handoff contract
 
@@ -86,108 +71,70 @@ status: done | blocked | failed | needs-decision
 role: <agent>
 task: <one line>
 artifacts:
-  - <path | run id | bead id | commit sha | worktree path+branch>
+  - <path | run id | bead id | commit sha | worktree + branch>
 evidence:
   - `<command>` → <decisive output line, verbatim numbers>
 claims:
   - <claim> — VERIFIED (<how>) | UNVERIFIED (<why not>)
 open:
   - <follow-up, suspected bug, decision needed; one line each>
-comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids or none>
-improve: <one concrete change to an agent definition / skill / brief template + evidence> | none
+comms: asked=<n> dms=<n> replies=<n>; board posts relied on: <ids | none>
+improve: <one change to a script, check or brief template that would have saved a round, with evidence> | none
 ```
 
-- `improve:` is mandatory (user 2026-10-13). It names what in your own definition, another agent's, or the brief would have saved time or a round this task. The chief applies it automatically.
-- `blocked` means a missing input or a failed precondition. Name it.
-- `needs-decision` means the agent found a fork that is the user's call. Give options and a recommendation.
-- Numbers are copied verbatim from tool output, never paraphrased or rounded.
-
-## Swarm bus (agent ↔ agent ↔ chief)
-
-`scripts/agents/bus.py` gives every job a shared mailbox + message board at `data/swarm/<job>/bus/` (append-only JSONL, flock-guarded; stdlib python3, so Claude subagents and Command Code subagents can both use it).
-
-- **Direct messages:** `post --to <agent>|chief|all` (idempotent with `--client-id`), `inbox`, `pending` (questions/blockers to you with no reply yet), `ask` (blocks for the answer), `wait`, `reply --ref`.
-- **Message board:** `board post --topic <t>`, `board read` (per-agent, per-topic cursors), `board search [--topic t ...] [--path p ...] [--grep w ...] [--limit N]` (no cursor change; topics OR, grep AND; a file matches by path or basename, a dir/glob by `<dir>/`), `board topics`, `thread <id>`, `board render --out <job>/board.md` (human view). Conventions: `#design` (claims on shared files, design questions; job-only), `#gotchas`/`#findings`/`#decisions` (cross-job memory: a rule a future agent on another task can act on, as RULE/WHEN/EVIDENCE; search before posting, reply instead of duplicating), `#blockers`. Review verdicts and status go to DMs or the handoff (graded 2026-10-14: 68% of #findings were task-local).
-- **Workers:** paste [`prompts/bus-protocol.md`](prompts/bus-protocol.md) (placeholders filled: agent id, absolute job bus path, repo, `{SCOPE_PATHS}` = the task's SCOPE paths for the start-up `board search`, and `{PEERS}` = every agent writing in parallel with its scope, e.g. `cc-f-dsr: discovery/pipeline.py, __main__.py; impl-g-boot: bootstrap_sharpe.py, guardrails.py`) into every brief — Claude subagents and Command Code T3 subagents alike (T3 children get nothing automatically).
-- **Persistent board (cross-job memory):** posts on `#findings`, `#gotchas`, `#decisions`, `#model-notes` are mirrored (tagged with the job) to `docs/orchestration/board/messages.jsonl` — committed to git, so every future swarm and machine sees them. Read with `board search --global --path <SCOPE> --topic gotchas findings decisions` (the protocol makes every worker do this first; `--recent 30` alone shows only ~5.5 h of posts); human view [`board/BOARD.md`](board/BOARD.md). Curated, durable project facts still go to `bd remember`; the board is the raw working-knowledge log.
-- **Never miss a message:** a worker must run `bus.py inbox` before each major step and `bus.py pending` to see questions still awaiting its reply (`pending --global` also covers the persistent board and every job bus). The pre-review gate FAILs on a hand-back with an unread chief DM (`--bus-agent`, see below; checked before AND after the tools — a DM already waiting fails fast, before any tool runs, and one landing mid-run still blocks; a bus-only FAIL keeps the tool PASS stamp, so the chief's re-run after `bus inbox` is cached; configured bus dir that does not exist = FAIL, agent without a bus = FAIL, corrupt cursor = FAIL, existing empty bus = PASS, bus without an agent = SKIP, nothing configured = SKIP; the gate never creates a bus dir), and the chief's watcher is durable, so a watcher that times out or dies loses nothing.
-- **Chief:** run `bus.py --bus <job>/bus --as chief tail --to chief --durable` under a Monitor — the durable tail keeps its own cursor (`cursors/chief.tail.chief`), so re-arming it is always safe and it replays everything that arrived while it was down. Only one durable tail may run per (`--as`, `--to`): a second exits with an error (it holds `cursors/chief.tail.chief.lock`), so re-arm the Monitor only after the old tail has ended. If you delete the cursor, the next start begins at the current end; pass `--since-start` to recover the backlog. A cursor file that is garbled or points past the end of `messages.jsonl` is refused with an error naming the file (delete it to reset), and so is a running reader whose held offset ends up past the end because the log shrank under it (a `git checkout`/rebase of the tracked board): it exits instead of waiting; answer questions with `bus.py --as chief reply --ref <id> --body ...` (answers override the brief); `board render` before the report.
-
-## Swarm tools
-
-| Tool | What | Used by |
-|---|---|---|
-| `scripts/agents/swarm-check.sh <wt> [--scope globs] [--base main] [--no-cache] [--bus <job bus>] [--bus-agent <id>]` | PASS is cached per HEAD+base+scope+tool hash (clean tree only), so the chief's re-run after the maker's is instant; automated pre-review gate: scope, clean tree, bus-inbox (checked before AND after the tools: an already-unread chief DM fails it fast, before any tool runs; an unread chief DM fails it even on a cached PASS, and a bus-only FAIL keeps the tool PASS stamp), ruff, mypy, targeted tests, exactness (any `vibe_quant/` change outside UI/IO dirs), frontend; fails closed (bad base, empty diff, git errors) | chief, before every review |
-| `scripts/agents/stall_watch.py watch --job <job_dir> [--kill]` | legacy: flags `cmd-task.sh` processes only (it cannot see T3 subagents). For T3 Command Code children use T3 notifications, `task_status` when overdue, and `git -C <worktree> status` | manual one-offs |
-| `scripts/agents/telemetry.py ingest-runs/record/ingest-cmd-log/review/report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` (committed): rounds-to-done, pass-1 rate, tokens, wall time and handoff comms (asked/dms/replies/board posts relied on) by model/runtime/agent, plus `--by board|asked` (pass-1 rate split by whether the maker relied on the board or asked the chief) | chief (`ingest-runs --job J` before verdicts and at Land, `review`, `report`); cmd-task.sh (auto, legacy) |
-| `scripts/agents/bus.py ask-user` + `needs-user open/answer --user` | queue of decisions only the user makes; shown first in `digest` and the SessionStart brief | any agent asks; only the user closes |
-
-`worktree.sh` symlinks `frontend/node_modules` from the main checkout by default (a `pnpm install` in the worktree would then mutate main's deps); add `--private-node-modules` to skip the symlink and run `pnpm install --frozen-lockfile` in the worktree whenever `package.json`/`pnpm-lock.yaml` will change.
+Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | sonnet | none`. `scripts/agents/handoff_lint.py` checks the block. `blocked` names the missing input; `needs-decision` gives options and a recommendation. Numbers are copied verbatim, never rounded.
 
 ## Tiered review
 
-Route each diff to the cheapest checker that can judge it (user, 2026-10-09). **Haiku runs only at effort `high` or `xhigh` — never lower, never `max`** (user rule; `reviewer-lite.md` pins `effort: high`; pass `effort: "xhigh"` explicitly for harder lite reviews).
-
 | Diff | Checker |
 |---|---|
-| test-only nits, docs/config, dependency pins, renames, small UI tweaks, fix-round deltas that only apply a reviewer's exact spec | `reviewer-lite` (Haiku 5.5) — escalates on its own when a hunk touches semantics |
-| fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control (signals, kill, locks), risk/paper/live, NEW scripts/modules, anything > ~150 hand-written non-test lines | `reviewer` (Sonnet) |
-| design reviews (architect handoffs) | `reviewer` with `model: "opus"`, `mode: design` |
-| a `reviewer-lite` escalation, or a later reviewer finding that lite missed | `reviewer` (Sonnet); post the miss to `#self-improvement` |
+| test-only nits, docs/config, dependency pins, renames, small UI tweaks, fix deltas that only apply a reviewer's exact spec | `reviewer-lite` (escalates when a hunk touches semantics) |
+| fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control, risk/paper/live, new scripts or modules, > ~150 hand-written non-test lines | `reviewer` |
+| architect design | `design-review` route, `reviewer` in design mode |
 
-**Money tasks carry a semantics contract** (architect § Design content 6): boundary rows with expected numbers, written before code; mid-task rulings are appended to it. Round ≥ 2 reviews cover prior findings + the fix delta only (2026-10-13, job 20261012-p1-honest: T3 took 8 rounds without one).
+- **Fix route:** `deepseek` (1–2 mechanical should-fix) → a new maker round with the findings verbatim, back to the same reviewer. `sonnet` (any blocking finding, ≥ 3 should-fix, a 2nd failed round, or a misunderstood task) → `implementer` with the findings verbatim, then a fresh reviewer.
+- **Paper or live diffs:** the `risk-officer` reviews in parallel with the reviewer.
+- **Nits never cost a round:** surviving mutants and test gaps outside money code become follow-up beads. Mutants are capped at 5 per review and 3 per maker.
 
-**Nits never cost a round:** surviving mutants / test-teeth gaps outside money code (tooling, UI copy, docs, test helpers) go to a follow-up bead (user 2026-10-11). Mutation work is capped (≤ 5 mutants, ~3 min per review; makers ≤ 3).
+## Swarm bus
 
-**Fix route** (from the reviewer's `fix-route:` line): `deepseek` → re-delegate to DeepSeek via T3 with the findings verbatim (new `clientRequestId`); `sonnet` (any blocking finding, ≥ 3 should-fix, 2nd failed round, or the maker misunderstood the task) → a Sonnet `implementer` fixes with the findings verbatim, and the fix delta goes to a **fresh** reviewer.
+`scripts/agents/bus.py` (shim: `scripts/agents/bus`) gives each job a mailbox and message board under `data/swarm/<job>/bus/`.
 
-Every diff still passes `scripts/agents/swarm-check.sh <worktree>` (the automated pre-review gate) before any reviewer sees it.
+- **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocks for the answer), `reply --ref`, `status` (the chief's ≤ 20-line overview).
+- **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`) and are mirrored to the committed `docs/orchestration/board/messages.jsonl`; human view [`board/BOARD.md`](board/BOARD.md). Verdicts and status go to DMs or handoffs.
+- **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
+- **Chief:** one durable tail under a Monitor (`tail --to chief --durable --kinds question,blocker,done`); it keeps its own cursor, so re-arming replays what it missed. Only one durable tail per (`--as`, `--to`) may run.
+- **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 
-## Self-improving prompts
+## Swarm tools
 
-Agent definitions (`.claude/agents/*.md`), the orchestrate skill and the worker protocol are living documents. Writing roles may edit their **own** definition; read-only roles and Command Code workers propose exact changes on `#self-improvement` (persistent); the chief reviews every proposal/self-edit at each Land step and keeps, adjusts or reverts it, logging a line in the file's `## Changelog`. Nobody weakens gates, maker-checker, verification rules or hard rules without the user's approval.
+| Tool | What |
+|---|---|
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
+| `mkbrief.py` | renders and validates a brief, writes it, prints the dispatch text |
+| `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
+| `mutate.py --file F --old X --new Y -- <test>` | one safe mutant check (KILLED/SURVIVED) |
+| `handoff_lint.py [--role reviewer] <file>` | checks the handoff block |
+| `models.py route <role> \| set \| show` | model routing from `models.json` |
+| `telemetry.py ingest-runs --job J \| review \| report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` |
 
 ## Workspace
 
-Each orchestrated job gets `data/swarm/<job-id>/` (gitignored), where `<job-id>` = `YYYYMMDD-<slug>`:
-
-```
-brief.md          user goal, constraints, gate decisions (append-only)
-ledger.md         task table: id | agent | status | worktree | handoff file | bead
-handoffs/NN-<agent>-<slug>.md   each handoff, verbatim
-prompts/          briefs sent to Command Code subagents (full text passed as delegate_task `task`)
-cmd-logs/         legacy NDJSON transcripts from cmd-task.sh (T3 children keep theirs in their child thread)
-hypotheses/       research lane: H-*.json tickets
-bus/              swarm bus: messages.jsonl + cursors/ (scripts/agents/bus.py)
-board.md          rendered message board (bus.py board render)
-```
-
-The ledger is the orchestrator's memory. If the context gets compacted, re-read `brief.md` + `ledger.md` + the latest handoffs and continue. Durable outcomes go to their permanent homes: beads (tasks, follow-ups), `bd remember` (project facts), `docs/discovery-journal.md` (research results), git (code).
+`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a context compaction, re-read `brief.md`, `ledger.md` and the latest handoffs and continue. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
 
 ## Lanes
 
-### Engineering lane
+**Engineering:** brief → design (lean: chief; full: architect + design review) → user gate → beads → build (one maker per task, in its own worktree, test-first) → check (gate, reviewer, verifier) → land (one verbose commit per task) → report.
 
-Six gated phases:
-
-1. **Brief.** The orchestrator restates the goal and constraints in `brief.md`. Ambiguity goes to the user now, not mid-build.
-2. **Design.** Lean profile: the orchestrator writes the task plan. Full profile: `architect` reads the code and returns a design + a task plan (tasks with acceptance criteria, file paths, dependencies, parallel-safe groups), then `reviewer` checks it in design mode. **User gate:** approve before any code.
-3. **Plan → beads.** The orchestrator files one bead per task (`bd create`) with the acceptance criteria as user-testable checks.
-4. **Build.** One DeepSeek T3 subagent per bead (Command Code, `deepseek/deepseek-v4.1-flash`), each in its own worktree, test-first. Parallelise only tasks the plan marks as disjoint. The Sonnet `implementer` only fixes (`fix-route: sonnet`) or takes over after a stall / 2 failed rounds.
-5. **Check.** `reviewer` (spec + quality verdicts) and `verifier` (gates + exactness proofs) run on each diff. A blocking finding (current code breaks the contract, or a reachable wrong value — `reviewer.md` § Severity bar) sends the task back to an implementer with the finding pasted into the brief. After 2 failed rounds on the same task, stop and do a design pass (fold rulings into the semantics contract, check for duplicated logic or unreachable edges, re-scope); after 3, also switch model or ask the user (orchestrate skill, 2026-10-13).
-6. **Land.** The orchestrator merges worktrees one at a time onto the job branch, runs the full gate set on the merged result, lands it on `main` as one verbose commit per task ([`prompts/commit-message.md`](prompts/commit-message.md); never one squash per job), closes beads and pushes (CLAUDE.md § Session Completion).
-
-### Research lane
-
-Strategy factory: scout → author → screen/discover → audit → validate → audit → risk → journal. Full description, gates and ticket schema are in [`research-swarm.md`](research-swarm.md).
+**Research:** scout → author → screen/discover → audit → validate → audit → risk → journal; see [`research-swarm.md`](research-swarm.md).
 
 ## Failure handling
 
 | Symptom | Response |
 |---|---|
-| Same error 3 times | stop the loop; re-brief with the error and a different approach, or escalate the tier |
-| Agent drifts out of scope | discard the out-of-scope hunks; file a bead for anything worth keeping |
+| Same error 3 times | stop; re-brief with the error and a different approach, or escalate the tier |
+| Agent edits out of scope | discard those hunks; file a bead for anything worth keeping |
 | Handoff missing evidence | treat every claim as UNVERIFIED; dispatch `verifier` |
-| Two agents need the same file | serialize them, or have `architect` re-cut the task boundary |
-| Process dies with no traceback | NT Rust abort (CLAUDE.md § NautilusTrader Gotchas) and not an agent fault; check `retain_log_guard` / TraderId |
+| Two agents need the same file | serialize them, or have `architect` re-cut the boundary |
+| Process dies with no traceback | NT Rust abort, not an agent fault (`docs/claude/nautilus-gotchas.md`) |
 | Results look too good | `overfit-auditor` before anyone celebrates |

@@ -106,15 +106,13 @@ Coverage axes — check which ones the change crosses and verify each side:
 
 ## Agent speed rules
 
-Measured costs: full `tests/unit` ≈ 3 min serial, ≈ 1 min under `-n auto --dist worksteal` (the gate uses this: `-m "not timing"` in parallel, `-m timing` serially) · `swarm-check.sh` ≈ 1 min when it runs the full suite, seconds on a cached PASS · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min + `ui-check.sh` up/down · one model turn ≈ 4–10 s.
-- **Gate once per round:** never run `pytest tests/unit` yourself; `swarm-check.sh` runs it as your last command, after targeted tests + ruff + mypy are green. On FAIL re-run only the failing test, then the gate once more; no gate after a rebase. Full-suite/gate time stayed ~21 min per job across three jobs (one maker ran it 7×).
-- **Fewer, fatter turns:** first turn reads every needed file in parallel; afterwards send all independent reads/greps/test runs in one turn, read whole functions, chain shell checks with `&&`, track work in beads instead of todo lists. Target ≥ 2 tool calls per turn — jobs 20261010-backlog / 20261011-testspeed / 20261011-grind averaged 1.11 / 1.17 / 1.10 (~90% single-tool turns).
-- **Mutation checks are capped:** ≤ 5 mutants (~3 min) per review, ≤ 3 per maker self-check, only on changed logic, each against the targeted test file in a `git archive` scratch copy (`cp -r` shares the worktree's git index). Stress loops ≤ 10 runs unless flakiness is the finding. A surviving mutant outside money code (screening/validation/discovery/overfitting/dsl/risk/paper/data, fills, metrics, DB writes, concurrency) becomes a follow-up bead, not a fix round.
-- **Gate cache:** `swarm-check.sh` caches a PASS per HEAD + base + scope + tool hash (clean tree only); re-running it on an unchanged worktree is instant, `--no-cache` forces a full run.
-- **E2E:** iterate with `-g <scenario>`, run the full spec once at the end.
-- **Async launches:** a test of anything that returns 201 and then runs in a subprocess polls the run's final status.
-- **Measure per-test time serially:** `--durations` under `-n auto` is inflated by CPU contention (job 20261016-followups3: 58.7 s and 7.8 s parallel-summed figures were 23.3 s and 2.98 s serially; two speed beads chased nothing).
-- **Keep proofs short:** never put long discovery/backtest reruns in a task brief; use unit tests, mutants and `exactness_239.py`, and tiny live settings (pop 4–6, 1–2 gens, 2–3 month window) when a live check is unavoidable.
+Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-check.sh` ≈ 1 min, seconds on a cached PASS · `exactness_239.py` ≈ 6 s · Playwright spec ≈ 1.5 min · one model turn ≈ 4–10 s.
+- **Gate once per round:** `swarm-check.sh` runs the unit suite; run it once, last, after targeted tests + ruff + mypy are green. On FAIL read the LOG it prints, re-run only the failing test, then the gate once more. Never run `pytest tests/unit` yourself.
+- **Fewer, fatter turns:** batch every independent read, grep and test run in one turn; read whole functions; chain shell checks with `&&`; track work in beads, not todo lists.
+- **Mutants:** `scripts/agents/mutate.py --file F --old X --new Y -- <targeted test>`; ≤ 5 per review, ≤ 3 per maker, only on changed logic. A surviving mutant outside money code becomes a follow-up bead, not a fix round. Stress loops ≤ 10 runs unless flakiness is the finding.
+- **E2E:** iterate with `-g <scenario>`, run the full spec once at the end. Tests of anything that returns 201 and runs in a subprocess poll the run's final status.
+- **Measure per-test time serially:** `--durations` under `-n auto` is inflated by CPU contention.
+- **Keep proofs short:** unit tests, mutants and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
 
 ## Shell
 
@@ -123,6 +121,7 @@ Measured costs: full `tests/unit` ≈ 3 min serial, ≈ 1 min under `-n auto --d
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
 - Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`.
+- zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call the bus through `scripts/agents/bus`, never a command stored in a variable.
 
 ## SQLite (state DB)
 
@@ -187,11 +186,9 @@ One commit per task (bead or tightly coupled pair), never one squash commit per 
 
 ## Multi-agent orchestration
 
-Large jobs use the `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md). Model routing (user 2026-10-16): DeepSeek V4.1 Flash (effort high) is the only Command Code coder (MiMo disabled: expensive, slow); difficult tasks escalate to a Sonnet implementer; GPT-6.1-Sol (Codex, via T3 `delegate_task`, effort high) reviews; Sonnet 5.5 / Haiku 5.5 implement and fix; Opus at effort medium plans and architects. Command Code workers (`deepseek/deepseek-v4.1-flash` effort high only; never MiMo/Kimi/GLM/Qwen) run only as T3 subagents via the `t3-code` MCP `delegate_task` (instance `driverKind: commandcode`, async, unique `clientRequestId`) — see `docs/orchestration/cheap-agents.md` § Dispatch protocol. Children start in the main checkout with no cwd: every brief names the absolute worktree and requires `cd <worktree> &&` on each command.
+Large jobs use the `orchestrate` skill + [`docs/orchestration/`](docs/orchestration/README.md). Model routing lives only in `docs/orchestration/models.json` (`scripts/agents/models.py route <role>`); Command Code workers run only as T3 `delegate_task` subagents ([`cheap-agents.md`](docs/orchestration/cheap-agents.md)), and every brief names the absolute worktree and requires `cd <worktree> &&` on each command. Every handoff ends with `improve: <change + evidence> | none`; the chief applies them by the skill's § Self-improvement policy: checks over prose, word budgets enforced by `tests/unit/test_steering_budget.py`.
 
-**Self-improvement is top priority (user 2026-10-13):** every agent handoff ends with `improve: <change + evidence> | none`. At every Land step, and whenever a task reaches its 3rd review round, the chief sweeps every `.claude/agents/*.md`, the orchestrate skill and `docs/orchestration/prompts/`. It applies evidence-backed improvements without asking, commits them separately (`self-improve: ...`), and reports them. Gates, verification rules and hard rules still need the user to weaken them.
-
-**Swarm board** — shared memory and chat for every agent (`scripts/agents/bus.py`; human view `docs/orchestration/board/BOARD.md`): catch up with `python3 scripts/agents/bus.py --as <you> board search --global --path <files you will touch> --topic gotchas findings decisions` (plus `board read --global --topic gotchas --recent 15`); record with `board post --topic findings|gotchas|decisions|model-notes|thoughts --body "..."`; ask the chief with `ask --to chief`, message peers with `post --to <agent>`, answer with `reply --ref <id>`.
+**Swarm board** (`scripts/agents/bus`; human view `docs/orchestration/board/BOARD.md`): before touching files, `scripts/agents/bus --as <you> board search --global --path <files> --topic gotchas findings decisions`; record reusable traps with `board post --topic gotchas|findings|decisions --body 'RULE: ... — WHEN: ... — EVIDENCE: ...'`; ask the chief with `ask --to chief`.
 
 ## Historical documentation
 

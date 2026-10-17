@@ -1,567 +1,89 @@
 ---
 name: discovery-run
-description: Run a full discovery cycle — parallel GA discoveries (CPU-scaled), 3min status reports, overfitting validation, backtesting, journal entry, and error triage. Use when user says /discovery-run, "run discoveries", "find new strategies", or "discovery batch". Triggers the complete pipeline from discovery through validation with automated monitoring and journaling.
+description: Run a full discovery cycle — parallel GA discoveries sized to the CPU, monitored with disc_watch.py, then overfitting checks, validation, journal entry and error triage. Use when the user says /discovery-run, "run discoveries", "find new strategies" or "discovery batch".
 ---
 
 # Discovery Run
 
-Full-cycle automated discovery: journal review, 5 parallel discoveries, monitoring, overfitting checks, backtesting, summary, and journal entry.
+Cycle: journal review, N parallel discoveries, monitoring, gate check, promote/validate, log audit, summary, journal entry. A strategy that looks great is a bug until gates, validation and paper agree; report 0 champions as 0 champions.
 
-## Verified state (2026-10-11, runs 880–888) — overrides older text below
+## Shell and sandbox rules
 
-- **Port 8000 may be someone else's server** (a `python -m http.server` held it). `lsof` is not proof: probe `curl -s localhost:8000/api/discovery/results/1` for JSON; if not ours, run the backend on another port (e.g. 8010). A backend started with Bash `run_in_background` is killed at the background time limit (default 30 min) — pass a long `timeout`. Discovery subprocesses outlive it.
-- **`GET /jobs/{id}/progress` can show a STALE progress file** from another DB (ui-check/test copies share `logs/`, run ids collide; bead filed 2026-10-11). Before launch: `ls logs/discovery_<next ids>_progress.json` and delete leftovers; trust `=== GEN n/m ===` lines in `logs/discovery_<id>_<ts>.log` over the API.
-- **Watch progress with Monitor**, not `sleep` (foreground `sleep N &&` is blocked). One `tail -n0 -F | rg --line-buffered "=== GEN|DISCOVERY COMPLETE|Gate FAIL|No champion|Traceback|\[ERROR\]"` per log file with an id prefix; a glob is expanded once, so re-arm after launching new runs. Every pipe stage must flush per line: `sed -u` OK, but **never end with `cut`/`head`** — `cut` buffered all events and the monitor stayed silent for 30 min while runs completed (2026-10-11).
-- **`max_workers` launch field (default 4, 2026-10-12).** Size it so Σ workers ≈ cores: on 10 cores 4 runs × 2–3, 2 runs × 4–5. Default 4 × 4 parallel runs = 16 workers → load ≈ 29 on 10 cores; backtests slowed from ~1.5–3 s to 20–60 s each. Size from MEASURED rates below, assuming ~3× slowdown under 4-way contention.
-- **Measured backtest times (4h, ~2.75 y, idle → contended):** single-symbol pool backtest 1.5–3 s → 20–30 s; TREND_ENSEMBLE 20–65 s (slowest indicator); `symbol_agg=worst` on 3 symbols ≈ 3 backtests per genome; 1h single-symbol ~25–55 s contended. pop 10–12 × 4 gens finishes in 1–6 min; pop 30 × 12 (SOL 4h, 4.3 y) took 473 s.
-- **50-trade hard gate kills the gradient:** 4h single-symbol on ~2.2 y train gives 17–48 trades → zero_score 12/12 every gen (run 882). 1h BTC 2025-01..2026-09 with eval_windows 3: every ≥50-trade genome had a negative window → all 0 (run 887). Use ≥4 y windows on 4h or multi-symbol portfolio.
-- **DSR gate N is cumulative across ALL prior same-timeframe runs with an overlapping train window** (any symbol, back to run 7): 4h N ≈ 21 500 (127 prior runs) Read `notes.dsr_trials` (`gate_n`, `prior_n`, `prior_run_ids`). N is rarely the binding constraint: ann SR 0.86 over 2.2 y fails even at N=1 (p 0.10); p<0.05 needs ann SR ≈3.5 at N=600, >4 at N=21 500. Check a rejected candidate with `calculate_dsr(deannualize_sharpe(sr), n, T)` before blaming N. Prior trials by tf (2026-10-11): 4h 22k, 1m 63k, 1h 3.6k, 5m 0.8k, 15m 0.3k.
-- **Gate-rejected candidates keep no DSL** (`guardrail_rejections` has uid + reasons only; log has indicator names, not params). 0 champions ⇒ nothing to promote/validate; say so instead of rebuilding genomes.
-- **Dates bug is FIXED:** launch persists `start_date`/`end_date`; skip the date-fix steps. Promote supports `mode=validation` (holdout range by default, `validation_range=full` for the whole range).
-- **Tuned recipe that gives the GA a gradient (runs 889/890):** ≤2 runs in parallel; multi-symbol `portfolio` + ≥3.75 y window; `eval_windows` 2; pop 16–20 × 6–8. Uncontended cost: 3-sym 4h 4.3 y with TREND_ENSEMBLE 176 s/gen (pop 16); 2-sym 1h 3.75 y 189 s/gen (pop 20). zero_score fell to 10–12 of 16–20, yet best genomes still plateau at ann Sharpe ≈0.6 → gates reject; more GA budget on the same indicator families is not the lever.
-- **Zero score is a hard gate, not a bug:** worst-window `trades < min_trades or total_return <= 0` → 0 (`fitness.py` hard gates); the overtrade penalty can also zero >300-trade genomes.
-- **`OrderRejected ... REDUCE_ONLY ... would have increased position` / `Canceling REDUCE_ONLY`** in logs are by design (exit racing a stop fill; leftover bracket leg after flat) — not a bug.
-- **"No rejections" is not a tunable param:** never pass `no_bootstrap_ci`/`--no-dsr` to get champions (forced champions collapsed in validation). Move the search instead: least-mined timeframe (15m ~0.3k prior trials, 2026-10-11) and more trades. 15m 2.75 y single-symbol: ROC/DONCHIAN/RSI/CCI/NATR ~150 s/gen (pop 20–24); BBANDS/MFI on 15m 80–170 s per backtest (673 s/gen) — avoid. Bootstrap floor: 1m 0.5, 4h/1d 0.0, 5m/15m/1h 1.0 (vibe-quant-fen0o).
-- **Start the backend detached:** `nohup .venv/bin/uvicorn ... --port 8010 > /tmp/vq-backend.log 2>&1 & disown`. A harness `run_in_background` backend is killed at its time limit (max 2 h) and takes running discovery subprocesses with it despite `start_new_session` (run 896 lost at gen 3); the next backend start reaps the orphan as `failed`.
-- **`convergence_generations` is capped at `max_generations // 2`** (log `Config: convergence_gens=N` shows the effective value).
-- **Fix `direction` when the hypothesis has one:** with most genomes at score 0, selection is random and populations drift (run 895: 14/18 shorts in a 2022-26 uptrend).
-- **Context indicators** (FUNDING, FUNDING_Z, BTC_TREND, BTC_ROC, OWN_TREND) work in discovery only when named in `indicator_pool`; slow (1h 2-sym 4.3 y ≈ 8 min/gen at pop 20); screening/validation only — paper/live refuse them.
-- **Pre-register a falsifier** before a follow-up run (e.g. best pooled ann SR < 1.0 or no DSR p < 0.5 → reject); a lead from a 2.75 y window (892, SR 1.13) died on 4.3 y (894, SR 0.56).
-- **Hypothesis track beats more GA (2026-10-11, H-2b):** freeze a literature strategy, commit the falsifier to the journal BEFORE the data/results exist, test on never-seen history. Catalog now has Binance perps from 2020 (SOL 2020-09, BNB 2020-02); `ingest --start 2020-01-01 --end 2022-01-01` rebuilds each symbol's catalog from the archive (exactness stayed IDENTICAL). For long-only crypto ALWAYS benchmark vs equal-weight buy-and-hold (`data/swarm/20261011-h2b/buyhold.py START END`): H-2b made Sharpe 1.78 OOS yet lost to buy-and-hold 1.996.
-- **Price momentum decayed after mid-2022 (H-8, H-9, 2026-10-11):** hedged alt-vs-BTC momentum and 66-coin cross-sectional momentum both had Sharpe >1.2 in 2020-10..2022-05 and ≈0 or negative in 2022-06..2026-09. Before another OHLCV discovery batch, read the journal day summary: new information (OI, liquidations, order flow) is the open lever. Off-engine feasibility tests on Binance Vision daily klines (`data/swarm/20261011-h2b/h9_download.py`) decide in minutes whether an engine build is worth it.
-- **Run validations in parallel:** `POST /api/backtest/validation` per scope (portfolio, per-symbol, windows) all at once; 6 parallel 4h validations (4 coins, up to 6 y) finished in ~6 min. Screening metrics land in `sweep_results`, not `backtest_results`.
-- **`rg -h` prints help** (use `-I` for no filename). Bootstrap floor: 1h uses 1.0, 4h/1d 0.0, 1m 0.5.
-- **`convergence_generations` 3** stops small runs after 3 flat gens (most runs here stopped at gen 4).
-- Launch fields worth exercising: `symbol_agg` (`portfolio|worst`), `eval_windows`, `seed` (replay), `cross_window_months`, `wfa_oos_step_days`, `train_test_split` (holdout default 0.8). Cross-window/WFA only run when a candidate survives the guardrails.
+- Search with `rg`, never `grep`. Never name a shell variable `status` (read-only in zsh); use `run_status`.
+- Run every `curl` to localhost and every `python3 -c` that opens sqlite with `dangerouslyDisableSandbox: true` (the sandbox returns empty bodies, which look like JSON errors).
+- Keep `$rid` in the shell layer; pass values into python via `sys.argv` or `?` placeholders. Format DB values only after a `None` check.
+- Wait with Monitor or a `run_in_background` `until` loop; foreground `sleep N &&` is blocked.
+- State DB: `data/state/vibe_quant.db`. Discovery runs are `backtest_runs` rows with `run_mode='discovery'` (no `discovery_runs` table). Key tables: `backtest_runs`, `strategies`, `backtest_results` (one row per run), `sweep_results` (screening metrics), `background_jobs`.
 
-## Shell Gotchas (CRITICAL — read before writing any bash)
+## Setup (once per batch)
 
-1. **`status` is read-only in zsh** — never use `status` as a variable name. Use `st`, `stat`, or `run_status` instead.
-2. **Always use `rg` (ripgrep) instead of `grep`** — faster, no `|` escaping. `rg "ERROR|Exception" file` not `grep "ERROR\|Exception" file`.
-3. **Don't embed `$rid` inside python3 heredocs** — shell expands it before python sees it. Use the python3 `-c` approach where `$rid` stays in the shell layer, not inside python strings.
-4. **Don't poll with `sleep N &&`** (blocked by the harness) — use Monitor on the discovery logs or a `run_in_background` `until` loop (see Verified state).
-5. **Parallel background commands**: use `cmd1 & cmd2 & wait` pattern. Check exit codes after `wait`.
-6. **ALWAYS use `dangerouslyDisableSandbox: true`** for ALL Bash tool calls that use `curl` to localhost or run `python3 -c` with sqlite3. The sandbox blocks localhost network connections and may block DB file access. This applies to discovery launch, progress polling, results fetching, promote calls, and any sqlite3 queries. Without this flag, curl returns empty responses causing JSON parse errors.
+1. **Choose `PORT`.** Port 8000 may hold a foreign server. Probe `curl -s localhost:$PORT/health`; `{"status":"ok"}` means our backend. A port that answers anything else, or nothing but is held (`lsof -i :$PORT`), is not ours: take another (e.g. 8010).
+2. **Start the backend detached** with the Bash tool's `run_in_background: true` and a long `timeout`, using `PORT=8010; .venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port $PORT`. Shell state does not persist between Bash calls, so start every later command with `PORT=8010;` too (`PORT=8010 cmd --port $PORT` expands `$PORT` before the assignment). Never use `&` plus `sleep`: a backend killed at the tool time limit takes its discovery runs with it and leaves them `failed`.
+3. **Wait for readiness:** `until curl -s localhost:$PORT/health >/dev/null; do sleep 1; done`. Use `http://localhost:$PORT` in every call below.
+4. **Cores and workers.** `sysctl -n hw.ncpu`. Launch with explicit `max_workers` so runs × workers ≤ cores (API default 4 per run; 4 runs on 10 cores = 16 processes, load ≈ 29, backtests slowed from 1.5–3 s to 20–60 s). On 10 cores: 2 runs × 4, or 4 runs × 2. More runs than fit go in waves.
+5. **Data coverage.** Every symbol/timeframe must cover the window, including the funding history. Check the catalog the engine reads: `curl -s -X POST localhost:$PORT/api/backtest/validate-coverage -H 'Content-Type: application/json' -d '{"symbols":["BTCUSDT"],"timeframe":"4h","start_date":"2022-01-01","end_date":"2026-09-01"}'` and require `has_data` true with the start/end dates you need (launch-time 422 pending, bead vibe-quant-b5xfj). Archive overview: `GET /api/data/coverage`.
+6. **New symbols or date ranges need the user's OK before ingesting** into `data/archive` or `data/catalog` (worktrees share them). Command once approved: `.venv/bin/python -m vibe_quant.data ingest --help`.
+7. **Stale progress files.** Run ids collide across DB copies sharing `logs/`. Before launch: `ls logs/discovery_<next ids>_progress.json` and delete leftovers.
+8. Print the live genome pool: `.venv/bin/python -c "from vibe_quant.discovery.genome import INDICATOR_POOL as P; [print(k, v.param_ranges) for k, v in P.items()]" 2>/dev/null`.
 
-**Working polling script (copy-paste safe):**
+## Phase 1: journal review and combos
+
+Read `docs/discovery-journal.md` with offset/limit (it is huge). List tried combos and results. Pick the planned number of NEW combos of 2+ complementary indicators (trend+momentum, volume+oscillator), and present them to the user before launching. Read the journal's latest day summary first: price momentum decayed after mid-2022 (hedged alt-vs-BTC and cross-sectional momentum: Sharpe >1.2 in 2020-10..2022-05, about 0 afterwards), so new information (OI, liquidations, order flow) is the open lever; more GA budget on the same OHLCV families is not.
+
+Heuristics from the journal:
+- CCI, STOCH, MFI+WILLR are the best past pieces; ADX is ignored by the GA; MACD's threshold range is narrow; pure momentum pairs (RSI+ROC, MFI+RSI) are redundant.
+- The GA tends to converge to single-indicator strategies; multi-indicator ones lose more in validation.
+- Set `direction` when the hypothesis has one: with most genomes at score 0, selection is random and populations drift (14/18 shorts in an uptrend).
+- Context indicators (FUNDING, FUNDING_Z, BTC_TREND, BTC_ROC, OWN_TREND) work in discovery only when named in `indicator_pool`; they are slow (1h 2-sym 4.3 y ≈ 8 min/gen at pop 20); screening/validation only, paper/live refuse them.
+- To add an indicator to the pool: `INDICATOR_POOL` in `vibe_quant/discovery/genome.py` (`params` name→[min,max], `threshold_range`), plus `vibe_quant/dsl/compiler.py` and `vibe_quant/dsl/indicators.py`. Rust-native indicators are about 10× faster than pandas-ta ones (TEMA, WILLR, ICHIMOKU, VOLSMA are pandas-ta).
+- Pre-register a falsifier in the journal before a follow-up run (e.g. best pooled ann Sharpe < 1.0 or no DSR p < 0.5 → reject). For long-only crypto, benchmark against equal-weight buy-and-hold.
+
+## Phase 2: launch
+
+`POST /api/discovery/launch` (one call per combo, as parallel Bash calls). Body fields: `population`, `generations`, `symbols`, `timeframes`, `indicator_pool`, `direction` (`long|short|both|null`), `max_workers`, `symbol_agg` (`portfolio|worst`), `eval_windows` (default 3), `seed`, `cross_window_months`, `wfa_oos_step_days`, `train_test_split` (0.8; last 20% is the holdout), `start_date`/`end_date`, `convergence_generations` (the effective value is capped at generations // 2; the log's `Config: convergence_gens=N` shows it).
 
 ```bash
-for rid in 232 233 234 235 236; do
-  echo -n "Run $rid: "
-  curl -s "http://localhost:8000/api/discovery/jobs/$rid/progress" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-g=d.get('progress') or {}
-gen=g.get('generation','?')
-mx=g.get('max_generations','?')
-best=g.get('best_fitness',0)
-mean=g.get('mean_fitness',0)
-st=d.get('status','?')
-e=g.get('eta_seconds')
-eta=f'{int(e)//60}m{int(e)%60}s' if e else '-'
-bf=f'{best:.4f}' if isinstance(best,(int,float)) else str(best)
-mf=f'{mean:.4f}' if isinstance(mean,(int,float)) else str(mean)
-print(f'{st} | Gen {gen}/{mx} | Best={bf} | Mean={mf} | ETA={eta}')
-"
-done
+curl -s -X POST localhost:$PORT/api/discovery/launch -H 'Content-Type: application/json' -d '{"population":12,"generations":8,"symbols":["BTCUSDT"],"timeframes":["4h"],"indicator_pool":["A","B"],"direction":null,"max_workers":4}'
 ```
 
-## Indicator Catalog
+Record every `run_id` and the launch timestamp (journal timing column). Default budget 20 minutes wall-clock per batch: shrink population/generations rather than exceed it, unless the user sets a bigger budget.
 
-### Currently in Discovery Genome Pool
+Sizing (MEASURED, 4h, ~2.75 y): single-symbol backtest 1.5–3 s idle, 20–30 s under 4-way contention; TREND_ENSEMBLE 20–65 s; `symbol_agg=worst` on 3 symbols = 3 backtests per genome; 15m ROC/DONCHIAN/RSI/CCI/NATR ≈ 150 s/gen at pop 20–24, BBANDS/MFI 80–170 s per backtest (avoid). Pop 10–12 × 4 gens takes 1–6 min. Reduce pop/gens with pandas-ta indicators (1: pop 10 × 6; 2: pop 8 × 5). Higher-budget runs (30–40 min): pop 20 × 20, Rust-native only.
 
-The pool is built from the indicator registry + plugins (17 entries on 2026-10-11: ADAPTIVE_RSI, ADX, BBANDS, CCI, DONCHIAN, MACD, MFI, NATR, PRICE_POSITION, RAMS, ROC, RSI, SQUEEZE_MOM, SQUEEZE_RATIO, STOCH, TREND_ENSEMBLE, WILLR). Print the live pool before launching:
+Recipe that gives the GA a gradient: at most 2 parallel runs, multi-symbol `portfolio`, window ≥ 3.75 y, `eval_windows` 2, pop 16–20 × 6–8 (3-sym 4h 4.3 y with TREND_ENSEMBLE 176 s/gen at pop 16; 2-sym 1h 3.75 y 189 s/gen at pop 20).
 
-```bash
-.venv/bin/python -c "from vibe_quant.discovery.genome import INDICATOR_POOL as P; [print(k, v.param_ranges) for k, v in P.items()]" 2>/dev/null
-```
+Hard facts about scoring:
+- Zero score is a hard gate: worst-window `trades < min_trades` (50) or `total_return <= 0` → 0 (`fitness.py`); the overtrade penalty can also zero >300-trade genomes. 4h single-symbol on ~2.2 y trains gives 17–48 trades, so every genome scores 0; use ≥4 y windows on 4h or a multi-symbol portfolio. 1h BTC 1.7 y with `eval_windows` 3 also scored all 0.
+- Never pass `no_bootstrap_ci` or `--no-dsr` to get champions (forced champions collapsed in validation). Move the search instead: least-mined timeframe (15m, ~0.3k prior trials) and more trades. Bootstrap floor: 1m 0.5, 4h/1d 0.0, 5m/15m/1h 1.0.
+- DSR trial count N is cumulative across ALL prior same-timeframe runs with an overlapping train window, any symbol (4h ≈ 22k, 1m 63k, 1h 3.6k, 5m 0.8k, 15m 0.3k at 2026-10-11); read `notes.dsr_trials` (`gate_n`, `prior_n`, `prior_run_ids`). N is rarely binding: ann Sharpe 0.86 over 2.2 y fails at N=1; p<0.05 needs ann Sharpe ≈ 3.5 at N=600 and >4 at N=21 500. Check a rejected candidate with `calculate_dsr(deannualize_sharpe(sr), n, T)` before blaming N.
+- Gate-rejected candidates keep no DSL (`guardrail_rejections` holds uid + reasons). With 0 champions there is nothing to promote or validate; say so.
+- `OrderRejected ... REDUCE_ONLY ... would have increased position` and `Canceling REDUCE_ONLY` in logs are by design.
 
-If a needed indicator is missing, add it before discovery.
+## Phase 3: monitor
 
-### Full DSL Catalog (available for backtesting, need genome pool expansion for discovery)
+Run `scripts/agents/disc_watch.py RUN_ID [RUN_ID ...]` under Monitor (`.venv/bin/python scripts/agents/disc_watch.py 901 902`). It prints improving GEN lines, COMPLETE, champion and error lines, and exits when every run is terminal. Monitor only through it: ad-hoc `tail | rg | cut` pipes buffer and went silent for 30 minutes while runs completed. Also schedule a fallback wakeup (ScheduleWakeup) at ≤ half of any user deadline that checks run status directly. Post a status table (run, status, gen, best, mean, ETA) about every 3 minutes of wall-clock; the API view is `GET /api/discovery/jobs/$rid/progress`, but trust `=== GEN n/m ===` lines in `logs/discovery_<id>_<ts>.log` over it.
 
-**Trend:** EMA, SMA, WMA, DEMA, TEMA, ICHIMOKU
-**Momentum:** RSI, MACD, STOCH, CCI, WILLR, ROC, ADX
-**Volatility:** ATR, BBANDS, KC, DONCHIAN
-**Volume:** OBV, VWAP, MFI, VOLSMA
+## Phase 4: results and gates
 
-**Rust-native (fast, ~10x):** EMA, SMA, WMA, DEMA, RSI, MACD, STOCH, CCI, ROC, ADX, ATR, BBANDS, KC, DONCHIAN, OBV, VWAP, MFI
-**pandas-ta only (slow):** TEMA, WILLR, ICHIMOKU, VOLSMA
+`GET /api/discovery/results/$rid` → `strategies[]` with `dsl, score, sharpe, max_dd, pf, trades, return_pct` (top 3 are enough). DSR and guardrail detail is in the log: `rg "DSR|guardrail|deflated|Gate FAIL|No champion" logs/discovery_<id>_*.log -A5`. A candidate failing DSR (p > 0.05), bootstrap CI, cross-window, WFA or holdout is eliminated; note which gate. A run's champion list comes from the gates, never from the raw top-score list.
 
-**To add an indicator to genome pool**: Edit `INDICATOR_POOL` dict in `vibe_quant/discovery/genome.py` — add entry with `params` (name→[min,max] ranges) and `threshold_range` ([min, max]). Also ensure it's in the compiler (`vibe_quant/dsl/compiler.py`) and indicator registry (`vibe_quant/dsl/indicators.py`).
+## Phase 5: screening replay and validation
 
-**NOTE:** If the journal review suggests trying an indicator NOT in the genome pool, add it to the pool first (following the ADX addition pattern from Batch 10), then proceed with discovery.
+For each champion: `POST /api/discovery/results/$rid/promote/0?mode=screening` returns `{strategy_id, run_id, name, mode}`; promote auto-runs screening (launch persists `start_date`/`end_date`, so no date fixing). Check `GET /api/results/runs/<screening_run_id>`: trades, Sharpe, return, PF must match discovery exactly when the run used `eval_windows=1`; otherwise investigate and file a bead. If a screening needs a re-run: `.venv/bin/python -m vibe_quant screening run --run-id N`. Screening metrics live in `sweep_results`.
 
-## API Reference (Critical — avoid guessing endpoints)
+Validation: `POST .../promote/0?mode=validation` (holdout range by default; `validation_range=full` for the whole range), or re-run an existing row with `.venv/bin/python -m vibe_quant validation run --run-id N`. Start all validation scopes at once (portfolio, per-symbol, windows; 6 parallel 4h validations took ~6 min). Expect the same trades with a 5–20% Sharpe drop (fill model, 60 ms cloud latency, fees); flag a >30% drop or a trade-count divergence >10%. Results: `GET /api/results/runs/<id>` (`sharpe_ratio, total_trades, total_return, profit_factor, max_drawdown, win_rate, total_fees`; these names differ from the discovery ones).
 
-**Backend startup:**
+## Phase 6: log audit and beads
 
-```bash
-# ALWAYS check if backend is already running before starting
-lsof -i :8000 2>/dev/null | head -3
-# Only start if nothing is listening:
-.venv/bin/uvicorn "vibe_quant.api.app:create_app" --factory --port 8000 &
-# Wait and verify:
-sleep 3 && curl -s http://localhost:8000/api/data/coverage | python3 -c "import json,sys; print('Backend OK' if json.load(sys.stdin) else 'FAIL')"
-```
+For every run: `rg -c "ERROR|Exception|Traceback" logs/{discovery,screening,validation}_<id>*.log`. File a bead for each distinct problem the moment you see it (log error, screening mismatch, crash, corrupt file): `bd create --title="[discovery-run] <desc>" --description="run ids + error" --type=bug --priority=2`.
 
-Note: uses `create_app` factory, NOT `app` directly. Module is `vibe_quant.api.app`, NOT `vibe_quant.api.main`.
+## Phase 7: summary and journal
 
-**Discovery endpoints:**
+Summary table, one column per run: discovery score/Sharpe/trades, gate results, screening match, validation Sharpe/return/DD/PF. Then append a batch entry to `docs/discovery-journal.md` in the format of the previous entries: date and batch number, goal, fixes applied, configuration table (run ids, indicators, pop, gens, timeframe, wall-clock per run, status), full-pipeline table, winners, issues, key findings, comparison with prior batches, recommendations. Commit the journal and push (`git add docs/discovery-journal.md && git commit && git pull --rebase && git push`); the work is not done until the push succeeds.
 
-```
-POST /api/discovery/launch                              → {run_id, status, ...}
-GET  /api/discovery/jobs/{run_id}/progress              → {run_id, status, progress: {generation, best_fitness, ...}}
-GET  /api/discovery/results/{run_id}                    → {strategies: [{dsl, score, sharpe, max_dd, pf, trades, return_pct}, ...]}
-POST /api/discovery/results/{run_id}/promote/{idx}?mode=screening  → {strategy_id, run_id, name, mode}
-```
+## Key rules
 
-**Results endpoints:**
-
-```
-GET  /api/results/runs/{run_id}                         → {sharpe_ratio, total_trades, total_return, profit_factor, max_drawdown, win_rate, total_fees, sortino_ratio, ...}
-GET  /api/results/runs/{run_id}/trades                  → trade list
-GET  /api/results/runs/summary                          → all runs summary
-```
-
-**Strategy endpoints:**
-
-```
-GET  /api/strategies/{id}                               → {id, name, dsl_config, ...}
-```
-
-**Discovery result field names** (NOT the same as results/runs):
-
-- `score`, `sharpe`, `max_dd`, `pf`, `trades`, `return_pct`
-- DSR info is in the discovery **log file**, not the API response
-
-**Results/runs field names:**
-
-- `sharpe_ratio`, `total_trades`, `total_return`, `profit_factor`, `max_drawdown`, `win_rate`, `total_fees`
-
-**FIXED (verified 2026-10-11) — discovery launch missing dates:** launch now saves `start_date`/`end_date`; the date-fix steps below are historical — check the run row and skip them when dates are set.
-
-**CRITICAL ORDERING:** You MUST fix dates BEFORE promoting. The promote endpoint auto-runs screening immediately. If dates are empty when you promote, screening produces 0 trades and you must re-run.
-
-**Correct workflow:**
-
-```bash
-# 1. Get the data range from ANY discovery log
-rg "Data range" logs/discovery_{FIRST_RUN_ID}.log | head -1
-# Output: "Data range: 2025-03-07 to 2026-03-07 ..."
-
-# 2. Fix dates on ALL discovery runs FIRST (before promote)
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for rid in [RUN_ID1, RUN_ID2, ...]:
-    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('2025-03-07', '2026-03-07', rid))
-conn.commit()
-print('Discovery run dates fixed')
-"
-
-# 3. NOW promote (screening will auto-run with correct dates)
-curl -s -X POST "http://localhost:8000/api/discovery/results/{run_id}/promote/0?mode=screening"
-# Returns: {strategy_id, run_id (screening_run_id), name, mode}
-
-# 4. Fix dates on the NEW screening runs too (promote creates them with empty dates)
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for rid in [SCREENING_RUN_ID1, SCREENING_RUN_ID2, ...]:
-    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('2025-03-07', '2026-03-07', rid))
-conn.commit()
-print('Screening run dates fixed')
-"
-
-# 5. Check if screening already ran successfully (promote auto-runs it)
-curl -s "http://localhost:8000/api/results/runs/{screening_run_id}" | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-tr=d.get('total_trades',0)
-print(f'trades={tr}' + (' — OK' if tr > 0 else ' — NEED RE-RUN'))
-"
-
-# 6. If 0 trades, re-run screening manually:
-.venv/bin/python -m vibe_quant screening run --run-id {SCREENING_RUN_ID}
-```
-
-**Validation runs — create manually** (promote endpoint may fail for re-promotes):
-
-```python
-python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for sid in [STRATEGY_IDS]:
-    cursor = conn.execute(
-        'INSERT INTO backtest_runs (strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status) VALUES (?,?,?,?,?,?,?,?)',
-        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'cloud'}), 'pending'))
-    print(f'Created validation run {cursor.lastrowid} for strategy {sid}')
-conn.commit()
-"
-```
-
-Then launch: `.venv/bin/python -m vibe_quant validation run --run-id {run_id}`
-
-**Screening re-runs:**
-
-```bash
-.venv/bin/python -m vibe_quant screening run --run-id {run_id}
-```
-
-## SQLite Queries (state DB)
-
-DB path: `data/state/vibe_quant.db`
-
-**Always use `python3 -c` with `?` placeholders** — NEVER use f-strings or `.format()` for values:
-
-```python
-python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('data/state/vibe_quant.db')
-conn.row_factory = sqlite3.Row
-row = conn.execute('SELECT * FROM backtest_runs WHERE id=?', (RUN_ID,)).fetchone()
-if row: print(dict(row))
-"
-```
-
-**Handle None before formatting** — DB values can be `None`, `str`, or numeric:
-
-```python
-# WRONG: print(f'{val:.2f}')  — crashes if val is None
-# RIGHT: print(f'{val:.2f}' if val is not None else 'N/A')
-```
-
-**Key tables:**
-
-- `backtest_runs` — all runs (discovery, screening, validation). Columns: id, strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status, pid, started_at, completed_at
-- `strategies` — saved strategies. Columns: id, name, dsl_config, strategy_type
-- `backtest_results` — stored results per run
-- `background_jobs` — job tracking. Columns: id, run_id, pid, job_type, status, log_file
-
-**There is NO `discovery_runs` table** — discovery runs are stored in `backtest_runs` with `run_mode='discovery'`.
-
-## Workflow
-
-### Phase 1: Journal Review & Combo Selection
-
-1. Read `docs/discovery-journal.md` (use offset/limit — file is large, >25k tokens)
-2. Identify all previously tried indicator combinations and their results
-3. Select 5 NEW indicator combinations not yet tried (or re-run promising ones with better params)
-4. Each combo MUST use 2+ indicators from the available pool
-5. Prefer complementary signal types (trend+momentum, volume+oscillator) — avoid redundant pairs
-6. Present the 5 combos to user for approval before launching
-
-**Combo selection heuristics (from journal learnings):**
-
-- Volume + momentum combos perform well (MFI+WILLR best so far)
-- CCI+RSI is all-time champion — consider variations
-- STOCH is the #2 indicator after CCI (Batch 12: Sharpe 2.55 validated standalone)
-- ADX is weak for threshold-based discovery — GA consistently ignores it (Batch 10+11+12). Don't prioritize ADX combos.
-- MACD has narrow threshold range — poor in 2-indicator combos
-- Pure momentum pairs (RSI+ROC, MFI+RSI) produce poor, redundant signals
-- GA overwhelmingly converges to single-indicator strategies (3/4 runs in Batch 12). Multi-indicator strategies degrade more in validation (35% Sharpe drop on MFI+ROC Batch 12).
-- CCI's wide threshold [-200,200] dominates — GA frequently picks pure CCI
-- Indicators NOT yet in genome pool are fair game — add them first, then discover
-
-### Phase 2: Launch Parallel Discoveries
-
-**Pre-launch checklist:**
-
-1. Verify backend is running: `lsof -i :8000`
-2. Verify genome pool: `rg "INDICATOR_POOL" vibe_quant/discovery/genome.py -A 3 | head -40`
-3. **Calculate parallelism from CPU cores** (see below)
-
-#### Parallelism Calculation (CRITICAL)
-
-Each discovery run spawns `--max-workers 4` multiprocessing workers. All workers run at ~75-90% CPU. To avoid CPU starvation, distribute workers evenly across cores with breathing room:
-
-```
-cpu_cores = sysctl -n hw.ncpu        # e.g., 10 on M1 Pro
-workers_per_run = 4                   # default --max-workers
-reserved_cores = 2                    # headroom for OS, backend, monitoring
-max_parallel_runs = floor((cpu_cores - reserved_cores) / workers_per_run)
-```
-
-| CPU Cores | Max Parallel Runs | Total Workers | Load |
-|-----------|-------------------|---------------|------|
-| 8         | 1                 | 4             | 50%  |
-| 10        | 2                 | 8             | 80%  |
-| 12-14     | 3                 | 12            | ~90% |
-| 16+       | 3-4               | 12-16         | ~80% |
-
-**Always check first:**
-
-```bash
-echo "CPU cores: $(sysctl -n hw.ncpu)"
-```
-
-**Rules:**
-- **Never exceed `(cores - 2) / 4` parallel runs** — causes CPU starvation, zombie workers, and slower total time
-- **3 parallel on 10 cores works but is tight** — runs compete for CPU, the slowest run takes ~30% longer
-- **2 parallel is the safe default for 10-core machines** — each run gets full 4-core utilization, minimal contention
-- If user requests more runs than fit in one wave, run them in waves (e.g., 5 runs = 2 waves of 2 + 1)
-
-**Default GA parameters** (adjust based on time budget):
-
-```
-Population: 12
-Generations: 8
-Timeframe: 4h
-Symbols: ["BTCUSDT"]
-Direction: null (random)
-Convergence generations: 5
-```
-
-**Time budget scaling** — if combos include slow indicators (pandas-ta), reduce pop/gens:
-
-- All Rust-native: pop=12, gens=8
-- 1 pandas-ta indicator: pop=10, gens=6
-- 2 pandas-ta indicators: pop=8, gens=5
-
-**For higher-budget runs** (30-40 min target): pop=20, gens=20 with Rust-native indicators.
-
-Launch command (repeat for each combo):
-
-```bash
-curl -s -X POST http://localhost:8000/api/discovery/launch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "population": 12,
-    "generations": 8,
-    "symbols": ["BTCUSDT"],
-    "timeframes": ["4h"],
-    "indicator_pool": ["INDICATOR1", "INDICATOR2"],
-    "direction": null
-  }'
-```
-
-Record all `run_id` values. **Record the launch timestamp** — you'll need it for the journal timing column. Launch all runs as parallel Bash tool calls.
-
-### Phase 3: Monitor Every 3 Minutes
-
-Poll all runs every 3 minutes. **USE `sleep 180 &&` before the poll command** in a single Bash tool call with `timeout: 300000`. This avoids spamming the user with rapid tool calls.
-
-```bash
-sleep 180 && for rid in RUN_IDS; do
-  echo -n "Run $rid: "
-  curl -s "http://localhost:8000/api/discovery/jobs/$rid/progress" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-g=d.get('progress') or {}
-gen=g.get('generation','?')
-mx=g.get('max_generations','?')
-best=g.get('best_fitness',0)
-mean=g.get('mean_fitness',0)
-st=d.get('status','?')
-e=g.get('eta_seconds')
-eta=f'{int(e)//60}m{int(e)%60}s' if e else '-'
-bf=f'{best:.4f}' if isinstance(best,(int,float)) else str(best)
-mf=f'{mean:.4f}' if isinstance(mean,(int,float)) else str(mean)
-print(f'{st} | Gen {gen}/{mx} | Best={bf} | Mean={mf} | ETA={eta}')
-"
-done
-```
-
-Report results in a markdown table. Repeat until all runs show `completed`.
-
-### Phase 4: Collect Results
-
-Once all complete, fetch results. **Use the correct field names** (discovery results differ from backtest results):
-
-```bash
-# Discovery results — fields: score, sharpe, max_dd, pf, trades, return_pct
-for rid in 232 233 234 235 236; do
-  echo "=== Run $rid ==="
-  curl -s "http://localhost:8000/api/discovery/results/$rid" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-for i,s in enumerate(d.get('strategies',[])[:3]):
-    ec=s.get('dsl',{}).get('entry_conditions',{})
-    dr=','.join(ec.keys()) if ec else '?'
-    print(f'  #{i}: score={s[\"score\"]:.4f} sharpe={s[\"sharpe\"]:.2f} dd={s[\"max_dd\"]*100:.1f}% trades={s[\"trades\"]} ret={s[\"return_pct\"]*100:.1f}% pf={s[\"pf\"]:.2f} dir={dr}')
-"
-done
-```
-
-```bash
-# Backtest/validation results — fields: sharpe_ratio, total_trades, total_return, profit_factor, max_drawdown, win_rate, total_fees
-for rid in 237 238 239 240; do
-  echo -n "Run $rid: "
-  curl -s "http://localhost:8000/api/results/runs/$rid" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-sr=d.get('sharpe_ratio'); tr=d.get('total_trades',0); ret=d.get('total_return',0)
-pf=d.get('profit_factor',0); dd=d.get('max_drawdown',0); fees=d.get('total_fees',0)
-if sr is not None: print(f'sharpe={sr:.2f} trades={tr} ret={ret*100:.1f}% pf={pf:.2f} dd={dd*100:.1f}% fees=\${fees:.2f}')
-else: print(f'FAILED (sharpe=null, trades={tr})')
-"
-done
-```
-
-### Phase 5: Overfitting Validation (DSR)
-
-For each winning strategy (top-1 per run), check DSR guardrails.
-
-```bash
-# Check DSR results in discovery log — use rg not grep
-rg "DSR|guardrail|deflated" logs/discovery_{run_id}.log -A5
-```
-
-Strategies that FAIL DSR (p > 0.05) are eliminated. Note failures in summary.
-
-### Phase 6: Screening Replay
-
-**CRITICAL ORDERING — dates must be fixed BEFORE promote auto-runs screening:**
-
-```bash
-# 1. Get data range from discovery log
-rg "Data range" logs/discovery_{FIRST_RUN_ID}.log | head -1
-
-# 2. Fix dates on discovery runs
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for rid in [DISCOVERY_RUN_IDS]:
-    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('START', 'END', rid))
-conn.commit()
-"
-
-# 3. Promote (auto-runs screening)
-for rid in DISCOVERY_RUN_IDS; do
-  echo "=== Promoting run $rid ==="
-  curl -s -X POST "http://localhost:8000/api/discovery/results/$rid/promote/0?mode=screening"
-  echo ""
-done
-# Save the returned strategy_id and screening run_id values
-
-# 4. Fix dates on screening runs too
-python3 -c "
-import sqlite3
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for rid in [SCREENING_RUN_IDS]:
-    conn.execute('UPDATE backtest_runs SET start_date=?, end_date=? WHERE id=?', ('START', 'END', rid))
-conn.commit()
-"
-
-# 5. Check if screening auto-ran successfully
-for rid in SCREENING_RUN_IDS; do
-  echo -n "Screening $rid: "
-  curl -s "http://localhost:8000/api/results/runs/$rid" | python3 -c "
-import json,sys; d=json.load(sys.stdin); tr=d.get('total_trades',0)
-print(f'trades={tr}' + (' OK' if tr > 0 else ' NEED RE-RUN'))
-"
-done
-
-# 6. Re-run any screening that got 0 trades
-for rid in SCREENING_RUN_IDS_NEEDING_RERUN; do
-  .venv/bin/python -m vibe_quant screening run --run-id $rid &
-done
-wait
-```
-
-Verify: discovery metrics == screening metrics (trade count, Sharpe, return, PF must match exactly).
-
-### Phase 7: Validation Backtest
-
-For strategies that passed screening, create validation runs manually:
-
-```bash
-python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('data/state/vibe_quant.db')
-for sid in [STRATEGY_IDS]:
-    cursor = conn.execute(
-        'INSERT INTO backtest_runs (strategy_id, run_mode, symbols, timeframe, start_date, end_date, parameters, status) VALUES (?,?,?,?,?,?,?,?)',
-        (sid, 'validation', json.dumps(['BTCUSDT']), '4h', 'START_DATE', 'END_DATE', json.dumps({'latency_preset': 'cloud'}), 'pending'))
-    print(f'Created validation run {cursor.lastrowid} for strategy {sid}')
-conn.commit()
-"
-
-# Launch validation (parallel, with log capture)
-for rid in VALIDATION_RUN_IDS; do
-  .venv/bin/python -m vibe_quant validation run --run-id $rid 2>&1 | tee logs/validation_${rid}.log &
-done
-wait
-```
-
-Expected: same trades, degraded metrics (5-20% Sharpe drop normal due to fill model + 60ms cloud latency + fees).
-Fetch results with `/api/results/runs/{validation_run_id}`.
-
-### Phase 8: Log File Audit
-
-For EVERY run (discovery, screening, validation), check logs for errors:
-
-```bash
-# Use rg (ripgrep) — NOT grep. Use specific run IDs, not wildcards.
-for rid in RUN_ID1 RUN_ID2; do
-  for prefix in discovery screening validation; do
-    f="logs/${prefix}_${rid}.log"
-    [ -f "$f" ] || continue
-    errors=$(rg -c "ERROR|Exception|Traceback" "$f" 2>/dev/null || echo 0)
-    warnings=$(rg -c "WARNING|FutureWarning" "$f" 2>/dev/null || echo 0)
-    echo "$f: $errors errors, $warnings warnings"
-  done
-done
-```
-
-**If errors found**: Create a bead for each distinct issue:
-
-```bash
-bd create --title="[discovery-run] <error description>" --type=bug --priority=2
-git push
-```
-
-### Phase 9: Summary Table
-
-Create a comparison table across all stages:
-
-```
-| Stage | Run A (X+Y) | Run B (X+Z) | ... |
-|-------|-------------|-------------|-----|
-| Discovery score | 0.52 | 0.48 | ... |
-| Discovery sharpe | 1.2 | 0.9 | ... |
-| Discovery trades | 95 | 120 | ... |
-| DSR guardrails | PASS | FAIL | ... |
-| Screening match | exact | n/a | ... |
-| Validation sharpe | 1.1 | n/a | ... |
-| Validation return | +8% | n/a | ... |
-| Validation DD | 7% | n/a | ... |
-| Validation PF | 1.3 | n/a | ... |
-```
-
-### Phase 10: Journal Entry
-
-Append a new batch entry to `docs/discovery-journal.md` following the exact format of previous entries. Include:
-
-1. **Date and batch number** (increment from last batch)
-2. **Goal** — what combos were tested and why
-3. **Bug Fixes Applied** — any fixes made during the run
-4. **Configuration table** — run IDs, indicators, pop, gens, TF, **wall-clock time per run** (from launch to completion), status
-5. **Full Pipeline Results table** — all stages for all runs
-6. **Winning Strategies** — detailed breakdown of top performers
-7. **Issues Found** — numbered list of any problems
-8. **Key Findings** — what worked, what didn't, patterns observed
-9. **Comparison with Previous Batches** — table comparing with best of prior batches
-10. **Recommendations** — what to try next
-
-### Phase 11: Commit & Push
-
-```bash
-git add docs/discovery-journal.md
-git commit -m "feat: Batch N discovery journal — <summary>"
-git push
-```
-
-## Key Rules
-
-- **NEVER skip the journal review** — it prevents re-running the same combos
-- **NEVER skip log audits** — errors must be caught and filed as beads
-- **File a bead for ANY bug or issue encountered during the run** — not just from log audits. If validation fails unexpectedly, if screening doesn't match, if a corrupt file appears, if a process crashes — immediately `bd create --title="[discovery-run] <description>" --type=bug --priority=2`. Don't wait until the end. Include the run ID and error details in the description.
-- **20 minute budget is hard** — reduce pop/gens rather than exceed it
-- **Exact screening match required** — if screening doesn't match discovery, something is broken (file a bead)
-- **Validation degradation is normal** — 5-20% Sharpe drop expected. Flag if >30% drop or trade count diverges >10%
-- **Always push at the end** — work is not done until git push succeeds
-- **Expand genome pool as needed** — if a promising indicator isn't in the pool, add it before discovery
-- **Fix dates BEFORE promote** — promote auto-runs screening; empty dates = 0 trades = wasted time
-- **Always use `rg` not `grep`** — faster, simpler regex, no escaping needed
-- **Never use `status` as a shell variable** — it's read-only in zsh
+- Review the journal before choosing combos.
+- Honest numbers: gates fail closed; report failures and 0-champion runs plainly.
+- Audit every log; bead every problem.
+- Backend detached, one `PORT`, runs × `max_workers` ≤ cores, monitoring through `disc_watch.py`.

@@ -113,7 +113,3 @@ After the loop ends, output a markdown summary:
 - New issues: N
 - Commits pushed: N
 ```
-
-## Changelog
-
-- 2026-10-11: subagents allowed when run under /orchestrate; commit format now points at commit-message.md (CLAUDE.md verbose per-task commits) — user: "the grind skill is just high-level stuff ... you can still use sub-agents" (job 20261011-testspeed).
