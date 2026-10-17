@@ -19,6 +19,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
    - fixed-strategy eval: `.venv/bin/python scripts/agents/exactness_239.py` (exit 0 = bit-identical to the CLAUDE.md baseline);
    - validation repeatability: same validation run twice must be bit-identical (239: sharpe `0.7802305953007851`, 67 trades).
    Comparing two discovery runs proves nothing. Reject it as evidence if a handoff offers it.
+5b. **Lockfile** (if `pyproject.toml` changed): `uv.lock` is gitignored, so a worktree has none; check with a temp dir holding the worktree's `pyproject.toml` and main's `uv.lock` (`uv lock --check` there). Report a stale lock as a chief action (regenerate locally after land), not a code FAIL (ver-gr-3).
 6. **Scope check**: `git diff --stat <base>...HEAD` contains only the paths in the brief's SCOPE.
 7. **UI check** (if `frontend/src` changed, or the API changed something the UI shows): exercise each UI acceptance criterion in a real browser.
    - `scripts/agents/ui-check.sh up <worktree>` starts the worktree's backend on :8001 and Vite on :5188 against a copy of the state DB (path printed). Seed the rows a criterion needs into that copy, never into `data/state`.
@@ -85,3 +86,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (job 20261016-easy-beads-3): seeded render-only fallback for rare-row UI criteria — evidence: nq6vg runs 920/921 produced no liquidated rows.
 - 2026-10-17 (job 20261016-safety-bankroll): clearing inputs in agent-browser. Evidence: ver-sb-1 improve line.
 - 2026-10-17 (job 20261017-grind): number-input leading-0 note. Evidence: ver-gr-2.
+- 2026-10-17 (Land 3, job 20261017-grind): lockfile check via temp dir (uv.lock gitignored). Evidence: ver-gr-3.
