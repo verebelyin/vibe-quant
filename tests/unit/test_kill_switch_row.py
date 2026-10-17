@@ -27,6 +27,11 @@ Contract rows:
 * R6  GET /status with the row missing -> 200, engaged, the R2 reason.
 * R6b GET /status raising ``SystemStateMissingError`` -> 503
       ``"kill switch state unavailable: <msg>"``.
+* R6c GET /status raising a raw ``sqlite3.OperationalError`` -> the same 503
+      (vibe-quant-qh6g7).
+* R6d the same against a REAL held writer lock with the row missing (the
+      reseed INSERT cannot run) -> 503 ``"database is locked"``, never a 500.
+* R6e any other exception class (e.g. ``ValueError``) is NOT mapped: 500.
 * R7  POST /kill when the write raises ``OperationalError`` -> the cascade is
       still enqueued and the response is 503 naming the class and the count.
 * R7b POST /unlock with the row missing -> 409 with the R5 text, row engaged.
@@ -480,6 +485,57 @@ async def test_status_unavailable_503(api: dict[str, Any], monkeypatch: pytest.M
     r = await api["ac"].get("/api/system/status")
     assert r.status_code == 503, r.text
     assert r.json()["detail"] == f"kill switch state unavailable: {_UNRESEEDABLE}"
+
+
+async def test_status_operational_error_503(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """R6c: a raw ``sqlite3.OperationalError`` from the read is the SAME 503
+    (bead vibe-quant-qh6g7), not the 500 it used to be."""
+
+    def boom() -> dict[str, Any]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(api["state"], "get_system_state", boom)
+    r = await api["ac"].get("/api/system/status")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == "kill switch state unavailable: database is locked"
+
+
+async def test_status_real_writer_lock_503(
+    api: dict[str, Any], tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R6d: the real gap -- row deleted, a second connection holds
+    ``BEGIN IMMEDIATE`` so a FRESH StateManager cannot re-create the row; its
+    ``init_schema`` re-raises the raw OperationalError. The endpoint must answer
+    the 503, not a 500."""
+    _delete_row(api["state"])
+    api["state"].close()
+    # Fail the connection's write attempt immediately instead of after 5 s.
+    monkeypatch.setattr("vibe_quant.db.connection.BUSY_TIMEOUT_MS", 0)
+    blocker = sqlite3.connect(tmp_db)
+    blocker.execute("BEGIN IMMEDIATE")
+    fresh = StateManager(db_path=tmp_db)
+    api["app"].state.state_manager = fresh
+    try:
+        r = await api["ac"].get("/api/system/status")
+        assert r.status_code == 503, r.text
+        assert r.json()["detail"] == "kill switch state unavailable: database is locked"
+    finally:
+        blocker.rollback()
+        blocker.close()
+        fresh.close()
+
+
+async def test_status_unrelated_exception_stays_500(
+    api: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R6e: only ``OperationalError`` is added -- any other class is still a 500."""
+
+    def boom() -> dict[str, Any]:
+        raise ValueError("unreadable")
+
+    monkeypatch.setattr(api["state"], "get_system_state", boom)
+    r = await api["ac"].get("/api/system/status")
+    assert r.status_code == 500, r.text
 
 
 async def test_kill_not_persisted_still_cascades_503(

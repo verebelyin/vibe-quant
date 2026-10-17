@@ -92,11 +92,14 @@ async def get_status(state: StateMgr) -> SystemStatusResponse:
 
     A row that went missing is re-created ENGAGED by the read (a deleted
     kill-switch record is never reported as unlocked); an unreadable-and-
-    unreseedable state is a 503, never a 200 default.
+    unreseedable state is a 503, never a 200 default. A raw
+    ``sqlite3.OperationalError`` (a writer lock held while the connection
+    re-creates the row, re-raised by ``init_schema``) is the same 503, not a
+    500 (vibe-quant-qh6g7); any other exception class stays a 500.
     """
     try:
         return SystemStatusResponse(**state.get_system_state())
-    except SystemStateMissingError as exc:
+    except (SystemStateMissingError, sqlite3.OperationalError) as exc:
         raise HTTPException(
             status_code=503,
             detail=f"kill switch state unavailable: {exc}",
