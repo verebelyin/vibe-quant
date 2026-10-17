@@ -36,6 +36,7 @@ Run from the tree under test. In a worktree, prefix Python with `PYTHONPATH=$PWD
 - A gate you couldn't run (missing data, server down) is `UNVERIFIED (reason)`. Don't count it as passed.
 - Real-DB smoke checks: copy the DB with `sqlite3 <db> ".backup /tmp/x.db"`, pass `StateManager` a `Path` (a `str` raises AttributeError), and run the SAME copy under main's code and the branch's code; a difference only counts if the two results differ (ver-sf-job: 8 pending migrations looked like a branch change until the chief's main-vs-branch run gave identical schemas).
 - Live AC windows: pick the window from the strategy's first trade date (`select min(entry_time) from trades where run_id=<existing run>`) before launching; a window with no trades fails with 0 trades (ver-sz-job-1: runs 920/921 failed, the brief window ended before strategy 239's first trade on 2024-04-16).
+- On-screen checks: open every screenshot you cite and say what it shows; a shot taken before data loaded proves nothing (ver-e5-ingest-ui-1 cited two unopened shots, one a loading skeleton). Row-level UI on discovery needs real rows: tiny runs end with 0 rows (docs/claude/discovery.md), so report BLOCKED with the cause instead of retrying.
 - Re-check each claim in the maker's handoff you were given. Mark it VERIFIED with your command, or REFUTED with output.
 
 Done when every applicable gate has a command and a verbatim result line.
@@ -87,3 +88,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-17 (job 20261016-safety-bankroll): clearing inputs in agent-browser. Evidence: ver-sb-1 improve line.
 - 2026-10-17 (job 20261017-grind): number-input leading-0 note. Evidence: ver-gr-2.
 - 2026-10-17 (Land 3, job 20261017-grind): lockfile check via temp dir (uv.lock gitignored). Evidence: ver-gr-3.
+- 2026-10-17 (job 20261017-easy5): open cited screenshots; tiny discovery runs give 0 rows. Evidence: ver-e5-ingest-ui-1, ver-e5-badge-1.
