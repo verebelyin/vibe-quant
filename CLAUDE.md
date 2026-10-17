@@ -100,6 +100,7 @@ Coverage axes — check which ones the change crosses and verify each side:
 | Throwaway UI stack | `scripts/agents/ui-check.sh up\|down <worktree>` (backend :8001 + Vite :5188 on a DB copy) |
 | Worktree for a task | `scripts/agents/worktree.sh <slug> [base] [--private-node-modules]` |
 | Rebuild catalog | `.venv/bin/python -m vibe_quant.data rebuild --from-archive` |
+| Funding intervals (refresh) | `.venv/bin/python -m vibe_quant.data funding-intervals [--symbols BTCUSDT,ETHUSDT,...]` (Binance Vision `funding_interval_hours` into the archive's `raw_funding_intervals`; defaults to all supported symbols) |
 
 **Worktrees import the main checkout's code** (the editable install points at it): run worktree code as `PYTHONPATH=$PWD .venv/bin/python -m ...`. Create worktrees with `scripts/agents/worktree.sh` — it links `data/catalog` + `data/archive` (a bare `git worktree add` lacks them and 8 research tests fail). `pnpm install` in a worktree writes through the shared `node_modules` symlink; pass `--private-node-modules` when deps change.
 

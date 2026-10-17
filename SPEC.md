@@ -103,7 +103,7 @@ python -m vibe_quant.portfolio evaluate --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSD
 ```
 
 - **Decision:** every Monday 00:05:00 UTC (`D`); `L = D - 60 s`.
-- **Signal:** the sum of settled funding rates over the trailing 7 calendar days `(L - 7d, L]`. A symbol whose 8h boundary in that window has no archived row within ±60 s is excluded that week (`funding_hole`) — no forward-fill. Rates are summed raw; Binance already scales each settlement by `8/N`, so a 4h symbol's 42 half-size rates and an 8h symbol's 21 rates give comparable 7-day totals. A missing NON-8h row (e.g. a 4h symbol's 04:00) is not detected (the archive has no interval column).
+- **Signal:** the sum of settled funding rates over the trailing 7 calendar days `(L - 7d, L]`. A symbol whose expected settlement (on its real interval grid — Binance Vision `funding_interval_hours`) in that window has no archived row within ±60 s is excluded that week (`funding_hole`) — no forward-fill. Rates are summed raw; Binance already scales each settlement by `8/N`, so a 4h symbol's 42 half-size rates and an 8h symbol's 21 rates give comparable 7-day totals. A missing NON-8h row (e.g. a 4h symbol's 04:00) is detected too since 2026-10-17 (the archive's `raw_funding_intervals` table holds each row's Vision interval); before that it was silently free.
 - **Ranking / weights:** total order by the key `(signal, symbol)`; `k = max(1, n // legs_divisor)` legs per side; long the `k` lowest signals, short the `k` highest; each leg `±gross/(2k)` (equal-dollar). `n < 2` → the book is flat (held legs closed).
 - **Sizing:** the floor and the band compare are exact in `Decimal` — `target_steps = sign(w) * floor(Decimal(abs(w) * E_D) / (Decimal(price) * step))`, never float division (the `abs(w) * E_D` product itself is formed in float). The band never skips an open, a close or a flip; a same-side resize is skipped when `Decimal(abs(target - current)) < Decimal(str(band)) * abs(target)` (default band `0.10`). Binance min-quantity and MIN_NOTIONAL are enforced in code and can skip a non-reduce order — an open, a same-side increase, or a flip's open leg (a flip's close, and every other reduce-only close, is always sent). A book below the minimum tradable size fails closed.
 - **Fills:** an order queued at `D` is released and filled on that symbol's OWN next 1m close (per-instrument outbox, strict `<`; a release more than 60 min stale, or an order still queued at the run end, fails the run). Orders are **never** submitted from the decision timer callback — a fill from the callback lands while the clock is at `D`, at the last datum's price, i.e. a look-ahead fill (MEASURED). Open positions are not closed at the run end (no fee; marked at the final price).
@@ -282,6 +282,17 @@ CREATE TABLE raw_funding_rates (
     funding_time INTEGER NOT NULL,     -- Unix timestamp ms
     funding_rate REAL NOT NULL,
     mark_price REAL,
+    source TEXT NOT NULL,
+    downloaded_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(symbol, funding_time)
+);
+
+-- Binance Vision funding_interval_hours; append-only, refreshed by `python -m vibe_quant.data funding-intervals`
+CREATE TABLE raw_funding_intervals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    funding_time INTEGER NOT NULL,     -- Unix timestamp ms
+    interval_hours INTEGER NOT NULL,   -- settlement interval in effect at funding_time
     source TEXT NOT NULL,
     downloaded_at TEXT DEFAULT (datetime('now')),
     UNIQUE(symbol, funding_time)
@@ -927,6 +938,8 @@ Custom fill model loaded via `ImportableFillModelConfig` (specifying `fill_model
 - Positive rate: long positions pay, short positions receive
 - Negative rate: short positions pay, long positions receive
 - Accrual: `position_notional * funding_rate` per period
+- **Screening/discovery with an execution bar longer than 8h** funds a position closed by a boundary STOP_MARKET/LIMIT exit up to its refined 1m bar (the same refinement the liquidation overlay uses); shorter bars use the NT fill time (vibe-quant-6osqd).
+- **Holes are detected on each symbol's real settlement interval** (Binance Vision `funding_interval_hours`, archive table `raw_funding_intervals`; refresh with `python -m vibe_quant.data funding-intervals`). A missing settlement is charged the fallback 0.01% per 8h scaled to its interval/8 (user decision 2026-10-17) and counted in `funding_fallback_settlements`. Rows without a Vision interval (current month) inherit the previous row's. Between two archived rows the expected interval is `H = max(h_prev, h_next)`; settlements on that grid missing from the archive are holes.
 
 **Liquidation simulation (opt-in, OFF by default):**
 - A per-run overlay available to screening, validation and discovery: mode `off` (default), `isolated` or `cross`; leverage a whole number in `[1, 125]` (default 10). With the mode on, every metric is recomputed from the truncated ledgers (trades, return, win rate, PF, return moments, Sharpe/Sortino and the daily series, MTM max DD), not NT's raw path.
@@ -938,7 +951,7 @@ Custom fill model loaded via `ImportableFillModelConfig` (specifying `fill_model
 
 ### How to turn liquidation on
 
-OFF by default: a run without `liquidation_mode` is off and, at the default leverage 10, stays byte-identical to before (import-isolated -- a mode-off run never imports `vibe_quant.liquidation`). At a mode-off leverage `L != 10` the screening/discovery venue runs at `L` (`screening/nt_runner.py`), so the numbers differ only where NT's margin checks bind (strategy 239 at 1x/125x measured identical to 10x; not guaranteed for every strategy). It needs MARK 1m klines in the archive (and, for the engine, in the catalog):
+OFF by default: a run without `liquidation_mode` is off and, at the default leverage 10, stays byte-identical to before at execution bars <= 8h (import-isolated at execution bars <= 8h: a mode-off run at or below 8h never imports `vibe_quant.liquidation`, while on a longer bar -- today 1d -- it imports the exit-timing refinement for funding, vibe-quant-6osqd, so 1d mode-off funding follows the refined exit since 2026-10-17). At a mode-off leverage `L != 10` the screening/discovery venue runs at `L` (`screening/nt_runner.py`), so the numbers differ only where NT's margin checks bind (strategy 239 at 1x/125x measured identical to 10x; not guaranteed for every strategy). It needs MARK 1m klines in the archive (and, for the engine, in the catalog):
 
 ```bash
 python -m vibe_quant.data download-mark --start 2024-01-01 --end 2026-03-17 --catalog
