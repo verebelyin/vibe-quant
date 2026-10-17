@@ -11,6 +11,7 @@ from vibe_quant.api.schemas.finite import reject_non_finite
 from vibe_quant.balance_settings import BalanceConfigError, parse_initial_balance
 from vibe_quant.liquidation_settings import LiquidationConfigError, LiquidationSettings
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingConfigError, SizingSettings
+from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
 
 class BacktestLaunchRequest(BaseModel):
@@ -94,12 +95,19 @@ class BacktestLaunchRequest(BaseModel):
         # and a cap above the run's margin leverage would be unmarginable.
         # Checked in EVERY mode, before any run row exists; the resolved
         # leverage is the run's own `parameters.leverage` (10.0 by default).
+        resolved_leverage = LiquidationSettings.from_params(self.parameters).leverage
         try:
-            SizingSettings.from_params(self.parameters).check_leverage(
-                LiquidationSettings.from_params(self.parameters).leverage
-            )
+            SizingSettings.from_params(self.parameters).check_leverage(resolved_leverage)
         except SizingConfigError as exc:
             raise ValueError(f"parameters: {exc}") from exc
+        # Every launch refuses a leverage above the coin's Binance maximum
+        # (vibe-quant-4oo1i): the venue would refuse it at execution, and the
+        # bracket snapshot is the one source of that cap. Checked against the
+        # run's resolved leverage (10.0 by default), in EVERY mode.
+        try:
+            check_leverage(self.symbols, resolved_leverage)
+        except SymbolLeverageError as exc:
+            raise ValueError(str(exc)) from exc
         # `parameters.sweep` is a free dict of strategy parameters: a sizing key
         # there would size every sweep row differently and is not a strategy
         # field at all, so refuse it here as well as at run time (S14).

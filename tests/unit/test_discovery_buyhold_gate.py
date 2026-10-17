@@ -600,7 +600,7 @@ def _run_main(
 
     db = tmp_path / "s.db"
     sm = StateManager(db)
-    run_id = sm.create_backtest_run(None, "discovery", ["AAAUSDT"], "1d",
+    run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "1d",
                                     "2024-01-01", "2024-07-01", {})
     sm.close()
 
@@ -615,7 +615,7 @@ def _run_main(
     monkeypatch.setattr(DiscoveryPipeline, "run", lambda self: canned)
     monkeypatch.setattr("sys.argv", [
         "prog", "--run-id", str(run_id), "--population-size", "6", "--max-generations", "2",
-        "--elite-count", "1", "--max-workers", "-1", "--symbols", "AAAUSDT", "--timeframe", "1d",
+        "--elite-count", "1", "--max-workers", "-1", "--symbols", "BTCUSDT", "--timeframe", "1d",
         "--start-date", "2024-01-01", "--end-date", "2024-07-01", "--no-dsr", "--db", str(db),
         "--mock", *extra,
     ])
@@ -659,7 +659,7 @@ def test_main_persists_champion_buy_hold_record_and_gate_notes(
         "enforced": True,
         "benchmark": "equal_weight_daily_rebalanced_1d_close",
         "candidate_series": "mark_to_market_daily",
-        "symbols": ["AAAUSDT"],
+        "symbols": ["BTCUSDT"],
         "ann_factor": 365,
         "per_symbol": False,
     }

@@ -33,10 +33,12 @@ from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
     LIQUIDATION_MODES,
     MISSING,
+    LiquidationConfigError,
     LiquidationSettings,
     resolve_leverage,
 )
 from vibe_quant.sizing_settings import SizingSettings
+from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 from vibe_quant.utils import compute_day_count, log_dir
 
 logger = logging.getLogger(__name__)
@@ -1379,9 +1381,51 @@ def _grid_cells_from_args(args: argparse.Namespace, sizing: SizingSettings) -> l
     )
 
 
+def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse a launch at a leverage above a symbol's Binance maximum (L5/L6).
+
+    Runs right after parsing: ``--symbols`` against the resolved ``--leverage``
+    (10 by default) and against every ``--bankroll-leverages`` value. The first
+    refusal ends the launch through ``parser.error`` (usage + exit code 2) before
+    any run row is read.
+
+    A leverage the run-level settings already refuse - disagreeing aliases, or a
+    value outside [1, 125] - is left to them (a failed run, exit 1), so this check
+    only adds the venue cap.
+    """
+    symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
+    try:
+        resolved = resolve_leverage(
+            MISSING if args.leverage is None else args.leverage,
+            MISSING if args.liquidation_leverage is None else args.liquidation_leverage,
+        )
+    except LiquidationConfigError:
+        return
+    if resolved is MISSING:
+        resolved = DEFAULT_LEVERAGE
+    leverages: list[object] = [resolved]
+    for token in (args.bankroll_leverages or "").split(","):
+        try:
+            leverages.append(float(token))
+        except ValueError:
+            # A malformed token is the grid's own parse error (BankrollGridError -> exit 2).
+            continue
+    try:
+        for leverage in leverages:
+            try:
+                checked = LiquidationSettings(leverage=cast("float", leverage)).leverage
+            except LiquidationConfigError:
+                continue
+            check_leverage(symbols, checked)
+    except SymbolLeverageError as exc:
+        parser.error(str(exc))
+
+
 def main() -> int:
     """Run discovery pipeline and persist summary metrics for the run."""
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    check_launch_leverage(parser, args)
 
     logging.basicConfig(
         level=logging.INFO,

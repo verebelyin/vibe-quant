@@ -28,6 +28,7 @@ from vibe_quant.liquidation_settings import (
     resolve_leverage,
 )
 from vibe_quant.sizing_settings import SizingSettings
+from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
 
 class BankrollGridRequest(BaseModel):
@@ -229,6 +230,28 @@ class DiscoveryLaunchRequest(BaseModel):
                 self.bankroll_cells()
             except BankrollGridError as exc:
                 raise ValueError(str(exc)) from exc
+        return self
+
+    # Declared after ``_check_bankroll_grid`` on purpose: the grid's own cells are
+    # validated first, so a bad cell names its cell rather than the snapshot cap.
+    @model_validator(mode="after")
+    def _check_symbol_leverage(self) -> DiscoveryLaunchRequest:
+        """L4 (vibe-quant-4oo1i): no launch at a leverage above a symbol's Binance maximum.
+
+        A grid has no run-level leverage: every cell's leverage is checked. Without a
+        grid the run's resolved leverage is checked (10.0 by default), so a symbol the
+        snapshot does not cover fails closed even when no leverage was given.
+        """
+        grid = self.bankroll_grid
+        if grid is not None:
+            leverages = list(grid.leverages)
+        else:
+            leverages = [self.leverage if self.leverage is not None else DEFAULT_LEVERAGE]
+        try:
+            for leverage in leverages:
+                check_leverage(self.symbols, leverage)
+        except SymbolLeverageError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     def bankroll_cells(self) -> list[BankrollCell]:

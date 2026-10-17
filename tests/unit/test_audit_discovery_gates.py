@@ -587,12 +587,12 @@ def test_missing_catalog_data_fails_loudly(tmp_path: Path, monkeypatch: pytest.M
 
     db = tmp_path / "s.db"
     sm = StateManager(db)
-    run_id = sm.create_backtest_run(None, "discovery", ["NOPEUSDT"], "4h",
+    run_id = sm.create_backtest_run(None, "discovery", ["BTCUSDT"], "4h",
                                     "2024-01-01", "2024-07-01", {})
     sm.close()
     monkeypatch.setattr(cli, "_check_data_available", lambda symbols: False)
     monkeypatch.setattr("sys.argv", [
-        "prog", "--run-id", str(run_id), "--symbols", "NOPEUSDT",
+        "prog", "--run-id", str(run_id), "--symbols", "BTCUSDT",
         "--start-date", "2024-01-01", "--end-date", "2024-07-01", "--db", str(db),
     ])
     assert cli.main() == 1
