@@ -93,3 +93,4 @@ not part of mandatory session close.
 - **Warm queries:** 0.3–1.0s per command. ~5× slower than the old SQLite backend but sub-second.
 - **Disk:** `.beads/embeddeddolt/` ~34 MB (Dolt stores full commit history).
 - **Parallel agents:** exclusive writer lock; for concurrent writers switch to server mode via `bd init --server`.
+- `bd update --notes` replaces the whole notes field; add a decision with `--append-notes` (job 20261017-grind lost 6osqd's measured numbers this way).

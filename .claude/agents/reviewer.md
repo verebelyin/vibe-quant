@@ -37,6 +37,9 @@ Hunt for these, in priority order:
   - State saved by a periodic checkpoint: probe the checkpoint written BEFORE the component exists (initialise, early-failure shutdown) — does it drop restored state? (rev-hs-p3b-1 SF1).
   - Per-item loops that must continue after a failure: put the failing item FIRST; a `break`-instead-of-`continue` mutant is invisible when nothing follows it (rev-hs-p3a2-2).
   - A value derived from another setting (margin type from liquidation mode): test it with the derivation OVERRIDDEN to the other value; a same-value test lets a hard-coded constant pass (rev-hs-p2a-1 M3).
+- **Forwarded-text and precedence probes** (job 20261017-grind):
+  - A value the code FORWARDS into a pinned string (exception class name, symbol, status): run the test with at least two unrelated inputs and assert each expected string from a literal; hard-code one input's text in production as the mutant (rev-gr-guard-1 SF1: a hard-coded `_MarginError` survived 6/6 tests).
+  - An ordering contract that names a chain (check A before B before C): one test per adjacent pair, on every entry point that has the chain (rev-gr-api-1 N1: the validation guard moved after the MARK precheck survived 5 tests).
 - **Settings, latch and restore probes** (job 20261016-sizing):
   - Canonical numeric storage: assert the type on the value READ BACK from storage, never on the expected fixture; Python `1 == 1.0`, so a raw-int storage mutant passes an equality check (rev-sz-api-1 SF1 survived 94/94).
   - A settings object threaded into an engine config: assert EACH non-default field in the built config, not one representative (rev-sz-screen-1: dropping `risk_per_trade` survived 10/10 because only the cap was asserted).
@@ -160,3 +163,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (job 20261016-safety-bankroll): design-mode held-worker probes through resume/stop/teardown — evidence: rev-sb-design-1 proposal 18df18c88e9afad0-4369, rev-sb-design-2 proposal 18df198cf597ec88-8009.
 - 2026-10-16 (job 20261016-safety-bankroll, T7 round 3 sweep): singleton recovery via cached+fresh paths, sub-precision excess probes, persisted-null consumer probes. Evidence: rev-sb-t1-1, rev-sb-t3-1 (18df1ab8bfdb6570-1376), rev-sb-t7-1 (18df1b06fad710b8-5445), rev-sb-t7-2 (18df1b707e9a5388-3925).
 - 2026-10-17 (job 20261016-safety-bankroll): settings-grid pooling probes. Evidence: rev-sb-t8-1 proposal 18df45bd43d2b688-8506.
+- 2026-10-17 (job 20261017-grind): forwarded-text + precedence-chain probes. Evidence: rev-gr-guard-1 SF1, rev-gr-api-1 N1.

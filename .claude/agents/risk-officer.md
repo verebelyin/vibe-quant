@@ -32,6 +32,8 @@ Code-change reviews (no paper/live start requested) also:
 - Before reviewing, run `git merge-base --is-ancestor <brief base> <head>`; if it is not an ancestor, ask the chief for the real base (risk-sb-t2b-1: the brief base was not in T2b's history and the diff showed a T2a test as deleted).
 - For a limit that sums pending orders, run the over-limit repro on a real `TradingNode` with entries submitted in ONE synchronous step; a BacktestEngine test cannot show orders still INITIALIZED in NT's live queue (risk-sb-t4-1 F1: 600 > 500 sent).
 - For operator commands interrupted at shutdown, check what each command already did before its row says "not executed" (risk-sb-t2b-2: close_all had sent the flatten).
+- For a flag read in an `asyncio.CancelledError` handler of a per-item loop, cancel at EVERY await in the body (execute AND outcome write) with a following item queued, and confirm the flag cannot label the next item (risk-gr-paperops-1 M1 survived all maker tests).
+- For a gate/guard fail-safe diff, drive the failure through a real BacktestEngine strategy calling `submit_order` (not `_gate_execute` directly) and compare order statuses on base vs head (risk-gr-guard-1: only the real-engine repro showed base leaves order 1 INITIALIZED and denies order 2).
 5. **Correlation**: overlap with strategies already in paper (same symbol + direction + timeframe means concentration).
 
 ## Output
@@ -78,3 +80,4 @@ You can make the next agent in this role better. Your purpose, method and checkl
 - 2026-10-16 (Land, job 20261016-followups3): fresh-connection repro for seeded rows — evidence risk-fu3-sysstate-1. Applied by the chief.
 - 2026-10-16 (job 20261016-safety-bankroll): emergency action reachable in UI error states; carve-out probes. Evidence: risk-sb-t1-1 F1 (proposal 18df1a81e03c66e8-8873), risk-sb-t1-2.
 - 2026-10-17 (job 20261016-safety-bankroll): base ancestry check, same-step live-node repro for pending sums, interrupted-command status check. Evidence: risk-sb-t2b-1, risk-sb-t4-1 F1, risk-sb-t2b-2 nit (proposals 18df1cbd9b5008a8-2068, 18df4584e8f34378-1248).
+- 2026-10-17 (job 20261017-grind): CancelledError per-item flag probe; real-engine base-vs-head repro for gate fail-safes. Evidence: risk-gr-paperops-1 M1, risk-gr-guard-1.
