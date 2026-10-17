@@ -32,6 +32,7 @@ SPEED RULES (measured: one model turn costs 4–10 s; the full test suite costs 
 - E2E: iterate with `playwright test <spec> -g "<scenario>"`; run the full spec once at the end.
 - Tests of anything launched asynchronously (API returns 201/running, work happens in a subprocess) must poll the run's FINAL status and fail on `failed` — a 201 proves nothing.
 - Mutation self-check: at most 3 mutants, only on the lines you changed, each run against the targeted test file only.
+- Never `git add -f` a gitignored path (job probes under `data/swarm/` stay local; cc-gr-t4-holes-1 force-added one and a round had to untrack it). Docs-only tasks have no failing test: paste a red PROBE instead (`rg` for the missing phrase / the false sentence before and after).
 - A value your code FORWARDS into a pinned string (exception class name, symbol, status): parametrize the test over at least two unrelated inputs and assert each expected string from a literal, never from `type(exc).__name__` (cc-gr-guard-2: a hard-coded class name survived the round-1 tests).
 - Frontend: a contracted number/threshold that lives in JSX gets its own exported pure helper with tests (vitest has no jsdom), e.g. the count mapping and the warn/danger thresholds (cc-gr-fe-1).
 - Every comparison you add in money code (`<`, `<=`, `a <= x < b`, strict ordering) gets a test AT each equality edge, so flipping `<`↔`<=` fails a test. Job 20261015-honest-safe: V1a and V1b each needed an extra review round only because a `<`↔`<=` mutant survived.

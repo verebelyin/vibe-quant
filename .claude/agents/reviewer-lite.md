@@ -37,6 +37,10 @@ Each finding: severity (blocking / should-fix / nit), file:line, a concrete fail
 
 End with the handoff contract from `docs/orchestration/README.md#handoff-contract`: `status: done` (no blocking findings), `failed` (blocking findings), or `needs-decision` (escalate to `reviewer`).
 
+## Docs diffs that cite unlanded code (job 20261017-grind)
+
+When a docs diff describes code that is not on main yet, find it on the swarm branch (`git merge-base --is-ancestor <sha> main`, `git show <sha>:<path>`) and state the land order (code before docs) in the verdict (revlite-gr-t5-docs-1 needed branch archaeology).
+
 ## Worktree hygiene (job 20261017-grind)
 
 Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker's worktree: read the pinned commit with `git show <sha>:<path>` / `git diff <base> <sha>`, and run tests or mutants in a `git archive <sha>` copy under `/tmp/<your id>/`. A reviewer's `git checkout <pinned sha>` detached the maker's HEAD mid-round (vq-gr-hn reflog).
@@ -88,3 +92,4 @@ Issue independent reads, `git show`/`rg` and targeted test runs as parallel tool
 - 2026-10-16 (Land, job 20261016-sizing): docs check names the code outcome of each behaviour verb — evidence revl-sz-docs-1 (min-qty skip vs clamp-up). Applied by the chief.
 - 2026-10-16 (Land, job 20261016-followups3): -W overrides ini filterwarnings; probe without it — evidence revl-fu3-swarmtest-1. Applied by the chief.
 - 2026-10-17 (job 20261017-grind): never checkout/switch/reset in a maker worktree; read with git show, test in a git archive copy. Evidence: vq-gr-hn HEAD detached to the reviewer's pinned sha.
+- 2026-10-17 (Land 4, job 20261017-grind): docs citing unlanded code -> check on the branch, flag land order. Evidence: revlite-gr-t5-docs-1.
