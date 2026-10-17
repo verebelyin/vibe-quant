@@ -15,7 +15,9 @@ Three rules shape the file, all from §4:
   is booked in its own year and the two Jan-1 boundary marks make the years
   telescope to the run total (R27).
 * **Turnover is grouped per decision** -- ``fsum(abs(q*px) for the decision's
-  fills) / E_D`` -- so the R25 pin ``0.9948494453248812`` uses one division.
+  fills) / E_D`` -- so the R25 pin ``0.9948494453248812`` uses one division. The
+  per-year buckets (R27c) hold the same per-fill terms but key on the FILL's
+  timestamp: a 23:59 decision fills one tick later, in the next year.
 
 ``E(B) <= 0`` fails closed (R22) and a held symbol without a boundary close
 raises :class:`CarryDataError` (through :func:`equity_at`).
@@ -213,7 +215,11 @@ def _legs(run: CarryRun, inputs: CarryInputs) -> list[dict[str, Any]]:
 
 
 def _turnover_by_decision(run: CarryRun) -> dict[int, float]:
-    """``fsum(abs(q*px) of a decision's fills) / E_D`` per decision (§4)."""
+    """``fsum(abs(q*px) of a decision's fills) / E_D`` per decision (§4).
+
+    ``turnover_total`` sums this grouping -- ``(4998 + 5046) / 10096`` -- so the R25
+    pin ``0.9948494453248812`` uses ONE division; dividing per fill gives ``...811``.
+    """
     times = [decision.ts for decision in run.decisions]
     equities = {decision.ts: decision.equity for decision in run.decisions}
     notional: dict[int, list[float]] = {}
@@ -223,12 +229,31 @@ def _turnover_by_decision(run: CarryRun) -> dict[int, float]:
     return {ts: math.fsum(values) / equities[ts] for ts, values in notional.items()}
 
 
+def _turnover_by_fill(run: CarryRun) -> list[tuple[int, float]]:
+    """``(fill.ts, abs(q*px) / E_D)`` per fill, normalised by its decision's equity (§4).
+
+    A decision is released one tick before its fills, so a 23:59 decision can fill
+    after the year boundary: the per-year buckets (R27c) key on the fill, and a
+    decision's fills split across the boundary keep their shared ``E_D``.
+    """
+    times = [decision.ts for decision in run.decisions]
+    equities = {decision.ts: decision.equity for decision in run.decisions}
+    return [
+        (
+            fill.ts,
+            abs(fill.qty * fill.price)
+            / equities[times[_decision_index(times, fill.ts, fill.symbol)]],
+        )
+        for fill in run.fills
+    ]
+
+
 def _by_year(
     run: CarryRun,
     inputs: CarryInputs,
     equities: dict[int, float],
     weekly: Sequence[tuple[int, int, float]],
-    turnover: dict[int, float],
+    turnover: Sequence[tuple[int, float]],
 ) -> list[dict[str, Any]]:
     """Per calendar year (R27b, R27c): MTM price P&L, funding, fees, Sharpe, dispersion."""
     rows: list[dict[str, Any]] = []
@@ -265,7 +290,7 @@ def _by_year(
                 "fees": fees,
                 "weekly_sharpe": _weekly_sharpe(returns),
                 "turnover": math.fsum(
-                    value for ts, value in turnover.items() if y0 <= ts < y1
+                    value for ts, value in turnover if y0 <= ts < y1
                 ),
                 "fees_pct_equity": fees / equities[y0],
                 "funding_dispersion_ann": (
@@ -368,5 +393,5 @@ def carry_metrics(run: CarryRun, inputs: CarryInputs) -> CarryReport:
         daily=daily,
         weekly=weekly,
         legs=legs,
-        by_year=_by_year(run, inputs, equities, weekly_detail, turnover),
+        by_year=_by_year(run, inputs, equities, weekly_detail, _turnover_by_fill(run)),
     )

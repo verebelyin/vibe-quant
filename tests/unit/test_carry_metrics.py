@@ -54,6 +54,9 @@ _Y2024 = 1_704_067_200_000_000_000
 _SELL_R27B = 1_704_672_000_000_000_000
 _Y2025 = 1_735_689_600_000_000_000
 _Y2026 = 1_767_225_600_000_000_000
+_EVE2024 = _Y2024 - _DAY  # 2023-12-31 00:00 UTC
+_LATE_2023 = _Y2024 - _MIN  # 2023-12-31 23:59 UTC, the last decision of 2023
+_ED = 10_096.0  # the decision equity every boundary-turnover fixture normalises by
 
 
 def _specs() -> dict[str, InstrumentSpec]:
@@ -422,6 +425,64 @@ def test_by_year_sums_to_totals() -> None:
         report.daily[-1][1] - 10_000.0, abs=tolerance
     )
     assert isinstance(summary["funding_estimated"], bool)
+
+
+def _boundary_run(fills: list[CarryFill], decisions: tuple[Decision, ...]) -> CarryReport:
+    """Two-day run across the 2024 boundary; BTC marked at 51000 on every close.
+
+    Boundaries are 2023-12-31 00:00, 2024-01-01 00:00 (== ``_Y2024``) and 2024-01-02
+    00:00, so 2023 is the short first bucket ``[_EVE2024, _Y2024)``.
+    """
+    spec = CarrySpec(symbols=(_BTC, _ETH), start_ns=_EVE2024, end_ns=_Y2024 + _DAY)
+    prices = {_EVE2024 + index * _DAY: 51000.0 for index in range(3)}
+    return carry_metrics(
+        _run(spec, fills, [], decisions), _inputs(spec, {_BTC: prices, _ETH: {}})
+    )
+
+
+def test_by_year_turnover_follows_the_fill_not_the_decision() -> None:
+    """R27c: a 2023-12-31 23:59 decision whose fill lands 2024-01-01 books 2024.
+
+    The fill is one tick (1 min) after the last decision of 2023 and sits exactly ON
+    the 2024-01-01 boundary, so the 2023 bucket ``[.., _Y2024)`` must NOT carry it.
+    Bucketing by the decision timestamp books all of ``abs(q*px) == 4998.0 /
+    10096.0`` in 2023 and leaves 2024 at 0.0; bucketing with ``<=`` at ``y1`` books
+    it in BOTH years.
+    """
+    fill = _fill(_BTC, _Y2024, 98, price=51000.0)
+    decisions = (_decision(_LATE_2023, _ED, weights={_BTC: 0.5}),)
+    report = _boundary_run([fill], decisions)
+
+    assert [row["year"] for row in report.by_year] == [2023, 2024]
+    assert report.by_year[0]["y0_ns"] == _EVE2024
+    assert report.by_year[0]["y1_ns"] == _Y2024
+    assert report.by_year[0]["turnover"] == 0.0
+    assert report.by_year[1]["turnover"] == 4998.0 / _ED
+    assert report.by_year[1]["turnover"] == report.summary["turnover_total"]
+    assert report.summary["turnover_total"] == 4998.0 / _ED
+
+
+def test_by_year_turnover_splits_one_decisions_fills_at_the_boundary() -> None:
+    """The last ns of 2023 counts in 2023, and both fills use the decision's ``E_D``.
+
+    One decision at 2023-12-31 23:59 releases two fills -- 98 BTC at
+    ``_Y2024 - 1`` ns and 100 BTC at ``_Y2024`` -- so a per-decision grouping (which
+    cannot split one decision's fills) misplaces half the year's turnover.
+    """
+    decisions = (_decision(_LATE_2023, _ED, weights={_BTC: 0.5}),)
+    fills = [
+        _fill(_BTC, _Y2024 - 1, 98, price=51000.0),
+        _fill(_BTC, _Y2024, 100, price=51000.0),
+    ]
+    report = _boundary_run(fills, decisions)
+
+    assert report.by_year[0]["turnover"] == 4998.0 / _ED
+    assert report.by_year[1]["turnover"] == 5100.0 / _ED
+    tolerance = 1e-9 * 10_000.0
+    assert report.by_year[0]["turnover"] + report.by_year[1]["turnover"] == pytest.approx(
+        report.summary["turnover_total"], abs=tolerance
+    )
+    assert report.summary["turnover_total"] == (4998.0 + 5100.0) / _ED
 
 
 def test_per_year_price_pnl_is_mark_to_market() -> None:
