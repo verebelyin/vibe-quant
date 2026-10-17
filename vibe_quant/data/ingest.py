@@ -49,6 +49,9 @@ AGGREGATION_INTERVALS = ["5m", "15m", "1h", "4h", "1d"]
 # Cap for the download-session error summary so one bad symbol cannot bloat the row.
 _MAX_SESSION_SUMMARY = 2000
 
+# One UTC day in milliseconds (day-bucket queries in the tail pass).
+_DAY_MS = 86_400_000
+
 
 def _failed_downloads_summary(
     results: dict[str, dict[str, Any]],
@@ -561,6 +564,135 @@ def _fill_interior_missing_days(
     return unresolved
 
 
+def _fill_unpublished_tail_days(
+    symbol: str,
+    interval: str,
+    day_range: tuple[date, date],
+    unavailable_months: list[str],
+    archive: RawDataArchive,
+    counts: dict[str, Any],
+    *,
+    verbose: bool,
+    now: datetime,
+) -> None:
+    """Fetch a daily Vision zip for every zero-row day in the requested tail.
+
+    A month Binance Vision has not published yet (the monthly zip 404s) leaves
+    every one of its UTC days with zero archived rows, and the interior pass
+    cannot repair them: :meth:`RawDataArchive.missing_days` clamps to the
+    symbol's own last archived day, so days past the current coverage end are
+    never reported missing. Vision publishes a daily zip roughly a day after a
+    UTC day closes, so the days between the coverage end and yesterday are
+    fetched here — *before* the interior pass, so ``counts['missing_days']``
+    read from the archive below already reflects what this pass filled.
+
+    The month does not have to be *unavailable* for its tail to be missing. A
+    month whose daily rows already clear the 0.9 ``has_month_mark_coverage`` bar
+    is *skipped*: its monthly zip is never requested, so the month never reaches
+    ``unavailable_months``, and its closed tail days still have to come from the
+    daily zips. Two day sets are therefore walked, whatever the month's status:
+
+    * every day after the symbol's last archived day, up to yesterday, and
+    * every day of a month in *unavailable_months* — interior holes included,
+      since those days can sit *before* the coverage end.
+
+    Both are bounded by the requested range and by yesterday: the current UTC day
+    is never requested (it is still forming). A day that already holds a row is
+    skipped, so a re-run is idempotent (the archive INSERT OR IGNORE on
+    ``(symbol, interval, open_time)`` also drops duplicates).
+
+    A 404 (day not published yet) is recorded in ``counts['unpublished_days']``
+    and a download that failed after retries in ``counts['failed_days']`` (both
+    ISO dates, oldest first); neither is raised — a hole, not a crashed run.
+
+    Args:
+        symbol: Trading symbol.
+        interval: Candle interval.
+        day_range: Requested (first_day, last_day).
+        unavailable_months: "YYYY-MM" months whose monthly zip was a 404.
+        archive: Raw data archive (inserts go to ``raw_mark_klines``).
+        counts: Per-symbol counts dict, updated in place.
+        verbose: Print one line per requested day.
+        now: Reference "today"; the current UTC day is skipped.
+    """
+    import calendar
+
+    source = "binance_vision_daily"
+    last_full_day = now.astimezone(UTC).date() - timedelta(days=1)
+    start_day, end_day = day_range
+    hi = min(end_day, last_full_day)
+
+    coverage = archive.get_mark_date_range(symbol, interval)
+    if coverage is None:
+        # Nothing archived at all: the whole requested tail is missing.
+        tail_lo = start_day
+    else:
+        last_archived_day = datetime.fromtimestamp(coverage[1] / 1000, tz=UTC).date()
+        tail_lo = max(start_day, last_archived_day + timedelta(days=1))
+
+    days: set[date] = set()
+    day = tail_lo
+    while day <= hi:
+        days.add(day)
+        day += timedelta(days=1)
+
+    for month_key in unavailable_months:
+        year, month = (int(part) for part in month_key.split("-"))
+        month_days = calendar.monthrange(year, month)[1]
+        lo = max(date(year, month, 1), start_day)
+        month_hi = min(date(year, month, month_days), end_day, last_full_day)
+        day = lo
+        while day <= month_hi:
+            days.add(day)
+            day += timedelta(days=1)
+
+    unpublished: list[str] = counts["unpublished_days"]
+    failed: list[str] = counts["failed_days"]
+    requested = 0
+    filled = 0
+    for day in sorted(days):
+        iso = day.isoformat()
+        day_start_ms = int(
+            datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000
+        )
+        has_rows = (
+            archive.conn.execute(
+                "SELECT 1 FROM raw_mark_klines WHERE symbol = ? AND interval = ? "
+                "AND open_time >= ? AND open_time < ? LIMIT 1",
+                (symbol, interval, day_start_ms, day_start_ms + _DAY_MS),
+            ).fetchone()
+            is not None
+        )
+        if has_rows:
+            continue
+        requested += 1
+        try:
+            rows = download_daily_mark_klines(symbol, interval, day)
+        except DailyDownloadError as e:
+            failed.append(iso)
+            logger.error("%s %s daily %s: FAILED: %s", symbol, interval, iso, e)
+            if verbose:
+                print(f"    {iso}: daily zip FAILED ({e})")
+            continue
+        if not rows:
+            unpublished.append(iso)
+            if verbose:
+                print(f"    {iso}: daily zip unavailable (404)")
+            continue
+        inserted = archive.insert_mark_klines(symbol, interval, rows, source)
+        counts["mark_klines_fetched"] += len(rows)
+        counts["mark_klines_inserted"] += inserted
+        filled += 1
+        if verbose:
+            print(f"    {iso}: {len(rows)} rows from daily zip ({inserted} new)")
+
+    if verbose and requested:
+        print(
+            f"  Unpublished-month tail: {requested} days requested, {filled} filled, "
+            f"{len(unpublished)} unpublished, {len(failed)} failed"
+        )
+
+
 def ingest_symbol(
     symbol: str,
     years: int = 2,
@@ -755,13 +887,18 @@ def ingest_mark_klines(
     end_date: datetime | None = None,
     archive: RawDataArchive | None = None,
     verbose: bool = True,
+    *,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Ingest Binance mark-price 1m klines from Vision monthly archives.
+    """Ingest Binance mark-price 1m klines from Vision archives.
 
     Liquidation triggers on the mark price, so it is archived in its own
     ``raw_mark_klines`` table and never mixed into the ``raw_klines`` path that
-    feeds the catalog. Only Vision monthly zips are used (no REST fill): a
-    symbol's later months may simply not be published yet (404 = unavailable).
+    feeds the catalog. Monthly Vision zips are the primary source; there is no
+    REST fill. A month Vision has not published yet 404s (unavailable), and its
+    trailing days are then fetched one by one from the DAILY zips — Vision
+    publishes those about a day after each UTC day closes — so coverage tracks
+    the current month instead of stopping at the last monthly zip.
 
     Args:
         symbol: Trading symbol (e.g., 'BTCUSDT').
@@ -769,13 +906,18 @@ def ingest_mark_klines(
         end_date: End date (defaults to now).
         archive: Raw data archive (created if not provided).
         verbose: Print progress messages.
+        now: Reference "today" (defaults to the current UTC time); the current
+            UTC day is never requested from a daily zip.
 
     Returns:
         Dict with counts: ``mark_klines_fetched``, ``mark_klines_inserted``,
         ``months_skipped``, ``months_downloaded`` plus the ``failed_months`` /
         ``unavailable_months`` lists ("YYYY-MM") on the same convention as
         :func:`ingest_symbol`: failed = download errored after retries (a hole
-        to re-run), unavailable = not published (404), not an error.
+        to re-run), unavailable = not published (404), not an error. The daily
+        tail pass adds ISO-date lists ``unpublished_days`` (day zip 404'd) and
+        ``failed_days`` (day zip errored after retries); ``missing_days`` is the
+        interior days still empty after every pass.
 
     Raises:
         ValueError: If symbol is not in INSTRUMENT_CONFIGS.
@@ -786,6 +928,8 @@ def ingest_mark_klines(
 
     if archive is None:
         archive = RawDataArchive()
+
+    now = now or datetime.now(UTC)
 
     counts: dict[str, Any] = {"mark_klines_fetched": 0, "mark_klines_inserted": 0}
     failed_months: list[str] = []
@@ -801,7 +945,7 @@ def ingest_mark_klines(
         return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
     utc_start = _utc(start_date)
-    utc_end = _utc(end_date or datetime.now(UTC))
+    utc_end = _utc(end_date or now)
     months = list(
         generate_month_range(
             utc_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0), utc_end
@@ -852,6 +996,31 @@ def ingest_mark_klines(
                     f"  {year}-{month:02d}: unavailable (not yet published) - "
                     f"mark coverage ends {coverage_end}"
                 )
+
+    # Fill the missing tail from the daily zips — every zero-row day after the
+    # coverage end (a 404'd *or* 90%-skip-passed current month) plus the days of
+    # a 404'd month — before the interior pass, so counts['missing_days'] (read
+    # from the archive below) already reflects the days this pass filled.
+    counts["unpublished_days"] = []
+    counts["failed_days"] = []
+    _fill_unpublished_tail_days(
+        symbol,
+        "1m",
+        day_range,
+        unavailable_months,
+        archive,
+        counts,
+        verbose=verbose,
+        now=now,
+    )
+    if verbose and unavailable_months:
+        coverage = archive.get_mark_date_range(symbol, "1m")
+        coverage_end = (
+            datetime.fromtimestamp(coverage[1] / 1000, tz=UTC).strftime("%Y-%m-%d")
+            if coverage
+            else "none archived"
+        )
+        print(f"  mark coverage now ends {coverage_end}")
 
     # Repair interior days the monthly mark zips omitted (skipped months included).
     _fill_interior_missing_days(
@@ -1718,8 +1887,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"{mark_counts['months_skipped']} skipped, "
                 f"{len(mark_counts['unavailable_months'])} unavailable, "
                 f"{len(mark_counts['failed_months'])} failed, "
+                f"{len(mark_counts['unpublished_days'])} unpublished days, "
+                f"{len(mark_counts['failed_days'])} failed days, "
                 f"{mark_counts['mark_klines_inserted']:,} rows inserted"
             )
+            if mark_counts["failed_days"]:
+                print(f"    FAILED days: {', '.join(mark_counts['failed_days'])}")
             mark_failed += [f"{symbol}: {m}" for m in mark_counts["failed_months"]]
         if args.catalog:
             mark_catalog = CatalogManager()

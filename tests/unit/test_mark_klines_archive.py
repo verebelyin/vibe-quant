@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import io
 import zipfile
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -130,6 +130,23 @@ def _one_month(year: int, month: int) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _monthly(seen: list[str]) -> list[str]:
+    return [p.rsplit("/", 1)[-1] for p in seen if "/monthly/" in p]
+
+
+def _daily(seen: list[str]) -> list[str]:
+    return [p.rsplit("/", 1)[-1] for p in seen if "/daily/" in p]
+
+
+def _daily_urls(start: date, end: date) -> list[str]:
+    out: list[str] = []
+    cur = start
+    while cur <= end:
+        out.append(f"BTCUSDT-1m-{cur.isoformat()}.zip")
+        cur += timedelta(days=1)
+    return out
+
+
 def _ingest(archive: RawDataArchive, start: datetime, end: datetime) -> dict[str, Any]:
     return ingest.ingest_mark_klines(
         "BTCUSDT", start_date=start, end_date=end, archive=archive, verbose=False
@@ -152,9 +169,11 @@ class TestMarkZipParsing:
         assert counts["mark_klines_inserted"] == 1
         assert counts["failed_months"] == []
         assert counts["unavailable_months"] == []
-        assert seen == [
-            "/data/futures/um/monthly/markPriceKlines/BTCUSDT/1m/BTCUSDT-1m-2024-01.zip"
-        ]
+        # The fixture monthly zip holds one minute, so every later day of the
+        # range is a zero-row day past the coverage end: the tail pass walks
+        # them from the DAILY zips (all 404 here) — contract M12.
+        assert _monthly(seen) == ["BTCUSDT-1m-2024-01.zip"]
+        assert _daily(seen) == _daily_urls(date(2024, 1, 2), date(2024, 1, 31))
 
         # Read through a fresh connection: an uncommitted write is invisible to it.
         archive.close()
@@ -238,8 +257,13 @@ class TestPersistentFailure:
         counts = _ingest(archive, *_one_month(2024, 1))
         assert counts["failed_months"] == ["2024-01"]
         assert counts["unavailable_months"] == []
-        assert len(seen) == len(downloader.MONTHLY_RETRY_DELAYS) + 1
-        assert no_sleep == list(downloader.MONTHLY_RETRY_DELAYS)
+        attempts = len(downloader.MONTHLY_RETRY_DELAYS) + 1
+        # the monthly zip is retried to exhaustion; with nothing archived the
+        # whole range is then a tail the daily pass walks (and fails too)
+        assert len(_monthly(seen)) == attempts
+        assert no_sleep[: len(downloader.MONTHLY_RETRY_DELAYS)] == list(
+            downloader.MONTHLY_RETRY_DELAYS
+        )
 
         monkeypatch.setattr(ingest, "RawDataArchive", lambda *a, **k: archive)
         rc = ingest.main(
@@ -307,12 +331,15 @@ class TestMonthCoverage:
         archive.insert_mark_klines("BTCUSDT", "1m", [_mark_row(jan1 + below * 60_000)], "test")
         assert archive.has_month_mark_coverage("BTCUSDT", "1m", 2024, 1) is True
 
-        # A covered month is skipped without any HTTP request.
+        # A covered month is skipped: its monthly zip is not requested. The
+        # archived rows stop on Jan 28, so the tail pass still walks the
+        # zero-row days after them (all 404 here) — contract M12.
         seen = _patch_mark_http(monkeypatch, {"BTCUSDT-1m-2024-01.zip": JAN_2024_ZIP})
         counts = _ingest(archive, *_one_month(2024, 1))
         assert counts["months_skipped"] == 1
         assert counts["mark_klines_inserted"] == 0
-        assert seen == []
+        assert _monthly(seen) == []
+        assert _daily(seen) == _daily_urls(date(2024, 1, 29), date(2024, 1, 31))
 
 
 class TestFinalPartialMonth:
@@ -324,7 +351,10 @@ class TestFinalPartialMonth:
         counts = _ingest(
             archive, datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 31, tzinfo=UTC)
         )
-        assert len(seen) == 1
+        # Jan 1 is the only archived minute, so the tail pass requests Jan 2-31
+        # from the daily zips (all 404 here) — contract M12.
+        assert _monthly(seen) == ["BTCUSDT-1m-2024-01.zip"]
+        assert _daily(seen) == _daily_urls(date(2024, 1, 2), date(2024, 1, 31))
         assert counts["mark_klines_inserted"] == 1
         assert counts["unavailable_months"] == []
 
@@ -335,10 +365,13 @@ class TestFinalPartialMonth:
         counts = _ingest(
             archive, datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 2, 15, tzinfo=UTC)
         )
-        assert [p.rsplit("/", 1)[-1] for p in seen] == [
+        assert _monthly(seen) == [
             "BTCUSDT-1m-2024-01.zip",
             "BTCUSDT-1m-2024-02.zip",
         ]
+        # coverage ends on Jan 1 (the monthly fixture's only minute), so the
+        # tail runs from Jan 2 to the range end, Feb's days included
+        assert _daily(seen) == _daily_urls(date(2024, 1, 2), date(2024, 2, 15))
         assert counts["mark_klines_inserted"] == 1
         assert counts["unavailable_months"] == ["2024-02"]
         assert counts["failed_months"] == []
@@ -365,7 +398,8 @@ class TestFinalPartialMonth:
             ]
         )
         assert rc == 0  # unavailable is not a failure, but it must be visible
-        assert [p.rsplit("/", 1)[-1] for p in seen] == ["BTCUSDT-1m-2026-10.zip"]
+        assert _monthly(seen) == ["BTCUSDT-1m-2026-10.zip"]
+        assert _daily(seen) == _daily_urls(date(2026, 10, 1), date(2026, 10, 12))
         out = capsys.readouterr().out
         assert "2026-10: unavailable (not yet published) - mark coverage ends 2026-09-30" in out
         assert "1 unavailable" in out
@@ -383,10 +417,12 @@ class TestMonthEnumerationBoundaries:
             datetime(2024, 1, 31, 23, 59, tzinfo=UTC),
             datetime(2024, 2, 1, 0, 0, tzinfo=UTC),
         )
-        assert [p.rsplit("/", 1)[-1] for p in seen] == [
+        assert _monthly(seen) == [
             "BTCUSDT-1m-2024-01.zip",
             "BTCUSDT-1m-2024-02.zip",
         ]
+        # the tail starts right after the Jan 1 coverage end, so Jan 31 is in it
+        assert _daily(seen) == _daily_urls(date(2024, 1, 31), date(2024, 2, 1))
         assert counts["unavailable_months"] == ["2024-02"]
 
     def test_non_utc_interval_is_normalised_to_utc_months(
@@ -401,7 +437,9 @@ class TestMonthEnumerationBoundaries:
             datetime(2024, 2, 1, 0, 30, tzinfo=plus_one),
             datetime(2024, 2, 1, 1, 30, tzinfo=plus_one),
         )
-        assert [p.rsplit("/", 1)[-1] for p in seen] == [
+        assert _monthly(seen) == [
             "BTCUSDT-1m-2024-01.zip",
             "BTCUSDT-1m-2024-02.zip",
         ]
+        # the range starts 2024-01-31 23:30 UTC, after the Jan 1 coverage end
+        assert _daily(seen) == _daily_urls(date(2024, 1, 31), date(2024, 2, 1))
