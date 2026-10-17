@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   useIngestPreviewApiDataIngestPreviewPost,
+  useListSupportedSymbolsApiDataSymbolsSupportedGet,
   useListSymbolsApiDataSymbolsGet,
   useRebuildCatalogApiDataRebuildPost,
   useStartIngestApiDataIngestPost,
   useStartUpdateApiDataUpdatePost,
 } from "@/api/generated/data/data";
 import type { IngestPreviewResponse } from "@/api/generated/models";
+import { buildSymbolOptions, HAS_DATA_LABEL } from "@/components/data/symbolOptions";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DatasetRangeIndicator } from "@/components/ui/DatasetRangeIndicator";
@@ -36,8 +39,16 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
   const [interval, setInterval] = useState<string>("1m");
   const [preview, setPreview] = useState<IngestPreviewResponse | null>(null);
 
+  // Archive contents (marks "has data") + every ingestable symbol, so a coin
+  // with no archived data yet is still offered for its first ingest.
   const symbolsQuery = useListSymbolsApiDataSymbolsGet();
-  const symbols = symbolsQuery.data?.data ?? [];
+  const supportedSymbolsQuery = useListSupportedSymbolsApiDataSymbolsSupportedGet();
+  const symbolOptions = buildSymbolOptions(
+    supportedSymbolsQuery.data?.data ?? [],
+    symbolsQuery.data?.data ?? [],
+  );
+  const symbols = symbolOptions.map((option) => option.symbol);
+  const symbolsLoading = symbolsQuery.isLoading || supportedSymbolsQuery.isLoading;
   const datasetRange = useDatasetDateRange();
 
   // Auto-populate dates from dataset coverage
@@ -159,22 +170,31 @@ export function IngestForm({ onIngestStarted }: IngestFormProps) {
             </Button>
           </div>
           <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-input bg-transparent p-2 dark:bg-input/30">
-            {symbols.length === 0 && (
+            {symbolsLoading && symbolOptions.length === 0 && (
+              <span className="text-xs text-muted-foreground">Loading symbols...</span>
+            )}
+            {!symbolsLoading && symbolOptions.length === 0 && (
               <span className="text-xs text-muted-foreground">No symbols available</span>
             )}
-            {symbols.map((sym) => {
-              const selected = selectedSymbols.includes(sym);
+            {symbolOptions.map((option) => {
+              const selected = selectedSymbols.includes(option.symbol);
               return (
-                <Button
-                  key={sym}
-                  type="button"
-                  variant={selected ? "default" : "secondary"}
-                  size="xs"
-                  onClick={() => handleToggleSymbol(sym)}
-                  className="font-mono"
-                >
-                  {sym}
-                </Button>
+                <span key={option.symbol} className="inline-flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant={selected ? "default" : "secondary"}
+                    size="xs"
+                    onClick={() => handleToggleSymbol(option.symbol)}
+                    className="font-mono"
+                  >
+                    {option.symbol}
+                  </Button>
+                  {option.hasData && (
+                    <Badge variant="secondary" className="text-[10px] text-muted-foreground">
+                      {HAS_DATA_LABEL}
+                    </Badge>
+                  )}
+                </span>
               );
             })}
           </div>

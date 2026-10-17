@@ -29,6 +29,7 @@ from vibe_quant.api.schemas.data import (
     OhlcError,
 )
 from vibe_quant.data.catalog import CatalogManager
+from vibe_quant.data.downloader import SUPPORTED_SYMBOLS
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.utils import log_dir
 
@@ -141,6 +142,18 @@ def list_symbols() -> list[str]:
         return archive.get_symbols()
     finally:
         archive.close()
+
+
+@router.get("/symbols/supported")
+def list_supported_symbols() -> list[str]:
+    """Every symbol the downloader can ingest, in ``SUPPORTED_SYMBOLS`` order.
+
+    Unlike ``GET /api/data/symbols`` (archive contents only), this includes
+    coins that have no archived data yet, so the Data page can offer a
+    brand-new coin's first ingest. ``POST /api/data/ingest`` already accepts
+    any symbol, so no other gate is needed.
+    """
+    return list(SUPPORTED_SYMBOLS)
 
 
 # --- Ingest preview ---

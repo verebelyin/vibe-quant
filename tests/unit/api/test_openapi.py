@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from vibe_quant.api.app import create_app
 
-EXPECTED_PATH_COUNT = 92
+EXPECTED_PATH_COUNT = 93  # +GET /api/data/symbols/supported (vibe-quant-yi8sl)
 EXPECTED_SCHEMA_COUNT = 88  # -DatabaseSwitchRequest (runtime DB switch removed); +ExitTimingSummary (vibe-quant-3r9wj); +BankrollGridRequest (vibe-quant-t8nrv)
 
 REQUIRED_PATHS = [

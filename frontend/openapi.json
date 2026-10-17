@@ -362,6 +362,32 @@
         }
       }
     },
+    "/api/data/symbols/supported": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "List Supported Symbols",
+        "description": "Every symbol the downloader can ingest, in ``SUPPORTED_SYMBOLS`` order.\n\nUnlike ``GET /api/data/symbols`` (archive contents only), this includes\ncoins that have no archived data yet, so the Data page can offer a\nbrand-new coin's first ingest. ``POST /api/data/ingest`` already accepts\nany symbol, so no other gate is needed.",
+        "operationId": "list_supported_symbols_api_data_symbols_supported_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Supported Symbols Api Data Symbols Supported Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/data/ingest/preview": {
       "post": {
         "tags": [
@@ -4265,7 +4291,7 @@
           "system"
         ],
         "summary": "Get Status",
-        "description": "Report the persisted kill state.\n\nA row that went missing is re-created ENGAGED by the read (a deleted\nkill-switch record is never reported as unlocked); an unreadable-and-\nunreseedable state is a 503, never a 200 default.",
+        "description": "Report the persisted kill state.\n\nA row that went missing is re-created ENGAGED by the read (a deleted\nkill-switch record is never reported as unlocked); an unreadable-and-\nunreseedable state is a 503, never a 200 default. A raw\n``sqlite3.OperationalError`` (a writer lock held while the connection\nre-creates the row, re-raised by ``init_schema``) is the same 503, not a\n500 (vibe-quant-qh6g7); any other exception class stays a 500.",
         "operationId": "get_status_api_system_status_get",
         "responses": {
           "200": {

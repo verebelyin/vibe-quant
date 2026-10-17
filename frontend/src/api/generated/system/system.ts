@@ -42,7 +42,10 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 A row that went missing is re-created ENGAGED by the read (a deleted
 kill-switch record is never reported as unlocked); an unreadable-and-
-unreseedable state is a 503, never a 200 default.
+unreseedable state is a 503, never a 200 default. A raw
+``sqlite3.OperationalError`` (a writer lock held while the connection
+re-creates the row, re-raised by ``init_schema``) is the same 503, not a
+500 (vibe-quant-qh6g7); any other exception class stays a 500.
  * @summary Get Status
  */
 export type getStatusApiSystemStatusGetResponse200 = {

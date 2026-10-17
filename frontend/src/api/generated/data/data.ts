@@ -379,6 +379,122 @@ export function useListSymbolsApiDataSymbolsGet<TData = Awaited<ReturnType<typeo
 
 
 /**
+ * Every symbol the downloader can ingest, in ``SUPPORTED_SYMBOLS`` order.
+
+Unlike ``GET /api/data/symbols`` (archive contents only), this includes
+coins that have no archived data yet, so the Data page can offer a
+brand-new coin's first ingest. ``POST /api/data/ingest`` already accepts
+any symbol, so no other gate is needed.
+ * @summary List Supported Symbols
+ */
+export type listSupportedSymbolsApiDataSymbolsSupportedGetResponse200 = {
+  data: string[]
+  status: 200
+}
+
+export type listSupportedSymbolsApiDataSymbolsSupportedGetResponseSuccess = (listSupportedSymbolsApiDataSymbolsSupportedGetResponse200) & {
+  headers: Headers;
+};
+;
+
+export type listSupportedSymbolsApiDataSymbolsSupportedGetResponse = (listSupportedSymbolsApiDataSymbolsSupportedGetResponseSuccess)
+
+export const getListSupportedSymbolsApiDataSymbolsSupportedGetUrl = () => {
+
+
+  
+
+  return `/api/data/symbols/supported`
+}
+
+export const listSupportedSymbolsApiDataSymbolsSupportedGet = async ( options?: RequestInit): Promise<listSupportedSymbolsApiDataSymbolsSupportedGetResponse> => {
+  
+  return customInstance<listSupportedSymbolsApiDataSymbolsSupportedGetResponse>(getListSupportedSymbolsApiDataSymbolsSupportedGetUrl(),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+
+
+export const getListSupportedSymbolsApiDataSymbolsSupportedGetQueryKey = () => {
+    return [
+    `/api/data/symbols/supported`
+    ] as const;
+    }
+
+    
+export const getListSupportedSymbolsApiDataSymbolsSupportedGetQueryOptions = <TData = Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError = unknown>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSupportedSymbolsApiDataSymbolsSupportedGetQueryKey();
+
+  
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>> = ({ signal }) => listSupportedSymbolsApiDataSymbolsSupportedGet({ signal, ...requestOptions });
+
+      
+
+      
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListSupportedSymbolsApiDataSymbolsSupportedGetQueryResult = NonNullable<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>>
+export type ListSupportedSymbolsApiDataSymbolsSupportedGetQueryError = unknown
+
+
+export function useListSupportedSymbolsApiDataSymbolsSupportedGet<TData = Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError = unknown>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>,
+          TError,
+          Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListSupportedSymbolsApiDataSymbolsSupportedGet<TData = Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>,
+          TError,
+          Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListSupportedSymbolsApiDataSymbolsSupportedGet<TData = Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List Supported Symbols
+ */
+
+export function useListSupportedSymbolsApiDataSymbolsSupportedGet<TData = Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError = unknown>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSupportedSymbolsApiDataSymbolsSupportedGet>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient 
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListSupportedSymbolsApiDataSymbolsSupportedGetQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+/**
  * @summary Ingest Preview
  */
 export type ingestPreviewApiDataIngestPreviewPostResponse200 = {
