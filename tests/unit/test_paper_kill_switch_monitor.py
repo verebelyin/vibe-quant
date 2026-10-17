@@ -609,3 +609,63 @@ async def test_wait_first_read_returns_on_first_clean_read_or_timeout() -> None:
     snap = await empty.wait_first_read(0.25)
     assert snap.last_ok_mono is None
     assert 0.2 <= time.monotonic() - started < 2.0
+
+
+# ------------------------------------------------------------ stop()/start() contract
+
+
+def test_second_stop_does_not_join_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """K1: with a hung read (it blocks on an event) ``stop()`` joins at most once across
+    repeated calls, so the node's two stop sites (``_run_loop`` finally + ``_shutdown``)
+    pay one join timeout, not two."""
+    release = threading.Event()
+    reading = threading.Event()
+
+    class _Hung:
+        def get_system_state(self) -> dict[str, Any]:
+            reading.set()
+            release.wait(5)
+            return {"kill_switch": False, "reason": None}
+
+        def close(self) -> None:
+            return None
+
+    monitor = KillSwitchMonitor(_Hung, poll_s=0.01)
+    monitor.start()
+    assert reading.wait(5)
+    thread = monitor._thread
+    assert thread is not None
+    joins: list[float | None] = []
+    real_join = thread.join
+
+    def spy(timeout: float | None = None) -> None:
+        joins.append(timeout)
+        real_join(timeout)
+
+    monkeypatch.setattr(thread, "join", spy)
+    try:
+        started = time.monotonic()
+        monitor.stop(join_timeout_s=0.2)
+        monitor.stop(join_timeout_s=0.2)
+        assert joins == [0.2], "the second stop must not join the thread again"
+        assert time.monotonic() - started < 0.6
+        assert thread.is_alive(), "a hung read outlives the bounded join"
+    finally:
+        release.set()
+        real_join(5)
+
+
+def test_start_after_stop_refuses_while_double_start_is_idempotent() -> None:
+    """K2: ``start()`` twice without a stop stays idempotent (one reader thread), but a
+    same-object restart after ``stop()`` is refused explicitly - the node must never pass
+    startup on a snapshot taken before the stop."""
+    monitor = KillSwitchMonitor(lambda: _ScriptedReads("F"), poll_s=0.01)
+    monitor.start()
+    first = monitor._thread
+    monitor.start()
+    assert monitor._thread is first
+    assert first is not None and first.is_alive()
+
+    monitor.stop(2.0)
+    with pytest.raises(RuntimeError, match="KillSwitchMonitor cannot be restarted"):
+        monitor.start()

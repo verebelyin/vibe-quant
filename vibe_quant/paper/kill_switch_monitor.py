@@ -91,9 +91,21 @@ class KillSwitchMonitor:
         self._snapshot = _EMPTY
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: Single-use (K2): set by the first ``stop`` of a started monitor.
+        self._stopped = False
+        #: K1: ``stop`` joins at most once, however many times the node calls it.
+        self._join_done = False
 
     def start(self) -> None:
-        """Start the reader thread (idempotent)."""
+        """Start the reader thread (idempotent while running; a stopped monitor is spent).
+
+        Raises:
+            RuntimeError: If this monitor was already stopped. Its snapshot is stale by
+                definition, so a restart would let the node pass startup on it: build a
+                new monitor instead.
+        """
+        if self._stopped:
+            raise RuntimeError("KillSwitchMonitor cannot be restarted; build a new one")
         if self._thread is not None:
             return
         self._stop.clear()
@@ -101,14 +113,22 @@ class KillSwitchMonitor:
         self._thread.start()
 
     def stop(self, join_timeout_s: float = 1.0) -> None:
-        """Signal the thread and wait at most ``join_timeout_s``; never closes the reader.
+        """Signal the thread and wait at most ``join_timeout_s`` ONCE; never closes the reader.
 
-        A read hung inside the DB keeps the thread alive past the timeout; the
-        thread closes its own handle once that read returns.
+        The node stops the monitor twice (``_run_loop``'s finally and ``_shutdown``): only
+        the first call joins, the second returns at once. A read hung inside the DB keeps
+        the thread alive past the timeout; the thread closes its own handle once that read
+        returns.
         """
         self._stop.set()
         thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
+        if thread is None:  # never started: nothing to signal and nothing to join
+            return
+        self._stopped = True
+        if self._join_done:
+            return
+        self._join_done = True
+        if thread is not threading.current_thread():
             thread.join(join_timeout_s)
 
     def snapshot(self) -> KillSwitchSnapshot:
