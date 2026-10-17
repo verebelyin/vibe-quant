@@ -255,7 +255,9 @@ class _Acct:
 
 def _fake(**attrs: Any) -> types.SimpleNamespace:
     """SimpleNamespace with every template method bound as a method."""
-    fake = types.SimpleNamespace(log=_Log(), **attrs)
+    # _outbox mirrors the real __init__: the unconditional _drop_queued_protection
+    # in _sync_protective_orders reads it on every sync (vibe-quant-5byet).
+    fake = types.SimpleNamespace(log=_Log(), _outbox=[], **attrs)
     for name, fn in _NS.items():
         if callable(fn) and getattr(fn, "__module__", None) is None and name.startswith("_"):
             setattr(fake, name, types.MethodType(fn, fake))

@@ -782,10 +782,13 @@ class RsiMeanReversionStrategy(Strategy):
         """Size SL/TP to the full open position: re-arm if none, else cancel/replace
         any order whose remaining quantity differs (prices are kept)."""
         orders = self._protective_orders()
+        # Queued SL/TP sized for an earlier fill are stale once the position grows
+        # (maker partials, GTC market splits). Drop them and re-arm the whole position.
+        self._drop_queued_protection()
         if getattr(self, '_post_only', False):  # getattr: hand-built strategy stubs lack the flag
-            # Partial maker fills: queued SL/TP are invisible to the cache. Drop them and
-            # treat orders awaiting a queued cancel as gone, then re-arm the whole position.
-            self._drop_queued_protection()
+            # post_only only: in market mode a queued cancel must not hide an order we
+            # still have to replace (an asymmetric partial exit would leave the position
+            # without its SL).
             queued = {cmd[2][0].client_order_id for cmd in self._queued('cancel_order')}
             orders = [o for o in orders if o.client_order_id not in queued]
         if not orders:
