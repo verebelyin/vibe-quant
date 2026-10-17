@@ -91,6 +91,12 @@ Any decision you put to the user (a bead, a semantics break, a design fork, the 
 4. **What breaks:** numbered concrete consequences.
 5. **Recommendation:** one line.
 
+Write it kindly and simply, like explaining to a smart friend who is not reading the code:
+- Put the full block for every item in the VISIBLE message first. Never hide the explanation in AskUserQuestion option previews; the user does not read them (user 2026-10-17: "These were bad questions. It should be phrased more nicely and simply. With example use cases and nice simple terms").
+- The question line itself is one plain, friendly sentence about the user's world ("Should the app fetch new prices by itself every night?"), not the bead id or an internal term. No jargon: no "semantics contract", "DSR", "outbox", "comparability break" without a plain gloss; bead ids only in brackets at the end.
+- Every item carries a concrete use case: "Say you launch a discovery on Monday morning..."
+- Options are plain choices, each with its everyday consequence in one line.
+
 Terse one-liners are fine only for yes/no items the user already understands. Evidence: job 20261017-grind, where the user did not follow the terse 6osqd/lcf12 questions, then decided both at once after this format and said "this was very good".
 
 ## Self-improvement (chief)
