@@ -41,6 +41,8 @@
 
 The headless CLI wrapper (`cmd -p … --yolo`, NDJSON logs, stall_watch registration) still exists for manual one-offs outside a swarm. Don't use it for swarm dispatch, and never as a fallback when `delegate_task` fails.
 
+**When T3 is not connected and the user authorizes the `cmd` CLI** (user 2026-10-17, job 20261017-easy3): launch each worker with ONE Bash call using `run_in_background: true` running `scripts/agents/cmd-task.sh --tier code --max-turns 120 --cwd <worktree> --log-dir <job>/cmd-logs --agent <id> <brief>` in the foreground of that call (never `nohup ... &` inside a subshell). Check liveness by the NDJSON log's mtime advancing or by bus posts, never by `ps`/`pgrep` (the sandbox hides the processes) or by the log's last line (it can stop mid-token for minutes). Evidence: the chief read a quiet log + empty `pgrep` as dead, relaunched, and two writers shared each worktree until one was killed.
+
 Each Command Code call carries ~17–20k input tokens of system-prompt overhead even for a one-word answer, so batch tiny items into one brief (e.g. 20 vault files per brief, not 1).
 
 ## Tiers
@@ -116,3 +118,4 @@ The `verifier` (or the orchestrator for tiny tasks) must:
 - 2026-10-16 (job 20261016-sizing): MiMo V2.6 Pro disabled — user, after reviewing its record: clean first rounds (safety-bugs T2 Sol PASS; sizing K1 no code defect, 2 test gaps, risk PASS) but ~31-34 min and 1.9-5.2M input tokens per task vs DeepSeek ~7 min, plus 37 min / 2 h / 90 min stalls (10-08, 10-09, 10-15). DeepSeek failures (S2, S4 blocking) were recovered by a ~4 min Sonnet fix. Hard tasks: DeepSeek, Sonnet implementer on escalation.
 - 2026-10-17 (job 20261017-grind): DeepSeek V4.1 Flash made 5 small tasks (8 beads) + a read-only audit (5byet) in parallel; all gate PASS first try; 2 needed a test-only round 2 (guard SF1 from Sol, paperops J5 from Sonnet), 0 production defects found by any reviewer. User then said "dont use sol for review, no limit": new reviews went to the Claude Sonnet `reviewer` (reviewer-lite for test-only deltas); one running Sol review was kept at the user's request.
 - 2026-10-16 (job 20261016-easy-beads): DeepSeek V4.1 Flash made 5 small tasks (9 beads) in parallel, all gate PASS first try, ~10-25 min each; GPT-6.1-Sol at reasoningEffort MEDIUM (user override) passed all 5 in round 1. Its one blocking claim came from an over-broad chief parity note and was ruled a nit. Medium looks enough for small, clearly specified diffs; keep high for money-path semantics.
+- 2026-10-17 (job 20261017-easy3): cmd CLI launch rule when T3 is missing (run_in_background per worker; liveness by log mtime/bus, not ps). Evidence: duplicate makers in vq-easy3-sources/intervals.
