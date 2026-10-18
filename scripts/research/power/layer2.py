@@ -24,6 +24,7 @@ Not on the mypy baseline (``files = ["vibe_quant"]``); kept typed and ruff-clean
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import subprocess
 import sys
@@ -1427,17 +1428,29 @@ def cmd_null_corr(ctx: Ctx, args: argparse.Namespace) -> int:
     root = ctx.accepted_root(state, "btc0")
     m, shards = int(args.m), int(args.shards)
     chunk = -(-m // shards)
-    pool: list[dict[str, Any]] = []
-    for i in range(shards):
-        count = max(0, min(chunk, m - i * chunk))
-        if not count:
-            continue
-        pool += run_worker(
+
+    def shard(i: int, count: int) -> list[dict[str, Any]]:
+        # q2g9o/R6: the payload is the sequential one verbatim — each shard is a separate
+        # ``_worker`` subprocess with its own tempdir, so the shards are independent and the
+        # merged pool stays seed-deterministic (R7).
+        return run_worker(
             "null", root,
             {"count": count, "seed_base": int(args.seed), "offset": i * chunk,
              "pool": list(NULL_INDICATOR_POOL)},
             ctx.scratch_db, timeout_s=args.timeout,
         )
+
+    # R9: a count-0 shard draws nothing, exactly as the sequential loop skipped it.
+    jobs = [(i, max(0, min(chunk, m - i * chunk))) for i in range(shards)]
+    jobs = [(i, count) for i, count in jobs if count]
+    pool: list[dict[str, Any]] = []
+    if jobs:
+        # R6: one worker thread per non-empty shard (the m=1200 pool was ~60 min sequential).
+        # R8: the pool is assembled only after every shard returns, so a shard that raises (via
+        # fut.result()) propagates with no pool file and no state["null"] — nothing half-written.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool_ex:
+            futures = [pool_ex.submit(shard, i, count) for i, count in jobs]
+            pool = [entry for fut in futures for entry in fut.result()]
     pool.sort(key=lambda entry: entry["seed"])
     pool_path = ctx.scratch / NULL_POOL_FILE
     pool_path.parent.mkdir(parents=True, exist_ok=True)

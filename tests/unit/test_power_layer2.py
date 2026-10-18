@@ -38,6 +38,7 @@ import json  # noqa: E402
 import os  # noqa: E402
 import sqlite3  # noqa: E402
 import subprocess  # noqa: E402
+import threading  # noqa: E402
 import time  # noqa: E402
 from dataclasses import replace  # noqa: E402
 from typing import Any  # noqa: E402
@@ -1669,3 +1670,114 @@ def test_7vn2j_discover_without_a_label_ignores_followup_runs(
     assert state[layer2.FOLLOWUP_RUNS_KEY]["w1"]["variant"] == "btc0"
 
 
+# --- q2g9o: null-corr shards run concurrently ---------------------------------------------
+
+
+def _null_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """A deterministic worker result: one entry per drawn chromosome seed."""
+    base = int(payload["seed_base"]) + int(payload["offset"])
+    return [
+        {"seed": base + j, "score": 0.25 * (base + j), "corr": None}
+        for j in range(int(payload["count"]))
+    ]
+
+
+def _null_corr_args(
+    tmp_path: Path, m: int, shards: int, *, seed: int = 0, reps: int = 5
+) -> list[str]:
+    return [*_cli(tmp_path), "null-corr", "--m", str(m), "--shards", str(shards),
+            "--reps", str(reps), "--seed", str(seed)]
+
+
+def _nonempty_offsets(m: int, shards: int) -> list[int]:
+    chunk = -(-m // shards)
+    return [i * chunk for i in range(shards) if max(0, min(chunk, m - i * chunk))]
+
+
+def test_q2g9o_null_corr_shards_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R6: the shards are in flight at once. A 3-way Barrier times out (5 s) and raises
+    BrokenBarrierError on the old sequential loop, so this test cannot pass unless the workers
+    overlap. The run_worker payloads are exactly the sequential ones."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0",))
+    barrier = threading.Barrier(3, timeout=5)
+    calls: list[tuple[str, Path, dict[str, Any], Path]] = []
+
+    def fake_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
+        calls.append((kind, r, payload, dbp))
+        barrier.wait()
+        return _null_entries(payload)
+
+    monkeypatch.setattr(layer2, "run_worker", fake_worker)
+    assert layer2.main(_null_corr_args(tmp_path, 30, 3)) == 0
+
+    assert len(calls) == 3
+    assert {kind for kind, *_rest in calls} == {"null"}
+    expected_root = (tmp_path / "o" / "scratch" / "btc0-b1").resolve()
+    expected_db = (tmp_path / "o" / "layer2.json").resolve().parent / "scratch" / "parent-state.db"
+    for _kind, r, _payload, dbp in calls:
+        assert r == expected_root and dbp == expected_db
+    by_offset = {int(p["offset"]): p for _k, _r, p, _d in calls}
+    assert sorted(by_offset) == [0, 10, 20]
+    for offset in (0, 10, 20):
+        assert by_offset[offset] == {
+            "count": 10, "seed_base": 0, "offset": offset,
+            "pool": list(layer2.NULL_INDICATOR_POOL),
+        }
+    entries = json.loads((tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE).read_text())
+    assert [e["seed"] for e in entries] == list(range(30))
+
+
+@pytest.mark.parametrize(("m", "shards"), [(25, 4), (4, 6)], ids=["uneven-chunks", "empty-shards"])
+def test_q2g9o_null_corr_pool_file_matches_the_sequential_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, m: int, shards: int
+) -> None:
+    """R7/R9: the concurrent merge writes bytes identical to the sequential loop's result
+    (recomputed by calling the same fake in order), and count-0 shards are never submitted."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0",))
+    submitted: list[int] = []
+
+    def fake_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
+        submitted.append(int(payload["offset"]))
+        return _null_entries(payload)
+
+    monkeypatch.setattr(layer2, "run_worker", fake_worker)
+    assert layer2.main(_null_corr_args(tmp_path, m, shards, seed=7)) == 0
+
+    chunk = -(-m // shards)
+    want: list[dict[str, Any]] = []
+    for i in range(shards):
+        count = max(0, min(chunk, m - i * chunk))
+        if count:
+            want += _null_entries({"count": count, "seed_base": 7, "offset": i * chunk})
+    want.sort(key=lambda e: e["seed"])
+    pool_path = tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE
+    assert pool_path.read_text() == json.dumps(want, default=layer2._json_default) + "\n"
+    assert sorted(submitted) == _nonempty_offsets(m, shards)
+    assert len(submitted) == len(_nonempty_offsets(m, shards))
+    assert layer2.load_state(out)[layer2.NULL_RECORD_KEY]["m"] == m
+
+
+def test_q2g9o_null_corr_one_failing_shard_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R8: a shard raising propagates as exit 2 with no pool file and no state["null"]; the
+    good shards' results are discarded, never half-written."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0",))
+    before = out.read_bytes()
+
+    def fake_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
+        if int(payload["offset"]) == 10:
+            raise layer2.Layer2Error("shard 1 exploded")
+        return _null_entries(payload)
+
+    monkeypatch.setattr(layer2, "run_worker", fake_worker)
+    assert layer2.main(_null_corr_args(tmp_path, 30, 3)) == 2
+    assert "shard 1 exploded" in capsys.readouterr().out
+    assert not (tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE).exists()
+    assert out.read_bytes() == before
+    assert layer2.NULL_RECORD_KEY not in layer2.load_state(out)
