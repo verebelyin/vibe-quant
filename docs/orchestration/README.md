@@ -28,6 +28,7 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 | `architect` | eng | design doc | spec → design → task plan with acceptance criteria and contract table | user gate, design review |
 | maker (`cmd`, T3) | eng | code + tests in a worktree | default maker for every task with clear acceptance criteria, test-first | reviewer + verifier |
 | `implementer` | eng | code + tests in a worktree | fixer on `fix-route: sonnet`; takes over after a stall or 2 failed rounds; tasks too risky for the cheap maker | fresh reviewer + verifier |
+| `operator` | eng | nothing; runs scripts/CLIs on scratch or read-only data | runs existing scripts and CLIs, reports numbers verbatim; never edits code or commits; stops and reports when a script fails closed | chief |
 | `reviewer` | eng | nothing | two verdicts (spec, quality) + `fix-route` | chief |
 | `reviewer-lite` | eng | nothing | first pass on mechanical diffs; escalates semantics | chief |
 | `verifier` | eng | nothing | quality gates, exactness proofs, UI check | chief |

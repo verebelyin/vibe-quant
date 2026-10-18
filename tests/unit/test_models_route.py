@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,9 @@ assert _spec is not None and _spec.loader is not None
 models = importlib.util.module_from_spec(_spec)
 sys.modules["models"] = models
 _spec.loader.exec_module(models)
+
+_REAL_MODELS = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
+_SKILL = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "orchestrate" / "SKILL.md"
 
 
 def _model(
@@ -180,3 +184,45 @@ def test_show_renders_on_off_and_note(tmp_path: Path, capsys: pytest.CaptureFixt
     assert lines[0] == "sonnet ON reviewer"
     assert lines[1] == "haiku OFF(until 2026-11-01T00:00:00+00:00) cheap"
     assert lines[2] == "opus OFF off indefinitely"
+
+
+def test_operator_routes_to_deepseek_flash_on_the_real_models_file() -> None:
+    data = json.loads(_REAL_MODELS.read_text())
+
+    assert data["routes"]["operator"] == ["deepseek-flash", "sonnet"]
+    assert data["models"]["deepseek-flash"]["runtime"] == "t3"
+    assert data["models"]["deepseek-flash"]["target"] == {
+        "providerInstanceId": "commandcode_command",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "options": {"effort": "high"},
+    }
+
+
+def test_operator_falls_back_to_sonnet_when_deepseek_flash_is_off(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = json.loads(_REAL_MODELS.read_text())
+    data["models"]["deepseek-flash"]["enabled"] = False
+    data["models"]["deepseek-flash"]["until"] = None
+    path = _write(tmp_path / "models.json", data["models"], data["routes"])
+
+    rc = models.main(["--file", str(path), "route", "operator"])
+
+    assert rc == 0
+    lines = capsys.readouterr().out.splitlines()
+    role, _, payload = lines[0].partition(" -> ")
+    key, _, rest = payload.partition(" ")
+    runtime, _, target = rest.partition(" ")
+    assert role == "operator"
+    assert (key, runtime) == ("sonnet", "claude")
+    assert json.loads(target) == {"model": "sonnet"}
+    assert lines[1] == "  skipped deepseek-flash: off"
+
+
+def test_skill_role_list_and_models_json_routes_cannot_drift() -> None:
+    match = re.search(r"\(roles: ([^)]+)\)", _SKILL.read_text())
+    assert match is not None, "SKILL.md no longer has a '(roles: ...)' list"
+    skill_roles = {role.strip() for role in match.group(1).split(",")}
+    routes = set(json.loads(_REAL_MODELS.read_text())["routes"])
+
+    assert skill_roles == routes

@@ -61,6 +61,10 @@
       "deepseek-flash",
       "sonnet"
     ],
+    "operator": [
+      "deepseek-flash",
+      "sonnet"
+    ],
     "fixer-small": [
       "deepseek-flash",
       "sonnet"

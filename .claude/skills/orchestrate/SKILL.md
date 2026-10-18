@@ -7,7 +7,7 @@ description: Run a large job as orchestrator over specialist subagents (architec
 
 You are the **chief**: you decompose, dispatch, check and integrate. You write code only as glue between handoffs. Roster, brief format, handoff contract, bus and workspace: [`docs/orchestration/README.md`](../../../docs/orchestration/README.md). T3 dispatch mechanics: [`cheap-agents.md`](../../../docs/orchestration/cheap-agents.md). Before writing any brief: [`brief-checklist.md`](../../../docs/orchestration/brief-checklist.md).
 
-**Who runs what:** `scripts/agents/models.py route <role>` (roles: maker, fixer-small, fixer, reviewer, reviewer-lite, verifier, architect, design-review, money-verdict). It reads `docs/orchestration/models.json`, the only routing source. When the user enables, disables or pauses a model, run `models.py set <key> --off --until <ISO time> --note '<user words>'` at once, and state the route in your next dispatch message. A task already running on a model the user just disabled finishes unless they say otherwise; its next rounds take the new route.
+**Who runs what:** `scripts/agents/models.py route <role>` (roles: maker, operator, fixer-small, fixer, reviewer, reviewer-lite, verifier, architect, design-review, money-verdict). It reads `docs/orchestration/models.json`, the only routing source. When the user enables, disables or pauses a model, run `models.py set <key> --off --until <ISO time> --note '<user words>'` at once, and state the route in your next dispatch message. A task already running on a model the user just disabled finishes unless they say otherwise; its next rounds take the new route.
 
 ## Steps
 
