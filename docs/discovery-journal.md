@@ -4,6 +4,26 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: PRE-REGISTRATION P-2 — production budget study (how big must a GA search be to find a planted edge on 4h and 1d?)
+
+Written before any P-2 run. Design: `data/swarm/20261018-grind-dir/design-budget.md` (Opus architect, Sol-reviewed driver). Code: `scripts/research/power/budget.py` + `layer2.py` Profile + `plant.py` bar params, landed on main before this entry; scratch catalogs only, `verify-untouched` at the end; no `vibe_quant/` change. Valid only after the 2026-10-18 DSR effective-N comparability break (harvest refuses a run whose `notes.dsr_trials.n_rule` is not the effective marker). Not comparable with P-1a (which searched `--direction both`).
+
+**Already seen (disclosure):** P-1a — 50×20 found the 4h S 5.8 plant 2/2, 12×4 never; btc0 0 champions at ~880 tries; C95(40) 0.6385.
+
+**Setup:** BTCUSDT, planted LONG rule (4h: RSI14 crosses below 30 / exit above 60, SL4 TP8; 1d: first of RSI14 xb30, RSI7 xb30, RSI7 xb35, RSI5 xb35 (exit xa60, SL4 TP8) with 80–250 btc0 train trades). `--direction long`, indicator pool ROC/DONCHIAN/RSI/CCI/NATR, eval_windows 2 (production default is 3: disclosed), split 0.8, own state DB per run (prior_n 0). Variants 4h s0/s2/s3/s4/s5, 1d s0/s3/s4/s5, each calibrated to train Sharpe within [0.9S, 1.1S] (≤ 4 builds per rule). 4h W3 2023-06-01..2026-06-01; 1d W6 2021-01-01..2026-10-15.
+
+**Ladder:** B1 16×6 (production max), B2 24×10, B3 36×14, B4 50×20; seeds 1–3; waves ascend; a cell stops at the first rung where M2 holds in ≥ 2 of 3 seeds (B*). Failed run: one rerun, else seed missing and cell `incomplete`.
+
+**Metrics:** M1 = some harvested candidate (champion or gate-rejected) has signed corr with the planted MTM ≥ C_K and train_S ≥ 0.5 × planted train S. **M2 (primary)** = some champion meets M1. C_K = max(C95(K), max signed corr of same-timeframe same-budget s0 candidates); K = the run's evaluated count; null pool m = 1200 LONG per timeframe, reps 2000, seed 20261018.
+
+**Extra probe (user, Q6):** 4h-s4 with the FULL indicator pool at B* and the next rung, 3 seeds; reported separately, never enters B* or C_K.
+
+**Predictions (M2 seeds found of 3 at B1/B2/B3/B4):** 4h s5 1/3/–/–; s4 0/1/2/–; s3 0/0/1/2; s2 0/0/0/0 (M1 at B4 1/3; DSR blocks). 1d one rung worse: s5 0/2/–; s4 0/0/1/2; s3 0/0/0/1. s0: 0 champions everywhere; s0 max corr > C95(K) in ≤ 1 run per timeframe. Full-pool probe needs one rung more than 5-indicator 4h-s4. Wall time per evaluation (EYEBALLED): 4h 0.9 s (0.65–1.0), 1d 1.3 s (0.5–3.0); B4 gate_n < 200.
+
+**Decisions:** D1 B*(4h, s4) ≤ B1 → production budgets suffice; "0 champions" means no strong edge in real data → prioritise edge sourcing. D2 B* ∈ {B2, B3} → recommend that rung as the default for the timeframe (user decides), discovery-speed bead 6n0n9 stays P2. D3 B* = B4, or M1 without M2 below B4 → recommend B4 and raise 6n0n9 to P1. D4 M1 but never M2 at S ≤ 3 because DSR fails at the run's gate_n → report the DSR floor as a user question; no automatic change. D5 any s0 champion → stop that timeframe, file a gate-leak bug, recommend no bigger budgets. D6 4h s5 M1 < 2/3 at B4 → contradicts P-1a → stop, machinery check.
+
+---
+
 ## 2026-10-18: RESULT P-1a — a 50×20 GA finds the planted S 5.8 edge in 2/2 seeds (search budget is a bottleneck); layer-2 btc2.0 "find" re-scored FAIL
 
 Pre-registration P-1a (32037230). `layer2.py` on main 9178f24f, operator run 12:50:55–14:38:50 local; output `data/swarm/20261017-power-paper/power/layer2.{json,log}`, handoff `handoffs/op-l2-followup-1.md`. `verify-untouched`: `R26 shared data untouched`. R31 ok on every run (prior_n 0).
