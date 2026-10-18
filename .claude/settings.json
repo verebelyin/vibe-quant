@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/agents/memory_index.py 2>/dev/null || true"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/memory_index.py 2>/dev/null || true"
           }
         ],
         "matcher": ""
@@ -16,11 +16,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/agents/memory_index.py 2>/dev/null || true"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/memory_index.py 2>/dev/null || true"
           },
           {
             "type": "command",
-            "command": "python3 scripts/agents/bus.py board brief 2>/dev/null || true"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py board brief 2>/dev/null || true"
           }
         ],
         "matcher": ""
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/agents/hooks/bd_notes_guard.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/hooks/bd_notes_guard.py"
           }
         ]
       }
