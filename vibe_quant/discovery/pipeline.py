@@ -2204,20 +2204,22 @@ class DiscoveryPipeline:
     def _dsr_trial_counts(self, total_evaluated: int) -> dict[str, object]:
         """Run-level DSR trial counts: raw N (USED) + informational N_eff.
 
-        ``neff_mean_corr`` and ``neff_eig_pr`` are two effective-trial-count
-        estimates over the retained mark-to-market daily series (only
-        train-gate-passing genomes keep one), both scaling to N when the
-        series are uncorrelated: ``N / (1 + (m-1)*rho_bar)`` (mean off-diagonal
-        correlation) and ``PR * N / m`` (participation ratio of the
-        correlation eigenvalues). Recorded, never used by the gate (bd
-        yul7u.24).
+        The retained mark-to-market daily series (only train-gate-passing
+        genomes keep one) are handed to the shared EV-matched estimator
+        (:func:`vibe_quant.discovery.neff.effective_trials`), which returns the
+        legacy informational estimates ``neff_mean_corr`` / ``neff_eig_pr``
+        (recorded, never used by the gate — bd yul7u.24) plus the four keys T1
+        records: ``neff_ev``, ``run_n_eff``, ``neff_ev_source`` and
+        ``neff_fallback_reason``.
 
-        The eigendecomposition is O(m^3), so when more than ``_NEFF_MAX_SERIES``
-        series are retained it runs on a deterministic evenly-spaced subset
-        (sorted uid order) and ``neff_subsampled_from`` records the original
-        count (bd yul7u.30). ``non_flat`` always stays the true count.
+        The series are in sorted uid order, the deterministic basis for the
+        estimator's evenly-spaced subsample (bd yul7u.30). ``non_flat`` always
+        stays the true count. T1 RECORDS ONLY: the DSR gate still uses
+        ``total_evaluated`` until T3.
         """
         import numpy as np
+
+        from vibe_quant.discovery.neff import effective_trials
 
         # Sorted uid order: the deterministic basis for the subsample below.
         entries = sorted(self._fitness_cache.items(), key=lambda kv: str(kv[0]))
@@ -2226,33 +2228,17 @@ class DiscoveryPipeline:
             for _, fr in entries
             if fr.mtm_daily_returns is not None and len(fr.mtm_daily_returns) >= 2
         ]
-        lengths = {len(r) for r in raw_rows}
-        rows = [r for r in raw_rows if r.std() > 0]
-        m = len(rows)
-        subsampled_from: int | None = None
-        if m > _NEFF_MAX_SERIES:
-            subsampled_from = m
-            idx = np.unique(np.linspace(0, m - 1, _NEFF_MAX_SERIES).astype(int))
-            rows = [rows[i] for i in idx]
-        n_used = len(rows)
-        neff_mean_corr: float | None = None
-        neff_eig_pr: float | None = None
-        if n_used >= 2 and len(lengths) == 1:
-            corr = np.nan_to_num(np.corrcoef(np.vstack(rows)))
-            rho_bar = (float(corr.sum()) - float(np.trace(corr))) / (n_used * (n_used - 1))
-            denom = 1.0 + (n_used - 1) * rho_bar
-            if denom > 0:
-                neff_mean_corr = float(total_evaluated) / denom
-            ev = np.clip(np.linalg.eigvalsh(corr), 0.0, None)
-            sq = float((ev**2).sum())
-            if sq > 0:
-                neff_eig_pr = float(ev.sum() ** 2 / sq) * total_evaluated / n_used
+        eff = effective_trials(raw_rows, total_evaluated, max_series=_NEFF_MAX_SERIES)
         return {
-            "raw": total_evaluated,
-            "non_flat": m,
-            "neff_mean_corr": neff_mean_corr,
-            "neff_eig_pr": neff_eig_pr,
-            "neff_subsampled_from": subsampled_from,
+            "raw": eff.raw,
+            "non_flat": eff.non_flat,
+            "neff_mean_corr": eff.neff_mean_corr,
+            "neff_eig_pr": eff.neff_eig_pr,
+            "neff_subsampled_from": eff.subsampled_from,
+            "neff_ev": eff.neff_ev,
+            "run_n_eff": eff.run_n_eff,
+            "neff_ev_source": eff.source,
+            "neff_fallback_reason": eff.fallback_reason,
         }
 
     def _export_top_strategies(
