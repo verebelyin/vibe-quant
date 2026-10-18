@@ -55,6 +55,14 @@ def test_pool_and_names_are_unfiltered_for_the_next_test() -> None:
     # BTC_TREND is a needs_context spec, i.e. exactly a name the default pool filter drops.
     assert "BTC_TREND" in build_indicator_pool(include_context=True)
 
+    # Checked BEFORE ``_ensure_pool()``: that call only EXTENDS an EMPTY names list, so it
+    # repairs nothing here. The two module globals are filtered independently, so a fixture
+    # that restores ``INDICATOR_POOL`` but not ``_INDICATOR_NAMES`` (or re-extends the saved
+    # names on top of the filtered list) leaves them disagreeing and this is what catches it.
+    assert sorted(_INDICATOR_NAMES) == sorted(INDICATOR_POOL), (
+        "_INDICATOR_NAMES not restored alongside INDICATOR_POOL"
+    )
+
     _ensure_pool()
 
     assert "BTC_TREND" in INDICATOR_POOL, "INDICATOR_POOL leaked between tests"
