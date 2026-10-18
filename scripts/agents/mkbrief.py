@@ -18,6 +18,23 @@ suffix), ``TELEMETRY`` (``TELEMETRY: task=<TASK> round=<ROUND>``), ``WT``,
 merge-base REF BRANCH``), ``HEAD_SHA`` (``git rev-parse BRANCH``), ``RANGE``
 and ``REVIEW_PACK``; git runs in ``--worktree`` (else the job dir).
 
+``--base REF`` with ``--worktree`` is resolved to a commit sha at render time
+(``git rev-parse --verify REF^{commit}``, in ``--worktree``), so the rendered
+GATE diffs against the commit that was current when the brief was written, not
+a branch that moved since. When the given ref is not already that sha, the GATE
+line keeps it in a trailing ``# base REF @ render`` comment; passing the sha
+itself omits the redundant comment. Without ``--worktree`` the ref is passed
+through verbatim.
+
+With ``--worktree``, ``--base`` and a non-empty ``--scope`` (not review mode),
+every path changed in ``<base_sha>...HEAD`` must match a ``--scope`` glob, or the
+brief exits 2 and lists the unmatched paths (a scope that omits a file the branch
+already changed would fail the gate's own scope check). With no ``--scope`` the
+gate SKIPs its scope check (``swarm_check.py`` ``elif cfg.scope``), so this branch
+check is skipped too. The gate's rule is reused as-is
+(``swarm_check.reviewable_paths`` + ``scope_offenders``), so the bus's
+board/telemetry mirror files are never offenders here either.
+
 Validation (exit 2, every problem printed to stderr, nothing written):
   * any ``{UPPER_SNAKE}`` in the raw template or ``--append``ed file text that
     has no value (values from ``--set``/``--set-file`` are never scanned, so a
@@ -29,6 +46,8 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     gate's fnmatch needs a subdirectory for ``**``);
   * ``--worktree`` without ``--base`` whose HEAD is stacked on another local branch or holds
     merge commits relative to ``main`` (the gate's default base would count that work as ours);
+  * ``--worktree`` with a ``--base`` that does not resolve to a commit in it
+    (the git error is printed);
   * the output file already exists (unless ``--force``).
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
@@ -48,12 +67,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -156,13 +176,21 @@ def scope_problems(rendered: Iterable[str], checked: Iterable[str], worktree: st
     return problems
 
 
-def gate_command(worktree: str, scope: str, base: str, bus: Path, agent_id: str) -> str:
-    """The literal pre-review gate command for this brief."""
+def gate_command(
+    worktree: str, scope: str, base: str, bus: Path, agent_id: str, base_ref: str = ""
+) -> str:
+    """The literal pre-review gate command for this brief.
+
+    ``base`` is a commit sha; ``base_ref`` is the ref it was resolved from, kept
+    as a trailing comment so the brief still says which ref was pinned.
+    """
     command = f"{_GATE} {worktree} --scope '{scope}'"
     if base:
         command += f" --base {base}"
     if bus.is_dir():
         command += f" --bus {bus} --bus-agent {agent_id}"
+    if base_ref:
+        command += f"  # base {base_ref} @ render"
     return command
 
 
@@ -171,6 +199,40 @@ def _git(cwd: Path, *args: str) -> str:
         ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True
     )
     return out.stdout.strip()
+
+
+def _gate_module() -> Any:
+    """``swarm_check.py`` (same directory) loaded by path — the gate's own scope rule, never a copy."""
+    name = "_mkbrief_swarm_check"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).with_name("swarm_check.py")
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # its @dataclass decorators resolve via sys.modules
+    spec.loader.exec_module(module)
+    return module
+
+
+def branch_scope_offenders(worktree: Path, base_sha: str, globs: Iterable[str]) -> list[str]:
+    """Paths changed in ``base_sha...HEAD`` that no ``--scope`` glob covers.
+
+    Uses the gate's own rule (``swarm_check.scope_offenders`` over
+    ``reviewable_paths``, the same pair the gate applies to its diff), so board
+    and telemetry mirror files are excluded and a brief is never rejected for a
+    path the gate itself would ignore.
+    """
+    gate = _gate_module()
+    changed = [
+        path
+        for path in _git(
+            worktree, "diff", "--name-only", "--no-renames", "-z", f"{base_sha}...HEAD"
+        ).split("\0")
+        if path
+    ]
+    return list(gate.scope_offenders(gate.reviewable_paths(changed), list(globs)))
 
 
 def stacked_candidates(worktree: Path) -> list[str]:
@@ -208,7 +270,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--template", required=True, help="template file with {UPPER_SNAKE} keys")
     parser.add_argument("--worktree", default="", help="worktree the brief works in")
     parser.add_argument("--scope", default="", help="comma-separated SCOPE globs")
-    parser.add_argument("--base", default="", help="gate --base ref")
+    parser.add_argument(
+        "--base", default="", help="gate --base ref (pinned to a sha when --worktree is given)"
+    )
     parser.add_argument("--review", default="", help="review mode: the branch under review")
     parser.add_argument("--parent", default="", help="review mode: the ref to merge-base against")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
@@ -246,8 +310,21 @@ def main(argv: list[str] | None = None) -> int:
     }
     rendered_globs, checked_globs = parse_scope(args.scope)
     scope_out = ",".join(rendered_globs)
+    base, base_ref = args.base, ""
+    if args.worktree and base:
+        cwd = Path(args.worktree).resolve()
+        try:
+            base = _git(cwd, "rev-parse", "--verify", f"{args.base}^{{commit}}")
+        except (subprocess.CalledProcessError, OSError) as exc:
+            stderr = getattr(exc, "stderr", "") or str(exc)
+            print(
+                f"--base {args.base} does not resolve in {cwd}: {stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 2
+        base_ref = "" if base == args.base else args.base
     values["SCOPE"] = scope_out
-    values["GATE"] = gate_command(args.worktree, scope_out, args.base, bus, args.id)
+    values["GATE"] = gate_command(args.worktree, scope_out, base, bus, args.id, base_ref)
 
     if bool(args.review) != bool(args.parent):
         print("--review and --parent must be given together", file=sys.stderr)
@@ -275,6 +352,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  git merge-base candidate: {candidate}", file=sys.stderr)
             return 2
 
+    branch_problems: list[str] = []
+    if args.worktree and base and rendered_globs and not args.review:
+        try:
+            offenders = branch_scope_offenders(
+                Path(args.worktree).resolve(), base, rendered_globs
+            )
+        except (subprocess.CalledProcessError, OSError) as exc:
+            stderr = getattr(exc, "stderr", "") or str(exc)
+            print(f"git diff {base}...HEAD failed in {args.worktree}: {stderr.strip()}", file=sys.stderr)
+            return 2
+        branch_problems = [
+            f"changed vs base {base} but matches no --scope glob: {path}" for path in offenders
+        ]
+
     for key, value in _key_value(list(args.set), "--set"):
         values[key] = value
     for key, path in _key_value(list(args.set_file), "--set-file"):
@@ -290,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     out_path = job / "prompts" / f"{args.id}.md"
     problems = [f"unfilled placeholder {{{key}}}" for key in unfilled(sources, values)]
     problems += scope_problems(rendered_globs, checked_globs, args.worktree)
+    problems += branch_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")
     if problems:

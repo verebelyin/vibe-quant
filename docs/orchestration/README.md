@@ -111,7 +111,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (no `--scope` SKIPs the scope check); `mkbrief.py` pins the ref it was given to a SHA at render, so the rendered gate diffs a frozen commit (board/telemetry mirror files are never offenders). Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
 | `mkbrief.py` | renders and validates a brief, writes it, prints the dispatch text |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
 | `mutate.py --file F --old X --new Y -- <test>` | one safe mutant check (KILLED/SURVIVED) |

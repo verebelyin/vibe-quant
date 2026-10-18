@@ -264,6 +264,10 @@ def test_refuses_to_overwrite_without_force(
     capsys.readouterr()
 
 
+def _gate(brief: Path) -> str:
+    return next(ln for ln in brief.read_text().splitlines() if ln.startswith("GATE: "))
+
+
 def test_gate_command_includes_base_and_bus_when_present(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -288,11 +292,213 @@ def test_gate_command_includes_base_and_bus_when_present(
     rc = mkbrief.main(_argv(job, template, scope="a.py", worktree=repo, extra=["--base", "main"]))
     assert rc == 0
     capsys.readouterr()
-    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
-    gate = next(ln for ln in text.splitlines() if ln.startswith("GATE: "))
-    assert gate == (
+    main_sha = _git(repo, "rev-parse", "main")
+    assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
         f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
-        f" --base main --bus {job / 'bus'} --bus-agent cc-rd-demo-1"
+        f" --base {main_sha} --bus {job / 'bus'} --bus-agent cc-rd-demo-1"
+        f"  # base main @ render"
+    )
+
+
+def test_gate_base_branch_resolves_to_sha_at_render_time(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    first = _commit(repo, "a1.py")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+    brief = job / "prompts" / "cc-rd-demo-1.md"
+
+    rc = mkbrief.main(_argv(job, template, worktree=repo, extra=["--base", "swarm/a"]))
+
+    assert rc == 0
+    assert _gate(brief) == (
+        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
+        f" --base {first}  # base swarm/a @ render"
+    )
+
+    moved = _commit(repo, "a2.py")  # the branch moves on after the brief was written
+    assert moved != first
+    assert f"--base {first}" in brief.read_text()
+    assert moved not in brief.read_text()
+
+    # A brief rendered now pins the branch's new tip, not the frozen one.
+    rc = mkbrief.main(
+        _argv(job, template, request_id="cc-rd-demo-2", worktree=repo, extra=["--base", "swarm/a"])
+    )
+    assert rc == 0
+    assert _gate(job / "prompts" / "cc-rd-demo-2.md") == (
+        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py'"
+        f" --base {moved}  # base swarm/a @ render"
+    )
+
+
+def test_review_mode_skips_the_branch_scope_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "branch", "parent")
+    _git(repo, "checkout", "-qb", "feat")
+    base = _git(repo, "rev-parse", "parent")
+    _commit(repo, "out_of_scope.py")
+    assert "out_of_scope.py" in _git(repo, "diff", "--name-only", f"{base}...HEAD")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            _template(tmp_path, _REVIEW_TEMPLATE),
+            scope="a.py",
+            worktree=repo,
+            extra=["--review", "feat", "--parent", "parent", "--base", base],
+        )
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_gate_base_sha_input_omits_redundant_comment(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    sha = _git(repo, "rev-parse", "HEAD")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path), worktree=repo, extra=["--base", sha]))
+
+    assert rc == 0
+    # The given ref already IS the resolved sha: no "# base ... @ render" comment.
+    assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
+        f"GATE: scripts/agents/swarm-check.sh {repo} --scope 'a.py' --base {sha}"
+    )
+    assert "@ render" not in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def test_branch_change_outside_scope_exits_2_and_lists_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-qb", "swarm/fix")
+    _commit(repo, "in_scope.py")
+    _commit(repo, "out_of_scope.py")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(
+            job,
+            _template(tmp_path),
+            scope="in_scope.py,a.py",
+            worktree=repo,
+            extra=["--base", base],
+        )
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "out_of_scope.py" in err
+    assert "matches no --scope glob" in err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_branch_changes_all_in_scope_render(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-qb", "swarm/fix")
+    _commit(repo, "in_scope.py")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), scope="in_scope.py", worktree=repo, extra=["--base", base])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_branch_scope_check_is_skipped_without_scope_globs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-qb", "swarm/fix")
+    _commit(repo, "b.py")
+    job = _job(tmp_path)
+
+    # No --scope: the gate SKIPs its own scope check, so the branch check must too.
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), scope=None, worktree=repo, extra=["--base", base])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_board_mirror_change_is_never_a_scope_offender(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-qb", "swarm/fix")
+    _commit(repo, "in_scope.py")
+    mirror = repo / "docs" / "orchestration" / "board"
+    mirror.mkdir(parents=True)
+    (mirror / "messages.jsonl").write_text("{}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "bus mirror")
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(
+        _argv(job, _template(tmp_path), scope="in_scope.py", worktree=repo, extra=["--base", base])
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    assert (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_scope_check_is_skipped_without_a_base(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _repo(tmp_path)
+    _git(repo, "checkout", "-qb", "swarm/a")
+    _commit(repo, "a1.py")
+    job = _job(tmp_path)
+
+    # No --base: the branch-vs-scope check does not run, so an unchecked branch renders.
+    rc = mkbrief.main(_argv(job, _template(tmp_path), scope="a.py", worktree=repo))
+
+    assert rc == 0
+    capsys.readouterr()
+    assert (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_unresolvable_base_exits_2_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(_argv(job, template, worktree=repo, extra=["--base", "no-such-ref"]))
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no-such-ref" in err
+    assert "does not resolve" in err
+    assert not (job / "prompts" / "cc-rd-demo-1.md").exists()
+
+
+def test_base_is_left_verbatim_without_a_worktree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    job = _job(tmp_path)
+
+    rc = mkbrief.main(_argv(job, _template(tmp_path), extra=["--base", "main"]))
+
+    assert rc == 0
+    capsys.readouterr()
+    assert _gate(job / "prompts" / "cc-rd-demo-1.md") == (
+        "GATE: scripts/agents/swarm-check.sh  --scope 'a.py' --base main"
     )
 
 
@@ -404,7 +610,9 @@ def test_stacked_worktree_with_base_passes(tmp_path: Path) -> None:
     a_tip = _commit(repo, "a1.py")
     _git(repo, "checkout", "-qb", "swarm/b")
     _commit(repo, "b1.py")
-    argv = _argv(_job(tmp_path), _template(tmp_path), worktree=repo, extra=["--base", a_tip])
+    argv = _argv(
+        _job(tmp_path), _template(tmp_path), scope="a.py,b1.py", worktree=repo, extra=["--base", a_tip]
+    )
     assert mkbrief.main(argv) == 0
 
 
