@@ -436,3 +436,46 @@ def test_explicit_logs_and_db_flags_win_over_the_defaults(
     code = disc_watch.main([run_id, "--logs", str(logs), "--db", str(db)])
 
     assert code == 0
+
+
+def test_env_db_is_read_when_no_db_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No --db: VIBE_QUANT_DB names the state DB, not the main-checkout default (ovf0e).
+
+    The main-checkout default is pointed at an absent dir, so `elif env_db` is the only branch
+    that can reach the run's status: the mutant `elif False` falls through to a DB that does not
+    exist, and main() then exits 2 (cannot open the state DB). A 0 therefore proves main() read
+    the env DB and saw the run "completed" (failed/cancelled would be 1, unknown would be 2).
+    """
+    run_id = "777"
+    logs = tmp_path / "logs"
+    _log(
+        logs,
+        [_gen(1, 1, 0.2022), _complete(gens=1, evaluated=2, total=30)],
+        name=f"discovery_{run_id}_20261017_193121.log",
+    )
+    db = _db(tmp_path, {run_id: "completed"})
+    monkeypatch.setenv("VIBE_QUANT_DB", str(db))
+    monkeypatch.setattr(
+        disc_watch, "main_checkout_root", lambda *_args, **_kwargs: tmp_path / "main"
+    )
+
+    assert disc_watch.main([run_id, "--logs", str(logs)]) == 0
+
+
+def test_db_flag_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--db beats VIBE_QUANT_DB: the env DB says the run failed, the flag DB says completed."""
+    run_id = "777"
+    logs = tmp_path / "logs"
+    _log(
+        logs,
+        [_gen(1, 1, 0.2022), _complete(gens=1, evaluated=2, total=30)],
+        name=f"discovery_{run_id}_20261017_193121.log",
+    )
+    env_db = _db(tmp_path / "env", {run_id: "failed"})
+    flag_db = _db(tmp_path / "flag", {run_id: "completed"})
+    monkeypatch.setenv("VIBE_QUANT_DB", str(env_db))
+
+    # exit 0 comes from the flag DB's "completed", not the env DB's "failed" (which would be 1)
+    assert disc_watch.main([run_id, "--logs", str(logs), "--db", str(flag_db)]) == 0
