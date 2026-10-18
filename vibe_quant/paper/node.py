@@ -142,6 +142,24 @@ EVENT_STARTUP_WAIT_S = 10.0
 #: SL/TP orders (submitted only after the entry fill) are visible. Never on the NT callback.
 TRADE_ALERT_DELAY_S = 2.0
 
+#: 3ljxh: direction -> (open emoji, arrow emoji) for the human-friendly trade texts.
+_DIRECTION_EMOJI = {"LONG": ("🟢", "📈"), "SHORT": ("🔴", "📉")}
+
+#: 3ljxh: exit reason -> the text shown in the close alert (fallback: ``❔ <reason>``).
+_EXIT_REASON_TEXT = {
+    "stop_loss": "🛑 stop loss hit",
+    "take_profit": "🎯 take profit hit",
+    "signal": "📊 strategy signal",
+    "halt_or_close_all": "⏹️ closed by halt",
+}
+
+
+def _signed(value: float, decimals: int = 2) -> str:
+    """A number with an explicit sign; negatives use U+2212 MINUS SIGN (Telegram-friendly)."""
+    sign = "+" if value >= 0 else "−"
+    return f"{sign}{abs(value):.{decimals}f}"
+
+
 #: ``PositionOpened.side`` (a ``PositionSide``) -> the sign the solvency formula wants.
 _POSITION_SIDE_SIGNS = {"LONG": 1, "SHORT": -1}
 
@@ -666,58 +684,123 @@ class PaperTradingNode:
     def _trade_open_message(self, event: Any) -> str:
         """The exact entry text: size, leverage, entry and the strategy's SL/TP."""
         cache = self._guard.cache if self._guard is not None else None
-        stop, take = self._protective_levels(cache, event.instrument_id)
+        symbol = self._symbol(event.instrument_id)
+        direction = "LONG" if event.side.name == "LONG" else "SHORT"
+        head, arrow = _DIRECTION_EMOJI[direction]
         quantity = float(event.quantity)
         entry = float(event.avg_px_open)
         leverage = self._resolved.leverage if self._resolved else 1
+        stop, take = self._protective_levels(cache, event.instrument_id)
         return "\n".join(
             [
-                f"OPEN {event.side.name} {event.instrument_id}",
-                f"Size: {quantity} (≈ {quantity * entry:.2f} USDT)",
-                f"Leverage: {leverage}x",
-                f"Entry: {self._alert_price(cache, event.instrument_id, entry)}",
-                f"Stop loss: {stop}",
-                f"Take profit: {take}",
-                f"Trader: {self._config.trader_id}",
+                f"{head} OPENED {direction} {arrow} {symbol}",
+                f"💰 Size: {quantity} {self._base_asset(cache, event.instrument_id, symbol)}"
+                f" (≈ ${quantity * entry:,.2f})",
+                f"⚡ Leverage: {leverage}x",
+                f"🎯 Entry: {self._alert_price(cache, event.instrument_id, entry)}",
+                f"🛑 Stop: {self._level_text(cache, event.instrument_id, stop, entry)}",
+                f"✅ Target: {self._level_text(cache, event.instrument_id, take, entry)}",
+                self._session_label(),
             ]
         )
 
     def _trade_close_message(
         self, event: Any, net: float, commissions: float, exit_reason: str
     ) -> str:
-        """The exact exit text: exit price, reason and net P&L (the event's own numbers).
+        """The exact exit text: outcome, net P&L, exit price/reason and held time.
 
         A NT ``PositionClosed.side`` is always FLAT, so the closed direction comes from
         ``event.entry`` (the entry order side): BUY -> LONG, SELL -> SHORT.
         """
         cache = self._guard.cache if self._guard is not None else None
+        symbol = self._symbol(event.instrument_id)
+        direction = "LONG" if event.entry.name == "BUY" else "SHORT"
+        arrow = _DIRECTION_EMOJI[direction][1]
         pos = cache.position(event.position_id) if cache is not None else None
-        entry = (
-            self._alert_price(cache, event.instrument_id, float(pos.avg_px_open))
-            if pos is not None
+        entry = float(pos.avg_px_open) if pos is not None else None
+        entry_text = (
+            self._alert_price(cache, event.instrument_id, entry)
+            if entry is not None
             else "unknown"
         )
         exit_price = self._alert_price(cache, event.instrument_id, float(event.avg_px_close))
-        direction = "LONG" if event.entry.name == "BUY" else "SHORT"
+        # PositionClosed.quantity is 0 (the position is flat); peak_qty is the size held.
+        pnl_line = self._pnl_text(net, entry, float(event.peak_qty))
+        reason_text = _EXIT_REASON_TEXT.get(exit_reason, f"❔ {exit_reason}")
         return "\n".join(
             [
-                f"CLOSE {direction} {event.instrument_id}",
-                f"Exit: {exit_price} ({exit_reason})",
-                f"Entry: {entry}",
-                f"P&L: {net:.2f} USDT (net, after {commissions:.2f} fees)",
-                f"Trader: {self._config.trader_id}",
+                f"{'✅' if net >= 0 else '❌'} CLOSED {direction} {arrow} {symbol} ·"
+                f" {'WIN' if net >= 0 else 'LOSS'}",
+                pnl_line,
+                f"🚪 Exit: {exit_price} · {reason_text}",
+                f"🎯 Entry: {entry_text}",
+                f"⏱️ Held: {self._held_text(event.duration_ns)}",
+                f"💸 Fees: {commissions:.2f} USDT",
+                self._session_label(),
             ]
         )
 
     @staticmethod
-    def _protective_levels(cache: Any, instrument_id: Any) -> tuple[str, str]:
-        """(stop, take) text for the instrument's open reduce-only orders.
+    def _pnl_text(net: float, entry: float | None, quantity: float) -> str:
+        """The P&L line: signed net USDT, plus the signed % of entry notional when known."""
+        arm = "📈" if net >= 0 else "📉"
+        amount = _signed(net)
+        if entry is None:
+            return f"{arm} P&L: {amount} USDT"
+        percent = net / (quantity * entry) * 100
+        return f"{arm} P&L: {amount} USDT ({_signed(percent)}%)"
+
+    @staticmethod
+    def _held_text(duration_ns: int) -> str:
+        """Format a position's lifetime: ``<h>h <mm>m`` >= 1 h, ``<m>m <ss>s`` >= 1 min, else ``<s>s``."""
+        total_s = duration_ns // 1_000_000_000
+        hours, remainder = divmod(total_s, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours >= 1:
+            return f"{hours}h {minutes:02d}m"
+        if minutes >= 1:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{seconds}s"
+
+    @staticmethod
+    def _symbol(instrument_id: Any) -> str:
+        """The instrument symbol without its venue suffix (``BTCUSDT-PERP.BINANCE`` -> ``BTCUSDT``)."""
+        return str(instrument_id).split(".")[0].removesuffix("-PERP")
+
+    @staticmethod
+    def _base_asset(cache: Any, instrument_id: Any, symbol: str) -> str:
+        """The instrument's base currency, else the symbol minus a USDT/USDC quote suffix."""
+        if cache is not None:
+            instrument = cache.instrument(instrument_id)
+            base = getattr(instrument, "base_currency", None)
+            if base is not None:
+                return str(base)
+        for quote in ("USDT", "USDC"):
+            if symbol.endswith(quote):
+                return symbol[: -len(quote)]
+        return symbol
+
+    def _level_text(self, cache: Any, instrument_id: Any, level: float | None, entry: float) -> str:
+        """``<price> (±x.xx%)`` for a protective level, or ``none placed``."""
+        if level is None:
+            return "none placed"
+        price = self._alert_price(cache, instrument_id, level)
+        return f"{price} ({_signed((level / entry - 1) * 100)}%)"
+
+    def _session_label(self) -> str:
+        """The trailing line: the trader id and whether the venue is testnet or live."""
+        env = "🧪 testnet" if self._config.binance.testnet else "💵 LIVE"
+        return f"🤖 {self._config.trader_id} · {env}"
+
+    @staticmethod
+    def _protective_levels(cache: Any, instrument_id: Any) -> tuple[float | None, float | None]:
+        """(stop, take) prices for the instrument's open reduce-only orders.
 
         Stop = STOP_MARKET/STOP_LIMIT trigger price, take-profit = LIMIT price. Missing
-        on either side reads 'none placed'.
+        on either side is ``None``.
         """
-        stop: str | None = None
-        take: str | None = None
+        stop: float | None = None
+        take: float | None = None
         if cache is not None:
             orders = list(cache.orders_open(instrument_id=instrument_id)) + list(
                 cache.orders_inflight(instrument_id=instrument_id)
@@ -727,21 +810,21 @@ class PaperTradingNode:
                     continue
                 name = order.order_type.name
                 if stop is None and name in ("STOP_MARKET", "STOP_LIMIT"):
-                    stop = str(order.trigger_price)
+                    stop = float(order.trigger_price)
                 elif take is None and name == "LIMIT":
-                    take = str(order.price)
-        return (stop or "none placed", take or "none placed")
+                    take = float(order.price)
+        return (stop, take)
 
     @staticmethod
     def _alert_price(cache: Any, instrument_id: Any, value: float) -> str:
-        """Format ``value`` at the instrument's price precision (fallback: ``str``)."""
+        """Format ``value`` at the instrument's price precision with thousands separators."""
         precision = None
         if cache is not None:
             instrument = cache.instrument(instrument_id)
             if instrument is not None:
                 precision = getattr(instrument, "price_precision", None)
         if isinstance(precision, int):
-            return f"{value:.{precision}f}"
+            return f"{value:,.{precision}f}"
         return str(value)
 
     def _write_then_alert(

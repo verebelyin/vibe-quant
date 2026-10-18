@@ -441,13 +441,13 @@ class TelegramBot:
         # [503]>") must be escaped or Telegram rejects the whole message.
         message = html.escape(message, quote=False)
         prefix_map = {
-            AlertType.ERROR: "[ERROR]",
-            AlertType.CIRCUIT_BREAKER: "[CIRCUIT BREAKER]",
-            AlertType.TRADE: "[TRADE]",
-            AlertType.DAILY_SUMMARY: "[DAILY]",
+            AlertType.ERROR: "⚠️ ERROR",
+            AlertType.CIRCUIT_BREAKER: "🚨 CIRCUIT BREAKER",
+            AlertType.TRADE: "💹 TRADE",
+            AlertType.DAILY_SUMMARY: "📊 DAILY",
         }
-        prefix = prefix_map.get(alert_type, "[ALERT]")
-        return f"{prefix} {timestamp}\n{message}"
+        prefix = prefix_map.get(alert_type, "🔔 ALERT")
+        return f"{prefix} · {timestamp}\n{message}"
 
     async def send_alert(
         self,

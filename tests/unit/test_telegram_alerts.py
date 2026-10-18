@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -230,19 +232,25 @@ class TestTelegramBot:
         assert not bot._is_rate_limited(AlertType.ERROR)
 
     def test_format_message(self, bot: TelegramBot) -> None:
-        """Formats message with prefix and timestamp."""
+        """Formats message with an emoji header and a UTC clock time."""
         msg = bot._format_message(AlertType.ERROR, "Test error")
 
-        assert "[ERROR]" in msg
-        assert "UTC" in msg
+        header = msg.split("\n")[0]
+        assert re.fullmatch(r"⚠️ ERROR · \d{2}:\d{2}:\d{2} UTC", header)
         assert "Test error" in msg
 
     def test_format_message_all_types(self, bot: TelegramBot) -> None:
-        """All alert types have proper prefixes."""
-        assert "[ERROR]" in bot._format_message(AlertType.ERROR, "")
-        assert "[CIRCUIT BREAKER]" in bot._format_message(AlertType.CIRCUIT_BREAKER, "")
-        assert "[TRADE]" in bot._format_message(AlertType.TRADE, "")
-        assert "[DAILY]" in bot._format_message(AlertType.DAILY_SUMMARY, "")
+        """All alert types have proper emoji headers."""
+        assert "⚠️ ERROR · " in bot._format_message(AlertType.ERROR, "")
+        assert "🚨 CIRCUIT BREAKER · " in bot._format_message(AlertType.CIRCUIT_BREAKER, "")
+        assert "💹 TRADE · " in bot._format_message(AlertType.TRADE, "")
+        assert "📊 DAILY · " in bot._format_message(AlertType.DAILY_SUMMARY, "")
+
+    def test_format_message_unknown_type_uses_default(self, bot: TelegramBot) -> None:
+        """An unmapped type falls back to the generic bell header."""
+        msg = bot._format_message(cast("AlertType", "WAT"), "")
+
+        assert "🔔 ALERT · " in msg
 
     @pytest.mark.asyncio
     async def test_send_alert_success(self, bot: TelegramBot) -> None:
@@ -368,7 +376,7 @@ class TestTelegramBot:
         await bot.send_error("Connection lost")
 
         call_kwargs = mock_client.post.call_args
-        assert "[ERROR]" in call_kwargs.kwargs["json"]["text"]
+        assert "⚠️ ERROR" in call_kwargs.kwargs["json"]["text"]
 
     @pytest.mark.asyncio
     async def test_send_circuit_breaker(self, bot: TelegramBot) -> None:
@@ -385,7 +393,7 @@ class TestTelegramBot:
 
         call_kwargs = mock_client.post.call_args
         text = call_kwargs.kwargs["json"]["text"]
-        assert "[CIRCUIT BREAKER]" in text
+        assert "🚨 CIRCUIT BREAKER" in text
         assert "Max drawdown" in text
         assert "15% threshold" in text
 
@@ -426,7 +434,7 @@ class TestTelegramBot:
 
         call_kwargs = mock_client.post.call_args
         text = call_kwargs.kwargs["json"]["text"]
-        assert "[TRADE]" in text
+        assert "💹 TRADE" in text
         assert "BUY" in text
         assert "0.5" in text
         assert "BTCUSDT" in text
@@ -453,7 +461,7 @@ class TestTelegramBot:
 
         call_kwargs = mock_client.post.call_args
         text = call_kwargs.kwargs["json"]["text"]
-        assert "[DAILY]" in text
+        assert "📊 DAILY" in text
         assert "2024-01-15" in text
         assert "+100.00" in text
 

@@ -9,6 +9,9 @@ The entry text is built 2 s after the fill (inside the alert task, never on the 
 callback) because the compiled strategy submits its SL/TP orders only then
 (``dsl/templates.py::_submit_sl_tp_orders``), so the operator sees the protective
 levels the strategy actually placed.
+
+vibe-quant-3ljxh: the texts are human-friendly (emoji, thousands separators, the
+instrument's price precision); this module pins them exactly.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from vibe_quant.alerts import telegram as telegram_module
 from vibe_quant.alerts.telegram import AlertType, TelegramBot, TelegramConfig
 from vibe_quant.logging.events import EventType
 from vibe_quant.paper import node as node_module
+from vibe_quant.paper.config import BinanceTestnetConfig
 from vibe_quant.paper.guard import TradingGuard
 from vibe_quant.paper.node import TRADE_ALERT_DELAY_S, PaperTradingNode, _GuardBridge
 
@@ -84,6 +88,7 @@ class _Cache:
         positions: dict[str, Any] | None = None,
         orders: dict[str, Any] | None = None,
         price_precision: int = 2,
+        base_currency: str | None = None,
         raising: bool = False,
         instrument_raises: bool = False,
     ) -> None:
@@ -91,6 +96,7 @@ class _Cache:
         self._positions = positions or {}
         self._orders = orders or {}
         self._price_precision = price_precision
+        self._base_currency = base_currency
         self._raising = raising
         self._instrument_raises = instrument_raises
         self.reads = 0
@@ -110,7 +116,9 @@ class _Cache:
         self.reads += 1
         if self._instrument_raises:
             raise OSError("ZZINSTRUMENTDOWN")
-        return SimpleNamespace(price_precision=self._price_precision)
+        return SimpleNamespace(
+            price_precision=self._price_precision, base_currency=self._base_currency
+        )
 
     def position(self, position_id: Any) -> Any:
         return self._positions.get(str(position_id))
@@ -141,7 +149,8 @@ class _Trip:
     """A REAL NautilusTrader round trip: Position + PositionOpened + PositionClosed.
 
     Real events matter: a NT ``PositionClosed.side`` is always FLAT (the direction lives
-    in ``entry``), which a hand-built fake with ``side=LONG`` hides.
+    in ``entry``), which a hand-built fake with ``side=LONG`` hides. ``hold_ns`` is the
+    position's lifetime in nanoseconds (it becomes ``PositionClosed.duration_ns``).
     """
 
     def __init__(
@@ -150,6 +159,7 @@ class _Trip:
         quantity: str = "0.002",
         entry_px: str = "67600.10",
         exit_px: str = "67498.70",
+        hold_ns: int = 1,
     ) -> None:
         instrument = TestInstrumentProvider.btcusdt_perp_binance()
         factory = OrderFactory(
@@ -176,7 +186,7 @@ class _Trip:
                 instrument,
                 position_id=pid,
                 last_px=Price.from_str(exit_px),
-                ts_event=TS + 1,
+                ts_event=TS + hold_ns,
             )
         )
         self.closed = TestEventStubs.position_closed(self.position)
@@ -283,15 +293,42 @@ async def test_entry_alert_long_with_stop_and_take(
     await _drain(node)
 
     assert _alert_calls(fake) == [
-        "OPEN LONG BTCUSDT-PERP.BINANCE\n"
-        "Size: 0.002 (≈ 135.20 USDT)\n"
-        "Leverage: 10x\n"
-        "Entry: 67600.10\n"
-        "Stop loss: 67498.70\n"
-        "Take profit: 67701.50\n"
-        "Trader: PAPER-007"
+        "🟢 OPENED LONG 📈 BTCUSDT\n"
+        "💰 Size: 0.002 BTC (≈ $135.20)\n"
+        "⚡ Leverage: 10x\n"
+        "🎯 Entry: 67,600.10\n"
+        "🛑 Stop: 67,498.70 (−0.15%)\n"
+        "✅ Target: 67,701.50 (+0.15%)\n"
+        "🤖 PAPER-007 · 🧪 testnet"
     ]
     assert fake.calls[0][0] is AlertType.TRADE
+
+
+async def test_entry_alert_short_with_targets(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T2: a SHORT's stop sits ABOVE entry (+x%) and its target BELOW (−x%)."""
+    monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
+    cache = _Cache(
+        open_orders=(
+            _Order("STOP_MARKET", trigger_price="68136.00"),
+            _Order("LIMIT", price="67864.00"),
+        )
+    )
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=cache)
+
+    node._on_position_opened(_Trip("SELL", "1.000", "68000.00").opened)
+    await _drain(node)
+
+    assert _alert_calls(fake) == [
+        "🔴 OPENED SHORT 📉 BTCUSDT\n"
+        "💰 Size: 1.0 BTC (≈ $68,000.00)\n"
+        "⚡ Leverage: 10x\n"
+        "🎯 Entry: 68,000.00\n"
+        "🛑 Stop: 68,136.00 (+0.20%)\n"
+        "✅ Target: 67,864.00 (−0.20%)\n"
+        "🤖 PAPER-007 · 🧪 testnet"
+    ]
 
 
 async def test_entry_alert_short_without_protective_orders(
@@ -309,37 +346,116 @@ async def test_entry_alert_short_without_protective_orders(
     await _drain(node)
 
     assert _alert_calls(fake) == [
-        "OPEN SHORT BTCUSDT-PERP.BINANCE\n"
-        "Size: 1.0 (≈ 68000.00 USDT)\n"
-        "Leverage: 10x\n"
-        "Entry: 68000.00\n"
-        "Stop loss: none placed\n"
-        "Take profit: none placed\n"
-        "Trader: PAPER-007"
+        "🔴 OPENED SHORT 📉 BTCUSDT\n"
+        "💰 Size: 1.0 BTC (≈ $68,000.00)\n"
+        "⚡ Leverage: 10x\n"
+        "🎯 Entry: 68,000.00\n"
+        "🛑 Stop: none placed\n"
+        "✅ Target: none placed\n"
+        "🤖 PAPER-007 · 🧪 testnet"
     ]
+
+
+async def test_entry_alert_stop_only_target_missing(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T2: a LONG with a stop but no take-profit -> only the target reads 'none placed'."""
+    monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
+    cache = _Cache(open_orders=(_Order("STOP_MARKET", trigger_price="67498.70"),))
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=cache)
+
+    node._on_position_opened(_Trip().opened)
+    await _drain(node)
+
+    assert _alert_calls(fake) == [
+        "🟢 OPENED LONG 📈 BTCUSDT\n"
+        "💰 Size: 0.002 BTC (≈ $135.20)\n"
+        "⚡ Leverage: 10x\n"
+        "🎯 Entry: 67,600.10\n"
+        "🛑 Stop: 67,498.70 (−0.15%)\n"
+        "✅ Target: none placed\n"
+        "🤖 PAPER-007 · 🧪 testnet"
+    ]
+
+
+async def test_entry_alert_uses_instrument_base_currency(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T2: the base asset is the instrument's base currency, not just the symbol suffix."""
+    monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
+    cache = _Cache(base_currency="XBT")
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=cache)
+
+    node._on_position_opened(_Trip().opened)
+    await _drain(node)
+
+    assert "💰 Size: 0.002 XBT (≈ $135.20)" in _alert_calls(fake)[0]
 
 
 # ----------------------------------------------------------------- T3: exit
 
 
 @pytest.mark.parametrize(
-    ("entry", "exit_px", "order_type", "reason", "direction", "pnl"),
+    ("entry", "exit_px", "closing", "expected"),
     [
-        ("BUY", "67498.70", "STOP_MARKET", "stop_loss", "LONG", "-0.25"),
-        ("BUY", "68400.00", "LIMIT", "take_profit", "LONG", "1.55"),
-        ("SELL", "67498.70", "LIMIT", "take_profit", "SHORT", "0.15"),
-        ("SELL", "68400.00", "STOP_MARKET", "stop_loss", "SHORT", "-1.65"),
+        (
+            "BUY",
+            "68400.00",
+            _Order("LIMIT"),
+            "✅ CLOSED LONG 📈 BTCUSDT · WIN\n"
+            "📈 P&L: +1.55 USDT (+1.15%)\n"
+            "🚪 Exit: 68,400.00 · 🎯 take profit hit\n"
+            "🎯 Entry: 67,600.10\n"
+            "⏱️ Held: 0s\n"
+            "💸 Fees: 0.05 USDT\n"
+            "🤖 PAPER-007 · 🧪 testnet",
+        ),
+        (
+            "BUY",
+            "67498.70",
+            _Order("STOP_MARKET"),
+            "❌ CLOSED LONG 📈 BTCUSDT · LOSS\n"
+            "📉 P&L: −0.25 USDT (−0.19%)\n"
+            "🚪 Exit: 67,498.70 · 🛑 stop loss hit\n"
+            "🎯 Entry: 67,600.10\n"
+            "⏱️ Held: 0s\n"
+            "💸 Fees: 0.05 USDT\n"
+            "🤖 PAPER-007 · 🧪 testnet",
+        ),
+        (
+            "SELL",
+            "67498.70",
+            _Order("LIMIT"),
+            "✅ CLOSED SHORT 📉 BTCUSDT · WIN\n"
+            "📈 P&L: +0.15 USDT (+0.11%)\n"
+            "🚪 Exit: 67,498.70 · 🎯 take profit hit\n"
+            "🎯 Entry: 67,600.10\n"
+            "⏱️ Held: 0s\n"
+            "💸 Fees: 0.05 USDT\n"
+            "🤖 PAPER-007 · 🧪 testnet",
+        ),
+        (
+            "SELL",
+            "68400.00",
+            _Order("STOP_MARKET"),
+            "❌ CLOSED SHORT 📉 BTCUSDT · LOSS\n"
+            "📉 P&L: −1.65 USDT (−1.22%)\n"
+            "🚪 Exit: 68,400.00 · 🛑 stop loss hit\n"
+            "🎯 Entry: 67,600.10\n"
+            "⏱️ Held: 0s\n"
+            "💸 Fees: 0.05 USDT\n"
+            "🤖 PAPER-007 · 🧪 testnet",
+        ),
     ],
+    ids=["long-win", "long-loss", "short-win", "short-loss"],
 )
 async def test_exit_alert_text(
     seeded: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
     entry: str,
     exit_px: str,
-    order_type: str,
-    reason: str,
-    direction: str,
-    pnl: str,
+    closing: Any,
+    expected: str,
 ) -> None:
     """T3 / F1: exact exit text for a REAL NT close of a LONG and of a SHORT.
 
@@ -347,21 +463,145 @@ async def test_exit_alert_text(
     """
     trip = _Trip(entry=entry, exit_px=exit_px)
     assert trip.closed.side.name == "FLAT", "the NT invariant this test guards"
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=trip.cache(closing=closing))
+
+    node._on_position_closed(trip.closed)
+    await _drain(node)
+
+    assert _alert_calls(fake) == [expected]
+    assert fake.calls[0][0] is AlertType.TRADE
+
+
+def test_exit_break_even_is_a_win(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3: net == 0 is the ``>= 0`` edge -- a WIN showing +0.00 (not LOSS/−0.00)."""
+    trip = _Trip("BUY", exit_px="67498.70")
+    node, _fake = _node(
+        monkeypatch, seeded, telegram=None, cache=trip.cache(closing=_Order("MARKET"))
+    )
+
+    lines = node._trade_close_message(trip.closed, 0.0, 0.0, "signal").split("\n")
+
+    assert lines[0] == "✅ CLOSED LONG 📈 BTCUSDT · WIN"
+    assert lines[1] == "📈 P&L: +0.00 USDT (+0.00%)"
+
+
+@pytest.mark.parametrize(
+    ("closing", "reason_text"),
+    [
+        (_Order("STOP_MARKET"), "🛑 stop loss hit"),
+        (_Order("LIMIT"), "🎯 take profit hit"),
+        (_Order("MARKET"), "📊 strategy signal"),
+        (_Order("MARKET", tags=("MARKET_EXIT",)), "⏹️ closed by halt"),
+    ],
+    ids=["stop_loss", "take_profit", "signal", "halt_or_close_all"],
+)
+async def test_exit_reason_text(
+    seeded: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    closing: Any,
+    reason_text: str,
+) -> None:
+    """T3: each exit reason maps to its human-friendly text (fallback: ``❔ <reason>``)."""
+    trip = _Trip("BUY", exit_px="67498.70")
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=trip.cache(closing=closing))
+
+    node._on_position_closed(trip.closed)
+    await _drain(node)
+
+    lines = _alert_calls(fake)[0].split("\n")
+    assert lines[2] == f"🚪 Exit: 67,498.70 · {reason_text}"
+
+
+async def test_exit_reason_unknown_falls_back(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3: a close whose order is not in the cache reads ``❔ unknown``."""
+    trip = _Trip("BUY", exit_px="67498.70")
     node, fake = _node(
-        monkeypatch, seeded, telegram=None, cache=trip.cache(closing=_Order(order_type))
+        monkeypatch, seeded, telegram=None, cache=trip.cache()  # no closing order
     )
 
     node._on_position_closed(trip.closed)
     await _drain(node)
 
+    lines = _alert_calls(fake)[0].split("\n")
+    assert lines[2] == "🚪 Exit: 67,498.70 · ❔ unknown"
+
+
+async def test_exit_without_cached_position_omits_entry_and_pnl_percent(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3: no cached position -> 'Entry: unknown' and the P&L % is omitted."""
+    trip = _Trip("BUY", exit_px="67498.70")
+    cache = _Cache(orders={str(trip.closed.closing_order_id): _Order("STOP_MARKET")})
+    node, fake = _node(monkeypatch, seeded, telegram=None, cache=cache)
+
+    node._on_position_closed(trip.closed)
+    await _drain(node)
+
     assert _alert_calls(fake) == [
-        f"CLOSE {direction} BTCUSDT-PERP.BINANCE\n"
-        f"Exit: {exit_px} ({reason})\n"
-        "Entry: 67600.10\n"
-        f"P&L: {pnl} USDT (net, after 0.05 fees)\n"
-        "Trader: PAPER-007"
+        "❌ CLOSED LONG 📈 BTCUSDT · LOSS\n"
+        "📉 P&L: −0.25 USDT\n"
+        "🚪 Exit: 67,498.70 · 🛑 stop loss hit\n"
+        "🎯 Entry: unknown\n"
+        "⏱️ Held: 0s\n"
+        "💸 Fees: 0.00 USDT\n"
+        "🤖 PAPER-007 · 🧪 testnet"
     ]
-    assert fake.calls[0][0] is AlertType.TRADE
+
+
+@pytest.mark.parametrize(
+    ("hold_ns", "expected"),
+    [
+        (45_000_000_000, "45s"),  # 45 s
+        (60_000_000_000, "1m 00s"),  # exactly 1 min
+        (782_000_000_000, "13m 02s"),  # 13 m 02 s
+        (3_600_000_000_000, "1h 00m"),  # exactly 1 h
+        (7_500_000_000_000, "2h 05m"),  # 2 h 05 m
+    ],
+    ids=["45s", "1m", "13m02s", "1h", "2h05m"],
+)
+async def test_held_format(
+    seeded: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    hold_ns: int,
+    expected: str,
+) -> None:
+    """T3: the held time comes from PositionClosed.duration_ns and is human-formatted."""
+    trip = _Trip("BUY", exit_px="67498.70", hold_ns=hold_ns)
+    node, fake = _node(
+        monkeypatch, seeded, telegram=None, cache=trip.cache(closing=_Order("STOP_MARKET"))
+    )
+
+    node._on_position_closed(trip.closed)
+    await _drain(node)
+
+    lines = _alert_calls(fake)[0].split("\n")
+    assert lines[4] == f"⏱️ Held: {expected}"
+
+
+async def test_live_session_label(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3: a non-testnet session shows LIVE instead of testnet."""
+    monkeypatch.setattr(node_module, "TRADE_ALERT_DELAY_S", 0.0)
+    node, _trace = _trace_node(
+        monkeypatch,
+        seeded,
+        trade_alerts=True,
+        binance=BinanceTestnetConfig("key", "secret", testnet=False),
+    )
+    fake = _FakeTelegram()
+    node._telegram = fake
+    node._guard = SimpleNamespace(cache=_Cache())
+    node._resolved = SimpleNamespace(leverage=10, margin_type="CROSSED")
+
+    node._on_position_opened(_Trip().opened)
+    await _drain(node)
+
+    assert _alert_calls(fake)[0].split("\n")[-1] == "🤖 PAPER-007 · 💵 LIVE"
 
 
 # ----------------------------------------------------------------- T4: failures
@@ -477,8 +717,8 @@ async def test_fast_open_then_close_sends_both_alerts(
 
         assert len(sent) == 2, "a fast OPEN/CLOSE round trip must deliver BOTH alerts"
         first, second = (request.content.decode() for request in sent)
-        assert "[TRADE]" in first and "OPEN LONG BTCUSDT-PERP.BINANCE" in first
-        assert "[TRADE]" in second and "CLOSE LONG BTCUSDT-PERP.BINANCE" in second
+        assert "💹 TRADE" in first and "OPENED LONG 📈 BTCUSDT" in first
+        assert "💹 TRADE" in second and "CLOSED LONG 📈 BTCUSDT" in second
         assert bot._last_alert_times[AlertType.TRADE] == 1_001.0
     finally:
         await bot.close()
@@ -521,7 +761,8 @@ async def test_entry_alert_waits_two_seconds_before_reading_the_cache(
 
     assert cache.reads > 0
     message = _alert_calls(fake)[0]
-    assert "Stop loss: 67498.70" in message and "Take profit: 67701.50" in message
+    assert "🛑 Stop: 67,498.70 (−0.15%)" in message
+    assert "✅ Target: 67,701.50 (+0.15%)" in message
 
 
 # ------------------------------------- F2: alerts never disturb the NT callback
