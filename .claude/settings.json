@@ -25,6 +25,17 @@
         ],
         "matcher": ""
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 scripts/agents/hooks/bd_notes_guard.py"
+          }
+        ]
+      }
     ]
   }
 }
