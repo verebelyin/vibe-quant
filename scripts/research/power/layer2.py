@@ -1361,6 +1361,19 @@ def cmd_discover(ctx: Ctx, args: argparse.Namespace) -> int:
     if label is not None:
         existing = state.get(FOLLOWUP_RUNS_KEY, {}).get(label)
         where = f"{variant} label {label}"
+        # 7vn2j: a label belongs to the variant that first used it — reusing it would either
+        # silently skip this run or overwrite the other variant's comparator (harvest --followup
+        # needs btc0's). Refused before any mkdir/rmtree/seed row/launch, with and without --force.
+        if existing is not None:
+            owner = existing.get("variant")
+            if owner is None:
+                msg = (f"label {label!r}: the recorded follow-up run has no variant; refusing "
+                       f"to reuse it for {variant}")
+                raise Layer2Error(msg)
+            if owner != variant:
+                msg = (f"label {label!r} is already recorded for variant {owner!r}; refusing "
+                       f"to reuse it for {variant}")
+                raise Layer2Error(msg)
     else:
         existing = state.get("variants", {}).get(variant, {}).get("runs", {}).get(str(seed))
         where = f"{variant} seed {seed}"

@@ -1549,3 +1549,123 @@ def test_r31_harvest_followup_fails_closed_on_isolation_violation(
     ]) == 0
     cal = layer2.load_state(ok)["variants"]["btc5.0"]["runs"]["1"]["harvest"]["calibration"]
     assert cal["found_cal"] is True
+
+
+# --- 7vn2j: a --label belongs to the variant that first used it --------------------------
+
+
+def _record_followup_label(out: Path, label: str, record: dict[str, Any]) -> None:
+    def seed(s: dict[str, Any]) -> None:
+        s.setdefault(layer2.FOLLOWUP_RUNS_KEY, {})[label] = record
+
+    layer2.update_state(out, seed)
+
+
+def _discover_label_args(
+    tmp_path: Path, variant: str, label: str, *, force: bool = False, sub: tuple[str, ...] = ()
+) -> list[str]:
+    return [*_cli(tmp_path), *(["--force"] if force else []),
+            "discover", "--variant", variant, "--seed", "1", "--label", label, *sub]
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["plain", "force"])
+def test_7vn2j_discover_label_owned_by_another_variant_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], force: bool
+) -> None:
+    """R1: reusing btc0's label w1 for btc5.0 is exit 2 WITH and WITHOUT --force, launches
+    nothing (not even the run dir) and leaves the btc0 comparator record byte-identical."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc5.0"))
+    _record_followup_label(out, "w1", {
+        "status": "completed", "variant": "btc0", "label": "w1", "seed": 1, "run_id": 4,
+    })
+    before = out.read_bytes()
+    monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("launched"))
+    monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
+
+    args = _discover_label_args(tmp_path, "btc5.0", "w1", force=force, sub=("--warm",))
+    assert layer2.main(args) == 2
+    msg = capsys.readouterr().out
+    assert "w1" in msg and "btc0" in msg and "btc5.0" in msg
+    assert out.read_bytes() == before
+    assert not (tmp_path / "o" / "scratch" / "runs" / "btc5.0-w1").exists()
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["plain", "force"])
+def test_7vn2j_discover_label_record_without_variant_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], force: bool
+) -> None:
+    """R4: a followup_runs record with no "variant" key cannot be attributed, so it fails
+    closed exactly like R1 (exit 2, nothing launched), with and without --force."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
+    _record_followup_label(out, "w1", {"status": "completed", "label": "w1", "seed": 1})
+    before = out.read_bytes()
+    monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("launched"))
+    monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
+
+    args = _discover_label_args(tmp_path, "btc5.0", "w1", force=force)
+    assert layer2.main(args) == 2
+    msg = capsys.readouterr().out
+    assert "no variant" in msg and "w1" in msg
+    assert out.read_bytes() == before
+    assert not (tmp_path / "o" / "scratch" / "runs" / "btc5.0-w1").exists()
+
+
+def test_7vn2j_discover_label_same_variant_still_already_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R2: the owning variant reusing its own label keeps the old 'already recorded' exit 0
+    and launches nothing."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
+    _record_followup_label(out, "w1", {
+        "status": "completed", "variant": "btc5.0", "label": "w1", "seed": 1, "run_id": 4,
+    })
+    before = out.read_bytes()
+    monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("relaunched"))
+    assert layer2.main(_discover_label_args(tmp_path, "btc5.0", "w1")) == 0
+    assert "already recorded (completed)" in capsys.readouterr().out
+    assert out.read_bytes() == before
+
+
+def test_7vn2j_discover_label_same_variant_force_reruns_and_replaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3: --force on the owning variant still re-runs the label and replaces its record."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
+    _record_followup_label(out, "w1", {
+        "status": "failed", "variant": "btc5.0", "label": "w1", "seed": 9, "run_id": 4,
+    })
+    seen: list[tuple[int, dict[str, Any]]] = []
+
+    def fake(run_id: int, db: Path, seed: int, **kw: Any) -> list[str]:
+        seen.append((seed, kw))
+        return _done_child()(run_id, db, seed)
+
+    monkeypatch.setattr(layer2, "discovery_command", fake)
+    args = _discover_label_args(
+        tmp_path, "btc5.0", "w1", force=True, sub=("--pop", "50", "--gens", "20")
+    )
+    assert layer2.main(args) == 0
+    rec = layer2.load_state(out)[layer2.FOLLOWUP_RUNS_KEY]["w1"]
+    assert rec["status"] == "completed" and rec["seed"] == 1 and rec["variant"] == "btc5.0"
+    assert seen == [(1, {"pop": 50, "gens": 20})]
+
+
+def test_7vn2j_discover_without_a_label_ignores_followup_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R5: an unlabelled run is untouched by any followup_runs entry — a label owned by
+    another variant never blocks it."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
+    _record_followup_label(out, "w1", {"status": "completed", "variant": "btc0", "label": "w1"})
+    monkeypatch.setattr(layer2, "discovery_command", _done_child())
+    assert layer2.main([*_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "3"]) == 0
+    state = layer2.load_state(out)
+    assert state["variants"]["btc5.0"]["runs"]["3"]["status"] == "completed"
+    assert state[layer2.FOLLOWUP_RUNS_KEY]["w1"]["variant"] == "btc0"
+
+
