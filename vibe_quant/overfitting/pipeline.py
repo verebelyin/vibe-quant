@@ -645,6 +645,9 @@ class OverfittingPipeline:
             return max(1, total_trials)
         payload = self._discovery_payload(candidate)
         if payload is not None:
+            gate_n = self._effective_rule_gate_n(payload)
+            if gate_n is not None:
+                return max(gate_n, num_candidates)
             evaluated = payload.get("evaluated")
             if isinstance(evaluated, int) and not isinstance(evaluated, bool) and evaluated > 0:
                 return max(evaluated, num_candidates)
@@ -653,6 +656,32 @@ class OverfittingPipeline:
                 "back to %d (understates the search)", candidate.get("id"), num_candidates,
             )
         return max(1, num_candidates)
+
+    @staticmethod
+    def _effective_rule_gate_n(payload: dict[str, Any]) -> int | None:
+        """``notes.dsr_trials.gate_n`` when the run recorded the effective-N rule.
+
+        Design D3 (megq1): discovery judged the champion at its EV-matched
+        effective trial count, so the promote-time re-check must use the same N —
+        at raw ``evaluated`` a champion discovery passed can be dropped. The
+        candidate floor is kept (review N2: ``N = max(gate_n, num_candidates)``).
+        Anything unrecognised returns None and keeps the raw fallback, so legacy
+        payloads are byte-identical.
+
+        The constant is imported here, not at module level: ``neff`` imports
+        ``overfitting.dsr``, so a top-level import cycles through this package's
+        ``__init__`` when ``neff`` is imported first (same reason
+        ``discovery/pipeline.py`` imports it inside the function).
+        """
+        from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
+
+        trials = payload.get("dsr_trials")
+        if not isinstance(trials, dict) or trials.get("n_rule") != N_RULE_EFFECTIVE:
+            return None
+        gate_n = trials.get("gate_n")
+        if isinstance(gate_n, int) and not isinstance(gate_n, bool) and gate_n >= 1:
+            return gate_n
+        return None
 
     @staticmethod
     def _champion_dsr_record(payload: dict[str, Any] | None) -> dict[str, Any] | None:

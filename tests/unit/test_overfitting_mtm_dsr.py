@@ -60,6 +60,7 @@ def _discovery_db(
     record: dict[str, Any] | None,
     symbols: list[str] | None = None,
     symbol_agg: str = "portfolio",
+    dsr_trials: dict[str, Any] | None = None,
 ) -> tuple[Path, int]:
     """A discovery run whose headline is the REALIZED Sharpe 2.5 (as persisted)."""
     db = tmp_path / "disc.db"
@@ -69,17 +70,20 @@ def _discovery_db(
     champion: dict[str, Any] = {"sharpe": REALIZED_SR_ANN}
     if record is not None:
         champion["dsr"] = record
+    notes: dict[str, Any] = {
+        "type": "discovery", "evaluated": evaluated,
+        "symbols": syms, "symbol_agg": symbol_agg,
+        "train_dates": ["2022-01-01", "2026-03-17"],
+        "top_strategies": [champion],
+    }
+    if dsr_trials is not None:
+        notes["dsr_trials"] = dsr_trials
     sm.save_backtest_result(
         run_id,
         {
             "sharpe_ratio": REALIZED_SR_ANN, "total_return": 0.4, "max_drawdown": 0.1,
             "profit_factor": 1.5, "total_trades": 120, "skewness": 0.0, "kurtosis": 3.0,
-            "notes": json.dumps({
-                "type": "discovery", "evaluated": evaluated,
-                "symbols": syms, "symbol_agg": symbol_agg,
-                "train_dates": ["2022-01-01", "2026-03-17"],
-                "top_strategies": [champion],
-            }),
+            "notes": json.dumps(notes),
         },
     )  # fmt: skip
     sm.close()
@@ -239,6 +243,137 @@ def test_recheck_consumes_the_record_discovery_actually_writes(tmp_path: Path) -
     assert cand.passed_dsr is False
     assert cand.dsr_fail_reason is not None and "ETHUSDT" in cand.dsr_fail_reason
     assert (skew, kurt) == (record["skewness"], record["kurtosis"])
+
+
+# --- effective-trial-count reconciliation (megq1 T4, design-neff.md R25-R27) -
+
+#: ``notes.dsr_trials.n_rule`` a post-switch discovery run records (sibling T3).
+DISC_N_RULE = "cumulative_effective_same_tf_overlapping_train"
+#: any older ``n_rule`` -> the run's effective N is not trusted here.
+LEGACY_N_RULE = "cumulative_raw"
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "import vibe_quant.discovery.neff",  # the direction design N7 got wrong
+        "import vibe_quant.overfitting.pipeline",
+    ],
+)
+def test_import_order_has_no_cycle(first: str) -> None:
+    """A MODULE-LEVEL ``from vibe_quant.discovery.neff import ...`` in
+    overfitting/pipeline.py cycles through overfitting/__init__ when neff is
+    imported first (design N7 was wrong); each order must import cleanly in a
+    fresh interpreter, so a future top-level import fails CI here."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    code = (
+        f"{first}\n"
+        "import vibe_quant.discovery.neff\n"
+        "import vibe_quant.overfitting.pipeline\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root)},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def _discovery_sweep_db(
+    tmp_path: Path, *, count: int, dsr_trials: dict[str, Any]
+) -> tuple[Path, int]:
+    """``count`` discovery-payload candidates in sweep_results with MTM stats set.
+
+    A real discovery run promotes one champion, so this builds the multi-candidate
+    shape a re-check must still floor at the number of candidates it sees.
+    """
+    db = tmp_path / "disc_sweep.db"
+    sm = StateManager(db)
+    rid = sm.create_backtest_run(
+        None, "discovery", ["BTCUSDT"], "4h", "2022-01-01", "2026-03-17", {}
+    )
+    notes = {
+        "type": "discovery", "evaluated": 40, "symbols": ["BTCUSDT"],
+        "symbol_agg": "portfolio", "train_dates": ["2022-01-01", "2026-03-17"],
+        "top_strategies": [{"sharpe": REALIZED_SR_ANN, "dsr": _record()}],
+        "dsr_trials": dsr_trials,
+    }
+    row = {
+        "parameters": notes, "sharpe_ratio": REALIZED_SR_ANN, "total_return": 0.4,
+        "max_drawdown": 0.1, "profit_factor": 1.5, "total_trades": 120,
+        "mtm_sharpe_daily": deannualize_sharpe(MTM_SR_ANN), "mtm_skewness": 0.0,
+        "mtm_kurtosis": 3.0, "mtm_days": T_DAYS,
+    }
+    sm.save_sweep_results_batch(rid, [dict(row) for _ in range(count)])
+    sm.close()
+    return db, rid
+
+
+@pytest.mark.parametrize(("gate_n", "expected"), [(27, 27), (1, 1)])
+def test_effective_rule_recheck_uses_gate_n(
+    tmp_path: Path, gate_n: int, expected: int
+) -> None:
+    """R25/D3: a champion discovery judged at its effective gate N is re-checked at
+    the SAME N, not at the raw ``evaluated`` 40 (which is stricter and can drop it)."""
+    db, rid = _discovery_db(
+        tmp_path, evaluated=40, record=_record(),
+        dsr_trials={"n_rule": DISC_N_RULE, "gate_n": gate_n},
+    )
+    cand, _ = _run_dsr(db, rid)
+    assert cand.dsr_result is not None
+    assert cand.dsr_result.num_trials == expected
+    ref = DeflatedSharpeRatio().calculate(
+        deannualize_sharpe(MTM_SR_ANN), expected, T_DAYS, 0.0, 3.0
+    )
+    assert cand.dsr_result.p_value == pytest.approx(ref.p_value, rel=1e-12)
+    other = DeflatedSharpeRatio().calculate(deannualize_sharpe(MTM_SR_ANN), 40, T_DAYS, 0.0, 3.0)
+    assert ref.p_value != other.p_value  # the two Ns are distinguishable
+
+
+def test_effective_rule_keeps_candidate_floor(tmp_path: Path) -> None:
+    """R26b/N2: gate_n 3 but 5 candidates -> N = max(3, 5) = 5 (floor kept)."""
+    db, rid = _discovery_sweep_db(
+        tmp_path, count=5, dsr_trials={"n_rule": DISC_N_RULE, "gate_n": 3}
+    )
+    p = OverfittingPipeline(db)
+    try:
+        res = p.run(run_id=rid, config=FilterConfig.dsr_only())
+    finally:
+        p.close()
+    assert [c.dsr_result.num_trials for c in res.candidates if c.dsr_result] == [5] * 5
+
+
+@pytest.mark.parametrize(
+    "dsr_trials",
+    [
+        {"n_rule": DISC_N_RULE},                   # gate_n absent
+        {"n_rule": DISC_N_RULE, "gate_n": None},
+        {"n_rule": DISC_N_RULE, "gate_n": True},   # a bool is not a trial count
+        {"n_rule": DISC_N_RULE, "gate_n": "27"},
+        {"n_rule": DISC_N_RULE, "gate_n": 0},      # below the floor
+        {"n_rule": DISC_N_RULE, "gate_n": 27.0},   # not an int
+        {"n_rule": LEGACY_N_RULE, "gate_n": 27},   # older n_rule
+        None,                                      # legacy payload, no dsr_trials
+    ],
+)
+def test_recheck_falls_back_to_evaluated(
+    tmp_path: Path, dsr_trials: dict[str, Any] | None
+) -> None:
+    """R26: no usable ``gate_n`` under the new rule (or a legacy payload) keeps
+    today's N = max(evaluated 40, num_candidates 1) = 40, byte-identical."""
+    db, rid = _discovery_db(tmp_path, evaluated=40, record=_record(), dsr_trials=dsr_trials)
+    cand, _ = _run_dsr(db, rid)
+    assert cand.dsr_result is not None
+    assert cand.dsr_result.num_trials == 40
+    ref = DeflatedSharpeRatio().calculate(deannualize_sharpe(MTM_SR_ANN), 40, T_DAYS, 0.0, 3.0)
+    assert cand.dsr_result.p_value == pytest.approx(ref.p_value, rel=1e-12)
 
 
 # --- per-symbol floor ------------------------------------------------------
