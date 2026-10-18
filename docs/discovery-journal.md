@@ -4,6 +4,33 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: RESULT P-1a — a 50×20 GA finds the planted S 5.8 edge in 2/2 seeds (search budget is a bottleneck); layer-2 btc2.0 "find" re-scored FAIL
+
+Pre-registration P-1a (32037230). `layer2.py` on main 9178f24f, operator run 12:50:55–14:38:50 local; output `data/swarm/20261017-power-paper/power/layer2.{json,log}`, handoff `handoffs/op-l2-followup-1.md`. `verify-untouched`: `R26 shared data untouched`. R31 ok on every run (prior_n 0).
+
+**(a) Re-screen 9e76b873b162** (corr / train_S): btc0 0.539394064306609 / 1.1087301272003958; btc2.0 0.5370463971268444 / 1.447515528201331; btc5.0 0.5708732998742876 / 1.475392641497731. ΔS = 0.3666625142973352 → **mixed** by the rule (prediction "plant-driven" not met). Its corr with the plant is as high on btc0 (no plant) as on btc2.0.
+
+**(b) Null threshold** (m 1200, reps 2000, seed 0): C95(40) = 0.6385267205767553 (prediction [0.45, 0.60] missed high); C95(847) = C95(878) = 0.6004842265036469. 0.5370463971268444 < C_40 → **V5 btc2.0 re-scored FAIL** (correction to the layer-2 entry below: no V5 PASS for any variant at 12×4).
+
+**(c) Warm start** (btc5.0, 12×4, seeded with the planted chromosome): warm1 and warm2 each 1 champion, corr 1.0, train_S 5.813800467449691, 173 trades, found_cal True, gate_n 38 / 41 → the GA path agrees with the V4 direct chain (no defect). **Deviation D1:** the pre-check rule failed as written — planted-as-BOTH train_S 5.813800467449691 vs anchor 5.762631704955743 (|Δ| 0.0511688 > 0.05); the anchor was the direct-chain fitness train_S, a different evaluation path; planted == planted-as-BOTH bit-identical on all three builds; the chief ruled to proceed.
+
+**(d) 50×20 budget** (runs parallelised at the chief's instruction, results seed-deterministic):
+
+| run | evaluated | champions | best corr (train_S) | max train_S among champions | C_K | found_cal |
+|---|---|---|---|---|---|---|
+| btc0 s1 | 878 | 0 | max\|corr\| 0.4761185692715131 | — | — | — |
+| btc0 s2 | 883 | 0 | max\|corr\| 0.231074549610333 | — | — | — |
+| btc5.0 s1 | 878 | 5 | 0.704816464752532 (4.7232946329331655) | 4.7232946329331655 | 0.6004842265036469 | True |
+| btc5.0 s2 | 847 | 5 | 0.6973214931528993 (4.175465496936061) | 4.5941508757441 | 0.6004842265036469 | True |
+
+Prediction ("not found; best train_S < 2.906900233724846") **missed**. By the pre-registered mapping: found in 2/2 ⇒ **search budget is a bottleneck → recommend a production budget study**; btc0 0 champions at N ≈ 880 ⇒ no gate leak observed.
+
+**Reading:** at the pre-registered layer-2 budget (12×4 ≈ 40 genomes) the GA never recovered a strong, expressible edge; at 50×20 (≈ 860 genomes) it did, in both seeds, and the gates passed it (in-run DSR at N ≈ 860) while passing nothing on the null copy. Production discovery runs 877/878/927/950 used 6–16 × 2–6. So "0 champions" in those runs reflected search budget as well as DSR strictness. Not shown: the minimum budget that suffices, other edge shapes or timeframes, or that real BTC holds such an edge.
+
+**Next (proposal, needs the user):** production budget study — how large pop × gens must be to recover planted edges of S 2–5 on 4h/1d, and what it costs in wall time (ties to bead vibe-quant-6n0n9, discovery speed).
+
+---
+
 ## 2026-10-18: RESULT G1 — EV-matched effective trial count passes the false-positive check (max 0.0125 ≤ 0.05)
 
 Pre-registration G1 (e73a0747). `neff_null.py --reps 400 --workers 6` on main 916ca37b, 528.4 s; output `data/swarm/20261017-power-paper/power/neff_null.{json,log}`. Exit 0.
@@ -81,7 +108,7 @@ Pre-registration P-1 (648438d5). Code `swarm/pw-layer2` @ e170c858 (layer2.py + 
 - `V5 btc5.0`: seed 1 found False max|corr| 0.4187189005312853; seed 2 found False max|corr| 0.44501304058913954. All 6 completed, champions 0, outcome no_viable_strategies.
 - `R26 shared data untouched` (ok True, problems []); snapshot 9 files, discovery rows {count 458, max_id 950}. `R31 isolation` ok (prior_n 0, gate_n == raw each).
 
-**Reading:** V4 PASS shows the machinery works; no STOP-class defect (R25, R26, R31 ok). At the pre-registered budget (pop 12 × gens 4, ≈ 40 genomes; production similar: 927 10×2, 950 6×2, 877/878 16×6) the GA did not recover an S 5.8 plant (best candidate S 0.501 vs planted 5.813800467449691), so "0 champions" is uninformative for search reasons too, not only DSR power. The btc2.0 "found" is not credible: a different rule, CCI(25) < -55; corr 0.5370463971268444 within the null range 0.4647; R30 never null-calibrated — a V5 PASS by the written rule only.
+**Reading:** V4 PASS shows the machinery works; no STOP-class defect (R25, R26, R31 ok). At the pre-registered budget (pop 12 × gens 4, ≈ 40 genomes; production similar: 927 10×2, 950 6×2, 877/878 16×6) the GA did not recover an S 5.8 plant (best candidate S 0.501 vs planted 5.813800467449691), so "0 champions" is uninformative for search reasons too, not only DSR power. The btc2.0 "found" is not credible: a different rule, CCI(25) < -55; corr 0.5370463971268444 within the null range 0.4647; R30 never null-calibrated — a V5 PASS by the written rule only. **Correction (RESULT P-1a):** re-scored FAIL against the null-calibrated threshold C_40 0.6385267205767553.
 
 **Does NOT show:** anything about larger budgets; that the GA finds S 2 edges.
 
