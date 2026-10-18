@@ -90,6 +90,15 @@ runs that file (it is a changed test file, an importer file, or the whole tests/
 That catches a pin OUTSIDE the targeted set that stays green here and goes red in the full
 suite later.
 
+policy-tests: POLICY_TESTS are repo-wide policy tests that SCAN the tree or the docs
+(silent-exception ratchet, steering word budgets, other tree scanners) instead of importing
+the module under change, so neither `-k` nor the reverse import closure can select them. They
+run on EVERY non-full selection - including a diff with NO .py file at all, where a docs or
+agent edit can turn the word-budget test red - as one serial call ahead of the importer
+closure and the `-k` group. A change to a vibe_quant module additionally runs the targeted
+files and that module's reverse import closure. A full tests/unit run already covers them.
+Keeps a gate PASS from leaving main red.
+
 Tool commands can be stubbed via env (full command, shell-quoted):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
 the "<python> -m pytest" prefix and keeps the arguments). Stubs are refused (FAIL,
@@ -204,6 +213,20 @@ TIMING_MARK = "timing"
 # of tests/unit, and only a full run is cheap enough there. A conftest/__init__ change
 # already forces the full suite via needs_full_suite, before any graph is built.
 MAX_IMPORTER_FILES = 150
+# Repo-wide policy tests: each SCANS the tree (or the docs) instead of importing the module
+# it checks, so the reverse import closure can never select one and `-k` never names it. A
+# change anywhere in the scanned tree can turn one red while a targeted gate run stays green -
+# 2026-10-18: a new silent handler in vibe_quant/discovery/neff.py went red in
+# test_exception_hygiene.py although every gate PASSed. Every non-full selection appends the
+# ones present in the worktree (a full tests/unit run already covers them). Add a file only
+# when its verdict depends on the TREE, not on the changed module: a test that imports what
+# it checks is already in the importer closure.
+POLICY_TESTS = (
+    "tests/unit/test_exception_hygiene.py",  # silent-swallow ratchet over the money packages
+    "tests/unit/test_steering_budget.py",  # word budgets over the steering docs and agents
+    "tests/unit/test_api_routers_conn_locking.py",  # tree scan: routers/discovery conn use
+    "tests/unit/test_discovery_liquidation.py",  # tree scan: every NTBacktestFn passes liquidation=
+)
 CACHE_DIR = "swarm-check"
 CACHE_VERSION = 2
 CHECK_STATUSES = ("PASS", "FAIL", "SKIP", "WARN")
@@ -682,6 +705,15 @@ def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -
     )
 
 
+def policy_test_files(worktree: Path) -> list[str]:
+    """The POLICY_TESTS present in `worktree`, in constant order.
+
+    Filtered by existence so a tree that predates a file (or a throwaway test repo) never
+    hands pytest a path that does not exist. Constant order keeps the command line stable.
+    """
+    return [p for p in POLICY_TESTS if (worktree / p).is_file()]
+
+
 def should_run_exactness(paths: Sequence[str]) -> bool:
     return any(
         (p.startswith("vibe_quant/") and not p.startswith(EXACTNESS_SAFE_DIRS))
@@ -965,18 +997,12 @@ def _run_tests(
     cfg: Config, state: GitState, tools: dict[str, list[str]], run: RunFn, wt_env: dict[str, str]
 ) -> TestRun:
     python_changed = [p for p in state.changed if p.endswith(".py")]
-    if not python_changed:
-        return TestRun(Check("tests", "SKIP", "no python changed"))
     targets = [p for p in changed_test_files(state.changed) if (cfg.worktree / p).exists()]
     expr = k_expr(state.changed)
     notes: list[str] = []
     # (args, rc5_is_skip, rc5_note)
     commands: list[tuple[list[str], bool, str]] = []
     explicit: set[str] = set(targets)  # every file pytest is handed by path (for pinned-text)
-    # A handful of targeted files runs serially (worker startup costs more than it
-    # saves); timing-marked tests in them therefore run uncontended.
-    if targets:
-        commands.append((targets, False, ""))
     full = needs_full_suite(state.changed)
     # A changed vibe_quant module also runs every test file that imports it, directly or
     # through other vibe_quant modules (reverse import closure): a caller test whose names
@@ -1005,6 +1031,23 @@ def _run_tests(
             commands.append(
                 ([*importers, "-m", TIMING_MARK], True, "no timing tests in the importer files")
             )
+    # Repo-wide policy tests SCAN the tree instead of importing the changed module, so
+    # neither the importer closure above nor `-k <stem>` can select them: append the ones
+    # present here to every non-full selection (a full tests/unit already covers them). They
+    # must run even when NO python file changed - a docs/agent edit can turn the word-budget
+    # test red - so the selection never early-returns for a diff with no .py file: a gate PASS
+    # must never leave main red (see POLICY_TESTS).
+    if not full:
+        policy = [p for p in policy_test_files(cfg.worktree) if p not in explicit]
+        if policy:
+            notes.append(f"{len(policy)} policy tests")
+            explicit.update(policy)
+            targets = [*targets, *policy]
+    # A handful of targeted files runs serially (worker startup costs more than it
+    # saves); timing-marked tests in them therefore run uncontended. Added first so the
+    # targeted/policy files are the first pytest call.
+    if targets:
+        commands.insert(0, (targets, False, ""))
     # A big selection (full suite, -k group) runs under xdist with the timing-marked
     # relative-speed tests deselected, then those run serially (they flake under load).
     group = ["tests/unit"] if full else (["tests/unit", "-k", expr] if expr else [])
@@ -1019,9 +1062,8 @@ def _run_tests(
              f"no timing tests matched -k {expr}" if expr else "no timing tests matched")
         )
     if not commands:
-        return TestRun(
-            Check("tests", "SKIP", "nothing to run for changed python"), frozenset(explicit), full
-        )
+        why = "nothing to run for changed python" if python_changed else "no python changed"
+        return TestRun(Check("tests", "SKIP", why), frozenset(explicit), full)
     summaries: list[str] = []
     failed = False
     passed = 0

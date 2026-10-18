@@ -1025,6 +1025,191 @@ class TestImporterTestSelection:
         ]
 
 
+#: The always-run policy set, written out literally: _policy_repo builds exactly these files
+#: and the selection must forward exactly them, so a rename/drop in swarm_check.POLICY_TESTS
+#: is caught (asserting against the constant itself would move both sides together).
+_POLICY_TESTS = [
+    "tests/unit/test_exception_hygiene.py",
+    "tests/unit/test_steering_budget.py",
+    "tests/unit/test_api_routers_conn_locking.py",
+    "tests/unit/test_discovery_liquidation.py",
+]
+
+
+def _policy_repo(tmp_path: Path) -> Path:
+    """The policy tests committed on a feature branch; the diff changes ONE unrelated module
+    that none of them imports (they scan the tree instead of the module under change)."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    for rel in _POLICY_TESTS:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_policy() -> None:\n    assert True\n")
+    (repo / "vibe_quant" / "unrelated.py").write_text("U = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "policy tests and an unrelated module")
+    (repo / "vibe_quant" / "unrelated.py").write_text("U = 2\n")  # the change
+    return repo
+
+
+def _policy_docs_repo(tmp_path: Path) -> Path:
+    """`_policy_repo`'s tree with a DOC-only diff: no .py changes, but the policy tests SCAN
+    the docs, so a steering-doc edit can turn test_steering_budget.py red with no python change
+    - the selection must run POLICY_TESTS instead of skipping."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    for rel in _POLICY_TESTS:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_policy() -> None:\n    assert True\n")
+    (repo / "docs" / "claude").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "claude" / "beads.md").write_text("b\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "policy tests and a steering doc")
+    (repo / "docs" / "claude" / "beads.md").write_text("b2\n")  # the docs-only change
+    return repo
+
+
+def _importer_policy_repo(tmp_path: Path) -> Path:
+    """`_importer_repo`'s tree plus the committed policy tests: the change (a vibe_quant
+    module) queues importer commands BEFORE the targeted/policy call, so where the targets
+    command lands in `commands` is observable."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    for rel in _POLICY_TESTS:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_policy() -> None:\n    assert True\n")
+    (repo / "vibe_quant" / "discovery").mkdir()
+    (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text("P = 1\n")
+    (repo / "tests" / "unit" / "test_symbol_agg.py").write_text(
+        "from vibe_quant.discovery.pipeline import DiscoveryPipeline\n\n\n"
+        "def test_topk_ranks_gate_passers_first() -> None:\n"
+        "    assert DiscoveryPipeline is not None\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "policy tests, the pipeline and its caller test")
+    (repo / "vibe_quant" / "discovery" / "pipeline.py").write_text("P = 2\n")  # the change
+    return repo
+
+
+class TestPolicyTestSelection:
+    """Repo-wide policy tests SCAN the tree instead of importing the changed module, so the
+    reverse import closure can never select them: on 2026-10-18 a new silent handler in
+    vibe_quant/discovery/neff.py went red in tests/unit/test_exception_hygiene.py although
+    every gate PASSed. Every non-full selection appends the ones present (POLICY_TESTS).
+    """
+
+    @staticmethod
+    def _pytest_cmds(runner: FakeRunner) -> list[list[str]]:
+        return [
+            c[c.index("pytest") + 1:]
+            for c in runner.calls
+            if any("pytest" in Path(a).name for a in c)
+        ]
+
+    def test_unrelated_module_change_still_runs_every_policy_test(self, tmp_path: Path) -> None:
+        repo = _policy_repo(tmp_path)
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        # the policy files run as ONE serial call, ahead of the -k group
+        assert self._pytest_cmds(runner)[0] == _POLICY_TESTS
+        assert f"{len(_POLICY_TESTS)} policy tests" in tests.detail
+
+    def test_policy_tests_follow_a_changed_test_file(self, tmp_path: Path) -> None:
+        repo = _policy_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_touched.py").write_text(
+            "def test_touched() -> None:\n    assert True\n"
+        )
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        swarm_check.run_checks(cfg, runner)
+        assert self._pytest_cmds(runner)[0] == ["tests/unit/test_touched.py", *_POLICY_TESTS]
+
+    def test_full_suite_run_does_not_append_them_separately(self, tmp_path: Path) -> None:
+        repo = _policy_repo(tmp_path)
+        (repo / "tests" / "conftest.py").write_text("X = 1\n")  # forces the whole tests/unit
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "9 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-m", "timing"],
+        ]
+        assert not _called_with(runner, "test_exception_hygiene.py")
+
+    def test_absent_policy_files_are_not_forwarded(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)  # this tree carries no policy tests
+        (repo / "vibe_quant" / "foo.py").write_text("def foo() -> int:\n    return 3\n")
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [
+            ["tests/unit", "-k", "foo", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-k", "foo", "-m", "timing"],
+        ]
+        assert "policy tests" not in tests.detail
+
+    def test_docs_only_change_still_runs_every_policy_test(self, tmp_path: Path) -> None:
+        """A diff with no .py file (a steering-doc edit) can still turn a tree-scanning policy
+        test red, so the selection must run POLICY_TESTS instead of returning an early SKIP."""
+        repo = _policy_docs_repo(tmp_path)
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "4 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner) == [_POLICY_TESTS]
+        assert f"{len(_POLICY_TESTS)} policy tests" in tests.detail
+
+    def test_changed_policy_file_runs_once_plus_the_other_three(self, tmp_path: Path) -> None:
+        """A changed POLICY file is itself a changed test file: it must appear exactly once,
+        followed by the other three - the dedupe filter (drop it and the file runs twice)."""
+        repo = _policy_repo(tmp_path)
+        (repo / "tests" / "unit" / "test_steering_budget.py").write_text(
+            "def test_policy() -> None:\n    assert True\n\n\n"
+            "def test_another() -> None:\n    assert True\n"
+        )  # the change: a policy file changed
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        assert self._pytest_cmds(runner)[0] == [
+            "tests/unit/test_steering_budget.py",
+            "tests/unit/test_exception_hygiene.py",
+            "tests/unit/test_api_routers_conn_locking.py",
+            "tests/unit/test_discovery_liquidation.py",
+        ]
+        assert "3 policy tests" in tests.detail
+
+    def test_policy_call_runs_ahead_of_the_importer_closure(self, tmp_path: Path) -> None:
+        """Order pin: the targeted/policy serial call is inserted FIRST even when the importer
+        closure has already queued commands (kills insert(0) -> append)."""
+        repo = _importer_policy_repo(tmp_path)
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "1 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        cmds = self._pytest_cmds(runner)
+        assert cmds[0] == _POLICY_TESTS
+        assert cmds[1][0] == "tests/unit/test_symbol_agg.py"
+        assert f"{len(_POLICY_TESTS)} policy tests" in tests.detail
+
+    def test_policy_set_is_pinned(self) -> None:
+        """The always-run set is what reopens the gap when a file is dropped: pin it."""
+        assert list(swarm_check.POLICY_TESTS) == _POLICY_TESTS
+
+
 class TestExactnessCarry:
     """exactness-carry: a SECOND exactness proof, for the funding-carry engine.
 
