@@ -36,6 +36,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from vibe_quant.alerts.telegram import (
+    AlertType,
     TelegramBot,
     TelegramUnavailableError,
     require_working_telegram,
@@ -136,6 +137,10 @@ STORE_CLOSE_WAIT_S = 2.0
 # EVENT_STARTUP_WAIT_S for the first lines (an unwritable log refuses to start).
 EVENT_WRITE_WAIT_S = 5.0
 EVENT_STARTUP_WAIT_S = 10.0
+
+#: ci7q9: seconds a trade-alert task waits before reading the cache, so the strategy's
+#: SL/TP orders (submitted only after the entry fill) are visible. Never on the NT callback.
+TRADE_ALERT_DELAY_S = 2.0
 
 #: ``PositionOpened.side`` (a ``PositionSide``) -> the sign the solvency formula wants.
 _POSITION_SIDE_SIGNS = {"LONG": 1, "SHORT": -1}
@@ -616,6 +621,128 @@ class PaperTradingNode:
             # TelegramBot already redacts its own failures; never feed alert
             # failures back into ErrorHandler (that would alert about alerts).
             logger.warning("telegram alert task failed: %s", type(exc).__name__)
+
+    # --------------------------------------------------------- trade alerts
+
+    def _send_trade_alert(self, build: Callable[[], str], *, delay: float = 0.0) -> None:
+        """Fire-and-forget entry/exit alert; the text is built inside the alert task.
+
+        ci7q9, report-only: the text is built lazily so a raising cache lookup lands in
+        the task's own handler, never on the NT fill callback (a raise there would also
+        skip the guard's risk evaluation). An entry alert waits ``delay`` before
+        building, because the compiled strategy submits its SL/TP orders only AFTER the
+        entry fill. No Telegram / setting off -> nothing is scheduled.
+        """
+        telegram = self._telegram
+        if not self._config.trade_alerts or telegram is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            logger.warning("trade alert not sent (%s)", type(exc).__name__)
+            return
+        task = loop.create_task(self._trade_alert_task(telegram, build, delay))
+        self._alert_tasks.add(task)
+        task.add_done_callback(self._alert_done)
+
+    async def _trade_alert_task(
+        self, telegram: TelegramBot, build: Callable[[], str], delay: float
+    ) -> bool:
+        """Send one TRADE alert; every failure is swallowed with a class-only log.
+
+        R31: the TRADE per-type rate limit is bypassed. OPEN and CLOSE share
+        ``AlertType.TRADE`` with a 60 s limit, so a fast round trip would silently drop
+        the CLOSE; the trade count is the natural bound and trade alerts are opt-in.
+        """
+        try:
+            if delay:
+                await asyncio.sleep(delay)
+            return await telegram.send_alert(AlertType.TRADE, build(), bypass_rate_limit=True)
+        except Exception as exc:
+            # Class only, never the text: a chained cache/httpx error can carry secrets.
+            logger.warning("trade alert not sent (%s)", type(exc).__name__)
+            return False
+
+    def _trade_open_message(self, event: Any) -> str:
+        """The exact entry text: size, leverage, entry and the strategy's SL/TP."""
+        cache = self._guard.cache if self._guard is not None else None
+        stop, take = self._protective_levels(cache, event.instrument_id)
+        quantity = float(event.quantity)
+        entry = float(event.avg_px_open)
+        leverage = self._resolved.leverage if self._resolved else 1
+        return "\n".join(
+            [
+                f"OPEN {event.side.name} {event.instrument_id}",
+                f"Size: {quantity} (≈ {quantity * entry:.2f} USDT)",
+                f"Leverage: {leverage}x",
+                f"Entry: {self._alert_price(cache, event.instrument_id, entry)}",
+                f"Stop loss: {stop}",
+                f"Take profit: {take}",
+                f"Trader: {self._config.trader_id}",
+            ]
+        )
+
+    def _trade_close_message(
+        self, event: Any, net: float, commissions: float, exit_reason: str
+    ) -> str:
+        """The exact exit text: exit price, reason and net P&L (the event's own numbers).
+
+        A NT ``PositionClosed.side`` is always FLAT, so the closed direction comes from
+        ``event.entry`` (the entry order side): BUY -> LONG, SELL -> SHORT.
+        """
+        cache = self._guard.cache if self._guard is not None else None
+        pos = cache.position(event.position_id) if cache is not None else None
+        entry = (
+            self._alert_price(cache, event.instrument_id, float(pos.avg_px_open))
+            if pos is not None
+            else "unknown"
+        )
+        exit_price = self._alert_price(cache, event.instrument_id, float(event.avg_px_close))
+        direction = "LONG" if event.entry.name == "BUY" else "SHORT"
+        return "\n".join(
+            [
+                f"CLOSE {direction} {event.instrument_id}",
+                f"Exit: {exit_price} ({exit_reason})",
+                f"Entry: {entry}",
+                f"P&L: {net:.2f} USDT (net, after {commissions:.2f} fees)",
+                f"Trader: {self._config.trader_id}",
+            ]
+        )
+
+    @staticmethod
+    def _protective_levels(cache: Any, instrument_id: Any) -> tuple[str, str]:
+        """(stop, take) text for the instrument's open reduce-only orders.
+
+        Stop = STOP_MARKET/STOP_LIMIT trigger price, take-profit = LIMIT price. Missing
+        on either side reads 'none placed'.
+        """
+        stop: str | None = None
+        take: str | None = None
+        if cache is not None:
+            orders = list(cache.orders_open(instrument_id=instrument_id)) + list(
+                cache.orders_inflight(instrument_id=instrument_id)
+            )
+            for order in orders:
+                if not getattr(order, "is_reduce_only", False):
+                    continue
+                name = order.order_type.name
+                if stop is None and name in ("STOP_MARKET", "STOP_LIMIT"):
+                    stop = str(order.trigger_price)
+                elif take is None and name == "LIMIT":
+                    take = str(order.price)
+        return (stop or "none placed", take or "none placed")
+
+    @staticmethod
+    def _alert_price(cache: Any, instrument_id: Any, value: float) -> str:
+        """Format ``value`` at the instrument's price precision (fallback: ``str``)."""
+        precision = None
+        if cache is not None:
+            instrument = cache.instrument(instrument_id)
+            if instrument is not None:
+                precision = getattr(instrument, "price_precision", None)
+        if isinstance(precision, int):
+            return f"{value:.{precision}f}"
+        return str(value)
 
     def _write_then_alert(
         self,
@@ -1878,6 +2005,10 @@ class PaperTradingNode:
             timestamp=_ns_to_dt(event.ts_event),
         )
         self._emit_liquidation_estimate(event)
+        # ci7q9: one entry message, built after the strategy's SL/TP land in the cache.
+        self._send_trade_alert(
+            lambda: self._trade_open_message(event), delay=TRADE_ALERT_DELAY_S
+        )
 
     def _emit_liquidation_estimate(self, event: Any) -> None:
         """R44/R45/R45b: report the estimated liquidation price of a newly opened position.
@@ -1983,6 +2114,10 @@ class PaperTradingNode:
                 "exit_reason": exit_reason,
             },
             timestamp=_ns_to_dt(event.ts_event),
+        )
+        # ci7q9: one exit message from the event's own P&L numbers (built in the task).
+        self._send_trade_alert(
+            lambda: self._trade_close_message(event, net, commissions, exit_reason)
         )
 
     def _count_closed_trade(self) -> None:

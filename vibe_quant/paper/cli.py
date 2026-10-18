@@ -162,6 +162,10 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
     if not isinstance(start_fresh, bool):
         raise ConfigurationError("start_fresh must be true or false")
 
+    trade_alerts = data.get("trade_alerts", False)
+    if not isinstance(trade_alerts, bool):
+        raise ConfigurationError("trade_alerts must be true or false")
+
     return PaperTradingConfig(
         trader_id=data["trader_id"],
         binance=binance,
@@ -176,6 +180,7 @@ def load_config_from_json(config_path: Path) -> PaperTradingConfig:
         logs_path=Path(logs_path_str),
         state_persistence_interval=int(data.get("state_persistence_interval", 60)),
         start_fresh=start_fresh,
+        trade_alerts=trade_alerts,
     )
 
 
@@ -229,6 +234,7 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
         "logs_path": str(config.logs_path),
         "state_persistence_interval": config.state_persistence_interval,
         "start_fresh": config.start_fresh,
+        "trade_alerts": config.trade_alerts,
     }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)

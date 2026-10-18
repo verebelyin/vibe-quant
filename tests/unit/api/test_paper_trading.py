@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path  # noqa: TCH003
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +15,9 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 @pytest.fixture()
@@ -194,3 +199,172 @@ async def test_restore_409_when_active(
     with patch.object(job_mgr, "is_process_alive", return_value=True):
         r = await ac.post("/api/paper/restore", json={"trader_id": "ANY"})
     assert r.status_code == 409
+
+
+# ------------------------------------------------------ trade_alerts (ci7q9)
+
+DSL = {
+    "name": "test_strategy",
+    "timeframe": "1h",
+    "indicators": {"rsi_14": {"type": "RSI", "period": 14}},
+    "entry_conditions": {"long": ["rsi_14 < 30"]},
+    "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+    "take_profit": {"type": "fixed_pct", "percent": 4.0},
+}
+
+
+class StartCtx:
+    def __init__(
+        self, ac: AsyncClient, state: StateManager, jobs: BacktestJobManager, tmp: Path
+    ) -> None:
+        self.ac = ac
+        self.state = state
+        self.jobs = jobs
+        self.tmp = tmp
+        self.launched: list[list[str]] = []
+        self.strategy_id = state.create_strategy("test_strategy", DSL)
+        self.validation_run = state.create_backtest_run(
+            strategy_id=self.strategy_id,
+            run_mode="validation",
+            symbols=["BTCUSDT"],
+            timeframe="1h",
+            start_date="2024-01-01",
+            end_date="2024-12-31",
+            parameters={},
+        )
+        state.update_backtest_run_status(self.validation_run, "completed")
+
+    def config_for(self, run_id: int) -> dict[str, Any]:
+        path = self.tmp / "paper_configs" / f"paper_{run_id}.json"
+        data: dict[str, Any] = json.loads(path.read_text())
+        return data
+
+
+@pytest.fixture()
+def api_env(tmp_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.paper_trading.PAPER_CONFIG_DIR", tmp_path / "paper_configs"
+    )
+    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "tk")
+    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "ts")
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    return tmp_db
+
+
+@pytest.fixture()
+async def start_ctx(
+    api_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[StartCtx]:
+    app = create_app()
+    state = StateManager(db_path=api_env)
+    _ = state.conn
+    jobs = BacktestJobManager(db_path=api_env)
+    ws = ConnectionManager()
+    await ws.start()
+    app.state.state_manager = state
+    app.state.job_manager = jobs
+    app.state.ws_manager = ws
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        c = StartCtx(ac, state, jobs, tmp_path)
+
+        def fake_start_job(
+            run_id: int, job_type: str, command: list[str], log_file: str | None = None
+        ) -> int:
+            c.launched.append(command)
+            return 4242
+
+        monkeypatch.setattr(jobs, "start_job", fake_start_job)
+        yield c
+    await ws.stop()
+    jobs.close()
+    state.close()
+
+
+@pytest.mark.parametrize("bad", ["true", 1, None])
+async def test_start_rejects_non_bool_trade_alerts(start_ctx: StartCtx, bad: object) -> None:
+    """T6: strict bool — a string/int/null is 422, and nothing is launched."""
+    r = await start_ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": start_ctx.validation_run, "trade_alerts": bad},
+    )
+    assert r.status_code == 422, r.text
+    assert start_ctx.launched == []
+
+
+async def test_start_records_trade_alerts_in_params_and_config(start_ctx: StartCtx) -> None:
+    """T6: trade_alerts travels into the run params AND the launched config JSON."""
+    from vibe_quant.paper.cli import load_config_from_json
+
+    r = await start_ctx.ac.post(
+        "/api/paper/start",
+        json={"validation_run_id": start_ctx.validation_run, "trade_alerts": True},
+    )
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    run = start_ctx.state.get_backtest_run(run_id)
+    assert run is not None
+    assert run["parameters"]["trade_alerts"] is True
+    assert start_ctx.config_for(run_id)["trade_alerts"] is True
+    assert load_config_from_json(start_ctx.tmp / "paper_configs" / f"paper_{run_id}.json").trade_alerts
+
+    # Absent -> False everywhere: the field is not optional-true.
+    r2 = await start_ctx.ac.post("/api/paper/start", json={"validation_run_id": start_ctx.validation_run})
+    assert r2.status_code == 201, r2.text
+    run_id2 = r2.json()["run_id"]
+    run2 = start_ctx.state.get_backtest_run(run_id2)
+    assert run2 is not None
+    assert run2["parameters"]["trade_alerts"] is False
+    assert start_ctx.config_for(run_id2)["trade_alerts"] is False
+
+
+@pytest.mark.parametrize("saved", [True, False])
+async def test_restore_keeps_trade_alerts(start_ctx: StartCtx, saved: bool) -> None:
+    """T6: /restore keeps the saved value (unlike start_fresh, which is forced False)."""
+    config_dir = start_ctx.tmp / "paper_configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "paper_900.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-900",
+                "strategy_id": start_ctx.strategy_id,
+                "validation_run_id": start_ctx.validation_run,
+                "binance": {"testnet": True},
+                "symbols": ["BTCUSDT"],
+                "start_fresh": True,
+                "trade_alerts": saved,
+            }
+        )
+    )
+
+    r = await start_ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-900"})
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    assert start_ctx.config_for(run_id)["trade_alerts"] is saved
+    assert start_ctx.config_for(run_id)["start_fresh"] is False
+
+
+async def test_restore_of_an_old_config_defaults_trade_alerts_off(start_ctx: StartCtx) -> None:
+    """T6: a saved config without the key restores with trade_alerts False."""
+    from vibe_quant.paper.cli import load_config_from_json
+
+    config_dir = start_ctx.tmp / "paper_configs"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "paper_901.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-901",
+                "strategy_id": start_ctx.strategy_id,
+                "binance": {"testnet": True},
+                "symbols": ["BTCUSDT"],
+            }
+        )
+    )
+
+    r = await start_ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-901"})
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    assert start_ctx.config_for(run_id).get("trade_alerts", False) is False
+    path = start_ctx.tmp / "paper_configs" / f"paper_{run_id}.json"
+    assert load_config_from_json(path).trade_alerts is False

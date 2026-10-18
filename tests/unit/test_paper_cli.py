@@ -644,6 +644,50 @@ class TestStartFresh:
         assert load_config_from_json(out).start_fresh is True
 
 
+class TestTradeAlerts:
+    """ci7q9: the ``trade_alerts`` config key (per-session Telegram trade messages)."""
+
+    @staticmethod
+    def _write(tmp_path: Path, extra: dict[str, object]) -> Path:
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                    **extra,
+                }
+            )
+        )
+        return path
+
+    def test_load_trade_alerts_rows(self, tmp_path: Path) -> None:
+        assert load_config_from_json(self._write(tmp_path, {})).trade_alerts is False
+        assert load_config_from_json(self._write(tmp_path, {"trade_alerts": True})).trade_alerts
+        assert (
+            load_config_from_json(self._write(tmp_path, {"trade_alerts": False})).trade_alerts
+            is False
+        )
+
+    @pytest.mark.parametrize("bad", [None, "yes", 1, 0, "true"])
+    def test_load_trade_alerts_rejects_non_bool(self, tmp_path: Path, bad: object) -> None:
+        with pytest.raises(ConfigurationError, match="trade_alerts must be true or false"):
+            load_config_from_json(self._write(tmp_path, {"trade_alerts": bad}))
+
+    def test_trade_alerts_round_trip(self, tmp_path: Path) -> None:
+        config = PaperTradingConfig(
+            trader_id="PAPER-001",
+            binance=BinanceTestnetConfig(api_key="k", api_secret="s", testnet=True),
+            trade_alerts=True,
+        )
+        out = tmp_path / "out.json"
+        save_config_to_json(config, out)
+        assert json.loads(out.read_text())["trade_alerts"] is True
+        assert load_config_from_json(out).trade_alerts is True
+
+
 class TestAllowlistedRefusalMessage:
     """u52nu: the curated refusal message prints for allowlisted errors only.
 

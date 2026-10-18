@@ -7857,6 +7857,12 @@
             "description": "Skip inheriting the last session's peak, daily-loss and losing-streak limits for this account (default: continue from that session's risk state).",
             "default": false
           },
+          "trade_alerts": {
+            "type": "boolean",
+            "title": "Trade Alerts",
+            "description": "Message on every entry and exit (needs Telegram configured).",
+            "default": false
+          },
           "sizing_method": {
             "anyOf": [
               {

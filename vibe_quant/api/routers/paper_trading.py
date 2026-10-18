@@ -301,6 +301,7 @@ async def start_paper(
         "sizing": sizing,
         "risk": risk,
         "start_fresh": body.start_fresh,
+        "trade_alerts": body.trade_alerts,
     }
     if body.trader_id:
         params["trader_id"] = body.trader_id
@@ -325,6 +326,7 @@ async def start_paper(
         "symbols": symbols,
         "logs_path": str(DEFAULT_PAPER_LOGS_PATH),
         "start_fresh": body.start_fresh,
+        "trade_alerts": body.trade_alerts,
     }
     if db_path is not None:
         config_data["db_path"] = str(db_path)
@@ -436,6 +438,9 @@ async def restore_paper(
 
     raw_symbols = prior_config.get("symbols")
     symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) else []
+    # ci7q9: unlike start_fresh, the saved trade_alerts choice is KEPT across a
+    # restore (absent in a config written before the setting existed -> False).
+    trade_alerts = prior_config.get("trade_alerts", False)
     params: dict[str, object] = {
         "trader_id": body.trader_id,
         "testnet": testnet,
@@ -447,6 +452,7 @@ async def restore_paper(
         # K4: a saved config may carry start_fresh: true; /restore must not
         # re-inject it, or the copied prior config resets the limits it restored.
         "start_fresh": False,
+        "trade_alerts": trade_alerts,
     }
 
     run_id = state.create_backtest_run(
@@ -462,6 +468,7 @@ async def restore_paper(
     new_config: dict[str, Any] = dict(prior_config)
     new_config["trader_id"] = body.trader_id
     new_config["start_fresh"] = False
+    new_config["trade_alerts"] = trade_alerts
     db_path = _state_db_path(state)
     if db_path is not None:
         new_config["db_path"] = str(db_path)

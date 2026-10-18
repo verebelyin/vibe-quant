@@ -80,6 +80,7 @@ function apiErrorDetail(err: unknown, fallback: string): string {
 export function SessionControl() {
   const [traderId, setTraderId] = useState(newTraderId);
   const [startFresh, setStartFresh] = useState(false);
+  const [tradeAlerts, setTradeAlerts] = useState(false);
   const [strategyId, setStrategyId] = useState("");
   const [validationRunId, setValidationRunId] = useState(NO_RUN);
   const [symbolsText, setSymbolsText] = useState("BTCUSDT");
@@ -171,6 +172,7 @@ export function SessionControl() {
       confirm_live: !testnet && confirmLive,
       trader_id: traderId,
       start_fresh: startFresh,
+      trade_alerts: tradeAlerts,
       max_leverage: maxLeverage === "" ? null : maxLeverage,
       max_position_pct: pctToFraction(maxPositionPct),
       risk_per_trade: pctToFraction(riskPerTrade),
@@ -189,6 +191,7 @@ export function SessionControl() {
             });
             setTraderId(newTraderId());
             setStartFresh(false);
+            setTradeAlerts(false);
           }
         },
         onError: (err: unknown) => {
@@ -400,6 +403,16 @@ export function SessionControl() {
               Unchecked (default): continues this account&apos;s last session, so a drawdown or
               losing streak that halted it halts again. Checked: those limits count from current
               equity. Never clears this trader&apos;s own halt.
+            </p>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="flex items-center gap-2">
+              <Checkbox checked={tradeAlerts} onCheckedChange={(v) => setTradeAlerts(v === true)} />
+              <span className="text-sm">Telegram trade alerts</span>
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Message on every entry and exit (needs Telegram configured)
             </p>
           </div>
 

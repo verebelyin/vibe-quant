@@ -25,6 +25,8 @@ export interface PaperStartRequest {
   trader_id?: string | null;
   /** Skip inheriting the last session's peak, daily-loss and losing-streak limits for this account (default: continue from that session's risk state). */
   start_fresh?: boolean;
+  /** Message on every entry and exit (needs Telegram configured). */
+  trade_alerts?: boolean;
   sizing_method?: 'fixed_fractional' | null;
   max_leverage?: number | null;
   max_position_pct?: number | null;

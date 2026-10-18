@@ -311,6 +311,8 @@ class PaperTradingConfig:
         start_fresh: Skip inheriting the last session's risk state (peak, daily
             baseline, losing streak, ERROR halt) from another trader on the same
             account. The trader's OWN checkpoint is never discarded.
+        trade_alerts: Send one Telegram message on every position entry and exit
+            (needs Telegram configured). Report-only; alerts never affect trading.
     """
 
     trader_id: str
@@ -327,6 +329,7 @@ class PaperTradingConfig:
     state_persistence_interval: int = 60
     control_poll_interval: float = 1.0
     start_fresh: bool = False
+    trade_alerts: bool = False
 
     def validate(self) -> list[str]:
         """Validate configuration.
