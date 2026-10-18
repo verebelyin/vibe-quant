@@ -4,6 +4,22 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: PRE-REGISTRATION G1 — false-positive check for the EV-matched effective trial count (megq1; gate change lands only on PASS)
+
+Written before the run. Design `data/swarm/20261017-power-paper/design-neff.md` §4 + Review r1 B5/N1 + chief rulings; script `scripts/research/power/neff_null.py` (megq1 T2). Estimator on main since 9237cb24 (record-only).
+
+**User condition (2026-10-18):** the selection-null false-positive rate at the new N must be ≤ 5% at every correlation level before DSR switches to the effective trial count.
+
+**Run:** `neff_null.py --reps 400 --workers 8`. 12 configs: W3, W6 × rho {0.0, 0.2, 0.5, 0.8} (base) + W3, W6 × rho {0.5, 0.8} sparse. Each replicate: 167 random S = 0 chromosomes; rows = production `keep_series` survivors in candidate order → `effective_trials(rows, raw=167)`; production top-5 picks; FP iff any pick passes `chain_recent[n]` with `dsr_trials` = dedup(167, run_n_eff, ceil mc, ceil pr, max). Sparse configs: per-replicate non-positive drift calibrated toward 17/167 survivors (the production small-survivor regime); replicates already ≤ 17 at drift 0 stay at drift 0 (undershoot) and are reported with the raw-N fallback rate (n_used < 2). Positive drift is never used (true edge ≤ 0).
+
+**Rule:** per config, count FP of 400 and the one-sided Clopper–Pearson 95% upper bound. PASS iff every config ≤ 20/400. Any config with ≥ 13/400 (CP upper > 0.05) gets a 1600-rep top-up on fresh seeds (`SeedSequence` tag 0x4E3F0) whose own point estimate must be ≤ 0.05. Exit 0 PASS, 1 FAIL, 2 MARGINAL. FAIL → no gate change; the chief takes it to the user.
+
+**Prediction:** max `fp_rate_ev` ≤ 0.02 (DSR-alone probe ≤ 0.0325, the chain cuts further). Quick run (10 reps) printed 0.0000 everywhere (non-concluding).
+
+**Disclosures:** (1) the DSR-alone Gaussian probe in design §0 (EV-matched MC 0.0000–0.0325 at rho 0–0.8) and the `--quick` verdict lines were seen before this entry. (2) Sparse configs undershoot often (quick probe: W6 rho 0.8 median 1 survivor, 8/10 undershoots, raw fallback 0.6); there the check measures the raw-N fallback production would also use. (3) The marginal → per-replicate sparse calibration change was made after review r1 found the marginal calibration bimodal (one replicate kept 102/167).
+
+---
+
 ## 2026-10-18: PRE-REGISTRATION P-1a — layer-2 follow-ups (is the btc2.0 "find" real; is GA search budget the bottleneck?)
 
 Written before any follow-up run. Design: `data/swarm/20261017-power-paper/design-l2-followup.md` (Opus architect). Code: new `layer2.py` subcommands (scratch only; `verify-untouched` at the end; no `vibe_quant/` change).
