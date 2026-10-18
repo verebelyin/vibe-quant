@@ -341,7 +341,9 @@ def ingest_cmd_log(
     if auto_round:
         derived = derive_round(task)
         if derived is not None:
-            task, round = derived
+            # take identity_from_name's task label too, so a cmd-log row joins the T3 row for the
+            # same task (cc-e6-sweep-2 -> task e6-sweep, not cc-e6-sweep).
+            _, task, round = identity_from_name(task)
             note_parts.append("round derived from name")
             print(f"telemetry: derived task={task!r} round={round}", file=sys.stderr)
     tokens_in: int | None = None

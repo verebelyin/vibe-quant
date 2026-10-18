@@ -1220,5 +1220,27 @@ def test_ingest_cmd_log_auto_round_reads_a_bare_round_suffix(
          "--task", "cc-e6-sweep-2", "--auto-round"]
     )  # fmt: skip
     (rec,) = _ledger_rows(_isolated_ledger)
-    assert (rec["task"], rec["round"]) == ("cc-e6-sweep", 2)
+    # the cmd path must land on the same task label as identity_from_name (T3), not keep "cc-"
+    assert (rec["task"], rec["round"]) == ("e6-sweep", 2)
     assert rec["note"] == "round derived from name"
+
+
+def test_ingest_cmd_log_auto_round_normalises_like_the_t3_path(
+    _isolated_ledger: Path, tmp_path: Path
+) -> None:
+    # Rows for one task must join across runtimes: auto_round has to derive the SAME (task, round)
+    # identity_from_name gives the T3 path — maker prefixes drop, checker roles map to review:/verify:.
+    for agent, expected in (
+        ("cc-e6-sweep-2", ("e6-sweep", 2)),
+        ("impl-liq-t2a-3", ("liq-t2a", 3)),
+        ("rev-x-3", ("review:x", 3)),
+    ):
+        log = tmp_path / f"20261017-150000-{agent}-xiaomi_mimo-v2.6-pro.ndjson"
+        _write_log(log, RESULT_SUCCESS + "\n")
+        tel.main(
+            ["ingest-cmd-log", str(log), "--job", JOB, "--agent", agent,
+             "--task", agent, "--auto-round"]
+        )  # fmt: skip
+        rec = _ledger_rows(_isolated_ledger)[-1]
+        assert (rec["task"], rec["round"]) == expected
+        assert (rec["task"], rec["round"]) == tel.identity_from_name(agent)[1:]
