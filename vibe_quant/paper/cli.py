@@ -17,6 +17,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from vibe_quant.alerts.telegram import (
+    ConfigurationError as TelegramConfigurationError,
+)
+from vibe_quant.alerts.telegram import (
+    TelegramUnavailableError,
+    redact_token,
+)
 from vibe_quant.jobs.manager import run_with_heartbeat
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -36,6 +43,16 @@ if TYPE_CHECKING:
     from vibe_quant.jobs.manager import BacktestJobManager
 
 logger = logging.getLogger(__name__)
+
+#: Refusal errors whose message is curated and operator-facing: every ``raise`` site
+#: of these three was audited and interpolates no secret, so their message is printed
+#: (redacted again, defence in depth). Subclasses count via ``isinstance``; anything
+#: else stays class-only on stderr.
+_ALLOWLISTED_ERRORS = (
+    ConfigurationError,
+    TelegramConfigurationError,
+    TelegramUnavailableError,
+)
 
 
 def _decimal_from_str(value: str | float | int) -> Decimal:
@@ -278,10 +295,16 @@ async def run_with_config(
                 # R29: class only, never ``logger.exception`` - this runs inside an
                 # active except, so the chained error's text must not reach the log.
                 logger.error("heartbeat mark_completed failed (%s)", type(exc).__name__)
+        # u52nu: an allowlisted refusal prints its curated message (redacted again as
+        # defence in depth); every other exception keeps the class-only line.
+        detail = f": {redact_token(str(e))}" if isinstance(e, _ALLOWLISTED_ERRORS) else ""
         if run_id is not None:
-            print(f"Paper trading error: {type(e).__name__} (run {run_id})", file=sys.stderr)
+            print(
+                f"Paper trading error: {type(e).__name__}{detail} (run {run_id})",
+                file=sys.stderr,
+            )
         else:
-            print(f"Paper trading error: {type(e).__name__}", file=sys.stderr)
+            print(f"Paper trading error: {type(e).__name__}{detail}", file=sys.stderr)
         return 1
     finally:
         if stop_heartbeat is not None:

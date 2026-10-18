@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from vibe_quant.alerts.telegram import (
+    ConfigurationError as TelegramConfigurationError,
+)
+from vibe_quant.alerts.telegram import (
+    TelegramUnavailableError,
+)
 from vibe_quant.paper.cli import (
     _decimal_from_str,
     load_config_from_json,
@@ -636,3 +642,200 @@ class TestStartFresh:
         save_config_to_json(config, out)
         assert json.loads(out.read_text())["start_fresh"] is True
         assert load_config_from_json(out).start_fresh is True
+
+
+class TestAllowlistedRefusalMessage:
+    """u52nu: the curated refusal message prints for allowlisted errors only.
+
+    The three allowlisted classes are ``paper.config.ConfigurationError``,
+    ``alerts.telegram.ConfigurationError`` and ``alerts.telegram.TelegramUnavailableError``;
+    every other exception keeps the class-only stderr line (R1-R5).
+    """
+
+    @staticmethod
+    def _write_minimal_config(path: Path) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                }
+            )
+        )
+
+    @staticmethod
+    def _fake_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+        class _FakeManager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                return
+
+            def close(self) -> None:
+                return
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (_FakeManager(), lambda: None),
+        )
+
+    @staticmethod
+    def _raise_with(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            raise exc
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("cls", "message"),
+        [
+            (ConfigurationError, "sizing.max_margin_pct: must be in (0, 1], got 1.5"),
+            (TelegramConfigurationError, "Missing TELEGRAM_CHAT_ID environment variable"),
+            (
+                TelegramUnavailableError,
+                "Telegram alerts are configured but not working (HTTP 401 Unauthorized); "
+                "refusing to start",
+            ),
+        ],
+    )
+    async def test_allowlisted_message_without_run_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        cls: type[Exception],
+        message: str,
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        self._raise_with(monkeypatch, cls(message))
+
+        rc = await run_with_config(config_path, run_id=None)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == [f"Paper trading error: {cls.__name__}: {message}"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("cls", "message"),
+        [
+            (ConfigurationError, "sizing.max_margin_pct: must be in (0, 1], got 1.5"),
+            (TelegramConfigurationError, "Missing TELEGRAM_CHAT_ID environment variable"),
+            (
+                TelegramUnavailableError,
+                "Telegram alerts are configured but not working (HTTP 401 Unauthorized); "
+                "refusing to start",
+            ),
+        ],
+    )
+    async def test_allowlisted_message_with_run_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        cls: type[Exception],
+        message: str,
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        self._fake_heartbeat(monkeypatch)
+        self._raise_with(monkeypatch, cls(message))
+
+        rc = await run_with_config(config_path, run_id=7)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == [f"Paper trading error: {cls.__name__}: {message} (run 7)"]
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_message_is_redacted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        token = "123456789:AAFakeBotTokenAbcdefghij"
+        self._raise_with(
+            monkeypatch,
+            TelegramUnavailableError(
+                "Telegram alerts are configured but not working (HTTP 401 against "
+                f"https://api.telegram.org/bot{token}/sendChatAction); refusing to start"
+            ),
+        )
+
+        rc = await run_with_config(config_path, run_id=None)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == [
+            "Paper trading error: TelegramUnavailableError: Telegram alerts are configured "
+            "but not working (HTTP 401 against "
+            "https://api.telegram.org/bot<redacted>/sendChatAction); refusing to start"
+        ]
+        assert token not in err
+
+    @pytest.mark.asyncio
+    async def test_non_allowlisted_stays_class_only(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        self._raise_with(monkeypatch, RuntimeError("secret-xyz"))
+
+        rc = await run_with_config(config_path, run_id=None)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == ["Paper trading error: RuntimeError"]
+        assert "secret-xyz" not in err
+
+    @pytest.mark.asyncio
+    async def test_subclass_of_allowlisted_shows_message(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        class _PaperConfigError(ConfigurationError):
+            pass
+
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        self._fake_heartbeat(monkeypatch)
+        self._raise_with(monkeypatch, _PaperConfigError("derived refusal reason"))
+
+        rc = await run_with_config(config_path, run_id=7)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == [
+            "Paper trading error: _PaperConfigError: derived refusal reason (run 7)"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_subclass_of_non_allowlisted_stays_class_only(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        class NotAllowlistedConfigurationError(Exception):
+            pass
+
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        self._raise_with(monkeypatch, NotAllowlistedConfigurationError("nope-xyz"))
+
+        rc = await run_with_config(config_path, run_id=None)
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert err.splitlines() == ["Paper trading error: NotAllowlistedConfigurationError"]
+        assert "nope-xyz" not in err
