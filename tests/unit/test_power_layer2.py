@@ -1070,7 +1070,7 @@ def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
         assert loaded[0].direction is Direction.LONG
         assert _prior_discovery_trials(
             state, run_id, layer2.TIMEFRAME, layer2.train_window()
-        ) == (0, [])
+        ) == (0, [], 0, 0)
     finally:
         state.close()
 
@@ -1107,7 +1107,7 @@ def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
     try:
         assert _prior_discovery_trials(
             state, 2, layer2.TIMEFRAME, layer2.train_window()
-        ) == (0, [])
+        ) == (0, [], 0, 0)
     finally:
         state.close()
 

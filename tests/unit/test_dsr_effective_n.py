@@ -21,6 +21,7 @@ import pytest
 from scipy.linalg import hadamard
 
 from vibe_quant.discovery.neff import (
+    N_RULE_EFFECTIVE,
     NEFF_EV_DRAWS,
     NEFF_EV_SEED,
     NEFF_MIN_DAYS,
@@ -443,7 +444,7 @@ def test_eval_windows_chained_series_use_ev_mc(monkeypatch: pytest.MonkeyPatch) 
 
 
 # ---------------------------------------------------------------------------
-# R12: T1 records, the gate is unchanged
+# R19: no DSR -> no estimator, but the run is still charged at raw (B1)
 # ---------------------------------------------------------------------------
 
 
@@ -492,32 +493,37 @@ def _pipeline(**cfg: Any) -> Any:
     return DiscoveryPipeline(DiscoveryConfig(**base), backtest_fn=fn)
 
 
-def test_t1_records_but_does_not_gate() -> None:
-    """R12: the 4 info keys are recorded; N is still raw+prior (T3 switches)."""
-    pipe = _pipeline(prior_trials_fn=lambda s, e: 921)
-    rng = np.random.default_rng(11)
-    common = rng.normal(0.0005, 0.01, 1264)
-    for i in range(6):
-        x = common + rng.normal(0, 0.001, 1264)
-        pipe._fitness_cache[f"k{i}"] = _fit(
-            mtm_daily_returns=DailyReturns(19_000, array("d", x.tobytes()))
-        )
-    pipe._fitness_cache["flat"] = _fit()
+def test_no_dsr_no_estimator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R19 (B1): require_dsr=False runs no estimator and no gate, but the run's note
+    still carries n_rule NEW at run_n_eff == raw so A3 charges its trials."""
+    import vibe_quant.discovery.neff as neff
+    from vibe_quant.discovery.__main__ import _dsr_trials_note
+    from vibe_quant.discovery.pipeline import DiscoveryResult
 
-    chrom = _chrom()
-    pipe._validate_top_strategies([(chrom, _fit(mtm_daily_returns=_series(2.5)))], 79)
+    calls: list[int] = []
+    real = neff.effective_trials
 
-    trials = pipe._dsr_trials
-    assert trials is not None
-    for key in ("neff_ev", "run_n_eff", "neff_ev_source", "neff_fallback_reason"):
-        assert key in trials, key
-    assert trials["neff_ev_source"] == "ev_mc"
-    assert trials["neff_fallback_reason"] is None
-    assert isinstance(trials["run_n_eff"], int)
-    assert trials["non_flat"] == 6
-    # the gate is UNCHANGED at T1: raw 79 + prior 921
-    assert trials["gate_n"] == 1000 and trials["prior_n"] == 921
-    assert pipe._dsr_records[chrom.uid]["trials"] == 1000
+    def spy(rows: Any, raw: int, **kw: Any) -> Any:
+        calls.append(raw)
+        return real(rows, raw, **kw)
+
+    monkeypatch.setattr(neff, "effective_trials", spy)
+
+    pipe = _pipeline(require_dsr=False)
+    kept = pipe._validate_top_strategies([(_chrom(), _fit(mtm_daily_returns=_series(2.5)))], 79)
+    assert len(kept) == 1
+    assert pipe._dsr_trials is None  # nothing computed
+    assert calls == []  # the estimator never ran
+
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=79,
+        converged=False, convergence_generation=None,
+    )  # fmt: skip
+    note = _dsr_trials_note(result, [])
+    assert note["n_rule"] == N_RULE_EFFECTIVE
+    assert note["raw"] == 79 and note["run_n_eff"] == 79
+    assert note["neff_ev_source"] == "dsr_disabled"
+    assert note["gate_n"] is None
 
 
 # ---------------------------------------------------------------------------

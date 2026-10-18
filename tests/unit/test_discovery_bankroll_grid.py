@@ -397,6 +397,9 @@ def test_pooled_n_counts_every_cell(monkeypatch: pytest.MonkeyPatch) -> None:
     assert res.total_candidates_evaluated == 240
     assert res.dsr_trials is not None
     assert res.dsr_trials["raw"] == 240
+    # no retained series in the pooled cache -> the estimator fails closed to raw
+    assert res.dsr_trials["run_n_eff"] == 240
+    assert res.dsr_trials["neff_ev_source"] == "fallback_raw"
     assert res.dsr_trials["gate_n"] == 270
     assert res.dsr_trials["prior_n"] == 30
     notes = cli._run_provenance_notes(

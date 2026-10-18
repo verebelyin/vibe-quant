@@ -29,7 +29,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from vibe_quant.discovery.config_check import (
     DiscoveryConfigError,
@@ -2100,7 +2100,9 @@ class DiscoveryPipeline:
         Args:
             top_strategies: Candidates to check.
             total_evaluated: This run's distinct strategies tried. The DSR gate's
-                N is ``total_evaluated + prior_n`` (see ``prior_trials_fn``).
+                N is ``run_n_eff + prior_n`` (T3): this run's EV-matched effective
+                trial count plus the same-timeframe prior runs' effective counts
+                (see ``prior_trials_fn``). Without DSR the raw count is untouched.
         """
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
@@ -2118,11 +2120,10 @@ class DiscoveryPipeline:
         # the day count of the window, not the bar count (vibe-quant-zmzzh).
         day_count = compute_day_count(self.config.start_date, self.config.end_date)
 
-        # Cumulative trial count (bd vibe-quant-yul7u.28): the gate's N is this
-        # run's distinct evaluated strategies PLUS the prior non-mock discovery
-        # runs with the same timeframe and an overlapping train window. A
-        # missing/raising fn (or one returning None) fails open to the run-only
-        # N and is recorded as prior_error.
+        # Cumulative trial count (bd vibe-quant-yul7u.28): the gate's N adds the
+        # same-timeframe, overlapping-train prior runs' effective counts to this
+        # run's. A missing/raising fn (or one returning None) fails open to the
+        # run-only N and is recorded as prior_error.
         prior_n = 0
         prior_error = False
         prior_fn = self.config.prior_trials_fn
@@ -2136,7 +2137,16 @@ class DiscoveryPipeline:
                 prior_error = True
             else:
                 prior_n = max(0, int(prior_raw))
+
+        # T3 (bd vibe-quant-megq1): the gate N is this run's EV-matched effective
+        # trial count + prior_n, not the raw evaluated count. The estimator runs
+        # BEFORE the loop (it reads the completed fitness cache) and only when
+        # DSR is required; require_dsr False records no DSR note here (B1).
+        trials: dict[str, object] | None = None
         gate_n = total_evaluated + prior_n
+        if self.config.require_dsr:
+            trials = self._dsr_trial_counts(total_evaluated)
+            gate_n = cast("int", trials["run_n_eff"]) + prior_n
 
         import numpy as np
 
@@ -2183,8 +2193,7 @@ class DiscoveryPipeline:
                     chrom, fitness, "guardrails", list(result.reasons), dsr=result.dsr_record
                 )
 
-        if self.config.require_dsr:
-            trials = self._dsr_trial_counts(total_evaluated)
+        if trials is not None:
             trials["gate_n"] = gate_n
             trials["prior_n"] = None if prior_error else prior_n
             if prior_error:
@@ -2202,24 +2211,25 @@ class DiscoveryPipeline:
         return validated
 
     def _dsr_trial_counts(self, total_evaluated: int) -> dict[str, object]:
-        """Run-level DSR trial counts: raw N (USED) + informational N_eff.
+        """Run-level DSR trial counts: the effective N (USED) + informational N_eff.
 
         The retained mark-to-market daily series (only train-gate-passing
         genomes keep one) are handed to the shared EV-matched estimator
         (:func:`vibe_quant.discovery.neff.effective_trials`), which returns the
         legacy informational estimates ``neff_mean_corr`` / ``neff_eig_pr``
-        (recorded, never used by the gate — bd yul7u.24) plus the four keys T1
-        records: ``neff_ev``, ``run_n_eff``, ``neff_ev_source`` and
-        ``neff_fallback_reason``.
+        (recorded, never used by the gate — bd yul7u.24) plus the T1 keys
+        ``neff_ev``, ``run_n_eff``, ``neff_ev_source`` and
+        ``neff_fallback_reason``. ``run_n_eff`` IS the gate's run-side N since T3
+        (``gate_n = run_n_eff + prior_n``).
 
         The series are in sorted uid order, the deterministic basis for the
         estimator's evenly-spaced subsample (bd yul7u.30). ``non_flat`` always
-        stays the true count. T1 RECORDS ONLY: the DSR gate still uses
-        ``total_evaluated`` until T3.
+        stays the true count. The MC schedule constants are recorded so a
+        past verdict can be reproduced.
         """
         import numpy as np
 
-        from vibe_quant.discovery.neff import effective_trials
+        from vibe_quant.discovery.neff import NEFF_EV_DRAWS, NEFF_EV_SEED, effective_trials
 
         # Sorted uid order: the deterministic basis for the subsample below.
         entries = sorted(self._fitness_cache.items(), key=lambda kv: str(kv[0]))
@@ -2239,6 +2249,8 @@ class DiscoveryPipeline:
             "run_n_eff": eff.run_n_eff,
             "neff_ev_source": eff.source,
             "neff_fallback_reason": eff.fallback_reason,
+            "neff_ev_draws": NEFF_EV_DRAWS,
+            "neff_ev_seed": NEFF_EV_SEED,
         }
 
     def _export_top_strategies(

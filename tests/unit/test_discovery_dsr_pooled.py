@@ -28,6 +28,7 @@ from vibe_quant.discovery.guardrails import (
     apply_discovery_dsr,
     apply_discovery_dsr_returns,
 )
+from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.metrics import (
     DailyReturns,
     concat_daily_returns,
@@ -480,22 +481,22 @@ def test_series_kept_only_for_gate_passing_genomes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T4 / SF4: trial counts recorded; only raw N is used
+# T3 / SF4: the gate N is the effective count (run_n_eff + prior_n)
 # ---------------------------------------------------------------------------
 
 
-def test_dsr_trials_recorded_not_used() -> None:
-    """N_eff is recorded but never gates; the gate N is cumulative (yul7u.28).
+def test_dsr_gate_uses_effective_n() -> None:
+    """R15 (T3): the gate N is this run's run_n_eff + prior_n, not raw + prior.
 
-    The old note logged ``p_value_at_cumulative_n`` while the gate used raw N;
-    now the gate itself uses ``gate_n = run N + prior_n`` and the note records
-    that rule. N_eff stays informational.
+    Six highly correlated retained series make the EV-matched effective count
+    27 (not raw 79), so the champion's record and the gate reason read
+    27 + 921 = 948. Before T3 the gate read raw 79 + 921 = 1000.
     """
     from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
 
     pipe = _pipeline(prior_trials_fn=lambda s, e: 921)
-    # Highly correlated retained series -> N_eff far below raw N
+    # Highly correlated retained series -> run_n_eff far below raw N
     rng = np.random.default_rng(11)
     common = rng.normal(0.0005, 0.01, 1264)
     for i in range(6):
@@ -505,34 +506,51 @@ def test_dsr_trials_recorded_not_used() -> None:
     pipe._fitness_cache["flat"] = _fit()
     cand = _series(2.5)
     chrom = _chrom()
-    pipe._validate_top_strategies([(chrom, _fit(mtm_daily_returns=cand))], 79)
+    weak_chrom = _chrom(stop_loss_pct=3.0)
+    weak_cand = _series(0.2, seed=9)
+    kept = pipe._validate_top_strategies(
+        [(chrom, _fit(mtm_daily_returns=cand)), (weak_chrom, _fit(mtm_daily_returns=weak_cand))], 79
+    )
 
     trials = pipe._dsr_trials
     assert trials is not None
     assert trials["raw"] == 79 and trials["non_flat"] == 6
-    assert trials["prior_n"] == 921 and trials["gate_n"] == 1000
+    assert trials["run_n_eff"] == 27 and trials["neff_ev_source"] == "ev_mc"
+    assert trials["prior_n"] == 921 and trials["gate_n"] == 948
+    # F2: the gate N is a plain int, not 948.0 -- a float is rejected as an
+    # invalid run_n_eff by the next run's prior lookup (T4) and charged evaluated.
+    assert type(trials["gate_n"]) is int
     neff_eig = trials["neff_eig_pr"]
     assert isinstance(neff_eig, float) and neff_eig < 79 / 3
     neff_mc = trials["neff_mean_corr"]
     assert isinstance(neff_mc, float) and 0 < neff_mc < 79
+
     sr, skew, kurt = daily_sharpe_inputs(cand.values)
-    # Champion p_value uses gate_n (= run N + prior), NOT raw N and NOT N_eff.
-    expected = DeflatedSharpeRatio().calculate(sr, 1000, 1264, min(skew, 0.0), max(kurt, 3.0))
+    # Champion p_value uses gate_n (= run_n_eff + prior), NOT raw N and NOT N_eff.
+    expected = DeflatedSharpeRatio().calculate(sr, 948, 1264, min(skew, 0.0), max(kurt, 3.0))
     rec = pipe._dsr_records[chrom.uid]
-    assert rec["trials"] == 1000 and rec["p_value"] == expected.p_value
+    assert rec["trials"] == 948 and rec["p_value"] == expected.p_value
+    assert [c.uid for c, _ in kept] == [chrom.uid]
     n_eff_p = DeflatedSharpeRatio().calculate(
         sr, int(neff_eig), 1264, min(skew, 0.0), max(kurt, 3.0)
     ).p_value
     assert rec["p_value"] != n_eff_p  # N_eff is recorded, never used
+
+    # A candidate the gate rejects prints the SAME effective N in its reason.
+    weak_reasons = {r["uid"]: r["reasons"] for r in pipe._guardrail_rejections}
+    assert any(
+        r.startswith("DSR not significant") and "N=948" in r for r in weak_reasons[weak_chrom.uid]
+    ), weak_reasons[weak_chrom.uid]
 
     result = DiscoveryResult(
         generations=[], top_strategies=[], total_candidates_evaluated=79, converged=False,
         convergence_generation=None, dsr_records=pipe._dsr_records, dsr_trials=trials,
     )  # fmt: skip
     note = _dsr_trials_note(result, [1, 2])
-    assert note["gate_n"] == 1000 and note["prior_n"] == 921 and note["raw"] == 79
+    assert note["gate_n"] == 948 and note["prior_n"] == 921 and note["raw"] == 79
+    assert note["run_n_eff"] == 27
     assert note["prior_run_ids"] == [1, 2]
-    assert note["n_rule"] == "cumulative_same_tf_overlapping_train"
+    assert note["n_rule"] == "cumulative_effective_same_tf_overlapping_train"
     assert "cumulative_n" not in note and "p_value_at_cumulative_n" not in note
 
 
@@ -550,10 +568,14 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     )
     conn.execute("CREATE TABLE backtest_results (run_id INTEGER, notes TEXT)")
     runs = [
-        (1, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 79}),
+        # new-rule run: charged at its recorded run_n_eff (79)
+        (1, "discovery", "4h", "2024-01-01", "2024-06-01",
+         {"evaluated": 79, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 79}}),
         (2, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 500, "mock": True}),
         (3, "screening", "4h", "2024-01-01", "2024-06-01", {"evaluated": 40}),
-        (4, "discovery", "4h", "2024-02-01", "2024-04-01", {"evaluated": 21}),
+        # new-rule run: charged at run_n_eff 21 though evaluated is 40
+        (4, "discovery", "4h", "2024-02-01", "2024-04-01",
+         {"evaluated": 40, "dsr_trials": {"n_rule": N_RULE_EFFECTIVE, "run_n_eff": 21}}),
         # this run and later: excluded by b.id < run_id
         (5, "discovery", "4h", "2024-01-01", "2024-06-01", {"evaluated": 1000}),
     ]
@@ -563,8 +585,11 @@ def test_prior_trials_sum_earlier_real_discovery_runs() -> None:
     conn.execute("INSERT INTO backtest_results VALUES (?, ?)", (4, "not json"))
     state = StateManager()
     state._conn = conn  # noqa: SLF001 -- skip get_connection/init_schema
-    n, ids = _prior_discovery_trials(state, 5, "4h", ("2024-03-01", "2024-09-01"))
-    assert n == 100 and ids == [1, 4]
+    total, ids, legacy_runs, legacy_raw = _prior_discovery_trials(
+        state, 5, "4h", ("2024-03-01", "2024-09-01")
+    )
+    assert total == 100 and ids == [1, 4]
+    assert legacy_runs == 0 and legacy_raw == 0
 
 
 # ---------------------------------------------------------------------------
