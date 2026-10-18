@@ -29,7 +29,8 @@ if TYPE_CHECKING:
 
 MIN_MS = 60_000
 BAR_MIN = 240  # 4h
-DRIFT_MIN = 6 * BAR_MIN  # 1,440 minutes
+DRIFT_BARS = 6
+DRIFT_MIN = DRIFT_BARS * BAR_MIN  # 1,440 minutes
 RSI_PERIOD = 14
 RSI_LEVEL = 30.0
 
@@ -81,19 +82,30 @@ def plant_drift(
     plant_start_ms: int,
     plant_end_ms: int,
     price_decimals: int | None = None,
+    bar_min: int = BAR_MIN,
+    drift_bars: int = DRIFT_BARS,
+    rsi_period: int = RSI_PERIOD,
+    rsi_level: float = RSI_LEVEL,
 ) -> PlantResult:
-    """Return planted klines + report. ``kappa`` is explicit; this function never iterates."""
+    """Return planted klines + report. ``kappa`` is explicit; this function never iterates.
+
+    ``bar_min`` is the RSI bar size in minutes (240 = 4h, 1440 = 1d); the drift that follows a
+    trigger lasts ``drift_bars * bar_min`` minutes. ``rsi_period`` / ``rsi_level`` are the RSI
+    window and the cross level. The explicit defaults reproduce the 4h plant byte for byte.
+    """
     t = k.open_time
     n = len(t)
+    bar_ms = bar_min * MIN_MS
+    drift_ms = drift_bars * bar_min * MIN_MS
     m_max = (plant_end_ms - plant_start_ms) // MIN_MS - 1
-    keys = t // (BAR_MIN * MIN_MS)
+    keys = t // bar_ms
     starts = np.concatenate(([0], np.flatnonzero(np.diff(keys)) + 1, [n])) if n else np.array([0])
 
     open_ = k.open.copy()
     high = k.high.copy()
     low = k.low.copy()
     close = k.close.copy()
-    rsi = RelativeStrengthIndex(RSI_PERIOD)
+    rsi = RelativeStrengthIndex(rsi_period)
     prev_rsi: float | None = None
     drift_until = -1
     d_total = 0
@@ -120,18 +132,18 @@ def plant_drift(
                 if price_decimals is not None:
                     new = np.round(new, price_decimals)
                 dst[a:b] = np.where(moved, new, src[a:b])
-        if b - a != BAR_MIN:
-            continue  # incomplete 4h bar: no RSI update
-        bar_close_ms = int(keys[a]) * BAR_MIN * MIN_MS + BAR_MIN * MIN_MS
+        if b - a != bar_min:
+            continue  # incomplete bar (fewer than bar_min rows): no RSI update
+        bar_close_ms = int(keys[a]) * bar_ms + bar_ms
         rsi.update_raw(float(close[b - 1]))
         cur: float | None = float(rsi.value) * 100.0 if rsi.initialized else None
         if (
-            crosses_below(prev_rsi, cur)
-            and int(keys[a]) * BAR_MIN * MIN_MS >= plant_start_ms
+            crosses_below(prev_rsi, cur, rsi_level)
+            and int(keys[a]) * bar_ms >= plant_start_ms
             and bar_close_ms <= plant_end_ms
         ):
             triggers.append(bar_close_ms)
-            drift_until = max(drift_until, bar_close_ms + DRIFT_MIN * MIN_MS)
+            drift_until = max(drift_until, bar_close_ms + drift_ms)
         prev_rsi = cur
 
     planted = Klines(
@@ -205,6 +217,10 @@ def solve_kappa(
     tol: float = 0.002,
     max_total_passes: int = 40,
     refine_above: float | None = None,
+    bar_min: int = BAR_MIN,
+    drift_bars: int = DRIFT_BARS,
+    rsi_period: int = RSI_PERIOD,
+    rsi_level: float = RSI_LEVEL,
 ) -> tuple[float, int, float]:
     """Kappa with |L_end| <= tol; returns (kappa, passes, L_end of that kappa).
 
@@ -238,6 +254,10 @@ def solve_kappa(
             plant_start_ms=plant_start_ms,
             plant_end_ms=plant_end_ms,
             price_decimals=price_decimals,
+            bar_min=bar_min,
+            drift_bars=drift_bars,
+            rsi_period=rsi_period,
+            rsi_level=rsi_level,
         )
         l_val = res.report.l_end
         history.append((candidate, l_val))

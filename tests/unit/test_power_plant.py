@@ -454,3 +454,132 @@ def test_solve_kappa_non_monotone_returns_the_minimum_residual_pair(
     assert abs(l_end) == 0.3  # the smallest |L_end| any evaluation reached
     assert min(abs(v) for _, v in calls) == abs(l_end)
     assert abs(l_end) > 0.002
+
+
+# --- bar_min / drift_bars / rsi_period / rsi_level (B1-B5) --------------------------------
+
+DAY_MIN = 1440
+DAY_MS = DAY_MIN * MIN_MS
+
+
+def rise_then_fall(n_up: int = 20, n_down: int = 20) -> list[float]:
+    """Daily closes: ``n_up`` days stepping +20, then ``n_down`` days stepping -30."""
+    ups = [1000.0 + 20.0 * i for i in range(n_up)]
+    return ups + [ups[-1] - 30.0 * j for j in range(1, n_down + 1)]
+
+
+def day_series(closes: list[float], last_minutes: int | None = None) -> plant.Klines:
+    """One flat 1m price per day; ``last_minutes`` truncates the final day (incomplete bar)."""
+    parts = [np.full(DAY_MIN, float(c)) for c in closes]
+    if last_minutes is not None:
+        parts[-1] = np.full(last_minutes, float(closes[-1]))
+    px = np.concatenate(parts)
+    t = T0_MS + np.arange(len(px), dtype=np.int64) * MIN_MS
+    return plant.Klines(t, px, px, px, px, np.ones(len(px)), t + 59_999)
+
+
+def day_window(n_days: int, a_days: int = 2) -> dict[str, int]:
+    """plant_start (a_days into the series) and plant_end (at the series end)."""
+    return {
+        "plant_start_ms": T0_MS + a_days * DAY_MS,
+        "plant_end_ms": T0_MS + n_days * DAY_MS,
+    }
+
+
+def test_daily_bar_plant_triggers_on_day_close() -> None:
+    """bar_min=1440 feeds the RSI one close per day: triggers land on day closes and the drift
+    span is drift_bars * 1440 minutes (8640 at the default drift_bars=6)."""
+    assert T0_MS % DAY_MS == 0  # day-aligned fixture: the bar keys are UTC-day boundaries
+    closes = rise_then_fall(20, 20)  # 40 days, exactly one cross below 30
+    k = day_series(closes)
+    w = day_window(len(closes))
+    rep = plant.plant_drift(k, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
+    assert rep.n_triggers == 1
+    assert rep.trigger_close_ms == (T0_MS + 27 * DAY_MS,)
+    assert all(c % 86_400_000 == 0 for c in rep.trigger_close_ms)
+    assert rep.drift_minutes == 6 * DAY_MIN  # drift_bars=6 (default) * bar_min=1440
+
+    # drift_bars is forwarded: 3 days * 1440 minutes for the same isolated trigger
+    rep3 = plant.plant_drift(k, delta=0.0, kappa=0.0, bar_min=DAY_MIN, drift_bars=3, **w).report
+    assert rep3.trigger_close_ms == rep.trigger_close_ms
+    assert rep3.drift_minutes == 3 * DAY_MIN
+
+
+def test_incomplete_day_bar_never_updates_rsi() -> None:
+    """A bar with fewer than bar_min rows is skipped: it never feeds the RSI, so it cannot
+    trigger (the cross here falls exactly on the final, complete day)."""
+    closes = rise_then_fall(20, 7)  # 27 days; the cross lands on the last day
+    w = day_window(len(closes))
+    full = day_series(closes)
+    rep = plant.plant_drift(full, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
+    assert rep.trigger_close_ms == (T0_MS + 27 * DAY_MS,)
+
+    partial = day_series(closes, last_minutes=1000)  # same closes, final day truncated
+    rep_part = plant.plant_drift(partial, delta=0.0, kappa=0.0, bar_min=DAY_MIN, **w).report
+    assert rep_part.n_triggers == 0  # the incomplete day's close never reached the RSI
+
+
+def test_explicit_default_kwargs_match_implicit() -> None:
+    """Passing the defaults explicitly is bit-identical to omitting them (B2)."""
+    k = make_klines()
+    w = window(k)
+    base = plant.plant_drift(k, delta=DELTA, kappa=KAPPA, **w)
+    explicit = plant.plant_drift(
+        k, delta=DELTA, kappa=KAPPA, bar_min=240, drift_bars=6, rsi_period=14, rsi_level=30.0, **w
+    )
+    for name in plant.Klines.__dataclass_fields__:
+        assert np.array_equal(getattr(explicit.klines, name), getattr(base.klines, name)), name
+    assert explicit.report == base.report
+    assert explicit.report.trigger_close_ms == base.report.trigger_close_ms
+
+
+def test_rsi_period_and_level_are_honoured() -> None:
+    """rsi_period/rsi_level reach the RSI: a shorter period / higher level crosses on an
+    earlier day than the 14/30 default, on the same constructed close series."""
+    closes = rise_then_fall(20, 12)
+    k = day_series(closes)
+    w = day_window(len(closes))
+
+    def triggers(period: int, level: float) -> tuple[int, ...]:
+        rep = plant.plant_drift(
+            k, delta=0.0, kappa=0.0, bar_min=DAY_MIN, rsi_period=period, rsi_level=level, **w
+        ).report
+        assert rep.n_triggers == 1
+        return rep.trigger_close_ms
+
+    default = triggers(14, 30.0)
+    assert default == (T0_MS + 27 * DAY_MS,)
+    assert triggers(14, 35.0) == (T0_MS + 26 * DAY_MS,)
+    assert triggers(7, 30.0) == (T0_MS + 24 * DAY_MS,)
+    assert triggers(7, 35.0) == (T0_MS + 23 * DAY_MS,)
+    assert triggers(5, 35.0) == (T0_MS + 22 * DAY_MS,)
+    # period 7 / level 35 fires on a bar where the 14/30 default does not
+    assert (T0_MS + 23 * DAY_MS) not in default
+
+
+def test_solve_kappa_forwards_the_bar_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """solve_kappa passes bar_min/drift_bars/rsi_period/rsi_level to every plant_drift call,
+    and its returned (kappa, l_end) pair belongs to that parametrised plant."""
+    k = make_klines()
+    w = window(k)
+    real = plant.plant_drift
+    seen: list[dict[str, Any]] = []
+
+    def spy(*args: Any, **kwargs: Any) -> plant.PlantResult:
+        seen.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(plant, "plant_drift", spy)
+    kappa, _, l_end = plant.solve_kappa(
+        k, DELTA, bar_min=240, drift_bars=3, rsi_period=7, rsi_level=35.0, **w
+    )
+    assert seen
+    for call in seen:
+        assert call["bar_min"] == 240
+        assert call["drift_bars"] == 3
+        assert call["rsi_period"] == 7
+        assert call["rsi_level"] == 35.0
+    got = plant.plant_drift(
+        k, delta=DELTA, kappa=kappa, bar_min=240, drift_bars=3, rsi_period=7, rsi_level=35.0, **w
+    ).report.l_end
+    assert got == l_end  # the pair is consistent for the parametrised plant, not the defaults
