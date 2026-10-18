@@ -4,6 +4,35 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: RESULT G1 — EV-matched effective trial count passes the false-positive check (max 0.0125 ≤ 0.05)
+
+Pre-registration G1 (e73a0747). `neff_null.py --reps 400 --workers 6` on main 916ca37b, 528.4 s; output `data/swarm/20261017-power-paper/power/neff_null.{json,log}`. Exit 0.
+
+**Verdict (verbatim):** `max=0.0125 -> PASS`. No config reached 13/400, so no top-up ran.
+
+| config | FP / 400 | rate | CP95 | median run_n_eff | median n_used | fallback | mean-corr est. | eigen-PR est. |
+|---|---|---|---|---|---|---|---|---|
+| W3 rho 0.0 | 1 | 0.0025 | 0.0118 | 154 | 37 | 0.00 | 0.0025 | 0.0025 |
+| W3 rho 0.2 | 1 | 0.0025 | 0.0118 | 93 | 35 | 0.00 | 0.0325 | 0.0075 |
+| W3 rho 0.5 | 0 | 0.0000 | 0.0075 | 47 | 29 | 0.07 | 0.0777 | 0.0188 |
+| W3 rho 0.8 | 4 | 0.0100 | 0.0227 | 51 | 10 | 0.33 | 0.0899 | 0.0749 |
+| W6 rho 0.0 | 0 | 0.0000 | 0.0075 | 156 | 34 | 0.00 | 0.0000 | 0.0000 |
+| W6 rho 0.2 | 1 | 0.0025 | 0.0118 | 97 | 30 | 0.01 | 0.0151 | 0.0050 |
+| W6 rho 0.5 | 2 | 0.0050 | 0.0157 | 56 | 20 | 0.08 | 0.0434 | 0.0190 |
+| W6 rho 0.8 | 5 | 0.0125 | 0.0261 | 63 | 8 | 0.35 | 0.0923 | 0.0846 |
+| W3 rho 0.5 sparse | 0 | 0.0000 | 0.0075 | 59 | 17 | 0.08 | 0.0000 | 0.0000 |
+| W3 rho 0.8 sparse | 0 | 0.0000 | 0.0075 | 40 | 16 | 0.30 | 0.0000 | 0.0000 |
+| W6 rho 0.5 sparse | 0 | 0.0000 | 0.0075 | 59 | 17 | 0.09 | 0.0000 | 0.0000 |
+| W6 rho 0.8 sparse | 0 | 0.0000 | 0.0075 | 56 | 9 | 0.34 | 0.0000 | 0.0000 |
+
+Sparse survivors per replicate: W3 rho 0.5 min 0 / median 17 / max 17, undershoots 156; W3 rho 0.8 0/16/17, 200; W6 rho 0.5 0/17/17, 150; W6 rho 0.8 0/9/17, 233.
+
+**Reading:** prediction held (max ≤ 0.02). The user's condition (≤ 5 % at every level) is met with CP95 ≤ 0.0261 everywhere. The recorded estimators would not have met it at rho 0.8 (mean-corr 0.0923, eigen-PR 0.0846 on W6), confirming design §0. In the sparse configs 30–35 % of rho-0.8 replicates fall back to raw N 167 (disclosed in G1); there the check measures the fallback.
+
+**Next:** megq1 T3 (gate switch + A3 prior rule + comparability break) and T4 (overfitting re-check uses the same N) may start.
+
+---
+
 ## 2026-10-18: PRE-REGISTRATION G1 — false-positive check for the EV-matched effective trial count (megq1; gate change lands only on PASS)
 
 Written before the run. Design `data/swarm/20261017-power-paper/design-neff.md` §4 + Review r1 B5/N1 + chief rulings; script `scripts/research/power/neff_null.py` (megq1 T2). Estimator on main since 9237cb24 (record-only).
