@@ -1155,6 +1155,21 @@ def test_ingest_runs_pairs_a_rerun_with_the_closest_unclaimed_session(
     assert toks == {"t3:cc-sh-retry-1": (100, 1), "t3:cc-sh-retry-2": (300, 3)}
 
 
+def test_cmd_session_usage_takes_the_closest_start_not_the_first_path(tmp_path: Path) -> None:
+    # Two session files carry the same whole prompt. The one that starts 90 s late but sorts
+    # FIRST by path must not win over the +2 s file: the "first match wins" mutant survives
+    # unless the closest start is asserted (proj-a sorts before proj-b).
+    prompt = _pointer_prompt("cc-sh-near-1", "sh-near")
+    start = tel._iso_s("2026-10-17T16:00:00.000Z")
+    assert start is not None
+    cmd = tmp_path / "cmd"
+    _cmd_session(cmd / "proj-a", "2026-10-17T16:01:30.000Z", prompt, [(900, 90)])  # +90 s, sorts first
+    _cmd_session(cmd / "proj-b", "2026-10-17T16:00:02.000Z", prompt, [(200, 2)])  # +2 s
+    claimed: set[Path] = set()
+    assert tel._cmd_session_usage(cmd, start, prompt, claimed) == (200, 2)
+    assert claimed == {cmd / "proj-b" / "2.000.jsonl"}
+
+
 def test_report_by_board_and_asked(_isolated_ledger: Path) -> None:
     recs = [
         _rec(task="a", round=1, review="PASS", board_relied=2, comms_asked=0),
