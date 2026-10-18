@@ -51,6 +51,7 @@ import pytest  # noqa: E402
 from vibe_quant.data.archive import RawDataArchive  # noqa: E402
 from vibe_quant.db.state_manager import StateManager  # noqa: E402
 from vibe_quant.discovery.config_check import plan_windows  # noqa: E402
+from vibe_quant.discovery.neff import N_RULE_EFFECTIVE  # noqa: E402
 
 MIN_MS = 60_000
 DAY0_MS = 1_704_067_200_000  # 2024-01-01 00:00 UTC
@@ -289,11 +290,11 @@ def test_signed_corr_and_ann_sharpe_use_common_days() -> None:
 
 
 def test_isolation_check_edges() -> None:
-    ok = layer2.check_isolation({"prior_n": 0, "gate_n": 90, "raw": 90})
-    assert ok == {"ok": True, "checked": True, "prior_n": 0, "gate_n": 90, "raw": 90}
-    assert layer2.check_isolation({"prior_n": 1, "gate_n": 91, "raw": 90})["ok"] is False
-    assert layer2.check_isolation({"prior_n": 0, "gate_n": 91, "raw": 90})["ok"] is False
-    assert layer2.check_isolation({"prior_n": None, "gate_n": 90, "raw": 90})["ok"] is False
+    good = {"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}
+    assert layer2.check_isolation(good) == {"ok": True, "checked": True, **good}
+    assert layer2.check_isolation({**good, "prior_n": 1, "gate_n": 38})["ok"] is False
+    assert layer2.check_isolation({**good, "gate_n": 41})["ok"] is False  # pre-T3 gate_n == raw
+    assert layer2.check_isolation({**good, "prior_n": None})["ok"] is False
     assert layer2.check_isolation({})["checked"] is False
 
 
@@ -390,7 +391,8 @@ def test_harvest_run_reports_champions_stages_and_isolation(tmp_path: Path) -> N
     dsl = {"name": "genome_abc", "timeframe": "4h"}
     _save_notes(db, run_id, {
         "evaluated": 90, "outcome": None,
-        "dsr_trials": {"raw": 90, "gate_n": 90, "prior_n": 0},
+        "dsr_trials": {"raw": 90, "gate_n": 90, "run_n_eff": 90, "prior_n": 0,
+                       "n_rule": N_RULE_EFFECTIVE},
         "top_strategies": [{"dsl": dsl, "dsr": {"sharpe_daily": 0.1}}],
         "guardrail_rejections": [
             {"uid": "u1", "stage": "guardrails", "dsl": dsl},
@@ -409,7 +411,8 @@ def test_harvest_run_reports_champions_stages_and_isolation(tmp_path: Path) -> N
     run2 = layer2.create_run(db)
     _save_notes(db, run2, {
         "evaluated": 90, "outcome": "no_viable_strategies", "top_strategies": [],
-        "dsr_trials": {"raw": 90, "gate_n": 94, "prior_n": 4},
+        "dsr_trials": {"raw": 90, "gate_n": 94, "run_n_eff": 90, "prior_n": 4,
+                       "n_rule": N_RULE_EFFECTIVE},
     })
     h2 = layer2.harvest_run(db, run2)
     assert h2["champions"] == 0 and h2["outcome"] == "no_viable_strategies"
@@ -494,8 +497,8 @@ def test_build_one_plants_writes_scratch_and_reports_l_end(
     k = make_klines(days)
     start = DAY0_MS + 2 * 86_400_000
     end = DAY0_MS + (days - 2) * 86_400_000
-    monkeypatch.setattr(layer2, "plant_window_ms", lambda: (start, end))
-    monkeypatch.setattr(layer2, "measure_build", lambda root, db: {"train_S": 5.5, "full_S": 2.0})
+    monkeypatch.setattr(layer2, "plant_window_ms", lambda *_a: (start, end))
+    monkeypatch.setattr(layer2, "measure_build", lambda root, db, *_a: {"train_S": 5.5, "full_S": 2.0})
     scratch = tmp_path / "scratch"
     rec = layer2.build_one("btc2.0", 1, 5e-5, k, tmp_path / "src.db", scratch, scratch / "p.db")
     root = scratch / "btc2.0-b1"
@@ -530,8 +533,8 @@ def test_build_one_refines_kappa_only_past_kappa_tol(
     k = make_klines(days)
     start = DAY0_MS + 2 * 86_400_000
     end = DAY0_MS + (days - 2) * 86_400_000
-    monkeypatch.setattr(layer2, "plant_window_ms", lambda: (start, end))
-    monkeypatch.setattr(layer2, "measure_build", lambda root, db: {"train_S": 5.5, "full_S": 2.0})
+    monkeypatch.setattr(layer2, "plant_window_ms", lambda *_a: (start, end))
+    monkeypatch.setattr(layer2, "measure_build", lambda root, db, *_a: {"train_S": 5.5, "full_S": 2.0})
     seen: list[dict[str, Any]] = []
     real = plant.solve_kappa
 
@@ -1392,7 +1395,8 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
 
 def _bad_isolation_notes() -> dict[str, Any]:
     return {"evaluated": 53, "top_strategies": [],
-            "dsr_trials": {"raw": 53, "gate_n": 55, "prior_n": 2}}
+            "dsr_trials": {"raw": 53, "gate_n": 55, "run_n_eff": 53, "prior_n": 2,
+                           "n_rule": N_RULE_EFFECTIVE}}
 
 
 def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str, Path]:
@@ -1421,7 +1425,8 @@ def test_r43_rescreen_resolves_the_dsl_through_the_real_harvest_record(
     run_id = layer2.create_run(db)
     dsl = {"name": "genome_zz", "timeframe": "4h", "marker": 7}
     _save_notes(db, run_id, {
-        "evaluated": 90, "dsr_trials": {"raw": 90, "gate_n": 90, "prior_n": 0},
+        "evaluated": 90, "dsr_trials": {"raw": 90, "gate_n": 90, "run_n_eff": 90, "prior_n": 0,
+                       "n_rule": N_RULE_EFFECTIVE},
         "top_strategies": [], "guardrail_rejections": [{"uid": "rej9", "stage": "holdout", "dsl": dsl}],
     })
     layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").__setitem__("runs", {
@@ -1781,3 +1786,259 @@ def test_q2g9o_null_corr_one_failing_shard_writes_nothing(
     assert not (tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE).exists()
     assert out.read_bytes() == before
     assert layer2.NULL_RECORD_KEY not in layer2.load_state(out)
+
+
+# --- Profile (budget study T2): P4H byte-identical, P1D = 1d / W6 / LONG ---------------------
+
+
+def _argv_pair_counts(cmd: list[str], flag: str) -> list[str]:
+    return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == flag]
+
+
+def test_profile_1d_long_discovery_argv() -> None:
+    cmd = layer2.discovery_command(5, Path("/x/s.db"), 2, profile=layer2.P1D)
+    assert _argv_pair_counts(cmd, "--timeframe") == ["1d"]
+    assert _argv_pair_counts(cmd, "--start-date") == ["2021-01-01"]
+    assert _argv_pair_counts(cmd, "--end-date") == ["2026-10-15"]
+    assert _argv_pair_counts(cmd, "--direction") == ["long"]
+
+
+def test_default_profile_is_byte_identical_to_the_4h_study() -> None:
+    """R2: the default argv and planted DSL are the pre-Profile literals."""
+    assert layer2.discovery_command(5, Path("/x/s.db"), 2) == [
+        sys.executable, "-m", "vibe_quant", "discovery",
+        "--run-id", "5", "--db", "/x/s.db",
+        "--symbols", "BTCUSDT",
+        "--timeframe", "4h",
+        "--start-date", "2023-06-01",
+        "--end-date", "2026-06-01",
+        "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
+        "--population-size", "12",
+        "--max-generations", "4",
+        "--eval-windows", "2",
+        "--train-test-split", "0.8",
+        "--direction", "both",
+        "--max-workers", "3",
+        "--seed", "2",
+    ]
+    assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-2:] == [
+        "--seed-from-run", "9"
+    ]
+    assert layer2.planted_dsl() == layer2.planted_dsl(layer2.P4H)
+    assert layer2.planted_dsl(layer2.P1D)["timeframe"] == "1d"
+    assert layer2.P4H.plant_span == ("2022-06-01", "2026-06-30")
+    assert layer2.plant_window_ms() == (plant._ms("2022-06-01"), plant._ms("2026-06-30") + 86_400_000)
+    assert layer2.plant_window_ms(layer2.P1D) == (
+        plant._ms("2021-01-01"), plant._ms("2026-10-15") + 86_400_000
+    )
+    assert layer2.P4H.plant_kw == {
+        "bar_min": 240, "drift_bars": 6, "rsi_period": 14, "rsi_level": 30.0
+    }
+    assert layer2.P1D.plant_kw["bar_min"] == 1440 and layer2.P1D.plant_kw["drift_bars"] == 6
+    assert layer2.P1D.kline_start == "2020-12-01" and layer2.P1D.direction == "long"
+
+
+def test_profile_windows_follow_the_plan_window() -> None:
+    for prof, name in ((layer2.P4H, "W3"), (layer2.P1D, "W6")):
+        want = gatechain._WINDOWS[name]
+        assert prof.window == name and prof.timeframe == want[0]
+        assert layer2.full_window(prof) == (want[1], want[2])
+    p6 = gatechain.settings_for("W6").plan
+    assert layer2.train_window(layer2.P1D) == (p6.train_start, p6.train_end)
+    assert layer2.train_window() == layer2.train_window(layer2.P4H)
+    jobs = layer2.measure_jobs(layer2.P1D)
+    assert [(j["start"], j["end"]) for j in jobs] == [
+        ("2021-01-01", "2026-10-15"), (p6.train_start, p6.train_end)
+    ]
+    assert all(j["dsl"]["timeframe"] == "1d" for j in jobs)
+    assert layer2.measure_jobs()[0]["dsl"] == layer2.planted_dsl()
+    assert layer2.measure_jobs()[0]["start"] == "2023-06-01"
+
+
+def test_profile_dict_round_trip_and_absent_payload_is_p4h() -> None:
+    assert layer2.Profile.from_payload({}) == layer2.P4H
+    for prof in (layer2.P4H, layer2.P1D):
+        wire = json.loads(json.dumps(prof.to_dict()))
+        assert layer2.Profile.from_dict(wire) == prof
+        assert layer2.Profile.from_payload({"profile": wire}) == prof
+    rule = replace(layer2.planted_chromosome(), stop_loss_pct=3.0)
+    swapped = replace(layer2.P1D, chromosome=rule)
+    back = layer2.Profile.from_dict(json.loads(json.dumps(swapped.to_dict())))
+    assert back.chromosome.stop_loss_pct == 3.0
+    assert layer2.planted_dsl(back)["stop_loss"]["percent"] == 3.0
+
+
+def test_create_run_records_the_profile_timeframe_and_window(tmp_path: Path) -> None:
+    for prof, tf, span in ((layer2.P1D, "1d", ("2021-01-01", "2026-10-15")),
+                           (layer2.P4H, "4h", ("2023-06-01", "2026-06-01"))):
+        db = tmp_path / f"{tf}.db"
+        run_id = layer2.create_run(db, profile=prof)
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT timeframe, start_date, end_date FROM backtest_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        conn.close()
+        assert tuple(row)[0] == tf and tuple(row)[1:] == span
+
+
+def test_build_one_forwards_the_profile_plant_kw_and_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_kappa(_k: Any, delta: float, **kw: Any) -> tuple[float, int, float]:
+        seen["kappa"] = kw
+        return 0.0, 1, 0.0
+
+    def fake_plant(_k: Any, **kw: Any) -> Any:
+        seen["plant"] = kw
+
+        class R:
+            klines = None
+            report = type("Rep", (), {"l_max_abs": 0.1, "l_end": 0.0, "n_triggers": 3,
+                                      "drift_minutes": 7})()
+
+        return R()
+
+    monkeypatch.setattr(plant, "solve_kappa", fake_kappa)
+    monkeypatch.setattr(plant, "plant_drift", fake_plant)
+    monkeypatch.setattr(plant, "write_scratch", lambda *a, **k: None)
+    monkeypatch.setattr(layer2, "measure_build", lambda root, db, profile=layer2.P4H: {"p": profile})
+    rec = layer2.build_one("btc2.0", 1, 1e-5, None, tmp_path / "a.db", tmp_path / "s", tmp_path / "p.db",  # type: ignore[arg-type]
+                           profile=layer2.P1D)
+    want_ms = layer2.plant_window_ms(layer2.P1D)
+    for call in ("kappa", "plant"):
+        assert (seen[call]["plant_start_ms"], seen[call]["plant_end_ms"]) == want_ms
+        assert seen[call]["bar_min"] == 1440 and seen[call]["drift_bars"] == 6
+        assert seen[call]["rsi_period"] == 14 and seen[call]["rsi_level"] == 30.0
+    assert rec["p"] is layer2.P1D
+    layer2.build_one("btc2.0", 2, 1e-5, None, tmp_path / "a.db", tmp_path / "s", tmp_path / "p.db")  # type: ignore[arg-type]
+    assert seen["plant"]["bar_min"] == 240  # default profile = the 4h study
+
+
+def test_profile_1d_worker_null_draws_only_long_chromosomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibe_quant.discovery import fitness
+
+    seen_profiles: list[Any] = []
+
+    class Fns:
+        backtest_fn = object()
+
+    def fake_fns(profile: Any) -> Any:
+        seen_profiles.append(profile)
+        return Fns(), None
+
+    class Fit:
+        adjusted_score = 1.5
+
+    monkeypatch.setattr(layer2, "_cell_fns", fake_fns)
+    monkeypatch.setattr(fitness, "_evaluate_single", lambda *a, **k: Fit())
+    monkeypatch.setattr(
+        layer2, "worker_screen",
+        lambda p: [{"tag": j["tag"], "mtm": None} for j in p["jobs"]],
+    )
+    monkeypatch.chdir(tmp_path)
+    for prof, want in ((layer2.P1D, "long"), (layer2.P4H, "both")):
+        out = layer2.worker_null({
+            "root": str(tmp_path), "seed_base": 11, "count": 6, "profile": prof.to_dict(),
+        })
+        assert len(out) == 6
+        assert {e["chromosome"]["direction"] for e in out} == {want}
+    assert seen_profiles == [layer2.P1D, layer2.P4H]
+
+
+def test_null_chromosome_direction_argument() -> None:
+    assert layer2.null_chromosome(3, direction=Direction.LONG).direction is Direction.LONG
+    assert layer2.null_chromosome(3).direction is Direction.BOTH
+
+
+@pytest.mark.parametrize(
+    ("trials", "ok"),
+    [
+        ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, True),
+        ({"prior_n": 0, "gate_n": 41, "run_n_eff": 41, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, True),
+        ({"prior_n": 1, "gate_n": 38, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41}, False),
+        ({"prior_n": 0, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": "legacy"}, False),
+        ({"prior_n": 0, "gate_n": 41, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        ({"prior_n": 0, "gate_n": 36, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        ({"prior_n": 0, "gate_n": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        ({"prior_n": None, "gate_n": 37, "run_n_eff": 37, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+        ({"prior_n": 0, "gate_n": None, "run_n_eff": None, "raw": 41, "n_rule": N_RULE_EFFECTIVE}, False),
+    ],
+)
+def test_isolation_check_effective_n_rule(trials: dict[str, Any], ok: bool) -> None:
+    """R5: ok iff prior_n == 0, gate_n == run_n_eff and the run recorded the effective-N rule."""
+    out = layer2.check_isolation(trials)
+    assert out["ok"] is ok and out["checked"] is True
+    assert out["gate_n"] == trials["gate_n"] and out["run_n_eff"] == trials.get("run_n_eff")
+    assert out["n_rule"] == trials.get("n_rule")
+
+
+def test_rescreen_jobs_under_a_non_default_profile_omit_planted_both() -> None:
+    """R6: P1D with a replaced chromosome -> planted (1d, SL3) + candidate only, on the W6 train."""
+    prof = replace(layer2.P1D, chromosome=replace(layer2.planted_chromosome(), stop_loss_pct=3.0))
+    cand = {"name": "genome_c", "timeframe": "1d"}
+    jobs = layer2.rescreen_jobs(cand, prof)
+    p6 = gatechain.settings_for("W6").plan
+    assert [j["tag"] for j in jobs] == ["planted", "candidate"]
+    assert jobs[0]["dsl"]["timeframe"] == "1d" and jobs[0]["dsl"]["stop_loss"]["percent"] == 3.0
+    assert jobs[1]["dsl"] is cand
+    assert all((j["start"], j["end"]) == (p6.train_start, p6.train_end) for j in jobs)
+    default = layer2.rescreen_jobs(cand)
+    assert [j["tag"] for j in default] == ["planted", "planted_both", "candidate"]
+    assert default[1]["dsl"] == layer2.planted_both_dsl()
+
+
+def test_run_discovery_persists_the_profile_on_the_run_row(tmp_path: Path) -> None:
+    """R7: a P1D launch records timeframe 1d + W6 dates on the run row (fake completed child)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    done = FAKE_HEAD + (
+        "con.execute(\"UPDATE backtest_runs SET status='completed' WHERE id=?\", (run_id,))\n"
+        "con.commit()\n"
+    )
+    for prof, want in ((layer2.P1D, ("1d", "2021-01-01", "2026-10-15")),
+                       (layer2.P4H, ("4h", "2023-06-01", "2026-06-01"))):
+        run_dir = tmp_path / f"r-{prof.timeframe}"
+        rec = layer2.run_discovery(
+            root, run_dir, 1, command_fn=_fake_command(done), poll_s=0.05, profile=prof
+        )
+        assert rec["status"] == "completed"
+        conn = sqlite3.connect(run_dir / "state.db")
+        row = conn.execute(
+            "SELECT timeframe, start_date, end_date FROM backtest_runs WHERE id = ?",
+            (rec["run_id"],),
+        ).fetchone()
+        conn.close()
+        assert tuple(row) == want
+
+
+def test_cell_fns_forwards_the_profile_window_and_timeframe(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R8: _cell_fns(P1D) builds the W6 plan with timeframe 1d (not W3/4h)."""
+    import vibe_quant.discovery.__main__ as disc
+
+    seen: dict[str, Any] = {}
+
+    class Fns:
+        class backtest_fn:  # noqa: N801
+            collect_daily_returns = False
+
+    def fake_make(**kw: Any) -> Any:
+        seen.update(kw)
+        return Fns()
+
+    monkeypatch.setattr(disc, "_make_cell_fns", fake_make)
+    _fns, settings = layer2._cell_fns(layer2.P1D)
+    p6 = gatechain.settings_for("W6").plan
+    assert settings.name == "W6"
+    assert seen["timeframe"] == "1d"
+    assert (seen["train_start"], seen["train_end"]) == (p6.train_start, p6.train_end)
+    assert seen["holdout"] == (str(p6.holdout_start), str(p6.holdout_end))
+    layer2._cell_fns(layer2.P4H)
+    p3 = gatechain.settings_for("W3").plan
+    assert seen["timeframe"] == "4h" and seen["train_start"] == p3.train_start

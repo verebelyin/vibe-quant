@@ -76,7 +76,7 @@ import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
 from collections import Counter  # noqa: E402
-from dataclasses import replace  # noqa: E402
+from dataclasses import dataclass, replace  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
@@ -85,7 +85,12 @@ import layer1  # noqa: E402
 import numpy as np  # noqa: E402
 import plant  # noqa: E402
 
-from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable  # noqa: E402
+from vibe_quant.discovery.genome import (  # noqa: E402
+    chromosome_to_dsl,
+    chromosome_to_serializable,
+    serializable_to_chromosome,
+)
+from vibe_quant.discovery.neff import N_RULE_EFFECTIVE  # noqa: E402
 from vibe_quant.discovery.operators import (  # noqa: E402
     ConditionType,
     Direction,
@@ -103,6 +108,8 @@ SYMBOL = "BTCUSDT"
 TIMEFRAME = "4h"
 #: W3 plan window (gatechain._WINDOWS): full range, train = first 80% by plan_windows.
 W3_FULL = ("2023-06-01", "2026-06-01")
+#: Full range of each plan window (gatechain._WINDOWS; a unit test pins the match).
+WINDOW_FULL: dict[str, tuple[str, str]] = {"W3": W3_FULL, "W6": ("2021-01-01", "2026-10-15")}
 SQRT_365 = math.sqrt(365.0)
 
 #: The L2 variants: calibration target and acceptance (R27). ``None`` target = no plant.
@@ -192,10 +199,11 @@ def planted_chromosome() -> StrategyChromosome:
     )
 
 
-def planted_dsl() -> dict[str, object]:
-    """The planted rule as the DSL dict a discovery champion would carry (4h)."""
-    dsl = chromosome_to_dsl(planted_chromosome())
-    dsl["timeframe"] = TIMEFRAME
+def planted_dsl(profile: Profile | None = None) -> dict[str, object]:
+    """The planted rule as the DSL dict a discovery champion would carry (profile timeframe)."""
+    prof = P4H if profile is None else profile
+    dsl = chromosome_to_dsl(prof.chromosome)
+    dsl["timeframe"] = prof.timeframe
     return dsl
 
 
@@ -204,6 +212,81 @@ def planted_both_dsl() -> dict[str, object]:
     dsl = chromosome_to_dsl(replace(planted_chromosome(), direction=Direction.BOTH))
     dsl["timeframe"] = TIMEFRAME
     return dsl
+
+
+# --- Profile: the timeframe / window / plant of one study -------------------------------------
+
+
+@dataclass(frozen=True)
+class Profile:
+    """Everything that differs between the 4h/W3 study and the 1d/W6 study.
+
+    ``plant_span`` is the plant window (ISO dates, end day inclusive); ``kline_start`` the first
+    archive day the klines are read from (warm-up before the plant); ``plant_kw`` is forwarded to
+    ``plant.plant_drift`` / ``plant.solve_kappa``; ``direction`` is the discovery ``--direction``
+    and the direction of null draws. ``chromosome`` is the planted rule (replaceable by the driver).
+    """
+
+    timeframe: str
+    window: str
+    plant_span: tuple[str, str]
+    kline_start: str
+    chromosome: StrategyChromosome
+    plant_kw: dict[str, Any]
+    direction: str = "both"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timeframe": self.timeframe, "window": self.window,
+            "plant_span": list(self.plant_span), "kline_start": self.kline_start,
+            "chromosome": chromosome_to_serializable(self.chromosome),
+            "chromosome_uid": self.chromosome.uid,
+            "plant_kw": dict(self.plant_kw), "direction": self.direction,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Profile:
+        start, end = data["plant_span"]
+        return cls(
+            timeframe=data["timeframe"], window=data["window"], plant_span=(start, end),
+            kline_start=data["kline_start"],
+            # the uid names the planted DSL (``genome_<uid>``): a round trip must keep it
+            chromosome=replace(
+                serializable_to_chromosome(data["chromosome"]), uid=data["chromosome_uid"]
+            ),
+            plant_kw=dict(data["plant_kw"]), direction=data["direction"],
+        )
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> Profile:
+        """The worker payload's profile; P4H when absent (old payloads)."""
+        wire = payload.get("profile")
+        return P4H if wire is None else cls.from_dict(wire)
+
+
+P4H = Profile(
+    timeframe=TIMEFRAME, window="W3", plant_span=(plant.PLANT_START, plant.PLANT_END),
+    kline_start=plant.PLANT_START, chromosome=planted_chromosome(),
+    plant_kw={
+        "bar_min": plant.BAR_MIN, "drift_bars": plant.DRIFT_BARS,
+        "rsi_period": plant.RSI_PERIOD, "rsi_level": plant.RSI_LEVEL,
+    },
+    direction="both",
+)
+#: The 1d study: W6, LONG. ``chromosome`` is the 4h rule until the driver picks the 1d rule.
+P1D = Profile(
+    timeframe="1d", window="W6", plant_span=("2021-01-01", "2026-10-15"),
+    kline_start="2020-12-01", chromosome=planted_chromosome(),
+    plant_kw={
+        "bar_min": 1440, "drift_bars": 6, "rsi_period": plant.RSI_PERIOD,
+        "rsi_level": plant.RSI_LEVEL,
+    },
+    direction="long",
+)
+
+
+def full_window(profile: Profile = P4H) -> tuple[str, str]:
+    return WINDOW_FULL[profile.window]
 
 
 # --- JSON state (one file, locked read-modify-write) ----------------------------------------
@@ -538,9 +621,10 @@ def next_delta(variant: str, builds: Sequence[dict[str, Any]], delta0: float) ->
 # --- builds ---------------------------------------------------------------------------------
 
 
-def plant_window_ms() -> tuple[int, int]:
-    """[start, end) of the plant window: 2022-06-01 .. end of 2026-06-30."""
-    return plant._ms(plant.PLANT_START), plant._ms(plant.PLANT_END) + 86_400_000
+def plant_window_ms(profile: Profile = P4H) -> tuple[int, int]:
+    """[start, end) of the plant window (P4H: 2022-06-01 .. end of 2026-06-30)."""
+    start, end = profile.plant_span
+    return plant._ms(start), plant._ms(end) + 86_400_000
 
 
 def _under(path: Path, parent: Path) -> bool:
@@ -551,25 +635,26 @@ def build_root(scratch: Path, variant: str, k: int) -> Path:
     return scratch / f"{variant}-b{k}"
 
 
-def measure_jobs() -> list[dict[str, Any]]:
-    """Screening jobs that calibrate one build: planted rule on full W3 and on TRAIN."""
-    train_start, train_end = train_window()
+def measure_jobs(profile: Profile = P4H) -> list[dict[str, Any]]:
+    """Screening jobs that calibrate one build: planted rule on the full window and on TRAIN."""
+    train_start, train_end = train_window(profile)
+    full_start, full_end = full_window(profile)
     return [
-        {"tag": "full", "dsl": planted_dsl(), "start": W3_FULL[0], "end": W3_FULL[1],
+        {"tag": "full", "dsl": planted_dsl(profile), "start": full_start, "end": full_end,
          "collect": True, "bh": False},
-        {"tag": "train", "dsl": planted_dsl(), "start": train_start, "end": train_end,
+        {"tag": "train", "dsl": planted_dsl(profile), "start": train_start, "end": train_end,
          "collect": True, "bh": True},
     ]
 
 
-def train_window() -> tuple[str, str]:
-    plan = gatechain.settings_for("W3").plan
+def train_window(profile: Profile = P4H) -> tuple[str, str]:
+    plan = gatechain.settings_for(profile.window).plan
     return plan.train_start, plan.train_end
 
 
-def measure_build(root: Path, db: Path) -> dict[str, Any]:
-    """NT sharpe/trades + MTM S on full W3 and on train, and the planted-catalog B&H bar."""
-    res = {r["tag"]: r for r in run_worker("screen", root, {"jobs": measure_jobs()}, db)}
+def measure_build(root: Path, db: Path, profile: Profile = P4H) -> dict[str, Any]:
+    """NT sharpe/trades + MTM S on the full window and on train, and the planted-catalog B&H bar."""
+    res = {r["tag"]: r for r in run_worker("screen", root, {"jobs": measure_jobs(profile)}, db)}
     full, train = res["full"], res["train"]
     return {
         "nt_sharpe_full": full["sharpe"],
@@ -590,6 +675,7 @@ def build_one(
     archive: Path,
     scratch: Path,
     db: Path,
+    profile: Profile = P4H,
 ) -> dict[str, Any]:
     """One build in a FRESH scratch root: plant (kappa-compensated), write, measure."""
     root = build_root(scratch, variant, k)
@@ -598,7 +684,7 @@ def build_one(
             msg = f"refusing to remove {root}"
             raise Layer2Error(msg)
         shutil.rmtree(root)  # a crashed earlier attempt; builds are never reused
-    start_ms, end_ms = plant_window_ms()
+    start_ms, end_ms = plant_window_ms(profile)
     from vibe_quant.data.catalog import create_instrument
 
     decimals = int(create_instrument(SYMBOL).price_precision)
@@ -609,11 +695,11 @@ def build_one(
         # (btc2.0) keeps its phase-1 kappa, so old builds stay byte-identical.
         kappa, passes, l_end = plant.solve_kappa(
             klines, delta, plant_start_ms=start_ms, plant_end_ms=end_ms, price_decimals=decimals,
-            refine_above=KAPPA_TOL,
+            refine_above=KAPPA_TOL, **profile.plant_kw,
         )
     result = plant.plant_drift(
         klines, delta=delta, kappa=kappa, plant_start_ms=start_ms, plant_end_ms=end_ms,
-        price_decimals=decimals,
+        price_decimals=decimals, **profile.plant_kw,
     )
     plant.write_scratch(root, result.klines, archive)
     rep = result.report
@@ -627,7 +713,7 @@ def build_one(
         "price_ratio_gt_3": ratio > PRICE_RATIO_LIMIT,
         "built_at": _now(),
     }
-    rec.update(measure_build(root, db))
+    rec.update(measure_build(root, db, profile))
     return rec
 
 
@@ -685,22 +771,24 @@ def discovery_command(
     pop: int = DEFAULT_POP,
     gens: int = DEFAULT_GENS,
     seed_run: int | None = None,
+    profile: Profile = P4H,
 ) -> list[str]:
     """R40: the discovery CLI argv. The defaults reproduce the 12x4 command byte for byte;
     ``seed_run`` adds one ``--seed-from-run`` (R42 warm start)."""
+    start, end = full_window(profile)
     cmd = [
         sys.executable, "-m", "vibe_quant", "discovery",
         "--run-id", str(run_id), "--db", str(db),
         "--symbols", SYMBOL,
-        "--timeframe", TIMEFRAME,
-        "--start-date", W3_FULL[0],
-        "--end-date", W3_FULL[1],
+        "--timeframe", profile.timeframe,
+        "--start-date", start,
+        "--end-date", end,
         "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
         "--population-size", str(pop),
         "--max-generations", str(gens),
         "--eval-windows", "2",
         "--train-test-split", "0.8",
-        "--direction", "both",
+        "--direction", profile.direction,
         "--max-workers", "3",
         "--seed", str(seed),
     ]
@@ -710,7 +798,7 @@ def discovery_command(
 
 
 def discover_command_fn(
-    pop: int, gens: int, seed_run: int | None
+    pop: int, gens: int, seed_run: int | None, profile: Profile = P4H
 ) -> Callable[[int, Path, int], list[str]]:
     """Bind ``--pop/--gens/--seed-from-run`` into the ``command_fn`` ``run_discovery`` calls.
 
@@ -724,6 +812,8 @@ def discover_command_fn(
             kwargs["gens"] = gens
         if seed_run is not None:
             kwargs["seed_run"] = seed_run
+        if profile != P4H:
+            kwargs["profile"] = profile
         return discovery_command(run_id, db, seed, **kwargs)
 
     return command
@@ -746,24 +836,25 @@ def classify_run(
     }
 
 
-def create_run(db: Path) -> int:
+def create_run(db: Path, profile: Profile = P4H) -> int:
     """A discovery ``backtest_runs`` row in the run's OWN scratch DB."""
     assert_not_real_db(db)
+    start, end = full_window(profile)
     from vibe_quant.db.state_manager import StateManager
 
     state = StateManager(db)
     try:
         return int(
             state.create_backtest_run(
-                strategy_id=None, run_mode="discovery", symbols=[SYMBOL], timeframe=TIMEFRAME,
-                start_date=W3_FULL[0], end_date=W3_FULL[1], parameters={},
+                strategy_id=None, run_mode="discovery", symbols=[SYMBOL],
+                timeframe=profile.timeframe, start_date=start, end_date=end, parameters={},
             )
         )
     finally:
         state.close()
 
 
-def create_seed_run(db: Path) -> int:
+def create_seed_run(db: Path, profile: Profile = P4H) -> int:
     """R42: the warm-start seed row in the run's OWN DB, written BEFORE the discovery run.
 
     A completed discovery row whose only champion is the planted chromosome (as the
@@ -774,17 +865,19 @@ def create_seed_run(db: Path) -> int:
     assert_not_real_db(db)
     from vibe_quant.db.state_manager import StateManager
 
+    start, end = full_window(profile)
     notes = {
         "top_strategies": [
-            {"chromosome": chromosome_to_serializable(planted_chromosome()), "dsl": planted_dsl()}
+            {"chromosome": chromosome_to_serializable(profile.chromosome),
+             "dsl": planted_dsl(profile)}
         ]
     }
     state = StateManager(db)
     try:
         run_id = int(
             state.create_backtest_run(
-                strategy_id=None, run_mode="discovery", symbols=[SYMBOL], timeframe=TIMEFRAME,
-                start_date=W3_FULL[0], end_date=W3_FULL[1], parameters={},
+                strategy_id=None, run_mode="discovery", symbols=[SYMBOL],
+                timeframe=profile.timeframe, start_date=start, end_date=end, parameters={},
             )
         )
         state.save_backtest_result(
@@ -809,13 +902,17 @@ def run_discovery(
     timeout_s: float = RUN_TIMEOUT_S,
     command_fn: Callable[[int, Path, int], list[str]] = discovery_command,
     poll_s: float = 1.0,
+    profile: Profile = P4H,
 ) -> dict[str, Any]:
-    """Launch one isolated discovery run (cwd = scratch root, own DB) and poll it to a final status."""
+    """Launch one isolated discovery run (cwd = scratch root, own DB) and poll it to a final status.
+
+    ``profile`` sets the timeframe and dates persisted on the run row; ``command_fn`` must be bound
+    to the same profile (``discover_command_fn(..., profile)``)."""
     root, run_dir = root.resolve(), run_dir.resolve()  # the child runs with cwd = root
     run_dir.mkdir(parents=True, exist_ok=True)
     db = run_dir / "state.db"
     log = run_dir / "run.log"
-    run_id = create_run(db)
+    run_id = create_run(db, profile)
     started = time.monotonic()
     timed_out = False
     with open(log, "w") as fh:
@@ -876,12 +973,18 @@ def harvest_run(db: Path, run_id: int) -> dict[str, Any]:
 
 
 def check_isolation(trials: dict[str, Any]) -> dict[str, Any]:
-    """R31: a run on its own DB has ``prior_n == 0`` and ``gate_n == raw``."""
+    """R31/R5: a run on its own DB has ``prior_n == 0``, ``gate_n == run_n_eff`` and recorded the
+    effective-N rule (``n_rule == N_RULE_EFFECTIVE``; megq1: gate_n = run_n_eff + prior_n, with
+    run_n_eff <= raw). A run with no marker, or another one, fails closed."""
     if not trials:
         return {"ok": True, "checked": False, "note": "no dsr_trials in notes (nothing reached DSR)"}
     prior_n, gate_n, raw = trials.get("prior_n"), trials.get("gate_n"), trials.get("raw")
-    return {"ok": prior_n == 0 and gate_n == raw, "checked": True,
-            "prior_n": prior_n, "gate_n": gate_n, "raw": raw}
+    run_n_eff, n_rule = trials.get("run_n_eff"), trials.get("n_rule")
+    ok = (
+        prior_n == 0 and gate_n is not None and gate_n == run_n_eff and n_rule == N_RULE_EFFECTIVE
+    )
+    return {"ok": ok, "checked": True, "prior_n": prior_n, "gate_n": gate_n, "raw": raw,
+            "run_n_eff": run_n_eff, "n_rule": n_rule}
 
 
 def posthoc_p(candidates: Sequence[dict[str, Any]], ns: Sequence[int]) -> dict[str, list[float | None]]:
@@ -965,13 +1068,15 @@ def apply_ga_pool_filter(pool: Sequence[str] = NULL_INDICATOR_POOL) -> None:
     pipeline._apply_indicator_pool_filter()
 
 
-def null_chromosome(seed: int, pool: Sequence[str] = NULL_INDICATOR_POOL) -> StrategyChromosome:
-    """R44: one null draw the GA's way -- pool filter, ``random.seed``, ``_random_chromosome(BOTH)``."""
+def null_chromosome(
+    seed: int, pool: Sequence[str] = NULL_INDICATOR_POOL, direction: Direction = Direction.BOTH
+) -> StrategyChromosome:
+    """R44: one null draw the GA's way -- pool filter, ``random.seed``, ``_random_chromosome``."""
     from vibe_quant.discovery.operators import _random_chromosome
 
     apply_ga_pool_filter(pool)
     random.seed(seed)
-    return _random_chromosome(Direction.BOTH)
+    return _random_chromosome(direction)
 
 
 def null_threshold(
@@ -1083,8 +1188,9 @@ def worker_screen(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _w3_cell_fns() -> tuple[Any, gatechain.ChainSettings]:
-    """The W3/4h cell functions (train + holdout + cross-window factory) of the real chain.
+def _cell_fns(profile: Profile = P4H) -> tuple[Any, gatechain.ChainSettings]:
+    """The cell functions (train + holdout + cross-window factory) of the real chain, for the
+    profile's plan window and timeframe.
 
     ONE place builds them so ``worker_chain`` (the planted rule) and ``worker_null`` (the random
     draws) score through the exact same train window and holdout (design-l2-followup.md §1(b)).
@@ -1094,10 +1200,10 @@ def _w3_cell_fns() -> tuple[Any, gatechain.ChainSettings]:
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings
 
-    settings = gatechain.settings_for("W3")
+    settings = gatechain.settings_for(profile.window)
     plan = settings.plan
     fns = _make_cell_fns(
-        use_mock=False, symbols=[SYMBOL], timeframe=TIMEFRAME, symbol_agg="portfolio",
+        use_mock=False, symbols=[SYMBOL], timeframe=profile.timeframe, symbol_agg="portfolio",
         fee_schedule=FeeSchedule(), entry_order="market", liquidation=LiquidationSettings(),
         sizing=SizingSettings(), train_start=plan.train_start, train_end=plan.train_end,
         eval_windows=plan.eval_windows, min_trades=settings.config.min_trades,
@@ -1107,6 +1213,11 @@ def _w3_cell_fns() -> tuple[Any, gatechain.ChainSettings]:
     return fns, settings
 
 
+def _w3_cell_fns() -> tuple[Any, gatechain.ChainSettings]:
+    """The W3/4h cell functions: ``_cell_fns`` of the default profile."""
+    return _cell_fns(P4H)
+
+
 def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
     """The planted rule through the REAL gate chain on the scratch catalog (fresh process, risk 3)."""
     from vibe_quant.discovery.buyhold import daily_sharpe, load_daily_closes
@@ -1114,9 +1225,10 @@ def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
 
     root = Path(payload["root"]).resolve()
     _assert_worker_cwd(root)
-    fns, settings = _w3_cell_fns()
-    chrom = planted_chromosome()
-    fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, TIMEFRAME)  # type: ignore[arg-type]
+    profile = Profile.from_payload(payload)
+    fns, settings = _w3_cell_fns() if profile == P4H else _cell_fns(profile)
+    chrom = profile.chromosome
+    fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, profile.timeframe)  # type: ignore[arg-type]
     holdout_bt = fns.holdout_backtest_fn(chrom)  # type: ignore[operator]
     closes = load_daily_closes([SYMBOL], root / "data" / "catalog")
     result = gatechain.evaluate_candidate(
@@ -1138,7 +1250,7 @@ def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
 def worker_null(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """R44/R47: draw ``count`` random chromosomes the GA's way and score them on the train window.
 
-    Fitness (``adjusted_score``, what ``select_picks`` needs) comes from the SHARED ``_w3_cell_fns``
+    Fitness (``adjusted_score``, what ``select_picks`` needs) comes from the SHARED ``_cell_fns``
     cell functions; the corr comes from the harvest's own train-window screen of the chromosome's
     DSL against the planted rule's train series (design-l2-followup.md §1(b)).
     """
@@ -1148,20 +1260,23 @@ def worker_null(payload: dict[str, Any]) -> list[dict[str, Any]]:
     root = Path(payload["root"]).resolve()
     _assert_worker_cwd(root)
     pool = payload.get("pool") or NULL_INDICATOR_POOL
-    fns, _settings = _w3_cell_fns()
+    profile = Profile.from_payload(payload)
+    fns, _settings = _cell_fns(profile)
+    direction = Direction(profile.direction)
     base = int(payload["seed_base"]) + int(payload.get("offset", 0))
     count = int(payload["count"])
-    start, end = train_window()
+    start, end = train_window(profile)
     jobs: list[dict[str, Any]] = [
-        {"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True}
+        {"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
+         "collect": True}
     ]
     entries: list[dict[str, Any]] = []
     for j in range(count):
         seed = base + j
-        chrom = null_chromosome(seed, pool)
-        fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, TIMEFRAME)  # type: ignore[arg-type]
+        chrom = null_chromosome(seed, pool, direction)
+        fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, profile.timeframe)  # type: ignore[arg-type]
         dsl = chromosome_to_dsl(chrom)
-        dsl["timeframe"] = TIMEFRAME
+        dsl["timeframe"] = profile.timeframe
         jobs.append({"tag": f"c{j}", "dsl": dsl, "start": start, "end": end, "collect": True})
         entries.append({
             "seed": seed, "score": float(fit.adjusted_score),
@@ -1494,15 +1609,20 @@ def rescreen_candidate(
     return {**cand, "dsl": full["dsl"]}
 
 
-def rescreen_jobs(candidate_dsl: dict[str, Any]) -> list[dict[str, Any]]:
-    """The three rules of §1(a), each on the TRAIN window: planted, planted-as-BOTH, candidate."""
-    start, end = train_window()
-    return [
-        {"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True},
-        {"tag": "planted_both", "dsl": planted_both_dsl(), "start": start, "end": end,
-         "collect": True},
-        {"tag": "candidate", "dsl": candidate_dsl, "start": start, "end": end, "collect": True},
-    ]
+def rescreen_jobs(candidate_dsl: dict[str, Any], profile: Profile = P4H) -> list[dict[str, Any]]:
+    """The three rules of §1(a), each on the TRAIN window: planted, planted-as-BOTH, candidate.
+
+    A non-default profile is a LONG study: the BOTH diagnostic is omitted (``planted_both_dsl`` is
+    the fixed 4h rule and would silently score another timeframe and chromosome)."""
+    start, end = train_window(profile)
+    jobs = [{"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
+             "collect": True}]
+    if profile == P4H:
+        jobs.append({"tag": "planted_both", "dsl": planted_both_dsl(), "start": start, "end": end,
+                     "collect": True})
+    jobs.append({"tag": "candidate", "dsl": candidate_dsl, "start": start, "end": end,
+                 "collect": True})
+    return jobs
 
 
 def cmd_rescreen(ctx: Ctx, args: argparse.Namespace) -> int:
@@ -1555,13 +1675,14 @@ def require_null_record(state: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _harvest_one(ctx: Ctx, root: Path, run: dict[str, Any]) -> bool:
+def _harvest_one(ctx: Ctx, root: Path, run: dict[str, Any], profile: Profile = P4H) -> bool:
     """Harvest ONE completed run into ``run["harvest"]``; returns its R31 isolation flag."""
     h = harvest_run(Path(run["db"]), int(run["run_id"]))
     ok = bool(h["r31"]["ok"])
     cands = h.pop("candidates")
-    start, end = train_window()
-    jobs = [{"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True}]
+    start, end = train_window(profile)
+    jobs = [{"tag": "planted", "dsl": planted_dsl(profile), "start": start, "end": end,
+             "collect": True}]
     jobs += [
         {"tag": f"c{i}", "dsl": c["dsl"], "start": start, "end": end, "collect": True}
         for i, c in enumerate(cands)
@@ -1738,7 +1859,7 @@ def cmd_harvest(ctx: Ctx, args: argparse.Namespace) -> int:
     for line in verdict_lines(load_state(ctx.out)):
         print(line)
     if not all_ok:
-        print("R31 isolation VIOLATED: a run saw prior trials or gate_n != raw")
+        print("R31 isolation VIOLATED: a run saw prior trials, gate_n != run_n_eff or no effective-N marker")
         return 3
     return 0
 
