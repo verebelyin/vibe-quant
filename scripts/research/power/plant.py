@@ -24,6 +24,7 @@ import numpy as np
 from nautilus_trader.indicators import RelativeStrengthIndex
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 MIN_MS = 60_000
@@ -146,6 +147,53 @@ def plant_drift(
     return PlantResult(planted, report)
 
 
+def _bisect_zero(
+    evaluate: Callable[[float], float],
+    history: list[tuple[float, float]],
+    *,
+    tol: float,
+    cap: int,
+    passes: int,
+    window_min: int,
+) -> int:
+    """Bracket a sign change of L_end(kappa) and bisect it; return the new pass count.
+
+    Seeds from the ``(kappa, L_end)`` pairs already in ``history`` (the fixed-point iterates),
+    expands outward until L_end changes sign or ``cap`` passes are spent, then bisects. Every
+    ``evaluate`` call appends to ``history``. L_end(kappa) is piecewise (discrete triggers),
+    not guaranteed monotone or continuous, so this fails closed: with no bracket in budget it
+    returns without a root and the caller keeps the best (smallest |L_end|) kappa it saw.
+    """
+    lo, f_lo = min(history, key=lambda pair: pair[0])
+    hi, f_hi = max(history, key=lambda pair: pair[0])
+    # A step on the kappa scale: the fixed-point move L_end / M is the natural unit.
+    step = max(hi - lo, abs(hi), abs(lo), abs(f_hi) / window_min, abs(f_lo) / window_min)
+    while passes < cap and f_lo * f_hi > 0.0:
+        if f_hi > 0.0:
+            hi += step
+            f_hi = evaluate(hi)
+        else:
+            lo -= step
+            f_lo = evaluate(lo)
+        step *= 2.0
+        passes += 1
+    if f_lo * f_hi > 0.0:
+        return passes  # no bracket inside the budget: fail closed
+    while passes < cap and abs(f_lo) > tol and abs(f_hi) > tol:
+        mid = 0.5 * (lo + hi)
+        if mid in (lo, hi):  # float exhaustion: no further progress is possible
+            break
+        f_mid = evaluate(mid)
+        passes += 1
+        if abs(f_mid) <= tol:
+            break
+        if (f_lo < 0.0) == (f_mid < 0.0):
+            lo, f_lo = mid, f_mid
+        else:
+            hi, f_hi = mid, f_mid
+    return passes
+
+
 def solve_kappa(
     k: Klines,
     delta: float,
@@ -155,32 +203,66 @@ def solve_kappa(
     price_decimals: int | None = None,
     max_passes: int = 5,
     tol: float = 0.002,
+    max_total_passes: int = 40,
+    refine_above: float | None = None,
 ) -> tuple[float, int, float]:
-    """Fixed point kappa with |L_end| <= tol; returns (kappa, passes, L_end of that kappa).
+    """Kappa with |L_end| <= tol; returns (kappa, passes, L_end of that kappa).
 
-    Each pass calls ``plant_drift`` with the candidate kappa and moves it by L_end / M
-    (M = window minutes), since L_end = delta*D - kappa*M. Stops after ``max_passes``
-    even when not converged (the caller checks L_end).
+    Phase 1 is the original fixed point, unchanged for the defaults: each pass calls
+    ``plant_drift`` with the candidate kappa and moves it by L_end / M (M = window minutes),
+    since L_end = delta*D - kappa*M for a fixed trigger count D; it stops after ``max_passes``
+    (default 5) even when not converged. ``max_total_passes`` caps phase 1 as well as phase 2,
+    so a total budget below ``max_passes`` stops phase 1 early and returns the truthful pair it
+    saw. Kappa changes the planted closes, hence the RSI triggers and D, so L_end(kappa) has
+    feedback and the fixed point stalls for large delta.
+
+    Phase 2 runs only when phase 1 is not converged AND |L_end| > ``refine_above`` (default
+    ``tol``) AND phase 1 did not spend ``max_total_passes``: it brackets kappa values with
+    L_end of opposite sign, expanding outward from the phase-1 iterates, then bisects until
+    |L_end| <= tol or ``max_total_passes`` passes (default 40) have been spent. A caller whose
+    acceptance threshold is looser than ``tol`` passes it as ``refine_above`` so builds that
+    already met that threshold keep their phase-1 kappa bit for bit. L_end(kappa) is piecewise
+    (discrete triggers), not guaranteed monotone or continuous, so the search fails closed:
+    with no root in budget it returns the best (smallest |L_end|) kappa seen and that kappa's
+    true L_end, and the caller marks the build non-converged.
     """
+    gate = tol if refine_above is None else refine_above
     window_min = (plant_end_ms - plant_start_ms) // MIN_MS - 1
-    kappa = 0.0
-    l_end = math.inf
-    passes = 0
-    while passes < max_passes:
+    history: list[tuple[float, float]] = []
+
+    def evaluate(candidate: float) -> float:
         res = plant_drift(
             k,
             delta=delta,
-            kappa=kappa,
+            kappa=candidate,
             plant_start_ms=plant_start_ms,
             plant_end_ms=plant_end_ms,
             price_decimals=price_decimals,
         )
+        l_val = res.report.l_end
+        history.append((candidate, l_val))
+        return l_val
+
+    kappa = 0.0
+    l_end = math.inf
+    passes = 0
+    # The TOTAL budget caps phase 1 too, so max_total_passes < max_passes stops phase 1 early.
+    # With the default max_total_passes (40) this is max_passes (5), leaving defaults unchanged.
+    phase1_cap = min(max_passes, max_total_passes)
+    while passes < phase1_cap:
+        l_end = evaluate(kappa)
         passes += 1
-        l_end = res.report.l_end
-        if abs(l_end) <= tol or passes == max_passes:
+        if abs(l_end) <= tol or passes == phase1_cap:
             break
         kappa += l_end / window_min
-    return kappa, passes, l_end
+
+    if abs(l_end) > gate and passes < max_total_passes:
+        passes = _bisect_zero(
+            evaluate, history, tol=tol, cap=max_total_passes, passes=passes, window_min=window_min
+        )
+
+    best_kappa, best_l_end = min(history, key=lambda pair: abs(pair[1]))
+    return best_kappa, passes, best_l_end
 
 
 def _ms(day: str) -> int:
