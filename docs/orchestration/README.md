@@ -89,13 +89,14 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 | Diff | Checker |
 |---|---|
+| test-only or tooling diffs ≤ ~100 lines outside money paths | chief diff-read + gate, no separate reviewer (user) |
 | test-only nits, docs/config, dependency pins, renames, small UI tweaks, fix deltas that only apply a reviewer's exact spec | `reviewer-lite` (escalates when a hunk touches semantics) |
 | fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control, risk/paper/live, new scripts or modules, > ~150 hand-written non-test lines | `reviewer` |
 | architect design | `design-review` route, `reviewer` in design mode |
 
 - **Fix route:** `deepseek` (1–2 mechanical should-fix) → a new maker round with the findings verbatim, back to the same reviewer. `sonnet` (any blocking finding, ≥ 3 should-fix, a 2nd failed round, or a misunderstood task) → `implementer` with the findings verbatim, then a fresh reviewer.
 - **Paper or live diffs:** the `risk-officer` reviews in parallel with the reviewer.
-- **Nits never cost a round:** surviving mutants and test gaps outside money code become follow-up beads. Mutants are capped at 5 per review and 3 per maker.
+- **Nits never cost a round:** surviving mutants, test gaps outside money code and fail-closed findings in research tooling become follow-up beads. Mutants are capped at 5 per review and 3 per maker.
 
 ## Swarm bus
 

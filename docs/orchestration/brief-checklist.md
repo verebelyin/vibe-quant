@@ -22,6 +22,7 @@
 - Paste the excerpts it must change or call, with the file of every type it names. Point at design sections by heading and at code by symbol, never by line range (edits move lines).
 - Name the mechanism a fix must call (found with `rg` at an existing call site) and the fixture builders that already exist (file:symbol, and whether they cover the case).
 - Changes to an input domain (parser, validator, translator): a table of input classes up front — numbers, integral floats, numeric strings, bools, None, non-numeric strings, inf/nan, huge ints — with the intended outcome of each, plus the frontend mirror.
+- Tests of NT callbacks build real NT events (`TestEventStubs`, `nautilus_trader.test_kit`), never hand-made fakes.
 - Name existing tests that already pin unchanged contract rows, so the maker re-runs them instead of duplicating them.
 - Lint counts come from the tool's severity output (`ruff --statistics`, `biome lint --reporter=json`), never from rule names.
 - Diagnosis briefs list hypotheses on every layer the symptom crosses (data, API, frontend lifecycle).
@@ -39,5 +40,4 @@
 - Quote each finding's bullet and the reviewer's FIX text verbatim; reference code by symbol.
 - The gate scope is the whole task scope (round 1 plus this round). Stacked task: `--base <parent branch>`; two or more parents: merge them in the new worktree and use `--base <merge sha>`.
 - Re-review briefs carry prior findings plus the fix delta, not a fresh full-surface hunt.
-- Nits never cost a round: surviving mutants and test gaps outside money code become follow-up beads.
 - After 2 failed rounds on one task, stop and do a design pass: fold every ruling and finding into contract rows, then ask whether the remaining findings come from a missing row, duplicated logic or an unreachable edge, and re-scope. After 3, also change the model or ask the user.
