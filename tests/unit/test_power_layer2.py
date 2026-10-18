@@ -965,3 +965,587 @@ def test_price_ratio_over_3x_fails_closed_and_blocks_downstream(
     # exactly 3.0 is still allowed
     _stub_builder(monkeypatch, trains=[5.0] * 4, fulls=[2.0] * 4, ratio=3.0)
     assert layer2.main([*_cli(tmp_path), "--force", "build", "--variant", "btc5.0"]) == 0
+
+
+# --- P-1a layer-2 follow-ups (design-l2-followup.md §4: R40, R41, R42, R43, R46) --------------
+
+
+def _done_child() -> Any:
+    return _fake_command(
+        FAKE_HEAD
+        + "con.execute(\"UPDATE backtest_runs SET status='completed' WHERE id=?\", (run_id,))\n"
+        + "con.commit()\n"
+    )
+
+
+def test_r40_discovery_command_budget_flags() -> None:
+    """R40: the default 12x4 command is byte-identical to the old one; pop/gens/seed_run each
+    appear exactly once and carry the requested values."""
+    default = layer2.discovery_command(5, Path("/x/s.db"), 2)
+    assert default == [
+        sys.executable, "-m", "vibe_quant", "discovery",
+        "--run-id", "5", "--db", "/x/s.db",
+        "--symbols", "BTCUSDT",
+        "--timeframe", "4h",
+        "--start-date", "2023-06-01",
+        "--end-date", "2026-06-01",
+        "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
+        "--population-size", "12",
+        "--max-generations", "4",
+        "--eval-windows", "2",
+        "--train-test-split", "0.8",
+        "--direction", "both",
+        "--max-workers", "3",
+        "--seed", "2",
+    ]
+    assert "--seed-from-run" not in default
+
+    big = layer2.discovery_command(5, Path("/x/s.db"), 2, pop=50, gens=20, seed_run=1)
+    for flag in ("--population-size", "--max-generations", "--seed-from-run"):
+        assert big.count(flag) == 1, flag
+    assert big[big.index("--population-size") + 1] == "50"
+    assert big[big.index("--max-generations") + 1] == "20"
+    assert big[big.index("--seed-from-run") + 1] == "1"
+    assert big[big.index("--seed") + 1] == "2"
+
+
+def test_r41_discover_label_records_followup_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R41: --label writes state["followup_runs"][label], leaves variants[*]["runs"] untouched
+    and does not change a single V5 line; --pop/--gens reach the launched command."""
+    out = tmp_path / "o" / "layer2.json"
+    root = tmp_path / "o" / "scratch" / "btc5.0-b1"
+    (root / "data" / "catalog").mkdir(parents=True)
+    layer2.update_state(
+        out, lambda s: layer2._variant(s, "btc5.0").__setitem__("accepted", {"root": str(root)})
+    )
+    before = layer2.verdict_lines(layer2.load_state(out))
+
+    seen: list[dict[str, Any]] = []
+
+    def fake(run_id: int, db: Path, seed: int, **kw: Any) -> list[str]:
+        seen.append(kw)
+        return _done_child()(run_id, db, seed)
+
+    monkeypatch.setattr(layer2, "discovery_command", fake)
+    base = [*_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--label", "w1"]
+    assert layer2.main([*base, "--pop", "50", "--gens", "20"]) == 0
+    assert seen == [{"pop": 50, "gens": 20}]
+
+    state = layer2.load_state(out)
+    rec = state["followup_runs"]["w1"]
+    assert rec["status"] == "completed" and rec["label"] == "w1"
+    assert rec["variant"] == "btc5.0" and rec["seed"] == 1
+    assert Path(rec["db"]) == tmp_path / "o" / "scratch" / "runs" / "btc5.0-w1" / "state.db"
+    assert "runs" not in state["variants"]["btc5.0"]
+    assert layer2.verdict_lines(state) == before
+
+    monkeypatch.setattr(layer2, "discovery_command", lambda *a, **k: pytest.fail("relaunched"))
+    assert layer2.main(base) == 0
+
+
+def test_r42_create_seed_run_makes_the_warm_start_row(tmp_path: Path) -> None:
+    """R42: the seed row is id 1 and carries the planted chromosome with NO evaluated count, so
+    `_prior_discovery_trials` counts 0 priors for the id-2 run; a real DB is refused."""
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+    from vibe_quant.discovery.operators import Direction
+    from vibe_quant.discovery.seed import load_seed_chromosomes
+
+    db = tmp_path / "s.db"
+    seed_run = layer2.create_seed_run(db)
+    run_id = layer2.create_run(db)
+    assert (seed_run, run_id) == (1, 2)
+
+    state = StateManager(db)
+    try:
+        loaded = load_seed_chromosomes(state, seed_run)
+        assert loaded is not None and len(loaded) == 1
+        # uid is regenerated on load (not serialized): compare the genome itself
+        assert chromosome_to_serializable(loaded[0]) == chromosome_to_serializable(
+            layer2.planted_chromosome()
+        )
+        assert loaded[0].direction is Direction.LONG
+        assert _prior_discovery_trials(
+            state, run_id, layer2.TIMEFRAME, layer2.train_window()
+        ) == (0, [])
+    finally:
+        state.close()
+
+    with pytest.raises(layer2.Layer2Error, match="real state DB"):
+        layer2.create_seed_run(layer2.REAL_DB)
+
+
+def test_r42_warm_discover_seeds_the_runs_own_db_before_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R42: --warm on the CLI writes the seed row into the run's OWN db first (id 1), then the
+    discovery run id 2, and passes --seed-from-run 1 to the child."""
+    from vibe_quant.db.state_manager import StateManager
+    from vibe_quant.discovery.__main__ import _prior_discovery_trials
+
+    out = tmp_path / "o" / "layer2.json"
+    root = tmp_path / "o" / "scratch" / "btc5.0-b1"
+    (root / "data" / "catalog").mkdir(parents=True)
+    layer2.update_state(
+        out, lambda s: layer2._variant(s, "btc5.0").__setitem__("accepted", {"root": str(root)})
+    )
+    seen: list[dict[str, Any]] = []
+
+    def fake(run_id: int, db: Path, seed: int, **kw: Any) -> list[str]:
+        seen.append(kw)
+        return _done_child()(run_id, db, seed)
+
+    monkeypatch.setattr(layer2, "discovery_command", fake)
+    assert layer2.main([*_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--warm"]) == 0
+    assert seen == [{"seed_run": 1}]  # defaults are not forwarded: the argv is unchanged
+    rec = layer2.load_state(out)["variants"]["btc5.0"]["runs"]["1"]
+    assert rec["run_id"] == 2
+    state = StateManager(Path(rec["db"]))
+    try:
+        assert _prior_discovery_trials(
+            state, 2, layer2.TIMEFRAME, layer2.train_window()
+        ) == (0, [])
+    finally:
+        state.close()
+
+
+def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R43: an absent uid is a Layer2Error (exit 2) and nothing is screened; a present uid is
+    screened as planted, planted-as-BOTH and candidate on all three accepted roots."""
+    out = tmp_path / "o" / "layer2.json"
+    roots: dict[str, Path] = {}
+    candidates = [{"uid": "u-a"}, {"uid": "u-b"}]
+    db = tmp_path / "o" / "run.db"
+    db.parent.mkdir(parents=True)
+    run_id = layer2.create_run(db)
+    _save_notes(db, run_id, {"evaluated": 2, "top_strategies": [], "guardrail_rejections": [
+        {"uid": u, "stage": "guardrails", "dsl": {"name": u}} for u in ("u-a", "u-b")]})
+
+    def seed(s: dict[str, Any]) -> None:
+        for variant in ("btc0", "btc2.0", "btc5.0"):
+            root = tmp_path / "o" / "scratch" / f"{variant}-b1"
+            (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
+            roots[variant] = root
+            layer2._variant(s, variant)["accepted"] = {"root": str(root)}
+        layer2._variant(s, "btc2.0")["runs"] = {
+            "2": {"status": "completed", "run_id": run_id, "db": str(db),
+                  "harvest": {"candidates": candidates}}
+        }
+
+    layer2.update_state(out, seed)
+
+    monkeypatch.setattr(layer2, "run_worker", lambda *a, **k: pytest.fail("screened an absent uid"))
+    assert layer2.main(
+        [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "nope"]
+    ) == 2
+    assert "nope" in capsys.readouterr().out
+    assert "rescreen" not in layer2.load_state(out)
+
+    calls: list[tuple[str, list[tuple[str, Any]]]] = []
+
+    def fake_worker(kind: str, r: Path, payload: dict[str, Any], db: Path, **kw: Any) -> Any:
+        calls.append((str(r), [(j["tag"], j["dsl"]) for j in payload["jobs"]]))
+        return [
+            {"tag": j["tag"], "trades": 3, "mtm": {"first_day": 0, "values": [0.1, 0.2, 0.3, 0.4]}}
+            for j in payload["jobs"]
+        ]
+
+    monkeypatch.setattr(layer2, "run_worker", fake_worker)
+    for uid in ("u-a", "u-b"):
+        calls.clear()
+        assert layer2.main(
+            [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", uid]
+        ) == 0
+        assert [c[0] for c in calls] == [str(roots[v]) for v in ("btc0", "btc2.0", "btc5.0")]
+        for _r, jobs in calls:
+            assert [tag for tag, _dsl in jobs] == ["planted", "planted_both", "candidate"]
+            assert set(jobs[0][1]["entry_conditions"]) == {"long"}
+            assert set(jobs[1][1]["entry_conditions"]) == {"long", "short"}
+            assert jobs[2][1] == {"name": uid}
+        rec = layer2.load_state(out)["rescreen"][uid]
+        assert rec["uid"] == uid and rec["run_variant"] == "btc2.0" and rec["seed"] == 2
+        for variant in ("btc0", "btc2.0", "btc5.0"):
+            vrec = rec["variants"][variant]
+            assert vrec["root"] == str(roots[variant])
+            assert vrec["candidate"]["corr"] == pytest.approx(1.0)
+            assert vrec["candidate"]["train_S"] == pytest.approx(
+                layer2.ann_sharpe({"first_day": 0, "values": [0.1, 0.2, 0.3, 0.4]})
+            )
+
+
+def test_r43_harvest_followup_refuses_without_the_null_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R47 seam (T2 fills the calibrated check): harvest --followup exits 2 with no null record."""
+    base = _cli(tmp_path)
+    assert layer2.main([*base, "harvest", "--followup"]) == 2
+    assert "null record" in capsys.readouterr().out
+    layer2.update_state(
+        tmp_path / "o" / "layer2.json",
+        lambda s: s.__setitem__(layer2.NULL_RECORD_KEY, {"status": "running"}),
+    )
+    assert layer2.main([*base, "harvest", "--followup"]) == 2
+    layer2.update_state(
+        tmp_path / "o" / "layer2.json",
+        lambda s: s.__setitem__(
+            layer2.NULL_RECORD_KEY, {"status": "completed", "m": 600, "reps": 2000, "k": [40], "seed": 7}
+        ),
+    )
+    assert layer2.main([*base, "harvest", "--followup"]) == 0
+
+
+def test_r46_found_criterion_corr_min() -> None:
+    """R46: the calibrated threshold C_K replaces CORR_MIN; 0.537 clears 0.53, not 0.55."""
+    assert layer2.found_criterion(0.537, 1.4475, 2.2301) is True  # default CORR_MIN 0.5
+    assert layer2.found_criterion(0.537, 1.4475, 2.2301, corr_min=0.55) is False
+    assert layer2.found_criterion(0.537, 1.4475, 2.2301, corr_min=0.53) is True
+    # the corr edge is inclusive and the S ratio floor still applies under a custom corr_min
+    assert layer2.found_criterion(0.53, 1.4475, 2.2301, corr_min=0.53) is True
+    assert layer2.found_criterion(0.5299, 1.4475, 2.2301, corr_min=0.53) is False
+    assert layer2.found_criterion(0.537, 1.11504, 2.2301, corr_min=0.53) is False
+
+
+# --- P-1a layer-2 follow-ups T2 (design-l2-followup.md §4: R44, R45, R47) --------------------
+
+from vibe_quant.discovery.genome import (  # noqa: E402
+    chromosome_to_serializable,
+)
+from vibe_quant.discovery.operators import Direction  # noqa: E402
+
+
+def test_r44_null_chromosome_is_drawn_the_gas_way() -> None:
+    """R44: same seed ⇒ identical chromosome; genes ⊂ the GA pool; direction BOTH.
+
+    The draw runs AFTER the discovery pipeline's indicator-pool filter, so a gene can only use the
+    command's ``--indicator-pool`` indicators (not the whole genome pool).
+    """
+    from vibe_quant.discovery.operators import INDICATOR_POOL
+
+    a = layer2.null_chromosome(2024)
+    b = layer2.null_chromosome(2024)
+    c = layer2.null_chromosome(2025)
+    assert chromosome_to_serializable(a) == chromosome_to_serializable(b)
+    assert chromosome_to_serializable(a) != chromosome_to_serializable(c)
+    assert a.direction is Direction.BOTH and c.direction is Direction.BOTH
+    assert set(INDICATOR_POOL) == set(layer2.NULL_INDICATOR_POOL)
+
+    # narrow the pool to one indicator: then EVERY scalar gene has to be that indicator
+    solo = layer2.null_chromosome(7, pool=("RSI",))
+    assert set(INDICATOR_POOL) == {"RSI"}
+    assert solo.direction is Direction.BOTH
+    genes = [*solo.entry_genes, *solo.exit_genes]
+    assert genes
+    assert {g.indicator_type for g in genes} == {"RSI"}
+
+
+def test_r45_null_threshold_subsamples_and_picks() -> None:
+    """R45: a fixed pool gives a fixed C95; a non-positive score is never picked; a None corr is
+    ignored; a pool whose scores are all non-positive gives T = 0.0 in every rep."""
+    ch = [layer2.planted_chromosome() for _ in range(5)]
+    pool = [
+        (ch[0], 3.0, 0.2),
+        (ch[1], 2.0, 0.9),
+        (ch[2], 1.0, -0.7),
+        (ch[3], 2.5, None),  # positive score ⇒ picked, but its None corr is ignored
+        (ch[4], -5.0, 1.0),  # score <= 0 ⇒ never picked, whatever its corr
+    ]
+    # K == len(pool): every subsample is the whole pool, so T is the same in every rep
+    out = layer2.null_threshold(pool, 5, 25, seed=1, min_distance=0.0)
+    assert (out["k"], out["reps"], out["seed"]) == (5, 25, 1)
+    assert out["c95"] == 0.9  # max(|0.2|, |0.9|, |-0.7|): the None and the -5.0 never count
+    assert layer2.null_threshold(pool, 5, 25, seed=1, min_distance=0.0) == out  # fixed
+
+    flat = [(ch[i], -1.0, 0.9) for i in range(5)]
+    assert layer2.null_threshold(flat, 5, 25, seed=1)["c95"] == 0.0  # no pick ⇒ T 0.0
+
+    with pytest.raises(layer2.Layer2Error, match="pool of 5"):
+        layer2.null_threshold(pool, 6, 5, seed=1)  # m must be >= K
+
+
+def test_r45_null_threshold_k_below_pool_without_replacement_and_absolute() -> None:
+    """R45: a K-subsample is drawn WITHOUT replacement and T is the max ABSOLUTE corr of the
+    picks. Pool of 2 at K=2 is the whole pool every rep (with replacement a {B, B} draw would
+    lift C95); pool of 3 at K=2 with a selected negative corr of largest magnitude."""
+    ch = [layer2.planted_chromosome() for _ in range(3)]
+    two = [(ch[0], 3.0, 0.3), (ch[1], 2.0, -0.8)]
+    out = layer2.null_threshold(two, 2, 200, seed=3, top_k=1, min_distance=0.0)
+    assert out["c95"] == 0.3  # the top score is always A; B (|-0.8|) is never drawn into a pick
+
+    three = [(ch[0], 3.0, 0.3), (ch[1], 2.0, -0.8), (ch[2], -1.0, 0.9)]
+    out3 = layer2.null_threshold(three, 2, 200, seed=3, top_k=2, min_distance=0.0)
+    assert out3["c95"] == 0.8  # |-0.8| beats the signed maximum 0.3; C is never picked
+
+
+def test_r47_corr_threshold_takes_the_max_with_btc0() -> None:
+    """R47/P-1a: C_K = max(C95(K), the same-budget btc0 GA max SIGNED corr)."""
+    assert layer2.corr_threshold(0.55, 0.4647) == 0.55
+    assert layer2.corr_threshold(0.45, 0.4647) == 0.4647
+    assert layer2.corr_threshold(0.5, 0.5) == 0.5
+    assert layer2.corr_threshold(0.5, None) == 0.5
+    assert layer2.corr_threshold(0.5, -0.3) == 0.5  # a negative btc0 max cannot lower C95
+
+
+def test_r47_harvest_followup_refuses_without_a_completed_null(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """R47: ``harvest --followup`` exits 2 without a completed state["null"] record."""
+    base = _cli(tmp_path)
+    assert layer2.main([*base, "harvest", "--followup"]) == 2
+    assert "null-corr" in capsys.readouterr().out
+    layer2.update_state(
+        tmp_path / "o" / "layer2.json",
+        lambda s: s.__setitem__(layer2.NULL_RECORD_KEY, {"status": "running"}),
+    )
+    assert layer2.main([*base, "harvest", "--followup"]) == 2
+    assert "null record" in capsys.readouterr().out
+
+
+def test_r47_harvest_followup_applies_the_calibrated_threshold(tmp_path: Path) -> None:
+    """R47: found_cal re-scores a V5 run with C_K = max(C95(K), btc0 max); a 12x4 run uses the
+    pre-registered literal K = 40 and the threshold actually used is written back into state."""
+    out = tmp_path / "o" / "layer2.json"
+    pool_path = tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE
+    pool_path.parent.mkdir(parents=True)
+    chrom = chromosome_to_serializable(layer2.planted_chromosome())
+    pool_path.write_text(
+        json.dumps([{"seed": i, "score": 0.0, "corr": 0.0, "chromosome": chrom} for i in range(40)])
+    )
+
+    def seed(s: dict[str, Any]) -> None:
+        layer2._variant(s, "btc0")["runs"] = {"1": {
+            "status": "completed", "pop": 12, "gens": 4,
+            "harvest": {"r31": {"ok": True},
+                        "candidates": [{"uid": "b0", "corr": 0.9, "train_S": 0.5}]},
+        }}
+        layer2._variant(s, "btc2.0")["runs"] = {"2": {
+            "status": "completed", "pop": 12, "gens": 4,
+            "harvest": {"r31": {"ok": True}, "evaluated": 41, "found": {"planted_train_S": 2.0},
+                        "candidates": [{"uid": "lo", "corr": 0.8, "train_S": 2.0},
+                                       {"uid": "hi", "corr": 0.95, "train_S": 2.0}]},
+        }}
+        s[layer2.NULL_RECORD_KEY] = {
+            "status": "completed", "m": 40, "reps": 25, "k": [], "thresholds": {},
+            "seed": 0, "pool_path": str(pool_path),
+        }
+
+    layer2.update_state(out, seed)
+    assert layer2.main([*_cli(tmp_path), "harvest", "--followup"]) == 0
+    state = layer2.load_state(out)
+    cal = state["variants"]["btc2.0"]["runs"]["2"]["harvest"]["calibration"]
+    assert (cal["k"], cal["c95"], cal["C_K"]) == (40, 0.0, 0.9)  # C95 0.0 < btc0 max 0.9
+    assert cal["found_cal"] is True
+    assert cal["found_by_cal"] == [{"uid": "hi", "corr": 0.95, "train_S": 2.0}]
+    assert state[layer2.NULL_RECORD_KEY]["thresholds"] == {"40": 0.0}
+    assert state[layer2.NULL_RECORD_KEY]["k"] == [40]
+
+
+def test_worker_chain_scores_through_the_shared_w3_cell_fns(
+    tiny_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The T2 extraction: worker_chain builds its train/holdout functions through the ONE shared
+    ``_w3_cell_fns()``, and its gate output is byte-for-byte the pre-extraction output."""
+    plan = plan_windows("2024-01-05", "2024-07-20", train_test_split=0.8, eval_windows=2,
+                        cross_window_months=(1,), wfa_oos_step_days=30)
+    base = gatechain.settings_for("W3")
+    cfg = replace(
+        base.config, start_date=plan.train_start, end_date=plan.train_end,
+        holdout_start_date=str(plan.holdout_start), holdout_end_date=str(plan.holdout_end),
+        cross_window_months=[1], wfa_oos_step_days=30,
+    )
+    tiny = gatechain.ChainSettings(name="TINY", config=cfg, plan=plan, symbols=("BTCUSDT",))
+    monkeypatch.setattr(gatechain, "settings_for", lambda name: tiny)
+    monkeypatch.chdir(tiny_root)
+    calls: list[bool] = []
+    real = layer2._w3_cell_fns
+
+    def spy() -> Any:
+        calls.append(True)
+        return real()
+
+    monkeypatch.setattr(layer2, "_w3_cell_fns", spy)
+    out = layer2.worker_chain({"root": str(tiny_root)})
+    assert calls == [True]
+    result = json.loads(json.dumps(out["result"], default=layer2._json_default))
+    assert out["fitness"] == {
+        "sharpe_ratio": -1.0, "total_trades": 22, "total_return": 0.0,
+        "adjusted_score": 0.0, "train_S": None,
+    }
+    assert out["holdout"] == {
+        "sharpe_ratio": 3.469234306697298, "total_trades": 7,
+        "total_return": 0.09831204743999995,
+    }
+    assert result["floor"] is False
+    assert result["marginals"] == {
+        "min_trades": False, "min_return": True, "complexity": True, "bootstrap": False,
+        "buy_hold": False, "holdout": True, "cross_window": False, "wfa": False,
+    }
+
+
+# --- round-2 fixes: F1 rescreen DSL from run DB, F2 label containment, F3 R31 in followup ----
+
+
+def _bad_isolation_notes() -> dict[str, Any]:
+    return {"evaluated": 53, "top_strategies": [],
+            "dsr_trials": {"raw": 53, "gate_n": 55, "prior_n": 2}}
+
+
+def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str, Path]:
+    roots: dict[str, Path] = {}
+
+    def seed(s: dict[str, Any]) -> None:
+        for variant in variants:
+            root = scratch / f"{variant}-b1"
+            (root / "data" / "catalog").mkdir(parents=True, exist_ok=True)
+            roots[variant] = root
+            layer2._variant(s, variant)["accepted"] = {"root": str(root)}
+
+    layer2.update_state(out, seed)
+    return roots
+
+
+def test_r43_rescreen_resolves_the_dsl_through_the_real_harvest_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: harvest writes the uid-only candidate record; rescreen then recovers the candidate's
+    DSL from the run's own DB (the recorded P-1 state has no dsl field)."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc2.0", "btc5.0"))
+    db = tmp_path / "o" / "scratch" / "runs" / "btc2.0-seed2" / "state.db"
+    db.parent.mkdir(parents=True)
+    run_id = layer2.create_run(db)
+    dsl = {"name": "genome_zz", "timeframe": "4h", "marker": 7}
+    _save_notes(db, run_id, {
+        "evaluated": 90, "dsr_trials": {"raw": 90, "gate_n": 90, "prior_n": 0},
+        "top_strategies": [], "guardrail_rejections": [{"uid": "rej9", "stage": "holdout", "dsl": dsl}],
+    })
+    layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").__setitem__("runs", {
+        "2": {"status": "completed", "run_id": run_id, "db": str(db)}}))
+
+    def fake_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
+        return [
+            {"tag": j["tag"], "trades": 3, "mtm": {"first_day": 0, "values": [0.1, 0.2, 0.3, 0.4]}}
+            for j in payload["jobs"]
+        ]
+
+    monkeypatch.setattr(layer2, "run_worker", fake_worker)
+    assert layer2.main([*_cli(tmp_path), "harvest", "--variant", "btc2.0"]) == 0
+    harvested = layer2.load_state(out)["variants"]["btc2.0"]["runs"]["2"]["harvest"]["candidates"]
+    assert harvested and "dsl" not in harvested[0]
+
+    seen: list[Any] = []
+
+    def spy_worker(kind: str, r: Path, payload: dict[str, Any], dbp: Path, **kw: Any) -> Any:
+        seen.append(next(j["dsl"] for j in payload["jobs"] if j["tag"] == "candidate"))
+        return fake_worker(kind, r, payload, dbp)
+
+    monkeypatch.setattr(layer2, "run_worker", spy_worker)
+    assert layer2.main(
+        [*_cli(tmp_path), "rescreen", "--run-variant", "btc2.0", "--seed", "2", "--uid", "rej9"]
+    ) == 0
+    assert seen == [dsl, dsl, dsl]
+    assert "rej9" in layer2.load_state(out)["rescreen"]
+
+
+@pytest.mark.parametrize(
+    "label", ["x/../../../escaped", "../up", "a/b", "..", "", ".hidden", "sp ace"]
+)
+def test_r41_discover_label_must_be_one_safe_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], label: str
+) -> None:
+    """F2: a traversal label is refused before any mkdir, seed row or launch (exit 2)."""
+    out = tmp_path / "o" / "layer2.json"
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc5.0",))
+    monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: pytest.fail("launched"))
+    before = {p for p in tmp_path.rglob("*")}
+    rc = layer2.main([
+        *_cli(tmp_path), "discover", "--variant", "btc5.0", "--seed", "1", "--warm", "--label", label,
+    ])
+    assert rc == 2
+    assert "label" in capsys.readouterr().out
+    assert {p for p in tmp_path.rglob("*")} == before
+    assert not (tmp_path / "o" / "power" / "escaped").exists()
+
+
+def _followup_state(
+    tmp_path: Path, *, btc5_r31_ok: bool | None, btc0_r31_ok: bool = True, fresh: bool = False
+) -> Path:
+    out = tmp_path / "o" / "layer2.json"
+    pool_path = tmp_path / "o" / "scratch" / layer2.NULL_POOL_FILE
+    pool_path.parent.mkdir(parents=True, exist_ok=True)
+    chrom = chromosome_to_serializable(layer2.planted_chromosome())
+    pool_path.write_text(
+        json.dumps([{"seed": i, "score": 0.0, "corr": 0.0, "chromosome": chrom} for i in range(40)])
+    )
+    _seed_roots(out, tmp_path / "o" / "scratch", ("btc0", "btc5.0"))
+
+    def seed(s: dict[str, Any]) -> None:
+        layer2._variant(s, "btc0")["runs"] = {"1": {
+            "status": "completed", "pop": 12, "gens": 4,
+            "harvest": {"r31": {"ok": btc0_r31_ok},
+                        "candidates": [{"uid": "b0", "corr": 0.49, "train_S": 0.5}]},
+        }}
+        run: dict[str, Any] = {"status": "completed", "pop": 12, "gens": 4, "run_id": 1}
+        if fresh:
+            db = tmp_path / "o" / "scratch" / "runs" / "btc5.0-seed1" / "state.db"
+            db.parent.mkdir(parents=True, exist_ok=True)
+            rid = layer2.create_run(db)
+            _save_notes(db, rid, _bad_isolation_notes())
+            run.update(db=str(db), run_id=rid)
+        else:
+            run["harvest"] = {
+                "r31": {"ok": btc5_r31_ok}, "evaluated": 53, "found": {"planted_train_S": 2.0},
+                "candidates": [{"uid": "hi", "corr": 0.51, "train_S": 1.0}],
+            }
+        layer2._variant(s, "btc5.0")["runs"] = {"1": run}
+        s[layer2.NULL_RECORD_KEY] = {
+            "status": "completed", "m": 40, "reps": 25, "k": [], "thresholds": {},
+            "seed": 0, "pool_path": str(pool_path),
+        }
+
+    layer2.update_state(out, seed)
+    return out
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "tag"),
+    [
+        ({"btc5_r31_ok": False}, "cached V5 run"),
+        ({"btc5_r31_ok": True, "btc0_r31_ok": False}, "btc0 comparator"),
+        ({"btc5_r31_ok": None}, "newly harvested run"),
+    ],
+)
+def test_r31_harvest_followup_fails_closed_on_isolation_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    kwargs: dict[str, Any], tag: str,
+) -> None:
+    """F3: any run (cached, newly harvested, btc0 comparator) with r31.ok False gives exit 3 and
+    persists no found_cal / calibration / thresholds."""
+    out = _followup_state(tmp_path, fresh=kwargs["btc5_r31_ok"] is None, **kwargs)
+    monkeypatch.setattr(
+        layer2, "run_worker",
+        lambda kind, r, payload, dbp, **kw: [
+            {"tag": j["tag"], "trades": 3, "mtm": {"first_day": 0, "values": [0.1, 0.2, 0.3, 0.4]}}
+            for j in payload["jobs"]
+        ],
+    )
+    before = layer2.load_state(out)
+    assert layer2.main([*_cli(tmp_path), "harvest", "--followup"]) == 3, tag
+    assert "R31" in capsys.readouterr().out
+    after = layer2.load_state(out)
+    assert after == before
+    assert "found_cal" not in json.dumps(after)
+
+    # the same state with every run isolated scores normally
+    ok = _followup_state(tmp_path / "ok", btc5_r31_ok=True)
+    assert layer2.main([
+        "--out", str(ok), "--data-root", str(tmp_path / "data"),
+        "--real-db", str(tmp_path / "none.db"), "--archive", str(tmp_path / "src.db"),
+        "harvest", "--followup",
+    ]) == 0
+    cal = layer2.load_state(ok)["variants"]["btc5.0"]["runs"]["1"]["harvest"]["calibration"]
+    assert cal["found_cal"] is True

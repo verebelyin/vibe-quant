@@ -68,19 +68,23 @@ import fcntl  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
 import math  # noqa: E402
+import random  # noqa: E402
+import re  # noqa: E402
 import shutil  # noqa: E402
 import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
 from collections import Counter  # noqa: E402
+from dataclasses import replace  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from typing import TYPE_CHECKING, Any  # noqa: E402
 
 import gatechain  # noqa: E402
+import layer1  # noqa: E402
 import numpy as np  # noqa: E402
 import plant  # noqa: E402
 
-from vibe_quant.discovery.genome import chromosome_to_dsl  # noqa: E402
+from vibe_quant.discovery.genome import chromosome_to_dsl, chromosome_to_serializable  # noqa: E402
 from vibe_quant.discovery.operators import (  # noqa: E402
     ConditionType,
     Direction,
@@ -136,19 +140,32 @@ WINDOW_239 = ("2024-01-01", "2026-03-17")
 CORR_MIN = 0.5
 RATIO_MIN = 0.5
 
-DISCOVERY_FLAGS = (
-    "--symbols", SYMBOL,
-    "--timeframe", TIMEFRAME,
-    "--start-date", W3_FULL[0],
-    "--end-date", W3_FULL[1],
-    "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
-    "--population-size", "12",
-    "--max-generations", "4",
-    "--eval-windows", "2",
-    "--train-test-split", "0.8",
-    "--direction", "both",
-    "--max-workers", "3",
-)
+#: R40: the pre-registered default GA budget (12 x 4); the 50x20 follow-up runs pass pop/gens.
+DEFAULT_POP = 12
+DEFAULT_GENS = 4
+
+#: State-JSON keys: `null` is T2's `null-corr` record (R47), the other two are written here.
+NULL_RECORD_KEY = "null"
+RESCREEN_RECORD_KEY = "rescreen"
+FOLLOWUP_RUNS_KEY = "followup_runs"
+LABEL_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+#: The three accepted builds a rescreen scores a candidate on (design-l2-followup.md §1(a)).
+RESCREEN_VARIANTS = ("btc0", "btc2.0", "btc5.0")
+
+#: R44: the discovery command's GA indicator pool (``discovery_command --indicator-pool``). The
+#: null draws run AFTER the pipeline's own pool filter, so a gene can only use these indicators.
+NULL_INDICATOR_POOL: tuple[str, ...] = ("ROC", "DONCHIAN", "RSI", "CCI", "NATR")
+#: R47/P-1a: a 12x4 run calibrates at the pre-registered literal K; a 50x20 run uses its own
+#: harvested evaluated count. The null pool must be at least as large as the largest K used.
+NULL_K_12X4: int = 40
+#: R45: the fixed subsample seed, so C95(K) is reproducible from the stored pool.
+NULL_SUBSAMPLE_SEED: int = 20261018
+NULL_DEFAULT_M: int = 1200  # >= the 50x20 run's evaluated count (chief ruling, P-1a)
+NULL_DEFAULT_REPS: int = 2000
+NULL_DEFAULT_SHARDS: int = 3
+#: The null pool scratch file (per-chromosome seed + score + corr + chromosome) under ``scratch``.
+NULL_POOL_FILE: str = "null-pool.json"
 
 
 class Layer2Error(RuntimeError):
@@ -177,6 +194,13 @@ def planted_chromosome() -> StrategyChromosome:
 def planted_dsl() -> dict[str, object]:
     """The planted rule as the DSL dict a discovery champion would carry (4h)."""
     dsl = chromosome_to_dsl(planted_chromosome())
+    dsl["timeframe"] = TIMEFRAME
+    return dsl
+
+
+def planted_both_dsl() -> dict[str, object]:
+    """The planted rule forced to BOTH, as a warm-started champion becomes (operators.py:1232)."""
+    dsl = chromosome_to_dsl(replace(planted_chromosome(), direction=Direction.BOTH))
     dsl["timeframe"] = TIMEFRAME
     return dsl
 
@@ -425,11 +449,20 @@ def signed_corr(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float | N
     return float(np.corrcoef(xa, xb)[0, 1])
 
 
-def found_criterion(corr: float | None, cand_s: float | None, planted_s: float | None) -> bool:
-    """R30 for ONE candidate: signed corr >= 0.5 AND train S >= 0.5 x the planted train S."""
+def found_criterion(
+    corr: float | None,
+    cand_s: float | None,
+    planted_s: float | None,
+    *,
+    corr_min: float = CORR_MIN,
+) -> bool:
+    """R30/R46 for ONE candidate: signed corr >= ``corr_min`` AND train S >= 0.5 x planted S.
+
+    ``corr_min`` defaults to ``CORR_MIN``; the calibrated null threshold C_K (T2) passes its own.
+    """
     if corr is None or cand_s is None or planted_s is None:
         return False
-    return corr >= CORR_MIN and cand_s >= RATIO_MIN * planted_s
+    return corr >= corr_min and cand_s >= RATIO_MIN * planted_s
 
 
 def assess_found(candidates: Sequence[dict[str, Any]], planted_s: float | None) -> dict[str, Any]:
@@ -643,11 +676,56 @@ def read_strategy_239(real_db: Path) -> dict[str, Any]:
 # --- discovery runs (R31, R32) --------------------------------------------------------------
 
 
-def discovery_command(run_id: int, db: Path, seed: int) -> list[str]:
-    return [
+def discovery_command(
+    run_id: int,
+    db: Path,
+    seed: int,
+    *,
+    pop: int = DEFAULT_POP,
+    gens: int = DEFAULT_GENS,
+    seed_run: int | None = None,
+) -> list[str]:
+    """R40: the discovery CLI argv. The defaults reproduce the 12x4 command byte for byte;
+    ``seed_run`` adds one ``--seed-from-run`` (R42 warm start)."""
+    cmd = [
         sys.executable, "-m", "vibe_quant", "discovery",
-        "--run-id", str(run_id), "--db", str(db), *DISCOVERY_FLAGS, "--seed", str(seed),
+        "--run-id", str(run_id), "--db", str(db),
+        "--symbols", SYMBOL,
+        "--timeframe", TIMEFRAME,
+        "--start-date", W3_FULL[0],
+        "--end-date", W3_FULL[1],
+        "--indicator-pool", "ROC,DONCHIAN,RSI,CCI,NATR",
+        "--population-size", str(pop),
+        "--max-generations", str(gens),
+        "--eval-windows", "2",
+        "--train-test-split", "0.8",
+        "--direction", "both",
+        "--max-workers", "3",
+        "--seed", str(seed),
     ]
+    if seed_run is not None:
+        cmd += ["--seed-from-run", str(seed_run)]
+    return cmd
+
+
+def discover_command_fn(
+    pop: int, gens: int, seed_run: int | None
+) -> Callable[[int, Path, int], list[str]]:
+    """Bind ``--pop/--gens/--seed-from-run`` into the ``command_fn`` ``run_discovery`` calls.
+
+    A value at its default is not passed, so the default 12x4 command stays a plain 3-arg call.
+    """
+    def command(run_id: int, db: Path, seed: int) -> list[str]:
+        kwargs: dict[str, Any] = {}
+        if pop != DEFAULT_POP:
+            kwargs["pop"] = pop
+        if gens != DEFAULT_GENS:
+            kwargs["gens"] = gens
+        if seed_run is not None:
+            kwargs["seed_run"] = seed_run
+        return discovery_command(run_id, db, seed, **kwargs)
+
+    return command
 
 
 def classify_run(
@@ -680,6 +758,44 @@ def create_run(db: Path) -> int:
                 start_date=W3_FULL[0], end_date=W3_FULL[1], parameters={},
             )
         )
+    finally:
+        state.close()
+
+
+def create_seed_run(db: Path) -> int:
+    """R42: the warm-start seed row in the run's OWN DB, written BEFORE the discovery run.
+
+    A completed discovery row whose only champion is the planted chromosome (as the
+    serialized genome ``--seed-from-run`` reloads). It carries NO ``evaluated`` count, so
+    ``_prior_discovery_trials`` skips it and the real run still sees ``prior_n == 0`` (R31).
+    The planted gene becomes BOTH at load under ``--direction both`` (operators.py:1232).
+    """
+    assert_not_real_db(db)
+    from vibe_quant.db.state_manager import StateManager
+
+    notes = {
+        "top_strategies": [
+            {"chromosome": chromosome_to_serializable(planted_chromosome()), "dsl": planted_dsl()}
+        ]
+    }
+    state = StateManager(db)
+    try:
+        run_id = int(
+            state.create_backtest_run(
+                strategy_id=None, run_mode="discovery", symbols=[SYMBOL], timeframe=TIMEFRAME,
+                start_date=W3_FULL[0], end_date=W3_FULL[1], parameters={},
+            )
+        )
+        state.save_backtest_result(
+            run_id,
+            {
+                "total_return": 0.0, "sharpe_ratio": 0.0, "max_drawdown": 0.0,
+                "profit_factor": 0.0, "total_trades": 0, "skewness": 0.0, "kurtosis": 3.0,
+                "execution_time_seconds": 0.0, "notes": json.dumps(notes),
+            },
+        )
+        state.update_backtest_run_status(run_id, "completed")
+        return run_id
     finally:
         state.close()
 
@@ -828,6 +944,90 @@ def verdict_lines(state: dict[str, Any]) -> list[str]:
     return lines
 
 
+# --- R44/R45/R47: the calibrated null threshold (design-l2-followup.md §1(b)) ---------------
+
+
+def _null_backtest(_chrom: StrategyChromosome) -> dict[str, float | int]:
+    """The pipeline instance below only applies the pool filter; its backtest fn is never called."""
+    return {}
+
+
+def apply_ga_pool_filter(pool: Sequence[str] = NULL_INDICATOR_POOL) -> None:
+    """Restrict ``operators.INDICATOR_POOL`` exactly the way the discovery pipeline does (R44).
+
+    Discovery runs as a subprocess, where filtering the module-global pool in place is safe; the
+    null draws run here for the same reason, so a gene can only use the ``--indicator-pool`` set.
+    """
+    from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline
+
+    pipeline = DiscoveryPipeline(DiscoveryConfig(indicator_pool=list(pool)), _null_backtest)
+    pipeline._apply_indicator_pool_filter()
+
+
+def null_chromosome(seed: int, pool: Sequence[str] = NULL_INDICATOR_POOL) -> StrategyChromosome:
+    """R44: one null draw the GA's way -- pool filter, ``random.seed``, ``_random_chromosome(BOTH)``."""
+    from vibe_quant.discovery.operators import _random_chromosome
+
+    apply_ga_pool_filter(pool)
+    random.seed(seed)
+    return _random_chromosome(Direction.BOTH)
+
+
+def null_threshold(
+    pool: Sequence[tuple[StrategyChromosome, float, float | None]],
+    k: int,
+    reps: int,
+    *,
+    seed: int = NULL_SUBSAMPLE_SEED,
+    top_k: int = layer1.SELECTION_TOP_K,
+    min_distance: float = layer1.SELECTION_MIN_DISTANCE,
+) -> dict[str, Any]:
+    """R45: the null 95th percentile C95(K) over ``reps`` K-subsamples of the pool.
+
+    Each rep draws K pool entries (fixed ``seed``), takes the production top-K pick of their float
+    scores (``layer1.select_picks``: a non-positive score is never eligible) and records
+    ``T = max|corr|`` of the picks (0.0 when nothing is picked or every corr is None). C95(K) is the
+    95th percentile of T over the reps.
+    """
+    if k > len(pool):
+        msg = f"null pool of {len(pool)} cannot supply a subsample of K={k}"
+        raise Layer2Error(msg)
+    rng = random.Random(seed)
+    ts: list[float] = []
+    for _ in range(reps):
+        sample = rng.sample(list(pool), k)
+        scored = sorted(
+            ((chrom, score) for chrom, score, _corr in sample),
+            key=lambda entry: entry[1],
+            reverse=True,
+        )
+        picked = {
+            id(chrom)
+            for chrom, _fit in layer1.select_picks(scored, top_k=top_k, min_distance=min_distance)
+        }
+        vals = [corr for chrom, _score, corr in sample if id(chrom) in picked and corr is not None]
+        ts.append(max((abs(v) for v in vals), default=0.0))
+    return {"k": k, "reps": reps, "seed": seed, "c95": float(np.percentile(np.asarray(ts), 95.0))}
+
+
+def corr_threshold(c95: float, btc0_max_corr: float | None) -> float:
+    """R47/P-1a: C_K = max(C95(K), the same-budget btc0 GA max SIGNED corr)."""
+    if btc0_max_corr is None:
+        return float(c95)
+    return float(max(float(c95), float(btc0_max_corr)))
+
+
+def load_null_pool(path: Path) -> list[tuple[StrategyChromosome, float, float | None]]:
+    """The recorded null pool as ``(chromosome, adjusted_score, corr)`` triples (R47 harvest)."""
+    from vibe_quant.discovery.genome import serializable_to_chromosome
+
+    raw: list[dict[str, Any]] = json.loads(Path(path).read_text())
+    return [
+        (serializable_to_chromosome(entry["chromosome"]), float(entry["score"]), entry.get("corr"))
+        for entry in raw
+    ]
+
+
 # --- workers (run inside a subprocess with cwd = scratch root) ------------------------------
 
 
@@ -882,17 +1082,17 @@ def worker_screen(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
-    """The planted rule through the REAL gate chain on the scratch catalog (fresh process, risk 3)."""
+def _w3_cell_fns() -> tuple[Any, gatechain.ChainSettings]:
+    """The W3/4h cell functions (train + holdout + cross-window factory) of the real chain.
+
+    ONE place builds them so ``worker_chain`` (the planted rule) and ``worker_null`` (the random
+    draws) score through the exact same train window and holdout (design-l2-followup.md §1(b)).
+    """
     from vibe_quant.discovery.__main__ import _make_cell_fns
-    from vibe_quant.discovery.buyhold import daily_sharpe, load_daily_closes
-    from vibe_quant.discovery.fitness import MIN_TRADES, _evaluate_single
     from vibe_quant.fees import FeeSchedule
     from vibe_quant.liquidation_settings import LiquidationSettings
     from vibe_quant.sizing_settings import SizingSettings
 
-    root = Path(payload["root"]).resolve()
-    _assert_worker_cwd(root)
     settings = gatechain.settings_for("W3")
     plan = settings.plan
     fns = _make_cell_fns(
@@ -903,6 +1103,17 @@ def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
         holdout=(str(plan.holdout_start), str(plan.holdout_end)), needs_factory=True,
     )
     fns.backtest_fn.collect_daily_returns = True  # type: ignore[attr-defined]
+    return fns, settings
+
+
+def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
+    """The planted rule through the REAL gate chain on the scratch catalog (fresh process, risk 3)."""
+    from vibe_quant.discovery.buyhold import daily_sharpe, load_daily_closes
+    from vibe_quant.discovery.fitness import MIN_TRADES, _evaluate_single
+
+    root = Path(payload["root"]).resolve()
+    _assert_worker_cwd(root)
+    fns, settings = _w3_cell_fns()
     chrom = planted_chromosome()
     fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, TIMEFRAME)  # type: ignore[arg-type]
     holdout_bt = fns.holdout_backtest_fn(chrom)  # type: ignore[operator]
@@ -923,9 +1134,49 @@ def worker_chain(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def worker_null(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """R44/R47: draw ``count`` random chromosomes the GA's way and score them on the train window.
+
+    Fitness (``adjusted_score``, what ``select_picks`` needs) comes from the SHARED ``_w3_cell_fns``
+    cell functions; the corr comes from the harvest's own train-window screen of the chromosome's
+    DSL against the planted rule's train series (design-l2-followup.md §1(b)).
+    """
+    from vibe_quant.discovery.fitness import MIN_TRADES, _evaluate_single
+    from vibe_quant.discovery.genome import chromosome_to_dsl
+
+    root = Path(payload["root"]).resolve()
+    _assert_worker_cwd(root)
+    pool = payload.get("pool") or NULL_INDICATOR_POOL
+    fns, _settings = _w3_cell_fns()
+    base = int(payload["seed_base"]) + int(payload.get("offset", 0))
+    count = int(payload["count"])
+    start, end = train_window()
+    jobs: list[dict[str, Any]] = [
+        {"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True}
+    ]
+    entries: list[dict[str, Any]] = []
+    for j in range(count):
+        seed = base + j
+        chrom = null_chromosome(seed, pool)
+        fit = _evaluate_single(chrom, fns.backtest_fn, None, MIN_TRADES, TIMEFRAME)  # type: ignore[arg-type]
+        dsl = chromosome_to_dsl(chrom)
+        dsl["timeframe"] = TIMEFRAME
+        jobs.append({"tag": f"c{j}", "dsl": dsl, "start": start, "end": end, "collect": True})
+        entries.append({
+            "seed": seed, "score": float(fit.adjusted_score),
+            "chromosome": chromosome_to_serializable(chrom),
+        })
+    shots = {r["tag"]: r for r in worker_screen({"root": str(root), "jobs": jobs})}
+    planted_series = shots["planted"]["mtm"]
+    for j, entry in enumerate(entries):
+        entry["corr"] = signed_corr(shots[f"c{j}"]["mtm"], planted_series)
+    return entries
+
+
 WORKERS: dict[str, Callable[[dict[str, Any]], Any]] = {
     "screen": worker_screen,
     "chain": worker_chain,
+    "null": worker_null,
 }
 
 
@@ -1102,24 +1353,210 @@ def _chain_exit(state: dict[str, Any], variant: str) -> int:
 
 
 def cmd_discover(ctx: Ctx, args: argparse.Namespace) -> int:
-    variant, seed = args.variant, int(args.seed)
+    variant, seed, label = args.variant, int(args.seed), args.label
+    if label is not None and not LABEL_RE.fullmatch(label):
+        msg = f"--label {label!r} must be one path component matching [A-Za-z0-9_-]+"
+        raise Layer2Error(msg)
     state = load_state(ctx.out)
-    existing = state.get("variants", {}).get(variant, {}).get("runs", {}).get(str(seed))
+    if label is not None:
+        existing = state.get(FOLLOWUP_RUNS_KEY, {}).get(label)
+        where = f"{variant} label {label}"
+    else:
+        existing = state.get("variants", {}).get(variant, {}).get("runs", {}).get(str(seed))
+        where = f"{variant} seed {seed}"
     if existing and not ctx.force:
-        print(f"{variant} seed {seed}: already recorded ({existing['status']})")
+        print(f"{where}: already recorded ({existing['status']})")
         return 0
     root = ctx.accepted_root(state, variant)
-    run_dir = ctx.scratch / "runs" / f"{variant}-seed{seed}"
+    run_dir = ctx.scratch / "runs" / (f"{variant}-{label}" if label is not None else f"{variant}-seed{seed}")
+    if not _under(run_dir, ctx.scratch):  # before any rmtree/mkdir/seed row/launch
+        msg = f"refusing run dir {run_dir}: outside {ctx.scratch}"
+        raise Layer2Error(msg)
     if run_dir.exists():
-        if not _under(run_dir, ctx.scratch):
-            msg = f"refusing to remove {run_dir}"
-            raise Layer2Error(msg)
         shutil.rmtree(run_dir)
-    rec = run_discovery(root, run_dir, seed, timeout_s=args.timeout, command_fn=discovery_command)
-    update_state(ctx.out, lambda s: _variant(s, variant).setdefault("runs", {}).__setitem__(str(seed), rec))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    # R42: the seed row lives in the run's OWN db, written before run_discovery adds its row.
+    seed_run = create_seed_run(run_dir / "state.db") if args.warm else None
+    rec = run_discovery(
+        root, run_dir, seed, timeout_s=args.timeout,
+        command_fn=discover_command_fn(args.pop, args.gens, seed_run),
+    )
+    rec = {**rec, "pop": args.pop, "gens": args.gens}  # R47: the run's own GA budget
+    if label is not None:
+        rec = {**rec, "label": label, "variant": variant, "seed": seed}
+
+    def _save(s: dict[str, Any], r: dict[str, Any] = rec) -> None:
+        # R41: a labelled follow-up run goes to followup_runs, never into variants[*]["runs"].
+        if label is not None:
+            s.setdefault(FOLLOWUP_RUNS_KEY, {})[label] = r
+        else:
+            _variant(s, variant).setdefault("runs", {})[str(seed)] = r
+
+    update_state(ctx.out, _save)
     detail = rec.get("error", "")
-    print(f"{variant} seed {seed}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {detail}")
+    print(f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {detail}")
     return 0
+
+
+def cmd_null_corr(ctx: Ctx, args: argparse.Namespace) -> int:
+    """R44/R47: draw the random-chromosome null pool on btc0 and record its scratch pool file.
+
+    ``m`` draws are split across ``shards`` worker processes; the merged pool (per-chromosome seed,
+    ``adjusted_score`` and planted-train corr) goes to ``scratch/null-pool.json`` and the path is
+    recorded in ``state["null"]``. C95(K) is computed at harvest time, so a later 50x20 run's K is
+    supported without re-running the pool.
+    """
+    state = load_state(ctx.out)
+    existing = state.get(NULL_RECORD_KEY)
+    if isinstance(existing, dict) and existing.get("status") == "completed" and not ctx.force:
+        print("null-corr already recorded (kept; --force redoes)")
+        return 0
+    root = ctx.accepted_root(state, "btc0")
+    m, shards = int(args.m), int(args.shards)
+    chunk = -(-m // shards)
+    pool: list[dict[str, Any]] = []
+    for i in range(shards):
+        count = max(0, min(chunk, m - i * chunk))
+        if not count:
+            continue
+        pool += run_worker(
+            "null", root,
+            {"count": count, "seed_base": int(args.seed), "offset": i * chunk,
+             "pool": list(NULL_INDICATOR_POOL)},
+            ctx.scratch_db, timeout_s=args.timeout,
+        )
+    pool.sort(key=lambda entry: entry["seed"])
+    pool_path = ctx.scratch / NULL_POOL_FILE
+    pool_path.parent.mkdir(parents=True, exist_ok=True)
+    pool_path.write_text(json.dumps(pool, default=_json_default) + "\n")
+    rec = {
+        "status": "completed", "m": len(pool), "reps": int(args.reps), "k": [], "thresholds": {},
+        "seed": int(args.seed), "shards": shards, "root": str(root), "pool_path": str(pool_path),
+        "recorded_at": _now(),
+    }
+    update_state(ctx.out, lambda s: s.__setitem__(NULL_RECORD_KEY, rec))
+    print(f"null-corr: m={len(pool)} reps={rec['reps']} root={root} pool={pool_path}")
+    return 0
+
+
+# --- R43 rescreen / R47 follow-up harvest (design-l2-followup.md §1(a)/(d)) ------------------
+
+
+def rescreen_candidate(
+    state: dict[str, Any], run_variant: str, seed: int, uid: str
+) -> dict[str, Any]:
+    """R43: the harvested candidate ``uid`` of one completed run; an absent uid is refused."""
+    run = (state.get("variants", {}).get(run_variant, {}).get("runs") or {}).get(str(seed))
+    if not run or run.get("status") != "completed":
+        msg = f"{run_variant} seed {seed} has no completed run to rescreen"
+        raise Layer2Error(msg)
+    candidates: list[dict[str, Any]] = (run.get("harvest") or {}).get("candidates") or []
+    cand: dict[str, Any] | None = next((c for c in candidates if c.get("uid") == uid), None)
+    if cand is None:
+        msg = f"uid {uid!r} is not a harvested candidate of {run_variant} seed {seed}"
+        raise Layer2Error(msg)
+    # the harvest record keeps no DSL (uid/source/stage/trades/train_S/corr): re-read it from the
+    # run's own DB, which works for state harvested before this lookup existed
+    full = next(
+        (c for c in harvest_run(Path(run["db"]), int(run["run_id"]))["candidates"]
+         if c.get("uid") == uid and c.get("dsl")),
+        None,
+    )
+    if full is None:
+        msg = f"uid {uid!r} has no DSL in the run DB of {run_variant} seed {seed}"
+        raise Layer2Error(msg)
+    return {**cand, "dsl": full["dsl"]}
+
+
+def rescreen_jobs(candidate_dsl: dict[str, Any]) -> list[dict[str, Any]]:
+    """The three rules of §1(a), each on the TRAIN window: planted, planted-as-BOTH, candidate."""
+    start, end = train_window()
+    return [
+        {"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True},
+        {"tag": "planted_both", "dsl": planted_both_dsl(), "start": start, "end": end,
+         "collect": True},
+        {"tag": "candidate", "dsl": candidate_dsl, "start": start, "end": end, "collect": True},
+    ]
+
+
+def cmd_rescreen(ctx: Ctx, args: argparse.Namespace) -> int:
+    state = load_state(ctx.out)
+    seed = int(args.seed)
+    cand = rescreen_candidate(state, args.run_variant, seed, args.uid)
+    jobs = rescreen_jobs(cand["dsl"])
+    variants: dict[str, Any] = {}
+    for variant in RESCREEN_VARIANTS:
+        root = ctx.accepted_root(state, variant)
+        shots = {r["tag"]: r for r in run_worker("screen", root, {"jobs": jobs}, ctx.scratch_db)}
+        planted_series = shots["planted"]["mtm"]
+        record: dict[str, Any] = {"root": str(root)}
+        for tag in ("planted", "planted_both", "candidate"):
+            record[tag] = {
+                "trades": shots[tag]["trades"],
+                "train_S": ann_sharpe(shots[tag]["mtm"]),
+                "corr": signed_corr(shots[tag]["mtm"], planted_series),
+            }
+        variants[variant] = record
+    rec = {
+        "uid": args.uid, "run_variant": args.run_variant, "seed": seed,
+        "variants": variants, "checked_at": _now(),
+    }
+
+    def _save(s: dict[str, Any], r: dict[str, Any] = rec) -> None:
+        s.setdefault(RESCREEN_RECORD_KEY, {})[args.uid] = r
+
+    update_state(ctx.out, _save)
+    print(f"rescreen {args.uid} ({args.run_variant} seed {seed}):")
+    for variant, record in variants.items():
+        print(f"  {variant}: candidate corr={record['candidate']['corr']} "
+              f"train_S={record['candidate']['train_S']}")
+    return 0
+
+
+def require_null_record(state: dict[str, Any]) -> dict[str, Any]:
+    """R47: the completed calibrated null record (T2's ``null-corr`` output) or a refusal.
+
+    T2 fills in the record's calibrated threshold comparison; T1 pins the key and the refusal
+    so ``harvest --followup`` cannot score against an uncalibrated (or missing) null.
+    """
+    record = state.get(NULL_RECORD_KEY)
+    if not isinstance(record, dict) or record.get("status") != "completed":
+        msg = (
+            f"harvest --followup needs the calibrated null record (state[{NULL_RECORD_KEY!r}], "
+            "status 'completed'): run `null-corr` first"
+        )
+        raise Layer2Error(msg)
+    return record
+
+
+def _harvest_one(ctx: Ctx, root: Path, run: dict[str, Any]) -> bool:
+    """Harvest ONE completed run into ``run["harvest"]``; returns its R31 isolation flag."""
+    h = harvest_run(Path(run["db"]), int(run["run_id"]))
+    ok = bool(h["r31"]["ok"])
+    cands = h.pop("candidates")
+    start, end = train_window()
+    jobs = [{"tag": "planted", "dsl": planted_dsl(), "start": start, "end": end, "collect": True}]
+    jobs += [
+        {"tag": f"c{i}", "dsl": c["dsl"], "start": start, "end": end, "collect": True}
+        for i, c in enumerate(cands)
+    ]
+    shots = {r["tag"]: r for r in run_worker("screen", root, {"jobs": jobs}, ctx.scratch_db)}
+    planted_series = shots["planted"]["mtm"]
+    planted_s = ann_sharpe(planted_series)
+    rows = []
+    for i, cand in enumerate(cands):
+        shot = shots[f"c{i}"]
+        rows.append({
+            "uid": cand.get("uid"), "source": cand["source"], "stage": cand.get("stage"),
+            "trades": shot["trades"], "train_S": ann_sharpe(shot["mtm"]),
+            "corr": signed_corr(shot["mtm"], planted_series),
+            "dsr": cand.get("dsr"),
+        })
+    h["found"] = assess_found(rows, planted_s)
+    h["candidates"] = [{k: v for k, v in r.items() if k != "dsr"} for r in rows]
+    h["posthoc_p"] = {"ns": list(POSTHOC_NS), "by_candidate": posthoc_p(rows, POSTHOC_NS)}
+    run["harvest"] = h
+    return ok
 
 
 def harvest_variant(ctx: Ctx, state: dict[str, Any], variant: str) -> tuple[dict[str, Any], bool]:
@@ -1131,37 +1568,135 @@ def harvest_variant(ctx: Ctx, state: dict[str, Any], variant: str) -> tuple[dict
     for run in runs.values():
         if run.get("status") != "completed":
             continue
-        h = harvest_run(Path(run["db"]), int(run["run_id"]))
-        ok = ok and bool(h["r31"]["ok"])
-        cands = h.pop("candidates")
-        jobs = [{"tag": "planted", "dsl": planted_dsl(), "start": train_window()[0],
-                 "end": train_window()[1], "collect": True}]
-        jobs += [
-            {"tag": f"c{i}", "dsl": c["dsl"], "start": train_window()[0],
-             "end": train_window()[1], "collect": True}
-            for i, c in enumerate(cands)
-        ]
-        shots = {r["tag"]: r for r in run_worker("screen", root, {"jobs": jobs}, ctx.scratch_db)}
-        planted_series = shots["planted"]["mtm"]
-        planted_s = ann_sharpe(planted_series)
-        rows = []
-        for i, cand in enumerate(cands):
-            shot = shots[f"c{i}"]
-            rows.append({
-                "uid": cand.get("uid"), "source": cand["source"], "stage": cand.get("stage"),
-                "trades": shot["trades"], "train_S": ann_sharpe(shot["mtm"]),
-                "corr": signed_corr(shot["mtm"], planted_series),
-                "dsr": cand.get("dsr"),
-            })
-        h["found"] = assess_found(rows, planted_s)
-        h["candidates"] = [{k: v for k, v in r.items() if k != "dsr"} for r in rows]
-        h["posthoc_p"] = {"ns": list(POSTHOC_NS), "by_candidate": posthoc_p(rows, POSTHOC_NS)}
-        run["harvest"] = h
+        ok = _harvest_one(ctx, root, run) and ok
     return runs, ok
+
+
+# --- R47: calibrated harvest (design-l2-followup.md §1(b), P-1a threshold) -------------------
+
+
+def _run_budget(run: dict[str, Any]) -> tuple[int, int]:
+    """The GA budget (pop, gens) a run was launched with; an absent budget is the 12x4 default."""
+    return int(run.get("pop", DEFAULT_POP)), int(run.get("gens", DEFAULT_GENS))
+
+
+def _run_k(run: dict[str, Any]) -> int:
+    """R47: K = 40 for a 12x4 run (pre-registered literal); else the run's evaluated count."""
+    pop, gens = _run_budget(run)
+    if (pop, gens) == (DEFAULT_POP, DEFAULT_GENS):
+        return NULL_K_12X4
+    evaluated = (run.get("harvest") or {}).get("evaluated")
+    if evaluated is None:
+        msg = f"run at budget {pop}x{gens} has no harvest evaluated count for its K"
+        raise Layer2Error(msg)
+    return int(evaluated)
+
+
+def _iter_runs(state: dict[str, Any]) -> Iterator[tuple[str | None, dict[str, Any]]]:
+    """Every recorded run as ``(variant, run)``: the V5 runs and the labelled follow-up runs."""
+    for variant, vrec in state.get("variants", {}).items():
+        for run in (vrec.get("runs") or {}).values():
+            yield variant, run
+    for run in (state.get(FOLLOWUP_RUNS_KEY) or {}).values():
+        yield run.get("variant"), run
+
+
+def _btc0_max_corr(state: dict[str, Any], pop: int, gens: int) -> float:
+    """R47/P-1a: the max SIGNED corr over ALL btc0 GA candidates at the same (pop, gens) budget."""
+    corrs: list[float] = []
+    for variant, run in _iter_runs(state):
+        if variant != "btc0" or run.get("status") != "completed" or _run_budget(run) != (pop, gens):
+            continue
+        for cand in (run.get("harvest") or {}).get("candidates") or []:
+            if cand.get("corr") is not None:
+                corrs.append(float(cand["corr"]))
+    if not corrs:
+        msg = f"harvest --followup needs btc0 GA candidates at budget {pop}x{gens}; none recorded"
+        raise Layer2Error(msg)
+    return max(corrs)
+
+
+def _found_cal(harvest: dict[str, Any], c_k: float) -> dict[str, Any]:
+    """R47: found_cal over a run's harvested candidates under the calibrated threshold C_K."""
+    planted_s = (harvest.get("found") or {}).get("planted_train_S")
+    flagged = [
+        {"uid": cand.get("uid"), "corr": cand.get("corr"), "train_S": cand.get("train_S")}
+        for cand in harvest.get("candidates") or []
+        if found_criterion(cand.get("corr"), cand.get("train_S"), planted_s, corr_min=c_k)
+    ]
+    return {"found_cal": bool(flagged), "found_by_cal": flagged}
+
+
+def harvest_followup(ctx: Ctx, state: dict[str, Any]) -> int:
+    """R47: re-score every V5 and follow-up run against the calibrated null threshold C_K.
+
+    C95(K) is computed from the stored null pool at a fixed subsample seed; the btc0 comparator is
+    the max signed corr over ALL btc0 candidates at the run's own (pop, gens) budget; the
+    thresholds actually used are written back into ``state["null"]``.
+    """
+    record = require_null_record(state)
+    violations: list[str] = []
+    for variant, run in list(_iter_runs(state)):
+        if run.get("status") != "completed":
+            continue
+        if not run.get("harvest"):
+            if variant is None:
+                msg = "a completed run has no variant to harvest against"
+                raise Layer2Error(msg)
+            ok = _harvest_one(ctx, ctx.accepted_root(state, variant), run)
+        else:  # cached: a missing r31 record fails closed
+            ok = bool(((run["harvest"].get("r31")) or {}).get("ok"))
+        if not ok:
+            violations.append(f"{variant} run_id={run.get('run_id')}")
+    if violations:  # R31: score nothing and persist nothing
+        print(f"R31 isolation VIOLATED in {', '.join(violations)}: harvest --followup scores nothing")
+        return 3
+
+    scorable = [
+        (variant, run)
+        for variant, run in _iter_runs(state)
+        if variant != "btc0" and run.get("status") == "completed" and run.get("harvest")
+    ]
+    if not scorable:
+        print("harvest --followup: no completed V5/follow-up runs to score")
+        return _write_followup(ctx, state, record)
+
+    pool = load_null_pool(Path(record["pool_path"]))
+    reps = int(record["reps"])
+    c95_by_k = {k: null_threshold(pool, k, reps)["c95"] for k in {_run_k(r) for _v, r in scorable}}
+    for variant, run in scorable:
+        k = _run_k(run)
+        pop, gens = _run_budget(run)
+        btc0_max = _btc0_max_corr(state, pop, gens)
+        c_k = corr_threshold(c95_by_k[k], btc0_max)
+        calibration = {
+            "k": k, "budget": [pop, gens], "c95": c95_by_k[k], "btc0_max_corr": btc0_max, "C_K": c_k,
+        }
+        calibration.update(_found_cal(run["harvest"], c_k))
+        run["harvest"]["calibration"] = calibration
+        print(f"harvest --followup {variant}: K={k} C95={c95_by_k[k]:.4f} btc0_max={btc0_max:.4f} "
+              f"C_K={c_k:.4f} found_cal={calibration['found_cal']}")
+    record["k"] = sorted(c95_by_k)
+    record["thresholds"] = {str(k): v for k, v in sorted(c95_by_k.items())}
+    return _write_followup(ctx, state, record)
+
+
+def _write_followup(ctx: Ctx, state: dict[str, Any], record: dict[str, Any]) -> int:
+    """Write every harvested run and the updated null thresholds back under one lock."""
+    def _save(s: dict[str, Any]) -> None:
+        for variant, vrec in state.get("variants", {}).items():
+            _variant(s, variant)["runs"] = vrec.get("runs", {})
+        s[FOLLOWUP_RUNS_KEY] = state.get(FOLLOWUP_RUNS_KEY, {})
+        s[NULL_RECORD_KEY] = record
+
+    update_state(ctx.out, _save)
+    return 0
 
 
 def cmd_harvest(ctx: Ctx, args: argparse.Namespace) -> int:
     state = load_state(ctx.out)
+    if args.followup:
+        return harvest_followup(ctx, state)
     names = [args.variant] if args.variant else [
         v for v, r in state.get("variants", {}).items() if r.get("runs")
     ]
@@ -1234,8 +1769,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--variant", choices=sorted(VARIANTS), required=True)
     p.add_argument("--seed", type=int, required=True)
     p.add_argument("--timeout", type=float, default=RUN_TIMEOUT_S)
+    p.add_argument("--pop", type=int, default=DEFAULT_POP, help="R40: GA population size")
+    p.add_argument("--gens", type=int, default=DEFAULT_GENS, help="R40: GA max generations")
+    p.add_argument("--label", default=None, help="R41: record under followup_runs[label]")
+    p.add_argument("--warm", action="store_true", help="R42: warm-start from a planted seed row")
+    p = sub.add_parser("null-corr", help="R44/R47: random-chromosome null pool on btc0")
+    p.add_argument("--m", type=int, default=NULL_DEFAULT_M, help="draws in the null pool (>= K)")
+    p.add_argument("--reps", type=int, default=NULL_DEFAULT_REPS, help="subsamples for C95")
+    p.add_argument("--shards", type=int, default=NULL_DEFAULT_SHARDS, help="parallel worker count")
+    p.add_argument("--seed", type=int, default=0, help="first chromosome seed")
+    p.add_argument("--timeout", type=float, default=7200.0, help="per-shard worker timeout (s)")
+    p = sub.add_parser("rescreen", help="R43: a harvested candidate on all three accepted roots")
+    p.add_argument("--run-variant", choices=sorted(VARIANTS), required=True)
+    p.add_argument("--seed", type=int, required=True)
+    p.add_argument("--uid", required=True)
     p = sub.add_parser("harvest", help="R30/R31: champions, rejections, found, post-hoc p")
     p.add_argument("--variant", choices=sorted(VARIANTS), default=None)
+    p.add_argument("--followup", action="store_true", help="R47: calibrated-threshold harvest")
     sub.add_parser("verify-untouched", help="R26: shared data identical to the snapshot")
     w = sub.add_parser("_worker")
     w.add_argument("kind", choices=sorted(WORKERS))
@@ -1255,6 +1805,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "check-btc0": cmd_check_btc0,
         "direct-chain": cmd_direct_chain,
         "discover": cmd_discover,
+        "null-corr": cmd_null_corr,
+        "rescreen": cmd_rescreen,
         "harvest": cmd_harvest,
         "verify-untouched": cmd_verify_untouched,
     }
