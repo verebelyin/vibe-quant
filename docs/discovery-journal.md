@@ -4,6 +4,30 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: RESULT P-1 layer 2 — gates pass a planted S≈5.8 edge (V4 PASS) but discovery does not find it at the pre-registered budget (V5 btc5.0 FAIL)
+
+Pre-registration P-1 (648438d5). Code `swarm/pw-layer2` @ e170c858 (layer2.py + plant.py fixes, Sol review PASS). Runs 2026-10-18 11:18:04–11:24:06 local; output `data/swarm/20261017-power-paper/power/layer2.{json,log}`.
+
+**Builds:** btc0 R25 fidelity: strategy 239 screening 2024-01-01..2026-03-17 gives sharpe 0.7974716442710239, 67 trades, return 0.159784359286041, PF 1.6359612484989312, max DD 0.05716872229767501. btc2.0 accepted build: planted S 2.230058593586291, direct-chain fitness train_S 2.165498644085478. btc5.0: first attempt failed closed — non-converged (kappa 5.679412437314832e-06, l_end 0.2592), `accepts()` was fail-open → fixed; final build delta 2.4e-05, kappa 6.0066442086054325e-06, kappa_passes 17, l_end 0.00014062500000022737, converged True, n_triggers 395, price_ratio 1.5541125485709368, train_S 5.813800467449691, full_S 5.341930767078273, accepted True.
+
+**Verdicts (verbatim):**
+- `V4 btc5.0 [positive control]: PASS` — fitness sharpe_ratio 4.414194196399031, total_trades 173, total_return 1.4193219245579138, adjusted_score 0.9340891195516463, train_S 5.762631704955743; floor True, all 8 marginals True, dsr + chain_full True at N 1,7,9,11,12,167,752,3901,22121.
+- `V4 btc2.0 [report only]: FAIL` (dsr[167], chain_full[167], dsr[22121], chain_full[22121]); fitness train_S 2.165498644085478; dsr/chain True at N<=11, False at N>=12.
+- `V5 btc0`: seed 1 found False max|corr| 0.3853690532818089; seed 2 found False max|corr| 0.46465948173465604.
+- `V5 btc2.0`: seed 1 found False max|corr| 0.4137435052439319; seed 2 found True (uid 9e76b873b162 corr 0.5370463971268444, train_S 1.447515528201331).
+- `V5 btc5.0`: seed 1 found False max|corr| 0.4187189005312853; seed 2 found False max|corr| 0.44501304058913954. All 6 completed, champions 0, outcome no_viable_strategies.
+- `R26 shared data untouched` (ok True, problems []); snapshot 9 files, discovery rows {count 458, max_id 950}. `R31 isolation` ok (prior_n 0, gate_n == raw each).
+
+**Reading:** V4 PASS shows the machinery works; no STOP-class defect (R25, R26, R31 ok). At the pre-registered budget (pop 12 × gens 4, ≈ 40 genomes; production similar: 927 10×2, 950 6×2, 877/878 16×6) the GA did not recover an S 5.8 plant (best candidate S 0.501 vs planted 5.813800467449691), so "0 champions" is uninformative for search reasons too, not only DSR power. The btc2.0 "found" is not credible: a different rule, CCI(25) < -55; corr 0.5370463971268444 within the null range 0.4647; R30 never null-calibrated — a V5 PASS by the written rule only.
+
+**Does NOT show:** anything about larger budgets; that the GA finds S 2 edges.
+
+**Disclosures:** btc5.0 delta0 changed from 4e-05 to 2.4e-05 after the failed build (4e-05 → ratio 4.88, FAILED closed). The plant solver gained a phase-2 root find (chief ruling B; btc2.0 path bit-identical, verified by Sol). Runs re-executed in session 3.
+
+**Next:** arch proposals, cheapest first: (a) re-screen 9e76b873b162 on btc0 and btc5.0; (b) null-calibrate corr — 167 random chromosomes on btc0, 95th percentile of top-5 max|corr|; (c) warm-start the planted chromosome via `--seed-from-run`; (d) btc5.0 at pop 50 × gens 20.
+
+---
+
 ## 2026-10-18: RESULT P-1 layer 1 — gates have NO power at production N (V1 FAIL, V2 PASS); DSR trial count is the binding gate
 
 Pre-registration P-1 (648438d5). `scripts/research/power/layer1.py --reps 500 --selection-reps 200 --workers 8` on main 648438d5, wall 2:09.67, output `data/swarm/20261017-power-paper/power/layer1.{json,md,log}`. Sharpe in √365 units (repo logs √252 = 0.83×).
