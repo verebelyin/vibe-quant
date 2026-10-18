@@ -4,6 +4,24 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-18: PRE-REGISTRATION P-1a — layer-2 follow-ups (is the btc2.0 "find" real; is GA search budget the bottleneck?)
+
+Written before any follow-up run. Design: `data/swarm/20261017-power-paper/design-l2-followup.md` (Opus architect). Code: new `layer2.py` subcommands (scratch only; `verify-untouched` at the end; no `vibe_quant/` change).
+
+**Already seen (disclosure):** all layer-2 results — btc0 max|corr| 0.3853690532818089 / 0.46465948173465604; candidate 9e76b873b162 corr 0.5370463971268444, train_S 1.447515528201331; btc5.0 best S 0.501.
+
+**Threshold:** C_K = max(C95(K), max signed corr of btc0 GA candidates at the same budget), where C95(K) is the 95th percentile, over random-chromosome subsamples of size K drawn the GA's way (`operators._random_chromosome` after the pool filter), of the top-5 picks' max|corr|. K = 40 for 12×4 runs; for 50×20 runs K = that run's actual evaluated count (chief ruling; random pool m ≥ 1200). found_cal iff corr ≥ C_K AND train_S ≥ 0.5 × planted train S. Disclosed gap: float scores skip the production behaviour-fingerprint rule.
+
+**(a) Re-screen 9e76b873b162** on btc0/btc2.0/btc5.0 (train window). ΔS = S(btc5.0) − S(btc0). Plant-driven iff ΔS ≥ 0.5 and S rises btc0 < btc2.0 < btc5.0; market beta iff |ΔS| < 0.25; else mixed. Prediction: S(btc0) 0.9–1.2, plant-driven (p ≈ 0.6). Plant-driven = partial capture, not "found".
+
+**(b) Null threshold.** Prediction C95(40) ∈ [0.45, 0.60]. If 0.5370463971268444 < C_40, V5 btc2.0 is re-scored FAIL and the layer-2 entry gets a correction; else it stays PASS by the letter, credibility from (a).
+
+**(c) Warm start** (btc5.0, seeds 1, 2, 12×4, seeded with the planted chromosome). Pre-check: planted-as-BOTH btc5.0 train S = 5.762631704955743 ± 0.05. Prediction: both runs keep it, ≥ 1 champion, found_cal, DSR passes at the run's own gate_n ≈ 40. Lost or rejected in-run ⇒ disagrees with the V4 direct chain: STOP, defect.
+
+**(d) Larger budget** (btc5.0 and btc0, 50×20, seeds 1, 2). Prediction (EYEBALLED p ≈ 0.6): not found; best btc5.0 train S < 2.906900233724846. Found in ≥ 1 of 2 ⇒ search budget is a bottleneck → recommend a production budget study. 0 of 2 ⇒ search space / operators, not budget → GA diagnostics before more hunts. Any btc0 champion ⇒ gate leak at N ≈ 1000: report.
+
+---
+
 ## 2026-10-18: RESULT P-1 layer 2 — gates pass a planted S≈5.8 edge (V4 PASS) but discovery does not find it at the pre-registered budget (V5 btc5.0 FAIL)
 
 Pre-registration P-1 (648438d5). Code `swarm/pw-layer2` @ e170c858 (layer2.py + plant.py fixes, Sol review PASS). Runs 2026-10-18 11:18:04–11:24:06 local; output `data/swarm/20261017-power-paper/power/layer2.{json,log}`.
