@@ -565,3 +565,38 @@ def test_first_failure_parses_parametrized_id_with_spaces(tmp_path: Path, capsys
     out = _lines(capsys)
     assert out[0].startswith("KILLED ")
     assert out[1].startswith("  first failure: tests/unit/test_ids.py::test_value[with spaces]: ")
+
+
+def test_first_failure_parses_parametrized_id_containing_separator(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "tests" / "unit" / "test_ids.py").write_text(
+        "import pytest\nfrom vibe_quant.mod import is_positive\n\n\n"
+        "@pytest.mark.parametrize('v', [pytest.param(-1, id='with - separator')])\n"
+        "def test_value(v: int) -> None:\n    assert not is_positive(v + 1)\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "ids")
+    _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return x >= 0",
+         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"])
+    out = _lines(capsys)
+    assert out[0].startswith("KILLED ")
+    assert out[1].startswith(
+        "  first failure: tests/unit/test_ids.py::test_value[with - separator]: "
+    )
+
+
+def test_first_failure_keeps_bracketed_node_id_whole() -> None:
+    # The message separator is the first " - " OUTSIDE square brackets; a " - " inside a
+    # parametrize id must not split the node id, and the id is printed whole either way.
+    assert mutate.first_failure("") == ""
+    assert mutate.first_failure("FAILED tests/t.py::test_a") == "  first failure: tests/t.py::test_a: "
+    assert (
+        mutate.first_failure("FAILED tests/t.py::test_a - assert 1 == 2\n")
+        == "  first failure: tests/t.py::test_a: assert 1 == 2"
+    )
+    assert (
+        mutate.first_failure("FAILED tests/t.py::test_v[with - sep] - assert 0 == 1\n")
+        == "  first failure: tests/t.py::test_v[with - sep]: assert 0 == 1"
+    )

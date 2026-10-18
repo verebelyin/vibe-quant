@@ -207,8 +207,25 @@ def is_pytest_command(cmd: Sequence[str]) -> bool:
     return any(Path(str(arg)).name in PYTEST_NAMES for arg in cmd)
 
 
-_FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (.+?)(?: - (.*))?$", re.MULTILINE)
+_FAILED_RE = re.compile(r"^(?:FAILED|ERROR) (.+)$", re.MULTILINE)
 _E_LINE_RE = re.compile(r"^E\s+(\S.*)$", re.MULTILINE)
+
+
+def _split_node_detail(line: str) -> tuple[str, str | None]:
+    """(node id, inline message) split at the first " - " that is OUTSIDE square brackets.
+
+    A pytest id like ``test_value[with - separator]`` contains the " - " separator itself, so a
+    plain first-occurrence split truncates the id and reports the id tail as the message.
+    """
+    depth = 0
+    for i, ch in enumerate(line):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif ch == "-" and depth == 0 and line[i - 1 : i] == " " and line[i + 1 : i + 2] == " ":
+            return line[: i - 1], line[i + 2 :]
+    return line, None
 
 
 def first_failure(output: str) -> str:
@@ -216,9 +233,10 @@ def first_failure(output: str) -> str:
     node = _FAILED_RE.search(output)
     if node is None:
         return ""
+    name, inline = _split_node_detail(node.group(1))
     err = _E_LINE_RE.search(output)
-    detail = err.group(1) if err else (node.group(2) or "")
-    return f"  first failure: {node.group(1)}: {detail.strip()}"
+    detail = err.group(1) if err else (inline or "")
+    return f"  first failure: {name}: {detail.strip()}"
 
 
 def check_mutant(
