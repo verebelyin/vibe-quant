@@ -32,6 +32,7 @@ over the same symbol.
 from __future__ import annotations
 
 import logging
+import os
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -195,7 +196,9 @@ class FundingCalculator:
     ) -> None:
         from vibe_quant.data.archive import DEFAULT_ARCHIVE_PATH
 
-        self._archive_path = Path(archive_path) if archive_path else DEFAULT_ARCHIVE_PATH
+        # Absolute, computed once: the caches below are process-wide, so a relative key
+        # ("data/archive/raw_data.db") would serve one root's rates to another cwd.
+        self._archive_path = Path(os.path.abspath(archive_path or DEFAULT_ARCHIVE_PATH))  # noqa: PTH100
         self._default_rate = default_rate
 
     @property
