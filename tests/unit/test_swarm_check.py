@@ -2653,6 +2653,30 @@ class TestPinnedText:
         pin = self._pin(tmp_path, repo)
         assert pin.status == "PASS" and "1 removed literals" in pin.detail
 
+    def test_pin_is_not_reported_when_the_full_unit_suite_runs(self, tmp_path: Path) -> None:
+        """The other half of ``test_already_run``: with TestRun.full_unit the whole tests/unit
+        ran, so a tests/unit pin IS covered by the gate's own selection and must not be a
+        false-positive FAIL. The pinning test is NOT in ``explicit`` here - a conftest change
+        is not a changed test file - so only the ``full_unit and path.startswith('tests/unit/')``
+        branch can spare it (a mutant returning False there reports the pin)."""
+        repo = _pinned_repo(tmp_path)
+        (repo / "tests" / "conftest.py").write_text("X = 1\n")  # forces the full tests/unit run
+        pin = self._pin(tmp_path, repo)
+        assert pin.status == "PASS"
+        assert "test_pin.py" not in pin.detail
+
+    def test_test_already_run_explicit_full_unit_and_outside(self) -> None:
+        """Direct pin of the branch: explicit membership, the full_unit tests/unit case, and
+        the two negatives (a tests/unit path without full_unit, and a path outside tests/unit)."""
+        check = swarm_check.Check("tests", "PASS", "x")
+        explicit = swarm_check.TestRun(check, frozenset({"tests/unit/test_a.py"}))
+        assert swarm_check.test_already_run("tests/unit/test_a.py", explicit)
+        assert not swarm_check.test_already_run("tests/unit/test_b.py", explicit)
+        full = swarm_check.TestRun(check, frozenset(), True)
+        assert swarm_check.test_already_run("tests/unit/test_b.py", full)
+        assert not swarm_check.test_already_run("tests/api/test_b.py", full)
+        assert not swarm_check.test_already_run("tests/unit/test_b.py", swarm_check.TestRun(check))
+
     def test_skips_without_a_vibe_quant_change(self, tmp_path: Path) -> None:
         repo = _init_repo(tmp_path)
         (repo / "notes.txt").write_text("x\n")
