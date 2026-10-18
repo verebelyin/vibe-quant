@@ -265,21 +265,23 @@ def test_unequal_lengths_fall_back() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raised", "marker", "n_series", "expected"),
+    ("raised", "marker", "n_series", "raw", "expected"),
     [
         (
             np.linalg.LinAlgError("no convergence"),
             "no convergence",
             2,
+            40,
             "EV-matched effective-N estimator failed (LinAlgError); "
-            "falling back to raw N=2",
+            "falling back to raw N=40 (n_used=2)",
         ),
         (
             ValueError("secret-sentinel"),
             "secret-sentinel",
             3,
+            40,
             "EV-matched effective-N estimator failed (ValueError); "
-            "falling back to raw N=3",
+            "falling back to raw N=40 (n_used=3)",
         ),
     ],
     ids=["LinAlgError-2-series", "ValueError-3-series"],
@@ -290,11 +292,14 @@ def test_estimator_error_falls_back(
     raised: Exception,
     marker: str,
     n_series: int,
+    raw: int,
     expected: str,
 ) -> None:
     """R7: an eigendecomposition failure is caught, logged, never escapes.
 
-    The warning names the exception CLASS and n_used, but must not leak the raw
+    The warning names the exception CLASS, the raw N the fallback returns and the
+    n_used it actually ran on. raw (40) != n_used (2 or 3) here, so swapping the
+    two ``%d`` arguments in the message is caught. It must also not leak the raw
     exception text (no ``exc_info``, no exception message) on a money path.
     """
     def boom(*_a: Any, **_k: Any) -> Any:
@@ -302,7 +307,7 @@ def test_estimator_error_falls_back(
 
     monkeypatch.setattr(np.linalg, "eigh", boom)
     with caplog.at_level(logging.WARNING):
-        eff = effective_trials(_w(*range(1, n_series + 1)), 40)
+        eff = effective_trials(_w(*range(1, n_series + 1)), raw)
     assert eff.source == "fallback_raw"
     assert eff.fallback_reason == "estimator_error"
     assert eff.neff_ev is None

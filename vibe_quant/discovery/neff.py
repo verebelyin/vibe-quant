@@ -213,8 +213,10 @@ def effective_trials(
             source = "ev_mc"
         except (np.linalg.LinAlgError, ValueError, FloatingPointError) as exc:
             logger.warning(
-                "EV-matched effective-N estimator failed (%s); falling back to raw N=%d",
+                "EV-matched effective-N estimator failed (%s); "
+                "falling back to raw N=%d (n_used=%d)",
                 type(exc).__name__,
+                raw,
                 n_used,
             )
             fallback_reason = "estimator_error"
