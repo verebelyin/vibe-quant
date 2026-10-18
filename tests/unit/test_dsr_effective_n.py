@@ -11,6 +11,7 @@ zero-mean except row 0 (used as the flat row). Row 0 is all-ones -> std 0.
 
 from __future__ import annotations
 
+import logging
 import math
 from array import array
 from typing import Any
@@ -263,17 +264,52 @@ def test_unequal_lengths_fall_back() -> None:
     assert eff.run_n_eff == 40
 
 
-def test_estimator_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R7: an eigendecomposition failure is caught, never escapes."""
+@pytest.mark.parametrize(
+    ("raised", "marker", "n_series", "expected"),
+    [
+        (
+            np.linalg.LinAlgError("no convergence"),
+            "no convergence",
+            2,
+            "EV-matched effective-N estimator failed (LinAlgError); "
+            "falling back to raw N=2",
+        ),
+        (
+            ValueError("secret-sentinel"),
+            "secret-sentinel",
+            3,
+            "EV-matched effective-N estimator failed (ValueError); "
+            "falling back to raw N=3",
+        ),
+    ],
+    ids=["LinAlgError-2-series", "ValueError-3-series"],
+)
+def test_estimator_error_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    raised: Exception,
+    marker: str,
+    n_series: int,
+    expected: str,
+) -> None:
+    """R7: an eigendecomposition failure is caught, logged, never escapes.
+
+    The warning names the exception CLASS and n_used, but must not leak the raw
+    exception text (no ``exc_info``, no exception message) on a money path.
+    """
     def boom(*_a: Any, **_k: Any) -> Any:
-        raise np.linalg.LinAlgError("no convergence")
+        raise raised
 
     monkeypatch.setattr(np.linalg, "eigh", boom)
-    eff = effective_trials(_w(1, 2), 40)
+    with caplog.at_level(logging.WARNING):
+        eff = effective_trials(_w(*range(1, n_series + 1)), 40)
     assert eff.source == "fallback_raw"
     assert eff.fallback_reason == "estimator_error"
     assert eff.neff_ev is None
     assert eff.run_n_eff == 40
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert [r.getMessage() for r in warnings] == [expected]
+    assert marker not in caplog.text
 
 
 def test_zero_raw_gives_one() -> None:

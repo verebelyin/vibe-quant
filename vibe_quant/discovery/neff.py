@@ -20,6 +20,7 @@ Layering (review N7): this module imports only ``vibe_quant.overfitting.dsr``.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from numpy.typing import NDArray
+
+logger = logging.getLogger(__name__)
 
 # Monte-Carlo schedule: fixed so the target (and hence run_n_eff) is deterministic.
 NEFF_EV_DRAWS: int = 4096
@@ -208,7 +211,12 @@ def effective_trials(
             neff_ev = n_m * raw / n_used
             run_n_eff = min(max(1, math.ceil(neff_ev)), max(1, raw))
             source = "ev_mc"
-        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError) as exc:
+            logger.warning(
+                "EV-matched effective-N estimator failed (%s); falling back to raw N=%d",
+                type(exc).__name__,
+                n_used,
+            )
             fallback_reason = "estimator_error"
 
     return EffectiveTrials(
