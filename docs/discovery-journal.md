@@ -4,6 +4,31 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: RESULT G2 power — with the q95 DSR rule, 14 of 41 rejected planted-edge copies become champions; 0 null champions
+
+Pre-registration G2 (592256b6), power part. `budget.py --dsr-rule q95` (0b3494d1) re-ran the 21 P-2 runs that had a DSR-rejected M1 hit plus all 24 s0 runs, same seeds and settings, into a copy of the P-2 state (`data/swarm/20261019-budget-dsr/power/reharvest/`; handoff `handoffs/cc-reharvest-1.md`). 45/45 runs `completed`, driver wall sum 9181.2 s. **Identity:** evaluated, `dsr_trials.gate_n` and the candidate set equal P-2 on 45/45 runs (the rule acts after the GA; main had gained inydc since P-2, so this also confirms long-only runs are bit-identical). `verify-untouched`: `R26 shared data untouched`.
+
+**Report (verbatim, q95):**
+```
+  4h-s2: B*=none | B1 M1=1/3 M2=0/3 | B2 M1=1/3 M2=0/3 | B3 M1=2/3 M2=0/3 | B4 M1=3/3 M2=0/3
+  4h-s3: B*=none | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=2/3 M2=1/3
+  4h-s4: B*=B4 | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=3/3 M2=3/3
+  4h-s5: B*=B4 | B1 M1=0/3 M2=0/3 | B2 M1=1/3 M2=1/3 | B3 M1=1/3 M2=1/3 | B4 M1=2/3 M2=2/3
+  1d-s3: B*=B2 | B1 M1=1/3 M2=1/3 | B2 M1=3/3 M2=2/3 | B3 M1=3/3 M2=3/3 | B4 M1=3/3 M2=3/3
+  s0 champion count: 0   (both timeframes)
+```
+(4h-s0, 1d-s0 0/3 everywhere; 1d-s4 B1 and 1d-s5 B3 unchanged — not re-run, no DSR-rejected hit.)
+
+**Versus legacy P-2:** 4h-s4 B4 M2 2/3 → 3/3; 1d-s3 B* none → B2 (M2 B2 1/3 → 2/3, B3 and B4 1/3 → 3/3); 4h-s2, 4h-s3, 4h-s5 cells unchanged. Of the 41 DSR-rejected M1 hits (chief recount, uids normalised `genome_` prefix): **14 now champions**, 25 still `DSR q95 not significant`, 2 fail a later gate (`Holdout`, e.g. 1d-s3 B4 seed 1 d4b683335ba3: return -1.34%, sharpe -0.17). Runs whose M2 flips False → True: 6 of 21; runs gaining a first champion: 7 (4h-s3 B4 seed 1's new champion genome_4b16cbeebd39 has corr 0.45620264790697856 < C_K 0.5220218373933287, train_S 2.5971560184236506 vs planted 3.003010401047131: Likely a looser plant copy, not an M1 hit). uid 7f9ad10125f4 (4h-s4 B4 seed 1) is now a champion.
+
+**Predictions:** 7–20 of 41 pass, point 14 → **14, met**; runs gaining a first champion 3–7 → 7, met (top edge); 4h-s2 gains none → met.
+
+**Reading:** the q95 rule recovers about a third of the planted copies the legacy DSR rejected, mostly on 1d-s3 (S ≈ 2.7) and at 4h B4, with no champion on any null copy (24 s0 runs) and a null false-positive rate ≤ 0.0200 (RESULT G2). S ≈ 2 on 4h stays undetectable (4h-s2 0/3), as the diagnosis said: those copies fail even an exact best-of-N 5% test. Not shown: the champion overfitting re-check under q95 (still legacy, declared gap), live-data champion counts.
+
+**Next (needs the user):** T4 — make q95 the production default and switch the overfitting champion re-check to read the run's rule; a dated comparability break in `docs/claude/discovery.md`.
+
+---
+
 ## 2026-10-19: RESULT G2 — the quantile-matched DSR critical value passes the false-positive check (max 0.0200 ≤ 0.05)
 
 Pre-registration G2 (592256b6). Code: opt-in `--dsr-rule q95` landed on main 1a753b82 (default `emax`, bit-identical; GPT-6.1-Sol round 2 PASS). **Deviation (chief ruling R11, before the binding run):** Sol round 1 blocked the pre-registered statistic z = SR/SE vs E[maxZ] + spread because it was stricter than legacy under fat tails (identical series, kurtosis 7.7, gate_n 88: legacy p 0.04887980953236665 pass, q95 reject). The binding rule keeps the legacy PSR statistic (SR − SR0)·√(T−1)/√(1 − γ3·SR + (γ4−1)/4·SR²) and replaces only the 1.6449 constant by the run's Monte Carlo spread; spread 1.6449 reproduces legacy for any input. A first 400-rep run on the pre-fix statistic (non-binding) gave max 0.0200 (8/400).
