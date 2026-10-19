@@ -97,26 +97,40 @@ def validate_indicator_pool(names: Sequence[str]) -> None:
     the launch endpoint, so a pool the genome cannot use fails with the same
     message before any work starts.
 
+    A price-vs-MA name (KAMA/VIDYA/FRAMA) is a valid pool entry: naming it
+    enables that MA's genes, and omitting every MA name leaves the MA gene
+    lists empty (vibe-quant-nn7i7).
+
     Raises:
         ValueError: the pool is empty (there is no "no indicators" run; omit
-            the pool to use the default), or it names indicators the GA genome
-            cannot use (unknown names, or price-vs-MA plugins whose
-            ``threshold_range`` is None).
+            the pool to use the default), it names indicators the GA genome
+            cannot use (unknown names, or price-relative indicators whose
+            ``threshold_range`` is None that are not price-vs-MA plugins), or
+            it names only MA plugins (the genome's entry/exit genes are
+            indicator-vs-threshold, so at least one is required).
     """
     _ensure_pool()
+    from vibe_quant.discovery.genome import MA_POOL
+
     if not names:
         msg = "indicator_pool must not be empty; omit it (null) to use the default pool"
         raise ValueError(msg)
-    available = set(INDICATOR_POOL.keys())
+    available = set(INDICATOR_POOL) | set(MA_POOL)
     unknown = sorted(set(names) - available)
     if unknown:
-        # Moving-average-type plugins register with threshold_range=None and
-        # are excluded from the GA pool (gene structure is indicator-vs-threshold).
+        # Price-relative plugins without ma_kind register with threshold_range=None
+        # and have no gene shape (price-vs-MA genes need ma_kind=True).
         msg = (
             f"indicator_pool contains names not available for GA discovery: "
             f"{unknown}. Available: {sorted(available)}. "
-            f"(Indicators with threshold_range=None, e.g. price-vs-MA plugins, "
-            f"are not yet supported by the genome — see bd-9c1g.)"
+            f"(Price-vs-MA plugins (KAMA/VIDYA/FRAMA) enable MA genes; other "
+            f"threshold_range=None indicators cannot form a threshold gene.)"
+        )
+        raise ValueError(msg)
+    if not set(names) & set(INDICATOR_POOL):
+        msg = (
+            "indicator_pool must also name at least one scalar-threshold indicator; "
+            "MA names alone cannot build the entry/exit genes"
         )
         raise ValueError(msg)
 
@@ -1343,6 +1357,8 @@ def initialize_population(
         _logger = logging.getLogger(__name__)
         # Clone seeds into population (cap at half the population to preserve exploration)
         _ensure_pool()
+        from vibe_quant.discovery.genome import MA_POOL
+
         max_seeds = min(len(seed_chromosomes), size // 2)
         skipped = 0
         for chrom in seed_chromosomes:
@@ -1359,6 +1375,19 @@ def initialize_population(
             ]
             clone.short_exit_genes = [
                 g for g in clone.short_exit_genes if g.indicator_type in INDICATOR_POOL
+            ]
+            # Same rule for MA genes: the pool restricts them too (nn7i7).
+            clone.ma_entry_genes = [
+                g for g in clone.ma_entry_genes if g.indicator_type in MA_POOL
+            ]
+            clone.ma_exit_genes = [
+                g for g in clone.ma_exit_genes if g.indicator_type in MA_POOL
+            ]
+            clone.short_ma_entry_genes = [
+                g for g in clone.short_ma_entry_genes if g.indicator_type in MA_POOL
+            ]
+            clone.short_ma_exit_genes = [
+                g for g in clone.short_ma_exit_genes if g.indicator_type in MA_POOL
             ]
             # Seeds from older runs may carry fractional int params / dead params
             for gene in clone.entry_genes + clone.exit_genes:

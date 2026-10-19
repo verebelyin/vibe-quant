@@ -604,12 +604,19 @@ class DiscoveryPipeline:
             return None
 
     def _apply_indicator_pool_filter(self) -> None:
-        """Filter operators.INDICATOR_POOL to only include configured indicators.
+        """Restrict the GA's scalar and price-vs-MA gene pools to the configured names.
+
+        A MA name in an explicit pool enables that MA's genes; an explicit pool
+        without MA names leaves no MA genes (``MA_POOL`` is filtered too, so
+        ``_ensure_pool`` cannot refill the draw list). ``None`` keeps every MA
+        and the RNG sequence unchanged.
 
         Safe to mutate module globals since discovery runs as a subprocess.
         """
+        from vibe_quant.discovery.genome import MA_POOL
         from vibe_quant.discovery.operators import (
             _INDICATOR_NAMES,
+            _MA_NAMES,
             INDICATOR_POOL,
             _ensure_pool,
             validate_indicator_pool,
@@ -636,7 +643,16 @@ class DiscoveryPipeline:
             del INDICATOR_POOL[k]
         _INDICATOR_NAMES.clear()
         _INDICATOR_NAMES.extend(INDICATOR_POOL.keys())
-        logger.info("Indicator pool filtered to: %s", list(INDICATOR_POOL.keys()))
+        if self.config.indicator_pool is not None:
+            for k in [k for k in MA_POOL if k not in allowed]:
+                del MA_POOL[k]
+            _MA_NAMES.clear()
+            _MA_NAMES.extend(MA_POOL.keys())
+        logger.info(
+            "Indicator pool filtered to: %s (MA genes: %s)",
+            list(INDICATOR_POOL.keys()),
+            list(MA_POOL.keys()),
+        )
 
     def _preflight_aux_data(self) -> None:
         """Fail before the GA starts if a context indicator in the pool lacks aux data.

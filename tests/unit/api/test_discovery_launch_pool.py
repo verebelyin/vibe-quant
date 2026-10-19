@@ -96,10 +96,11 @@ def _run_count(state: StateManager) -> int:
 
 
 def _available_pool_names() -> list[str]:
+    from vibe_quant.discovery.genome import MA_POOL
     from vibe_quant.discovery.operators import INDICATOR_POOL, _ensure_pool
 
     _ensure_pool()
-    return sorted(INDICATOR_POOL.keys())
+    return sorted(set(INDICATOR_POOL) | set(MA_POOL))
 
 
 def _unknown_pool_message(unknown: list[str]) -> str:
@@ -107,8 +108,8 @@ def _unknown_pool_message(unknown: list[str]) -> str:
     return (
         "indicator_pool contains names not available for GA discovery: "
         f"{sorted(unknown)}. Available: {_available_pool_names()}. "
-        "(Indicators with threshold_range=None, e.g. price-vs-MA plugins, "
-        "are not yet supported by the genome — see bd-9c1g.)"
+        "(Price-vs-MA plugins (KAMA/VIDYA/FRAMA) enable MA genes; other "
+        "threshold_range=None indicators cannot form a threshold gene.)"
     )
 
 
@@ -174,6 +175,41 @@ async def test_launch_context_indicator_pool_is_accepted(
     assert run["parameters"]["indicator_pool"] == ["FUNDING", "RSI"]
     argv = popen.call_args.args[0]
     assert argv[argv.index("--indicator-pool") + 1] == "FUNDING,RSI"
+
+
+async def test_launch_ma_indicator_pool_is_accepted(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """nn7i7: an MA name is a valid pool entry (it enables that MA's genes)."""
+    ac, state, job_mgr = client
+
+    with _PopenPatch(job_mgr) as popen:
+        r = await ac.post(
+            "/api/discovery/launch", json={**_BODY, "indicator_pool": ["RSI", "VIDYA"]}
+        )
+
+    assert r.status_code == 201, r.text
+    run = state.get_backtest_run(r.json()["run_id"])
+    assert run is not None
+    assert run["parameters"]["indicator_pool"] == ["RSI", "VIDYA"]
+    argv = popen.call_args.args[0]
+    assert argv[argv.index("--indicator-pool") + 1] == "RSI,VIDYA"
+
+
+async def test_launch_ma_only_pool_is_422_before_any_run(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """nn7i7: MA names alone cannot build the genome's threshold genes."""
+    ac, state, job_mgr = client
+    before = _run_count(state)
+
+    with _PopenPatch(job_mgr) as popen:
+        r = await ac.post("/api/discovery/launch", json={**_BODY, "indicator_pool": ["VIDYA"]})
+
+    assert r.status_code == 422, r.text
+    assert "scalar-threshold" in r.json()["detail"]
+    assert _run_count(state) == before
+    assert popen.call_count == 0
 
 
 @pytest.mark.parametrize(

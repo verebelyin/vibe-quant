@@ -980,7 +980,7 @@ class TestIndicatorPoolFilter:
         _INDICATOR_NAMES.extend(saved[1])
 
     def test_unknown_indicator_raises(self) -> None:
-        cfg = _make_config(indicator_pool=["RSI", "KAMA"])
+        cfg = _make_config(indicator_pool=["RSI", "NOPE"])
         pipe = DiscoveryPipeline(cfg, _mock_backtest)
         with pytest.raises(ValueError, match="not available for GA discovery"):
             pipe._apply_indicator_pool_filter()

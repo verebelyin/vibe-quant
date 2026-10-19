@@ -1116,7 +1116,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--indicator-pool",
         type=str,
         default=None,
-        help="Comma-separated indicator names to use (default: all)",
+        help=(
+            "Comma-separated indicator names to use (default: all). An MA name "
+            "(KAMA/VIDYA/FRAMA) enables that MA's price-vs-MA genes; an explicit "
+            "pool without MA names draws none."
+        ),
     )
     parser.add_argument(
         "--direction",

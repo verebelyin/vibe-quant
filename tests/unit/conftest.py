@@ -220,17 +220,23 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
     ``vibe_quant.discovery`` into every unit collection (see
     ``_NT_EAGER_IMPORT_TEST_MODULES`` in tests/conftest.py for why that matters).
 
-    ``THRESHOLD_RANGES`` / ``_MA_NAMES`` / ``_INT_PARAMS`` / ``_PARAM_DEFAULTS``
-    are built from the genome, not from ``INDICATOR_POOL``, and only the pool and
-    the name list are ever filtered in place, so they need no restore here.
+    ``_apply_indicator_pool_filter`` also filters ``genome.MA_POOL`` and the
+    derived ``operators._MA_NAMES`` draw list in place (vibe-quant-nn7i7), so
+    both are snapshot-and-restored here too.
+
+    ``THRESHOLD_RANGES`` / ``_INT_PARAMS`` / ``_PARAM_DEFAULTS`` are built from
+    the genome, not from the pools, so they need no restore here.
     """
     ops = sys.modules.get("vibe_quant.discovery.operators")
     if ops is None:
         yield
         return
 
+    genome = sys.modules.get("vibe_quant.discovery.genome")
     saved_pool = dict(ops.INDICATOR_POOL)
     saved_names = list(ops._INDICATOR_NAMES)
+    saved_ma_pool = dict(genome.MA_POOL) if genome is not None else None
+    saved_ma_names = list(ops._MA_NAMES)
 
     yield
 
@@ -238,6 +244,16 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
     ops.INDICATOR_POOL.update(saved_pool)
     ops._INDICATOR_NAMES.clear()
     ops._INDICATOR_NAMES.extend(saved_names)
+    ops._MA_NAMES.clear()
+    ops._MA_NAMES.extend(saved_ma_names)
+    genome = genome if genome is not None else sys.modules.get("vibe_quant.discovery.genome")
+    if genome is not None:
+        genome.MA_POOL.clear()
+        if saved_ma_pool is not None:
+            genome.MA_POOL.update(saved_ma_pool)
+        else:
+            # First import happened inside the test: nothing had filtered it yet.
+            genome.MA_POOL.update(genome.build_ma_pool())
 
 
 def _noop_data_precheck(*args: object, **kwargs: object) -> None:
