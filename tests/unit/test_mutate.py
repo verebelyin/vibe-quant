@@ -600,3 +600,17 @@ def test_first_failure_keeps_bracketed_node_id_whole() -> None:
         mutate.first_failure("FAILED tests/t.py::test_v[with - sep] - assert 0 == 1\n")
         == "  first failure: tests/t.py::test_v[with - sep]: assert 0 == 1"
     )
+
+
+def test_shell_style_test_commands_are_normalised() -> None:
+    norm = mutate.normalize_command
+    assert norm(["tests/unit/test_x.py", "-q"]) == (
+        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py", "-q"], {}
+    )
+    assert norm(["pytest", "tests/unit/test_x.py"]) == (
+        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py"], {}
+    )
+    assert norm(["PYTHONPATH=/w", "FOO=1", ".venv/bin/python", "-m", "pytest", "t.py"]) == (
+        [".venv/bin/python", "-m", "pytest", "t.py"], {"FOO": "1"}
+    )
+    assert norm(["/x/python", "-m", "pytest", "t.py"]) == (["/x/python", "-m", "pytest", "t.py"], {})

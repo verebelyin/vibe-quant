@@ -185,6 +185,25 @@ def main_checkout(repo: Path) -> Path | None:
     return Path(common).parent if common else None
 
 
+_ENV_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def normalize_command(cmd: Sequence[str]) -> tuple[list[str], dict[str, str]]:
+    """Accept the shell forms agents type after ``--``: leading ``VAR=value`` tokens become
+    env entries (``PYTHONPATH`` is dropped: the copy sets its own), and a bare test file or
+    ``pytest`` runs as ``.venv/bin/python -m pytest`` (job 20261019-budget-dsr: both forms
+    failed with "No such file" / "Permission denied")."""
+    out = [str(c) for c in cmd]
+    env: dict[str, str] = {}
+    while out and _ENV_TOKEN.match(out[0]):
+        key, _, value = out.pop(0).partition("=")
+        if key != "PYTHONPATH":
+            env[key] = value
+    if out and (out[0] in PYTEST_NAMES or (out[0].endswith(".py") and Path(out[0]).name.startswith("test_"))):
+        out = [".venv/bin/python", "-m", "pytest", *(out[1:] if out[0] in PYTEST_NAMES else out)]
+    return out, env
+
+
 def resolve_executable(cmd: Sequence[str], repo: Path, workdir: Path) -> list[str]:
     """Resolve a relative `<dir>/<exe>` in the test command against --repo, then the main
     checkout, when the copy does not have it: `.venv/bin/python` is gitignored, so the copy
@@ -367,6 +386,8 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(workdir)
         env["PYTHONDONTWRITEBYTECODE"] = "1"  # else a same-second, same-size mutation reuses a stale .pyc
+        cmd, extra_env = normalize_command(cmd)
+        env.update(extra_env)
         cmd = resolve_executable(cmd, repo, workdir)
         pytest_like = is_pytest_command(cmd)
 
