@@ -4,6 +4,20 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: RESULT G2 — the quantile-matched DSR critical value passes the false-positive check (max 0.0200 ≤ 0.05)
+
+Pre-registration G2 (592256b6). Code: opt-in `--dsr-rule q95` landed on main 1a753b82 (default `emax`, bit-identical; GPT-6.1-Sol round 2 PASS). **Deviation (chief ruling R11, before the binding run):** Sol round 1 blocked the pre-registered statistic z = SR/SE vs E[maxZ] + spread because it was stricter than legacy under fat tails (identical series, kurtosis 7.7, gate_n 88: legacy p 0.04887980953236665 pass, q95 reject). The binding rule keeps the legacy PSR statistic (SR − SR0)·√(T−1)/√(1 − γ3·SR + (γ4−1)/4·SR²) and replaces only the 1.6449 constant by the run's Monte Carlo spread; spread 1.6449 reproduces legacy for any input. A first 400-rep run on the pre-fix statistic (non-binding) gave max 0.0200 (8/400).
+
+**Binding run** (`neff_null.py --dsr-rule q95 --reps 400 --workers 6` on 6bbe160c, 579.6 s, `data/swarm/20261019-budget-dsr/power/neff_null_q95_r11.{json,log}`), verbatim: `V2-neff: selection [W3:rho=0.0=0.0200, W3:rho=0.2=0.0200, W3:rho=0.5=0.0050, W3:rho=0.8=0.0150, W6:rho=0.0=0.0150, W6:rho=0.2=0.0100, W6:rho=0.5=0.0100, W6:rho=0.8=0.0100, W3:rho=0.5:sparse=0.0000, W3:rho=0.8:sparse=0.0000, W6:rho=0.5:sparse=0.0000, W6:rho=0.8:sparse=0.0000] max=0.0200 -> PASS` (exit 0; max count 8/400, cp95 0.0358; no config ≥ 13/400, no top-up). Layer-1 V2 with q95 (`layer1.py --reps 500 --selection-reps 200 --workers 8 --dsr-rule q95`): `V2 nulls: single max=0.0120; selection [W3:rho=0.0=0.0000, W3:rho=0.5=0.0000, W6:rho=0.0=0.0150, W6:rho=0.5=0.0000] max=0.0150 -> PASS`.
+
+**Prediction** (max 0.02–0.05, highest at rho 0.8 base): max 0.0200 met at the low edge, but highest at rho 0.0/0.2 W3, not rho 0.8 (0.0150): missed on location. Legacy G1 for comparison: max 0.0125.
+
+**Reading:** the q95 rule raises the selection-null false-positive rate from ≤ 0.0125 to ≤ 0.0200, well under the 5% cap. Not shown yet: power (the P-2 re-harvest, T3) and the champion overfitting re-check, which still uses legacy (declared gap).
+
+**Decision (pre-registered):** PASS → propose T4 to the user: production default q95 + the overfitting re-check reading the rule, a dated comparability break. T3 re-harvest (21 P-2 runs at the same seeds, identity-checked) runs first so the user sees the power gain before deciding.
+
+---
+
 ## 2026-10-19: PRE-REGISTRATION G2 — false-positive check for the quantile-matched DSR critical value (gate change lands only on PASS + user)
 
 Written before any G2 run. Design `data/swarm/20261019-budget-dsr/design-dsr-q95.md` (arch-dsr); user approved option 1 and a 5% cap on 2026-10-19 (bead vibe-quant-rf0y7). Diagnosis: all 41 P-2 non-champion M1 hits were rejected on DSR alone; today's rule (E[maxZ] + 1.6449 single-trial SE) is a 0.16% family-wise test at N 88 for iid trials (critical z 4.1302 vs Šidák 5% 3.2472), consistent with G1's measured rates 0.0000–0.0125. Formula otherwise matches Bailey & López de Prado; kurtosis and skew handling do not bind.
