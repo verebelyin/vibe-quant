@@ -4,6 +4,26 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: PRE-REGISTRATION G2 — false-positive check for the quantile-matched DSR critical value (gate change lands only on PASS + user)
+
+Written before any G2 run. Design `data/swarm/20261019-budget-dsr/design-dsr-q95.md` (arch-dsr); user approved option 1 and a 5% cap on 2026-10-19 (bead vibe-quant-rf0y7). Diagnosis: all 41 P-2 non-champion M1 hits were rejected on DSR alone; today's rule (E[maxZ] + 1.6449 single-trial SE) is a 0.16% family-wise test at N 88 for iid trials (critical z 4.1302 vs Šidák 5% 3.2472), consistent with G1's measured rates 0.0000–0.0125. Formula otherwise matches Bailey & López de Prado; kurtosis and skew handling do not bind.
+
+**Hypothesis:** replacing 1.6449 with the run's Monte Carlo spread (q95 − mean of the correlated maximum, same draws as the EV-matched N) keeps the selection-null false-positive rate ≤ 5% at every correlation level.
+
+**Run:** `neff_null.py --dsr-rule q95 --reps 400 --workers 6`, G1's 12 configs, seeds and top-5 any-pick rule (W3, W6 × rho {0.0, 0.2, 0.5, 0.8} base + W3, W6 × rho {0.5, 0.8} sparse). Raw-N fallback replicates use the legacy rule (fail closed), fallback rate reported. Layer-1 V2 selection null with `--dsr-rule q95` reported alongside, same bar.
+
+**Rule:** per config false-positive count / 400 and one-sided Clopper–Pearson 95% upper bound. PASS iff every config ≤ 20/400; a config ≥ 13/400 gets G1's 1600-rep top-up on fresh seeds (tag 0x4E3F0), point estimate ≤ 0.05. Exit 0 PASS, 1 FAIL, 2 MARGINAL.
+
+**Prediction:** max rate 0.02–0.05, highest at rho 0.8 base; sparse configs ≈ 0.
+
+**Power (re-harvest of the 21 P-2 runs, same seeds, identity-checked on gate_n, evaluated, candidate uids):** 7–20 of 41 rejected hits pass (20 at spread 0.82, 17 at 1.0, 14 at 1.1, 7 at 1.26, 2 at 1.53; point guess 14); runs gaining a first champion 3–7; 4h-s2 gains none; uid 7f9ad10125f4 (z 3.6797) passes iff its spread ≤ 1.194.
+
+**Decisions:** PASS → propose T4 (production default q95 + the overfitting re-check, a comparability break) to the user. FAIL → no gate change; test option 3 (4h train window back to ≈ 2022-06; needs T × 1.25–1.45 for s3–s5).
+
+**Disclosures:** the counterfactual counts and spread table were computed from stored P-2 records and equicorrelated synthetic matrices before this entry.
+
+---
+
 ## 2026-10-19: COMPARABILITY NOTE — direction=both runs before inydc were long-only searches (runs 920–954)
 
 Before vibe-quant-inydc, `chromosome_to_dsl` copied the long entry/exit conditions into the short side and the compiler's `if long … elif short` tie made the short side dead, so every `--direction both` (and direction=None) run, most of runs 920–954, searched long-only strategies judged against |buy-and-hold|. Board finding arch-power (NTScreeningRunner BTCUSDT 4h 2023-06-01..2026-06-01, RSI(14) xb30/xa60 SL4 TP8): long sharpe -0.3729222589307 142 trades == both -0.3729222589307 142 trades; short alone 0.06788740870648444 112 trades.
