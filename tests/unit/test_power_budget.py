@@ -9,6 +9,7 @@ discovery or backtest: every heavy step (``layer2.run_worker`` / ``layer2.run_di
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -657,7 +658,8 @@ def test_f2_printed_retry_command_reruns_then_goes_incomplete(
     retry = cmds["4h-s32"]
     assert " --force discover " in retry
     assert all("--force" not in ln for key, ln in cmds.items() if key != "4h-s32")
-    assert budget.main([*_cli(tmp_path), *_printed_args(retry)]) == 0
+    # the retry really ran and failed again: the exit code now says so (SEMANTICS BREAK, 4urlp)
+    assert budget.main([*_cli(tmp_path), *_printed_args(retry)]) == budget.EXIT_RUN_NOT_COMPLETED
     assert launches == [2]  # the printed command really re-launched the run
     st = budget.load_state(out)
     assert st["runs"][budget.run_key("4h-s3", "B1", 2)]["reruns"] == 1
@@ -1014,3 +1016,171 @@ def test_r34e_unaccepted_builds_record_their_rule(
     _stub_builder(monkeypatch, trains=[1.0] * 4)
     assert budget.main([*_cli(tmp_path), "build", "--variant", "1d-s4"]) == 2
     assert budget.load_state(out)["variants"]["1d-s4"]["rule"] == budget.PICK_RULES[1]["name"]
+
+
+# --- R9b discover exit code ----------------------------------------------------------------
+
+
+def _stub_discovery(status: str) -> Any:
+    def fake_discovery(
+        root: Path, run_dir: Path, seed: int, **kw: Any
+    ) -> dict[str, Any]:
+        return {"status": status, "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1,
+                "error": "killed at the timeout" if status != "completed" else ""}
+
+    return fake_discovery
+
+
+@pytest.mark.parametrize("status", ["timeout", "failed"])
+def test_discover_exits_nonzero_on_a_non_completed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    status: str,
+) -> None:
+    """Bead 4urlp: a wave runner keyed off exit codes saw 0 while 5/6 runs were killed."""
+    out = _out(tmp_path)
+    _accept(out, "4h-s4", tmp_path)
+    monkeypatch.setattr(layer2, "run_discovery", _stub_discovery(status))
+    rc = budget.main([
+        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
+    ])
+    assert rc == budget.EXIT_RUN_NOT_COMPLETED == 4
+    text = capsys.readouterr().out
+    assert "RUN NOT COMPLETED" in text and status in text
+    # the record is still written: the next wave offers a forced rerun, not a silent pass
+    rec = budget.load_state(out)["runs"][budget.run_key("4h-s4", "B1", 2)]
+    assert rec["status"] == status
+
+    # the equality edge: a completed run keeps the old exit 0
+    out2 = tmp_path / "o2" / "budget.json"
+    _accept(out2, "4h-s4", tmp_path)
+    monkeypatch.setattr(layer2, "run_discovery", _stub_discovery("completed"))
+    assert budget.main([
+        "--out", str(out2), "--data-root", str(tmp_path / "data"),
+        "--real-db", str(tmp_path / "n.db"), "--archive", str(tmp_path / "src.db"),
+        "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
+    ]) == 0
+
+
+@pytest.mark.parametrize("status", ["timeout", "failed"])
+def test_discover_of_an_already_recorded_non_completed_run_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    status: str,
+) -> None:
+    """The idempotent "already recorded" path must not report success for a failed run."""
+    out = _out(tmp_path)
+    _accept(out, "4h-s4", tmp_path)
+    _seed_runs(out, [_run_rec("4h-s4", "B1", 2, status=status, reruns=1)])
+    launched: list[int] = []
+    monkeypatch.setattr(layer2, "run_discovery", lambda *a, **k: launched.append(1) or {})
+    rc = budget.main([
+        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "2",
+    ])
+    assert rc == budget.EXIT_RUN_NOT_COMPLETED
+    assert launched == []  # nothing relaunched without --force
+    assert "RUN NOT COMPLETED" in capsys.readouterr().out
+
+    # a recorded completed run is still the idempotent exit 0
+    _seed_runs(out, [_run_rec("4h-s4", "B1", 3, status="completed")])
+    assert budget.main([
+        *_cli(tmp_path), "discover", "--variant", "4h-s4", "--rung", "B1", "--seed", "3",
+    ]) == 0
+    assert launched == []
+
+
+# --- R15b report: the prereg s0 check per run -----------------------------------------------
+
+
+def _null_pool(tmp_path: Path, tf: str, corrs: list[float]) -> Path:
+    """A null pool of len(corrs) entries; the highest score owns the largest |corr|, so every
+    K = len(corrs) subsample picks it first and T (hence C95) is a known literal."""
+    from vibe_quant.discovery.genome import chromosome_to_serializable
+
+    chrom = chromosome_to_serializable(layer2.planted_chromosome())
+    path = tmp_path / "o" / "scratch" / f"null-pool-{tf}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([
+        {"seed": i, "score": float(len(corrs) - i), "corr": corr, "chromosome": chrom}
+        for i, corr in enumerate(corrs)
+    ]))
+    return path
+
+
+def test_report_prints_per_s0_run_max_corr_against_c95_k(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Bead 4urlp: the prereg check "s0 max corr > C95(K)" was computed by hand for P-2."""
+    out = _out(tmp_path)
+    pool_4h = _null_pool(tmp_path, "4h", [0.70, 0.10])
+    pool_1d = _null_pool(tmp_path, "1d", [0.70, 0.10])
+    recs = []
+    for seed, corr in ((1, 0.80), (2, 0.70)):  # above, then exactly equal (not above)
+        rec = _run_rec("4h-s0", "B1", seed)
+        rec["harvest"] = {"evaluated": 2, "candidates": [{"corr": corr}, {"corr": 0.20}]}
+        rec["evaluated"] = 2
+        recs.append(rec)
+    rec = _run_rec("1d-s0", "B1", 1)
+    rec["harvest"] = {"evaluated": 2, "candidates": [{"corr": 0.50}]}
+    recs.append(rec)
+    _seed_runs(out, recs)
+
+    def seed(s: dict[str, Any]) -> None:
+        s["null"] = {
+            "4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool_4h)},
+            "1d": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool_1d)},
+        }
+
+    budget.update_state(out, seed)
+    assert budget.main([*_cli(tmp_path), "report"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert (
+        "  s0 4h-s0 B1 seed 1: K=2 max corr 0.8000 vs C95 0.7000: ABOVE C95" in lines
+    )
+    assert (
+        "  s0 4h-s0 B1 seed 2: K=2 max corr 0.7000 vs C95 0.7000: below C95" in lines
+    )
+    assert (
+        "  s0 1d-s0 B1 seed 1: K=2 max corr 0.5000 vs C95 0.7000: below C95" in lines
+    )
+
+
+def test_report_s0_check_degrades_loudly_without_a_null_pool_or_evaluated_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _out(tmp_path)
+    recs = []
+    for seed, evaluated in ((1, None), (2, 2)):
+        rec = _run_rec("4h-s0", "B1", seed)
+        rec["harvest"] = {"evaluated": evaluated, "candidates": [{"corr": 0.80}]}
+        recs.append(rec)
+    _seed_runs(out, recs)
+    assert budget.main([*_cli(tmp_path), "report"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(
+        ln.startswith("  s0 4h-s0 B1 seed 1: max corr 0.8000")
+        and "no evaluated count" in ln
+        for ln in lines
+    )
+    assert any(
+        ln.startswith("  s0 4h-s0 B1 seed 2: max corr 0.8000")
+        and "no null pool for 4h" in ln
+        for ln in lines
+    )
+
+
+def test_report_s0_check_ignores_probe_runs_and_non_completed_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _out(tmp_path)
+    pool = _null_pool(tmp_path, "4h", [0.70, 0.10])
+    probe = _run_rec("4h-s0", "B1", 3, probe=True)
+    probe["harvest"] = {"evaluated": 2, "candidates": [{"corr": 0.99}]}
+    failed = _run_rec("4h-s0", "B1", 4, status="timeout")
+    _seed_runs(out, [probe, failed])
+    budget.update_state(
+        out, lambda s: s.__setitem__(
+            "null", {"4h": {"status": "completed", "m": 2, "reps": 5, "pool_path": str(pool)}}
+        ),
+    )
+    assert budget.main([*_cli(tmp_path), "report"]) == 0
+    text = capsys.readouterr().out
+    assert "s0 4h-s0" not in text  # no completed untagged s0 run: no line, no crash

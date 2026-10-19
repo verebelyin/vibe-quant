@@ -15,11 +15,14 @@ the profile-aware ``layer2`` functions (``P4H`` byte-identical, ``P1D`` = 1d / W
   isolated discovery run (``--dsr-rule`` defaults to an explicit emax pin).
 - ``harvest [--tf]``: screen candidates, compute M1/M2 under ``C_K`` and advance the cells.
 - ``next-wave --tf``: PRINT the exact shell commands of the next budget wave (runs nothing).
-- ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count and the git-sha set.
+- ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count, the prereg
+  per-s0-run ``max corr vs C95(K)`` check and the git-sha set.
 
 State: ONE JSON (default ``data/swarm/20261018-grind-dir/power/budget.json``) written under a
 flock; every subcommand is idempotent per its state key (``--force`` redoes). Exit codes mirror
-layer2: 0 ok, 2 prerequisite missing, 3 machinery defect (isolation / LONG / btc0 fidelity).
+layer2: 0 ok, 2 prerequisite missing, 3 machinery defect (isolation / LONG / btc0 fidelity),
+4 discover recorded a run whose status is not ``completed`` (timeout / failed) - a wave runner
+keyed off exit codes must never read that as success (bead 4urlp).
 It NEVER writes ``data/catalog``, ``data/archive`` or ``data/state``: it reuses layer2's
 scratch guards (its own DB per run, cwd = scratch root).
 """
@@ -87,6 +90,10 @@ CONF_FIELDS = ("sharpe", "trades", "return", "profit_factor", "max_drawdown")
 
 #: A cell stops at the first rung with M2 in >= this many seeds (2 of 3, or 2 of 2 in two-seed mode).
 MIN_M2 = 2
+
+#: A discover whose recorded run status is not ``completed`` (timeout / failed) exits this, so a
+#: wave runner keyed off exit codes cannot report success for a killed run (bead 4urlp).
+EXIT_RUN_NOT_COMPLETED = 4
 
 PICK_TRADES_MIN = 80
 PICK_TRADES_MAX = 250
@@ -464,6 +471,72 @@ def next_wave_commands(state: dict[str, Any], tf: str, ctx: layer2.Ctx) -> list[
     return cmds
 
 
+def _s0_runs(state: dict[str, Any], tf: str) -> list[dict[str, Any]]:
+    """The completed, non-probe s0 runs of one tf, in (rung, seed) order."""
+    runs = [
+        r
+        for r in all_runs(state)
+        if r.get("variant") == s0_variant(tf)
+        and r.get("status") == "completed"
+        and not is_probe_run(r)
+    ]
+    return sorted(runs, key=lambda r: (str(r.get("rung")), int(r.get("seed", 0))))
+
+
+def s0_corr_lines(state: dict[str, Any], tf: str) -> list[str]:
+    """The prereg check per completed s0 run: its max SIGNED candidate corr vs C95(K).
+
+    K is the run's own harvested evaluated count and C95(K) comes from the tf's null pool
+    (``state['null'][tf]``), exactly the threshold ``harvest`` scores the planted runs under.
+    A missing pool, missing K or an over-large K is printed as a loud note, never raised: the
+    report is a read-only view of what is recorded (bead 4urlp).
+    """
+    lines: list[str] = []
+    pool: list[tuple[StrategyChromosome, float, float | None]] | None = None
+    reps = 0
+    pool_problem = ""
+    c95: dict[int, tuple[float | None, str]] = {}
+    for run in _s0_runs(state, tf):
+        where = f"  s0 {run.get('variant')} {run.get('rung')} seed {run.get('seed')}"
+        harvest = run.get("harvest") or {}
+        corrs = [
+            float(c["corr"]) for c in harvest.get("candidates") or [] if c.get("corr") is not None
+        ]
+        if not corrs:
+            lines.append(f"{where}: no candidate corr")
+            continue
+        best = max(corrs)
+        if harvest.get("evaluated") is None:
+            lines.append(f"{where}: max corr {best:.4f} (no evaluated count; no C95)")
+            continue
+        k = int(harvest["evaluated"])
+        if pool is None:
+            null = (state.get("null") or {}).get(tf)
+            if not isinstance(null, dict) or null.get("status") != "completed":
+                pool_problem = f"no null pool for {tf} (run null-corr --tf {tf})"
+            else:
+                try:
+                    pool = layer2.load_null_pool(Path(null["pool_path"]))
+                    reps = int(null["reps"])
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    pool_problem = f"cannot read the {tf} null pool ({type(exc).__name__})"
+        if pool is None:
+            lines.append(f"{where}: max corr {best:.4f} ({pool_problem})")
+            continue
+        if k not in c95:
+            try:
+                c95[k] = (float(layer2.null_threshold(pool, k, reps)["c95"]), "")
+            except layer2.Layer2Error as exc:
+                c95[k] = (None, str(exc))
+        threshold, problem = c95[k]
+        if threshold is None:
+            lines.append(f"{where}: max corr {best:.4f} (C95 unavailable: {problem})")
+            continue
+        verdict = "ABOVE C95" if best > threshold else "below C95"
+        lines.append(f"{where}: K={k} max corr {best:.4f} vs C95 {threshold:.4f}: {verdict}")
+    return lines
+
+
 def report_lines(state: dict[str, Any]) -> list[str]:
     """R15: per-cell B*, M1/M2 counts per rung, s0 champion count and the git-sha set."""
     lines = ["budget report"]
@@ -490,6 +563,7 @@ def report_lines(state: dict[str, Any]) -> list[str]:
             if r["variant"] == s0_variant(tf) and r.get("status") == "completed"
         )
         lines.append(f"  s0 champion count: {champion}")
+        lines.extend(s0_corr_lines(state, tf))
     return lines
 
 
@@ -814,6 +888,9 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     where = f"{variant} {rung} seed {seed}" + (" [probe]" if probe else "")
     if existing and not ctx.force:
         print(f"{where}: already recorded ({existing['status']})")
+        if existing.get("status") != "completed":
+            print(f"{where}: RUN NOT COMPLETED ({existing['status']}); rerun with --force")
+            return EXIT_RUN_NOT_COMPLETED
         return 0
     reruns = int(existing.get("reruns", 0)) + 1 if existing else 0
     profile = profile_for(state, tf)
@@ -842,6 +919,10 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     )
     update_state(ctx.out, lambda s: s.setdefault("runs", {}).__setitem__(key, rec))
     print(f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {rec.get('error', '')}".rstrip())
+    if rec["status"] != "completed":
+        # the wave runner keys off exit codes: never let a killed run look like success
+        print(f"{where}: RUN NOT COMPLETED ({rec['status']}); rerun with --force")
+        return EXIT_RUN_NOT_COMPLETED
     return 0
 
 
