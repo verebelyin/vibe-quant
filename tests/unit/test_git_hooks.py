@@ -396,3 +396,32 @@ def test_claude_co_author_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n",
     )
     assert check_commit_msg.main([str(message)]) == 0
+
+
+def _run_lint_policy(repo: Path, policy_cmd: str) -> subprocess.CompletedProcess[str]:
+    ruff = _main_ruff()
+    if not os.access(ruff, os.X_OK):
+        pytest.skip(f"ruff not available at {ruff}")
+    (repo / "ok.py").write_text("X = 1\n", encoding="utf-8")
+    _git(repo, "add", "ok.py")
+    return subprocess.run(
+        [str(repo / "scripts" / "git-hooks" / "pre-commit-lint.sh")],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_git_env({"VQ_RUFF": str(ruff), "VQ_POLICY_CMD": policy_cmd}),
+    )
+
+
+def test_pre_commit_runs_policy_tests_on_main_and_blocks_a_red_one(tmp_path: Path) -> None:
+    """The chief commits on main directly; main went red when only swarm-check ran them."""
+    repo = _make_repo(tmp_path)
+    result = _run_lint_policy(repo, "false")
+    assert result.returncode == 1
+    assert "policy tests failed on main" in result.stderr
+    assert _run_lint_policy(repo, "true").returncode == 0
+
+
+def test_pre_commit_skips_policy_tests_off_main(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, branch="swarm/task")
+    assert _run_lint_policy(repo, "false").returncode == 0

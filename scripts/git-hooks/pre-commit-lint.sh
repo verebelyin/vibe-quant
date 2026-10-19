@@ -9,6 +9,10 @@
 # worktree uses the main checkout's toolchain — a worktree usually has no `.venv` of its
 # own. Override the binary with VQ_RUFF (the hook tests do).
 #
+# On main, staged Python also runs the gate's POLICY_TESTS (tree scanners, ~3 s): the chief
+# commits on main directly, and main went red once because only swarm-check ran them.
+# Override with VQ_POLICY_CMD (the hook tests do).
+#
 # Staged steering files (CLAUDE.md, .claude/, docs/orchestration/, docs/claude/) also run
 # tests/unit/test_steering_budget.py: word budgets, no changelogs, no job-id narrative
 # (a self-improve commit once pushed two files over budget). Override with VQ_BUDGET_CMD.
@@ -48,3 +52,27 @@ if [ ! -x "$ruff_bin" ]; then
 fi
 
 "$ruff_bin" check --force-exclude "${files[@]}"
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [ "$branch" = "main" ]; then
+  py="$(dirname "$common_dir")/.venv/bin/python"
+  if [ -n "${VQ_POLICY_CMD:-}" ]; then
+    policy_cmd="$VQ_POLICY_CMD"
+  else
+    policy=""
+    if [ -f "$toplevel/scripts/agents/swarm_check.py" ] && [ -x "$py" ]; then
+      # read the literal, never import the gate (its dataclasses need a registered module)
+      policy="$(cd "$toplevel" && "$py" -c 'import ast, os
+tree = ast.parse(open("scripts/agents/swarm_check.py", encoding="utf-8").read())
+value = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+             and any(getattr(t, "id", "") == "POLICY_TESTS" for t in n.targets))
+print(" ".join(p for p in value if os.path.exists(p)))')"
+    fi
+    policy_cmd="${policy:+$py -m pytest $policy -q -p no:cacheprovider}"
+  fi
+  if [ -n "$policy_cmd" ] && ! (cd "$toplevel" && $policy_cmd >/tmp/vq-policy-$$.log 2>&1); then
+    tail -20 "/tmp/vq-policy-$$.log" >&2
+    printf 'pre-commit-lint: policy tests failed on main (log: /tmp/vq-policy-%s.log)\n' "$$" >&2
+    exit 1
+  fi
+fi
