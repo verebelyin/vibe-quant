@@ -74,6 +74,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -758,7 +759,39 @@ def status_report(bus: Path, me: str, max_items: int = 5) -> list[str]:
     else:
         lines.append("last message: none")
     lines.append(f"open needs-user: {len(needs_user_open(bus))}")
+    running = running_agents(bus)
+    shown_running = ", ".join(running[:max_items]) + (f" (+{len(running) - max_items})" if len(running) > max_items else "")
+    lines.append(f"running: {len(running)}" + (f" ({shown_running})" if running else ""))
+    ready = _ready_count()
+    lines.append(f"startable: {ready if ready is not None else 'unknown'} ready beads (bd ready)")
     return lines
+
+
+_LEDGER_ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|.*\|\s*([^|]*?)\s*\|\s*$")
+
+
+def running_agents(bus: Path) -> list[str]:
+    """Agents whose latest ledger.md row (next to the bus) is dispatched/running and who have
+    posted no `done` since: the "what is still out" line the user kept asking for."""
+    ledger = bus.parent / "ledger.md"
+    if not ledger.is_file():
+        return []
+    latest: dict[str, str] = {}
+    for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _LEDGER_ROW_RE.match(line)
+        if m and m.group(1) not in ("agent", "---") and not m.group(1).startswith("-"):
+            latest[m.group(1)] = m.group(2)
+    done = {str(m["from"]) for m in _all(bus) if m.get("kind") == "done"}
+    return [a for a, st in latest.items() if re.search(r"dispatched|running", st) and a not in done]
+
+
+def _ready_count() -> int | None:
+    """`bd ready` count, or None when bd is unavailable (status must never fail on it)."""
+    try:
+        proc = subprocess.run(["bd", "ready", "--json"], capture_output=True, text=True, timeout=10)
+        return len(json.loads(proc.stdout)) if proc.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
 
 
 def _pending_section(msgs: list[dict[str, object]], me: str, max_items: int = 10) -> list[str]:

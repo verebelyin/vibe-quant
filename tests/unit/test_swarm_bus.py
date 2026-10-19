@@ -1603,3 +1603,35 @@ def test_durable_tail_exit_on_first_returns_after_one_batch_and_advances(tmp_pat
         exit_on_first=True,
     )  # fmt: skip
     assert len(sent) == 1 and "q2?" in sent[0]  # q1 is not replayed
+
+
+def test_status_lists_running_agents_and_startable_beads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user asked 'anything left / waiting?' three times in one session: status answers it."""
+    job = tmp_path / "20261020-j"
+    busdir = job / "bus"
+    busdir.mkdir(parents=True)
+    (job / "ledger.md").write_text(
+        "# ledger 20261020-j\n| agent | runtime | model | task | bead | worktree | status |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| cc-a-1 | t3 | flash | a | - | - | 10-20 08:00Z dispatched |\n"
+        "| cc-b-1 | t3 | flash | b | - | - | 10-20 08:00Z dispatched |\n"
+        "| cc-c-1 | t3 | flash | c | - | - | 10-20 08:00Z dispatched |\n"
+        "| cc-c-1 | t3 | flash | c | - | - | 10-20 09:00Z GATE PASS, merged |\n"
+    )
+    bus.post(busdir, "cc-b-1", "chief", "done", "finished")
+    monkeypatch.setattr(bus, "_ready_count", lambda: 4)
+    assert bus.main(["--bus", str(busdir), "--as", "chief", "status"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "running: 1 (cc-a-1)" in out  # b posted done; c's latest row is not running
+    assert "startable: 4 ready beads (bd ready)" in out
+
+
+def test_status_without_a_ledger_reports_zero_running(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bus, "_ready_count", lambda: None)
+    assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "running: 0" in out and "startable: unknown ready beads (bd ready)" in out

@@ -37,7 +37,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 - Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief tail --to chief --durable --kinds question,blocker --exit-on-first` (completions arrive as task notifications). It ends on the first ask and wakes you: answer, then start it again.
 - A notification that carries nothing new (a task already ledgered, a duplicate completion) gets no prose turn: end the turn silently. Read `task_status` only when you need a result mid-turn and the handoff is not already on the bus.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
-- When the user asks whether messages reach agents, paste `bus.py --as chief status`.
+- Every status message to the user ends with three lines: **Running** and **Startable** (from `bus.py --as chief status`), and **Waiting on you** (open needs-user plus your unasked questions, asked right there).
 - Between dispatch waves, run `bus.py --as chief digest` and act on what is interesting: answer questions, correct wrong claims with `reply --ref`, file beads, promote durable facts to `bd remember`.
 - A Claude subagent stopped by the account session limit keeps its work: resume it with `SendMessage` after the reset instead of re-dispatching.
 
@@ -59,7 +59,7 @@ Ask in plain words, the way you would explain it to a friend who is not reading 
 2. **What happens today**, as one real example with a coin, a time and numbers ("you hold BTC and ETH; ETH fails to save; the screen shows no positions").
 3. **The options**, each with its everyday consequence in one line, and your recommendation marked.
 
-No internal names, file paths or contract-row ids in the question; put evidence and tables after the questions, for the curious. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
+Tag every number in an option `MEASURED (<command>)` or `Likely:`; an option that loosens a gate states its measured no-edge pass rate. No internal names, file paths or contract-row ids in the question; put evidence and tables after the questions, for the curious. End with a one-line summary of what you need ("1 = A or B? 2 = OK?"). Put it all in the visible message, never only in AskUserQuestion previews.
 
 ## Self-improvement
 
