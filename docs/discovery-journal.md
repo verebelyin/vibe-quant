@@ -4,6 +4,46 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: RESULT P-2 — on 4h the GA needs the top rung (50×20) to recover planted S 4–5 edges as champions; production budgets (≤ 16×6) do not; at S ≤ 3 DSR blocks what the search finds
+
+Pre-registration P-2 (23ad2a4e). `scripts/research/power/budget.py` (study code unchanged since d5c5c49b; runs carry shas 20496e5d and 32cbbe97, `git diff 20496e5d..32cbbe97 -- scripts/research/power/` empty). Operator run 2026-10-18 20:33–01:19 local; state `data/swarm/20261018-grind-dir/power/budget.json`, handoff `handoffs/op-p2-main-1.md`. 96/96 ladder runs completed, no exit 2/3, `s0 champion count: 0` on both timeframes, `verify-untouched`: `R26 shared data untouched`. R31 isolation ok on every run (prior_n 0, n_rule effective).
+
+**Setup check.** Builds accepted (train_S): 4h s2 1.905785275886144, s3 3.003010401047131, s4 4.0051275240499375, s5 4.846057098301657; 1d rule `rsi7_xb30_xa60_sl4_tp8` (111 btc0 train trades), s3 2.7224883425629662, s4 3.6748370780469606, s5 4.618990356819913. btc0 fidelity IDENTICAL both tf. Direct chain (planted rule through the real gates): 4h s4/s5 and 1d s4/s5 `failures=[]`; 4h-s3 and 1d-s3 `['dsr[22121]', 'chain_full[22121]']`; 4h-s2 `['holdout', 'chain_full[1]', 'dsr[167]', 'chain_full[167]', 'dsr[22121]', 'chain_full[22121]']`.
+
+**Final report (verbatim):**
+```
+tf 4h seeds=3
+  4h-s0: B*=none | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3
+  4h-s2: B*=none | B1 M1=1/3 M2=0/3 | B2 M1=1/3 M2=0/3 | B3 M1=2/3 M2=0/3 | B4 M1=3/3 M2=0/3
+  4h-s3: B*=none | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=2/3 M2=1/3
+  4h-s4: B*=B4 | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=3/3 M2=2/3
+  4h-s5: B*=B4 | B1 M1=0/3 M2=0/3 | B2 M1=1/3 M2=1/3 | B3 M1=1/3 M2=1/3 | B4 M1=2/3 M2=2/3
+  s0 champion count: 0
+tf 1d seeds=3
+  1d-s0: B*=none | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3
+  1d-s3: B*=none | B1 M1=1/3 M2=1/3 | B2 M1=3/3 M2=1/3 | B3 M1=3/3 M2=1/3 | B4 M1=3/3 M2=1/3
+  1d-s4: B*=B1 | B1 M1=2/3 M2=2/3 | B2 M1=0/3 M2=0/3 | B3 M1=0/3 M2=0/3 | B4 M1=0/3 M2=0/3
+  1d-s5: B*=B3 | B1 M1=0/3 M2=0/3 | B2 M1=0/3 M2=0/3 | B3 M1=3/3 M2=3/3 | B4 M1=0/3 M2=0/3
+  s0 champion count: 0
+```
+(A cell stops at B*; rungs after it were not run and print 0/3.)
+
+**Predictions vs actual (M2 of 3, B1/B2/B3/B4):** 4h s5 1/3/–/– → 0/1/1/2 (missed: B4 not B2); s4 0/1/2/– → 0/0/0/2 (missed: B4 not B3); s3 0/0/1/2 → 0/0/0/1 (missed: no B*); s2 0/0/0/0 → 0/0/0/0, M1 at B4 3/3 (predicted 1/3). 1d s5 0/2/– → 0/0/3 (B3 not B2); s4 0/0/1/2 → 2/–/–/– (B1, far better); s3 0/0/0/1 → 1/1/1/1 (no B*). s0 0 champions: met. "s0 max corr > C95(K) in ≤ 1 run per tf" (chief-computed from state, `layer2.null_threshold`): 4h 1 run (B4 seed 2, 0.5220218373933287 > 0.48282606187496235) met; 1d 3 runs (B2 s3 0.38662470822314904 > 0.38480403182494627; B4 s2 0.3505426090247785 > 0.20432902110845227; B4 s3 0.36297338187802464 > 0.270540822372646) missed. C_K = max(C95, s0 max) absorbs this by construction. Cost (MEASURED, sum wall / sum evaluated): 4h 0.673–0.810 s/eval (predicted 0.9, range 0.65–1.0: met); 1d 0.227–0.362 s/eval (predicted 1.3, range 0.5–3.0: missed, faster). B4 gate_n: 4h 40–134 (< 200 met), 1d 94–258 (missed).
+
+**Why hits fail to become champions.** Every M1 hit that was not a champion was a guardrail rejection with reason `DSR not significant` (e.g. 4h-s2 B4 seed 1: p 0.3089, N 91; 4h-s4 B4 seed 1: p 0.1098, N 88). Over all 96 runs the rejections are DSR 395, bootstrap-CI lower bound < 0 ≈ 140, holdout 2. The GA's best copies of the plant reach train_S ≈ 1.6–2.4 at S 2–3, below the plant itself, and DSR at in-run N 40–260 rejects them.
+
+**Full-pool probe (Q6, 4h-s4, B4, all indicators; outside B*/C_K; chief-scored with the same rule, C_K 0.5220218373933287):** M1 2/3, M2 2/3 — seed 1 K 831, 3 champions, best corr 0.7193 (train_S 3.398); seed 2 K 846, 3 champions, best 0.5953 (3.115); seed 3 K 846, 0 champions, max corr 0.5205983904949265 (just under C_K). Wall 2723.3 / 2500.5 / 2799.2 s vs 283–1079 s for the 5-indicator B4 runs. Prediction "needs one rung more than 5-indicator 4h-s4" **missed**: same B4, same 2/3. The first two attempts at the 2400 s timeout were killed (5 of 6 runs); final runs used `--timeout 4800` (deviation). They paused across a laptop sleep; `wall_s` is `time.monotonic()` (Likely: excludes sleep on macOS — the logs resumed at wake with no timeout).
+
+**Decisions (pre-registered):** D1 not met (4h B*(s4) = B4). **D3 applies** (4h B*(s4) = B4, also s5): recommend B4 (50×20) as the 4h discovery budget (user decides); bead vibe-quant-6n0n9 (discovery speed) raised to P1: a B4 4h run costs 283–1079 s wall here with the 5-indicator pool and 2500–2799 s with the full pool (MEASURED, probe). **D4 applies** (4h-s2 M1 3/3 M2 0/3; 1d-s3 M1 3/3 M2 1/3 at B2–B4, all non-champion hits DSR-rejected): DSR floor raised as a user question, no automatic change. D2 touched only on 1d (s5 B3, s4 B1; 1d recovery is non-monotone in S with 3 seeds, so no 1d default is recommended from this). D5, D6 not triggered (4h-s5 M1 at B4 = 2/3, the edge of D6).
+
+**Reading:** with production budgets (≤ 16×6 ≈ 85 genomes) the 4h GA recovered neither a planted S 4 nor S 5 edge as a champion in any seed (M2 0/3 at B1 for both). At 50×20 (≈ 850 genomes) it recovers S 4–5 in 2/3 seeds while promoting nothing on the null copy. Below S ≈ 3 the search finds the plant's shape (M1) but DSR rejects it. So the recent "0 champions" runs are uninformative about edges below S ≈ 4 on 4h. 1d is cheaper per eval (≈ 0.25 s) and found S 4 at B1. Not shown: other edge shapes, short side, multi-symbol, eval_windows 3 (production default; this study used 2), or that real BTC holds such an edge.
+
+**Disclosures:** null pools drawn with seed 0 (driver default), not the pre-registered 20261018 (same as P-1a's C95). eval_windows 2 (pre-registered). Probe timeout raised 2400 → 4800 s after two killed attempts. Operator's first runner attempt failed with EXIT 127 (`/usr/bin/time` wrapper); 4h-s2's build stdout lost, record intact. Two git shas, no study-code diff.
+
+**Next:** user decides (a) 4h default budget B4; (b) the DSR question for S ≤ 3 edges.
+
+---
+
 ## 2026-10-18: PRE-REGISTRATION P-2 — production budget study (how big must a GA search be to find a planted edge on 4h and 1d?)
 
 Written before any P-2 run. Design: `data/swarm/20261018-grind-dir/design-budget.md` (Opus architect, Sol-reviewed driver). Code: `scripts/research/power/budget.py` + `layer2.py` Profile + `plant.py` bar params, landed on main before this entry; scratch catalogs only, `verify-untouched` at the end; no `vibe_quant/` change. Valid only after the 2026-10-18 DSR effective-N comparability break (harvest refuses a run whose `notes.dsr_trials.n_rule` is not the effective marker). Not comparable with P-1a (which searched `--direction both`).
