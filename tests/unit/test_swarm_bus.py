@@ -293,6 +293,104 @@ def test_brief_lists_usage_and_latest_posts(tmp_path: Path, monkeypatch: pytest.
     assert "board search --global --path" in text and "#gotchas w: gotcha 4" in text and "gotcha 2" not in text
 
 
+# --- retire / supersede ------------------------------------------------------
+
+
+def _bytes(d: Path) -> bytes:
+    f = d / "messages.jsonl"
+    return f.read_bytes() if f.exists() else b""
+
+
+def test_retired_post_leaves_brief_and_search_but_stays_in_the_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    stale = bus.post(gdir, "w", "board", "info", "sharpe 1.9 on nt_runner.py", topic="findings")
+    bus.post(gdir, "w", "board", "info", "fresh nt_runner.py gotcha", topic="gotchas")
+    bus.reply(gdir, "x", str(stale["id"]), "confirmed sharpe 1.9")
+    assert bus.main(["--bus", str(gdir), "--as", "chief", "board", "retire", "--ref", str(stale["id"]), "--reason", "pre-break metric"]) == 0
+    capsys.readouterr()
+    assert "sharpe 1.9" not in bus.brief() and "fresh nt_runner.py gotcha" in bus.brief()
+    assert [m["body"] for m in bus.board_search(gdir, paths=["nt_runner.py"])] == ["fresh nt_runner.py gotcha"]
+    bus.main(["--bus", str(gdir), "board", "search", "--topic", "findings", "--all"])
+    out = capsys.readouterr().out
+    assert f"[{stale['id']}]" in out and "[retired: pre-break metric]" in out
+    assert "confirmed sharpe 1.9" in out and f"[reply under hidden {stale['id']}]" in out  # its thread goes too
+    assert [m["body"] for m in bus.board_read(gdir, "anyone", everything=True)][0] == "sharpe 1.9 on nt_runner.py"
+    assert bus.thread(gdir, str(stale["id"]))[-1][1]["retires"] == stale["id"]  # the event sits under the post
+    assert [m["body"] for m in bus.inbox(gdir, "w")][-1].startswith(f"retired {stale['id']}")  # author is told
+
+
+def test_superseded_post_is_replaced_by_its_correction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    old = bus.post(gdir, "w", "board", "info", "RULE: use 1.6449", topic="decisions")
+    new = bus.supersede(gdir, "chief", str(old["id"]), "decisions", "RULE: use the run's q95 spread")
+    assert new["supersedes"] == old["id"] and f"supersedes:{old['id']}" in bus.fmt(new)
+    assert [m["body"] for m in bus.board_search(gdir, topics=["decisions"])] == ["RULE: use the run's q95 spread"]
+    assert "1.6449" not in bus.brief()
+    hits = bus.board_search(gdir, topics=["decisions"], include_hidden=True)
+    assert [(m["body"], m.get("hidden")) for m in hits] == [
+        ("RULE: use 1.6449", f"superseded by {new['id']}"),
+        ("RULE: use the run's q95 spread", None),
+    ]
+
+
+def test_retire_refuses_unknown_ids_and_is_a_noop_twice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    p = bus.post(gdir, "w", "board", "info", "a gotcha", topic="gotchas")
+    before = _bytes(gdir)
+    with pytest.raises(SystemExit) as e:
+        bus.main(["--bus", str(gdir), "board", "retire", "--ref", "nope", "--reason", "x"])
+    assert e.value.code not in (0, None) and _bytes(gdir) == before
+    with pytest.raises(SystemExit) as e:
+        bus.retire(gdir, "chief", str(p["id"]), "  ")
+    assert e.value.code == 2 and _bytes(gdir) == before
+    assert bus.retire(gdir, "chief", str(p["id"]), "wrong") is not None
+    after_first = _bytes(gdir)
+    assert bus.retire(gdir, "chief", str(p["id"]), "again") is None and _bytes(gdir) == after_first
+    event = bus.board_read(gdir, "anyone", everything=True)[-1]
+    with pytest.raises(SystemExit) as e:
+        bus.retire(gdir, "chief", str(event["id"]), "retire the retire")
+    assert e.value.code == 2
+
+
+def test_needs_user_questions_cannot_be_retired_or_superseded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    q = bus.ask_user(gdir, "w", "ship or wait?")
+    before = _bytes(gdir)
+    for call in (
+        lambda: bus.retire(gdir, "chief", str(q["id"]), "stale"),
+        lambda: bus.supersede(gdir, "chief", str(q["id"]), "decisions", "shipped"),
+    ):
+        with pytest.raises(SystemExit) as e:
+            call()
+        assert e.value.code == 2
+    assert _bytes(gdir) == before and [m["id"] for m in bus.needs_user_open(gdir)] == [q["id"]]
+
+
+def test_retire_and_supersede_reach_the_bus_that_holds_the_post(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    job = tmp_path / "jobs" / "20261019-job" / "bus"
+    job.mkdir(parents=True)
+    mirrored = bus.post(job, "w", "board", "info", "job gotcha", topic="gotchas")  # copied to global
+    bus.retire(job, "chief", str(mirrored["id"]), "wrong")
+    assert bus.board_search(job, topics=["gotchas"]) == [] and bus.board_search(gdir, topics=["gotchas"]) == []
+    chat = bus.post(job, "w", "board", "info", "job-only design note", topic="design")  # not mirrored
+    new = bus.supersede(gdir, "chief", str(chat["id"]), "decisions", "global decision replaces it")
+    assert bus.board_search(job, topics=["design"]) == []  # retire event written on the job bus
+    assert bus.hidden_posts(bus._all(job))[str(chat["id"])] == f"retired: superseded by {new['id']}"
+    assert [m["body"] for m in bus.board_search(gdir, topics=["decisions"])] == ["global decision replaces it"]
+    on_global = bus.post(gdir, "w", "board", "info", "global gotcha", topic="gotchas")
+    bus.supersede(job, "w2", str(on_global["id"]), "design", "job-only correction")  # not mirrored back
+    assert bus.board_search(gdir, topics=["gotchas"]) == []  # so the global board got a retire event
+
+
 # --- needs-user decision queue ------------------------------------------------
 
 

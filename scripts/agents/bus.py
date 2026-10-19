@@ -26,9 +26,12 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
     bus.py board post   --topic design --body TEXT [--kind info|question|claim|...] [--client-id TEXT]
     bus.py board read   [--topic design] [--all]   # unread posts (per-agent, per-topic cursor); --all = full history
     bus.py board topics                            # topics with post counts + latest post
-    bus.py board search [--topic T ...] [--path P ...] [--grep W ...] [--limit N]   # no cursor change;
+    bus.py board search [--topic T ...] [--path P ...] [--grep W ...] [--limit N] [--all]   # no cursor change;
                                      # topics OR, greps AND (case-insensitive); a file matches by path or
-                                     # basename, a dir/glob by '<dir>/'; add --global for the persistent board
+                                     # basename, a dir/glob by '<dir>/'; add --global for the persistent board;
+                                     # retired/superseded posts are hidden unless --all (then tagged)
+    bus.py board retire --ref MSG_ID --reason TEXT # a stale/wrong post: hidden from brief + search, kept in the log
+    bus.py board post ... --supersedes MSG_ID      # a corrected post replaces MSG_ID (which is then hidden)
     bus.py reply  --ref MSG_ID --body TEXT          # threads under a post, or answers a DM;
                                      # --ref accepts ANY id `board search --global` prints — the
                                      # reply lands on the bus that HOLDS the post (see it with
@@ -312,7 +315,8 @@ def fmt(msg: dict[str, object]) -> str:
     ref = f" re:{msg['ref']}" if msg.get("ref") else ""
     if msg.get("to") == "board":
         job = f" @{msg['job']}" if msg.get("job") else ""
-        return f"[{msg['id']}] #{msg.get('topic')} {msg['from']}{job} ({msg['kind']}{ref}): {msg['body']}"
+        sup = f" supersedes:{msg['supersedes']}" if msg.get("supersedes") else ""
+        return f"[{msg['id']}] #{msg.get('topic')} {msg['from']}{job} ({msg['kind']}{ref}{sup}): {msg['body']}"
     return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {msg['body']}"
 
 
@@ -476,25 +480,111 @@ def _path_needles(paths: list[str]) -> set[str]:
     return out
 
 
+def hidden_posts(msgs: list[dict[str, object]]) -> dict[str, str]:
+    """Board ids readers skip by default -> why: retired, superseded, a reply under one, a retire event.
+
+    The log stays append-only: a retire is its own record (``retires`` + ``reason``, ref'ing the
+    post, so ``thread`` shows it under the post and the author's inbox gets it).
+    """
+    out: dict[str, str] = {}
+    for m in msgs:
+        if m.get("retires"):
+            out[str(m["retires"])] = f"retired: {m.get('reason') or m['body']}"
+            out[str(m["id"])] = "retire event"
+        if m.get("supersedes"):
+            out.setdefault(str(m["supersedes"]), f"superseded by {m['id']}")
+    for m in msgs:  # a reply follows its parent in file order, so one pass covers whole threads
+        if m.get("ref") and str(m["ref"]) in out and str(m["id"]) not in out:
+            out[str(m["id"])] = f"reply under hidden {m['ref']}"
+    return out
+
+
+def _retirable(ref: str, msg: dict[str, object]) -> None:
+    """Refuse (exit 2) to retire/supersede anything but a plain board post."""
+    if msg.get("to") != "board":
+        _refuse(f"bus: {ref} is not a board post")
+    if msg.get("retires"):
+        _refuse(f"bus: {ref} is a retire event; post a correction instead")
+    if msg.get("topic") == "needs-user":
+        _refuse(f"bus: {ref} is a needs-user question: only the user closes it (needs-user answer --user)")
+
+
+def retire(bus: Path, me: str, ref: str, reason: str) -> dict[str, object] | None:
+    """Hide a stale or wrong board post from brief and search, wherever it lives (see ``_locate``).
+
+    None (nothing written) when it is already hidden. The event is posted on the bus that holds
+    the post, under the post's topic, so a job post on a persistent topic is retired on the
+    global board too (mirroring, as ``post`` does).
+    """
+    if not reason.strip():
+        _refuse("bus: board retire needs a --reason")
+    found = _locate(bus, ref)
+    if found is None:
+        sys.exit(f"bus: no message {ref}")
+    holder, parent = found
+    _retirable(ref, parent)
+    if ref in hidden_posts(_all(holder)):
+        return None
+    on_global = holder.resolve() == global_board_dir().resolve() and holder.resolve() != bus.resolve()
+    extra: dict[str, object] = {"retires": ref, "reason": reason}
+    if on_global:
+        extra["job"] = bus.resolve().parent.name
+    return post(holder, me, "board", "info", f"retired {ref}: {reason}", ref=ref, topic=str(parent.get("topic")), extra=extra)
+
+
+def supersede(
+    bus: Path, me: str, ref: str, topic: str, body: str, kind: str = "info",
+    client_id: str | None = None, extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Post a correction that replaces board post ``ref`` (hidden from then on).
+
+    When ``ref`` lives on a bus the new post does not reach (another job, or the global board
+    without mirroring), a retire event naming the new post is written there too.
+    """
+    found = _locate(bus, ref)
+    if found is None:
+        sys.exit(f"bus: no message {ref}")
+    holder, old = found
+    _retirable(ref, old)
+    new = post(bus, me, "board", kind, body, topic=topic, client_id=client_id, extra={**(extra or {}), "supersedes": ref})
+    gdir = global_board_dir().resolve()
+    reached = {bus.resolve()} | ({gdir} if new["topic"] in PERSISTENT_TOPICS else set())
+    if holder.resolve() not in reached and ref not in hidden_posts(_all(holder)):
+        post(
+            holder, me, "board", "info", f"retired {ref}: superseded by {new['id']}", ref=ref,
+            topic=str(old.get("topic")), mirror=False, extra={"retires": ref, "reason": f"superseded by {new['id']}"},
+        )
+    return new
+
+
 def board_search(
     bus: Path,
     topics: list[str] | None = None,
     paths: list[str] | None = None,
     terms: list[str] | None = None,
     limit: int | None = None,
+    include_hidden: bool = False,
 ) -> list[dict[str, object]]:
     """Board posts matching every given filter, oldest first; never moves a read cursor.
 
     topics: any of them (OR). paths: the body names any of them (see _path_needles).
     terms: the body contains all of them, case-insensitive (AND). limit: keep the newest N.
+    Retired/superseded posts (``hidden_posts``) are skipped unless ``include_hidden``; then each
+    comes back as a copy carrying ``hidden`` = why.
     """
     want = {t.lstrip("#").lower() for t in topics or []}
     needles = _path_needles(paths or [])
     words = [t.lower() for t in terms or []]
+    msgs = _all(bus)
+    hidden = hidden_posts(msgs)
     out = []
-    for m in _all(bus):
+    for m in msgs:
         if m.get("to") != "board" or (want and m.get("topic") not in want):
             continue
+        if str(m["id"]) in hidden:
+            if not include_hidden:
+                continue
+            m = {**m, "hidden": hidden[str(m["id"])]}
         body = str(m["body"])
         if needles and not any(n in body for n in needles):
             continue
@@ -870,7 +960,9 @@ def brief(per_topic: int = 3) -> str:
         "  python3 scripts/agents/bus.py --as <you> reply --ref <id> --body '...'   |   inbox   |   ask --to chief --body '...'",
         "Post what future agents should know (findings, gotchas, decisions, thoughts); chat freely on #chat.",
     ]
-    msgs = [m for m in _all(g) if m.get("to") == "board"]
+    everything = _all(g)
+    hidden = hidden_posts(everything)
+    msgs = [m for m in everything if m.get("to") == "board" and str(m["id"]) not in hidden]
     by_topic: dict[str, list[dict[str, object]]] = {}
     for m in msgs:
         by_topic.setdefault(str(m.get("topic", "")), []).append(m)
@@ -951,6 +1043,10 @@ def main(argv: list[str] | None = None) -> int:
     bp.add_argument("--body", required=True)
     bp.add_argument("--kind", default="info", choices=KINDS)
     bp.add_argument("--client-id")
+    bp.add_argument("--supersedes", metavar="MSG_ID", help="this post corrects MSG_ID, which is hidden from then on")
+    brt = bsub.add_parser("retire")
+    brt.add_argument("--ref", required=True)
+    brt.add_argument("--reason", required=True)
     br = bsub.add_parser("read")
     br.add_argument("--topic")
     br.add_argument("--all", action="store_true")
@@ -962,6 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
     bs.add_argument("--grep", action="append", help="repeatable; all must appear (case-insensitive)")
     bs.add_argument("--limit", type=int, default=40, help="newest N hits (default 40)")
     bs.add_argument("--global", dest="glob", action="store_true")
+    bs.add_argument("--all", action="store_true", help="include retired/superseded posts (tagged with why)")
     bt = bsub.add_parser("topics")
     bt.add_argument("--global", dest="glob", action="store_true")
     bbr = bsub.add_parser("brief")
@@ -1043,7 +1140,13 @@ def main(argv: list[str] | None = None) -> int:
             print("  " * depth + fmt(m))
     elif args.cmd == "board":
         if args.bcmd == "post":
-            print(fmt(post(bus, _me(args), "board", args.kind, args.body, topic=args.topic, client_id=args.client_id)))
+            if args.supersedes:
+                print(fmt(supersede(bus, _me(args), args.supersedes, args.topic, args.body, args.kind, args.client_id)))
+            else:
+                print(fmt(post(bus, _me(args), "board", args.kind, args.body, topic=args.topic, client_id=args.client_id)))
+        elif args.bcmd == "retire":
+            event = retire(bus, _me(args), args.ref, args.reason)
+            print(fmt(event) if event else f"(already hidden: {args.ref})")
         elif args.bcmd == "read":
             msgs = board_read(bus, _me(args), args.topic, args.all, args.recent)
             for m in msgs:
@@ -1053,9 +1156,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.bcmd == "search":
             if not (args.topic or args.path or args.grep):
                 _refuse("board search needs at least one --topic, --path or --grep")
-            hits = board_search(bus, args.topic, args.path, args.grep, args.limit)
+            hits = board_search(bus, args.topic, args.path, args.grep, args.limit, include_hidden=args.all)
             for m in hits:
-                print(fmt(m))
+                print(fmt(m) + (f"  [{m['hidden']}]" if m.get("hidden") else ""))
             if not hits:
                 print("(no matching board posts)")
         elif args.bcmd == "topics":
