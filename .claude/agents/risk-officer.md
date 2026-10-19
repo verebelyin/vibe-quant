@@ -42,6 +42,7 @@ Run every repro on the BASE commit too and quote its red/leaking result, so the 
 - Flag read in an `asyncio.CancelledError` handler of a per-item loop: cancel at EVERY await in the body (execute AND outcome write) with a following item queued; the flag must not label the next item.
 - New alert latch: run the repro with the REAL `_write_then_alert` and a writer that keeps raising (N denials -> 1 alert). Stubbed fixtures cannot catch a latch set after the write.
 - Gate/guard fail-safe: drive the failure through a real BacktestEngine strategy calling `submit_order` (not `_gate_execute`) and compare order statuses on base vs head.
+- Alert suppression or priority (stop/teardown, rate limits, retries): reproduce each ordering on a real `TradingNode` + client stub (event BEFORE and AFTER the stop) and a yielding, low-priority-first transport with non-default `retry_after` (huge, inf, NaN). A suppressed real disconnect or a starved breaker alert is BLOCK.
 
 ## Output
 
