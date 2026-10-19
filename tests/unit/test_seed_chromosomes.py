@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 
 import pytest
 
@@ -22,6 +23,8 @@ from vibe_quant.discovery.operators import (
     Direction,
     StrategyChromosome,
     StrategyGene,
+    initialize_population,
+    is_valid_chromosome,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
 
@@ -234,3 +237,79 @@ def test_new_both_seed_with_short_genes_stays_both(state: StateManager) -> None:
     assert loaded[0].direction is Direction.BOTH
     assert loaded[0].short_entry_genes[0].threshold == 70.0
     assert loaded[0].short_exit_genes[0].threshold == 30.0
+
+
+# ---------------------------------------------------------------------------
+# R12: a seed that violates the R8-R11 short-gene guards is dropped (inydc T2)
+# ---------------------------------------------------------------------------
+
+
+def test_r12_malformed_short_gene_seed_returns_none_with_warning(
+    state: StateManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    """short_entry_genes: None (R8) makes the whole load fail closed with a warning."""
+    run_id = _create_run(state)
+    _save_chromosomes(
+        state, run_id, [_legacy_both_blob(direction="long", short_entry_genes=None)]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        loaded = load_seed_chromosomes(state, run_id)
+
+    assert loaded is None
+    assert "Failed to load seed chromosomes" in caplog.text
+
+
+def test_r12_single_direction_seed_with_short_keys_returns_none(
+    state: StateManager, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A long seed carrying short_entry_genes (R11) is refused too."""
+    run_id = _create_run(state)
+    _save_chromosomes(
+        state,
+        run_id,
+        [_legacy_both_blob(direction="long", short_entry_genes=[])],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        loaded = load_seed_chromosomes(state, run_id)
+
+    assert loaded is None
+    assert "Failed to load seed chromosomes" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# R13: a seed re-directioned to BOTH gains a valid short side (inydc T2)
+# ---------------------------------------------------------------------------
+
+
+def test_r13_legacy_seed_under_both_constraint_becomes_valid_both(state: StateManager) -> None:
+    run_id = _create_run(state)
+    _save_chromosomes(state, run_id, [_legacy_both_blob()])
+    seeds = load_seed_chromosomes(state, run_id)
+    assert seeds is not None and seeds[0].direction is Direction.LONG
+
+    random.seed(4)
+    pop = initialize_population(4, Direction.BOTH, seeds)
+
+    seeded = pop[0]
+    assert seeded.direction is Direction.BOTH
+    assert 1 <= len(seeded.short_entry_genes) <= 5
+    assert 1 <= len(seeded.short_exit_genes) <= 3
+    assert is_valid_chromosome(seeded)
+
+
+def test_r13_legacy_seed_under_long_constraint_unchanged(state: StateManager) -> None:
+    run_id = _create_run(state)
+    _save_chromosomes(state, run_id, [_legacy_both_blob()])
+    seeds = load_seed_chromosomes(state, run_id)
+    assert seeds is not None and seeds[0].direction is Direction.LONG
+
+    random.seed(4)
+    pop = initialize_population(4, Direction.LONG, seeds)
+
+    seeded = pop[0]
+    assert seeded.direction is Direction.LONG
+    assert seeded.short_entry_genes == []
+    assert seeded.short_exit_genes == []
+    assert is_valid_chromosome(seeded)

@@ -469,6 +469,46 @@ class TestPerDirectionSLTPOperators:
         has_per_dir = sum(1 for c in pop if c.stop_loss_long_pct is not None)
         assert has_per_dir == 50
 
+    def test_random_both_has_short_genes(self) -> None:
+        random.seed(42)
+        pop = initialize_population(size=50, direction_constraint=Direction.BOTH)
+        for chrom in pop:
+            assert MIN_ENTRY_GENES <= len(chrom.short_entry_genes) <= MAX_ENTRY_GENES
+            assert MIN_EXIT_GENES <= len(chrom.short_exit_genes) <= MAX_EXIT_GENES
+            assert is_valid_chromosome(chrom)
+
+    def test_crossover_carries_short_genes_from_both_parents(self) -> None:
+        random.seed(42)
+        a = _make_chromosome(direction=Direction.BOTH)
+        a.short_entry_genes = [_make_gene(threshold=70.0, condition=ConditionType.GT)]
+        a.short_exit_genes = [_make_gene(threshold=30.0)]
+        b = _make_chromosome(direction=Direction.BOTH)
+        b.short_entry_genes = [_make_gene(threshold=20.0, condition=ConditionType.GT)]
+        b.short_exit_genes = [_make_gene(threshold=40.0)]
+        thresholds: set[float] = set()
+        for _ in range(100):
+            for child in crossover(a, b):
+                assert child.direction is Direction.BOTH
+                assert len(child.short_entry_genes) == 1
+                assert len(child.short_exit_genes) == 1
+                thresholds.add(child.short_entry_genes[0].threshold)
+        assert thresholds == {70.0, 20.0}
+
+    def test_mutation_mutates_short_gene_lists(self) -> None:
+        random.seed(42)
+        chrom = _make_chromosome(direction=Direction.BOTH)
+        chrom.short_entry_genes = [_make_gene(threshold=70.0, condition=ConditionType.GT)]
+        chrom.short_exit_genes = [_make_gene(threshold=30.0)]
+        changed = False
+        for _ in range(100):
+            m = mutate(chrom, mutation_rate=1.0)
+            assert MIN_ENTRY_GENES <= len(m.short_entry_genes) <= MAX_ENTRY_GENES
+            assert MIN_EXIT_GENES <= len(m.short_exit_genes) <= MAX_EXIT_GENES
+            assert is_valid_chromosome(m)
+            if m.short_entry_genes[0].threshold != 70.0:
+                changed = True
+        assert changed
+
     def test_random_long_no_per_direction(self) -> None:
         random.seed(42)
         pop = initialize_population(size=20, direction_constraint=Direction.LONG)

@@ -42,9 +42,9 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
 
     Returns a value in [0, 1] where 0 = monoculture, 1 = max diversity.
     Averages normalized Shannon entropy across three loci:
-    - Indicator types used (entry + exit genes)
+    - Indicator types used (entry + exit genes, both sides)
     - Direction (long/short/both)
-    - Condition types (all genes)
+    - Condition types (all genes, both sides)
     """
     if len(population) <= 1:
         return 0.0
@@ -56,7 +56,11 @@ def population_entropy(population: list[StrategyChromosome]) -> float:
     for chrom in population:
         dir_val = chrom.direction.value if hasattr(chrom.direction, "value") else str(chrom.direction)
         dir_counter[dir_val] += 1
-        for gene in chrom.entry_genes + chrom.exit_genes:
+        # Short-side genes count too (inydc T2, R19); they are empty for a
+        # non-BOTH chromosome, so a single-direction population is unchanged.
+        for gene in (
+            chrom.entry_genes + chrom.exit_genes + chrom.short_entry_genes + chrom.short_exit_genes
+        ):
             ind_counter[gene.indicator_type] += 1
             cond_val = gene.condition.value if hasattr(gene.condition, "value") else str(gene.condition)
             cond_counter[cond_val] += 1

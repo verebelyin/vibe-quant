@@ -674,7 +674,24 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
         if val is not None and not (valid_range[0] <= val <= valid_range[1]):
             return False
 
-    for gene in chrom.entry_genes + chrom.exit_genes:
+    # Short-side reconciliation (inydc T2, R17/R17b): BOTH must carry a complete
+    # short side the DSL/compiler can emit; a long/short chromosome owns none.
+    if chrom.direction == Direction.BOTH:
+        if not (MIN_ENTRY_GENES <= len(chrom.short_entry_genes) <= MAX_ENTRY_GENES):
+            return False
+        if not (MIN_EXIT_GENES <= len(chrom.short_exit_genes) <= MAX_EXIT_GENES):
+            return False
+    elif (
+        chrom.short_entry_genes
+        or chrom.short_exit_genes
+        or chrom.short_ma_entry_genes
+        or chrom.short_ma_exit_genes
+    ):
+        return False
+
+    for gene in (
+        chrom.entry_genes + chrom.exit_genes + chrom.short_entry_genes + chrom.short_exit_genes
+    ):
         if gene.indicator_type not in INDICATOR_POOL:
             return False
         if gene.indicator_type == "MACD":
@@ -692,8 +709,17 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
         return False
     if len(chrom.ma_exit_genes) > MAX_MA_EXIT_GENES:
         return False
+    if len(chrom.short_ma_entry_genes) > MAX_MA_ENTRY_GENES:
+        return False
+    if len(chrom.short_ma_exit_genes) > MAX_MA_EXIT_GENES:
+        return False
     from vibe_quant.discovery.genome import MA_POOL
-    for ma_gene in chrom.ma_entry_genes + chrom.ma_exit_genes:
+    for ma_gene in (
+        chrom.ma_entry_genes
+        + chrom.ma_exit_genes
+        + chrom.short_ma_entry_genes
+        + chrom.short_ma_exit_genes
+    ):
         if ma_gene.indicator_type not in MA_POOL:
             return False
         if ma_gene.op not in _MA_CONDITION_TYPES:
@@ -841,6 +867,35 @@ def crossover(
         parent_b.ma_exit_genes, parent_a.ma_exit_genes, MAX_MA_EXIT_GENES
     )
 
+    # Short-side genes (inydc T2): min 0 so two single-direction parents -- whose
+    # short lists are empty -- draw no RNG here and keep the long/short stream
+    # bit-identical (R16). _repair_chromosome then reconciles the crossed lists
+    # with each child's direction.
+    child_a_short_entries = _crossover_genes(
+        parent_a.short_entry_genes, parent_b.short_entry_genes, 0, MAX_ENTRY_GENES
+    )
+    child_b_short_entries = _crossover_genes(
+        parent_b.short_entry_genes, parent_a.short_entry_genes, 0, MAX_ENTRY_GENES
+    )
+    child_a_short_exits = _crossover_genes(
+        parent_a.short_exit_genes, parent_b.short_exit_genes, 0, MAX_EXIT_GENES
+    )
+    child_b_short_exits = _crossover_genes(
+        parent_b.short_exit_genes, parent_a.short_exit_genes, 0, MAX_EXIT_GENES
+    )
+    child_a_short_ma_entries = _crossover_ma_genes(
+        parent_a.short_ma_entry_genes, parent_b.short_ma_entry_genes, MAX_MA_ENTRY_GENES
+    )
+    child_b_short_ma_entries = _crossover_ma_genes(
+        parent_b.short_ma_entry_genes, parent_a.short_ma_entry_genes, MAX_MA_ENTRY_GENES
+    )
+    child_a_short_ma_exits = _crossover_ma_genes(
+        parent_a.short_ma_exit_genes, parent_b.short_ma_exit_genes, MAX_MA_EXIT_GENES
+    )
+    child_b_short_ma_exits = _crossover_ma_genes(
+        parent_b.short_ma_exit_genes, parent_a.short_ma_exit_genes, MAX_MA_EXIT_GENES
+    )
+
     # SL/TP: random pick per child
     sl_a = parent_a.stop_loss_pct if random.random() < 0.5 else parent_b.stop_loss_pct
     tp_a = parent_a.take_profit_pct if random.random() < 0.5 else parent_b.take_profit_pct
@@ -872,6 +927,10 @@ def crossover(
         take_profit_short_pct=tp_short_a,
         ma_entry_genes=child_a_ma_entries,
         ma_exit_genes=child_a_ma_exits,
+        short_entry_genes=child_a_short_entries,
+        short_exit_genes=child_a_short_exits,
+        short_ma_entry_genes=child_a_short_ma_entries,
+        short_ma_exit_genes=child_a_short_ma_exits,
     )
     child_b = StrategyChromosome(
         entry_genes=child_b_entries,
@@ -885,6 +944,10 @@ def crossover(
         take_profit_short_pct=tp_short_b,
         ma_entry_genes=child_b_ma_entries,
         ma_exit_genes=child_b_ma_exits,
+        short_entry_genes=child_b_short_entries,
+        short_exit_genes=child_b_short_exits,
+        short_ma_entry_genes=child_b_short_ma_entries,
+        short_ma_exit_genes=child_b_short_ma_exits,
     )
     return _repair_chromosome(child_a), _repair_chromosome(child_b)
 
@@ -1014,6 +1077,25 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
     chrom.ma_exit_genes = _mutate_ma_genes(
         chrom.ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES
     )
+
+    # Short-side genes (inydc T2): mutate them only for BOTH and only AFTER every
+    # existing draw, so a long/short mutation consumes the same RNG as before
+    # (R16). The direction guard is load-bearing -- mutating an empty list draws
+    # RNG (structural mutation + _clamp_genes floor), so calling this for a
+    # single-direction chromosome would shift its whole RNG stream.
+    if chrom.direction == Direction.BOTH:
+        chrom.short_entry_genes = _mutate_genes(
+            chrom.short_entry_genes, mutation_rate, MIN_ENTRY_GENES, MAX_ENTRY_GENES
+        )
+        chrom.short_exit_genes = _mutate_genes(
+            chrom.short_exit_genes, mutation_rate, MIN_EXIT_GENES, MAX_EXIT_GENES
+        )
+        chrom.short_ma_entry_genes = _mutate_ma_genes(
+            chrom.short_ma_entry_genes, mutation_rate, MAX_MA_ENTRY_GENES
+        )
+        chrom.short_ma_exit_genes = _mutate_ma_genes(
+            chrom.short_ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES
+        )
 
     return chrom
 
@@ -1272,13 +1354,27 @@ def initialize_population(
             # absolute-price thresholds) must not re-enter via warm-start.
             clone.entry_genes = [g for g in clone.entry_genes if g.indicator_type in INDICATOR_POOL]
             clone.exit_genes = [g for g in clone.exit_genes if g.indicator_type in INDICATOR_POOL]
+            clone.short_entry_genes = [
+                g for g in clone.short_entry_genes if g.indicator_type in INDICATOR_POOL
+            ]
+            clone.short_exit_genes = [
+                g for g in clone.short_exit_genes if g.indicator_type in INDICATOR_POOL
+            ]
             # Seeds from older runs may carry fractional int params / dead params
             for gene in clone.entry_genes + clone.exit_genes:
                 canonicalize_gene(gene)
+            for gene in clone.short_entry_genes + clone.short_exit_genes:
+                canonicalize_gene(gene)
             for ma_gene in clone.ma_entry_genes + clone.ma_exit_genes:
+                canonicalize_ma_gene(ma_gene)
+            for ma_gene in clone.short_ma_entry_genes + clone.short_ma_exit_genes:
                 canonicalize_ma_gene(ma_gene)
             if direction_constraint is not None:
                 clone.direction = direction_constraint
+            # After the direction constraint: a seed re-directioned to BOTH gains a
+            # short side, a seed re-directioned away from BOTH drops it (R13; no RNG
+            # draw for a non-BOTH clone, so single-direction seeding stays neutral).
+            _sync_direction_genes(clone)
             if not is_valid_chromosome(clone):
                 skipped += 1
                 continue

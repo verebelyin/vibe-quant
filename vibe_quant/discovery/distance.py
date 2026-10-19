@@ -148,6 +148,19 @@ def chromosome_distance(a: StrategyChromosome, b: StrategyChromosome) -> float:
         else:
             gene_dists.append(1.0)
 
+    # Short-side genes (inydc T2, R18): a slot the other chromosome lacks is a
+    # missing gene and counts 1.0, exactly like a missing long slot. Both lists
+    # are empty for a non-BOTH pair, so their floats are unchanged (R7c).
+    for genes_a, genes_b in (
+        (a.short_entry_genes, b.short_entry_genes),
+        (a.short_exit_genes, b.short_exit_genes),
+    ):
+        for i in range(max(len(genes_a), len(genes_b))):
+            if i < len(genes_a) and i < len(genes_b):
+                gene_dists.append(gene_distance(genes_a[i], genes_b[i]))
+            else:
+                gene_dists.append(1.0)
+
     avg_gene_dist = sum(gene_dists) / len(gene_dists) if gene_dists else 0.0
     weighted_sum += _W_GENES * avg_gene_dist
 
