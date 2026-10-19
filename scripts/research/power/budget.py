@@ -12,7 +12,7 @@ the profile-aware ``layer2`` functions (``P4H`` byte-identical, ``P1D`` = 1d / W
 - ``direct-chain --variant``: the planted rule through the real gate chain (positive control).
 - ``null-corr --tf``: the calibrated null pool of that timeframe (LONG draws for 1d).
 - ``discover --variant --rung --seed [--probe full_pool] [--dsr-rule {emax,q95}]``: one
-  isolated discovery run (``--dsr-rule`` is opt-in and absent by default).
+  isolated discovery run (``--dsr-rule`` defaults to an explicit emax pin).
 - ``harvest [--tf]``: screen candidates, compute M1/M2 under ``C_K`` and advance the cells.
 - ``next-wave --tf``: PRINT the exact shell commands of the next budget wave (runs nothing).
 - ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count and the git-sha set.
@@ -549,7 +549,7 @@ def discovery_argv(
     dsr_rule: str | None = None,
 ) -> list[str]:
     """The discovery CLI argv for one wave run; ``probe`` drops the 5-indicator restriction and
-    ``dsr_rule`` appends the opt-in ``--dsr-rule <rule>`` (``None`` = legacy argv)."""
+    ``dsr_rule`` appends ``--dsr-rule <rule>`` (``None`` = explicit ``emax`` pin)."""
     pop, gens = LADDER[rung]
     cmd = layer2.discovery_command(
         run_id, db, seed, pop=pop, gens=gens, profile=profile, dsr_rule=dsr_rule

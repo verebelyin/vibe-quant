@@ -114,6 +114,7 @@ def settings_for(name: str) -> ChainSettings:
         cross_window_months=list(cross_months),
         wfa_oos_step_days=wfa_step,
         require_dsr=True,
+        dsr_rule="emax",  # the DiscoveryConfig default is q95; research stays on the legacy rule
         require_bootstrap_ci=True,
         bootstrap_min_sharpe=_default_bootstrap_min_sharpe(timeframe),
     )

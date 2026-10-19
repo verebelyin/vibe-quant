@@ -563,3 +563,9 @@ def test_guardrails_match_pipeline() -> None:
                 m["min_trades"] and m["min_return"] and m["bootstrap"] and out["dsr"][n]
             )
             assert mine is bool(kept), (label, n, mine, kept)
+
+
+@pytest.mark.parametrize("window", ["W3", "W6"])
+def test_gate_chain_settings_stay_on_the_legacy_dsr_rule(window: str) -> None:
+    # DiscoveryConfig defaults to q95 since T4; the power study reproduces its legacy chain.
+    assert gatechain.settings_for(window).config.dsr_rule == "emax"

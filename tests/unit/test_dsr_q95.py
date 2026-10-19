@@ -308,7 +308,7 @@ def test_q95_stored_candidate_r7() -> None:
     # The rule switch, end to end: same null_spread, emax ignores it.
     fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes())))
     emax = apply_guardrails(
-        fit, 2, GuardrailConfig(require_wfa=False, require_bootstrap_ci=False),
+        fit, 2, GuardrailConfig(require_wfa=False, require_bootstrap_ci=False, dsr_rule="emax"),
         num_trials=88, daily_returns=values, null_spread=0.8206,
     )  # fmt: skip
     q95 = apply_guardrails(
@@ -347,8 +347,7 @@ _DEFAULT_RECORD_KEYS = {
 
 
 def test_q95_flag_off_is_bit_identical() -> None:
-    """R8: default rule emax -> same p-value, decision, text; only new keys."""
-    assert GuardrailConfig().dsr_rule == "emax"
+    """R8: explicit rule emax -> same p-value, decision, text; only new keys."""
     values = _gaussian_values(0.05)
     _result, record, reasons = apply_discovery_dsr_returns(values, 88)
     sharpe, skew, kurt = daily_sharpe_inputs(values)
@@ -373,36 +372,35 @@ def test_q95_flag_off_is_bit_identical() -> None:
 
     # emax ignores a passed spread end to end (the rule switch is the only gate).
     fit = _fitness(mtm_daily_returns=DailyReturns(_FIRST_DAY, array("d", np.array(values).tobytes())))
+    emax_cfg = GuardrailConfig(require_wfa=False, require_bootstrap_ci=False, dsr_rule="emax")
     with_spread = apply_guardrails(
-        fit, 2, GuardrailConfig(require_wfa=False, require_bootstrap_ci=False),
-        num_trials=88, daily_returns=values, null_spread=0.90,
+        fit, 2, emax_cfg, num_trials=88, daily_returns=values, null_spread=0.90,
     )  # fmt: skip
     without = apply_guardrails(
-        fit, 2, GuardrailConfig(require_wfa=False, require_bootstrap_ci=False),
-        num_trials=88, daily_returns=values,
+        fit, 2, emax_cfg, num_trials=88, daily_returns=values,
     )  # fmt: skip
     assert with_spread.dsr_record == without.dsr_record
     assert with_spread.passed == without.passed
 
 
 # ---------------------------------------------------------------------------
-# R9: absent rule in the API body / parser defaults to emax
+# R9: absent rule in the API body / parser defaults to q95 (T4)
 # ---------------------------------------------------------------------------
 
 
-def test_q95_rule_absent_defaults_to_emax() -> None:
-    """R9: no body/JSON/config key -> "emax" (the pre-change path)."""
+def test_q95_rule_absent_defaults_to_q95() -> None:
+    """R9/T4: no body/JSON/config key -> "q95"; emax is the explicit opt-out."""
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
     from vibe_quant.discovery.__main__ import build_parser
     from vibe_quant.discovery.pipeline import DiscoveryConfig
 
-    assert DiscoveryConfig().dsr_rule == "emax"
+    assert DiscoveryConfig().dsr_rule == "q95"
     assert "dsr_rule" not in DiscoveryLaunchRequest.model_fields
     assert "dsr_rule" not in DiscoveryLaunchRequest().model_dump()
-    assert build_parser().parse_args(["--run-id", "1"]).dsr_rule == "emax"
+    assert build_parser().parse_args(["--run-id", "1"]).dsr_rule == "q95"
     assert (
-        build_parser().parse_args(["--run-id", "1", "--dsr-rule", "q95"]).dsr_rule
-        == "q95"
+        build_parser().parse_args(["--run-id", "1", "--dsr-rule", "emax"]).dsr_rule
+        == "emax"
     )
 
 

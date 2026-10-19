@@ -1001,6 +1001,7 @@ def test_r40_discovery_command_budget_flags() -> None:
         "--direction", "both",
         "--max-workers", "3",
         "--seed", "2",
+        "--dsr-rule", "emax",  # explicit pin: the CLI default is q95
     ]
     assert "--seed-from-run" not in default
 
@@ -1012,8 +1013,10 @@ def test_r40_discovery_command_budget_flags() -> None:
     assert big[big.index("--seed-from-run") + 1] == "1"
     assert big[big.index("--seed") + 1] == "2"
 
-    # design-dsr-q95 T3: absent rule keeps the argv byte-identical; q95/emax append one pair.
-    assert "--dsr-rule" not in default
+    # The CLI default is q95, so an absent rule pins emax explicitly: the old argv plus one
+    # emax pair (same effective rule as before); q95/emax append one pair.
+    assert default.count("--dsr-rule") == 1
+    default = default[:-2]
     q95 = layer2.discovery_command(5, Path("/x/s.db"), 2, dsr_rule="q95")
     assert q95.count("--dsr-rule") == 1
     assert q95[-2:] == ["--dsr-rule", "q95"]
@@ -1027,6 +1030,21 @@ def test_r40_discovery_command_budget_flags() -> None:
     assert one_d.count("--dsr-rule") == 1
     assert one_d[-2:] == ["--dsr-rule", "q95"]
     assert one_d.count("--direction") == 1 and one_d[one_d.index("--direction") + 1] == "long"
+
+
+def test_research_argv_resolves_to_the_requested_dsr_rule_through_the_cli_parser() -> None:
+    """The effective rule the discovery CLI parses from research argv: emax unless q95 is asked."""
+    from vibe_quant.discovery.__main__ import build_parser
+
+    def effective(argv: list[str]) -> str:
+        return str(build_parser().parse_args(argv[argv.index("discovery") + 1 :]).dsr_rule)
+
+    db = Path("/x/s.db")
+    assert effective(layer2.discovery_command(5, db, 2)) == "emax"
+    assert effective(layer2.discovery_command(5, db, 2, dsr_rule="q95")) == "q95"
+    assert effective(layer2.discovery_command(5, db, 2, profile=layer2.P1D)) == "emax"
+    # the parser's own default stays q95, so the pin above is what keeps research on emax
+    assert build_parser().parse_args(["--run-id", "1"]).dsr_rule == "q95"
 
 
 def test_r41_discover_label_records_followup_runs(
@@ -1837,9 +1855,10 @@ def test_default_profile_is_byte_identical_to_the_4h_study() -> None:
         "--direction", "both",
         "--max-workers", "3",
         "--seed", "2",
+        "--dsr-rule", "emax",
     ]
-    assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-2:] == [
-        "--seed-from-run", "9"
+    assert layer2.discovery_command(5, Path("/x/s.db"), 2, pop=7, gens=3, seed_run=9)[-4:] == [
+        "--seed-from-run", "9", "--dsr-rule", "emax"
     ]
     assert layer2.planted_dsl() == layer2.planted_dsl(layer2.P4H)
     assert layer2.planted_dsl(layer2.P1D)["timeframe"] == "1d"

@@ -156,9 +156,10 @@ class DiscoveryConfig:
     bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound (t-stat) < this
     bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
     require_dsr: bool = True  # Deflated Sharpe Ratio guardrail
-    # Opt-in DSR critical value (design-dsr-q95): "emax" is the legacy
-    # E[maxZ] + 1.6449 bar; "q95" uses the run's quantile-matched MC spread.
-    dsr_rule: Literal["emax", "q95"] = "emax"
+    # DSR critical value (design-dsr-q95): "q95" (default) uses the run's
+    # quantile-matched MC spread; "emax" is the legacy E[maxZ] + 1.6449 bar,
+    # kept for reproducing earlier runs.
+    dsr_rule: Literal["emax", "q95"] = "q95"
     # Fail-closed buy-and-hold champion gate (bd vibe-quant-wcn55): a champion's
     # mark-to-market daily Sharpe must beat the equal-weight daily-rebalanced
     # buy-and-hold of its symbols over the train window (direction-aware bar).

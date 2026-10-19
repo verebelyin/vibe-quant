@@ -1245,9 +1245,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dsr-rule",
         choices=["emax", "q95"],
-        default="emax",
-        help="DSR critical value: emax (default, legacy E[maxZ] + 1.6449) or "
-        "q95 (opt-in quantile-matched Monte-Carlo spread; design-dsr-q95).",
+        default="q95",
+        help="DSR critical value: q95 (default, quantile-matched Monte-Carlo "
+        "spread; design-dsr-q95) or emax (legacy E[maxZ] + 1.6449, reproduces "
+        "earlier runs).",
     )
     parser.add_argument(
         "--no-buy-hold-gate",

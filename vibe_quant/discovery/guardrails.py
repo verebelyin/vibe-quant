@@ -69,8 +69,9 @@ class GuardrailConfig:
         max_complexity: Maximum total genes (entry + exit) allowed.
         require_dsr: Whether to apply DSR multiple-testing correction.
         dsr_significance_level: p-value threshold for DSR significance.
-        dsr_rule: ``"emax"`` (default, the legacy E[maxZ] + 1.6449 bar) or
-            ``"q95"`` (opt-in quantile-matched spread; design-dsr-q95).
+        dsr_rule: ``"q95"`` (default, the quantile-matched Monte-Carlo spread;
+            design-dsr-q95) or ``"emax"`` (the legacy E[maxZ] + 1.6449 bar,
+            kept for reproducing earlier runs).
         require_wfa: Whether to require Walk-Forward validation.
         wfa_min_efficiency: Minimum WFA efficiency to pass.
         require_purged_kfold: Whether to require Purged K-Fold CV (expensive).
@@ -81,7 +82,7 @@ class GuardrailConfig:
     max_complexity: int = 8
     require_dsr: bool = True
     dsr_significance_level: float = 0.05
-    dsr_rule: Literal["emax", "q95"] = "emax"
+    dsr_rule: Literal["emax", "q95"] = "q95"
     require_wfa: bool = True
     wfa_min_efficiency: float = 0.5
     require_purged_kfold: bool = False
@@ -237,6 +238,46 @@ def _clamped_dsr(
     return dsr.calculate(sharpe, num_trials, t, min(skew, 0.0), max(kurt, 3.0))
 
 
+def q95_dsr_decision(
+    psr_stat: float,
+    legacy_significant: bool,
+    null_spread: float | None,
+) -> tuple[bool, float | None]:
+    """``(significant, spread_used)`` under the q95 DSR rule (design-dsr-q95 R11).
+
+    The statistic stays the legacy PSR statistic; only the critical value is
+    replaced by the run's Monte-Carlo spread ``quantile(M, 0.95) - mean(M)``.
+    Both discovery and the promote-time overfitting re-check call THIS helper,
+    so the two gates cannot drift apart.
+
+    Fails closed to the legacy decision with ``spread_used is None`` (and hence
+    the legacy reject text) when the spread is missing or non-finite, or when
+    the statistic is NaN. The legacy constant itself keeps the legacy verdict
+    (one distinct series), while still reporting the spread that was applied.
+    """
+    spread = null_spread if null_spread is not None and math.isfinite(null_spread) else None
+    if math.isnan(psr_stat):
+        spread = None
+    if spread is None or spread == LEGACY_NULL_SPREAD:
+        return legacy_significant, spread
+    return psr_stat >= spread, spread
+
+
+def q95_dsr_reject_reason(
+    psr_stat: float,
+    spread: float,
+    sharpe_daily: float,
+    observations: int,
+    num_trials: int,
+) -> str:
+    """Reject text of the q95 rule, shared by discovery and the re-check."""
+    ann = math.sqrt(TRADING_DAYS_PER_YEAR)
+    return (
+        f"DSR q95 not significant: stat={psr_stat:.4f} < spread={spread:.4f} "
+        f"(ann SR={sharpe_daily * ann:.3f}, T={observations}, N={num_trials})"
+    )
+
+
 def apply_discovery_dsr_returns(
     daily_returns: Sequence[float] | None,
     num_trials: int,
@@ -296,18 +337,10 @@ def apply_discovery_dsr_returns(
     result = _clamped_dsr(dsr, sharpe, num_trials, t, skew, kurt)
     unclamped = dsr.calculate(sharpe, num_trials, t, skew, kurt)
     ann = math.sqrt(TRADING_DAYS_PER_YEAR)
-    # Opt-in q95 rule (design-dsr-q95, R11): the legacy PSR statistic
-    # (SR - SR0) / SE, compared with the run's MC spread instead of 1.6449. A
-    # missing / non-finite spread or a NaN statistic fails closed to legacy;
-    # the legacy spread itself takes the legacy p-value decision verbatim.
-    spread = null_spread if null_spread is not None and math.isfinite(null_spread) else None
+    # q95 rule (design-dsr-q95, R11), shared with the promote re-check: the
+    # legacy PSR statistic compared with the run's MC spread instead of 1.6449.
     psr_stat = result.deflated_sharpe
-    if math.isnan(psr_stat):
-        spread = None
-    if spread is None or spread == LEGACY_NULL_SPREAD:
-        significant = result.is_significant
-    else:
-        significant = psr_stat >= spread
+    significant, spread = q95_dsr_decision(psr_stat, result.is_significant, null_spread)
     record.update(
         observations=t,
         sharpe_daily=sharpe,
@@ -328,10 +361,7 @@ def apply_discovery_dsr_returns(
     reasons: list[str] = []
     if not significant:
         if spread is not None:
-            reasons.append(
-                f"DSR q95 not significant: stat={psr_stat:.4f} < spread={spread:.4f} "
-                f"(ann SR={sharpe * ann:.3f}, T={t}, N={num_trials})"
-            )
+            reasons.append(q95_dsr_reject_reason(psr_stat, spread, sharpe, t, num_trials))
         else:
             reasons.append(
                 f"DSR not significant: p={result.p_value:.4f} >= {significance_level} "

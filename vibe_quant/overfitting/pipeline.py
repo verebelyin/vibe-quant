@@ -210,6 +210,15 @@ class OverfittingPipeline:
         cv_config = config.cv_config or CVConfig()
         cv = PurgedKFoldCV(config=cv_config, robustness_threshold=config.cv_robustness_threshold)
 
+        # Promote-time re-check applies the rule the run used (T4, design-dsr-q95).
+        # Local import: discovery.guardrails pulls in discovery's package
+        # __init__, whose pipeline imports this module (same cycle class as the
+        # ``neff`` import below); importing at module level breaks one order.
+        from vibe_quant.discovery.guardrails import (
+            q95_dsr_decision,
+            q95_dsr_reject_reason,
+        )
+
         # Process each candidate
         results: list[CandidateResult] = []
         passed_dsr_count = 0
@@ -243,11 +252,25 @@ class OverfittingPipeline:
                 if dsr_result is None:
                     passed_dsr = False
                 else:
-                    passed_dsr = dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold)
+                    passed_dsr, spread = q95_dsr_decision(
+                        dsr_result.deflated_sharpe,
+                        dsr.passes_threshold(dsr_result, config.dsr_confidence_threshold),
+                        self._recheck_null_spread(self._discovery_payload(candidate)),
+                    )
                     if not passed_dsr:
                         dsr_fail_reason = (
-                            f"DSR not significant: p={dsr_result.p_value:.4f} "
-                            f"(T={candidate.get('mtm_days')}, N={num_trials})"
+                            q95_dsr_reject_reason(
+                                dsr_result.deflated_sharpe,
+                                spread,
+                                dsr_result.observed_sharpe,
+                                dsr_result.num_observations,
+                                num_trials,
+                            )
+                            if spread is not None
+                            else (
+                                f"DSR not significant: p={dsr_result.p_value:.4f} "
+                                f"(T={candidate.get('mtm_days')}, N={num_trials})"
+                            )
                         )
                     floor_reasons = self._symbol_floor_reasons(candidate)
                     if floor_reasons:
@@ -682,6 +705,30 @@ class OverfittingPipeline:
         if isinstance(gate_n, int) and not isinstance(gate_n, bool) and gate_n >= 1:
             return gate_n
         return None
+
+    @staticmethod
+    def _recheck_null_spread(payload: dict[str, Any] | None) -> float | None:
+        """``notes.dsr_trials.neff_ev_q95_spread`` when the run used the q95 rule.
+
+        The promote-time re-check must reach the verdict the run did, so it
+        applies that run's own critical value. A payload without
+        ``dsr_rule == "q95"`` (older runs, explicit emax) or with a missing /
+        non-numeric spread returns None: the legacy decision, byte-identical to
+        before T4 (fail closed).
+        """
+        if not isinstance(payload, dict):
+            return None
+        trials = payload.get("dsr_trials")
+        if not isinstance(trials, dict) or trials.get("dsr_rule") != "q95":
+            return None
+        spread = trials.get("neff_ev_q95_spread")
+        if isinstance(spread, bool) or not isinstance(spread, (int, float)):
+            return None
+        try:
+            return float(spread)
+        except OverflowError:  # a huge int (10**400) is not a usable spread: fail closed
+            logger.warning("q95 re-check: neff_ev_q95_spread too large for a float; using legacy rule")
+            return None
 
     @staticmethod
     def _champion_dsr_record(payload: dict[str, Any] | None) -> dict[str, Any] | None:

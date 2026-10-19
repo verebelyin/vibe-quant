@@ -162,6 +162,7 @@ def test_r1_build_cli_accept_not_calibrated_and_price_ratio(
 def test_r2_p4h_argv_is_byte_identical() -> None:
     argv = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1")
     assert argv == layer2.discovery_command(5, Path("/x/s.db"), 2, pop=16, gens=6)
+    assert argv[-2:] == ["--dsr-rule", "emax"]
     assert budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B3") == (
         layer2.discovery_command(5, Path("/x/s.db"), 2, pop=36, gens=14)
     )
@@ -170,17 +171,31 @@ def test_r2_p4h_argv_is_byte_identical() -> None:
     assert "--indicator-pool" not in probe
     assert len(probe) == len(argv) - 2
     # design-dsr-q95 T3: an absent rule is byte-identical; q95 appends exactly one pair.
-    assert "--dsr-rule" not in argv
+    assert argv.count("--dsr-rule") == 1
     q95 = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1", dsr_rule="q95")
     assert q95.count("--dsr-rule") == 1
     assert q95[-2:] == ["--dsr-rule", "q95"]
-    assert q95[:-2] == argv
+    assert q95[:-2] == argv[:-2]
     probe_q95 = budget.discovery_argv(
         layer2.P4H, 5, Path("/x/s.db"), 2, "B1", probe=True, dsr_rule="q95"
     )
     assert probe_q95.count("--dsr-rule") == 1
     assert probe_q95[-2:] == ["--dsr-rule", "q95"]
     assert probe_q95.count("--indicator-pool") == 0
+
+
+def test_budget_argv_resolves_to_the_requested_dsr_rule_through_the_cli_parser() -> None:
+    """Wave argv parsed by the discovery CLI: emax unless q95 is asked (the CLI default is q95)."""
+    from vibe_quant.discovery.__main__ import build_parser
+
+    def effective(argv: list[str]) -> str:
+        return str(build_parser().parse_args(argv[argv.index("discovery") + 1 :]).dsr_rule)
+
+    db = Path("/x/s.db")
+    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1")) == "emax"
+    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1", probe=True)) == "emax"
+    assert effective(budget.discovery_argv(layer2.P1D, 5, db, 2, "B1")) == "emax"
+    assert effective(budget.discovery_argv(layer2.P4H, 5, db, 2, "B1", dsr_rule="q95")) == "q95"
 
 
 def test_dsr_rule_recorded_and_forwarded(
@@ -212,7 +227,7 @@ def test_dsr_rule_recorded_and_forwarded(
         argv = argvs[f"{variant[:2]}|{seed}"]
         rec = budget.load_state(out)["runs"][budget.run_key(variant, "B1", seed)]
         if rule is None:
-            assert "--dsr-rule" not in argv
+            assert argv[-2:] == ["--dsr-rule", "emax"]
             assert rec["dsr_rule"] is None
         else:
             assert argv[-2:] == ["--dsr-rule", "q95"]

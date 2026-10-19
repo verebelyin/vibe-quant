@@ -495,7 +495,9 @@ def test_dsr_gate_uses_effective_n() -> None:
     from vibe_quant.discovery.__main__ import _dsr_trials_note
     from vibe_quant.discovery.pipeline import DiscoveryResult
 
-    pipe = _pipeline(prior_trials_fn=lambda s, e: 921)
+    # emax pinned: this test reads the legacy reject text; the default q95 rule
+    # has its own text (tests/unit/test_dsr_q95_default.py).
+    pipe = _pipeline(prior_trials_fn=lambda s, e: 921, dsr_rule="emax")
     # Highly correlated retained series -> run_n_eff far below raw N
     rng = np.random.default_rng(11)
     common = rng.normal(0.0005, 0.01, 1264)
