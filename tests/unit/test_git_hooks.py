@@ -165,6 +165,7 @@ def test_markdown_headings_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "bd: close vq-1",
         "Merge branch 'main'",
         "Revert \"fix(dsl): x\"",
+        "journal: RESULT P-2 — 0 champions",
     ],
 )
 def test_exempt_subject_passes_on_main(
@@ -367,3 +368,31 @@ def test_pre_commit_skips_budget_check_for_other_markdown(tmp_path: Path) -> Non
     _git(repo, "add", "README.md")
 
     assert _run_lint_budget(repo, "false").returncode == 0
+
+
+@pytest.mark.parametrize("branch", ["main", "swarm/task"])
+def test_non_claude_co_author_is_rejected_on_every_branch(
+    branch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    if branch != "main":
+        _git(repo, "checkout", "-q", "-b", branch)
+    monkeypatch.chdir(repo)
+    message = _message_file(
+        tmp_path,
+        "fix(dsl): x\n\nWhy:\na\n\nWhat:\nb\n\nVerification:\nc\n\n"
+        "Co-Authored-By: DeepSeek V4 <noreply@deepseek.com>\n",
+    )
+    assert check_commit_msg.main([str(message)]) == 1
+    assert "DeepSeek V4" in capsys.readouterr().err
+
+
+def test_claude_co_author_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    message = _message_file(
+        tmp_path,
+        "fix(dsl): x\n\nWhy:\na\n\nWhat:\nb\n\nVerification:\nc\n\n"
+        "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n",
+    )
+    assert check_commit_msg.main([str(message)]) == 0

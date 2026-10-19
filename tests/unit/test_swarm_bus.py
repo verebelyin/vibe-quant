@@ -1554,3 +1554,30 @@ def test_cli_ask_rerun_waits_on_the_same_question_and_returns_its_answer(
     assert bus.main([*argv, "--timeout", "0.1"]) == 0
     assert "2*period" in capsys.readouterr().out
     assert len([m for m in bus._all(tmp_path) if m.get("kind") == "question"]) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "debug: CLAUDE_CODE_MESSAGING_TOKEN=abcd1234efgh5678ijkl",
+        "BINANCE_API_KEY: 'k3y-abcdefghijklmnop'",
+        "HOME=/x\nPATH=/bin\nUSER=me\nSHELL=/bin/zsh\nLANG=C\n",
+    ],
+)
+def test_cli_refuses_a_body_that_looks_like_a_secret(tmp_path: Path, body: str) -> None:
+    with pytest.raises(SystemExit) as exc:
+        bus.main(["--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", body])
+    assert exc.value.code == 2
+    assert not (tmp_path / "messages.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "GATE PASS; token budget fine",
+        "use SWARM_BUS=/x and SWARM_AGENT=y",
+        "the TOKEN env var must be unset",
+    ],
+)
+def test_cli_posts_ordinary_bodies(tmp_path: Path, body: str) -> None:
+    assert bus.main(["--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", body]) == 0

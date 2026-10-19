@@ -255,6 +255,7 @@ POLICY_TESTS = (
     "tests/unit/test_steering_budget.py",  # word budgets over the steering docs and agents
     "tests/unit/test_api_routers_conn_locking.py",  # tree scan: routers/discovery conn use
     "tests/unit/test_discovery_liquidation.py",  # tree scan: every NTBacktestFn passes liquidation=
+    "tests/unit/test_script_exec_bits.py",  # git index scan: shebang scripts are 100755
 )
 CACHE_DIR = "swarm-check"
 CACHE_VERSION = 2

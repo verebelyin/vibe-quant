@@ -4,13 +4,15 @@ Usage::
 
     scripts/git-hooks/check_commit_msg.py <commit-msg-file>
 
-``git commit`` passes the message file as ``$1`` (see ``githooks(5)``). On any branch
-other than ``main`` every message is accepted, so worker branches and scratch commits
-are unaffected. On ``main``:
+``git commit`` passes the message file as ``$1`` (see ``githooks(5)``). On every branch
+a ``Co-Authored-By:`` trailer naming anything but Claude is rejected (GitHub showed
+DeepSeek as a commit author; 11 commits were rewritten and force-pushed, 2026-10-16).
+Otherwise any branch other than ``main`` accepts every message, so worker branches and
+scratch commits are unaffected. On ``main``:
 
-* a subject matching ``self-improve``, ``orchestration``, ``Merge``, ``Revert``,
-  ``wip``, ``chore(beads)`` or ``bd: `` passes as-is (board/telemetry and prompt
-  commits keep their own one-line style);
+* a subject matching ``self-improve``, ``orchestration``, ``journal``,
+  ``Merge``, ``Revert``, ``wip``, ``chore(beads)`` or ``bd: `` passes as-is
+  (board/telemetry, journal and prompt commits keep their own one-line style);
 * every other message must carry the ``Why``, ``What`` and ``Verification`` heading
   lines from ``docs/orchestration/prompts/commit-message.md`` (``Why``/``**Why**:``/
   ``# Why`` all count). Missing headings are named on stderr.
@@ -33,8 +35,9 @@ DEFAULT_BRANCH = "main"
 DOC_PATH = "docs/orchestration/prompts/commit-message.md"
 
 EXEMPT_SUBJECT = re.compile(
-    r"^(self-improve|orchestration|Merge|Revert|wip|chore\(beads\)|bd: )"
+    r"^(self-improve|orchestration|journal|Merge|Revert|wip|chore\(beads\)|bd: )"
 )
+CO_AUTHOR = re.compile(r"^co-authored-by:\s*(.*)$", re.IGNORECASE)
 REQUIRED_HEADINGS = ("Why", "What", "Verification")
 HEADING = re.compile(r"^(?:#{1,6}\s*)?\*{0,2}(Why|What|Verification)\b")
 
@@ -77,16 +80,31 @@ def missing_headings(text: str) -> list[str]:
     return [heading for heading in REQUIRED_HEADINGS if heading not in found]
 
 
+def foreign_co_authors(text: str) -> list[str]:
+    """``Co-Authored-By`` trailers that do not name Claude (DeepSeek, GPT, Kimi, ...)."""
+    return [
+        m.group(1).strip()
+        for line in message_lines(text)
+        if (m := CO_AUTHOR.match(line.strip())) is not None and "claude" not in m.group(1).lower()
+    ]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 1:
         print("usage: check_commit_msg.py <commit-msg-file>", file=sys.stderr)
         return 2
 
+    text = Path(args[0]).read_text(encoding="utf-8", errors="replace")
+    foreign = foreign_co_authors(text)
+    if foreign:
+        print(f"non-Claude Co-Authored-By trailer: {'; '.join(foreign)}", file=sys.stderr)
+        print(f"name maker/reviewer models in the Review section instead ({DOC_PATH})", file=sys.stderr)
+        return 1
+
     if current_branch() != DEFAULT_BRANCH:
         return 0
 
-    text = Path(args[0]).read_text(encoding="utf-8", errors="replace")
     subject = next((line.strip() for line in message_lines(text) if line.strip()), "")
     if EXEMPT_SUBJECT.match(subject):
         return 0

@@ -143,6 +143,20 @@ def _me(args: argparse.Namespace, default: str = "anon") -> str:
     return str(args.as_ or os.environ.get("SWARM_AGENT") or default)
 
 
+_SECRET_ASSIGN_RE = re.compile(
+    r"\b[A-Z0-9_]*(?:TOKEN|SECRET|API_KEY|APIKEY|PASSWORD|PRIVATE_KEY)[A-Z0-9_]*\s*[=:]\s*['\"]?[^\s'\"]{12,}"
+)
+_ENV_LINE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,}=\S", re.MULTILINE)
+
+
+def looks_like_secret(body: str) -> bool:
+    """A credential assignment, or an env dump (>= 5 KEY=value lines).
+
+    2026-10-17: a double-quoted --body ran a backticked `env` and posted
+    CLAUDE_CODE_MESSAGING_TOKEN to the bus (and through a worker's model provider)."""
+    return bool(_SECRET_ASSIGN_RE.search(body)) or len(_ENV_LINE_RE.findall(body)) >= 5
+
+
 def _refuse(msg: str) -> NoReturn:
     """A refused policy violation: state the rule, exit 2 (argparse's usage-error code)."""
     print(msg, file=sys.stderr)
@@ -1247,6 +1261,9 @@ def main(argv: list[str] | None = None) -> int:
     bre.add_argument("--out")
     bre.add_argument("--global", dest="glob", action="store_true")
     args = ap.parse_args(argv)
+    if isinstance(getattr(args, "body", None), str) and looks_like_secret(args.body):
+        _refuse("bus: --body looks like a credential or an env dump; refusing to post it. "
+                "Single-quote --body '...' (double quotes run backticks) and never print env.")
     if getattr(args, "glob", False):
         args.bus = str(global_board_dir())
     bus = _bus_dir(args)

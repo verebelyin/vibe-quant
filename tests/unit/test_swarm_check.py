@@ -1145,6 +1145,7 @@ _POLICY_TESTS = [
     "tests/unit/test_steering_budget.py",
     "tests/unit/test_api_routers_conn_locking.py",
     "tests/unit/test_discovery_liquidation.py",
+    "tests/unit/test_script_exec_bits.py",
 ]
 
 
@@ -1300,8 +1301,9 @@ class TestPolicyTestSelection:
             "tests/unit/test_exception_hygiene.py",
             "tests/unit/test_api_routers_conn_locking.py",
             "tests/unit/test_discovery_liquidation.py",
+            "tests/unit/test_script_exec_bits.py",
         ]
-        assert "3 policy tests" in tests.detail
+        assert "4 policy tests" in tests.detail
 
     def test_policy_call_runs_ahead_of_the_importer_closure(self, tmp_path: Path) -> None:
         """Order pin: the targeted/policy serial call is inserted FIRST even when the importer
