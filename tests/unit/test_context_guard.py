@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,8 +43,9 @@ def test_hook_prints_once_per_session(tmp_path: Path) -> None:
     payload = json.dumps(
         {"transcript_path": str(_transcript(tmp_path, 652_000)), "session_id": f"t-{tmp_path.name}"}
     )
+    env = {**os.environ, "TMPDIR": str(tmp_path)}  # the per-session marker must not outlive the test
     run = lambda: subprocess.run(  # noqa: E731
-        [sys.executable, str(_PATH)], input=payload, capture_output=True, text=True
+        [sys.executable, str(_PATH)], input=payload, capture_output=True, text=True, env=env
     )
     first, second = run(), run()
     assert first.returncode == 0 and "CONTEXT 652k tokens" in first.stdout
