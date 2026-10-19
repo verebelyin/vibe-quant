@@ -51,6 +51,14 @@ BUDGETS: dict[str, int] = {
 }
 
 MAX_LINE_CHARS = 1300
+
+# The always-loaded user profile: Claude Code's auto-memory index for this checkout
+# (outside the repo, so only checked where it exists). Same cap as the tiered-memory model.
+PROFILE = (
+    Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(ROOT)) / "memory" / "MEMORY.md"
+)
+PROFILE_MAX_CHARS = 4000
+PROFILE_MAX_FACTS = 100
 NARRATIVE = re.compile(r"\bjob 2026\d{4}-|\b2026\d{4}-[a-z][a-z0-9-]+\b")
 
 
@@ -106,3 +114,29 @@ def test_no_overlong_lines(path: Path) -> None:
 def test_no_incident_narrative_in_agent_prompts(path: Path) -> None:
     hits = [m.group(0) for m in NARRATIVE.finditer(path.read_text())]
     assert hits == [], f"{_rel(path)}: job ids belong in commit messages: {hits[:5]}"
+
+
+def profile_problems(text: str) -> list[str]:
+    """Why a user profile breaks the cap (a fact = one `- ` bullet line); [] when it fits."""
+    facts = sum(1 for line in text.splitlines() if line.lstrip().startswith("- "))
+    out = []
+    if len(text) > PROFILE_MAX_CHARS:
+        out.append(f"{len(text)} chars > {PROFILE_MAX_CHARS}")
+    if facts > PROFILE_MAX_FACTS:
+        out.append(f"{facts} facts > {PROFILE_MAX_FACTS}")
+    return out
+
+
+def test_profile_cap_counts_chars_and_facts() -> None:
+    assert profile_problems("# Profile\n" + "- fact\n" * 100) == []
+    assert profile_problems("- fact\n" * 101) == ["101 facts > 100"]
+    assert profile_problems("x" * 4001) == ["4001 chars > 4000"]
+
+
+def test_user_profile_within_cap() -> None:
+    if not PROFILE.is_file():
+        pytest.skip(f"no auto-memory profile at {PROFILE}")
+    assert profile_problems(PROFILE.read_text()) == [], (
+        f"{PROFILE}: merge facts or move detail into the linked memory files "
+        "(one line per fact, detail lives in the file it points to)"
+    )
