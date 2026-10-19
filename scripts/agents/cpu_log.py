@@ -43,6 +43,10 @@ def _top(n: int = 5) -> list[dict[str, object]]:
 
 def label(cmd: str) -> str:
     """Short, stable label: the script/module a python process runs, else the executable."""
+    if "multiprocessing.spawn" in cmd or "multiprocessing.forkserver" in cmd:
+        return "py mp-worker"
+    if "exec(eval(sys.stdin.readline()))" in cmd:
+        return "py xdist-worker"
     toks = cmd.split()
     for i, t in enumerate(toks):
         if t == "-m" and i + 1 < len(toks):

@@ -45,3 +45,8 @@ def test_label_names_the_python_module_or_script() -> None:
     assert cpu_log.label("/x/Python -m vibe_quant discovery --run-id 3") == "py -m vibe_quant"
     assert cpu_log.label("/x/python scripts/research/power/budget.py discover") == "py budget.py"
     assert cpu_log.label("/usr/bin/caffeinate -ims") == "caffeinate"
+    spawn = "/x/Python -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=14)"
+    assert cpu_log.label(spawn) == "py mp-worker"
+    assert cpu_log.label("/x/Python -u -c import sys;exec(eval(sys.stdin.readline()))") == (
+        "py xdist-worker"
+    )
