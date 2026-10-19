@@ -4,7 +4,7 @@ Command Code serves cheap open models; the only one allowed here is DeepSeek V4.
 
 ## Dispatch protocol
 
-1. **Target.** `scripts/agents/models.py route <role>` prints the `delegate_task` target (`providerInstanceId`, `model`, `options`). Call `orchestrator_capabilities` only when a dispatch errors or the route names a provider you have not used this session.
+1. **Target.** `mkbrief.py --route <role>` prints the whole `delegate_task` call as `DELEGATE_TASK {json}`; `scripts/agents/models.py route <role>` prints just the target (`providerInstanceId`, `model`, `options`). Call `orchestrator_capabilities` only when a dispatch errors or the route names a provider you have not used this session.
 2. **Delegate.** `delegate_task` with `task` = the dispatch text `mkbrief.py` printed (a pointer to the brief file plus the TELEMETRY line), `target` from step 1, `mode: "async"`, and a `clientRequestId` unique per round (`cc-<slug>-<round>`, `rev-<slug>-<round>`; reuse it only to retry that same call). Record `taskId` in the ledger.
 3. **Wait.** A finished child wakes your thread with a notification: end the turn instead of polling. Then read `handoffs/<id>.md` when the child wrote one (`task_status` prints the report twice). `task_cancel` only when the user asks.
 4. **Next round.** A new `delegate_task` with the original brief, the findings verbatim and anything unresolved, under a new `clientRequestId`. Never `t3_thread_send` to a `childThreadId`, and never `t3_thread_launch`/`create_threads` for children.

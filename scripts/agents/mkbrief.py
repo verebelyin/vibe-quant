@@ -75,6 +75,7 @@ import argparse
 import ast
 import fnmatch
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -364,7 +365,48 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--set-file", action="append", default=[], metavar="KEY=PATH")
     parser.add_argument("--append", action="append", default=[], metavar="FILE")
     parser.add_argument("--force", action="store_true", help="overwrite an existing brief")
+    parser.add_argument(
+        "--route",
+        default="",
+        help="models.py role: print the delegate_task JSON (T3) and append a ledger row",
+    )
+    parser.add_argument("--bead", default="", help="bead id for the --route ledger row")
     return parser.parse_args(argv)
+
+
+def _sibling(name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(f"mkbrief_{name}", Path(__file__).with_name(f"{name}.py"))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str) -> int:
+    """--route: one ready-to-send dispatch line + the ledger's "dispatched" row (exit 2: no route)."""
+    models = _sibling("models")
+    default = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
+    data = models.load(Path(os.environ.get("VQ_MODELS_JSON") or default))
+    chosen, skipped = models.resolve(data, args.route)
+    if chosen is None:
+        why = "; ".join(f"{k}: {r}" for k, r in skipped) or "unknown role"
+        print(f"route {args.route}: none available ({why})", file=sys.stderr)
+        return 2
+    key, model = chosen
+    runtime = str(model.get("runtime"))
+    if runtime == "t3":
+        call = {"task": dispatch_text, "target": model.get("target"), "mode": "async",
+                "clientRequestId": args.id}  # fmt: skip
+        print("DELEGATE_TASK " + json.dumps(call))
+    else:
+        print(f"ROUTE {args.route} -> {key} ({runtime}) {json.dumps(model.get('target'))}")
+    ledger = _sibling("ledger")
+    ledger.append_row(job, {
+        "agent": args.id, "runtime": runtime, "model": key, "task": task, "bead": args.bead,
+        "worktree": args.worktree, "status": f"{ledger.now_hm()} dispatched",
+    })  # fmt: skip
+    return 0
 
 
 def _key_value(items: list[str], flag: str) -> list[tuple[str, str]]:
@@ -486,8 +528,10 @@ def main(argv: list[str] | None = None) -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)
-    print(f"Read your brief at {out_path} and follow it exactly.")
-    print(values["TELEMETRY"])
+    dispatch_text = f"Read your brief at {out_path} and follow it exactly.\n{values['TELEMETRY']}"
+    print(dispatch_text)
+    if args.route:
+        return dispatch(job, args, task, dispatch_text)
     return 0
 
 

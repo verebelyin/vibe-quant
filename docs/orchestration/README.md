@@ -105,7 +105,7 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 - **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocks for the answer), `reply --ref`, `status` (the chief's ≤ 20-line overview).
 - **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`) and are mirrored to the committed `docs/orchestration/board/messages.jsonl`; human view [`board/BOARD.md`](board/BOARD.md). Verdicts and status go to DMs or handoffs.
 - **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
-- **Chief:** one durable tail under a Monitor (`tail --to chief --durable --kinds question,blocker`; task completions already notify); it keeps its own cursor, so re-arming replays what it missed. Only one durable tail per (`--as`, `--to`) may run.
+- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); it keeps its own cursor, so a restart replays what it missed. Only one durable tail per (`--as`, `--to`) may run.
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 
 ## Swarm tools

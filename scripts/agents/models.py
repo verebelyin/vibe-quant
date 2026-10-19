@@ -94,24 +94,30 @@ def _routes(data: Mapping[str, object]) -> dict[str, list[str]]:
     return raw if isinstance(raw, dict) else {}
 
 
-def cmd_route(data: Mapping[str, object], role: str) -> int:
-    routes = _routes(data)
-    if role not in routes:
-        print(f"unknown role {role!r}; valid roles: {', '.join(routes)}", file=sys.stderr)
-        return 2
+def resolve(
+    data: Mapping[str, object], role: str
+) -> tuple[tuple[str, dict[str, object]] | None, list[tuple[str, str]]]:
+    """(first available (key, model) on the role's route or None, skipped (key, reason))."""
     models = _models(data)
     skipped: list[tuple[str, str]] = []
-    chosen: tuple[str, dict[str, object]] | None = None
-    for key in routes[role]:
+    for key in _routes(data).get(role, []):
         model = models.get(key)
         if model is None:
             skipped.append((key, "unknown model"))
             continue
         available, reason = availability(model)
         if available:
-            chosen = (key, model)
-            break
+            return (key, model), skipped
         skipped.append((key, reason))
+    return None, skipped
+
+
+def cmd_route(data: Mapping[str, object], role: str) -> int:
+    routes = _routes(data)
+    if role not in routes:
+        print(f"unknown role {role!r}; valid roles: {', '.join(routes)}", file=sys.stderr)
+        return 2
+    chosen, skipped = resolve(data, role)
     if chosen is None:
         print(f"{role} -> none available")
         for key, reason in skipped:

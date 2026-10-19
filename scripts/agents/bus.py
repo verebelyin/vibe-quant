@@ -12,7 +12,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # 0 = all), job-tagged, as digest does
     bus.py ask   --to chief --body TEXT [--timeout 25] [--client-id TEXT]   # post a question, wait for its answer; re-run = keep waiting (never re-posts)
     bus.py wait  [--timeout 600]     # block until my inbox has something new
-    bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS]  # follow messages (chief: run under a Monitor)
+    bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS] [--exit-on-first]  # follow messages
                                      # --durable persists its own delivery cursor, so a restart
                                      # replays everything that arrived while the watcher was dead;
                                      # one durable tail per (--as, --to): a second exits with an error.
@@ -922,6 +922,7 @@ def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str |
 def _durable_tail(
     bus: Path, me: str, to: str, since_start: bool, timeout: float | None,
     kinds: frozenset[str] | None = None, emit: Callable[[str], None] | None = None,
+    exit_on_first: bool = False,
 ) -> None:
     """A tail that survives a restart: its own cursor, advanced only after printing.
 
@@ -951,15 +952,19 @@ def _durable_tail(
         deadline = None if timeout is None else time.monotonic() + timeout
         while deadline is None or time.monotonic() < deadline:
             msgs, new_offset = _read_from(bus, offset)
+            sent = 0
             for m in msgs:
                 if to and m.get("to") not in (to, "all", "board"):
                     continue
                 if kinds and m.get("kind") not in kinds:
                     continue
                 send(fmt(m))
+                sent += 1
             if new_offset != offset:
                 _write_cursor(cpath, new_offset)
                 offset = new_offset
+            if sent and exit_on_first:
+                return  # the whole batch was delivered and the cursor advanced past it
             time.sleep(POLL_S)
 
 
@@ -1213,6 +1218,11 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--durable", action="store_true", help="persist a delivery cursor so a restart replays undelivered messages")
     t.add_argument("--timeout", type=float, default=None, help="stop after SECONDS (default: forever)")
     t.add_argument(
+        "--exit-on-first", action="store_true",
+        help="exit after the first delivered batch: run as a background Bash call (2 h cap) that "
+             "wakes the chief, instead of a Monitor that expires every 30 min",
+    )
+    t.add_argument(
         "--kinds", metavar="K1,K2",
         help=f"emit only these kinds ({'/'.join(KINDS)}); the durable cursor still advances past the rest",
     )
@@ -1323,7 +1333,10 @@ def main(argv: list[str] | None = None) -> int:
         kinds = parse_kinds(args.kinds)
         path = bus / "messages.jsonl"
         if args.durable:
-            _durable_tail(bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds)
+            _durable_tail(
+                bus, _me(args), str(args.to or ""), args.since_start, args.timeout, kinds,
+                exit_on_first=args.exit_on_first,
+            )  # fmt: skip
         else:
             start = 0 if args.since_start or not path.exists() else path.stat().st_size
             for m in _follow(bus, start, args.timeout):
@@ -1332,6 +1345,8 @@ def main(argv: list[str] | None = None) -> int:
                 if kinds and m.get("kind") not in kinds:
                     continue
                 print(fmt(m), flush=True)
+                if args.exit_on_first:
+                    break
     elif args.cmd == "status":
         for line in status_report(bus, _me(args, "chief")):
             print(line)

@@ -17,7 +17,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 4. **Ledger.** One row per task: id, runtime, model, dependencies, parallel group, bead, worktree, `clientRequestId` + `taskId` for T3 rows. File the beads.
 5. **Dispatch loop** until every row is `done` or `dropped`:
    - Each writer gets `scripts/agents/worktree.sh <slug> [base]` (stacked task: the parent's branch as base). WIP ≤ 5 writers.
-   - Render every brief with `scripts/agents/mkbrief.py` from `prompts/cmd-task.md` (makers) or `prompts/review-task.md` (reviewers), appending `prompts/bus-protocol.md`. Dispatch the text it prints. Claude roles go through the Agent tool; T3 roles through `delegate_task` (cheap-agents.md).
+   - Render every brief with `scripts/agents/mkbrief.py --route <role> --bead <id>` from `prompts/cmd-task.md` (makers) or `prompts/review-task.md` (reviewers), appending `prompts/bus-protocol.md`. It appends the ledger row and prints the dispatch: a `DELEGATE_TASK {json}` line to pass to `delegate_task` as is, or the Agent-tool route for Claude roles. Later status rows: `scripts/agents/ledger.py`.
    - Pre-review gate: `swarm-check.sh <wt> --scope '<SCOPE>'` must say GATE PASS (a maker's cached PASS is reused in seconds). A FAIL goes straight back to the maker.
    - Send every handoff through `scripts/agents/handoff_lint.py`, save it verbatim to `handoffs/`, and update the ledger. Return a maker handoff without a red run.
    - Route each diff to its checker (README § Tiered review) and follow the reviewer's `fix-route:`: `deepseek` → new `delegate_task` round with the original brief + findings verbatim, back to the same checker; `sonnet` → Sonnet `implementer` with the findings verbatim, then a fresh reviewer. A blocking finding caused by your own ruling, fully specified as a contract row, may go back to DeepSeek. The round closes on the checker's PASS.
@@ -34,7 +34,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
 
 ## Waiting well
 
-- Keep one Monitor on `bus.py --as chief tail --to chief --durable --kinds question,blocker` (completions arrive as task notifications). Re-arm it when its expiry notice arrives, then run `bus.py --as chief status`.
+- Keep one background Bash call (`run_in_background`, timeout 7200000) on `bus.py --as chief tail --to chief --durable --kinds question,blocker --exit-on-first` (completions arrive as task notifications). It ends on the first ask and wakes you: answer, then start it again.
 - A notification that carries nothing new (a task already ledgered, a duplicate completion) gets no prose turn: end the turn silently. Read `task_status` only when you need a result mid-turn and the handoff is not already on the bus.
 - A T3 child overdue (> ~45 min) or with no worktree edits after ~20 min: tell the user; cancel only when they say so. After a T3 server restart, `task_status` every child before re-dispatching: a cancelled child can resume on its own.
 - When the user asks whether messages reach agents, paste `bus.py --as chief status`.

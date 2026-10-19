@@ -1581,3 +1581,25 @@ def test_cli_refuses_a_body_that_looks_like_a_secret(tmp_path: Path, body: str) 
 )
 def test_cli_posts_ordinary_bodies(tmp_path: Path, body: str) -> None:
     assert bus.main(["--bus", str(tmp_path), "--as", "sa", "post", "--to", "chief", "--body", body]) == 0
+
+
+def test_durable_tail_exit_on_first_returns_after_one_batch_and_advances(tmp_path: Path) -> None:
+    """A background `tail --exit-on-first` wakes the chief once per event (no 30-min Monitor
+    expiry to re-arm); the next run starts after what was delivered."""
+    bus.post(tmp_path, "w1", "chief", "info", "noise")
+    bus.post(tmp_path, "w1", "chief", "question", "q1?")
+    sent: list[str] = []
+    t0 = time.monotonic()
+    bus._durable_tail(
+        tmp_path, "chief", "chief", True, 5.0, frozenset({"question"}), emit=sent.append,
+        exit_on_first=True,
+    )  # fmt: skip
+    assert time.monotonic() - t0 < 4  # returned on the event, not the timeout
+    assert len(sent) == 1 and "q1?" in sent[0]
+    bus.post(tmp_path, "w2", "chief", "question", "q2?")
+    sent.clear()
+    bus._durable_tail(
+        tmp_path, "chief", "chief", False, 5.0, frozenset({"question"}), emit=sent.append,
+        exit_on_first=True,
+    )  # fmt: skip
+    assert len(sent) == 1 and "q2?" in sent[0]  # q1 is not replayed

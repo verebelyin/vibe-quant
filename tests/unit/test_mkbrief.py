@@ -723,3 +723,54 @@ def test_no_out_of_scope_note_when_the_pinning_test_is_in_scope(
     assert rc == 0
     assert "outside --scope" not in capsys.readouterr().err
     assert "TESTS OUTSIDE SCOPE" not in (job / "prompts" / "cc-rd-demo-1.md").read_text()
+
+
+def _models_json(tmp_path: Path, maker_enabled: bool = True) -> Path:
+    import json
+
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({
+        "models": {
+            "flash": {"enabled": maker_enabled, "runtime": "t3",
+                      "target": {"providerInstanceId": "cc", "model": "ds-flash"}},
+            "sonnet": {"enabled": True, "runtime": "claude", "target": {"subagent_type": "implementer"}},
+        },
+        "routes": {"maker": ["flash"], "fixer": ["sonnet"]},
+    }))  # fmt: skip
+    return path
+
+
+def test_route_prints_the_delegate_call_and_appends_a_ledger_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    monkeypatch.setenv("VQ_MODELS_JSON", str(_models_json(tmp_path)))
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main([*_argv(job, template, scope="a.py", worktree=repo), "--route", "maker", "--bead", "vq-1"])
+
+    assert rc == 0
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("DELEGATE_TASK "))
+    call = json.loads(line.removeprefix("DELEGATE_TASK "))
+    assert call["clientRequestId"] == "cc-rd-demo-1" and call["mode"] == "async"
+    assert call["target"] == {"providerInstanceId": "cc", "model": "ds-flash"}
+    assert call["task"].startswith("Read your brief at ") and "TELEMETRY: task=rd-demo round=1" in call["task"]
+    rows = (job / "ledger.md").read_text().splitlines()
+    assert rows[1] == "| agent | runtime | model | task | bead | worktree | status |"
+    assert rows[-1].startswith(f"| cc-rd-demo-1 | t3 | flash | rd-demo | vq-1 | {repo} | ")
+    assert rows[-1].endswith(" dispatched |")
+
+
+def test_route_with_no_available_model_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VQ_MODELS_JSON", str(_models_json(tmp_path, maker_enabled=False)))
+    repo = _repo(tmp_path)
+    job = _job(tmp_path)
+    rc = mkbrief.main([*_argv(job, _template(tmp_path), scope="a.py", worktree=repo), "--route", "maker"])
+    assert rc == 2
+    assert "route maker: none available (flash: off)" in capsys.readouterr().err
+    assert not (job / "ledger.md").exists()
