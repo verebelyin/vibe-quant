@@ -4,6 +4,21 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: RESULT — first real BTCUSDT batch at the new defaults (50×20, q95 DSR): 0 champions on 4h and 1d; best candidates far below the bar
+
+Runs 955 (4h, 2023-06-01..2026-06-01) and 956 (1d, 2021-01-01..2026-10-15): BTCUSDT, population 50 × 20 generations, convergence 10, `--direction both` (own short genes since inydc), full indicator pool, eval_windows 3, split 0.8, `--dsr-rule q95` (explicit; default since fc5d4958), `--max-workers 3`, run in parallel with other jobs. Handoff `data/swarm/20261019-budget-dsr/handoffs/op-disc-q95-1.md`; no ERROR/Traceback in `logs/discovery_95{5,6}_20261019_173845.log`.
+
+| run | wall s | evaluated | gate_n | q95 spread | champions | best psr_stat (ann SR) |
+|---|---|---|---|---|---|---|
+| 955 4h | 4786 | 918 | 91 | 1.1663379224197128 | 0 | 0.5100172093621739 (1.625) |
+| 956 1d | 1035 | 907 | 400 | 1.0853683583822944 | 0 | -1.2677784048600025 (0.660) |
+
+Rejections (5 per run, all guardrails): 955 — `DSR q95 not significant` 5, `Too complex: N genes > 8 max` 3 (10, 9, 11 genes); 956 — DSR 5, `Bootstrap CI lower bound < 0.0` 4. `prior_n` 0 on both: earlier same-timeframe runs predate the effective-N rule (`prior_legacy_runs` 136 / 4, raw 21981 / 167) and are disclosed, not counted. CPU (cpu_log): 955 window load mean 9.8, max 29.53; 956 window mean 15.82 (shared). EYEBALLED: walls are inflated by contention; the 6n0n9.1 indicator fast paths (in review) measure −36.8% per 4h full-pool eval.
+
+**Reading:** at a budget that recovered planted S 4–5 edges in 2–3 of 3 seeds (P-2, G2 power), real BTCUSDT 4h and 1d produced no candidate near the q95 bar: the best 4h candidate needed psr_stat ≥ 1.1663 and had 0.5100; on 1d every top candidate had a negative statistic. Likely: no long/short edge expressible by these single-symbol indicator genomes on these windows, at S ≥ ≈ 3. Not shown: other symbols, multi-symbol, other edge shapes, shorter timeframes. Side finding: 3 of 5 top 4h candidates were over the 8-gene complexity cap, so the GA spent top slots on genomes the final guardrail must reject (bead filed).
+
+---
+
 ## 2026-10-19: RESULT G2 power — with the q95 DSR rule, 14 of 41 rejected planted-edge copies become champions; 0 null champions
 
 Pre-registration G2 (592256b6), power part. `budget.py --dsr-rule q95` (0b3494d1) re-ran the 21 P-2 runs that had a DSR-rejected M1 hit plus all 24 s0 runs, same seeds and settings, into a copy of the P-2 state (`data/swarm/20261019-budget-dsr/power/reharvest/`; handoff `handoffs/cc-reharvest-1.md`). 45/45 runs `completed`, driver wall sum 9181.2 s. **Identity:** evaluated, `dsr_trials.gate_n` and the candidate set equal P-2 on 45/45 runs (the rule acts after the GA; main had gained inydc since P-2, so this also confirms long-only runs are bit-identical). `verify-untouched`: `R26 shared data untouched`.
