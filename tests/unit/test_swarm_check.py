@@ -494,6 +494,118 @@ class TestImportGraph:
         assert swarm_check.importer_test_files([], self._GRAPH) == []
 
 
+def _path_reader_repo(tmp_path: Path) -> Path:
+    """The bead's red fixture: a test READS two vibe_quant modules by path, never importing them.
+
+    tests/unit/test_state_manager_locking.py's real pattern is the ``_EXTERNAL_MODULES`` tuple
+    of repo-relative paths plus ``(_REPO_ROOT / rel).read_text()``. A second test builds the
+    same path from a directory and a file name, so both needle forms are exercised. Neither
+    file imports the modules, so the reverse import closure never reaches them.
+    """
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feature")
+    (repo / "vibe_quant" / "screening").mkdir()
+    (repo / "vibe_quant" / "screening" / "replay_drift.py").write_text("R = 1\n")
+    (repo / "vibe_quant" / "validation").mkdir()
+    (repo / "vibe_quant" / "validation" / "consistency.py").write_text("C = 1\n")
+    (repo / "tests" / "unit" / "test_state_manager_locking.py").write_text(
+        "_EXTERNAL_MODULES = (\n"
+        '    "vibe_quant/screening/replay_drift.py",\n'
+        '    "vibe_quant/validation/consistency.py",\n'
+        ")\n\n\n"
+        "def test_state_consumers_never_touch_the_shared_connection() -> None:\n"
+        "    for rel in _EXTERNAL_MODULES:\n"
+        "        (_REPO_ROOT / rel).read_text()\n"
+    )
+    (repo / "tests" / "unit" / "test_split_path.py").write_text(
+        "from pathlib import Path\n\n"
+        '_ROOT = Path(__file__).parents[2] / "vibe_quant" / "screening"\n\n\n'
+        "def test_read() -> None:\n"
+        '    (_ROOT / "replay_drift.py").read_text()\n'
+    )
+    (repo / "tests" / "unit" / "test_unrelated.py").write_text(
+        "def test_x() -> None:\n    assert True\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "a test that reads the source by path")
+    return repo
+
+
+class TestPathMentionTestSelection:
+    """tests that read a changed source file BY PATH are invisible to the import graph.
+
+    tests/unit/test_state_manager_locking.py reads vibe_quant/screening/replay_drift.py and
+    vibe_quant/validation/consistency.py through ``read_text()``, so neither `-k <stem>` nor
+    the reverse import closure selects it when those modules change (bead olizd).
+    """
+
+    def test_the_import_closure_cannot_see_them(self, tmp_path: Path) -> None:
+        repo = _path_reader_repo(tmp_path)
+        changed = ["vibe_quant/screening/replay_drift.py"]
+        assert swarm_check.importer_test_files(
+            changed, swarm_check.build_import_graph(repo)
+        ) == []
+
+    @pytest.mark.parametrize(
+        ("changed", "expected"),
+        [
+            (["vibe_quant/screening/replay_drift.py"],  # the literal relative path
+             ["tests/unit/test_split_path.py", "tests/unit/test_state_manager_locking.py"]),
+            (["vibe_quant/validation/consistency.py"],  # path literal only in the lock test
+             ["tests/unit/test_state_manager_locking.py"]),
+            (["vibe_quant/other.py"], []),
+            (["tests/unit/test_state_manager_locking.py"], []),  # a changed test selects nothing
+            (["scripts/agents/swarm_check.py"], []),  # only vibe_quant modules are needles
+            ([], []),
+        ],
+    )
+    def test_path_mentions_select_reading_tests(
+        self, tmp_path: Path, changed: list[str], expected: list[str]
+    ) -> None:
+        repo = _path_reader_repo(tmp_path)
+        assert swarm_check.path_mention_test_files(changed, repo) == expected
+
+    def test_a_path_reading_test_fails_the_gate(self, tmp_path: Path) -> None:
+        repo = _path_reader_repo(tmp_path)
+        (repo / "vibe_quant" / "screening" / "replay_drift.py").write_text("R = 2\n")  # the change
+
+        def respond(cmd: Sequence[str], cwd: Path) -> tuple[int, str]:
+            if any("test_state_manager_locking.py" in Path(a).name for a in cmd):
+                return 1, "1 failed in 0.02s"
+            return 0, "1 passed in 0.01s"
+
+        runner = FakeRunner()
+        runner.responses = {"pytest": respond}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        checks = swarm_check.run_checks(cfg, runner)
+        assert {c.name: c for c in checks}["tests"].status == "FAIL"
+        assert _called_with(runner, "test_state_manager_locking.py")
+        assert swarm_check.gate_summary(checks) == ("GATE FAIL (1 failed)", 1)
+
+    def test_path_reading_files_count_against_the_importer_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _path_reader_repo(tmp_path)
+        (repo / "vibe_quant" / "screening" / "replay_drift.py").write_text("R = 2\n")
+        monkeypatch.setattr(swarm_check, "MAX_IMPORTER_FILES", 1)
+        runner = FakeRunner()
+        runner.responses = {"pytest": (0, "9 passed in 0.01s")}
+        cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+        tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+        assert tests.status == "PASS"
+        pytest_cmds = [
+            c[c.index("pytest") + 1:]
+            for c in runner.calls
+            if any("pytest" in Path(a).name for a in c)
+        ]
+        assert pytest_cmds == [
+            ["tests/unit", "-n", "auto", "--dist", "worksteal", "-m", "not timing"],
+            ["tests/unit", "-m", "timing"],
+        ]
+        assert "2 importer files > cap 1: full tests/unit" in tests.detail
+        assert not _called_with(runner, "test_state_manager_locking.py")
+
+
 class TestAutoTriggers:
     def test_exactness_dirs(self) -> None:
         for p in [

@@ -99,6 +99,16 @@ closure and the `-k` group. A change to a vibe_quant module additionally runs th
 files and that module's reverse import closure. A full tests/unit run already covers them.
 Keeps a gate PASS from leaving main red.
 
+path-mentions: a test that READS a changed source file by path instead of importing it is
+invisible to both `-k <stem>` and the reverse import closure. tests/unit/
+test_state_manager_locking.py reads vibe_quant/screening/replay_drift.py and
+vibe_quant/validation/consistency.py through `read_text()`, so a change to either module left
+the gate green (bead olizd, found by rev-si-gate-global-1). For every changed vibe_quant
+module the selection also scans tests/unit for the repo-relative path or the module FILE name
+(e.g. "replay_drift.py"); a bare stem is deliberately NOT a needle (`pipeline`, `runner` would
+select half of tests/unit, and `-k` already matches the test files named after them). Those
+files join the importer selection and count against MAX_IMPORTER_FILES.
+
 Tool commands can be stubbed via env (full command, shell-quoted):
 SWARM_CHECK_RUFF / SWARM_CHECK_MYPY / SWARM_CHECK_PYTEST (the pytest stub replaces
 the "<python> -m pytest" prefix and keeps the arguments). Stubs are refused (FAIL,
@@ -720,6 +730,38 @@ def importer_test_files(changed: Sequence[str], graph: Mapping[str, set[str]]) -
     )
 
 
+def path_mention_test_files(changed: Sequence[str], worktree: Path) -> list[str]:
+    """tests/unit test files that MENTION a changed vibe_quant module's path or file name.
+
+    The reverse import closure only sees ``import`` edges. A test that reads the source file
+    BY PATH - tests/unit/test_state_manager_locking.py's ``_EXTERNAL_MODULES`` tuple and
+    ``(root / rel).read_text()`` - is invisible to it and to `-k <stem>` when the module's stem
+    is not in the test's own name (bead olizd). Needles are the repo-relative path and the
+    module FILE name: a bare stem would select every test that merely mentions "pipeline" or
+    "runner". Only vibe_quant/**/*.py paths are needles; a changed test file selects nothing.
+    Sorted: the pytest command line must not depend on filesystem order.
+    """
+    needles: set[str] = set()
+    for path in changed:
+        if module_name(path):
+            needles.add(path)
+            needles.add(Path(path).name)
+    if not needles:
+        return []
+    root = worktree / "tests" / "unit"
+    if not root.is_dir():
+        return []
+    out: list[str] = []
+    for path in sorted(root.rglob("test_*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if any(needle in text for needle in needles):
+            out.append(path.relative_to(worktree).as_posix())
+    return out
+
+
 def policy_test_files(worktree: Path) -> list[str]:
     """The POLICY_TESTS present in `worktree`, in constant order.
 
@@ -1021,14 +1063,16 @@ def _run_tests(
     full = needs_full_suite(state.changed)
     # A changed vibe_quant module also runs every test file that imports it, directly or
     # through other vibe_quant modules (reverse import closure): a caller test whose names
-    # never mention the module is invisible to `-k <stem>` (see importer_test_files).
+    # never mention the module is invisible to `-k <stem>` (see importer_test_files). Tests
+    # that READ the module by path have no import edge, so the same selection adds them by
+    # path/file-name mention (see path_mention_test_files); both count against the cap.
     if not full and any(module_name(p) for p in state.changed):
         seen = set(targets)
-        importers = [
-            p
-            for p in importer_test_files(state.changed, build_import_graph(cfg.worktree, state.changed))
-            if p not in seen
-        ]
+        selected = set(
+            importer_test_files(state.changed, build_import_graph(cfg.worktree, state.changed))
+        )
+        selected.update(path_mention_test_files(state.changed, cfg.worktree))
+        importers = sorted(selected - seen)
         if len(importers) > MAX_IMPORTER_FILES:
             full = True  # a low-level module reaches most of tests/unit: one whole-suite run
             notes.append(
