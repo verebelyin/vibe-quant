@@ -978,8 +978,36 @@ def harvest_run(db: Path, run_id: int) -> dict[str, Any]:
         "rejections_by_stage": dict(Counter(str(r.get("stage", "guardrails")) for r in rejects)),
         "dsr_trials": trials,
         "r31": check_isolation(trials),
+        "indicator_pool": notes.get("indicator_pool"),
         "candidates": candidates,
     }
+
+
+def config_violations(h: dict[str, Any], pool: Sequence[str] | None, dsr_rule: str) -> list[str]:
+    """What a harvested run actually used against what the harness asked for; [] = consistent.
+
+    Checks the run's output, not its argv: P-2 (2026-10-19) passed ``--indicator-pool`` to 96+
+    runs whose MA genes ignored it (found a day later), and a CLI default switch reached research
+    runs that omitted ``--dsr-rule``. ``pool`` None = no restriction asked (a probe run).
+    """
+    out: list[str] = []
+    if pool is not None:
+        allowed = set(pool)
+        stored = h.get("indicator_pool")
+        if stored is not None and set(stored) != allowed:
+            out.append(f"notes indicator_pool {sorted(stored)} != requested {sorted(allowed)}")
+        for cand in h.get("candidates") or []:
+            specs = ((cand.get("dsl") or {}).get("indicators") or {}).values()
+            used = {str(spec.get("type")) for spec in specs if isinstance(spec, dict)}
+            if used - allowed:
+                out.append(
+                    f"candidate {cand.get('uid')!r} uses {sorted(used - allowed)} outside the pool"
+                )
+                break
+    trials = h.get("dsr_trials") or {}
+    if trials.get("gate_n") is not None and trials.get("dsr_rule") != dsr_rule:
+        out.append(f"DSR rule {trials.get('dsr_rule')!r} != requested {dsr_rule!r}")
+    return out
 
 
 def check_isolation(trials: dict[str, Any]) -> dict[str, Any]:
@@ -1685,9 +1713,23 @@ def require_null_record(state: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _harvest_one(ctx: Ctx, root: Path, run: dict[str, Any], profile: Profile = P4H) -> bool:
-    """Harvest ONE completed run into ``run["harvest"]``; returns its R31 isolation flag."""
+def _harvest_one(
+    ctx: Ctx,
+    root: Path,
+    run: dict[str, Any],
+    profile: Profile = P4H,
+    *,
+    pool: Sequence[str] | None = NULL_INDICATOR_POOL,
+    dsr_rule: str = "emax",
+) -> bool:
+    """Harvest ONE completed run into ``run["harvest"]``; returns its R31 isolation flag.
+
+    Fails closed (Layer2Error) when the run used another pool or DSR rule than requested."""
     h = harvest_run(Path(run["db"]), int(run["run_id"]))
+    bad = config_violations(h, pool, dsr_rule)
+    if bad:
+        msg = f"run {run['run_id']} did not run the requested config: {'; '.join(bad)}"
+        raise Layer2Error(msg)
     ok = bool(h["r31"]["ok"])
     cands = h.pop("candidates")
     start, end = train_window(profile)

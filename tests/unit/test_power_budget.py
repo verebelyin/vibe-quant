@@ -716,7 +716,7 @@ def test_f3_harvest_accepts_the_effective_n_marker(
     out = _out(tmp_path)
     _accept(out, "4h-s0", tmp_path)
     db = tmp_path / "r.db"
-    trials = {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": layer2.N_RULE_EFFECTIVE}
+    trials = {"prior_n": 0, "gate_n": 5, "run_n_eff": 5, "n_rule": layer2.N_RULE_EFFECTIVE, "dsr_rule": "emax"}
     _notes_db(db, {"dsr_trials": trials, "evaluated": 5})
     rec = _run_rec("4h-s0", "B1", 1)
     rec.update(db=str(db), run_id=1)
@@ -1184,3 +1184,29 @@ def test_report_s0_check_ignores_probe_runs_and_non_completed_runs(
     assert budget.main([*_cli(tmp_path), "report"]) == 0
     text = capsys.readouterr().out
     assert "s0 4h-s0" not in text  # no completed untagged s0 run: no line, no crash
+
+
+def test_harvest_exit_3_when_a_run_used_another_dsr_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run launched without --dsr-rule is pinned to emax; a q95 gate means the CLI default
+    leaked in (rev-dsr-t4-1, 2026-10-19), so the harvest refuses it."""
+    out = _out(tmp_path)
+    _accept(out, "4h-s0", tmp_path)
+    rec = _run_rec("4h-s0", "B1", 1, champions=0)
+    rec.update(db=str(tmp_path / "r.db"), run_id=1)
+    _seed_runs(out, [rec])
+    trials = {"n_rule": layer2.N_RULE_EFFECTIVE, "gate_n": 40, "dsr_rule": "q95"}
+    monkeypatch.setattr(
+        layer2,
+        "harvest_run",
+        lambda db, rid: {"r31": {"ok": True}, "dsr_trials": trials, "candidates": [], "champions": 0},
+    )
+    monkeypatch.setattr(layer2, "_harvest_one", lambda *a, **k: True)
+    assert budget.main([*_cli(tmp_path), "harvest", "--tf", "4h"]) == 3
+    assert "DSR rule 'q95' != requested 'emax'" in capsys.readouterr().out
+
+
+def test_requested_config_follows_probe_and_dsr_rule() -> None:
+    assert budget.requested_config({"probe": True}) == (None, "emax")
+    assert budget.requested_config({"dsr_rule": "q95"}) == (layer2.NULL_INDICATOR_POOL, "q95")

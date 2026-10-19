@@ -41,7 +41,7 @@ import subprocess  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from dataclasses import replace  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, cast  # noqa: E402
 
 import gatechain  # noqa: E402
 import numpy as np  # noqa: E402
@@ -1431,7 +1431,7 @@ def test_worker_chain_scores_through_the_shared_w3_cell_fns(
 def _bad_isolation_notes() -> dict[str, Any]:
     return {"evaluated": 53, "top_strategies": [],
             "dsr_trials": {"raw": 53, "gate_n": 55, "run_n_eff": 53, "prior_n": 2,
-                           "n_rule": N_RULE_EFFECTIVE}}
+                           "n_rule": N_RULE_EFFECTIVE, "dsr_rule": "emax"}}
 
 
 def _seed_roots(out: Path, scratch: Path, variants: tuple[str, ...]) -> dict[str, Path]:
@@ -1461,7 +1461,7 @@ def test_r43_rescreen_resolves_the_dsl_through_the_real_harvest_record(
     dsl = {"name": "genome_zz", "timeframe": "4h", "marker": 7}
     _save_notes(db, run_id, {
         "evaluated": 90, "dsr_trials": {"raw": 90, "gate_n": 90, "run_n_eff": 90, "prior_n": 0,
-                       "n_rule": N_RULE_EFFECTIVE},
+                       "n_rule": N_RULE_EFFECTIVE, "dsr_rule": "emax"},
         "top_strategies": [], "guardrail_rejections": [{"uid": "rej9", "stage": "holdout", "dsl": dsl}],
     })
     layer2.update_state(out, lambda s: layer2._variant(s, "btc2.0").__setitem__("runs", {
@@ -2078,3 +2078,59 @@ def test_cell_fns_forwards_the_profile_window_and_timeframe(
     layer2._cell_fns(layer2.P4H)
     p3 = gatechain.settings_for("W3").plan
     assert seen["timeframe"] == "4h" and seen["train_start"] == p3.train_start
+
+
+# --- the harvest checks what the run used, not what it asked for (P-2 pool, DSR default) ------
+
+
+def _cand(*types: str) -> dict[str, Any]:
+    return {"uid": "g1", "dsl": {"indicators": {f"i{n}": {"type": t} for n, t in enumerate(types)}}}
+
+
+def test_config_violations_flags_an_ma_gene_outside_the_requested_pool() -> None:
+    h = {"candidates": [_cand("RSI", "CCI"), _cand("RSI", "KAMA")], "dsr_trials": {}}
+    bad = layer2.config_violations(h, layer2.NULL_INDICATOR_POOL, "emax")
+    assert bad == ["candidate 'g1' uses ['KAMA'] outside the pool"]
+
+
+def test_config_violations_flags_a_stored_pool_that_differs() -> None:
+    h = {"indicator_pool": ["RSI"], "candidates": [], "dsr_trials": {}}
+    assert layer2.config_violations(h, ("RSI", "CCI"), "emax") == [
+        "notes indicator_pool ['RSI'] != requested ['CCI', 'RSI']"
+    ]
+
+
+def test_config_violations_flags_the_dsr_rule_the_gate_actually_used() -> None:
+    h = {"candidates": [], "dsr_trials": {"gate_n": 90, "dsr_rule": "q95"}}
+    assert layer2.config_violations(h, None, "emax") == ["DSR rule 'q95' != requested 'emax'"]
+    assert layer2.config_violations(h, None, "q95") == []
+
+
+def test_config_violations_passes_a_consistent_run_and_skips_an_ungated_one() -> None:
+    h = {
+        "indicator_pool": list(layer2.NULL_INDICATOR_POOL),
+        "candidates": [_cand("RSI", "NATR")],
+        "dsr_trials": {"gate_n": None},  # --no-dsr: no gate ran, so no rule to check
+    }
+    assert layer2.config_violations(h, layer2.NULL_INDICATOR_POOL, "emax") == []
+    assert layer2.config_violations({"candidates": [_cand("KAMA")]}, None, "emax") == []
+
+
+def test_harvest_one_fails_closed_on_config_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        layer2,
+        "harvest_run",
+        lambda db, rid: {"r31": {"ok": True}, "candidates": [_cand("VIDYA")], "dsr_trials": {}},
+    )
+    ctx = cast("layer2.Ctx", None)
+    with pytest.raises(layer2.Layer2Error, match="VIDYA"):
+        layer2._harvest_one(ctx, tmp_path, {"db": str(tmp_path / "s.db"), "run_id": 7})
+
+
+def test_harvest_run_exposes_the_stored_pool(tmp_path: Path) -> None:
+    db = tmp_path / "s.db"
+    run_id = layer2.create_run(db)
+    _save_notes(db, run_id, {"evaluated": 1, "indicator_pool": ["RSI"], "top_strategies": []})
+    assert layer2.harvest_run(db, run_id)["indicator_pool"] == ["RSI"]

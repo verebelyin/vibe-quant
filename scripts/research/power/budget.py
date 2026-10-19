@@ -613,6 +613,13 @@ def invalidate_variant(s: dict[str, Any], variant: str) -> None:
 # --- discovery argv -------------------------------------------------------------------------
 
 
+def requested_config(run: dict[str, Any]) -> tuple[tuple[str, ...] | None, str]:
+    """The (indicator pool, DSR rule) a run was launched with: a probe drops the pool and an
+    absent ``dsr_rule`` is the explicit ``emax`` pin (``discovery_argv``)."""
+    pool = None if run.get("probe") else layer2.NULL_INDICATOR_POOL
+    return pool, run.get("dsr_rule") or "emax"
+
+
 def discovery_argv(
     profile: layer2.Profile,
     run_id: int,
@@ -951,6 +958,13 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
                 f"{run['rung']} seed {run['seed']}: {h.get('r31')}"
             )
             return 3
+        drift = layer2.config_violations(h, *requested_config(run))
+        if drift:
+            print(
+                f"harvest {tf}: {run['variant']} {run['rung']} seed {run['seed']} did not run the "
+                f"requested config: {'; '.join(drift)}"
+            )
+            return 3
         bad = [c for c in h.get("candidates") or [] if not is_long_dsl(c.get("dsl") or {})]
         if bad:
             print(
@@ -960,7 +974,10 @@ def harvest_tf(ctx: layer2.Ctx, state: dict[str, Any], tf: str) -> int:
             return 3
     profile = profile_for(state, tf)
     for run in runs:
-        layer2._harvest_one(ctx, ctx.accepted_root(state, run["variant"]), run, profile)
+        pool, rule = requested_config(run)
+        layer2._harvest_one(
+            ctx, ctx.accepted_root(state, run["variant"]), run, profile, pool=pool, dsr_rule=rule
+        )
     null = (state.get("null") or {}).get(tf)
     pool: list[tuple[StrategyChromosome, float, float | None]] | None = None
     reps = 0

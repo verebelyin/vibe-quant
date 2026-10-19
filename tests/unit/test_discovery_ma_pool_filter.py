@@ -199,3 +199,23 @@ class TestPoolValidation:
     def test_ma_names_alone_cannot_build_the_genome(self) -> None:
         with pytest.raises(ValueError, match="scalar-threshold"):
             validate_indicator_pool(["VIDYA"])
+
+
+def test_run_notes_record_an_explicit_pool_and_default_runs_add_no_key() -> None:
+    """A harness checks the pool the run recorded (scripts/research/power config_violations)."""
+    from vibe_quant.discovery.__main__ import _run_provenance_notes
+    from vibe_quant.discovery.pipeline import DiscoveryResult
+
+    result = DiscoveryResult(
+        generations=[], top_strategies=[], total_candidates_evaluated=10, converged=True,
+        convergence_generation=1,
+    )  # fmt: skip
+    kwargs = dict(
+        use_mock=True, eval_windows_count=1, eval_windows=None, symbol_agg="portfolio",
+        split_ratio=0.0, direction=None, cross_window_months=[], cross_window_min_sharpe=0.5,
+        wfa_oos_step_days=0, wfa_min_consistency=0.75, num_seeds=1, seed=42,
+        bootstrap_min_sharpe=0.0, holdout_min_sharpe=0.0, symbols=["BTCUSDT"],
+    )  # fmt: skip
+    explicit = _run_provenance_notes(result, indicator_pool=["ROC", "RSI"], **kwargs)  # type: ignore[arg-type]
+    assert explicit["indicator_pool"] == ["ROC", "RSI"]
+    assert "indicator_pool" not in _run_provenance_notes(result, **kwargs)  # type: ignore[arg-type]

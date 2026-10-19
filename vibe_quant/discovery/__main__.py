@@ -801,6 +801,7 @@ def _run_provenance_notes(
     prior_legacy: dict[str, int] | None = None,
     liquidation: LiquidationSettings | None = None,
     sizing: SizingSettings | None = None,
+    indicator_pool: list[str] | None = None,
 ) -> dict[str, object]:
     """Run-level notes shared by the champion and zero-champion outcomes."""
     schedule = fee_schedule if fee_schedule is not None else FeeSchedule()
@@ -868,6 +869,11 @@ def _run_provenance_notes(
         and liquidation.leverage != DEFAULT_LEVERAGE
     ):
         notes["leverage"] = liquidation.leverage
+    # An explicit GA pool (scalar AND MA genes) is recorded so a harness can check what
+    # the run used, not what it asked for (P-2, 2026-10-19: 96+ runs ignored the pool for
+    # MA genes). A default-pool run adds no key.
+    if indicator_pool is not None:
+        notes["indicator_pool"] = list(indicator_pool)
     if symbol_agg == "worst":
         # GA rank score over the per-symbol adjusted fitness; champions still
         # need every symbol's train return > 0 and trades >= min (hard gate).
@@ -1812,6 +1818,7 @@ def main() -> int:
             prior_legacy=prior_legacy,
             liquidation=liquidation,
             sizing=sizing,
+            indicator_pool=ind_pool,
         )
         if cells is not None:
             # A grid run has no run-level liquidation / leverage / max_margin_pct: the cells
