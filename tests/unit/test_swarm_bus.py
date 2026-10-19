@@ -526,6 +526,30 @@ def test_metric_posts_older_than_a_break_sink_and_are_tagged(
     assert "Sharpe from 1.2 to 0.4\n" in out  # untagged
 
 
+def test_idle_job_buses_fade_from_digest_and_pending_but_not_from_lookups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    monkeypatch.setenv("SWARM_JOBS", str(tmp_path / "jobs"))
+    live, idle = (tmp_path / "jobs" / name / "bus" for name in ("20261019-live", "20261001-idle"))
+    for b in (live, idle):
+        b.mkdir(parents=True)
+        bus.post(b, "w", "chief", "question", f"question on {b.parent.name}?")
+    note = bus.post(idle, "w", "board", "info", "idle job design note", topic="design")
+    decision = bus.ask_user(idle, "w", "idle job decision?", job_only=True)
+    eight_days_ago = time.time() - 8 * 86400
+    os.utime(idle / "messages.jsonl", (eight_days_ago, eight_days_ago))
+    assert [m["job"] for m in bus.pending_all("chief")] == ["20261019-live"]
+    assert sorted(m["job"] for m in bus.pending_all("chief", fade_days=0)) == ["20261001-idle", "20261019-live"]
+    assert [label for label, _ in bus.digest("chief", recent=5)] == ["job 20261019-live"]
+    assert [label for label, _ in bus.digest("chief", recent=5, fade_days=10)] == ["job 20261001-idle", "job 20261019-live"]
+    assert [m["id"] for m in bus.needs_user_open_all()] == [decision["id"]]  # the user's queue never fades
+    assert bus.thread(idle, str(note["id"])) and bus.reply(gdir, "chief", str(note["id"]), "still reachable")["ref"] == note["id"]
+    bus.main(["--as", "chief", "pending", "--global", "--fade-days", "0"])
+    assert "@20261001-idle" in capsys.readouterr().out
+
+
 # --- needs-user decision queue ------------------------------------------------
 
 

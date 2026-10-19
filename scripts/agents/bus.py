@@ -6,9 +6,10 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
 
     bus.py post  --to chief|all|<agent> --kind info|question|blocker|answer|claim|done --body TEXT [--ref MSG_ID] [--client-id TEXT] [--no-handoff-check]
     bus.py inbox [--peek]            # new messages for me (to me or to all), advances my cursor
-    bus.py pending [--global]        # questions/blockers addressed to me with no reply yet, oldest first,
-                                     # one bounded line each (the body is cut to 60 chars); --global =
-                                     # persistent board + every job bus (job-tagged), as digest does
+    bus.py pending [--global] [--fade-days N]   # questions/blockers addressed to me with no reply yet, oldest
+                                     # first, one bounded line each (the body is cut to 60 chars); --global =
+                                     # persistent board + every job bus active in the last N days (default 7;
+                                     # 0 = all), job-tagged, as digest does
     bus.py ask   --to chief --body TEXT [--timeout 900] [--client-id TEXT]   # post a question, block until an answer refs it
     bus.py wait  [--timeout 600]     # block until my inbox has something new
     bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS]  # follow messages (chief: run under a Monitor)
@@ -53,7 +54,8 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
 Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
     SWARM_BUS=<dir> (or --bus)   SWARM_AGENT=<name> (or --as)
   Without a job bus everything goes to the persistent board (the lobby), so any agent can use it any time.
-  Overseer:  bus.py --as chief digest   # everything new on the persistent board + every job bus
+  Overseer:  bus.py --as chief digest [--recent N] [--fade-days N]   # everything new on the persistent board +
+                                     # every job bus active in the last N days (default 7; 0 = all)
              bus.py board brief [--top N]   # onboarding text + the N best posts for this work (SessionStart hook):
                                      # importance x 0.5^(age/60d) x relevance (files changed on this
                                      # branch, in-progress bead titles) x 0.8 per comparability break
@@ -111,6 +113,7 @@ def global_board_dir() -> Path:
 POLL_S = 2.0
 HALF_LIFE_DAYS = 60.0  # a post loses half its rank every 60 days
 BRIEF_TOP = 30
+JOB_FADE_DAYS = 7.0  # digest/pending --global skip a job bus with no message for this long (0 = never)
 BREAK_PENALTY = 0.8  # per comparability break a metric-quoting post predates
 # a metric name then its value: "sharpe 0.79", "PF=1.63", "Sharpe from 3.46"; not "dsr.py:46" or "return at runner.py:878"
 _METRIC = re.compile(
@@ -668,10 +671,10 @@ def pending(bus: Path, me: str) -> list[dict[str, object]]:
     return sorted(out, key=_ts_key)
 
 
-def pending_all(me: str) -> list[dict[str, object]]:
-    """Pending questions for ``me`` across the global board and every job bus (job-tagged)."""
+def pending_all(me: str, fade_days: float = JOB_FADE_DAYS) -> list[dict[str, object]]:
+    """Pending questions for ``me`` across the global board and every live job bus (job-tagged)."""
     out = pending(global_board_dir(), me)
-    for jb in _job_buses():
+    for jb in _job_buses(fade_days):
         out.extend({**m, "job": jb.parent.name} for m in pending(jb, me))
     return sorted(out, key=_ts_key)
 
@@ -937,11 +940,13 @@ def _durable_tail(
             time.sleep(POLL_S)
 
 
-def _job_buses() -> list[Path]:
+def _job_buses(fade_days: float = 0) -> list[Path]:
     """Job buses: $SWARM_JOBS root, else <repo>/data/swarm via git's common dir.
 
     With $SWARM_BOARD set (a scratch/shallow board) there is no repo layout to search,
-    so job buses are skipped unless $SWARM_JOBS says where they are.
+    so job buses are skipped unless $SWARM_JOBS says where they are. ``fade_days`` > 0 drops
+    buses whose messages.jsonl has not changed for that long (a finished job's short-term
+    notes); lookups by id and needs-user questions never fade.
     """
     raw = os.environ.get("SWARM_JOBS")
     if raw:
@@ -950,13 +955,19 @@ def _job_buses() -> list[Path]:
         return []
     else:
         root = _repo_root() / "data" / "swarm"
-    return sorted(p for p in root.glob("*/bus") if (p / "messages.jsonl").exists())
+    cutoff = time.time() - fade_days * 86400
+    return sorted(
+        p for p in root.glob("*/bus")
+        if (p / "messages.jsonl").exists() and (fade_days <= 0 or (p / "messages.jsonl").stat().st_mtime >= cutoff)
+    )
 
 
-def digest(me: str, recent: int | None = None) -> list[tuple[str, list[dict[str, object]]]]:
-    """Everything new for an overseer: the persistent board + every job bus (all messages, not just mine)."""
+def digest(
+    me: str, recent: int | None = None, fade_days: float = JOB_FADE_DAYS
+) -> list[tuple[str, list[dict[str, object]]]]:
+    """Everything new for an overseer: the persistent board + every live job bus (all messages, not just mine)."""
     out: list[tuple[str, list[dict[str, object]]]] = []
-    for src in [global_board_dir(), *_job_buses()]:
+    for src in [global_board_dir(), *_job_buses(fade_days)]:
         key = f"{me}.digest"
         if recent:
             msgs = _all(src)[-recent:]
@@ -1148,6 +1159,8 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--peek", action="store_true")
     pd = sub.add_parser("pending")
     pd.add_argument("--global", dest="glob", action="store_true")
+    fade_help = f"with --global, skip job buses idle this many days (default {JOB_FADE_DAYS:g}; 0 = never)"
+    pd.add_argument("--fade-days", type=float, default=JOB_FADE_DAYS, help=fade_help)
     a = sub.add_parser("ask")
     a.add_argument("--to", default="chief")
     a.add_argument("--body", required=True)
@@ -1183,6 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     dg = sub.add_parser("digest")
     dg.add_argument("--recent", type=int)
+    dg.add_argument("--fade-days", type=float, default=JOB_FADE_DAYS, help=fade_help)
     r = sub.add_parser("reply")
     r.add_argument("--ref", required=True)
     r.add_argument("--body", required=True)
@@ -1239,7 +1253,7 @@ def main(argv: list[str] | None = None) -> int:
             print("(inbox empty)")
     elif args.cmd == "pending":
         me = _me(args)
-        msgs = pending_all(me) if args.glob else pending(bus, me)  # --global = board + every job bus
+        msgs = pending_all(me, args.fade_days) if args.glob else pending(bus, me)  # --global = board + live job buses
         for m in msgs:
             job = f" @{m['job']}" if m.get("job") else ""
             print(f"{_one_line(m)}{job} ({_age_of(m)} old)")  # one bounded line: never a body dump
@@ -1336,11 +1350,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(md)
     elif args.cmd == "digest":
         me = _me(args)
-        for line in _pending_section(pending_all(me), me):
+        for line in _pending_section(pending_all(me, args.fade_days), me):
             print(line)
         for line in _needs_user_section(needs_user_open_all()):
             print(line)
-        groups = digest(me, args.recent)
+        groups = digest(me, args.recent, args.fade_days)
         for label, msgs in groups:
             print(f"== {label} ({len(msgs)} new)")
             for m in msgs:
