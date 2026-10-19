@@ -32,6 +32,7 @@ from vibe_quant.discovery.guardrails import (
     apply_discovery_dsr_returns,
     apply_guardrails,
 )
+from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
@@ -192,7 +193,7 @@ def evaluate_candidate(
     """
     cfg = settings.config
     pipeline = DiscoveryPipeline(cfg, backtest_fn=_null_backtest, backtest_fn_factory=window_bt)
-    num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+    num_genes = scalar_gene_count(chrom)
 
     series = fitness.mtm_daily_returns
     values = list(series.values) if series is not None else None

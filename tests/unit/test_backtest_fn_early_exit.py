@@ -41,7 +41,16 @@ def _fn(monkeypatch: Any, metrics: list[Any], min_trades: int = 60) -> tuple[NTB
     return fn, calls
 
 
-CHROM = SimpleNamespace(uid="x", entry_genes=[], exit_genes=[], stop_loss_pct=1.0, take_profit_pct=2.0, direction="long")
+CHROM = SimpleNamespace(
+    uid="x",
+    entry_genes=[],
+    exit_genes=[],
+    short_entry_genes=[],
+    short_exit_genes=[],
+    stop_loss_pct=1.0,
+    take_profit_pct=2.0,
+    direction="long",
+)
 
 
 def test_stops_after_window_with_nonpositive_return(monkeypatch: Any) -> None:

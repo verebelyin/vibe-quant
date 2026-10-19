@@ -52,6 +52,7 @@ from vibe_quant.discovery.operators import (
     initialize_population,
     is_valid_chromosome,
     mutate,
+    scalar_gene_count,
     tournament_select,
 )
 from vibe_quant.dsl.identity import dsl_body_key
@@ -1707,7 +1708,7 @@ class DiscoveryPipeline:
 
         ind_counter: Counter[str] = Counter()
         for c in population:
-            for g in c.entry_genes + c.exit_genes:
+            for g in c.entry_genes + c.exit_genes + c.short_entry_genes + c.short_exit_genes:
                 ind_counter[g.indicator_type] += 1
         total_genes = sum(ind_counter.values()) or 1
         ind_pcts = {k: f"{v/total_genes*100:.0f}%" for k, v in ind_counter.most_common()}
@@ -1795,17 +1796,31 @@ class DiscoveryPipeline:
         logger.info("  --- Top %d strategies ---", len(top_strategies))
         for rank, (chrom, fit) in enumerate(top_strategies, 1):
             _dir = chrom.direction.value if hasattr(chrom.direction, "value") else chrom.direction
+            short_entry = [g.indicator_type for g in chrom.short_entry_genes]
+            short_exit = [g.indicator_type for g in chrom.short_exit_genes]
+            short_suffix = (
+                f" short_entry={short_entry} short_exit={short_exit}"
+                if short_entry or short_exit
+                else ""
+            )
             logger.info(
                 "  #%d uid=%s score=%.4f sharpe=%.2f pf=%.2f dd=%.1f%% return=%.1f%% trades=%d | "
-                "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%",
+                "dir=%s entry=%s exit=%s sl=%.1f%% tp=%.1f%%%s",
                 rank, chrom.uid, fit.adjusted_score, fit.sharpe_ratio, fit.profit_factor,
                 fit.max_drawdown * 100, fit.total_return * 100, fit.total_trades,
                 _dir,
                 [g.indicator_type for g in chrom.entry_genes],
                 [g.indicator_type for g in chrom.exit_genes],
                 chrom.stop_loss_pct, chrom.take_profit_pct,
+                short_suffix,
             )
-            for label, genes in (("entry", chrom.entry_genes), ("exit", chrom.exit_genes)):
+            gene_groups = [("entry", chrom.entry_genes), ("exit", chrom.exit_genes)]
+            if short_entry or short_exit:
+                gene_groups += [
+                    ("short_entry", chrom.short_entry_genes),
+                    ("short_exit", chrom.short_exit_genes),
+                ]
+            for label, genes in gene_groups:
                 for i, gene in enumerate(genes):
                     logger.info(
                         "    %s[%d]: %s(%s) %s %.4f%s",
@@ -2156,7 +2171,7 @@ class DiscoveryPipeline:
             if gate_reasons:
                 self._reject(chrom, fitness, "worst_symbol_train", gate_reasons)
                 continue
-            num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+            num_genes = scalar_gene_count(chrom)
             num_obs = day_count if day_count else max(100, fitness.total_trades * 5)
 
             trade_ret = np.array(fitness.trade_returns) if fitness.trade_returns else None

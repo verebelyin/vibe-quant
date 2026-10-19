@@ -11,6 +11,7 @@ import statistics
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.errors import DataUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -557,7 +558,7 @@ def _evaluate_single(
     if not {"early_exit", "early_exit_symbol", "error", "synthetic_symbols"} & bt.keys():
         _sanity_check_metrics(chrom.uid, sharpe, max_dd, pf, trades, total_return)
 
-    num_genes = len(chrom.entry_genes) + len(chrom.exit_genes)
+    num_genes = scalar_gene_count(chrom)
     complexity_pen = compute_complexity_penalty(num_genes)
     overtrade_pen = compute_overtrade_penalty(trades, timeframe)
     sl_tp_pen = chromosome_sl_tp_penalty(chrom)
