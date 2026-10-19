@@ -7,6 +7,7 @@
  * (contract C6 / vibe-quant-6wq6w): no `leverage`, no `liquidation_mode`.
  */
 import { describe, expect, it } from "vitest";
+import { budgetFor } from "@/components/discovery/discoveryEstimate";
 import {
   type BankrollGridForm,
   buildDiscoveryLaunchBody,
@@ -204,6 +205,28 @@ describe("buildDiscoveryLaunchBody", () => {
     const body = buildDiscoveryLaunchBody(defaultForm({ rngSeed: "1.5", seedRunId: "abc" }));
     expect("seed" in body).toBe(false);
     expect("seed_run_id" in body).toBe(false);
+  });
+});
+
+/**
+ * U2 (bead vibe-quant-wnqea): an untouched form on the default 4h timeframe starts at
+ * the P-2 rung 50x20 with convergence 10, and the launch body carries exactly that.
+ */
+describe("buildDiscoveryLaunchBody 4h budget default", () => {
+  it("launches 50x20 with convergence 10 from an untouched 4h form", () => {
+    const budget = budgetFor("4h");
+    const body = buildDiscoveryLaunchBody(
+      defaultForm({
+        population: budget.population,
+        generations: budget.generations,
+        convergenceWindow: budget.convergenceWindow,
+        timeframe: "4h",
+      }),
+    );
+    expect(body.population).toBe(50);
+    expect(body.generations).toBe(20);
+    expect(body.convergence_generations).toBe(10);
+    expect(body.timeframes).toStrictEqual(["4h"]);
   });
 });
 

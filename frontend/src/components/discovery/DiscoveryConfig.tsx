@@ -39,11 +39,14 @@ import {
 } from "@/lib/sizing";
 import { formatApiErrorDetail } from "./apiErrorDetail";
 import {
+  budgetFor,
+  budgetOnTimeframeChange,
+  dangerAdvice,
   discoveryEvalEstimate,
   EVAL_CORES,
   evalBudget,
   gridSetupCount,
-  SEC_PER_EVAL,
+  secPerEvalFor,
 } from "./discoveryEstimate";
 import {
   BANKROLL_GRID_MODES,
@@ -65,20 +68,24 @@ interface DiscoveryConfigProps {
   onConvergenceChange?: (config: DiscoveryConvergenceConfig) => void;
 }
 
+/** The form opens on 4h, whose P-2 budget is 50x20 with convergence 10 (vibe-quant-wnqea). */
+const INITIAL_TIMEFRAME = "4h";
+const INITIAL_BUDGET = budgetFor(INITIAL_TIMEFRAME);
+
 export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
   // GA parameters (sensible defaults for quick exploration)
-  const [population, setPopulation] = useState(20);
-  const [generations, setGenerations] = useState(15);
+  const [population, setPopulation] = useState(INITIAL_BUDGET.population);
+  const [generations, setGenerations] = useState(INITIAL_BUDGET.generations);
   const [crossoverRate, setCrossoverRate] = useState(0.8);
   const [mutationRate, setMutationRate] = useState(0.1);
   const [eliteCount, setEliteCount] = useState(2);
   const [tournamentSize, setTournamentSize] = useState(3);
-  const [convergenceWindow, setConvergenceWindow] = useState(5);
+  const [convergenceWindow, setConvergenceWindow] = useState(INITIAL_BUDGET.convergenceWindow);
   const [convergenceThreshold, setConvergenceThreshold] = useState(0.001);
 
   // Target config
   const [symbols, setSymbols] = useState("BTCUSDT");
-  const [timeframe, setTimeframe] = useState("4h");
+  const [timeframe, setTimeframe] = useState(INITIAL_TIMEFRAME);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -208,6 +215,23 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
     setSelectedIndicators(
       selectedIndicators.length === indicatorNames.length ? [] : [...indicatorNames],
     );
+  }
+
+  // Switching timeframe adopts the new timeframe's budget, unless the user edited the
+  // current one (P-2: 4h -> 50x20/convergence 10, everything else 20x15/5).
+  function handleTimeframeChange(next: string) {
+    const budget = budgetOnTimeframeChange(timeframe, next, {
+      population,
+      generations,
+      convergenceWindow,
+    });
+    setPopulation(budget.population);
+    setGenerations(budget.generations);
+    if (budget.convergenceWindow !== convergenceWindow) {
+      setConvergenceWindow(budget.convergenceWindow);
+      onConvergenceChange?.({ convergenceWindow: budget.convergenceWindow, convergenceThreshold });
+    }
+    setTimeframe(next);
   }
 
   function handleLaunch() {
@@ -472,7 +496,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           </div>
           <div className="space-y-2">
             <Label htmlFor="disc-timeframe">Timeframe</Label>
-            <Select value={timeframe} onValueChange={setTimeframe}>
+            <Select value={timeframe} onValueChange={handleTimeframeChange}>
               <SelectTrigger id="disc-timeframe" className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -1066,6 +1090,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
       {(() => {
         const crossWindowMultiplier = Math.max(1, parsedCrossWindowMonths.length);
         const { totalEvals, parallelSec } = discoveryEvalEstimate({
+          timeframe,
           population,
           generations,
           numSeeds,
@@ -1079,7 +1104,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
           const m = Math.round((s % 3600) / 60);
           return m > 0 ? `${h}h ${m}m` : `${h}h`;
         };
-        const budget = evalBudget(totalEvals);
+        const budget = evalBudget(totalEvals, parallelSec, timeframe);
         const danger = budget === "danger";
         const warn = budget === "warn";
         const borderCls = danger
@@ -1096,7 +1121,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
                   {totalEvals.toLocaleString()}
                 </span>
               </span>
-              <span>~{fmt(SEC_PER_EVAL)}/eval</span>
+              <span>~{fmt(secPerEvalFor(timeframe))}/eval</span>
             </div>
             <div className="mt-1 flex items-center justify-between">
               <span>
@@ -1106,8 +1131,8 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             </div>
             {danger && (
               <p className="mt-1.5 text-[10px] font-medium text-red-300">
-                {totalEvals.toLocaleString()} evals = ~{fmt(parallelSec)} runtime. Recommended:
-                pop=20 x gen=15 = 300 evals for quick exploration.
+                {totalEvals.toLocaleString()} evals = ~{fmt(parallelSec)} runtime.{" "}
+                {dangerAdvice(timeframe)}
               </p>
             )}
             {warn && !danger && (
