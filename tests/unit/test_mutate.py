@@ -357,7 +357,18 @@ def test_timeout_is_labelled_and_counts_as_killed(
 
     old, new = _KILL
     rc = mutate.main(
-        ["--repo", str(repo), "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--", *_CMD],
+        [
+            "--repo",
+            str(repo),
+            "--file",
+            "vibe_quant/mod.py",
+            "--old",
+            old,
+            "--new",
+            new,
+            "--",
+            *_CMD,
+        ],
         run=fake_run,
     )
     out = _lines(capsys)
@@ -372,9 +383,7 @@ def test_pytest_collection_error_is_invalid_not_killed(
     reporting KILLED there would credit a mutant that was never exercised (round-2 F1)."""
     repo = _make_repo(tmp_path)
     old, new = _BROKEN
-    rc = _run(
-        repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--name", "syntax"
-    )
+    rc = _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--name", "syntax")
     out = _lines(capsys)
     assert rc == 2
     assert out[0] == (
@@ -505,9 +514,7 @@ def test_rev_uses_the_committed_text_not_the_working_tree(
 def test_unknown_rev_is_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     old, new = _KILL
-    rc = _run(
-        repo, "--rev", "deadbeef", "--file", "vibe_quant/mod.py", "--old", old, "--new", new
-    )
+    rc = _run(repo, "--rev", "deadbeef", "--file", "vibe_quant/mod.py", "--old", old, "--new", new)
     out = _lines(capsys)
     assert rc == 2
     assert out[0].startswith("ERROR repo: git archive deadbeef failed")
@@ -526,7 +533,9 @@ def test_killed_mutant_shows_first_failing_test_and_assertion(
     assert out[-1] == "MUTANTS killed=1 survived=0 errors=0"
 
 
-def test_killed_by_runtime_error_shows_error_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_killed_by_runtime_error_shows_error_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = _make_repo(tmp_path)
     _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return 1 // 0 > x")
     out = _lines(capsys)
@@ -535,7 +544,9 @@ def test_killed_by_runtime_error_shows_error_line(tmp_path: Path, capsys: pytest
     assert "ZeroDivisionError" in out[1]
 
 
-def test_quiet_kills_hides_failure_detail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_quiet_kills_hides_failure_detail(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = _make_repo(tmp_path)
     old, new = _KILL
     _run(repo, "--file", "vibe_quant/mod.py", "--old", old, "--new", new, "--quiet-kills")
@@ -551,7 +562,9 @@ def test_survivor_has_no_failure_detail(tmp_path: Path, capsys: pytest.CaptureFi
     assert len(_lines(capsys)) == 2
 
 
-def test_first_failure_parses_parametrized_id_with_spaces(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_first_failure_parses_parametrized_id_with_spaces(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = _make_repo(tmp_path)
     (repo / "tests" / "unit" / "test_ids.py").write_text(
         "import pytest\nfrom vibe_quant.mod import is_positive\n\n\n"
@@ -560,8 +573,16 @@ def test_first_failure_parses_parametrized_id_with_spaces(tmp_path: Path, capsys
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "ids")
-    _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return x >= 0",
-         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"])
+    _run(
+        repo,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        "return x > 0",
+        "--new",
+        "return x >= 0",
+        cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"],
+    )
     out = _lines(capsys)
     assert out[0].startswith("KILLED ")
     assert out[1].startswith("  first failure: tests/unit/test_ids.py::test_value[with spaces]: ")
@@ -578,8 +599,16 @@ def test_first_failure_parses_parametrized_id_containing_separator(
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "ids")
-    _run(repo, "--file", "vibe_quant/mod.py", "--old", "return x > 0", "--new", "return x >= 0",
-         cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"])
+    _run(
+        repo,
+        "--file",
+        "vibe_quant/mod.py",
+        "--old",
+        "return x > 0",
+        "--new",
+        "return x >= 0",
+        cmd=[*_CMD, "tests/unit/test_ids.py", "tests/unit/test_mod.py::test_positive"],
+    )
     out = _lines(capsys)
     assert out[0].startswith("KILLED ")
     assert out[1].startswith(
@@ -591,7 +620,9 @@ def test_first_failure_keeps_bracketed_node_id_whole() -> None:
     # The message separator is the first " - " OUTSIDE square brackets; a " - " inside a
     # parametrize id must not split the node id, and the id is printed whole either way.
     assert mutate.first_failure("") == ""
-    assert mutate.first_failure("FAILED tests/t.py::test_a") == "  first failure: tests/t.py::test_a: "
+    assert (
+        mutate.first_failure("FAILED tests/t.py::test_a") == "  first failure: tests/t.py::test_a: "
+    )
     assert (
         mutate.first_failure("FAILED tests/t.py::test_a - assert 1 == 2\n")
         == "  first failure: tests/t.py::test_a: assert 1 == 2"
@@ -605,12 +636,65 @@ def test_first_failure_keeps_bracketed_node_id_whole() -> None:
 def test_shell_style_test_commands_are_normalised() -> None:
     norm = mutate.normalize_command
     assert norm(["tests/unit/test_x.py", "-q"]) == (
-        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py", "-q"], {}
+        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py", "-q"],
+        {},
     )
     assert norm(["pytest", "tests/unit/test_x.py"]) == (
-        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py"], {}
+        [".venv/bin/python", "-m", "pytest", "tests/unit/test_x.py"],
+        {},
     )
     assert norm(["PYTHONPATH=/w", "FOO=1", ".venv/bin/python", "-m", "pytest", "t.py"]) == (
-        [".venv/bin/python", "-m", "pytest", "t.py"], {"FOO": "1"}
+        [".venv/bin/python", "-m", "pytest", "t.py"],
+        {"FOO": "1"},
     )
-    assert norm(["/x/python", "-m", "pytest", "t.py"]) == (["/x/python", "-m", "pytest", "t.py"], {})
+    assert norm(["/x/python", "-m", "pytest", "t.py"]) == (
+        ["/x/python", "-m", "pytest", "t.py"],
+        {},
+    )
+
+
+def test_auto_diff_mutates_added_code_lines_only(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "gate.py").write_text(
+        "def ok(x, n, flag):\n"
+        '    """Gate.\n\n'
+        "    passes when not over and below the cap\n"
+        '    """\n'
+        '    msg = "not and or <="\n'
+        '    logger.info("x <= %s", n)\n'
+        "    if x <= n and flag:\n"
+        "        return 3\n"
+        "    return 3\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
+    got = {(m.name, m.new.strip()) for m in mutants}
+    assert got == {
+        ("vibe_quant/gate.py:8:cmp", "if x < n and flag:"),
+        ("vibe_quant/gate.py:9:int", "return 4"),  # the 8-space line is unique in the file
+    }
+    # docstring prose (line 4), string literals (6) and logging (7) yield no mutant; the
+    # 4-space `return 3` (10) also occurs inside line 9, so it is not unique and is skipped
+
+
+def test_auto_diff_cli_runs_the_generated_mutants(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "cap.py").write_text("def capped(x):\n    return x >= 10\n")
+    (repo / "tests" / "unit" / "test_cap.py").write_text(
+        "from vibe_quant.cap import capped\n\n\ndef test_edge():\n    assert capped(10)\n"
+    )
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--", sys.executable, "-m", "pytest",
+         "tests/unit/test_cap.py", "-q"]
+    )  # fmt: skip
+    assert rc == 0  # the >= -> > mutant was generated and killed by the edge test
+
+
+def test_auto_diff_with_nothing_to_mutate_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    assert mutate.main(["--repo", str(repo), "--auto-diff", base, "--", "true"]) == 2
+    assert "no mutable added line" in capsys.readouterr().out

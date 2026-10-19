@@ -4,6 +4,7 @@
     scripts/agents/mutate.py [--repo DIR] --file PATH --old TEXT --new TEXT
                              [--name NAME] [--rev SHA] [--timeout SEC] [--quiet-kills] -- <test command...>
     scripts/agents/mutate.py [--repo DIR] --spec mutants.json [--rev SHA] [--timeout SEC] -- <test command...>
+    scripts/agents/mutate.py [--repo DIR] --auto-diff BASE [--max N] [--glob G] -- <test command...>
 
 Worked example (the mutant is killed when the tests fail on it):
 
@@ -46,6 +47,13 @@ Non-pytest commands are unchanged: any non-zero exit is a kill.
 Each KILLED line of a pytest command is followed by `  first failure: <node id>: <first
 assertion/error line>` (tells an assertion kill from an import/SQL error); `--quiet-kills` drops it.
 
+`--auto-diff BASE [--max N] [--glob G]` generates the mutants instead: for each line ADDED
+in `git diff BASE` of files matching `--glob` (default `vibe_quant/*.py`), the first
+applicable of comparison flip (`<=`/`<`, `>=`/`>`, `==`/`!=`), boolean swap (`and`/`or`),
+dropped `not`, or integer literal +1, as one whole-line replacement (the line must be unique
+in its file), at most `--max` (default 8), round-robin over files. Named `<file>:<line>:<op>`.
+Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a reviewer found.
+
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
 `--spec` takes a JSON list of `{"name", "file", "old", "new"}` objects. The last line is
 `MUTANTS killed=K survived=S errors=E`; exit 0 when S=0 and E=0, 1 when anything survived,
@@ -56,6 +64,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -70,6 +79,18 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+# comments, decorators, imports, logging/print calls and docstring lines carry no behaviour
+_SKIP_LINE_RE = re.compile(r"^\s*(?:#|@|import |from \S+ import|logger\.|log\.|print\(|\"\"\"|''')")
+_STRING_RE = re.compile(r"""(["'])(?:\\.|(?!\1).)*\1""")
+_CMP_SWAP = {"<=": "<", "<": "<=", ">=": ">", ">": ">=", "==": "!=", "!=": "=="}
+_OPERATORS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("cmp", re.compile(r"(?<![<>=!-])(<=|>=|==|!=|<|>)(?![<>=])")),
+    ("bool", re.compile(r"\b(and|or)\b")),
+    ("not", re.compile(r"\bnot\s+")),
+    ("int", re.compile(r"(?<![\w.])(\d+)(?![\w.])")),
+)
 
 TOOL_TIMEOUT = 300.0  # seconds; --timeout overrides
 DATA_LINKS = ("data/catalog", "data/archive")
@@ -333,12 +354,104 @@ def load_spec(path: Path) -> list[Mutant]:
     return mutants
 
 
+def _mutated(op: str, match: re.Match[str]) -> str:
+    if op == "cmp":
+        return _CMP_SWAP[match.group(1)]
+    if op == "bool":
+        return "or" if match.group(1) == "and" else "and"
+    if op == "not":
+        return ""
+    return str(int(match.group(1)) + 1)
+
+
+def added_lines(repo: Path, base: str, glob: str) -> list[tuple[str, int, str]]:
+    """(file, line number, text) of every line `git diff base` adds in files matching glob."""
+    out = subprocess.run(
+        ["git", "-C", str(repo), "diff", "-U0", "--no-color", base, "--", glob],
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    lines: list[tuple[str, int, str]] = []
+    path, lineno = "", 0
+    for raw in out.splitlines():
+        if raw.startswith("+++ "):
+            path = raw[6:] if raw.startswith("+++ b/") else ""
+        elif (m := _HUNK_RE.match(raw)) is not None:
+            lineno = int(m.group(1))
+        elif raw.startswith("+") and path:
+            lines.append((path, lineno, raw[1:]))
+            lineno += 1
+    untracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", "--", glob],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()  # fmt: skip
+    for rel in untracked:  # a new file not committed yet: every line is added
+        text = (repo / rel).read_text(encoding="utf-8", errors="replace")
+        lines += [(rel, n, line) for n, line in enumerate(text.splitlines(), start=1)]
+    return lines
+
+
+def string_lines(source: str) -> set[int]:
+    """Line numbers inside multi-line string constants (docstrings): prose, not behaviour."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        end = getattr(node, "end_lineno", None)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and end and end > node.lineno:
+            lines.update(range(node.lineno, end + 1))
+    return lines
+
+
+def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
+    """At most ``limit`` whole-line mutants on added code lines, round-robin over files."""
+    by_file: dict[str, list[Mutant]] = {}
+    prose: dict[str, set[int]] = {}
+    for path, lineno, text in added_lines(repo, base, glob):
+        if path.endswith(".py"):
+            if path not in prose:
+                try:
+                    prose[path] = string_lines((repo / path).read_text(encoding="utf-8"))
+                except OSError:
+                    prose[path] = set()
+            if lineno in prose[path]:
+                continue
+        # blank out string-literal contents (same length, so offsets still index `text`)
+        code = _STRING_RE.sub(lambda q: q[0][0] + "_" * (len(q[0]) - 2) + q[0][-1], text)
+        code = code.split("#", 1)[0]
+        if not code.strip() or _SKIP_LINE_RE.match(text):
+            continue
+        try:
+            source = (repo / path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if source.count(text) != 1:
+            continue
+        for op, pattern in _OPERATORS:
+            m = pattern.search(code)
+            if m is not None:
+                new = text[: m.start()] + _mutated(op, m) + text[m.end() :]
+                by_file.setdefault(path, []).append(Mutant(f"{path}:{lineno}:{op}", path, text, new))
+                break
+    picked: list[Mutant] = []
+    queues = list(by_file.values())
+    while len(picked) < limit and any(queues):
+        for queue in queues:
+            if queue and len(picked) < limit:
+                picked.append(queue.pop(0))
+    return picked
+
+
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mutate.py", description="One-command mutation check")
     parser.add_argument("--repo", default=".", help="repo to copy (default: the current dir)")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="repo-relative file to mutate")
     source.add_argument("--spec", help="JSON list of {name, file, old, new}")
+    source.add_argument("--auto-diff", metavar="BASE", help="generate mutants on lines added since BASE")
+    parser.add_argument("--max", type=int, default=8, help="--auto-diff: mutant cap (default 8)")
+    parser.add_argument("--glob", default="vibe_quant/*.py", help="--auto-diff: files to mutate")
     parser.add_argument("--old", help="text to replace; must occur exactly once")
     parser.add_argument("--new", help="replacement text")
     parser.add_argument("--name", default=None, help="mutant name (default <file>:<line>)")
@@ -363,6 +476,15 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         if args.old is None or args.new is None:
             parser.error("--file needs --old and --new")
         mutants = [Mutant(args.name or "", args.file, args.old, args.new)]
+    elif args.auto_diff:
+        try:
+            mutants = diff_mutants(Path(args.repo).resolve(), args.auto_diff, args.glob, args.max)
+        except subprocess.CalledProcessError as exc:
+            print(f"ERROR auto-diff: {(exc.stderr or '').strip()}")
+            return 2
+        if not mutants:
+            print(f"ERROR auto-diff: no mutable added line in {args.glob} since {args.auto_diff}")
+            return 2
     else:
         try:
             mutants = load_spec(Path(args.spec))
