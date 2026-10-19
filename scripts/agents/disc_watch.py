@@ -12,7 +12,12 @@ watched run has finished:
     Monitor(command="scripts/agents/disc_watch.py 938 --all-gens")
 
     disc_watch.py RUN_ID [RUN_ID ...] [--logs DIR] [--db PATH] [--interval SEC]
-                  [--all-gens]
+                  [--all-gens] [--kill-after SEC [--api URL]]
+
+`--kill-after SEC` cancels every run still going SEC seconds after the watcher started
+(`DELETE <api>/api/discovery/jobs/<id>`, default api http://127.0.0.1:8000) and keeps
+watching until the DB says it ended; it prints `KILL after <n>s (HTTP <code>)`. Discovery
+operators hand-wrote this kill loop in every wave of one job (8 operators, ~35 calls).
 
 Every printed line is prefixed `run <id>: `:
 
@@ -97,6 +102,7 @@ class Run:
     status: str = ""
     status_printed: bool = False
     traceback_left: int = 0
+    killed: bool = False
 
 
 def main_checkout_root(script_dir: Path = SCRIPT_DIR) -> Path:
@@ -272,6 +278,9 @@ def watch(
     all_gens: bool = False,
     out: TextIO = sys.stdout,
     sleep: Callable[[float], None] = time.sleep,
+    kill_after: float | None = None,
+    kill: Callable[[str], str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Poll the runs' logs and the state DB, printing as events arrive.
 
@@ -290,12 +299,19 @@ def watch(
             for run in unknown:
                 _emit(out, run.run_id, "UNKNOWN run id")
             return UNKNOWN_RC
+        started = clock()
         while True:
             for run in runs:
                 status = run_status(conn, run.run_id)
                 if status is not None:
                     run.status = status
                 terminal = run.status in TERMINAL_STATUSES
+                if (
+                    kill_after is not None and kill is not None and not terminal
+                    and not run.killed and clock() - started >= kill_after
+                ):  # fmt: skip
+                    run.killed = True
+                    _emit(out, run.run_id, f"KILL after {clock() - started:.0f}s ({kill(run.run_id)})")
                 if run.log is None:
                     run.log = newest_log(logs_dir, run.run_id)
                     if run.log is None and not run.waiting_printed:
@@ -314,6 +330,24 @@ def watch(
     return BAD_RC if any(run.status in BAD_STATUSES for run in runs) else OK_RC
 
 
+def http_cancel(api: str) -> Callable[[str], str]:
+    """DELETE /api/discovery/jobs/<id>; returns "HTTP <code>" or the error text (never raises)."""
+    import urllib.error
+    import urllib.request
+
+    def cancel(run_id: str) -> str:
+        req = urllib.request.Request(f"{api.rstrip('/')}/api/discovery/jobs/{run_id}", method="DELETE")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return f"HTTP {resp.status}"
+        except urllib.error.HTTPError as exc:
+            return f"HTTP {exc.code}"
+        except (urllib.error.URLError, OSError) as exc:
+            return f"cancel failed: {exc}"
+
+    return cancel
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="disc_watch.py",
@@ -325,6 +359,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--db", type=Path, default=None, metavar="PATH")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL, metavar="SEC")
     parser.add_argument("--all-gens", action="store_true", help="print every gen, not just improving ones")
+    parser.add_argument("--kill-after", type=float, default=None, metavar="SEC",
+                        help="cancel runs still going SEC seconds after the watcher started")
+    parser.add_argument("--api", default="http://127.0.0.1:8000", help="backend for --kill-after")
     args = parser.parse_args(argv)
     root = main_checkout_root()
     env_db = os.environ.get("VIBE_QUANT_DB")
@@ -340,6 +377,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         db_path=db_path,
         interval=args.interval,
         all_gens=args.all_gens,
+        kill_after=args.kill_after,
+        kill=http_cancel(args.api) if args.kill_after is not None else None,
     )
 
 

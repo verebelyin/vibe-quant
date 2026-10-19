@@ -479,3 +479,46 @@ def test_db_flag_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     # exit 0 comes from the flag DB's "completed", not the env DB's "failed" (which would be 1)
     assert disc_watch.main([run_id, "--logs", str(logs), "--db", str(flag_db)]) == 0
+
+
+def test_kill_after_cancels_a_running_run_once_and_waits_for_its_end(tmp_path: Path) -> None:
+    db = _db(tmp_path, {RUN: "running"})
+    logs = tmp_path / "logs"
+    _log(logs, [])
+    now = [0.0]
+    killed: list[str] = []
+
+    def kill(run_id: str) -> str:
+        killed.append(run_id)
+        return "HTTP 204"
+
+    def tick(seconds: float, status: str | None = None) -> Callable[[], None]:
+        def step() -> None:
+            now[0] += seconds
+            if status:
+                _set_status(db, RUN, status)
+
+        return step
+
+    out = io.StringIO()
+    queue = [tick(200), tick(200), tick(5), tick(5, "cancelled")]
+
+    def sleep(_s: float) -> None:
+        queue.pop(0)()
+
+    code = disc_watch.watch(
+        [RUN], logs_dir=logs, db_path=db, out=out, sleep=sleep,
+        kill_after=360, kill=kill, clock=lambda: now[0],
+    )  # fmt: skip
+    assert killed == [RUN]  # exactly once, though the run stayed "running" two more passes
+    assert f"run {RUN}: KILL after 400s (HTTP 204)" in out.getvalue()
+    assert f"run {RUN}: STATUS cancelled" in out.getvalue()
+    assert code == 1  # cancelled counts as a bad end, like any cancel
+
+
+def test_no_kill_without_kill_after(tmp_path: Path) -> None:
+    db = _db(tmp_path, {RUN: "running"})
+    logs = tmp_path / "logs"
+    _log(logs, [_complete()])
+    code, out = _run([RUN], logs, db, mutations=[lambda: _set_status(db, RUN, "completed")])
+    assert code == 0 and "KILL" not in out

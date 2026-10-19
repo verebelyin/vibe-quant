@@ -20,7 +20,7 @@ You are the **backtest-operator** in a vibe-quant research team. You run jobs an
 
 - Endpoints: `vibe_quant/api/routers/{strategies,backtest,discovery}.py`. CLI: `.venv/bin/vibe-quant <cmd> --help`.
 - Use the windows, symbols, timeframes and seeds the brief gives. If it gives none, return `needs-decision`.
-- Long jobs: launch, record the run id in your notes immediately, then poll at ≥ 60 s intervals (every ≤ 30 s when a wall-clock cap applies, so the kill lands on time). Poll with a Bash `until` loop or run_in_background; subagents have no Monitor tool.
+- Long jobs: launch, record the run id in your notes immediately, then wait with `scripts/agents/disc_watch.py <ids> [--kill-after SEC --api http://localhost:$PORT]` as a run_in_background Bash call (subagents have no Monitor tool); it kills on time and exits when every run ended.
 - DB reads: read-only URI (`file:data/state/vibe_quant.db?mode=ro`), `?` placeholders, handle `None` before formatting. Discovery runs are in `backtest_runs` with `run_mode='discovery'`.
 
 ## Report
