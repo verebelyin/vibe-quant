@@ -105,6 +105,8 @@ tf 1d seeds=3
 
 **Reading:** with production budgets (≤ 16×6 ≈ 85 genomes) the 4h GA recovered neither a planted S 4 nor S 5 edge as a champion in any seed (M2 0/3 at B1 for both). At 50×20 (≈ 850 genomes) it recovers S 4–5 in 2/3 seeds while promoting nothing on the null copy. Below S ≈ 3 the search finds the plant's shape (M1) but DSR rejects it. So the recent "0 champions" runs are uninformative about edges below S ≈ 4 on 4h. 1d is cheaper per eval (≈ 0.25 s) and found S 4 at B1. Not shown: other edge shapes, short side, multi-symbol, eval_windows 3 (production default; this study used 2), or that real BTC holds such an edge.
 
+**Correction (2026-10-19, bead vibe-quant-nn7i7):** `--indicator-pool` does not restrict the PriceVsMA genes (FRAMA/VIDYA/KAMA): every P-2 run, including the "5-indicator" arms and s0, could also draw those MA genes (perf-6n0n9-1: 24% of 4h 5-indicator engine time). All arms shared this, so within-study comparisons hold; the setup line "indicator pool ROC/DONCHIAN/RSI/CCI/NATR" was inaccurate.
+
 **Disclosures:** null pools drawn with seed 0 (driver default), not the pre-registered 20261018 (same as P-1a's C95). eval_windows 2 (pre-registered). Probe timeout raised 2400 → 4800 s after two killed attempts. Operator's first runner attempt failed with EXIT 127 (`/usr/bin/time` wrapper); 4h-s2's build stdout lost, record intact. Two git shas, no study-code diff.
 
 **Next:** user decides (a) 4h default budget B4; (b) the DSR question for S ≤ 3 edges.
