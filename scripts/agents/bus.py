@@ -10,7 +10,7 @@ Any agent with a shell can use it (Claude subagents, `cmd` workers). One bus per
                                      # first, one bounded line each (the body is cut to 60 chars); --global =
                                      # persistent board + every job bus active in the last N days (default 7;
                                      # 0 = all), job-tagged, as digest does
-    bus.py ask   --to chief --body TEXT [--timeout 900] [--client-id TEXT]   # post a question, block until an answer refs it
+    bus.py ask   --to chief --body TEXT [--timeout 25] [--client-id TEXT]   # post a question, wait for its answer; re-run = keep waiting (never re-posts)
     bus.py wait  [--timeout 600]     # block until my inbox has something new
     bus.py tail  [--to chief] [--since-start] [--durable] [--timeout SECONDS]  # follow messages (chief: run under a Monitor)
                                      # --durable persists its own delivery cursor, so a restart
@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -882,6 +883,14 @@ def _follow(bus: Path, offset: int, timeout: float | None) -> Iterator[dict[str,
         time.sleep(POLL_S)
 
 
+def ask_client_id(to: str, body: str) -> str:
+    """Idempotency key of a CLI ask: re-running the same command finds the same question.
+
+    Workers' shells time out at 30 s (Command Code's default) while an answer can take minutes;
+    a blocking 15-min ask died mid-wait (cc-si-operator-2, cc-pw-kappa-1, 2026-10-18)."""
+    return "ask-" + hashlib.sha1(f"{to}\n{body}".encode()).hexdigest()[:12]
+
+
 def ask(bus: Path, me: str, to: str, body: str, timeout: float, client_id: str | None = None) -> dict[str, object] | None:
     start = (bus / "messages.jsonl").stat().st_size if (bus / "messages.jsonl").exists() else 0
     q = post(bus, me, to, "question", body, client_id=client_id)
@@ -1164,8 +1173,9 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("ask")
     a.add_argument("--to", default="chief")
     a.add_argument("--body", required=True)
-    a.add_argument("--timeout", type=float, default=900)
-    a.add_argument("--client-id")
+    # 25 s fits a worker's 30 s tool timeout; re-running the same ask waits again (see ask_client_id)
+    a.add_argument("--timeout", type=float, default=25)
+    a.add_argument("--client-id", help="default: derived from --to and --body, so a re-run never re-posts")
     w = sub.add_parser("wait")
     w.add_argument("--timeout", type=float, default=600)
     au = sub.add_parser("ask-user")
@@ -1260,9 +1270,14 @@ def main(argv: list[str] | None = None) -> int:
         if not msgs:
             print(f"(no pending questions for {me})")
     elif args.cmd == "ask":
-        ans = ask(bus, _me(args), args.to, args.body, args.timeout, client_id=args.client_id)
+        cid = args.client_id or ask_client_id(args.to, args.body)
+        ans = ask(bus, _me(args), args.to, args.body, args.timeout, client_id=cid)
         if ans is None:
-            print(f"(no answer within {args.timeout:.0f}s — proceed with your best judgement and say so in your report)")
+            print(
+                f"(no answer yet after {args.timeout:.0f}s — re-run this exact command to keep waiting; "
+                "it never re-posts. After ~15 min of asking, proceed with your best judgement and say so "
+                "in your report)"
+            )
             return 3
         print(fmt(ans))
     elif args.cmd == "ask-user":

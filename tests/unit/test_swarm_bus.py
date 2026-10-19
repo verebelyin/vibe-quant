@@ -1538,3 +1538,19 @@ def test_done_escape_hatch_and_other_kinds_unchecked(tmp_path: Path) -> None:
     (tmp_path / "bus").mkdir()
     assert _done(tmp_path, "--no-handoff-check") == 0
     assert bus.main(["--bus", str(tmp_path / "bus"), "--as", "w1", "post", "--to", "chief", "--kind", "info", "--body", "hi"]) == 0
+
+
+def test_cli_ask_rerun_waits_on_the_same_question_and_returns_its_answer(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A worker whose shell kills a long wait re-runs the same ask: no duplicate question."""
+    argv = ["--bus", str(tmp_path), "--as", "sa", "ask", "--to", "chief", "--body", "lookback?"]
+    assert bus.main([*argv, "--timeout", "0.1"]) == 3
+    assert "re-run this exact command" in capsys.readouterr().out
+    assert bus.main([*argv, "--timeout", "0.1"]) == 3
+    questions = [m for m in bus._all(tmp_path) if m.get("kind") == "question"]
+    assert len(questions) == 1
+    bus.reply(tmp_path, "chief", str(questions[0]["id"]), "2*period")
+    assert bus.main([*argv, "--timeout", "0.1"]) == 0
+    assert "2*period" in capsys.readouterr().out
+    assert len([m for m in bus._all(tmp_path) if m.get("kind") == "question"]) == 1
