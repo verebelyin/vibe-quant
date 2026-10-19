@@ -732,27 +732,37 @@ def _strategies_from_payload(data: dict[str, object]) -> list[dict[str, object]]
     return []
 
 
-def _discovery_entry_is_short_only(entry: dict[str, object]) -> bool:
-    """Return True when a discovery result only trades the short side."""
-    chrom_raw = entry.get("chromosome")
-    if isinstance(chrom_raw, dict):
-        direction = chrom_raw.get("direction")
-        if direction == "short":
-            return True
-        if direction in {"long", "both"}:
-            return False
+def _discovery_entry_trades_short(entry: dict[str, object]) -> bool:
+    """Return True when a discovery result can place SHORT entries.
 
-    dsl_raw = entry.get("dsl")
-    if not isinstance(dsl_raw, dict):
+    ``direction=short`` shorts by definition. A ``direction=both`` genome that
+    carries its OWN short entry conditions (new genomes name their indicators
+    ``*_short_entry_*``, so the sides differ) trades that side too (R23/R26), so
+    it must clear the opposing-regime gate as well. A legacy both champion
+    stored IDENTICAL long and short entry conditions and the engine resolves
+    that same-bar tie LONG (R24/R26b), so it never shorted and stays exempt.
+
+    An entry whose DSL we cannot read cannot be proven long-only: a both
+    chromosome fails closed (gated), an entry with no direction claim keeps the
+    long-only dsl rule.
+    """
+    chrom_raw = entry.get("chromosome")
+    direction = chrom_raw.get("direction") if isinstance(chrom_raw, dict) else None
+    if direction == "short":
+        return True
+    if direction == "long":
         return False
 
-    entry_conditions = dsl_raw.get("entry_conditions")
-    if isinstance(entry_conditions, dict):
-        has_long = bool(entry_conditions.get("long"))
-        has_short = bool(entry_conditions.get("short"))
-        return has_short and not has_long
+    dsl_raw = entry.get("dsl")
+    entry_conditions = dsl_raw.get("entry_conditions") if isinstance(dsl_raw, dict) else None
+    if not isinstance(entry_conditions, dict):
+        return direction == "both"
 
-    return False
+    short: object = entry_conditions.get("short")
+    if not short:
+        return False
+    long_side: object = entry_conditions.get("long")
+    return short != long_side
 
 
 def _window_regime_sign(symbol: str, start_date: str, end_date: str) -> int:
@@ -919,10 +929,10 @@ def _enforce_short_1m_cross_regime_gate(
     discovery_run: dict[str, object],
     entry: dict[str, object],
 ) -> None:
-    """Block promotion of fragile 1m short champions without opposing-regime proof."""
+    """Block promotion of fragile 1m champions that can trade short without proof."""
     if discovery_run.get("timeframe") != "1m":
         return
-    if not _discovery_entry_is_short_only(entry):
+    if not _discovery_entry_trades_short(entry):
         return
     if _passes_opposing_regime_gate(state, run_id, discovery_run, entry):
         return

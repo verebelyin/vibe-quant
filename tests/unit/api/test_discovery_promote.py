@@ -828,3 +828,344 @@ async def test_replay_legacy_run_defaults_to_vip0_and_says_so(
     assert child is not None
     assert "bnb_discount" not in child["parameters"]
     assert child["parameters"]["fee_schedule_source"] == "legacy_default_vip0"
+
+
+# --- R29 (inydc T6): the 1m opposing-regime gate follows the SHORT SIDE of the
+# --- entry, not only direction=short -----------------------------------------
+#
+# A direction=both chromosome now carries its own short_* genes (T1-T3), so it
+# CAN short and must clear the gate (R23/R26). Legacy both champions stored
+# IDENTICAL long/short entry conditions and the engine resolves that same-bar
+# tie LONG (R24/R26b) -> long-only, exempt.
+
+
+def _predicate_trades_short(entry: dict[str, object]) -> bool:
+    """Call the shipped predicate lazily (the base has no such symbol -> red run)."""
+    from vibe_quant.api.routers.discovery import _discovery_entry_trades_short
+
+    return _discovery_entry_trades_short(entry)
+
+
+_OWN_SHORT_SIDES: dict[str, object] = {
+    "long": ["rsi_entry_0 < 30"],
+    "short": ["rsi_short_entry_0 > 70"],
+}
+
+_LEGACY_IDENTICAL_SIDES: dict[str, object] = {
+    "long": ["rsi_entry_0 < 30"],
+    "short": ["rsi_entry_0 < 30"],
+}
+
+_CROSS_WINDOW_NOTES: dict[str, object] = {
+    "cross_window_months": [1, 3],
+    "cross_window_min_sharpe": 0.5,
+}
+
+
+def _both_champion(
+    sides: dict[str, object],
+    cross_window: dict[str, object] | None,
+    *,
+    name: str = "ga_both_1m",
+) -> dict[str, object]:
+    """A direction=both 1m champion entry with its own long and short sides."""
+    entry: dict[str, object] = {
+        "dsl": {
+            "name": name,
+            "strategy_type": "momentum",
+            "indicators": {
+                "rsi_entry_0": {"type": "RSI", "period": 14},
+                "rsi_short_entry_0": {"type": "RSI", "period": 14},
+            },
+            "entry_conditions": sides,
+            "exit_conditions": {
+                "long": ["rsi_exit_0 > 70"],
+                "short": ["rsi_short_exit_0 < 40"],
+            },
+        },
+        "chromosome": {"direction": "both"},
+        "score": 1.9,
+        "trades": 60,
+        "sharpe": 1.7,
+    }
+    if cross_window is not None:
+        entry["cross_window"] = cross_window
+    return entry
+
+
+def _cross_window(shifted_sharpe: float, shifted_return_pct: float, *, passed: bool) -> dict[str, object]:
+    """Legacy cross-window payload: slot 0 in-sample, slot 1 the +1-month window."""
+    return {
+        "windows_passed": 1 if passed else 0,
+        "total_windows": 1,
+        "passed": passed,
+        "windows": [
+            {"sharpe": 1.7, "return_pct": 0.11, "trades": 60},
+            {"sharpe": shifted_sharpe, "return_pct": shifted_return_pct, "trades": 41},
+        ],
+    }
+
+
+def _patch_adverse_regime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Base window bear (-1), every shifted window bull (+1) = adverse for shorts."""
+    monkeypatch.setattr(
+        "vibe_quant.api.routers.discovery._window_regime_sign",
+        lambda _symbol, start, _end: -1 if start == "2024-01-01" else 1,
+    )
+
+
+def test_predicate_short_chromosome_trades_short() -> None:
+    """G1: direction=short -> gated (unchanged)."""
+    assert _predicate_trades_short({"chromosome": {"direction": "short"}}) is True
+
+
+def test_predicate_long_chromosome_is_exempt() -> None:
+    """G2: direction=long -> exempt (unchanged), short conditions or not."""
+    entry = {
+        "chromosome": {"direction": "long"},
+        "dsl": {"entry_conditions": {"short": ["rsi_short_entry_0 > 70"]}},
+    }
+    assert _predicate_trades_short(entry) is False
+
+
+def test_predicate_both_with_its_own_short_side_trades_short() -> None:
+    """G3: a new both genome names its indicators *_short_entry_* -> different sides."""
+    entry = {"chromosome": {"direction": "both"}, "dsl": {"entry_conditions": _OWN_SHORT_SIDES}}
+    assert _predicate_trades_short(entry) is True
+
+
+def test_predicate_both_with_dead_long_side_trades_short() -> None:
+    """G3 (R23): a both genome with no long conditions trades its short rule."""
+    entry = {
+        "chromosome": {"direction": "both"},
+        "dsl": {"entry_conditions": {"short": ["rsi_short_entry_0 > 70"]}},
+    }
+    assert _predicate_trades_short(entry) is True
+
+
+def test_predicate_both_with_identical_sides_is_exempt() -> None:
+    """G4 (R26b): identical long/short conditions -> the tie resolves LONG."""
+    entry = {
+        "chromosome": {"direction": "both"},
+        "dsl": {"entry_conditions": _LEGACY_IDENTICAL_SIDES},
+    }
+    assert _predicate_trades_short(entry) is False
+
+
+@pytest.mark.parametrize(
+    "dsl",
+    [
+        "not-a-dict",
+        {"name": "ga_both_1m"},
+        {"name": "ga_both_1m", "entry_conditions": "junk"},
+        {"name": "ga_both_1m", "entry_conditions": ["rsi_short_entry_0 > 70"]},
+    ],
+    ids=["dsl-not-a-dict", "no-entry-conditions", "conditions-not-a-dict", "conditions-a-list"],
+)
+def test_predicate_both_with_unreadable_dsl_fails_closed(dsl: object) -> None:
+    """G5: a both chromosome whose DSL cannot be read cannot be proven long-only."""
+    assert _predicate_trades_short({"chromosome": {"direction": "both"}, "dsl": dsl}) is True
+    assert _predicate_trades_short({"chromosome": {"direction": "both"}}) is True
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"dsl": {"entry_conditions": {"short": ["rsi_short_entry_0 > 70"]}}}, True),
+        (
+            {"dsl": {"entry_conditions": {"long": ["rsi_entry_0 < 30"], "short": ["rsi_short_entry_0 > 70"]}}},
+            True,
+        ),
+        ({"dsl": {"entry_conditions": _LEGACY_IDENTICAL_SIDES}}, False),
+        ({"dsl": {"entry_conditions": {"long": ["rsi_entry_0 < 30"]}}}, False),
+        ({}, False),
+    ],
+    ids=["short-only", "both-different", "both-identical", "long-only", "no-dsl"],
+)
+def test_predicate_without_chromosome_uses_entry_conditions(
+    entry: dict[str, object], expected: bool
+) -> None:
+    """G6: no chromosome -> the dsl rule (identical sides stay long-only)."""
+    assert _predicate_trades_short(entry) is expected
+
+
+async def test_promote_blocks_1m_both_champion_with_its_own_short_side(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G3: a both 1m champion that shorts is blocked without regime proof."""
+    ac, state = client
+    entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False))
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 409, r.text
+    assert "opposing-regime cross-window validation" in r.json()["detail"]
+
+
+async def test_promote_allows_1m_both_champion_with_opposing_regime_pass(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G3: the same both 1m champion promotes once a bull window passes."""
+    ac, state = client
+    entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(0.9, 0.04, passed=True), name="ga_both_1m_pass")
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "ga_both_1m_pass"
+
+
+async def test_promote_allows_1m_legacy_both_with_identical_sides(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G4: legacy identical-conditions both champions never shorted -> exempt.
+
+    The cross-window on this entry FAILS the bar and the base regime is adverse,
+    so a predicate that gated identical sides would answer 409.
+    """
+    ac, state = client
+    entry = _both_champion(
+        _LEGACY_IDENTICAL_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_legacy_1m",
+    )
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "ga_both_legacy_1m"
+
+
+async def test_promote_blocks_1m_both_champion_with_unreadable_dsl(
+    client: tuple[AsyncClient, StateManager],
+) -> None:
+    """R29/G5: a both 1m champion whose DSL we cannot read fails closed (409)."""
+    ac, state = client
+    entry: dict[str, object] = {
+        "dsl": {"name": "ga_both_unreadable_1m", "entry_conditions": "junk"},
+        "chromosome": {"direction": "both"},
+        "score": 1.3,
+        "trades": 12,
+        "sharpe": 0.8,
+    }
+    run_id = _create_discovery_run_with_results(
+        state, timeframe="1m", symbols=["BTCUSDT"], top_strategies=[entry],
+    )
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 409, r.text
+    assert "opposing-regime cross-window validation" in r.json()["detail"]
+
+
+async def test_promote_blocks_1m_short_entry_without_chromosome(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G6: no chromosome -> the entry-conditions rule still gates a 1m short."""
+    ac, state = client
+    entry: dict[str, object] = {
+        "dsl": {
+            "name": "ga_nodir_1m",
+            "strategy_type": "momentum",
+            "entry_conditions": {"short": ["rsi_short_entry_0 > 70"]},
+            "exit_conditions": {"short": ["rsi_short_exit_0 < 40"]},
+        },
+        "score": 2.0,
+        "trades": 44,
+        "sharpe": 1.9,
+        "cross_window": _cross_window(-1.2, -0.09, passed=False),
+    }
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 409, r.text
+    assert "opposing-regime cross-window validation" in r.json()["detail"]
+
+
+async def test_promote_allows_1m_short_entry_without_chromosome_once_proven(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G6: the same chromosome-less short entry promotes on a bull-window pass."""
+    ac, state = client
+    entry: dict[str, object] = {
+        "dsl": {
+            "name": "ga_nodir_1m_pass",
+            "strategy_type": "momentum",
+            "entry_conditions": {"short": ["rsi_short_entry_0 > 70"]},
+            "exit_conditions": {"short": ["rsi_short_exit_0 < 40"]},
+        },
+        "score": 2.2,
+        "trades": 46,
+        "sharpe": 2.0,
+        "cross_window": _cross_window(0.9, 0.04, passed=True),
+    }
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="1m",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "ga_nodir_1m_pass"
+
+
+async def test_promote_allows_non_1m_both_champion_without_proof(
+    client: tuple[AsyncClient, StateManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R29/G7: the gate is 1m-only -- a 4h both champion promotes without proof."""
+    ac, state = client
+    entry = _both_champion(_OWN_SHORT_SIDES, _cross_window(-1.2, -0.09, passed=False), name="ga_both_4h")
+    run_id = _create_discovery_run_with_results(
+        state,
+        timeframe="4h",
+        symbols=["BTCUSDT"],
+        top_strategies=[entry],
+        notes_extra=_CROSS_WINDOW_NOTES,
+    )
+    _patch_adverse_regime(monkeypatch)
+
+    r = await ac.post(f"/api/discovery/results/{run_id}/promote/0")
+
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "ga_both_4h"
