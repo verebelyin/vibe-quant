@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -10,6 +11,16 @@ from typing import Final
 # results all use the same DB (a runtime switch could only ever swap part of it).
 DEFAULT_DB_PATH: Final = Path(os.environ.get("VIBE_QUANT_DB") or "data/state/vibe_quant.db")
 BUSY_TIMEOUT_MS: Final = 5000
+# The real state DB of the checkout this package lives in (or a scratch copy's symlink to it).
+_REAL_DB: Final = Path(__file__).resolve().parents[2] / "data" / "state" / "vibe_quant.db"
+
+
+class RealStateDBUnderTestError(RuntimeError):
+    """A test (or a job a test launched) tried to open the real state DB."""
+
+
+def _under_test() -> bool:
+    return "pytest" in sys.modules or bool(os.environ.get("VIBE_QUANT_PYTEST"))
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
@@ -23,6 +34,10 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """
     if db_path is None:
         db_path = DEFAULT_DB_PATH
+    if _under_test() and os.path.realpath(db_path) == os.path.realpath(_REAL_DB):
+        # 2026-10-19: a review scratch copy's data/state symlink slipped past the conftest
+        # VIBE_QUANT_DB pin and a test inserted run 957 into the real DB.
+        raise RealStateDBUnderTestError(f"tests must not open the real state DB: {db_path}")
 
     # Ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)

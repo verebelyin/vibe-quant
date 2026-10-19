@@ -12,6 +12,10 @@ os.environ.setdefault(
     "VIBE_QUANT_DB", os.path.join(tempfile.mkdtemp(prefix="vq_test_db_"), "default.db")
 )
 
+# Hard guard: vibe_quant.db.connection refuses the real state DB while this is set
+# (inherited by job subprocesses a test launches).
+os.environ["VIBE_QUANT_PYTEST"] = "1"
+
 # Job log paths resolve through vibe_quant.utils.log_dir(); pin them to a temp
 # dir so a launched job (or a test calling a launch endpoint) never writes into
 # the repo's logs/ tree.
