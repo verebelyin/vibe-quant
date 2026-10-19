@@ -4,6 +4,14 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-19: COMPARABILITY NOTE — direction=both runs before inydc were long-only searches (runs 920–954)
+
+Before vibe-quant-inydc, `chromosome_to_dsl` copied the long entry/exit conditions into the short side and the compiler's `if long … elif short` tie made the short side dead, so every `--direction both` (and direction=None) run, most of runs 920–954, searched long-only strategies judged against |buy-and-hold|. Board finding arch-power (NTScreeningRunner BTCUSDT 4h 2023-06-01..2026-06-01, RSI(14) xb30/xa60 SL4 TP8): long sharpe -0.3729222589307 142 trades == both -0.3729222589307 142 trades; short alone 0.06788740870648444 112 trades.
+
+Since inydc, both genomes own their short genes. Real-engine proof (BTCUSDT 4h 2024-03-01..2024-06-01, `tests/unit/test_discovery_both_direction_nt.py`): R23 both-with-dead-long == SHORT on all five metrics, sharpe -0.6372539506147427, 15 trades, 0 long; R24 identical sides == LONG, sharpe 0.20772222893030862, 18 trades, 0 short; R26b an old stored both DSL replays to the R24 LONG numbers. Old both champions stay valid as long-only strategies (stored DSL); do not compare their numbers with post-inydc both runs. P-2 (above) used `--direction long` and is unaffected; P-1a and P-1 layer-2 searched `--direction both`, i.e. long-only.
+
+---
+
 ## 2026-10-19: RESULT P-2 — on 4h the GA needs the top rung (50×20) to recover planted S 4–5 edges as champions; production budgets (≤ 16×6) do not; at S ≤ 3 DSR blocks what the search finds
 
 Pre-registration P-2 (23ad2a4e). `scripts/research/power/budget.py` (study code unchanged since d5c5c49b; runs carry shas 20496e5d and 32cbbe97, `git diff 20496e5d..32cbbe97 -- scripts/research/power/` empty). Operator run 2026-10-18 20:33–01:19 local; state `data/swarm/20261018-grind-dir/power/budget.json`, handoff `handoffs/op-p2-main-1.md`. 96/96 ladder runs completed, no exit 2/3, `s0 champion count: 0` on both timeframes, `verify-untouched`: `R26 shared data untouched`. R31 isolation ok on every run (prior_n 0, n_rule effective).
