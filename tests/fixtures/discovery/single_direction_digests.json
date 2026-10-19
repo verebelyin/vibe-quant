@@ -1,0 +1,126 @@
+{
+  "distance_legacy_both": "5c0cf65be5d387edf7a200762b516bed48b3385817c32bb50fe91273929b50f1",
+  "distance_non_both": "3969e54ab347de9a8b588553df07e44398dc46ac74a8c20ef758b6a2f58f1d10",
+  "dsl_single_direction": "1a91041bba0ce43b49aaaacd5692c5faca11e6293c988429385714e7f064b6ce",
+  "population_long": "968be6a566556cb94f404aeac97df0f626f3c8210b8992e961cb715edb467165",
+  "population_short": "f04a4120011ad48e7af00c83ead074762f83f41a23f110e8fd8599bc22a8c2b6",
+  "random_generation_long": {
+    "direction": "long",
+    "entry_genes": [
+      {
+        "condition": "crosses_above",
+        "indicator_type": "ADX",
+        "parameters": {
+          "period": 15.0
+        },
+        "sub_value": null,
+        "threshold": 36.8667
+      },
+      {
+        "condition": ">=",
+        "indicator_type": "RAMS",
+        "parameters": {
+          "period": 81.0
+        },
+        "sub_value": null,
+        "threshold": 2.6167
+      },
+      {
+        "condition": "<",
+        "indicator_type": "MFI",
+        "parameters": {
+          "period": 21.0
+        },
+        "sub_value": null,
+        "threshold": 36.9103
+      },
+      {
+        "condition": ">=",
+        "indicator_type": "CCI",
+        "parameters": {
+          "period": 49.0
+        },
+        "sub_value": null,
+        "threshold": 194.9037
+      }
+    ],
+    "exit_genes": [
+      {
+        "condition": ">",
+        "indicator_type": "DONCHIAN",
+        "parameters": {
+          "period": 24.0
+        },
+        "sub_value": "position",
+        "threshold": 0.7298
+      },
+      {
+        "condition": "crosses_above",
+        "indicator_type": "ROC",
+        "parameters": {
+          "period": 20.0
+        },
+        "sub_value": null,
+        "threshold": -3.993
+      }
+    ],
+    "stop_loss_pct": 4.6246,
+    "take_profit_pct": 12.4123
+  },
+  "random_generation_short": {
+    "direction": "short",
+    "entry_genes": [
+      {
+        "condition": "<=",
+        "indicator_type": "BBANDS",
+        "parameters": {
+          "period": 21.0,
+          "std_dev": 1.2358
+        },
+        "sub_value": "bandwidth",
+        "threshold": 0.1577
+      },
+      {
+        "condition": ">",
+        "indicator_type": "CCI",
+        "parameters": {
+          "period": 41.0
+        },
+        "sub_value": null,
+        "threshold": 157.3268
+      }
+    ],
+    "exit_genes": [
+      {
+        "condition": "crosses_above",
+        "indicator_type": "SQUEEZE_MOM",
+        "parameters": {
+          "length": 23.0
+        },
+        "sub_value": null,
+        "threshold": 2.6228
+      },
+      {
+        "condition": "crosses_below",
+        "indicator_type": "ADAPTIVE_RSI",
+        "parameters": {
+          "alpha": 0.4563,
+          "period": 49.0
+        },
+        "sub_value": null,
+        "threshold": 68.1096
+      },
+      {
+        "condition": ">",
+        "indicator_type": "CCI",
+        "parameters": {
+          "period": 30.0
+        },
+        "sub_value": null,
+        "threshold": -191.0712
+      }
+    ],
+    "stop_loss_pct": 6.6707,
+    "take_profit_pct": 0.6795
+  }
+}

@@ -271,6 +271,14 @@ class StrategyChromosome:
     # scalar-threshold mutation/crossover paths stay type-homogeneous.
     ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
+    # Short-side genes, owned only by direction=BOTH (inydc T1). Empty for
+    # LONG/SHORT, where entry_genes/exit_genes/ma_* are the only side. The
+    # compiler checks long before short, so pre-inydc BOTH strategies traded
+    # long-only; these give BOTH a real, independently evolvable short side.
+    short_entry_genes: list[StrategyGene] = field(default_factory=list)
+    short_exit_genes: list[StrategyGene] = field(default_factory=list)
+    short_ma_entry_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
+    short_ma_exit_genes: list[PriceVsMAConditionGene] = field(default_factory=list)
     uid: str = field(default_factory=lambda: _new_uid())
 
     def clone(self) -> StrategyChromosome:
@@ -295,8 +303,22 @@ class StrategyChromosome:
             time_filters=dict(self.time_filters),
             ma_entry_genes=[g.clone() for g in self.ma_entry_genes],
             ma_exit_genes=[g.clone() for g in self.ma_exit_genes],
+            short_entry_genes=[g.clone() for g in self.short_entry_genes],
+            short_exit_genes=[g.clone() for g in self.short_exit_genes],
+            short_ma_entry_genes=[g.clone() for g in self.short_ma_entry_genes],
+            short_ma_exit_genes=[g.clone() for g in self.short_ma_exit_genes],
             uid=self.uid,
         )
+
+
+def scalar_gene_count(chrom: StrategyChromosome) -> int:
+    """Number of scalar-threshold genes across both sides (MA genes excluded)."""
+    return (
+        len(chrom.entry_genes)
+        + len(chrom.exit_genes)
+        + len(chrom.short_entry_genes)
+        + len(chrom.short_exit_genes)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +717,31 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
     return True
 
 
+def _sync_direction_genes(chrom: StrategyChromosome) -> None:
+    """Reconcile the short-side gene lists with the chromosome's direction, in place.
+
+    A non-BOTH chromosome owns no short-side genes. A BOTH chromosome must carry
+    1-5 short entries, 1-3 short exits and at most one short MA gene per slot, so
+    ``genome.chromosome_to_dsl`` can emit a short side the compiler will run.
+    Missing slots are filled with a fresh random gene; non-BOTH never draws RNG,
+    which keeps a single-direction GA run bit-identical (R16).
+    """
+    if chrom.direction != Direction.BOTH:
+        chrom.short_entry_genes.clear()
+        chrom.short_exit_genes.clear()
+        chrom.short_ma_entry_genes.clear()
+        chrom.short_ma_exit_genes.clear()
+        return
+    while len(chrom.short_entry_genes) < MIN_ENTRY_GENES:
+        chrom.short_entry_genes.append(_random_gene())
+    del chrom.short_entry_genes[MAX_ENTRY_GENES:]
+    while len(chrom.short_exit_genes) < MIN_EXIT_GENES:
+        chrom.short_exit_genes.append(_random_gene())
+    del chrom.short_exit_genes[MAX_EXIT_GENES:]
+    del chrom.short_ma_entry_genes[MAX_MA_ENTRY_GENES:]
+    del chrom.short_ma_exit_genes[MAX_MA_EXIT_GENES:]
+
+
 def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
     """Repair a chromosome by re-sampling out-of-range thresholds and fixing param constraints.
 
@@ -743,6 +790,7 @@ def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
                 g.op = random.choice(_MA_CONDITION_TYPES)
         if len(genes) > cap:
             del genes[cap:]
+    _sync_direction_genes(chrom)
     return chrom
 
 
@@ -1298,6 +1346,14 @@ def _random_chromosome(
         chrom.stop_loss_short_pct = round(random.uniform(*SL_RANGE), 4)
         chrom.take_profit_long_pct = round(random.uniform(*TP_RANGE), 4)
         chrom.take_profit_short_pct = round(random.uniform(*TP_RANGE), 4)
+        # A BOTH chromosome owns its short side; draw it AFTER every existing
+        # draw so long/short runs keep the same RNG sequence (R16).
+        chrom.short_entry_genes = [
+            _random_gene() for _ in range(random.randint(MIN_ENTRY_GENES, MAX_ENTRY_GENES))
+        ]
+        chrom.short_exit_genes = [
+            _random_gene() for _ in range(random.randint(MIN_EXIT_GENES, MAX_EXIT_GENES))
+        ]
     return chrom
 
 

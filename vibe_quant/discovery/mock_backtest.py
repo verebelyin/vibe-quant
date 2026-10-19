@@ -17,9 +17,28 @@ if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 
+def _seeding_repr(chromosome: StrategyChromosome) -> str:
+    """The seed text for an arm's deterministic metrics.
+
+    The four short-side lists are omitted when empty, so a LONG/SHORT
+    chromosome's mock metrics are bit-identical to the pre-inydc base (R16b)
+    even though a BOTH chromosome now carries them.
+    """
+    text = repr(chromosome)
+    for fragment, genes in (
+        (", short_entry_genes=[]", chromosome.short_entry_genes),
+        (", short_exit_genes=[]", chromosome.short_exit_genes),
+        (", short_ma_entry_genes=[]", chromosome.short_ma_entry_genes),
+        (", short_ma_exit_genes=[]", chromosome.short_ma_exit_genes),
+    ):
+        if not genes:
+            text = text.replace(fragment, "", 1)
+    return text
+
+
 def mock_backtest(chromosome: StrategyChromosome) -> dict[str, float | int]:
     """Generate deterministic pseudo-backtest metrics for testing GA loop."""
-    seed_bytes = repr(chromosome).encode("utf-8")
+    seed_bytes = _seeding_repr(chromosome).encode("utf-8")
     seed = int.from_bytes(hashlib.blake2b(seed_bytes, digest_size=8).digest(), "big")
     rng = random.Random(seed)
 

@@ -294,9 +294,12 @@ class TestDSLConversion:
 
     def test_both_direction_populates_long_and_short(self) -> None:
         g = StrategyGene("RSI", {"period": 14}, "less_than", 30.0)
+        short_g = StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)
         chrom = StrategyChromosome(
             entry_genes=[g],
             exit_genes=[g],
+            short_entry_genes=[short_g],
+            short_exit_genes=[short_g],
             stop_loss_pct=2.0,
             take_profit_pct=4.0,
             direction="both",
@@ -305,6 +308,8 @@ class TestDSLConversion:
         strategy = StrategyDSL(**dsl_dict)
         assert len(strategy.entry_conditions.long) > 0
         assert len(strategy.entry_conditions.short) > 0
+        # inydc: the short side is its OWN genes, not a copy of the long side
+        assert strategy.entry_conditions.long != strategy.entry_conditions.short
 
     def test_short_only(self) -> None:
         g = StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)
@@ -464,6 +469,11 @@ class TestThresholdValidation:
 
 
 class TestPerDirectionSLTPGenome:
+    @staticmethod
+    def _short_genes() -> dict[str, list[StrategyGene]]:
+        g = StrategyGene("RSI", {"period": 14}, "greater_than", 70.0)
+        return {"short_entry_genes": [g], "short_exit_genes": [g]}
+
     def test_chromosome_to_dsl_emits_per_direction(self) -> None:
         g = StrategyGene("RSI", {"period": 14}, "less_than", 30.0)
         chrom = StrategyChromosome(
@@ -476,6 +486,7 @@ class TestPerDirectionSLTPGenome:
             stop_loss_short_pct=8.29,
             take_profit_long_pct=17.13,
             take_profit_short_pct=13.06,
+            **self._short_genes(),
         )
         dsl_dict = chromosome_to_dsl(chrom)
         assert dsl_dict["stop_loss_long"]["percent"] == 1.09
@@ -508,6 +519,7 @@ class TestPerDirectionSLTPGenome:
             stop_loss_short_pct=8.29,
             take_profit_long_pct=17.13,
             take_profit_short_pct=13.06,
+            **self._short_genes(),
         )
         dsl_dict = chromosome_to_dsl(chrom)
         strategy = StrategyDSL(**dsl_dict)
@@ -522,6 +534,7 @@ class TestPerDirectionSLTPGenome:
             take_profit_pct=4.0,
             direction="both",
             stop_loss_long_pct=15.0,
+            **self._short_genes(),
         )
         errors = validate_chromosome(chrom)
         assert any("stop_loss_long" in e for e in errors)

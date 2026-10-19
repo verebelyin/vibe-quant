@@ -308,12 +308,25 @@ def generate_random_chromosome(
 
     direction = r.choice(list(Direction))
 
+    # A BOTH chromosome draws its own short side AFTER every existing draw, so
+    # the long/short RNG sequence is unchanged (R16) and a BOTH chromosome the
+    # DSL can actually compile (R4).
+    short_entry_genes: list[StrategyGene] = []
+    short_exit_genes: list[StrategyGene] = []
+    if direction == Direction.BOTH:
+        n_short_entry = r.randint(1, 5)
+        n_short_exit = r.randint(1, 3)
+        short_entry_genes = [_random_gene(r) for _ in range(n_short_entry)]
+        short_exit_genes = [_random_gene(r) for _ in range(n_short_exit)]
+
     return StrategyChromosome(
         entry_genes=entry_genes,
         exit_genes=exit_genes,
         stop_loss_pct=sl,
         take_profit_pct=tp,
         direction=direction,
+        short_entry_genes=short_entry_genes,
+        short_exit_genes=short_exit_genes,
     )
 
 
@@ -348,7 +361,14 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
         errors.append(f"Max 5 exit genes, got {len(chrom.exit_genes)}")
 
     # Validate each gene
-    for label, genes in [("entry", chrom.entry_genes), ("exit", chrom.exit_genes)]:
+    gene_groups: list[tuple[str, list[StrategyGene]]] = [
+        ("entry", chrom.entry_genes),
+        ("exit", chrom.exit_genes),
+    ]
+    if _normalize_direction(chrom.direction) == Direction.BOTH:
+        gene_groups.append(("short_entry", chrom.short_entry_genes))
+        gene_groups.append(("short_exit", chrom.short_exit_genes))
+    for label, genes in gene_groups:
         for i, gene in enumerate(genes):
             prefix = f"{label}[{i}]"
 
@@ -412,8 +432,30 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
             errors.append(f"{label}={val} out of range [{valid_range[0]}, {valid_range[1]}]")
 
     # Direction
-    if _normalize_direction(chrom.direction) is None:
+    direction_norm = _normalize_direction(chrom.direction)
+    if direction_norm is None:
         errors.append(f"invalid direction '{chrom.direction}'")
+    is_both = direction_norm == Direction.BOTH
+    has_short_genes = bool(
+        chrom.short_entry_genes
+        or chrom.short_exit_genes
+        or chrom.short_ma_entry_genes
+        or chrom.short_ma_exit_genes
+    )
+    if not is_both and has_short_genes:
+        errors.append(
+            "short-side genes are only valid for direction=both "
+            f"(got {direction_norm.value if direction_norm is not None else chrom.direction})"
+        )
+    if is_both:
+        if len(chrom.short_entry_genes) < 1:
+            errors.append("Must have at least 1 short entry gene")
+        if len(chrom.short_entry_genes) > 5:
+            errors.append(f"Max 5 short entry genes, got {len(chrom.short_entry_genes)}")
+        if len(chrom.short_exit_genes) < 1:
+            errors.append("Must have at least 1 short exit gene")
+        if len(chrom.short_exit_genes) > 3:
+            errors.append(f"Max 3 short exit genes, got {len(chrom.short_exit_genes)}")
 
     if len(chrom.ma_entry_genes) > MAX_MA_ENTRY_GENES:
         errors.append(
@@ -427,6 +469,19 @@ def validate_chromosome(chrom: StrategyChromosome) -> list[str]:
         ("ma_entry", chrom.ma_entry_genes),
         ("ma_exit", chrom.ma_exit_genes),
     ]
+    if is_both:
+        if len(chrom.short_ma_entry_genes) > MAX_MA_ENTRY_GENES:
+            errors.append(
+                f"short_ma_entry_genes count {len(chrom.short_ma_entry_genes)} "
+                f"exceeds cap {MAX_MA_ENTRY_GENES}"
+            )
+        if len(chrom.short_ma_exit_genes) > MAX_MA_EXIT_GENES:
+            errors.append(
+                f"short_ma_exit_genes count {len(chrom.short_ma_exit_genes)} "
+                f"exceeds cap {MAX_MA_EXIT_GENES}"
+            )
+        ma_groups.append(("ma_short_entry", chrom.short_ma_entry_genes))
+        ma_groups.append(("ma_short_exit", chrom.short_ma_exit_genes))
     for ma_label, ma_genes in ma_groups:
         for i, mg in enumerate(ma_genes):
             prefix = f"{ma_label}[{i}]"
@@ -586,25 +641,32 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         msg = f"Unsupported direction: {chrom.direction}"
         raise ValueError(msg)
 
-    # Build indicators + conditions from entry genes
-    for i, gene in enumerate(chrom.entry_genes):
-        ind_name = _gene_indicator_name(gene, i, "entry")
-        indicators[ind_name] = _gene_to_indicator_config(gene)
-        cond_str = _gene_to_condition_str(gene, ind_name)
-        if direction in (Direction.LONG, Direction.BOTH):
-            entry_long.append(cond_str)
-        if direction in (Direction.SHORT, Direction.BOTH):
-            entry_short.append(cond_str)
+    has_short_genes = bool(
+        chrom.short_entry_genes
+        or chrom.short_exit_genes
+        or chrom.short_ma_entry_genes
+        or chrom.short_ma_exit_genes
+    )
+    if direction != Direction.BOTH and has_short_genes:
+        msg = f"short-side genes are only valid for direction=both (got {direction.value})"
+        raise ValueError(msg)
+    if direction == Direction.BOTH and (
+        not chrom.short_entry_genes or not chrom.short_exit_genes
+    ):
+        msg = (
+            "direction=both needs short_entry_genes and short_exit_genes "
+            f"(got {len(chrom.short_entry_genes)} entry, {len(chrom.short_exit_genes)} exit)"
+        )
+        raise ValueError(msg)
 
-    # Build indicators + conditions from exit genes
-    for i, gene in enumerate(chrom.exit_genes):
-        ind_name = _gene_indicator_name(gene, i, "exit")
-        indicators[ind_name] = _gene_to_indicator_config(gene)
-        cond_str = _gene_to_condition_str(gene, ind_name)
-        if direction in (Direction.LONG, Direction.BOTH):
-            exit_long.append(cond_str)
-        if direction in (Direction.SHORT, Direction.BOTH):
-            exit_short.append(cond_str)
+    def _emit_scalar_genes(
+        genes: list[StrategyGene], slot: str, target: list[str]
+    ) -> None:
+        """Register each scalar gene's indicator and append its DSL condition."""
+        for i, gene in enumerate(genes):
+            ind_name = _gene_indicator_name(gene, i, slot)
+            indicators[ind_name] = _gene_to_indicator_config(gene)
+            target.append(_gene_to_condition_str(gene, ind_name))
 
     def _emit_ma_gene(
         ma_gene: PriceVsMAConditionGene, slot: str, idx: int
@@ -626,21 +688,29 @@ def chromosome_to_dsl(chrom: StrategyChromosome) -> dict[str, object]:
         )
         return _ma_cross_gene_to_condition_str(ma_gene, fast_name, slow_name)
 
-    # Build indicators + conditions from MA entry genes
-    for i, ma_gene in enumerate(chrom.ma_entry_genes):
-        cond_str = _emit_ma_gene(ma_gene, "entry", i)
-        if direction in (Direction.LONG, Direction.BOTH):
-            entry_long.append(cond_str)
-        if direction in (Direction.SHORT, Direction.BOTH):
-            entry_short.append(cond_str)
+    def _emit_ma_genes(
+        genes: list[PriceVsMAConditionGene], slot: str, target: list[str]
+    ) -> None:
+        for i, ma_gene in enumerate(genes):
+            target.append(_emit_ma_gene(ma_gene, slot, i))
 
-    # Build indicators + conditions from MA exit genes
-    for i, ma_gene in enumerate(chrom.ma_exit_genes):
-        cond_str = _emit_ma_gene(ma_gene, "exit", i)
-        if direction in (Direction.LONG, Direction.BOTH):
-            exit_long.append(cond_str)
-        if direction in (Direction.SHORT, Direction.BOTH):
-            exit_short.append(cond_str)
+    # The chromosome's own genes are the long side for LONG/BOTH and the only
+    # side for SHORT. They carry the unchanged ``<ind>_entry_<i>`` names, so a
+    # single-direction DSL stays byte-identical (R1).
+    _emit_scalar_genes(chrom.entry_genes, "entry", entry_long)
+    _emit_scalar_genes(chrom.exit_genes, "exit", exit_long)
+    _emit_ma_genes(chrom.ma_entry_genes, "entry", entry_long)
+    _emit_ma_genes(chrom.ma_exit_genes, "exit", exit_long)
+
+    if direction == Direction.SHORT:
+        entry_short, exit_short = entry_long, exit_long
+        entry_long, exit_long = [], []
+    elif direction == Direction.BOTH:
+        # Short side gets its OWN genes; keys are appended after every long key.
+        _emit_scalar_genes(chrom.short_entry_genes, "short_entry", entry_short)
+        _emit_scalar_genes(chrom.short_exit_genes, "short_exit", exit_short)
+        _emit_ma_genes(chrom.short_ma_entry_genes, "short_entry", entry_short)
+        _emit_ma_genes(chrom.short_ma_exit_genes, "short_exit", exit_short)
 
     # Entry conditions must have at least one side populated
     entry_conditions: dict[str, list[str]] = {}
@@ -724,6 +794,16 @@ def chromosome_to_serializable(chrom: StrategyChromosome) -> dict[str, object]:
         d["ma_entry_genes"] = [_ma_gene_dict(g) for g in chrom.ma_entry_genes]
     if chrom.ma_exit_genes:
         d["ma_exit_genes"] = [_ma_gene_dict(g) for g in chrom.ma_exit_genes]
+    # BOTH always carries its short scalar lists (even when empty, so a legacy
+    # BOTH is still distinguishable from a new one); the optional short MA
+    # lists are written only when present. LONG/SHORT gain no short_* key (R6).
+    if _normalize_direction(chrom.direction) == Direction.BOTH:
+        d["short_entry_genes"] = [_gene_dict(g) for g in chrom.short_entry_genes]
+        d["short_exit_genes"] = [_gene_dict(g) for g in chrom.short_exit_genes]
+        if chrom.short_ma_entry_genes:
+            d["short_ma_entry_genes"] = [_ma_gene_dict(g) for g in chrom.short_ma_entry_genes]
+        if chrom.short_ma_exit_genes:
+            d["short_ma_exit_genes"] = [_ma_gene_dict(g) for g in chrom.short_ma_exit_genes]
     if chrom.stop_loss_long_pct is not None:
         d["stop_loss_long_pct"] = chrom.stop_loss_long_pct
     if chrom.stop_loss_short_pct is not None:
@@ -781,8 +861,44 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
     ma_entry_genes = [_parse_ma_gene(g) for g in _gene_dicts(d.get("ma_entry_genes", []))]
     ma_exit_genes = [_parse_ma_gene(g) for g in _gene_dicts(d.get("ma_exit_genes", []))]
 
+    short_keys = (
+        "short_entry_genes",
+        "short_exit_genes",
+        "short_ma_entry_genes",
+        "short_ma_exit_genes",
+    )
+    # Type check first (R8/R9), then the direction rule (R11) — a null short
+    # list is a type error even on a long chromosome (dr-inydc-1).
+    for key in short_keys:
+        if key in d and not isinstance(d[key], list):
+            msg = f"{key} must be a list, got {type(d[key]).__name__}"
+            raise ValueError(msg)
+
     direction_raw = d.get("direction", "long")
     direction = Direction(str(direction_raw))
+
+    present_short = [key for key in short_keys if key in d]
+    if direction != Direction.BOTH and present_short:
+        msg = f"{present_short[0]} is only valid for direction=both (got {direction.value})"
+        raise ValueError(msg)
+    if direction == Direction.BOTH:
+        # A legacy BOTH omits the short keys entirely and is kept as BOTH here
+        # (seed.py converts it to long); a present-but-empty list is corrupt.
+        if "short_entry_genes" in d and not d["short_entry_genes"]:
+            msg = "direction=both chromosome has no short_entry_genes"
+            raise ValueError(msg)
+        if "short_exit_genes" in d and not d["short_exit_genes"]:
+            msg = "direction=both chromosome has no short_exit_genes"
+            raise ValueError(msg)
+
+    short_entry_genes = [_parse_gene(g) for g in _gene_dicts(d.get("short_entry_genes", []))]
+    short_exit_genes = [_parse_gene(g) for g in _gene_dicts(d.get("short_exit_genes", []))]
+    short_ma_entry_genes = [
+        _parse_ma_gene(g) for g in _gene_dicts(d.get("short_ma_entry_genes", []))
+    ]
+    short_ma_exit_genes = [
+        _parse_ma_gene(g) for g in _gene_dicts(d.get("short_ma_exit_genes", []))
+    ]
 
     tf_raw = d.get("time_filters")
     time_filters: dict[str, object] = dict(tf_raw) if tf_raw and isinstance(tf_raw, dict) else {}
@@ -800,4 +916,8 @@ def serializable_to_chromosome(d: dict[str, object]) -> StrategyChromosome:
         time_filters=time_filters,
         ma_entry_genes=ma_entry_genes,
         ma_exit_genes=ma_exit_genes,
+        short_entry_genes=short_entry_genes,
+        short_exit_genes=short_exit_genes,
+        short_ma_entry_genes=short_ma_entry_genes,
+        short_ma_exit_genes=short_ma_exit_genes,
     )

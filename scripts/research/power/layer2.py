@@ -208,8 +208,14 @@ def planted_dsl(profile: Profile | None = None) -> dict[str, object]:
 
 
 def planted_both_dsl() -> dict[str, object]:
-    """The planted rule forced to BOTH, as a warm-started champion becomes (operators.py:1232)."""
-    dsl = chromosome_to_dsl(replace(planted_chromosome(), direction=Direction.BOTH))
+    """The planted rule as the LONG champion a pre-inydc BOTH run actually traded (R28).
+
+    Before inydc, direction=both copied the long genes into the short side and the
+    compiler's long-first tie meant the strategy traded long-only; inydc loads a
+    legacy both seed as long, so the "planted_both" rescreen job screens the same
+    long rule as ``planted_dsl``.
+    """
+    dsl = chromosome_to_dsl(replace(planted_chromosome(), direction=Direction.LONG))
     dsl["timeframe"] = TIMEFRAME
     return dsl
 

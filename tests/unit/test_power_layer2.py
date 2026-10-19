@@ -1120,7 +1120,7 @@ def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """R43: an absent uid is a Layer2Error (exit 2) and nothing is screened; a present uid is
-    screened as planted, planted-as-BOTH and candidate on all three accepted roots."""
+    screened as planted, the pre-inydc planted-long rule and the candidate on all three roots."""
     out = tmp_path / "o" / "layer2.json"
     roots: dict[str, Path] = {}
     candidates = [{"uid": "u-a"}, {"uid": "u-b"}]
@@ -1169,7 +1169,8 @@ def test_r43_rescreen_refuses_an_unknown_uid_and_screens_every_root(
         for _r, jobs in calls:
             assert [tag for tag, _dsl in jobs] == ["planted", "planted_both", "candidate"]
             assert set(jobs[0][1]["entry_conditions"]) == {"long"}
-            assert set(jobs[1][1]["entry_conditions"]) == {"long", "short"}
+            # R28: the "planted_both" job is the long rule a pre-inydc BOTH run traded
+            assert set(jobs[1][1]["entry_conditions"]) == {"long"}
             assert jobs[2][1] == {"name": uid}
         rec = layer2.load_state(out)["rescreen"][uid]
         assert rec["uid"] == uid and rec["run_variant"] == "btc2.0" and rec["seed"] == 2

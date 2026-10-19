@@ -72,6 +72,10 @@ def _chrom(**kw: Any) -> StrategyChromosome:
         "direction": Direction.LONG,
     }
     base.update(kw)
+    # inydc: a BOTH chromosome carries its own short-side genes
+    if base["direction"] == Direction.BOTH:
+        base.setdefault("short_entry_genes", [_gene("RSI", {"period": 14.0}, ConditionType.GT, 70.0)])
+        base.setdefault("short_exit_genes", [_gene("RSI", {"period": 14.0}, ConditionType.LT, 30.0)])
     return StrategyChromosome(**base)
 
 

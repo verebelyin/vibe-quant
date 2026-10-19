@@ -293,14 +293,28 @@ def test_boundary_periods_compile(ma_kind: str, p_fast: float, p_slow: float) ->
 def test_direction_both_emits_cross_to_long_and_short() -> None:
     chrom = _make_cross_chrom("KAMA", 10.0, 30.0)
     chrom.direction = Direction.BOTH
+    # inydc: a BOTH chromosome carries its own short-side genes
+    chrom.short_entry_genes = [
+        StrategyGene("RSI", {"period": 14}, ConditionType.GT, 70.0)
+    ]
+    chrom.short_exit_genes = [
+        StrategyGene("RSI", {"period": 14}, ConditionType.LT, 30.0)
+    ]
+    chrom.short_ma_entry_genes = [
+        PriceVsMAConditionGene(
+            indicator_type="KAMA",
+            parameters={"period": 10.0},
+            op=ConditionType.GT,
+            parameters_slow={"period": 30.0},
+        )
+    ]
 
     dsl_dict = chromosome_to_dsl(chrom)
     long_cond = dsl_dict["entry_conditions"]["long"]  # type: ignore[index]
     short_cond = dsl_dict["entry_conditions"]["short"]  # type: ignore[index]
 
-    cross_expr = "kama_ma_entry_0_fast > kama_ma_entry_0_slow"
-    assert cross_expr in long_cond
-    assert cross_expr in short_cond
+    assert "kama_ma_entry_0_fast > kama_ma_entry_0_slow" in long_cond
+    assert "kama_ma_short_entry_0_fast > kama_ma_short_entry_0_slow" in short_cond
 
     dsl_dict["timeframe"] = "5m"
     dsl_dict["name"] = "e2e_direction_both"
