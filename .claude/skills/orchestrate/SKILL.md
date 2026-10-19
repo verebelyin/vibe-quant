@@ -30,7 +30,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
    - Memory: `consolidate_memory.py propose --job <job>`; read and prune `memory-ops.json`, then `consolidate_memory.py apply --ops <that file>`.
    - Close beads (UI beads only after their on-screen check), file follow-ups from every `open:` list, record research results in the journal, push, confirm `git status` is up to date, remove the job's worktrees and `swarm/*` branches.
    - Run the § Self-improvement sweep.
-8. **Report.** What shipped, what was dropped and why, every number verbatim from tool output, any skipped gate.
+8. **Report.** What shipped, what was dropped and why, every number verbatim from tool output, any skipped gate. Then recommend a fresh session for the next job: every turn re-reads the whole context.
 
 ## Waiting well
 
