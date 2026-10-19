@@ -1635,3 +1635,20 @@ def test_status_without_a_ledger_reports_zero_running(
     assert bus.main(["--bus", str(tmp_path), "--as", "chief", "status"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert "running: 0" in out and "startable: unknown ready beads (bd ready)" in out
+
+
+def test_board_search_shows_newest_15_with_cut_bodies_by_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A worker's first search printed 12-27k chars of mostly stale posts (10-17..10-19)."""
+    for i in range(20):
+        bus.post(tmp_path, "w", "board", "info", f"RULE {i}: tests/unit/test_x.py " + "y" * 900, topic="gotchas")
+    assert bus.main(["--bus", str(tmp_path), "--as", "r", "board", "search", "--topic", "gotchas"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 16 and "RULE 5:" in lines[0] and "RULE 19:" in lines[14]
+    assert all(len(ln) < 600 for ln in lines[:15])
+    assert lines[-1].startswith("(showing newest 15 of 20, bodies cut at 400 chars")
+    assert bus.main(["--bus", str(tmp_path), "--as", "r", "board", "search", "--topic", "gotchas", "--full",
+                     "--limit", "1"]) == 0  # fmt: skip
+    full = capsys.readouterr().out.splitlines()
+    assert "y" * 900 in full[0]

@@ -359,6 +359,9 @@ def fmt(msg: dict[str, object]) -> str:
     return f"[{msg['id']}] {msg['from']} -> {msg['to']} ({msg['kind']}{ref}): {msg['body']}"
 
 
+SEARCH_BODY_CHARS = 400
+
+
 def _first_chars(body: object, width: int) -> str:
     """A body's first ``width`` characters on one line (newlines collapsed) — for compact reports."""
     text = " ".join(str(body).split())
@@ -1293,7 +1296,8 @@ def main(argv: list[str] | None = None) -> int:
     bs.add_argument("--topic", action="extend", nargs="+", help="one or more; any of them matches")
     bs.add_argument("--path", action="extend", nargs="+", help="one or more files/dirs/globs the post names (a shell-expanded glob works too)")
     bs.add_argument("--grep", action="append", help="repeatable; all must appear (case-insensitive)")
-    bs.add_argument("--limit", type=int, default=40, help="newest N hits (default 40)")
+    bs.add_argument("--limit", type=int, default=15, help="newest N hits (default 15)")
+    bs.add_argument("--full", action="store_true", help="whole bodies (default: first 400 chars)")
     bs.add_argument("--global", dest="glob", action="store_true")
     bs.add_argument("--all", action="store_true", help="include retired/superseded posts (tagged with why)")
     bt = bsub.add_parser("topics")
@@ -1407,13 +1411,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.bcmd == "search":
             if not (args.topic or args.path or args.grep):
                 _refuse("board search needs at least one --topic, --path or --grep")
-            hits = board_search(bus, args.topic, args.path, args.grep, args.limit, include_hidden=args.all)
+            every = board_search(bus, args.topic, args.path, args.grep, None, include_hidden=args.all)
+            hits = every[-args.limit:] if args.limit > 0 else every
             breaks = comparability_breaks()
             for m in hits:
                 tags = [t for t in (str(m.get("hidden") or ""), _break_tag(m, breaks)) if t]
-                print(fmt(m) + "".join(f"  [{t}]" for t in tags))
+                shown = m if args.full else {**m, "body": _first_chars(m["body"], SEARCH_BODY_CHARS)}
+                print(fmt(shown) + "".join(f"  [{t}]" for t in tags))
             if not hits:
                 print("(no matching board posts)")
+            elif len(every) > len(hits) or not args.full:
+                # a worker's first search printed 12-27k chars of mostly stale posts (10-17..10-19)
+                print(f"(showing newest {len(hits)} of {len(every)}, bodies cut at {SEARCH_BODY_CHARS} chars: "
+                      "--limit N / --full / bus thread <id>)")
         elif args.bcmd == "topics":
             for name, info in sorted(topics(bus).items()):
                 last = info["last"]
