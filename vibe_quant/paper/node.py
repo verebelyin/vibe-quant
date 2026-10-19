@@ -745,7 +745,9 @@ class PaperTradingNode:
         """The P&L line: signed net USDT, plus the signed % of entry notional when known."""
         arm = "📈" if net >= 0 else "📉"
         amount = _signed(net)
-        if entry is None:
+        # vgjcg: a 0 notional (peak_qty 0, or a zero entry) has no percentage to show.
+        # Dividing raised inside the alert task and dropped the whole CLOSE message.
+        if entry is None or quantity * entry == 0:
             return f"{arm} P&L: {amount} USDT"
         percent = net / (quantity * entry) * 100
         return f"{arm} P&L: {amount} USDT ({_signed(percent)}%)"

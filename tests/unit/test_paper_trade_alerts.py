@@ -553,6 +553,28 @@ async def test_exit_without_cached_position_omits_entry_and_pnl_percent(
 
 
 @pytest.mark.parametrize(
+    ("net", "entry", "quantity", "expected"),
+    [
+        (-0.25, 67498.70, 0.0, "📉 P&L: −0.25 USDT"),
+        (-0.25, 0.0, 0.002, "📉 P&L: −0.25 USDT"),
+        (0.0, 0.0, 0.0, "📈 P&L: +0.00 USDT"),
+        (1.55, 67600.10, 0.002, "📈 P&L: +1.55 USDT (+1.15%)"),
+    ],
+    ids=["zero-quantity", "zero-entry", "both-zero", "nonzero-notional"],
+)
+def test_pnl_text_with_zero_notional_omits_the_percent(
+    net: float, entry: float, quantity: float, expected: str
+) -> None:
+    """vgjcg: a 0 notional has no % to show -- print the USDT amount, never divide by 0.
+
+    ``PositionClosed.peak_qty`` is 0 for a flat position in a hostile/legacy event, and
+    ``entry`` is unknown when the cache lost the position; both used to raise inside the
+    alert task, which dropped the CLOSE message. The nonzero edge still shows the %.
+    """
+    assert PaperTradingNode._pnl_text(net, entry, quantity) == expected
+
+
+@pytest.mark.parametrize(
     ("hold_ns", "expected"),
     [
         (45_000_000_000, "45s"),  # 45 s
