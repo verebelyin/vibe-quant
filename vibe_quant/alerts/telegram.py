@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import math
 import os
 import re
 import time
@@ -36,6 +37,15 @@ TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 
 # Rate limit: 1 alert per type per minute
 RATE_LIMIT_SECONDS = 60
+
+#: ci7q9/21qug: at most this many TRADE sends may be in flight. A burst above it is
+#: dropped (and counted) so trade spam cannot hold the chat's 429 window that a
+#: CIRCUIT_BREAKER retry needs.
+MAX_TRADE_ALERTS_IN_FLIGHT = 5
+
+#: Longest Telegram ``retry_after`` a critical alert will wait; beyond it (or a
+#: non-finite value) the normal 1 s / 2 s backoff applies.
+MAX_RETRY_AFTER_SECONDS = 60.0
 
 #: How long the start-up probe may take before the start is refused.
 TELEGRAM_PROBE_TIMEOUT_S = 5.0
@@ -107,6 +117,51 @@ def _is_retryable(exc: Exception) -> bool:
         if isinstance(status, int):
             return status == 429 or status >= 500
     return True
+
+
+def _is_429(exc: Exception) -> bool:
+    """True for a Telegram HTTP 429 (the whole chat is throttled)."""
+    return (
+        isinstance(exc, httpx.HTTPStatusError) and getattr(exc.response, "status_code", None) == 429
+    )
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Telegram's ``parameters.retry_after`` on a 429, else ``None`` (ci7q9/21qug).
+
+    A 429 means the whole chat is throttled; exponential backoff can hit the same
+    window again and drop a CIRCUIT_BREAKER alert. The server's own delay is the only
+    value that is known to work. A value that is not a finite number in
+    [0, ``MAX_RETRY_AFTER_SECONDS``] (JSON ``1e309`` -> inf, ``10**400``, a huge
+    delay that would park the alert) is logged once and treated as absent, so the
+    caller falls back to its own 1 s / 2 s backoff.
+    """
+    if not _is_429(exc):
+        return None
+    assert isinstance(exc, httpx.HTTPStatusError)
+    try:
+        body = exc.response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    parameters = body.get("parameters")
+    if not isinstance(parameters, dict):
+        return None
+    retry_after = parameters.get("retry_after")
+    if isinstance(retry_after, bool) or not isinstance(retry_after, (int, float)):
+        return None
+    try:
+        delay = float(retry_after)
+    except OverflowError:
+        delay = math.inf
+    if not math.isfinite(delay) or delay < 0 or delay > MAX_RETRY_AFTER_SECONDS:
+        logger.warning(
+            "Telegram retry_after outside [0, %gs] ignored; using default backoff",
+            MAX_RETRY_AFTER_SECONDS,
+        )
+        return None
+    return delay
 
 
 def _describe_failure(exc: Exception) -> str:
@@ -375,6 +430,15 @@ class TelegramBot:
         self.config = config
         self._last_alert_times: dict[AlertType, float] = {}
         self._client: httpx.AsyncClient | None = None
+        #: ci7q9/21qug: in-flight sends per class, and trade alerts dropped so far.
+        self._trade_in_flight = 0
+        self._critical_in_flight = 0
+        self._trade_dropped = 0
+
+    @property
+    def trade_alerts_dropped(self) -> int:
+        """Trade alerts dropped by the in-flight cap or a chat-wide 429 this session."""
+        return self._trade_dropped
 
     @classmethod
     def from_env(cls) -> TelegramBot:
@@ -449,6 +513,25 @@ class TelegramBot:
         prefix = prefix_map.get(alert_type, "🔔 ALERT")
         return f"{prefix} · {timestamp}\n{message}"
 
+    def _admit_trade(self) -> bool:
+        """Take a TRADE slot, or drop and count the alert (ci7q9/21qug).
+
+        Critical priority is enforced in ``_send`` before every attempt, so a trade
+        admitted here still yields to a critical alert that is in flight.
+        """
+        if self._trade_in_flight >= MAX_TRADE_ALERTS_IN_FLIGHT:
+            self._note_trade_drop(f"{self._trade_in_flight} in flight")
+            return False
+        self._trade_in_flight += 1
+        return True
+
+    def _note_trade_drop(self, reason: str) -> None:
+        """Count and log one dropped TRADE alert (never raises)."""
+        self._trade_dropped += 1
+        logger.warning(
+            "trade alert dropped (%s); %d dropped this session", reason, self._trade_dropped
+        )
+
     async def send_alert(
         self,
         alert_type: AlertType,
@@ -458,17 +541,43 @@ class TelegramBot:
     ) -> bool:
         """Send alert to Telegram.
 
+        TRADE alerts are bounded: above ``MAX_TRADE_ALERTS_IN_FLIGHT`` (or while a
+        CIRCUIT_BREAKER/ERROR send is in flight) they are dropped and counted, never
+        queued. Critical alerts are never dropped in favour of trade alerts.
+
         Args:
             alert_type: Type of alert.
             message: Message content.
             bypass_rate_limit: If True, skip rate limit check.
 
         Returns:
-            True if sent successfully, False if rate limited or failed.
+            True if sent successfully, False if rate limited, dropped or failed.
         """
         if not bypass_rate_limit and self._is_rate_limited(alert_type):
             return False
 
+        is_trade = alert_type is AlertType.TRADE
+        is_critical = alert_type in (AlertType.CIRCUIT_BREAKER, AlertType.ERROR)
+        if is_trade and not self._admit_trade():
+            return False
+
+        if is_critical:
+            self._critical_in_flight += 1
+        try:
+            return await self._send(alert_type, message, critical=is_critical)
+        finally:
+            if is_trade:
+                self._trade_in_flight -= 1
+            if is_critical:
+                self._critical_in_flight -= 1
+
+    async def _send(self, alert_type: AlertType, message: str, *, critical: bool) -> bool:
+        """The retry loop, inside ``send_alert``'s in-flight accounting.
+
+        A failed send leaves the shared client OPEN: other requests are in flight on
+        it, and closing it under them turns one Telegram hiccup into several failed
+        alerts. httpx reconnects on its own for the next attempt.
+        """
         formatted = self._format_message(alert_type, message)
         url = f"{TELEGRAM_API_BASE}{self.config.bot_token}/sendMessage"
 
@@ -480,6 +589,11 @@ class TelegramBot:
 
         max_attempts = 3
         for attempt in range(max_attempts):
+            if alert_type is AlertType.TRADE and self._critical_in_flight:
+                # F3: priority is rechecked before EVERY trade attempt, retries
+                # included, so an admitted trade cannot eat the breaker's window.
+                self._note_trade_drop("a critical alert is in flight")
+                return False
             try:
                 client = await self._get_client()
                 response = await client.post(url, json=payload)
@@ -487,17 +601,22 @@ class TelegramBot:
                 self._update_rate_limit(alert_type)
                 return True
             except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                # Reset client on transport/protocol failures so next send
-                # starts from a known-good connection state.
-                await self.close()
                 reason = _describe_failure(exc)
+                retry_after = _retry_after_seconds(exc)
+                if alert_type is AlertType.TRADE and _is_429(exc):
+                    # The chat is throttled; a trade alert is not worth waiting it out.
+                    self._note_trade_drop("Telegram 429")
+                    return False
                 if not _is_retryable(exc):
                     # 400/401/403/404: retrying cannot help (bad token, bad
                     # chat id, unparseable text) -- fail once, loudly.
                     logger.warning("Alert send rejected by Telegram (%s); not retrying", reason)
                     return False
                 if attempt < max_attempts - 1:
-                    delay = 1.0 * (2**attempt)  # 1s, 2s
+                    if critical and retry_after is not None:
+                        delay = retry_after
+                    else:
+                        delay = 1.0 * (2**attempt)  # 1s, 2s
                     logger.warning(
                         "Alert send attempt %d/%d failed: %s, retrying in %.0fs",
                         attempt + 1,

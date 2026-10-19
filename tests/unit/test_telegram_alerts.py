@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 import time
@@ -530,3 +532,411 @@ class TestRateLimitIntegration:
 
         # Verify post was called twice (ERROR + TRADE)
         assert mock_client.post.call_count == 2
+
+
+# --------------------------------------- ci7q9/21qug: burst backpressure
+
+
+def _ok_response() -> httpx.Response:
+    return httpx.Response(200, json={"ok": True})
+
+
+def _too_many_response(retry_after: float = 1) -> httpx.Response:
+    """The real Telegram 429 body: ``parameters.retry_after`` is the server's delay."""
+    return httpx.Response(
+        429,
+        json={
+            "ok": False,
+            "error_code": 429,
+            "description": f"Too Many Requests: retry after {retry_after:g}",
+            "parameters": {"retry_after": retry_after},
+        },
+    )
+
+
+class TestTradeBurstBackpressure:
+    """A trade-alert burst must never cost a CIRCUIT_BREAKER alert (vibe-quant-21qug).
+
+    Trade alerts bypass the per-type rate limit (R31), so a fast strategy can post
+    dozens of messages and make Telegram answer 429 for the whole chat. The circuit
+    breaker then burned ~3 s of retries and was dropped, and every failed send closed
+    the shared httpx client under the other in-flight requests.
+    """
+
+    @pytest.fixture()
+    def bot(self) -> TelegramBot:
+        return TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
+
+    @pytest.mark.asyncio
+    async def test_in_flight_trade_alerts_are_capped_and_counted(
+        self, bot: TelegramBot, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """At most 5 TRADE sends are in flight; the rest are dropped and counted."""
+        caplog.set_level(logging.WARNING)
+        release = asyncio.Event()
+        five_in_flight = asyncio.Event()
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if len(requests) == 5:
+                five_in_flight.set()
+            await release.wait()
+            return _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            tasks = [
+                asyncio.create_task(
+                    bot.send_trade(
+                        "BTCUSDT",
+                        "BUY",
+                        Decimal("0.5"),
+                        Decimal("50000"),
+                        bypass_rate_limit=True,
+                    )
+                )
+                for _ in range(50)
+            ]
+            await asyncio.wait_for(five_in_flight.wait(), 1)
+            for _ in range(3):
+                await asyncio.sleep(0)  # let the droppers reach their return
+
+            try:
+                assert len(requests) == 5, "only 5 trade sends may be in flight"
+                assert bot.trade_alerts_dropped == 45
+                assert "trade alert dropped" in caplog.text
+            finally:
+                release.set()  # never leave the in-flight handlers parked
+                results = await asyncio.gather(*tasks)
+
+            assert results.count(True) == 5
+            assert bot.trade_alerts_dropped == 45, "the drop count does not move on success"
+        finally:
+            await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_is_delivered_through_the_trade_burst(
+        self,
+        bot: TelegramBot,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """50 trades + one breaker, chat answering 429 retry_after=1: the breaker arrives."""
+        caplog.set_level(logging.WARNING)
+        sleeps: list[float] = []
+
+        async def _record_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
+
+        delivered: list[str] = []
+        breaker_calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal breaker_calls
+            text = request.content.decode()
+            if "TRADE" in text:
+                return _too_many_response()
+            breaker_calls += 1
+            if breaker_calls == 1:
+                return _too_many_response()  # the breaker itself is caught in the 429
+            delivered.append(text)
+            return _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            breaker = asyncio.create_task(
+                bot.send_circuit_breaker(
+                    "Max drawdown", "Hit 15%", bypass_rate_limit=True
+                )
+            )
+            trades = [
+                asyncio.create_task(
+                    bot.send_trade(
+                        "BTCUSDT",
+                        "BUY",
+                        Decimal("0.5"),
+                        Decimal("50000"),
+                        bypass_rate_limit=True,
+                    )
+                )
+                for _ in range(50)
+            ]
+            results = await asyncio.gather(breaker, *trades)
+        finally:
+            await bot.close()
+
+        assert results[0] is True, "the CIRCUIT_BREAKER alert must be delivered"
+        assert len(delivered) == 1
+        assert "🚨 CIRCUIT BREAKER" in delivered[0]
+        assert "Max drawdown" in delivered[0]
+        assert sleeps == [1.0], "Telegram's retry_after is honoured, not 1s/2s backoff"
+        assert results[1:].count(True) == 0, "no trade alert got through the 429 chat"
+        assert bot.trade_alerts_dropped == 50
+        assert "trade alert dropped" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_rejected_send_does_not_close_the_shared_client(
+        self, bot: TelegramBot
+    ) -> None:
+        """A 400 leaves the shared client open for the other in-flight requests."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"ok": False, "description": "Bad Request"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        bot._client = client
+        try:
+            assert await bot.send_alert(AlertType.ERROR, "x") is False
+            assert bot._client is client
+            assert not client.is_closed
+        finally:
+            await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_retryable_failure_retries_on_the_same_client(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transport error retries on the SAME client (closing it would break peers)."""
+
+        async def _record_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=_record_sleep))
+        posts: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            posts.append(1)
+            raise httpx.ConnectError("boom", request=request)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        bot._client = client
+        try:
+            assert await bot.send_alert(AlertType.ERROR, "x") is False
+            assert len(posts) == 3
+            assert bot._client is client
+            assert not client.is_closed
+        finally:
+            await bot.close()
+
+
+# ------------------------- retry_after bounds, critical priority (rev round 1)
+
+
+def _raw_429(retry_after_json: str) -> httpx.Response:
+    """A 429 whose ``retry_after`` is spliced in as RAW JSON (``1e309``, ``10**400``)."""
+    body = '{"ok": false, "error_code": 429, "parameters": {"retry_after": ' + retry_after_json + "}}"
+    return httpx.Response(429, content=body.encode(), headers={"content-type": "application/json"})
+
+
+class _Sleeper:
+    """Yielding ``asyncio.sleep`` stand-in: records delays, parks the ones in ``park``.
+
+    The older fixtures' sleep never yields, so a second sender could never run in a
+    sleeping sender's window; this one hands control back like the real loop does.
+    """
+
+    def __init__(self, park: tuple[float, ...] = ()) -> None:
+        self.delays: list[float] = []
+        self.parked = {d: asyncio.Event() for d in park}
+        self.gates = {d: asyncio.Event() for d in park}
+
+    @property
+    def gate(self) -> asyncio.Event:
+        """The (single) parked delay's gate, for tests that park one delay."""
+        return next(iter(self.gates.values()))
+
+    @property
+    def parked_event(self) -> asyncio.Event:
+        return next(iter(self.parked.values()))
+
+    def open_all(self) -> None:
+        for gate in self.gates.values():
+            gate.set()
+
+    async def sleep(self, delay: float) -> None:
+        self.delays.append(delay)
+        if delay in self.gates:
+            self.parked[delay].set()
+            await self.gates[delay].wait()
+        else:
+            await asyncio.sleep(0)
+
+
+def _install_sleeper(monkeypatch: pytest.MonkeyPatch, sleeper: _Sleeper) -> None:
+    monkeypatch.setattr(telegram_mod, "asyncio", SimpleNamespace(sleep=sleeper.sleep))
+
+
+class TestCriticalRetryAfterAndPriority:
+    @pytest.fixture()
+    def bot(self) -> TelegramBot:
+        return TelegramBot(TelegramConfig(bot_token="123:ABC", chat_id="456"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("retry_after_json", "expected_delay"),
+        [
+            ("7", 7.0),  # nondefault: kills "use 1.0 instead of retry_after"
+            ("2.5", 2.5),
+            ("0", 0.0),  # lower edge, allowed
+            ("60", 60.0),  # cap edge, allowed
+            ("60.5", 1.0),  # just over the cap -> default backoff
+            ("-1", 1.0),
+            ("1e309", 1.0),  # JSON -> float inf
+            ("1" + "0" * 400, 1.0),  # int too large for float()
+            ("NaN", 1.0),
+            ("Infinity", 1.0),
+        ],
+    )
+    async def test_breaker_429_delay(
+        self,
+        bot: TelegramBot,
+        monkeypatch: pytest.MonkeyPatch,
+        retry_after_json: str,
+        expected_delay: float,
+    ) -> None:
+        """The breaker is delivered after Telegram's bounded delay, never lost to a crash."""
+        sleeper = _Sleeper()
+        _install_sleeper(monkeypatch, sleeper)
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return _raw_429(retry_after_json) if calls == 1 else _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            assert await bot.send_circuit_breaker("DD", bypass_rate_limit=True) is True
+        finally:
+            await bot.close()
+        assert sleeper.delays == [expected_delay]
+
+    @pytest.mark.asyncio
+    async def test_unbounded_retry_after_is_logged_once(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING)
+        _install_sleeper(monkeypatch, _Sleeper())
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return _raw_429("1e309") if calls == 1 else _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            assert await bot.send_error("x", bypass_rate_limit=True) is True
+        finally:
+            await bot.close()
+        assert caplog.text.count("retry_after outside") == 1
+
+    @pytest.mark.asyncio
+    async def test_trade_429_with_unbounded_retry_after_still_drops(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_sleeper(monkeypatch, _Sleeper())
+        posts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal posts
+            posts += 1
+            return _raw_429("1e309")
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            sent = await bot.send_trade(
+                "BTCUSDT", "BUY", Decimal("1"), Decimal("50000"), bypass_rate_limit=True
+            )
+        finally:
+            await bot.close()
+        assert sent is False
+        assert posts == 1
+        assert bot.trade_alerts_dropped == 1
+
+    @pytest.mark.asyncio
+    async def test_trade_arriving_during_breaker_backoff_is_dropped(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Breaker parked in its retry_after wait: a new trade never reaches the wire."""
+        sleeper = _Sleeper(park=(7.0,))
+        _install_sleeper(monkeypatch, sleeper)
+        trade_posts = 0
+        breaker_posts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal trade_posts, breaker_posts
+            if "TRADE" in request.content.decode():
+                trade_posts += 1
+                return _ok_response()
+            breaker_posts += 1
+            return _raw_429("7") if breaker_posts == 1 else _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            breaker = asyncio.create_task(bot.send_circuit_breaker("DD", bypass_rate_limit=True))
+            await asyncio.wait_for(sleeper.parked_event.wait(), 2)
+            sent = await bot.send_trade(
+                "BTCUSDT", "BUY", Decimal("1"), Decimal("50000"), bypass_rate_limit=True
+            )
+            sleeper.gate.set()
+            assert await breaker is True
+        finally:
+            sleeper.gate.set()
+            await bot.close()
+        assert sent is False
+        assert trade_posts == 0
+        assert bot.trade_alerts_dropped == 1
+
+    @pytest.mark.asyncio
+    async def test_admitted_trade_retry_yields_to_breaker(
+        self, bot: TelegramBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Trade FIRST: it 503s and waits to retry; the breaker (429) arrives meanwhile.
+
+        The pending trade retry must be dropped and counted, not sent ahead of the
+        breaker's retry (a one-message-per-window chat would starve the breaker).
+        """
+        sleeper = _Sleeper(park=(1.0, 7.0))
+        _install_sleeper(monkeypatch, sleeper)
+        trade_posts = 0
+        breaker_posts = 0
+        order: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal trade_posts, breaker_posts
+            if "TRADE" in request.content.decode():
+                trade_posts += 1
+                order.append("trade")
+                return httpx.Response(503) if trade_posts == 1 else _ok_response()
+            breaker_posts += 1
+            order.append("breaker")
+            return _raw_429("7") if breaker_posts == 1 else _ok_response()
+
+        bot._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            trade = asyncio.create_task(
+                bot.send_trade(
+                    "BTCUSDT", "BUY", Decimal("1"), Decimal("50000"), bypass_rate_limit=True
+                )
+            )
+            await asyncio.wait_for(sleeper.parked[1.0].wait(), 2)
+            breaker = asyncio.create_task(bot.send_circuit_breaker("DD", bypass_rate_limit=True))
+            await asyncio.wait_for(sleeper.parked[7.0].wait(), 2)  # 429, waiting 7 s
+            sleeper.gates[1.0].set()  # the trade's backoff ends while the breaker is in flight
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert trade.done(), "the pending trade retry resolves (dropped) at once"
+            sleeper.gates[7.0].set()
+            results = await asyncio.gather(trade, breaker)
+        finally:
+            sleeper.open_all()
+            await bot.close()
+        assert results == [False, True]
+        assert trade_posts == 1, "the pending trade retry must not be sent"
+        assert order == ["trade", "breaker", "breaker"]
+        assert bot.trade_alerts_dropped == 1
+        assert 7.0 in sleeper.delays
