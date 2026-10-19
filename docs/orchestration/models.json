@@ -90,6 +90,10 @@
     ],
     "money-verdict": [
       "opus"
+    ],
+    "memory": [
+      "haiku",
+      "sonnet"
     ]
   },
   "changed": "2026-10-17T21:40:10.234347+02:00"

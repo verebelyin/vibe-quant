@@ -7,7 +7,7 @@ description: Run a large job as orchestrator over specialist subagents (architec
 
 You are the **chief**: you decompose, dispatch, check and integrate. You write code only as glue between handoffs. Roster, brief format, handoff contract, bus and workspace: [`docs/orchestration/README.md`](../../../docs/orchestration/README.md). T3 dispatch mechanics: [`cheap-agents.md`](../../../docs/orchestration/cheap-agents.md). Before writing any brief: [`brief-checklist.md`](../../../docs/orchestration/brief-checklist.md).
 
-**Who runs what:** `scripts/agents/models.py route <role>` (roles: maker, operator, fixer-small, fixer, reviewer, reviewer-lite, verifier, architect, design-review, money-verdict). It reads `docs/orchestration/models.json`, the only routing source. When the user enables, disables or pauses a model, run `models.py set <key> --off --until <ISO time> --note '<user words>'` at once, and state the route in your next dispatch message. A task already running on a model the user just disabled finishes unless they say otherwise; its next rounds take the new route.
+**Who runs what:** `scripts/agents/models.py route <role>` (roles: maker, operator, fixer-small, fixer, reviewer, reviewer-lite, verifier, architect, design-review, money-verdict, memory). It reads `docs/orchestration/models.json`, the only routing source. When the user enables, disables or pauses a model, run `models.py set <key> --off --until <ISO time> --note '<user words>'` at once, and state the route in your next dispatch message. A task already running on a model the user just disabled finishes unless they say otherwise; its next rounds take the new route.
 
 ## Steps
 
@@ -29,6 +29,7 @@ You are the **chief**: you decompose, dispatch, check and integrate. You write c
    - Take each task's delta from its own fork point: `git diff $(git merge-base <main tip> <task>) <task>`, or `git diff <parent tip> <child tip> | git apply --index --3way` for a stacked child. A two-dot `git diff main <task>` reverts whatever main gained since the fork.
    - After the last task, `git diff <verified job-branch HEAD>` must be empty. If it is not, reset main (unpushed) and redo. Commit `docs/orchestration/board/` before any `git reset --hard` (uncommitted board posts live there).
    - `scripts/agents/telemetry.py ingest-runs --job <job>`, then `telemetry.py review` per verdict; `bus.py board render --global --out docs/orchestration/board/BOARD.md`; commit the board.
+   - Memory: `consolidate_memory.py propose --job <job>`; read and prune `memory-ops.json`, then `consolidate_memory.py apply --ops <that file>`.
    - Close beads (UI beads only after their on-screen check), file follow-ups from every `open:` list, record research results in the journal, push, confirm `git status` is up to date, remove the job's worktrees and `swarm/*` branches.
    - Run the § Self-improvement sweep.
 8. **Report.** What shipped, what was dropped and why, every number verbatim from tool output, any skipped gate.
