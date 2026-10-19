@@ -205,7 +205,13 @@ async def test_full_callback_sequence_halts_within_15s(
         while time.monotonic() < reader_deadline:
             cmd = PaperCommandQueue(seeded["db"]).get(cid)
             status = cmd.status if cmd else None
-            if status == "done" and stalls.started.get("save_checkpoint", 0) >= 2:
+            # Save and prune are ONE worker job: the 2nd save starts a moment before its
+            # prune, so wait on the prune too (the last call this block asserts on).
+            if (
+                status == "done"
+                and stalls.started.get("save_checkpoint", 0) >= 2
+                and stalls.started.get("delete_old_checkpoints", 0) >= 1
+            ):
                 break
             await asyncio.sleep(0.1)
         assert status == "done"
