@@ -113,6 +113,7 @@ Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-ch
 - **Mutants:** `scripts/agents/mutate.py --file F --old X --new Y -- <targeted test>`; ≤ 5 per review, ≤ 3 per maker, only on changed logic. A surviving mutant outside money code becomes a follow-up bead, not a fix round. Stress loops ≤ 10 runs unless flakiness is the finding.
 - **E2E:** iterate with `-g <scenario>`, run the full spec once at the end. Tests of anything that returns 201 and runs in a subprocess poll the run's final status.
 - **Measure per-test time serially:** `--durations` under `-n auto` is inflated by CPU contention.
+- **Timings under parallel jobs** quote the load they ran under: `scripts/agents/cpu_log.py summary --log data/swarm/<job>/cpu.jsonl --since HH:MM` (the chief runs `cpu_log.py sample`).
 - **Keep proofs short:** unit tests, mutants and `exactness_239.py`; a live discovery check uses pop 4–6, 1–2 gens, a 2–3 month window.
 
 ## Shell
