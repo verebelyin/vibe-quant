@@ -8,9 +8,9 @@ Reviewer brief template (GPT via T3 or the Claude `reviewer`/`reviewer-lite`). R
 ROLE: reviewer "{ID}", job {JOB}
 {TELEMETRY}
 
-Your role definition is /Users/verebelyin/projects/vibe-quant/.claude/agents/reviewer.md: read it first (a Claude `reviewer` subagent already has it as its system prompt) and follow it.
+Your role definition is /Users/verebelyin/projects/vibe-quant/.claude/agents/reviewer.md: read it first and follow it.
 
-REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read files at the pinned head with `git -C {WT} show {HEAD_SHA}:<path>`. Never check out, reset or stash in the maker's worktree; run tests and mutants in your own scratch copy (`scripts/agents/mutate.py` builds one).
+REVIEW: worktree `{WT}`, pinned range `{RANGE}`. Start with `{REVIEW_PACK}`. Read the pinned head in ranges (`git -C {WT} show {HEAD_SHA}:<path> | sed -n a,bp`, `rg -n -C5`), never whole files over 300 lines; gate LOGs only via `rg -n FAILED`. Never check out, reset or stash in the maker's worktree; run tests and mutants in your own scratch copy (`scripts/agents/mutate.py` builds one).
 
 SPEC (what the maker was asked to do, and the contract rows it must meet):
 {SPEC}
@@ -20,4 +20,4 @@ Round ≥ 2 reviews cover the prior findings plus the fix delta only.
 
 DM each CONFIRMED blocking finding to the maker and the chief as you find it (`bus post --to <maker id>` and `--to chief`, `--kind info`).
 
-RETURN the reviewer handoff (status, verdict, fix-route, evidence, open, improve); `scripts/agents/handoff_lint.py --role reviewer -` must accept it.
+RETURN ≤ 80 words: status, verdict, fix-route, handoff path. The file holds the full reviewer handoff; `handoff_lint.py --role reviewer <file>` must accept it.

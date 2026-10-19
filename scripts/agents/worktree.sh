@@ -6,7 +6,9 @@
 # Creates ../vq-<slug> on branch swarm/<slug> from base-ref (pass a sibling task's
 # branch to stack work), symlinks the main checkout's read-only market data
 # (data/catalog, data/archive) so catalog-backed tests and exactness_239.py run
-# there, and prints the env line every brief must paste. data/state is NOT linked:
+# there, links the main checkout's .venv (so `.venv/bin/ruff` and friends resolve in the
+# worktree; a missing .venv once made `x | tail; echo EXIT=$?` report EXIT=0 for checks
+# that never ran), and prints the env line every brief must paste. data/state is NOT linked:
 # the state DB stays single-writer (exactness_239.py opens main's DB read-only).
 #
 # frontend/node_modules is symlinked to the main checkout's by default, so `pnpm build`
@@ -32,6 +34,7 @@ main="$(cd "$(dirname "$0")/../.." && pwd)"
 wt="$(dirname "$main")/vq-$slug"
 
 git -C "$main" worktree add -q "$wt" -b "swarm/$slug" "$base"
+if [[ -e "$main/.venv" ]]; then ln -s "$main/.venv" "$wt/.venv"; fi
 mkdir -p "$wt/data"
 for d in catalog archive; do
   [[ -e "$main/data/$d" ]] && ln -s "$main/data/$d" "$wt/data/$d"

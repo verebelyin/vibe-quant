@@ -24,4 +24,4 @@ RULES: follow the RULES of docs/orchestration/prompts/cmd-task.md. Per finding: 
 
 GATE, LAST command, once per round (must print GATE PASS): `{GATE}`
 
-RETURN the handoff contract (docs/orchestration/README.md#handoff-contract): one `evidence:` item per finding (red run, green run), plus the GATE line.
+RETURN ≤ 80 words: status, GATE line, handoff file path. The handoff file holds the contract (docs/orchestration/README.md#handoff-contract): one `evidence:` item per finding (red run, green run), plus the GATE line.

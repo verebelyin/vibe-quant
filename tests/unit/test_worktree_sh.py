@@ -108,3 +108,20 @@ def test_unknown_option_rejected_with_rc_2(tmp_path: Path) -> None:
     assert res.returncode == 2
     assert "unknown option '--foo'" in res.stderr
     assert not (tmp_path / "vq-s5").exists()  # nothing created before the arg check
+
+
+def test_venv_is_linked_and_the_link_is_gitignored(tmp_path: Path) -> None:
+    """Workers ran `.venv/bin/ruff ... | tail; echo EXIT=$?` in a worktree without .venv and
+    read EXIT=0 for a check that never ran; the link must exist and not dirty the worktree."""
+    main = _make_repo(tmp_path)
+    (main / ".venv" / "bin").mkdir(parents=True)
+    repo_gitignore = SCRIPT.parents[2] / ".gitignore"
+    (main / ".gitignore").write_text(repo_gitignore.read_text(encoding="utf-8"), encoding="utf-8")
+    _git(main, "add", ".gitignore")
+    _git(main, "commit", "-qm", "ignore")
+    res = _run(main, "s4")
+    assert res.returncode == 0, res.stderr
+    link = tmp_path / "vq-s4" / ".venv"
+    assert link.is_symlink()
+    assert link.resolve() == (main / ".venv").resolve()
+    assert ".venv" not in _git(tmp_path / "vq-s4", "status", "--porcelain")

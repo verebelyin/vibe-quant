@@ -1,6 +1,6 @@
 # Development
 .devcontainer/
-.venv/
+.venv
 .env
 .env.local
 .worktrees/
