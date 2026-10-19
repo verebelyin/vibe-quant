@@ -56,7 +56,9 @@ Identity/location come from env (set by cmd-task.sh / worktree briefs) or flags:
   Overseer:  bus.py --as chief digest   # everything new on the persistent board + every job bus
              bus.py board brief [--top N]   # onboarding text + the N best posts for this work (SessionStart hook):
                                      # importance x 0.5^(age/60d) x relevance (files changed on this
-                                     # branch, in-progress bead titles); retired/superseded posts never
+                                     # branch, in-progress bead titles) x 0.8 per comparability break
+                                     # (docs/claude/discovery.md) a metric-quoting post predates (tagged
+                                     # 'pre-break' in brief + search); retired/superseded posts never
 Stdlib only; runs with any python3.
 """
 
@@ -109,6 +111,14 @@ def global_board_dir() -> Path:
 POLL_S = 2.0
 HALF_LIFE_DAYS = 60.0  # a post loses half its rank every 60 days
 BRIEF_TOP = 30
+BREAK_PENALTY = 0.8  # per comparability break a metric-quoting post predates
+# a metric name then its value: "sharpe 0.79", "PF=1.63", "Sharpe from 3.46"; not "dsr.py:46" or "return at runner.py:878"
+_METRIC = re.compile(
+    r"\b(sharpe|pf|profit factor|return|dsr|psr|drawdown|max dd|fitness|win rate)\b[\s=:≈~(]{1,3}"
+    r"(?:(?:of|from|to|was|is|now)\s+)?-?\d",
+    re.I,
+)
+_BREAK_LINE = re.compile(r"^- \*\*(\d{4}-\d{2}-\d{2})")
 DEFAULT_IMPORTANCE = {"gotchas": 2, "findings": 2, "decisions": 2}  # any other topic: 1
 _STOPWORDS = frozenset((
     "about", "after", "again", "agent", "agents", "before", "board", "check", "fails", "first", "other",
@@ -967,6 +977,45 @@ def importance_of(m: dict[str, object]) -> int:
     return DEFAULT_IMPORTANCE.get(str(m.get("topic")), 1)
 
 
+def comparability_breaks(path: Path | None = None) -> list[str]:
+    """Dates (YYYY-MM-DD, sorted) of the breaks under '## Comparability breaks' in docs/claude/discovery.md.
+
+    Bullets saying "NOT a break" are skipped. [] when the file or section is missing (fail-soft:
+    no demotion beats a broken session start).
+    """
+    import subprocess
+
+    try:
+        text = (path or _repo_root() / "docs" / "claude" / "discovery.md").read_text(encoding="utf-8")
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return []
+    parts = text.split("## Comparability breaks", 1)
+    if len(parts) < 2:
+        return []
+    out = set()
+    for line in parts[1].split("\n## ", 1)[0].splitlines():
+        hit = _BREAK_LINE.match(line)
+        if hit and "NOT a break" not in line:
+            out.add(hit.group(1))
+    return sorted(out)
+
+
+def breaks_after(m: dict[str, object], breaks: list[str]) -> list[str]:
+    """The breaks dated after the post's day when it quotes a metric (``_METRIC``), else [].
+
+    A post from the break's own day is assumed to know about it.
+    """
+    if not breaks or not _METRIC.search(str(m["body"])):
+        return []
+    day = str(m.get("ts") or "")[:10]
+    return [b for b in breaks if b > day]
+
+
+def _break_tag(m: dict[str, object], breaks: list[str]) -> str:
+    stale = breaks_after(m, breaks)
+    return f"pre-break {stale[0]}, {len(stale)} break(s)" if stale else ""
+
+
 def _age_days(m: dict[str, object], now: float) -> float | None:
     try:
         return max(0.0, (now - time.mktime(time.strptime(str(m.get("ts")), "%Y-%m-%dT%H:%M:%S"))) / 86400)
@@ -986,15 +1035,18 @@ def relevance(body: str, needles: set[str], words: set[str]) -> float:
 
 def score(
     m: dict[str, object], now: float, needles: set[str] | None = None, words: set[str] | None = None,
-    half_life: float = HALF_LIFE_DAYS,
+    half_life: float = HALF_LIFE_DAYS, breaks: list[str] | None = None,
 ) -> float:
-    """Rank of a post for this session: importance x 0.5^(age/half_life) x relevance.
+    """Rank of a post for this session: importance x 0.5^(age/half_life) x relevance x 0.8^breaks.
 
-    A post without a parseable ``ts`` counts as four half-lives old.
+    breaks = comparability breaks the post predates while quoting a metric (``breaks_after``):
+    its numbers are no longer comparable, so it sinks (it is never hidden). A post without a
+    parseable ``ts`` counts as four half-lives old.
     """
     age = _age_days(m, now)
     decay = 0.5 ** ((4 * half_life if age is None else age) / half_life)
-    return importance_of(m) * decay * relevance(str(m["body"]), needles or set(), words or set())
+    stale = BREAK_PENALTY ** len(breaks_after(m, breaks or []))
+    return importance_of(m) * decay * relevance(str(m["body"]), needles or set(), words or set()) * stale
 
 
 def _run(cmd: list[str]) -> str:
@@ -1033,7 +1085,7 @@ def work_context() -> tuple[list[str], set[str]]:
 
 def ranked_posts(
     msgs: list[dict[str, object]], top: int, now: float, files: list[str] | None = None,
-    words: set[str] | None = None,
+    words: set[str] | None = None, breaks: list[str] | None = None,
 ) -> list[tuple[float, dict[str, object]]]:
     """The ``top`` visible board posts (not needs-user, not hidden) by ``score``, best first."""
     hidden = hidden_posts(msgs)
@@ -1042,7 +1094,7 @@ def ranked_posts(
         m for m in msgs
         if m.get("to") == "board" and m.get("topic") != "needs-user" and str(m["id"]) not in hidden
     ]
-    scored = [(score(m, now, needles, words), i, m) for i, m in enumerate(cands)]
+    scored = [(score(m, now, needles, words, breaks=breaks), i, m) for i, m in enumerate(cands)]
     scored.sort(key=lambda sim: (sim[0], sim[1]), reverse=True)  # a tie goes to the newer post
     return [(sc, m) for sc, _, m in scored[:top]]
 
@@ -1066,14 +1118,17 @@ def brief(top: int = BRIEF_TOP, context: tuple[list[str], set[str]] | None = Non
     ]
     lines += _needs_user_section(needs_user_open_all())  # needs-user is never ranked away
     files, words = work_context() if context is None else context
-    ranked = ranked_posts(_all(g), top, time.time() if now is None else now, files, words)
+    breaks = comparability_breaks()
+    ranked = ranked_posts(_all(g), top, time.time() if now is None else now, files, words, breaks)
     if ranked:
         lines.append(
             f"Top {len(ranked)} posts (importance x age x relevance to {len(files)} changed file(s), "
             f"{len(words)} bead keyword(s)); everything else: board search --global"
         )
         for _, m in ranked:
-            lines.append(f"  [{m['id']}] #{m.get('topic')} {m['from']} {_age_of(m)}: {_first_chars(m['body'], 110)}")
+            tag = _break_tag(m, breaks)
+            tag = f" ({tag})" if tag else ""
+            lines.append(f"  [{m['id']}] #{m.get('topic')} {m['from']} {_age_of(m)}{tag}: {_first_chars(m['body'], 110)}")
     return "\n".join(lines)
 
 
@@ -1259,8 +1314,10 @@ def main(argv: list[str] | None = None) -> int:
             if not (args.topic or args.path or args.grep):
                 _refuse("board search needs at least one --topic, --path or --grep")
             hits = board_search(bus, args.topic, args.path, args.grep, args.limit, include_hidden=args.all)
+            breaks = comparability_breaks()
             for m in hits:
-                print(fmt(m) + (f"  [{m['hidden']}]" if m.get("hidden") else ""))
+                tags = [t for t in (str(m.get("hidden") or ""), _break_tag(m, breaks)) if t]
+                print(fmt(m) + "".join(f"  [{t}]" for t in tags))
             if not hits:
                 print("(no matching board posts)")
         elif args.bcmd == "topics":

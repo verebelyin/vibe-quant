@@ -34,6 +34,7 @@ def _load() -> ModuleType:
 
 bus = _load()
 _REAL_WORK_CONTEXT = bus.work_context
+_REAL_BREAKS = bus.comparability_breaks
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +42,7 @@ def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPat
     monkeypatch.setattr(bus, "POLL_S", 0.05)
     # board brief ranks by the caller's git branch and in-progress beads: none in tests
     monkeypatch.setattr(bus, "work_context", lambda: ([], set()))
+    monkeypatch.setattr(bus, "comparability_breaks", lambda: [])  # tests that demote pass their own
     # never let a test write the real committed board
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path_factory.mktemp("global_board")))
     # ...or discover real job buses / inherit a real identity from the caller's env
@@ -469,6 +471,59 @@ def test_work_context_reads_branch_files_and_bead_keywords(monkeypatch: pytest.M
     assert words == {"ranked", "brief", "decay", "funding", "carry", "sizing"}  # 'board' is a stopword
     monkeypatch.setattr(bus, "_run", lambda cmd: "")  # git/bd missing or failing
     assert _REAL_WORK_CONTEXT() == ([], set())
+
+
+_DISCOVERY_MD = """# Discovery
+## Comparability breaks
+
+Results from before each date are NOT comparable with later ones:
+- **2026-10-19 DSR q95 critical value** (bead): stricter.
+- **2026-10-16 NOT a break:** margin limit is opt-in.
+- **2026-10-10:** per-instrument fill release.
+  - **2026-09-01** an indented sub-bullet is not a break
+- **2026-07-09**: screening loads only the strategy timeframe.
+
+## Next section
+- **2026-01-01** not in the breaks section
+"""
+
+
+def test_comparability_breaks_are_read_from_the_discovery_doc(tmp_path: Path) -> None:
+    doc = tmp_path / "discovery.md"
+    doc.write_text(_DISCOVERY_MD)
+    assert _REAL_BREAKS(doc) == ["2026-07-09", "2026-10-10", "2026-10-19"]
+    assert _REAL_BREAKS(tmp_path / "missing.md") == []
+    doc.write_text("# no breaks section\n- **2026-10-19** x\n")
+    assert _REAL_BREAKS(doc) == []
+
+
+def test_metric_posts_older_than_a_break_sink_and_are_tagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    breaks = ["2026-10-10", "2026-10-19"]
+    monkeypatch.setattr(bus, "comparability_breaks", lambda: breaks)
+
+    def at(day: str, body: str) -> dict[str, object]:
+        return bus._append(gdir, {"id": f"{day}-{body[:6]}", "ts": f"{day}T12:00:00", "from": "w", "to": "board", "kind": "info", "topic": "findings", "body": body})
+
+    old_metric = at("2026-10-09", "strategy 239 sharpe 0.7974 after the fix")
+    at("2026-10-09", "the runner.py fill path, a non-metric fact")
+    same_day = at("2026-10-19", "run 900 Sharpe from 1.2 to 0.4")
+    assert bus.breaks_after(old_metric, breaks) == ["2026-10-10", "2026-10-19"]
+    assert bus.breaks_after(same_day, breaks) == []  # posted on the break's day: knew about it
+    assert bus.breaks_after({**old_metric, "body": "see dsr.py:46 and fitness.py:168"}, breaks) == []  # paths, not values
+    now = time.mktime(time.strptime("2026-10-20T12:00:00", "%Y-%m-%dT%H:%M:%S"))
+    assert bus.score(old_metric, now, breaks=breaks) == pytest.approx(bus.score(old_metric, now) * 0.8**2)
+    text = bus.brief(top=3, context=([], set()), now=now)
+    ranked = [line for line in text.splitlines() if line.startswith("  [")]
+    assert "Sharpe from 1.2" in ranked[0] and "non-metric" in ranked[1]  # same age, the metric post sinks
+    assert "sharpe 0.7974" in ranked[2] and "(pre-break 2026-10-10, 2 break(s))" in ranked[2]
+    bus.main(["--bus", str(gdir), "board", "search", "--grep", "sharpe"])
+    out = capsys.readouterr().out
+    assert "sharpe 0.7974 after the fix  [pre-break 2026-10-10, 2 break(s)]" in out
+    assert "Sharpe from 1.2 to 0.4\n" in out  # untagged
 
 
 # --- needs-user decision queue ------------------------------------------------
