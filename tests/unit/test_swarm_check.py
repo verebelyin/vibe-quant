@@ -2236,10 +2236,22 @@ class TestIntegration:
         )
         assert proc.returncode == 1, proc.stdout + proc.stderr
         assert "FAIL scope:" in proc.stdout
-        assert "FAIL mypy:" in proc.stdout
-        assert proc.stdout.strip().endswith("GATE FAIL (2 failed)")
+        # an out-of-scope diff stops before the tools: the failing mypy stub never runs
+        assert "SKIP mypy: scope FAIL: fix scope first" in proc.stdout
+        assert "SKIP tests: scope FAIL: fix scope first" in proc.stdout
+        assert proc.stdout.strip().endswith("GATE FAIL (1 failed)")
         data = json.loads(out_json.read_text())
         assert data["gate"] == "FAIL"
+        proc = subprocess.run(
+            [
+                "bash", str(_SCRIPT.parent / "swarm-check.sh"), str(repo), "--base", "main",
+                "--scope", "vibe_quant/*,stray.txt", "--exactness", "never", "--frontend", "never",
+            ],
+            capture_output=True, text=True, env=env,
+        )  # fmt: skip
+        assert "PASS scope:" in proc.stdout
+        assert "FAIL mypy:" in proc.stdout
+        assert proc.stdout.strip().endswith("GATE FAIL (1 failed)")
 
 
 class TestBusInbox:
@@ -2803,3 +2815,37 @@ def test_gate_caps_xdist_auto_when_the_host_is_already_loaded() -> None:
     assert workers({}, 6.4, 10) == "4"
     assert workers({}, 29.5, 10) == "2"
     assert workers({"SWARM_CHECK_WORKERS": "3"}, 1.0, 10) == "3"
+
+
+def test_failed_tests_names_the_first_failing_node_ids() -> None:
+    out = (
+        "....F.E\n=== short test summary info ===\n"
+        "FAILED tests/unit/test_a.py::test_x - AssertionError: boom\n"
+        "ERROR tests/unit/test_b.py::test_y - fixture missing\n"
+        "FAILED tests/unit/test_c.py::test_z[1] - assert 1 == 2\n"
+        "FAILED tests/unit/test_d.py::test_w\n2 failed, 1 error, 4 passed in 1.0s\n"
+    )
+    assert swarm_check.failed_tests(out) == [
+        "FAILED tests/unit/test_a.py::test_x, tests/unit/test_b.py::test_y, "
+        "tests/unit/test_c.py::test_z[1] (+1 more)"
+    ]
+    assert swarm_check.failed_tests("3 passed in 0.1s") == []
+
+
+def test_gate_pytest_runs_quiet_and_the_fail_line_names_the_test(tmp_path: Path) -> None:
+    repo = _path_reader_repo(tmp_path)
+    (repo / "vibe_quant" / "screening" / "replay_drift.py").write_text("R = 2\n")
+    runner = FakeRunner()
+    runner.responses = {
+        "pytest": (1, "FAILED tests/unit/test_r.py::test_drift - assert 1 == 2\n1 failed in 0.1s")
+    }
+    cfg = _cfg(tmp_path, repo, base="HEAD", exactness="never", frontend="never")
+    tests = {c.name: c for c in swarm_check.run_checks(cfg, runner)}["tests"]
+    assert tests.status == "FAIL"
+    assert "FAILED tests/unit/test_r.py::test_drift" in tests.detail
+    pytest_envs = [
+        e for c, e in zip(runner.calls, runner.envs, strict=True)
+        if any("pytest" in Path(a).name for a in c)
+    ]  # fmt: skip
+    assert pytest_envs
+    assert all(e is not None and "-q -rfE" in e["PYTEST_ADDOPTS"] for e in pytest_envs)

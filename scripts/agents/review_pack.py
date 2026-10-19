@@ -2,7 +2,7 @@
 """Print exactly the review surface of a branch range in one command.
 
     review_pack.py <worktree> (--range BASE..HEAD | --merge-base PARENT [--head REF])
-                   [--max-lines 600] [--full PATH]
+                   [--max-lines 250] [--full PATH]
 
 Resolves both ends with `git rev-parse` and prints, in order:
     RANGE <base sha>..<head sha>          (always first)
@@ -22,7 +22,7 @@ names `*.lock`, `pnpm-lock.yaml`, `uv.lock`, `*.golden` at ANY depth, plus the r
 `frontend/openapi.json`, `frontend/src/api/generated/**`, `docs/orchestration/board/**`,
 `docs/orchestration/telemetry/**`.
 
-The printed diff is capped at `--max-lines` (600). The cut finishes the current file's hunk
+The printed diff is capped at `--max-lines` (250). The cut finishes the current file's hunk
 header, then prints:
     TRUNCATED: <n> more diff lines in <files>; read one file with:
         git -C <worktree> diff <base>..<head> -- <file>
@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--range", dest="range_", metavar="BASE..HEAD", help="explicit range")
     group.add_argument("--merge-base", metavar="PARENT", help="base = git merge-base PARENT HEAD")
     parser.add_argument("--head", metavar="REF", help="HEAD for --merge-base (default: worktree HEAD)")
-    parser.add_argument("--max-lines", type=int, default=600, help="diff line cap (default 600)")
+    parser.add_argument("--max-lines", type=int, default=250, help="diff line cap (default 250)")
     parser.add_argument("--full", metavar="PATH", help="write the uncapped diff here")
     args = parser.parse_args(argv)
 

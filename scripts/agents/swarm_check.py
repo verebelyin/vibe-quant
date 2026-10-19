@@ -213,6 +213,10 @@ PYTEST_NO_TESTS_RC = 5
 # Tests marked `timing` assert relative wall-clock speed and flake under worker
 # contention, so they are deselected from the parallel pass and run serially after.
 PYTEST_PARALLEL_ARGS = ("-n", "auto", "--dist", "worksteal")
+# Through PYTEST_ADDOPTS so the argv stays as is: -q cancels the ini's -v (a full-suite log was
+# 1.7 MB, 8105 PASSED lines, which reviewers then grep), -rfE keeps one FAILED/ERROR line per test.
+PYTEST_QUIET_ADDOPTS = "-q -rfE"
+FAILED_TEST_RE = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 TIMING_MARK = "timing"
 
 
@@ -813,6 +817,15 @@ def pytest_summary(output: str) -> str:
     return lines[-1] if lines else "no output"
 
 
+def failed_tests(output: str, limit: int = 3) -> list[str]:
+    """The first failing node ids, so the FAIL line names what to re-run alone."""
+    ids = FAILED_TEST_RE.findall(output)
+    if not ids:
+        return []
+    more = f" (+{len(ids) - limit} more)" if len(ids) > limit else ""
+    return ["FAILED " + ", ".join(ids[:limit]) + more]
+
+
 def tail_line(output: str) -> str:
     lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
     return lines[-1] if lines else "ok"
@@ -1126,14 +1139,17 @@ def _run_tests(
     summaries: list[str] = []
     failed = False
     passed = 0
+    test_env = dict(wt_env)
+    test_env["PYTEST_ADDOPTS"] = f"{wt_env.get('PYTEST_ADDOPTS', '')} {PYTEST_QUIET_ADDOPTS}".strip()
     for args, rc5_skip, rc5_note in commands:
-        rc, out = run(tools["pytest"] + args, cfg.worktree, wt_env, TEST_TIMEOUT)
+        rc, out = run(tools["pytest"] + args, cfg.worktree, test_env, TEST_TIMEOUT)
         if rc == PYTEST_NO_TESTS_RC and rc5_skip:
             summaries.append(rc5_note)
             continue
         summaries.append(pytest_summary(out))
         if rc != 0:
             failed = True
+            summaries.extend(failed_tests(out))
         else:
             passed += 1
     summaries.extend(notes)  # how many importer files ran, or why the full suite ran instead
@@ -1249,6 +1265,13 @@ def run_checks(cfg: Config, run: RunFn = real_run) -> list[Check]:
             checks.append(Check("scope", "PASS", f"{len(reviewable)} paths in scope"))
     else:
         checks.append(Check("scope", "SKIP", "no --scope given"))
+    if checks[-1].name == "scope" and "out of scope" in checks[-1].detail:
+        # Nothing else is worth minutes: twice a scope-only FAIL surfaced after a 2-3 min test
+        # run. The tools run once the diff is in scope (bus-inbox still runs: time-dependent).
+        checks += [Check(n, "SKIP", "scope FAIL: fix scope first") for n in TOOL_CHECK_NAMES]
+        checks.append(bus_inbox_check(cfg))
+        order = {name: i for i, name in enumerate(CHECK_ORDER)}
+        return sorted(checks, key=lambda c: order.get(c.name, len(order)))
 
     # 2. clean
     if state.untracked:
