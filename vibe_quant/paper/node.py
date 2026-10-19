@@ -536,6 +536,7 @@ class PaperTradingNode:
         self._restored_watch_ms = 0
         self._connected: bool | None = None
         self._startup_timeout_reported = False
+        self._connected_seen_in_stop = False
         self._kill_reason_seen: str | None = None
         # The kill switch is read on a reader thread that owns its own state-DB
         # handle (T2a/B2); the loop only ever looks at its snapshot. The latch is
@@ -1453,6 +1454,21 @@ class PaperTradingNode:
             self.halt(HaltReason.KILL_SWITCH, f"system kill switch: {reason or 'no reason'}")
         self._kill_reason_seen = reason
 
+    def _shutdown_in_progress(self) -> bool:
+        """True while the venue is being torn down on an operator stop request.
+
+        NT 1.231 has no public ``is_stopping``: ``kernel._is_stopping`` is set at the
+        top of ``stop_async`` -- BEFORE the data/exec clients disconnect -- and cleared
+        only when it returns (``system/kernel.py``, verified at the source). A tick in
+        that window is the SIGTERM we asked for, not a venue failure. The node's
+        ``_shutdown_event`` covers the ticks between ``run_async`` returning and the
+        control loop being cancelled.
+        """
+        kernel = getattr(self._trading_node, "kernel", None)
+        if getattr(kernel, "_is_stopping", False):
+            return True
+        return self._shutdown_event.is_set()
+
     def _check_connectivity(self) -> None:
         kernel = getattr(self._trading_node, "kernel", None)
         connected = False
@@ -1471,6 +1487,12 @@ class PaperTradingNode:
                     # "not connected" for the startup timeout.
                     self._check_startup_connect_timeout()
                 return
+        # yejfx/R2: a disconnect during a stop is the stop itself ONLY if this node saw
+        # the venue connected after the stop began; otherwise it was lost before.
+        if not self._shutdown_in_progress():
+            self._connected_seen_in_stop = False
+        elif connected:
+            self._connected_seen_in_stop = True
         if self._connected is None:
             if not connected:
                 # R42b/R42e: the probe ran first, so only a venue that is still not
@@ -1497,6 +1519,12 @@ class PaperTradingNode:
             return
         if self._connected and not connected:
             self._connected = False
+            # yejfx: the clients disconnect BECAUSE the operator asked the node to stop;
+            # paging "venue connection lost" there is a false alarm during every SIGTERM.
+            # Fail open: a loss seen before any connected observation in the stop
+            # is a genuine disconnect and still alerts.
+            if self._connected_seen_in_stop and self._shutdown_in_progress():
+                return
             self.handle_error(
                 ConnectionError("venue connection lost (data or execution client disconnected)"),
                 operation="connectivity",
