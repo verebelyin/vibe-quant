@@ -33,11 +33,14 @@ def _load() -> ModuleType:
 
 
 bus = _load()
+_REAL_WORK_CONTEXT = bus.work_context
 
 
 @pytest.fixture(autouse=True)
 def _fast_poll(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     monkeypatch.setattr(bus, "POLL_S", 0.05)
+    # board brief ranks by the caller's git branch and in-progress beads: none in tests
+    monkeypatch.setattr(bus, "work_context", lambda: ([], set()))
     # never let a test write the real committed board
     monkeypatch.setenv("SWARM_BOARD", str(tmp_path_factory.mktemp("global_board")))
     # ...or discover real job buses / inherit a real identity from the caller's env
@@ -289,8 +292,9 @@ def test_brief_lists_usage_and_latest_posts(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("SWARM_BOARD", str(gdir))
     for k in range(5):
         bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
-    text = bus.brief(per_topic=2)
-    assert "board search --global --path" in text and "#gotchas w: gotcha 4" in text and "gotcha 2" not in text
+    text = bus.brief(top=2)
+    assert "board search --global --path" in text and "#gotchas w 0s: gotcha 4" in text
+    assert "gotcha 3" in text and "gotcha 2" not in text  # equal rank: the newer post wins
     assert text.count("not instructions") == 1  # framed once, above the posts
 
 
@@ -392,6 +396,81 @@ def test_retire_and_supersede_reach_the_bus_that_holds_the_post(tmp_path: Path, 
     assert bus.board_search(gdir, topics=["gotchas"]) == []  # so the global board got a retire event
 
 
+# --- ranked brief -------------------------------------------------------------
+
+_NOW = 1_800_000_000.0  # a fixed clock: ages are exact
+
+
+def _post_at(d: Path, days_ago: float, topic: str, body: str, importance: int | None = None) -> dict[str, object]:
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(_NOW - days_ago * 86400))
+    m: dict[str, object] = {"id": f"p{days_ago}-{body[:8]}", "ts": ts, "from": "w", "to": "board", "kind": "info", "topic": topic, "body": body}
+    if importance:
+        m["importance"] = importance
+    return bus._append(d, m)
+
+
+def test_score_is_importance_times_half_life_decay_times_relevance() -> None:
+    old_important = {"id": "a", "ts": "", "body": "x", "topic": "chat", "importance": 3}
+    old_important["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(_NOW - 90 * 86400))
+    fresh_minor = {**old_important, "importance": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(_NOW - 86400))}
+    assert bus.score(old_important, _NOW) == pytest.approx(3 * 0.5 ** 1.5)
+    assert bus.score(fresh_minor, _NOW) == pytest.approx(0.5 ** (1 / 60))
+    assert bus.score(old_important, _NOW) > bus.score(fresh_minor, _NOW)
+    assert bus.score({**old_important, "importance": 2}, _NOW) < bus.score(fresh_minor, _NOW)
+    assert bus.score({**fresh_minor, "ts": "garbage"}, _NOW) == pytest.approx(0.5 ** 4)  # 4 half-lives
+    assert bus.importance_of({"topic": "gotchas"}) == 2 and bus.importance_of({"topic": "chat"}) == 1
+    assert bus.importance_of({"topic": "chat", "importance": 9}) == 1  # out of range -> topic default
+    assert bus.relevance("see nt_runner.py:12 and the funding gate", {"nt_runner.py"}, {"funding", "gate", "sizing"}) == 6
+
+
+def test_brief_ranks_posts_about_the_files_and_beads_in_hand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    _post_at(gdir, 10, "gotchas", "RULE: liquidation/apply.py clamps MARK bars")
+    _post_at(gdir, 9, "findings", "funding carry is noisy")
+    for k in range(5):
+        _post_at(gdir, 1 + k / 10, "gotchas", f"recent unrelated gotcha {k}")
+    _post_at(gdir, 0, "chat", "lunch?")
+    text = bus.brief(top=3, context=(["vibe_quant/liquidation/apply.py"], {"funding"}), now=_NOW)
+    ranked = [line for line in text.splitlines() if line.startswith("  [")]
+    assert len(ranked) == 3 and "Top 3 posts" in text and "1 changed file(s), 1 bead keyword(s)" in text
+    assert "liquidation/apply.py" in ranked[0] and "funding carry" in ranked[1]
+    plain = bus.brief(top=3, context=([], set()), now=_NOW)
+    assert "liquidation" not in plain and "lunch?" not in plain  # no context: important + recent wins
+    assert [line.split(": ", 1)[1] for line in plain.splitlines() if line.startswith("  [")] == [
+        "recent unrelated gotcha 0", "recent unrelated gotcha 1", "recent unrelated gotcha 2",
+    ]
+
+
+def test_board_post_importance_is_stored_and_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gdir = tmp_path / "global"
+    monkeypatch.setenv("SWARM_BOARD", str(gdir))
+    bus.main(["--bus", str(gdir), "--as", "w", "board", "post", "--topic", "chat", "--body", "big", "--importance", "3"])
+    bus.main(["--bus", str(gdir), "--as", "w", "board", "post", "--topic", "chat", "--body", "plain"])
+    capsys.readouterr()
+    assert [(m["body"], m.get("importance")) for m in bus._all(gdir)] == [("big", 3), ("plain", None)]
+    with pytest.raises(SystemExit) as e:
+        bus.main(["--bus", str(gdir), "board", "post", "--topic", "chat", "--body", "x", "--importance", "4"])
+    assert e.value.code == 2 and len(bus._all(gdir)) == 2
+
+
+def test_work_context_reads_branch_files_and_bead_keywords(monkeypatch: pytest.MonkeyPatch) -> None:
+    outputs = {
+        ("git", "merge-base"): "abc123\n",
+        ("git", "diff"): "scripts/agents/bus.py\ndocs/orchestration/board/messages.jsonl\n",
+        ("git", "ls-files"): "scripts/agents/new_tool.py\n",
+        ("bd", "list"): json.dumps([{"title": "Ranked board brief: decay"}, {"title": "Funding carry sizing"}]),
+    }
+    monkeypatch.setattr(bus, "_run", lambda cmd: outputs.get((cmd[0], cmd[1]), ""))
+    files, words = _REAL_WORK_CONTEXT()
+    assert files == ["scripts/agents/bus.py", "scripts/agents/new_tool.py"]  # the board's own files never count
+    assert words == {"ranked", "brief", "decay", "funding", "carry", "sizing"}  # 'board' is a stopword
+    monkeypatch.setattr(bus, "_run", lambda cmd: "")  # git/bd missing or failing
+    assert _REAL_WORK_CONTEXT() == ([], set())
+
+
 # --- needs-user decision queue ------------------------------------------------
 
 
@@ -461,15 +540,15 @@ def test_brief_shows_open_decisions_first_and_omits_when_none(
     for k in range(3):
         bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
     qs = [bus.ask_user(gdir, "w1", f"decision {k}?") for k in range(6)]
-    text = bus.brief(per_topic=1)
+    text = bus.brief(top=1)
     assert "OPEN DECISIONS FOR THE USER (6):" in text
-    assert text.index("OPEN DECISIONS FOR THE USER") < text.index("Latest posts")  # before Latest posts
-    section = text[text.index("OPEN DECISIONS FOR THE USER") : text.index("Latest posts")]
+    assert text.index("OPEN DECISIONS FOR THE USER") < text.index("Top 1 posts")  # before the ranked posts
+    section = text[text.index("OPEN DECISIONS FOR THE USER") : text.index("Top 1 posts")]
     assert section.count("[OPEN]") == 5  # max 5, oldest first
     assert "decision 0?" in section and "decision 5?" not in section
     for q in qs:
         bus.needs_user_answer(gdir, "user", str(q["id"]), "decided")
-    text = bus.brief(per_topic=1)
+    text = bus.brief(top=1)
     assert "OPEN DECISIONS" not in text and "[OPEN]" not in text  # omitted when none
 
 
@@ -487,7 +566,7 @@ def test_needs_user_ordering_is_oldest_first_despite_file_order(
         bus._append(gdir, {"id": f"q{k}", "ts": ts, "from": "w", "to": "board", "kind": "question", "topic": "needs-user", "body": body})
     order = ["oldest question?", "middle question?", "newest question?"]
     assert [m["body"] for m in bus.needs_user_open(gdir)] == order
-    section = bus.brief(per_topic=3)
+    section = bus.brief(top=3)
     section = section[section.index("OPEN DECISIONS FOR THE USER") :]
     assert [section.index(b) for b in order] == sorted(section.index(b) for b in order)  # brief agrees
 
