@@ -169,6 +169,54 @@ def test_r2_p4h_argv_is_byte_identical() -> None:
     probe = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1", probe=True)
     assert "--indicator-pool" not in probe
     assert len(probe) == len(argv) - 2
+    # design-dsr-q95 T3: an absent rule is byte-identical; q95 appends exactly one pair.
+    assert "--dsr-rule" not in argv
+    q95 = budget.discovery_argv(layer2.P4H, 5, Path("/x/s.db"), 2, "B1", dsr_rule="q95")
+    assert q95.count("--dsr-rule") == 1
+    assert q95[-2:] == ["--dsr-rule", "q95"]
+    assert q95[:-2] == argv
+    probe_q95 = budget.discovery_argv(
+        layer2.P4H, 5, Path("/x/s.db"), 2, "B1", probe=True, dsr_rule="q95"
+    )
+    assert probe_q95.count("--dsr-rule") == 1
+    assert probe_q95[-2:] == ["--dsr-rule", "q95"]
+    assert probe_q95.count("--indicator-pool") == 0
+
+
+def test_dsr_rule_recorded_and_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3: ``discover --dsr-rule`` forwards one literal pair and records the rule; absent -> None.
+
+    Two unrelated inputs: an untagged 4h seed 1 and a q95 1d seed 3.
+    """
+    out = _out(tmp_path)
+    for variant in ("4h-s0", "1d-s0"):
+        _accept(out, variant, tmp_path)
+    argvs: dict[str, list[str]] = {}
+
+    def fake_discovery(
+        root: Path, run_dir: Path, seed: int, *, command_fn: Any, profile: layer2.Profile, **kw: Any
+    ) -> dict[str, Any]:
+        argvs[f"{profile.timeframe}|{seed}"] = command_fn(7, run_dir / "s.db", seed)
+        return {"status": "completed", "run_id": 7, "db": str(run_dir / "s.db"), "wall_s": 0.1}
+
+    monkeypatch.setattr(layer2, "run_discovery", fake_discovery)
+    cases = [("4h-s0", 1, None), ("1d-s0", 3, "q95")]
+    for variant, seed, rule in cases:
+        extra = [] if rule is None else ["--dsr-rule", rule]
+        assert budget.main([
+            *_cli(tmp_path), "discover", "--variant", variant, "--rung", "B1",
+            "--seed", str(seed), *extra,
+        ]) == 0
+        argv = argvs[f"{variant[:2]}|{seed}"]
+        rec = budget.load_state(out)["runs"][budget.run_key(variant, "B1", seed)]
+        if rule is None:
+            assert "--dsr-rule" not in argv
+            assert rec["dsr_rule"] is None
+        else:
+            assert argv[-2:] == ["--dsr-rule", "q95"]
+            assert rec["dsr_rule"] == "q95"
 
 
 # --- R3 1d btc0 fidelity -------------------------------------------------------------------

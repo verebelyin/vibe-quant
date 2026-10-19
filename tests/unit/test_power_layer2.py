@@ -1012,6 +1012,22 @@ def test_r40_discovery_command_budget_flags() -> None:
     assert big[big.index("--seed-from-run") + 1] == "1"
     assert big[big.index("--seed") + 1] == "2"
 
+    # design-dsr-q95 T3: absent rule keeps the argv byte-identical; q95/emax append one pair.
+    assert "--dsr-rule" not in default
+    q95 = layer2.discovery_command(5, Path("/x/s.db"), 2, dsr_rule="q95")
+    assert q95.count("--dsr-rule") == 1
+    assert q95[-2:] == ["--dsr-rule", "q95"]
+    assert q95[:-2] == default
+    emax = layer2.discovery_command(5, Path("/x/s.db"), 2, dsr_rule="emax")
+    assert emax.count("--dsr-rule") == 1
+    assert emax[-2:] == ["--dsr-rule", "emax"]
+    assert emax[:-2] == default
+    # the 1d Profile path carries the same one appended pair after its own flags.
+    one_d = layer2.discovery_command(5, Path("/x/s.db"), 2, profile=layer2.P1D, dsr_rule="q95")
+    assert one_d.count("--dsr-rule") == 1
+    assert one_d[-2:] == ["--dsr-rule", "q95"]
+    assert one_d.count("--direction") == 1 and one_d[one_d.index("--direction") + 1] == "long"
+
 
 def test_r41_discover_label_records_followup_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

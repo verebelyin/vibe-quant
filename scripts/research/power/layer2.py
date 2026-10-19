@@ -778,9 +778,11 @@ def discovery_command(
     gens: int = DEFAULT_GENS,
     seed_run: int | None = None,
     profile: Profile = P4H,
+    dsr_rule: str | None = None,
 ) -> list[str]:
     """R40: the discovery CLI argv. The defaults reproduce the 12x4 command byte for byte;
-    ``seed_run`` adds one ``--seed-from-run`` (R42 warm start)."""
+    ``seed_run`` adds one ``--seed-from-run`` (R42 warm start); ``dsr_rule`` appends one
+    ``--dsr-rule <rule>`` (design-dsr-q95 T3; ``None`` keeps the legacy argv)."""
     start, end = full_window(profile)
     cmd = [
         sys.executable, "-m", "vibe_quant", "discovery",
@@ -800,6 +802,8 @@ def discovery_command(
     ]
     if seed_run is not None:
         cmd += ["--seed-from-run", str(seed_run)]
+    if dsr_rule is not None:
+        cmd += ["--dsr-rule", dsr_rule]
     return cmd
 
 

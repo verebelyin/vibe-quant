@@ -11,7 +11,8 @@ the profile-aware ``layer2`` functions (``P4H`` byte-identical, ``P1D`` = 1d / W
 - ``check-btc0 --tf``: the s0 scratch catalog reproduces the real catalog bit for bit.
 - ``direct-chain --variant``: the planted rule through the real gate chain (positive control).
 - ``null-corr --tf``: the calibrated null pool of that timeframe (LONG draws for 1d).
-- ``discover --variant --rung --seed [--probe full_pool]``: one isolated discovery run.
+- ``discover --variant --rung --seed [--probe full_pool] [--dsr-rule {emax,q95}]``: one
+  isolated discovery run (``--dsr-rule`` is opt-in and absent by default).
 - ``harvest [--tf]``: screen candidates, compute M1/M2 under ``C_K`` and advance the cells.
 - ``next-wave --tf``: PRINT the exact shell commands of the next budget wave (runs nothing).
 - ``report``: per-cell ``B*``, M1/M2 counts per rung, s0 champion count and the git-sha set.
@@ -539,11 +540,20 @@ def invalidate_variant(s: dict[str, Any], variant: str) -> None:
 
 
 def discovery_argv(
-    profile: layer2.Profile, run_id: int, db: Path, seed: int, rung: str, probe: bool = False
+    profile: layer2.Profile,
+    run_id: int,
+    db: Path,
+    seed: int,
+    rung: str,
+    probe: bool = False,
+    dsr_rule: str | None = None,
 ) -> list[str]:
-    """The discovery CLI argv for one wave run; ``probe`` drops the 5-indicator restriction."""
+    """The discovery CLI argv for one wave run; ``probe`` drops the 5-indicator restriction and
+    ``dsr_rule`` appends the opt-in ``--dsr-rule <rule>`` (``None`` = legacy argv)."""
     pop, gens = LADDER[rung]
-    cmd = layer2.discovery_command(run_id, db, seed, pop=pop, gens=gens, profile=profile)
+    cmd = layer2.discovery_command(
+        run_id, db, seed, pop=pop, gens=gens, profile=profile, dsr_rule=dsr_rule
+    )
     if probe:
         i = cmd.index("--indicator-pool")
         del cmd[i : i + 2]
@@ -818,7 +828,7 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     def command(run_id: int, db: Path, sd: int) -> list[str]:
-        return discovery_argv(profile, run_id, db, sd, rung, probe)
+        return discovery_argv(profile, run_id, db, sd, rung, probe, args.dsr_rule)
 
     timeout = args.timeout if args.timeout is not None else TIMEOUT_S[tf]
     rec = layer2.run_discovery(
@@ -828,6 +838,7 @@ def cmd_discover(ctx: layer2.Ctx, args: argparse.Namespace) -> int:
         variant=variant, rung=rung, seed=seed, pop=pop, gens=gens, probe=probe,
         profile=profile.to_dict(), sha=git_sha(), reruns=reruns, evaluated=None,
         build_id=(state.get("variants") or {}).get(variant, {}).get("build_id"),
+        dsr_rule=args.dsr_rule,
     )
     update_state(ctx.out, lambda s: s.setdefault("runs", {}).__setitem__(key, rec))
     print(f"{where}: {rec['status']} run_id={rec['run_id']} {rec['wall_s']}s {rec.get('error', '')}".rstrip())
@@ -994,6 +1005,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rung", choices=list(LADDER), required=True)
     p.add_argument("--seed", type=int, required=True)
     p.add_argument("--probe", choices=[PROBE_FULL_POOL], default=None, help="Q1: full indicator pool")
+    p.add_argument("--dsr-rule", choices=["emax", "q95"], default=None,
+                   help="design-dsr-q95: opt-in DSR critical value (absent = legacy argv)")
     p.add_argument("--timeout", type=float, default=None)
     p = sub.add_parser("harvest", help="R5/R6: isolation, LONG, M1/M2 under C_K, cells")
     p.add_argument("--tf", choices=tfs, default=None)
