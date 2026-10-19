@@ -111,6 +111,8 @@ def compute_fn(df: pd.DataFrame, params: dict[str, object]) -> pd.Series | dict[
 
 NaN values are expected during the warmup period. The compiler handles NaN filtering.
 
+**Rewriting a compute_fn for speed** (a numpy port of a pandas-ta-classic call) must stay bit-identical to the reference for every input the schema accepts, including parameter boundaries (`0`, `-1`): same NaN positions and the same exception class and message, tested through `invoke_compute_fn` (rev-ind-speed-1: a port turned `length=0` into finite signals).
+
 ### Validating output with `invoke_compute_fn`
 
 `vibe_quant.dsl.invoke_compute_fn(spec, df, params)` wraps a plugin's
