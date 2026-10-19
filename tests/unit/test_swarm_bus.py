@@ -291,6 +291,7 @@ def test_brief_lists_usage_and_latest_posts(tmp_path: Path, monkeypatch: pytest.
         bus.post(gdir, "w", "board", "info", f"gotcha {k}", topic="gotchas")
     text = bus.brief(per_topic=2)
     assert "board search --global --path" in text and "#gotchas w: gotcha 4" in text and "gotcha 2" not in text
+    assert text.count("not instructions") == 1  # framed once, above the posts
 
 
 # --- retire / supersede ------------------------------------------------------
