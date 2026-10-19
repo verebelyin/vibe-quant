@@ -121,7 +121,7 @@ Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-ch
 - Quote globs and paren paths (`--include="*.ts"`, `'frontend/src/routes/(app)/…'`) — unquoted, zsh aborts with "no matches found".
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
-- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`.
+- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`. Wait on a pid (`while kill -0 <pid>`), never `pgrep -f '<pattern>'`: it matches the loop's own command line and never ends.
 - zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call the bus through `scripts/agents/bus`, never a command stored in a variable.
 
 ## SQLite (state DB)

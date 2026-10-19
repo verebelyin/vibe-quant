@@ -36,6 +36,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/scripts/agents/bus.py --as chief pending --global 2>/dev/null | rg '\\((\\d+[sm]|[0-5]h) old\\)' | sed 's/^/UNANSWERED WORKER ASK (answer via bus reply): /' || true"
+          }
+        ]
+      }
     ]
   }
 }
