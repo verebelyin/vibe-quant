@@ -204,6 +204,21 @@ PYTEST_NO_TESTS_RC = 5
 # contention, so they are deselected from the parallel pass and run serially after.
 PYTEST_PARALLEL_ARGS = ("-n", "auto", "--dist", "worksteal")
 TIMING_MARK = "timing"
+
+
+def xdist_auto_workers(env: dict[str, str], load1: float, cpus: int) -> str | None:
+    """What ``-n auto`` should mean: SWARM_CHECK_WORKERS wins; else the free cores (>= 2)
+    when other jobs already load the host past half its cores; else None (xdist decides).
+    Applied by ``main`` through xdist's PYTEST_XDIST_AUTO_NUM_WORKERS, so the gate's
+    commands and test selection never depend on the host. Job 20261019-budget-dsr: a
+    ``-n auto`` gate on top of two discoveries hit load 29.5 on 10 cores."""
+    if env.get("SWARM_CHECK_WORKERS"):
+        return env["SWARM_CHECK_WORKERS"]
+    if load1 > cpus / 2:
+        return str(max(2, cpus - round(load1)))
+    return None
+
+
 # Cap on the importer-file selection (the reverse import closure of the changed modules).
 # Past this many files a per-file targeted run no longer costs less than the same work as
 # one whole-suite run under xdist, so the gate runs full tests/unit instead: the closure is
@@ -1348,6 +1363,11 @@ def bus_post(cfg: Config, checks: Sequence[Check], cached_head: str = "") -> Non
 
 
 def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
+    if run is None and "PYTEST_XDIST_AUTO_NUM_WORKERS" not in os.environ:
+        workers = xdist_auto_workers(dict(os.environ), os.getloadavg()[0], os.cpu_count() or 1)
+        if workers is not None:
+            os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"] = workers
+            print(f"gate: host loaded, xdist auto = {workers} workers")
     parser = argparse.ArgumentParser(description="Pre-review gate for a worker's worktree")
     parser.add_argument("worktree")
     parser.add_argument(

@@ -2682,3 +2682,12 @@ class TestPinnedText:
         (repo / "notes.txt").write_text("x\n")
         pin = self._pin(tmp_path, repo)
         assert pin.status == "SKIP" and "no vibe_quant" in pin.detail
+
+
+def test_gate_caps_xdist_auto_when_the_host_is_already_loaded() -> None:
+    workers = swarm_check.xdist_auto_workers
+    assert workers({}, 1.0, 10) is None
+    assert workers({}, 5.0, 10) is None
+    assert workers({}, 6.4, 10) == "4"
+    assert workers({}, 29.5, 10) == "2"
+    assert workers({"SWARM_CHECK_WORKERS": "3"}, 1.0, 10) == "3"
