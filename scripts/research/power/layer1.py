@@ -48,6 +48,7 @@ from vibe_quant.discovery.fitness import (
     _evaluate_single,
 )
 from vibe_quant.discovery.genome import generate_random_chromosome
+from vibe_quant.discovery.neff import effective_trials
 from vibe_quant.discovery.pipeline import _select_diverse_top_k
 from vibe_quant.overfitting.dsr import DeflatedSharpeRatio
 
@@ -448,12 +449,16 @@ def selection_null(
     n: int = RESULTS_N,
     candidates: int = SELECTION_K,
     seed_base: int = SEED_BASE,
+    dsr_rule: str = "emax",
 ) -> dict[str, object]:
     """R33/V2: false-positive rate of one selection-null configuration.
 
     Each rep draws ``candidates`` random chromosomes (``random.Random(rep_seed+i)``),
     scores them with ``synth`` at S = 0, takes the production top-5 pick, and
     counts a false positive iff ANY pick passes ``chain_recent`` at N = 167.
+    ``dsr_rule="q95"`` scores each rep with the effective-N estimator's spread
+    over that rep's own retained series (design-dsr-q95); a fallback keeps the
+    legacy bar.
     """
     timeframe = settings.config.timeframe
     w_idx = WINDOWS.index(plan_name)
@@ -484,12 +489,26 @@ def selection_null(
         picks = select_picks([(chrom, fit) for chrom, _, fit, _ in entries])
         picks_total += len(picks)
         picked = {id(chrom) for chrom, _ in picks}
+        spread: float | None = None
+        if dsr_rule == "q95":
+            rows = [
+                np.frombuffer(fit.mtm_daily_returns.values, dtype=np.float64)
+                for _, _, fit, _ in entries
+                if fit.mtm_daily_returns is not None and len(fit.mtm_daily_returns) >= 2
+            ]
+            spread = effective_trials(rows, candidates).ev_q95_spread if rows else None
         for chrom, sched, fit, cseed in entries:
             if id(chrom) not in picked:
                 continue
             holdout_bt = synth.holdout(plan_name, n, 0.0, cseed).window.bt
             out = gatechain.evaluate_candidate(
-                chrom, fit, holdout_bt, _window_factory(sched), closes, settings
+                chrom,
+                fit,
+                holdout_bt,
+                _window_factory(sched),
+                closes,
+                settings,
+                null_spread=spread,
             )
             recent = cast("dict[int, bool]", out["chain_recent"])
             if recent[SELECTION_K]:
@@ -514,6 +533,7 @@ def _init_worker(
     reps: int,
     seed_base: int,
     selection_reps: int,
+    dsr_rule: str,
 ) -> None:
     """Pool initializer: silence logs and cache the shared inputs per worker.
 
@@ -528,6 +548,7 @@ def _init_worker(
         reps=reps,
         seed_base=seed_base,
         selection_reps=selection_reps,
+        dsr_rule=dsr_rule,
         settings={window: gatechain.settings_for(window) for window in WINDOWS},
     )
 
@@ -551,6 +572,7 @@ def _null_worker(key: tuple[str, float]) -> dict[str, object]:
         cast("Mapping[str, Mapping[int, float]]", _WORKER["closes"]),
         cast("dict[str, gatechain.ChainSettings]", _WORKER["settings"])[plan_name],
         seed_base=cast("int", _WORKER["seed_base"]),
+        dsr_rule=cast("str", _WORKER["dsr_rule"]),
     )
 
 
@@ -562,6 +584,7 @@ def run_grid(
     *,
     selection_reps: int = QUICK_SELECTION_REPS,
     seed_base: int = SEED_BASE,
+    dsr_rule: str = "emax",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Run the grid (and the selection null) on a process pool.
 
@@ -571,12 +594,12 @@ def run_grid(
     """
     keys = [(window, rho) for window in WINDOWS for rho in SELECTION_RHOS]
     if workers <= 1:
-        _init_worker(closes, reps, seed_base, selection_reps)
+        _init_worker(closes, reps, seed_base, selection_reps, dsr_rule)
         return [_worker(cell) for cell in grid], [_null_worker(key) for key in keys]
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_worker,
-        initargs=(closes, reps, seed_base, selection_reps),
+        initargs=(closes, reps, seed_base, selection_reps, dsr_rule),
     ) as pool:
         cell_results = list(pool.map(_worker, grid))
         null_results = list(pool.map(_null_worker, keys))
@@ -882,6 +905,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--reps", type=int, default=None)
     parser.add_argument("--selection-reps", type=int, default=None)
     parser.add_argument("--catalog", default=DEFAULT_CATALOG, type=Path)
+    parser.add_argument(
+        "--dsr-rule",
+        choices=["emax", "q95"],
+        default="emax",
+        help="V2 selection-null DSR rule: emax (default, legacy) or q95 (each "
+        "rep's quantile-matched MC spread; design-dsr-q95).",
+    )
     args = parser.parse_args(argv)
 
     with _quiet_vibe_quant():
@@ -911,7 +941,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         closes = load_closes(Path(args.catalog))
         cell_results, null_results = run_grid(
-            cells(), reps, workers, closes, selection_reps=selection_reps
+            cells(),
+            reps,
+            workers,
+            closes,
+            selection_reps=selection_reps,
+            dsr_rule=args.dsr_rule,
         )
         report = build_report(
             cell_results, null_results, reps=reps, selection_reps=selection_reps

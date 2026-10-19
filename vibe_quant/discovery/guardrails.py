@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from vibe_quant.discovery.neff import LEGACY_NULL_SPREAD
 from vibe_quant.overfitting.dsr import (
     TRADING_DAYS_PER_YEAR,
     DeflatedSharpeRatio,
@@ -68,6 +69,8 @@ class GuardrailConfig:
         max_complexity: Maximum total genes (entry + exit) allowed.
         require_dsr: Whether to apply DSR multiple-testing correction.
         dsr_significance_level: p-value threshold for DSR significance.
+        dsr_rule: ``"emax"`` (default, the legacy E[maxZ] + 1.6449 bar) or
+            ``"q95"`` (opt-in quantile-matched spread; design-dsr-q95).
         require_wfa: Whether to require Walk-Forward validation.
         wfa_min_efficiency: Minimum WFA efficiency to pass.
         require_purged_kfold: Whether to require Purged K-Fold CV (expensive).
@@ -78,6 +81,7 @@ class GuardrailConfig:
     max_complexity: int = 8
     require_dsr: bool = True
     dsr_significance_level: float = 0.05
+    dsr_rule: Literal["emax", "q95"] = "emax"
     require_wfa: bool = True
     wfa_min_efficiency: float = 0.5
     require_purged_kfold: bool = False
@@ -239,6 +243,7 @@ def apply_discovery_dsr_returns(
     significance_level: float = 0.05,
     symbol_daily: Mapping[str, Mapping[str, float] | None] | None = None,
     symbol_psr_floor: float = SYMBOL_PSR_FLOOR,
+    null_spread: float | None = None,
 ) -> tuple[DSRResult | None, dict[str, object], list[str]]:
     """DSR on a dense MARK-TO-MARKET daily return series (yul7u.24, y9ywf).
 
@@ -291,6 +296,18 @@ def apply_discovery_dsr_returns(
     result = _clamped_dsr(dsr, sharpe, num_trials, t, skew, kurt)
     unclamped = dsr.calculate(sharpe, num_trials, t, skew, kurt)
     ann = math.sqrt(TRADING_DAYS_PER_YEAR)
+    # Opt-in q95 rule (design-dsr-q95, R11): the legacy PSR statistic
+    # (SR - SR0) / SE, compared with the run's MC spread instead of 1.6449. A
+    # missing / non-finite spread or a NaN statistic fails closed to legacy;
+    # the legacy spread itself takes the legacy p-value decision verbatim.
+    spread = null_spread if null_spread is not None and math.isfinite(null_spread) else None
+    psr_stat = result.deflated_sharpe
+    if math.isnan(psr_stat):
+        spread = None
+    if spread is None or spread == LEGACY_NULL_SPREAD:
+        significant = result.is_significant
+    else:
+        significant = psr_stat >= spread
     record.update(
         observations=t,
         sharpe_daily=sharpe,
@@ -302,15 +319,24 @@ def apply_discovery_dsr_returns(
         expected_max_sharpe_daily=result.expected_max_sharpe,
         p_value=result.p_value,
         p_value_unclamped=unclamped.p_value,
-        significant=result.is_significant,
+        significant=significant,
         lag1_autocorrelation=lag1_autocorrelation(values),
+        psr_stat=psr_stat,
+        crit=spread if spread is not None else LEGACY_NULL_SPREAD,
+        null_spread=spread,
     )
     reasons: list[str] = []
-    if not result.is_significant:
-        reasons.append(
-            f"DSR not significant: p={result.p_value:.4f} >= {significance_level} "
-            f"(pooled daily SR={sharpe * ann:.3f} ann, T={t}, N={num_trials})"
-        )
+    if not significant:
+        if spread is not None:
+            reasons.append(
+                f"DSR q95 not significant: stat={psr_stat:.4f} < spread={spread:.4f} "
+                f"(ann SR={sharpe * ann:.3f}, T={t}, N={num_trials})"
+            )
+        else:
+            reasons.append(
+                f"DSR not significant: p={result.p_value:.4f} >= {significance_level} "
+                f"(pooled daily SR={sharpe * ann:.3f} ann, T={t}, N={num_trials})"
+            )
 
     if symbol_daily is not None and len(symbol_daily) >= 2:
         stats = {s: v for s, v in symbol_daily.items() if v is not None}
@@ -442,6 +468,7 @@ def apply_guardrails(
     daily_returns: Sequence[float] | None = None,
     symbol_daily: Mapping[str, Mapping[str, float] | None] | None = None,
     dsr_requires_returns: bool = False,
+    null_spread: float | None = None,
 ) -> GuardrailResult:
     """Run all enabled guard rails on a candidate.
 
@@ -472,6 +499,8 @@ def apply_guardrails(
             (floor); a symbol whose MTM series is missing must map to ``None``.
         dsr_requires_returns: Real backtests always produce the series; a
             missing one then fails DSR closed instead of falling back.
+        null_spread: The run's MC q95 spread, used only when
+            ``config.dsr_rule == "q95"`` (design-dsr-q95); None = legacy rule.
 
     Returns:
         GuardrailResult with per-check verdicts and overall pass/fail.
@@ -505,6 +534,7 @@ def apply_guardrails(
             num_trials=num_trials,
             significance_level=config.dsr_significance_level,
             symbol_daily=symbol_daily,
+            null_spread=null_spread if config.dsr_rule == "q95" else None,
         )
         dsr_passed = not dsr_reasons
         reasons.extend(dsr_reasons)

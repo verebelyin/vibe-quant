@@ -1243,6 +1243,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable the Deflated Sharpe Ratio soft guardrail.",
     )
     parser.add_argument(
+        "--dsr-rule",
+        choices=["emax", "q95"],
+        default="emax",
+        help="DSR critical value: emax (default, legacy E[maxZ] + 1.6449) or "
+        "q95 (opt-in quantile-matched Monte-Carlo spread; design-dsr-q95).",
+    )
+    parser.add_argument(
         "--no-buy-hold-gate",
         dest="require_buy_hold",
         action="store_false",
@@ -1640,6 +1647,7 @@ def main() -> int:
             bootstrap_min_sharpe=args.bootstrap_min_sharpe,
             bootstrap_ci_level=args.bootstrap_ci_level,
             require_dsr=args.require_dsr,
+            dsr_rule=args.dsr_rule,
             require_buy_hold=args.require_buy_hold,
             use_crowding=args.use_crowding,
             immigrant_fraction=args.immigrant_fraction,

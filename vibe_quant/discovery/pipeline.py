@@ -29,7 +29,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from vibe_quant.discovery.config_check import (
     DiscoveryConfigError,
@@ -156,6 +156,9 @@ class DiscoveryConfig:
     bootstrap_min_sharpe: float = 1.0  # Reject if CI lower bound (t-stat) < this
     bootstrap_ci_level: float = 0.95  # Confidence level for bootstrap CI
     require_dsr: bool = True  # Deflated Sharpe Ratio guardrail
+    # Opt-in DSR critical value (design-dsr-q95): "emax" is the legacy
+    # E[maxZ] + 1.6449 bar; "q95" uses the run's quantile-matched MC spread.
+    dsr_rule: Literal["emax", "q95"] = "emax"
     # Fail-closed buy-and-hold champion gate (bd vibe-quant-wcn55): a champion's
     # mark-to-market daily Sharpe must beat the equal-weight daily-rebalanced
     # buy-and-hold of its symbols over the train window (direction-aware bar).
@@ -2123,6 +2126,7 @@ class DiscoveryPipeline:
             min_trades=self.config.min_trades,
             max_complexity=8,
             require_dsr=self.config.require_dsr,
+            dsr_rule=self.config.dsr_rule,
             require_wfa=False,  # WFA requires separate out-of-sample data
             require_purged_kfold=False,
             require_bootstrap_ci=self.config.require_bootstrap_ci,
@@ -2158,10 +2162,14 @@ class DiscoveryPipeline:
         # BEFORE the loop (it reads the completed fitness cache) and only when
         # DSR is required; require_dsr False records no DSR note here (B1).
         trials: dict[str, object] | None = None
+        null_spread: float | None = None
         gate_n = total_evaluated + prior_n
         if self.config.require_dsr:
             trials = self._dsr_trial_counts(total_evaluated)
             gate_n = cast("int", trials["run_n_eff"]) + prior_n
+            trials["dsr_rule"] = self.config.dsr_rule
+            if self.config.dsr_rule == "q95":
+                null_spread = cast("float | None", trials["neff_ev_q95_spread"])
 
         import numpy as np
 
@@ -2188,6 +2196,7 @@ class DiscoveryPipeline:
                 daily_returns=series.values if series is not None else None,
                 symbol_daily=_symbol_mtm_stats(fitness.symbol_mtm_daily),
                 dsr_requires_returns=self._dsr_requires_returns,
+                null_spread=null_spread,
                 # trials_sharpe_variance intentionally omitted — use theoretical
                 # 1/(T-1). Cross-strategy Sharpe dispersion from GA is NOT what
                 # the paper's V[{SR_n}] measures (see vibe-quant-fici).
@@ -2261,6 +2270,7 @@ class DiscoveryPipeline:
             "neff_eig_pr": eff.neff_eig_pr,
             "neff_subsampled_from": eff.subsampled_from,
             "neff_ev": eff.neff_ev,
+            "neff_ev_q95_spread": eff.ev_q95_spread,
             "run_n_eff": eff.run_n_eff,
             "neff_ev_source": eff.source,
             "neff_fallback_reason": eff.fallback_reason,

@@ -121,14 +121,20 @@ def settings_for(name: str) -> ChainSettings:
 
 
 def dsr_verdict(
-    daily_returns: Sequence[float] | None, num_trials: int
+    daily_returns: Sequence[float] | None,
+    num_trials: int,
+    *,
+    null_spread: float | None = None,
 ) -> tuple[bool, dict[str, object]]:
     """``(passed, dsr_record)`` of one dense daily series at ``num_trials``.
 
     Thin wrapper over the repo's :func:`apply_discovery_dsr_returns`: passed iff
-    the real function reports no rejection reason.
+    the real function reports no rejection reason. ``null_spread`` is the
+    opt-in q95 rule's spread (design-dsr-q95); None keeps the legacy bar.
     """
-    _result, record, reasons = apply_discovery_dsr_returns(daily_returns, num_trials)
+    _result, record, reasons = apply_discovery_dsr_returns(
+        daily_returns, num_trials, null_spread=null_spread
+    )
     return (not reasons), record
 
 
@@ -182,6 +188,8 @@ def evaluate_candidate(
     window_bt: Callable[[str, str], Callable[[StrategyChromosome], dict[str, float | int]]],
     closes: Mapping[str, Mapping[int, float]],
     settings: ChainSettings,
+    *,
+    null_spread: float | None = None,
 ) -> dict[str, object]:
     """Every gate verdict for one candidate, plus the per-N chain readings.
 
@@ -227,7 +235,7 @@ def evaluate_candidate(
     dsr: dict[int, bool] = {}
     dsr_records: dict[int, dict[str, object]] = {}
     for num_trials in settings.dsr_trials:
-        passed, record = dsr_verdict(values, num_trials)
+        passed, record = dsr_verdict(values, num_trials, null_spread=null_spread)
         dsr[num_trials] = passed
         dsr_records[num_trials] = record
 

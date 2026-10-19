@@ -695,8 +695,8 @@ def test_main_persists_cumulative_dsr_trials(
     # R22: the exact persisted key set of a new-rule run (mock -> no series).
     assert set(trials) == {
         "raw", "non_flat", "neff_mean_corr", "neff_eig_pr", "neff_subsampled_from",
-        "neff_ev", "run_n_eff", "neff_ev_source", "neff_fallback_reason",
-        "neff_ev_draws", "neff_ev_seed",
+        "neff_ev", "neff_ev_q95_spread", "run_n_eff", "neff_ev_source",
+        "neff_fallback_reason", "neff_ev_draws", "neff_ev_seed", "dsr_rule",
         "prior_n", "prior_run_ids", "prior_legacy_runs", "prior_legacy_raw",
         "gate_n", "n_rule",
     }, trials

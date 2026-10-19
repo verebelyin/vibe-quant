@@ -45,6 +45,9 @@ NEFF_MAX_SERIES: int = 500
 NEFF_MIN_DAYS: int = 365
 # ``notes.dsr_trials.n_rule`` value that marks a run's recorded N as effective.
 N_RULE_EFFECTIVE: str = "cumulative_effective_same_tf_overlapping_train"
+# The legacy single-trial bar, and the spread an input with ONE distinct series
+# gets: the q95 rule then reduces to the legacy decision (design-dsr-q95 R5).
+LEGACY_NULL_SPREAD: float = 1.6448536269514722
 
 FallbackReason = Literal[
     "fewer_than_2_series",
@@ -78,6 +81,10 @@ class EffectiveTrials:
     neff_mean_corr: float | None
     neff_eig_pr: float | None
     neff_ev: float | None
+    # ``quantile(M, 0.95) - mean(M)`` of the EV Monte Carlo's row-wise maxima
+    # (opt-in DSR rule, design-dsr-q95). Recorded every EV run; None on any
+    # fallback (the q95 gate then fails closed to the legacy rule).
+    ev_q95_spread: float | None
     run_n_eff: int
     source: Literal["ev_mc", "fallback_raw"]
     fallback_reason: FallbackReason | None
@@ -170,6 +177,7 @@ def effective_trials(
     source: Literal["ev_mc", "fallback_raw"] = "fallback_raw"
     fallback_reason: FallbackReason | None = None
     neff_ev: float | None = None
+    ev_q95_spread: float | None = None
     run_n_eff = max(1, raw)
     # Distinct count is only computed when the EV actually runs; any fallback
     # fails closed without collapsing.
@@ -198,6 +206,7 @@ def effective_trials(
             n_distinct = len(reps)
             if n_distinct == 1:
                 n_m = 1
+                ev_q95_spread = LEGACY_NULL_SPREAD
             else:
                 sub = corr[np.ix_(reps, reps)]
                 w, vec = np.linalg.eigh(sub)
@@ -205,8 +214,10 @@ def effective_trials(
                 z = np.random.default_rng(NEFF_EV_SEED).standard_normal(
                     (NEFF_EV_DRAWS, n_distinct)
                 )
-                target = float((z @ root).max(axis=1).mean())
+                maxima = (z @ root).max(axis=1)
+                target = float(maxima.mean())
                 n_m = expected_max_inverse(target)
+                ev_q95_spread = float(np.quantile(maxima, 0.95) - target)
             # Scaling keeps the PRE-collapse retained count (n_used).
             neff_ev = n_m * raw / n_used
             run_n_eff = min(max(1, math.ceil(neff_ev)), max(1, raw))
@@ -230,6 +241,7 @@ def effective_trials(
         neff_mean_corr=neff_mean_corr,
         neff_eig_pr=neff_eig_pr,
         neff_ev=neff_ev,
+        ev_q95_spread=ev_q95_spread,
         run_n_eff=run_n_eff,
         source=source,
         fallback_reason=fallback_reason,

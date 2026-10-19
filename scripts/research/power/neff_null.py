@@ -384,6 +384,7 @@ def run_config(
     *,
     candidates: int = CONFIG_CANDIDATES,
     streams: SeedStreams = GRID_SEEDS,
+    dsr_rule: str = "emax",
 ) -> dict[str, object]:
     """Run one config's ``reps`` replicates and report its columns.
 
@@ -432,6 +433,9 @@ def run_config(
         picks = layer1.select_picks([(entry.chromosome, entry.fitness) for entry in ranked])
         picks_total += len(picks)
         picked = {id(chromosome) for chromosome, _ in picks}
+        # design-dsr-q95: the q95 rule uses THIS replicate's spread; a fallback
+        # (spread None) scores the legacy bar, as G2 pre-registers.
+        spread = eff.ev_q95_spread if dsr_rule == "q95" else None
         column_ns = column_n(eff, candidates)
         trial_set = tuple(sorted({n for n in column_ns.values() if n is not None}))
         per_rep = replace(settings, dsr_trials=trial_set)
@@ -445,6 +449,7 @@ def run_config(
                     layer1._window_factory(entry.schedule),
                     closes,
                     per_rep,
+                    null_spread=spread,
                 )["chain_recent"],
             )
             for entry in entries
@@ -592,8 +597,11 @@ def _init_worker(
     reps: int,
     candidates: int,
     streams: SeedStreams,
+    dsr_rule: str,
 ) -> None:
-    _WORKER.update(closes=closes, reps=reps, candidates=candidates, streams=streams)
+    _WORKER.update(
+        closes=closes, reps=reps, candidates=candidates, streams=streams, dsr_rule=dsr_rule
+    )
 
 
 def _worker(cfg: Config) -> dict[str, object]:
@@ -604,6 +612,7 @@ def _worker(cfg: Config) -> dict[str, object]:
             cast("Mapping[str, Mapping[int, float]]", _WORKER["closes"]),
             candidates=cast("int", _WORKER["candidates"]),
             streams=cast("SeedStreams", _WORKER["streams"]),
+            dsr_rule=cast("str", _WORKER["dsr_rule"]),
         )
 
 
@@ -615,6 +624,7 @@ def run_grid(
     *,
     candidates: int = CONFIG_CANDIDATES,
     streams: SeedStreams = GRID_SEEDS,
+    dsr_rule: str = "emax",
 ) -> list[dict[str, object]]:
     """Run every config on a process pool (``workers <= 1`` runs inline).
 
@@ -623,13 +633,20 @@ def run_grid(
     if workers <= 1:
         with layer1._quiet_vibe_quant():
             return [
-                run_config(cfg, reps, closes, candidates=candidates, streams=streams)
+                run_config(
+                    cfg,
+                    reps,
+                    closes,
+                    candidates=candidates,
+                    streams=streams,
+                    dsr_rule=dsr_rule,
+                )
                 for cfg in cfgs
             ]
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=_init_worker,
-        initargs=(closes, reps, candidates, streams),
+        initargs=(closes, reps, candidates, streams, dsr_rule),
     ) as pool:
         return list(pool.map(_worker, cfgs))
 
@@ -730,6 +747,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--candidates", type=int, default=CONFIG_CANDIDATES)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--catalog", default=DEFAULT_CATALOG, type=Path)
+    parser.add_argument(
+        "--dsr-rule",
+        choices=["emax", "q95"],
+        default="emax",
+        help="DSR critical value: emax (default, legacy) or q95 (this replicate's "
+        "quantile-matched MC spread; G2 pre-registration).",
+    )
     args = parser.parse_args(argv)
 
     reps = args.reps if args.reps is not None else (QUICK_REPS if args.quick else DESIGN_REPS)
@@ -742,7 +766,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         closes = load_closes(Path(args.catalog))
         grid = configs()
         results = run_grid(
-            grid, reps, workers, closes, candidates=args.candidates, streams=GRID_SEEDS
+            grid,
+            reps,
+            workers,
+            closes,
+            candidates=args.candidates,
+            streams=GRID_SEEDS,
+            dsr_rule=args.dsr_rule,
         )
         base = build_verdict(results, reps=reps)
         topup_rows: list[dict[str, object]] = []
@@ -756,6 +786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 closes,
                 candidates=args.candidates,
                 streams=TOPUP_SEEDS,
+                dsr_rule=args.dsr_rule,
             )
             topup = {str(row["key"]): float(cast("float", row["rate_ev"])) for row in topup_rows}
         verdict = build_verdict(results, reps=reps, topup=topup or None)

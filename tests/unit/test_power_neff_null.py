@@ -205,6 +205,7 @@ def test_topup_runs_only_for_marginal_configs(
         *,
         candidates: int,
         streams: neff_null.SeedStreams,
+        dsr_rule: str,
     ) -> list[dict[str, Any]]:
         calls.append((tuple(c.key for c in cfgs), reps, streams))
         if streams == neff_null.GRID_SEEDS:
@@ -302,6 +303,7 @@ def test_dsr_trials_are_the_per_rep_dedup(monkeypatch: pytest.MonkeyPatch) -> No
             neff_mean_corr=3.2,
             neff_eig_pr=4.7,
             neff_ev=8.5,
+            ev_q95_spread=1.1,
             run_n_eff=9,
             source="ev_mc",
             fallback_reason=None,
@@ -315,6 +317,7 @@ def test_dsr_trials_are_the_per_rep_dedup(monkeypatch: pytest.MonkeyPatch) -> No
             neff_mean_corr=None,
             neff_eig_pr=None,
             neff_ev=None,
+            ev_q95_spread=None,
             run_n_eff=167,
             source="fallback_raw",
             fallback_reason="fewer_than_2_series",
