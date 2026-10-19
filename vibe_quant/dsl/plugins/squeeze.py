@@ -51,30 +51,29 @@ Usage::
 
 from __future__ import annotations
 
+from functools import cache
 from typing import TYPE_CHECKING, cast
 
-from vibe_quant.dsl.compute_builtins import float_param, int_param, nan_like
+from vibe_quant.dsl.compute_builtins import (
+    _rma_np,
+    float_param,
+    int_param,
+    nan_like,
+)
 from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry
 
 if TYPE_CHECKING:
     import pandas as pd
 
 
-def compute_squeeze_ratio(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
-    """BB width / KC width over ``close``.
-
-    ``length`` = rolling window (default 20), ``bb_mult`` = Bollinger
-    deviation multiplier (2.0), ``kc_mult`` = Keltner ATR multiplier
-    (1.5). Population std (ddof=0), Wilder ATR via pandas_ta_classic.atr.
-    """
+def _squeeze_ratio_library(
+    df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float
+) -> pd.Series:
+    """Reference path: pandas rolling std + ``pandas_ta_classic.atr``."""
     import pandas as pd
     import pandas_ta_classic as ta
 
-    length = int_param(params, "length", 20)
-    bb_mult = float_param(params, "bb_mult", 2.0)
-    kc_mult = float_param(params, "kc_mult", 1.5)
     close = df["close"]
-
     # Population std (ddof=0) — pandas_ta_classic.bbands' default.
     bb_width = 2.0 * bb_mult * close.rolling(length).std(ddof=0)
 
@@ -91,6 +90,112 @@ def compute_squeeze_ratio(df: pd.DataFrame, params: dict[str, object]) -> pd.Ser
         "pd.Series",
         pd.Series(ratio, index=df.index, name=f"SQUEEZE_RATIO_{length}"),
     )
+
+
+def _squeeze_ratio_port(
+    df: pd.DataFrame, length: int, bb_mult: float, kc_mult: float
+) -> pd.Series:
+    """Numpy port of :func:`_squeeze_ratio_library` (same float operations).
+
+    Bollinger width keeps pandas' own ``rolling(length).std(ddof=0)``; the
+    Keltner width replaces ``pandas_ta_classic.atr`` with its exact parts —
+    ``true_range`` (non-zero range epsilon, skipna row max, blanked warmup)
+    fed to ``_rma_np``, the already-verified ``pandas_ta_classic.rma`` port.
+    ``tests/unit/test_indicator_fast_paths.py`` is the zero-tolerance
+    reference. Assumes ``length > 0`` and float64 columns (the public entry point routes
+    everything else to the library).
+    """
+    import numpy as np
+    import pandas as pd
+
+    n = len(df)
+    if n < length:
+        return nan_like(df)  # library's verify_series returns None here
+    high = df["high"].to_numpy(dtype=np.float64)
+    low = df["low"].to_numpy(dtype=np.float64)
+    close = df["close"].to_numpy(dtype=np.float64)
+
+    eps = float(np.finfo(np.float64).eps)
+    high_low = high - low
+    high_low = np.where(high_low != 0.0, high_low, eps)
+    prev_close = np.empty(n, dtype=np.float64)
+    prev_close[0] = np.nan
+    prev_close[1:] = close[:-1]
+    # true_range: abs of the three ranges, row max skipping NaN, warmup blanked
+    true_range = np.fmax(
+        np.fmax(np.abs(high_low), np.abs(high - prev_close)),
+        np.abs(prev_close - low),
+    )
+    finite = ~(np.isnan(high) | np.isnan(low) | np.isnan(close))
+    start = int(finite.argmax()) if finite.any() else n
+    true_range[: start + 1] = np.nan
+    atr = _rma_np(true_range, length)
+
+    bb_width = 2.0 * bb_mult * df["close"].rolling(length).std(ddof=0).to_numpy()
+    kc_width = 2.0 * kc_mult * atr
+    with np.errstate(all="ignore"):
+        ratio = bb_width / kc_width
+    ratio = np.where(kc_width != 0.0, ratio, np.nan)
+    return pd.Series(ratio, index=df.index, name=f"SQUEEZE_RATIO_{length}")
+
+
+def _squeeze_ratio_fast_ok(df: pd.DataFrame) -> bool:
+    """True when the port's float64 arithmetic is exactly the library's own."""
+    if not df.index.is_unique:  # Series alignment is label-based
+        return False
+    return all(df[col].dtype == "float64" for col in ("high", "low", "close"))
+
+
+@cache
+def _squeeze_port_ok() -> bool:
+    """One-shot runtime check that the port is bit-identical on this platform.
+
+    ``_rma_np`` relies on pandas' compiled ``ewm`` contracting the blend into
+    an FMA (true on pandas 3.0.3 arm64 wheels); other platforms or versions may
+    differ by ~1 ulp per step, so verify once per process and fall back to the
+    library path (with a warning) on any mismatch.
+    """
+    import logging
+
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.RandomState(12345)
+    close = 100.0 + np.cumsum(rng.randn(120) * 0.5)
+    high = close + np.abs(rng.randn(120)) * 0.4
+    low = close - np.abs(rng.randn(120)) * 0.4
+    high[40:60] = low[40:60] = close[40:60] = close[40]  # flat stretch
+    df = pd.DataFrame({"high": high, "low": low, "close": close})
+    ok = all(
+        np.array_equal(
+            _squeeze_ratio_port(df, length, 2.0, 1.5).to_numpy(),
+            _squeeze_ratio_library(df, length, 2.0, 1.5).to_numpy(),
+            equal_nan=True,
+        )
+        for length in (10, 20)
+    )
+    if not ok:
+        logging.getLogger(__name__).warning(
+            "numpy SQUEEZE_RATIO port differs from pandas-ta here (FMA/pandas "
+            "version); falling back to the slower library path"
+        )
+    return ok
+
+
+def compute_squeeze_ratio(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+    """BB width / KC width over ``close``.
+
+    ``length`` = rolling window (default 20), ``bb_mult`` = Bollinger
+    deviation multiplier (2.0), ``kc_mult`` = Keltner ATR multiplier
+    (1.5). Population std (ddof=0), Wilder ATR via pandas_ta_classic.atr
+    (numpy fast path; the library remains the fallback).
+    """
+    length = int_param(params, "length", 20)
+    bb_mult = float_param(params, "bb_mult", 2.0)
+    kc_mult = float_param(params, "kc_mult", 1.5)
+    if length > 0 and _squeeze_ratio_fast_ok(df) and _squeeze_port_ok():
+        return _squeeze_ratio_port(df, length, bb_mult, kc_mult)
+    return _squeeze_ratio_library(df, length, bb_mult, kc_mult)
 
 
 def compute_squeeze_mom(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:

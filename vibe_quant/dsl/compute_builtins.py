@@ -123,7 +123,85 @@ def compute_atr(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
     )
 
 
+_PTA_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _mfi_port(df: pd.DataFrame, length: int) -> pd.Series | None:
+    """Numpy port of ``pandas_ta_classic.mfi`` (default drift 1, no offset).
+
+    Operation-for-operation with the library: ``hlc3 = (high + low + close) / 3``,
+    ``raw_money_flow = hlc3 * volume``, the one-bar typical-price diff decides
+    the positive/negative flow, then pandas' own ``rolling(length).sum()`` (the
+    library's Cython accumulator -- a hand-rolled add/subtract loop is NOT bit
+    identical) and ``100 * psum / (psum + nsum)``. Only the DataFrame/``.loc``
+    prep is removed; every float values goes through the same operations in the
+    same order, so the result equals the library bit for bit.
+
+    Assumes float64 columns; ``None`` when the library would return ``None``
+    (fewer than ``length`` rows). ``tests/unit/test_indicator_fast_paths.py``
+    is the zero-tolerance reference.
+    """
+    import numpy as np
+    import pandas as pd
+
+    length = length if length > 0 else 14
+    n = len(df)
+    if n < length:
+        return None
+    cols = df.columns
+    if len(cols) == 5 and tuple(cols) == _PTA_COLUMNS:
+        block = df.to_numpy(copy=False)
+        high = block[:, 1]
+        low = block[:, 2]
+        close = block[:, 3]
+        volume = block[:, 4]
+    else:
+        high = df["high"].to_numpy(dtype=np.float64)
+        low = df["low"].to_numpy(dtype=np.float64)
+        close = df["close"].to_numpy(dtype=np.float64)
+        volume = df["volume"].to_numpy(dtype=np.float64)
+
+    typical = (high + low + close) / 3.0
+    raw_money_flow = typical * volume
+    diff = np.empty(n, dtype=np.float64)
+    diff[0] = np.nan
+    diff[1:] = typical[1:] - typical[:-1]
+    positive = np.where(diff > 0.0, raw_money_flow, 0.0)
+    negative = np.where(diff < 0.0, raw_money_flow, 0.0)
+    sums = (
+        pd.DataFrame(np.column_stack((positive, negative)), copy=False)
+        .rolling(length)
+        .sum()
+        .to_numpy()
+    )
+    psum = sums[:, 0]
+    nsum = sums[:, 1]
+    with np.errstate(invalid="ignore"):
+        mfi = 100 * psum / (psum + nsum)
+    return pd.Series(mfi, index=df.index, name=f"MFI_{length}")
+
+
+def _mfi_fast_ok(df: pd.DataFrame) -> bool:
+    """True when the port's float64 arithmetic is exactly the library's own."""
+    import numpy as np
+
+    if not df.index.is_unique:  # the library assigns by label
+        return False
+    cols = df.columns
+    if len(cols) == 5 and tuple(cols) == _PTA_COLUMNS:
+        return bool(df.to_numpy(copy=False).dtype == np.float64)
+    return all(df[col].dtype == "float64" for col in ("high", "low", "close", "volume"))
+
+
 def compute_mfi(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
+    """Money Flow Index — numpy fast path over the same pandas arithmetic.
+
+    Falls back to ``pandas_ta_classic.mfi`` for non-float64 columns or a
+    non-unique index. ``None`` below ``length`` rows, exactly like the library.
+    """
+    length = int_param(params, "period", 14)
+    if _mfi_fast_ok(df):
+        return cast("pd.Series", _mfi_port(df, length))
     return cast(
         "pd.Series",
         _ta().mfi(
@@ -131,7 +209,7 @@ def compute_mfi(df: pd.DataFrame, params: dict[str, object]) -> pd.Series:
             df["low"],
             df["close"],
             df["volume"],
-            length=int_param(params, "period", 14),
+            length=length,
         ),
     )
 
