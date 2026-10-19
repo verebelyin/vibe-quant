@@ -48,7 +48,13 @@ Validation (exit 2, every problem printed to stderr, nothing written):
     merge commits relative to ``main`` (the gate's default base would count that work as ours);
   * ``--worktree`` with a ``--base`` that does not resolve to a commit in it
     (the git error is printed);
+  * a ``--scope`` path that differs from a worktree file only by case (macOS
+    filesystems accept it, the gate's fnmatch does not), including a ``+`` new file;
   * the output file already exists (unless ``--force``).
+
+Not a failure: test files OUTSIDE ``--scope`` that name a top-level symbol of a scoped
+source file are printed to stderr and appended to the brief, so the maker knows which
+tests pin behaviour it may change (11 of 24 worker asks in one job were such scope gaps).
 
 A leading ``<!-- ... -->`` usage comment (and the blank lines after it) is
 stripped from the template and every appended file before rendering, so the
@@ -66,6 +72,7 @@ TELEMETRY line is always in the dispatched text. Stdlib only.
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import importlib.util
 import os
@@ -151,7 +158,15 @@ def parse_scope(raw: str) -> tuple[list[str], list[str]]:
 
 
 def worktree_files(root: Path) -> list[str]:
-    """Every file under ``root`` (POSIX-relative), minus ``.git``; symlinks not followed."""
+    """Tracked + untracked-not-ignored files (``git ls-files``); a non-git dir is walked.
+
+    A full walk of the main checkout (data/, node_modules/) made one brief take 23.3 s; this 0.25 s."""
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard"],
+        capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    if proc.returncode == 0:
+        return [line for line in proc.stdout.splitlines() if line]
     files: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
@@ -172,8 +187,78 @@ def scope_problems(rendered: Iterable[str], checked: Iterable[str], worktree: st
             if glob == _BROAD_UNIT_GLOB:
                 continue  # covered by the dedicated hint above
             if not any(fnmatch.fnmatch(path, glob) for path in files):
-                problems.append(f"glob {glob} matches no file in {worktree}")
+                problems.append(
+                    f"glob {glob} matches no file in {worktree} (prefix + for a file you create)"
+                )
     return problems
+
+
+def case_problems(rendered: Iterable[str], worktree: str) -> list[str]:
+    """Literal scope paths that exist only under another case (sizingChip.test.ts vs SizingChip)."""
+    if not worktree:
+        return []
+    by_lower: dict[str, str] = {}
+    for path in worktree_files(Path(worktree)):
+        by_lower.setdefault(path.lower(), path)
+    problems: list[str] = []
+    files = set(by_lower.values())
+    for glob in rendered:
+        if any(c in glob for c in "*?["):
+            continue
+        actual = by_lower.get(glob.lower())
+        if actual is not None and actual != glob and glob not in files:
+            problems.append(f"scope path {glob} differs only by case from {actual}")
+    return problems
+
+
+_TS_EXPORT_RE = re.compile(r"^export\s+(?:async\s+)?(?:function|const|class)\s+(\w+)", re.MULTILINE)
+_MIN_SYMBOL_LEN = 4  # shorter names (run, App) match too much unrelated test text
+
+
+def scoped_symbols(worktree: Path, paths: Iterable[str]) -> set[str]:
+    """Top-level def/class names of scoped .py sources and exported names of scoped .ts/.tsx."""
+    names: set[str] = set()
+    for rel in paths:
+        path = worktree / rel
+        if "test" in Path(rel).name or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if rel.endswith(".py"):
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                continue
+            names.update(
+                node.name for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            )  # fmt: skip
+        elif rel.endswith((".ts", ".tsx")):
+            names.update(_TS_EXPORT_RE.findall(text))
+    return {n for n in names if len(n) >= _MIN_SYMBOL_LEN}
+
+
+def tests_outside_scope(worktree: str, rendered: Iterable[str]) -> list[str]:
+    """Test files outside the scope that mention a scoped source's top-level symbol."""
+    if not worktree:
+        return []
+    root = Path(worktree)
+    globs = list(rendered)
+    files = worktree_files(root)
+    scoped = [f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)]
+    names = scoped_symbols(root, scoped)
+    if not names:
+        return []
+    pattern = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, names))) + r")\b")
+    hits: list[str] = []
+    for rel in files:
+        is_test = (rel.startswith("tests/") and rel.endswith(".py")) or rel.endswith(
+            (".test.ts", ".test.tsx")
+        )
+        if not is_test or rel in scoped or "node_modules/" in rel:
+            continue
+        if pattern.search((root / rel).read_text(encoding="utf-8", errors="replace")):
+            hits.append(rel)
+    return sorted(hits)
 
 
 def gate_command(
@@ -381,6 +466,16 @@ def main(argv: list[str] | None = None) -> int:
     out_path = job / "prompts" / f"{args.id}.md"
     problems = [f"unfilled placeholder {{{key}}}" for key in unfilled(sources, values)]
     problems += scope_problems(rendered_globs, checked_globs, args.worktree)
+    problems += case_problems(rendered_globs, args.worktree)
+    if not args.review:
+        outside = tests_outside_scope(args.worktree, rendered_globs)
+        if outside:
+            shown = ", ".join(outside[:15]) + (f" (+{len(outside) - 15} more)" if len(outside) > 15 else "")
+            print(f"NOTE: {len(outside)} test files outside --scope use scoped symbols: {shown}", file=sys.stderr)
+            text += (
+                "\nTESTS OUTSIDE SCOPE that use your files' symbols (a change that breaks one needs "
+                f"`bus ask` for scope first): {shown}\n"
+            )
     problems += branch_problems
     if out_path.exists() and not args.force:
         problems.append(f"output file already exists: {out_path} (pass --force to overwrite)")

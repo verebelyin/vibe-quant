@@ -670,3 +670,56 @@ def test_child_branch_at_parent_tip_without_commits_is_stacked(
     assert rc == 2
     assert f"swarm/a {a_tip}" in err
     assert "swarm/b " not in err  # the worktree's own branch is never a candidate
+
+
+def test_scope_path_differing_only_by_case_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T6 listed sizingChip.test.ts while the file is SizingChip.test.ts (gate FAIL + an ask)."""
+    repo = _repo(tmp_path)
+    (repo / "SizingChip.test.ts").write_text("export const x = 1\n")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(_argv(job, template, scope="a.py,+sizingChip.test.ts", worktree=repo))
+
+    assert rc == 2
+    assert "sizingChip.test.ts differs only by case from SizingChip.test.ts" in capsys.readouterr().err
+
+
+def test_tests_outside_scope_using_scoped_symbols_are_listed_in_the_brief(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("def compute_drift(x):\n    return x\n\n\ndef run(x):\n    return x\n")
+    (repo / "tests" / "unit" / "test_pins.py").write_text(
+        "from a import compute_drift\n\n\ndef test_pin() -> None:\n    assert compute_drift(1) == 1\n"
+    )
+    (repo / "tests" / "unit" / "test_other.py").write_text("def test_run() -> None:\n    run = 1\n")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(_argv(job, template, scope="a.py", worktree=repo))
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "1 test files outside --scope use scoped symbols: tests/unit/test_pins.py" in err
+    text = (job / "prompts" / "cc-rd-demo-1.md").read_text()
+    assert "TESTS OUTSIDE SCOPE" in text and "tests/unit/test_pins.py" in text
+    assert "test_other.py" not in text  # `run` is shorter than the 4-char floor
+
+
+def test_no_out_of_scope_note_when_the_pinning_test_is_in_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("def compute_drift(x):\n    return x\n")
+    (repo / "tests" / "unit" / "test_pins.py").write_text("from a import compute_drift\n")
+    job = _job(tmp_path)
+    template = _template(tmp_path)
+
+    rc = mkbrief.main(_argv(job, template, scope="a.py,tests/unit/test_pins.py", worktree=repo))
+
+    assert rc == 0
+    assert "outside --scope" not in capsys.readouterr().err
+    assert "TESTS OUTSIDE SCOPE" not in (job / "prompts" / "cc-rd-demo-1.md").read_text()
