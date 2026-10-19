@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -323,7 +324,11 @@ def load_catalog_bars(catalog_path: Path | str, bar_type: str) -> BarSeries | No
 
     import pyarrow.parquet as pq
 
-    bar_dir = _Path(catalog_path) / "data" / "bar" / bar_type
+    # Absolute: ``_BAR_CACHE`` is process-wide, so a relative catalog path
+    # ("data/catalog") would serve one root's bars under another cwd's spelling
+    # of the same key. abspath, not resolve(): a symlinked data/catalog must keep
+    # working and keep its own key.
+    bar_dir = _Path(os.path.abspath(catalog_path)) / "data" / "bar" / bar_type  # noqa: PTH100
     files = sorted(bar_dir.glob("*.parquet")) if bar_dir.is_dir() else []
     if not files:
         return None

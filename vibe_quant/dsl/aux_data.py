@@ -28,6 +28,7 @@ funding periods old (archive hole; stale rates are never forward-filled).
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -252,7 +253,11 @@ _REF_DERIVED: dict[tuple[str, str, str, str, int], tuple[object, np.ndarray]] = 
 def _resolved_catalog() -> Path:
     from vibe_quant.data.catalog import DEFAULT_CATALOG_PATH
 
-    return _catalog_path or DEFAULT_CATALOG_PATH
+    # Absolute: ``_REF``/``_REF_DERIVED`` are process-wide, so a relative catalog
+    # ("data/catalog") would serve one root's bars under another cwd's spelling
+    # of the same key. abspath, not resolve(): a symlinked data/catalog must keep
+    # working and keep its own key.
+    return Path(os.path.abspath(_catalog_path or DEFAULT_CATALOG_PATH))  # noqa: PTH100
 
 
 def _ref_bar_type(symbol: str, tf: str) -> str:
