@@ -38,6 +38,7 @@
 
 ## Fix rounds
 - Quote each finding's bullet and the reviewer's FIX text verbatim; reference code by symbol.
+- A fix that adds an `except` returning a fallback under `vibe_quant/` must log (no `exc_info` on money paths): `tests/unit/test_exception_hygiene.py` ratchets silent handlers.
 - The gate scope is the whole task scope (round 1 plus this round). Stacked task: `--base <parent branch>`; two or more parents: merge them in the new worktree and use `--base <merge sha>`.
 - Re-review briefs carry prior findings plus the fix delta, not a fresh full-surface hunt.
 - After 2 failed rounds on one task, stop and do a design pass: fold every ruling and finding into contract rows, then ask whether the remaining findings come from a missing row, duplicated logic or an unreachable edge, and re-scope. After 3, also change the model or ask the user.
