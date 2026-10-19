@@ -112,10 +112,13 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (no `--scope` SKIPs the scope check); `mkbrief.py` pins the ref it was given to a SHA at render, so the rendered gate diffs a frozen commit (board/telemetry mirror files are never offenders). Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
-| `mkbrief.py` | renders and validates a brief, writes it, prints the dispatch text |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (`mkbrief.py` pins it to a SHA, so the gate diffs a frozen commit); board/telemetry mirror files are never offenders. Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
+| `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
-| `mutate.py --file F --old X --new Y -- <test>` | one safe mutant check (KILLED/SURVIVED) |
+| `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |
+| `land.py --job J --verified B <task>=<msg> ...` | one commit per task from its fork point; tree == verified |
+| `ledger.py --job J --id A --status S` | append a ledger row |
+| `session_stats.py [--since DAYS]` | retro numbers incl. T3 workers |
 | `handoff_lint.py [--role reviewer] <file>` | checks the handoff block |
 | `models.py route <role> \| set \| show` | model routing from `models.json` |
 | `telemetry.py ingest-runs --job J \| review \| report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` |

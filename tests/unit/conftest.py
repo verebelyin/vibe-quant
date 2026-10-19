@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import os
 import socket
@@ -226,7 +227,17 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
 
     ``THRESHOLD_RANGES`` / ``_INT_PARAMS`` / ``_PARAM_DEFAULTS`` are built from
     the genome, not from the pools, so they need no restore here.
+
+    The body is ``restore_ga_indicator_pool`` so one test can drive the exact restore
+    without relying on test order (an ordered pair broke under xdist worksteal, 1xhri).
     """
+    with restore_ga_indicator_pool():
+        yield
+
+
+@contextlib.contextmanager
+def restore_ga_indicator_pool() -> Iterator[None]:
+    """Snapshot the GA pools on entry, restore them on exit (see the fixture above)."""
     ops = sys.modules.get("vibe_quant.discovery.operators")
     if ops is None:
         yield
@@ -238,22 +249,23 @@ def _restore_ga_indicator_pool() -> Iterator[None]:
     saved_ma_pool = dict(genome.MA_POOL) if genome is not None else None
     saved_ma_names = list(ops._MA_NAMES)
 
-    yield
-
-    ops.INDICATOR_POOL.clear()
-    ops.INDICATOR_POOL.update(saved_pool)
-    ops._INDICATOR_NAMES.clear()
-    ops._INDICATOR_NAMES.extend(saved_names)
-    ops._MA_NAMES.clear()
-    ops._MA_NAMES.extend(saved_ma_names)
-    genome = genome if genome is not None else sys.modules.get("vibe_quant.discovery.genome")
-    if genome is not None:
-        genome.MA_POOL.clear()
-        if saved_ma_pool is not None:
-            genome.MA_POOL.update(saved_ma_pool)
-        else:
-            # First import happened inside the test: nothing had filtered it yet.
-            genome.MA_POOL.update(genome.build_ma_pool())
+    try:
+        yield
+    finally:  # a context manager sees the test's exception at `yield`; restore anyway
+        ops.INDICATOR_POOL.clear()
+        ops.INDICATOR_POOL.update(saved_pool)
+        ops._INDICATOR_NAMES.clear()
+        ops._INDICATOR_NAMES.extend(saved_names)
+        ops._MA_NAMES.clear()
+        ops._MA_NAMES.extend(saved_ma_names)
+        genome = genome if genome is not None else sys.modules.get("vibe_quant.discovery.genome")
+        if genome is not None:
+            genome.MA_POOL.clear()
+            if saved_ma_pool is not None:
+                genome.MA_POOL.update(saved_ma_pool)
+            else:
+                # First import happened inside the test: nothing had filtered it yet.
+                genome.MA_POOL.update(genome.build_ma_pool())
 
 
 def _noop_data_precheck(*args: object, **kwargs: object) -> None:

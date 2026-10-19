@@ -1113,7 +1113,60 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seeds", type=int, default=None, help="two-seed mode (e.g. --seeds 2)")
     sub.add_parser("report", help="R15: per-cell B*, M1/M2 counts, s0 champions, git shas")
     sub.add_parser("verify-untouched", help="R26: shared data identical to the snapshot")
+    sub.add_parser("status", help="per run dir: complete / GEN n/m + ETA / starting, log idle time")
     return parser
+
+
+def _disc_watch() -> Any:
+    """scripts/agents/disc_watch.py, for its GEN/COMPLETE log patterns (one source of truth)."""
+    import importlib.util
+
+    path = REPO_ROOT / "scripts" / "agents" / "disc_watch.py"
+    spec = importlib.util.spec_from_file_location("budget_disc_watch", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # its @dataclass resolves the module through sys.modules
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_progress(run_dir: Path, now: float) -> str:
+    """One line for a run dir: complete, the newest GEN with its ETA, or starting; + log idle."""
+    watch = _disc_watch()
+    logs = sorted((run_dir / "logs").glob("discovery_*.log"), key=lambda p: p.stat().st_mtime)
+    if not logs:
+        return "starting (no discovery log yet)"
+    log = logs[-1]
+    text = log.read_text(encoding="utf-8", errors="replace")
+    if watch.COMPLETE_RE.search(text):
+        return "complete"
+    gens = list(watch.GEN_RE.finditer(text))
+    idle = now - log.stat().st_mtime
+    if not gens:
+        return f"gen 0 (log idle {idle:.0f}s)"
+    g = gens[-1]
+    return (
+        f"gen {g['gen']}/{g['gens']} best={float(g['best']):.4f} ETA {float(g['eta']):.0f}s "
+        f"(log idle {idle:.0f}s)"
+    )
+
+
+def cmd_status(ctx: layer2.Ctx, _args: argparse.Namespace) -> int:
+    """Progress of every run dir under the scratch root: the ETA the user asked for 5 times."""
+    import time
+
+    runs_dir = ctx.scratch / "runs"
+    dirs = sorted(d for d in runs_dir.glob("*") if d.is_dir()) if runs_dir.is_dir() else []
+    if not dirs:
+        print(f"status: no run dirs under {runs_dir}")
+        return 0
+    now = time.time()
+    lines = [(d.name, run_progress(d, now)) for d in dirs]
+    for name, line in lines:
+        print(f"{name}: {line}")
+    done = sum(1 for _, line in lines if line == "complete")
+    print(f"status: {done}/{len(lines)} complete")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1131,6 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
         "next-wave": cmd_next_wave,
         "report": cmd_report,
         "verify-untouched": cmd_verify_untouched,
+        "status": cmd_status,
     }
     try:
         return handlers[args.cmd](ctx, args)

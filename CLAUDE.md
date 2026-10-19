@@ -122,14 +122,14 @@ Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-ch
 - Quote globs and paren paths (`--include="*.ts"`, `'frontend/src/routes/(app)/…'`) — unquoted, zsh aborts with "no matches found".
 - Keep exit codes visible: `cmd >/tmp/log 2>&1; echo "EXIT=$?"` (zsh uses lowercase `$pipestatus`). Trust the `ruff`/`mypy`/`pytest` exit code over editor diagnostics mid-refactor.
 - zsh: `status` is read-only (use `st`/`run_status`); unquoted variables don't word-split (`$CMD args` fails — use `bash -c` or a function for loops over `set -- $row`).
-- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`. Wait on a pid (`while kill -0 <pid>`), never `pgrep -f '<pattern>'`: it matches the loop's own command line and never ends.
+- Wait on conditions (Monitor, `run_in_background`, `until` loops), not fixed `sleep`; wait on a pid (`while kill -0 <pid>`). Hooks block `pgrep -f` loops, `pkill -f`, backticks in unquoted heredocs, and (in subagents) an `rm` outside `/tmp`.
 - zsh: a bare `echo =====` is an error (`=word` expansion) and kills the rest of a `&&` chain; print separators with `printf '%s\n' '--'`. Call the bus through `scripts/agents/bus`, never a command stored in a variable.
 
 ## SQLite (state DB)
 
 `data/state/vibe_quant.db`; override with `VIBE_QUANT_DB` at backend start (every job subprocess inherits it; there is no runtime DB switch). Every connection sets `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;` (`StateManager` does this).
 
-- **Opening the DB runs schema migrations.** `tests/conftest.py` pins `VIBE_QUANT_DB` to a temp file; keep that guard. Scratch scripts against the real DB use `sqlite3.connect('file:data/state/vibe_quant.db?mode=ro', uri=True)`.
+- **Opening the DB runs schema migrations.** `tests/conftest.py` pins `VIBE_QUANT_DB` to a temp file; keep that guard. Scratch scripts against the real DB use `sqlite3.connect('file:data/state/vibe_quant.db?mode=ro', uri=True)`; the CLI needs `sqlite3 -readonly <path>` (a `file:...?mode=ro` argument fails with error 14).
 - A missing `system_state` row is re-created **ENGAGED** (`kill-switch record was missing; re-created engaged`), never unlocked — only a brand-new DB starts unlocked; paper reads the kill switch on a background thread, never on the trading loop.
 - Use `?` placeholders for every value; handle `None` before formatting; `conn.commit()` after writes; `row_factory = sqlite3.Row` for dict access.
 - Discovery runs live in `backtest_runs` with `run_mode='discovery'` (there is no `discovery_runs` table). `backtest_results` has ONE row per run (re-runs replace result + trades); its `notes` column is machine JSON (discovery payload, `data_window`, funding, consistency, `dsr_trials`) and user text lives in `user_notes`.

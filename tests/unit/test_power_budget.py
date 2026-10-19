@@ -1210,3 +1210,28 @@ def test_harvest_exit_3_when_a_run_used_another_dsr_rule(
 def test_requested_config_follows_probe_and_dsr_rule() -> None:
     assert budget.requested_config({"probe": True}) == (None, "emax")
     assert budget.requested_config({"dsr_rule": "q95"}) == (layer2.NULL_INDICATOR_POOL, "q95")
+
+
+def test_status_reports_gen_eta_complete_and_starting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The user asked for a budget ETA 5 times and the chief guessed; status reads the logs."""
+    runs = tmp_path / "o" / "scratch" / "runs"
+    gen = (
+        "2026-10-19 21:40:01,000 [INFO] vibe_quant.discovery.pipeline: === GEN 7/20 === "
+        "best=0.4121 mean=0.1 | zero_score=3/50 | gen_time=61.2s | ETA=795.6s"
+    )
+    done = (
+        "2026-10-19 22:00:00,000 [INFO] vibe_quant.discovery.pipeline: === DISCOVERY COMPLETE: "
+        "900.0s total (45.0s/gen avg) | 20 gens | 812 evaluated | converged=False ==="
+    )
+    for name, lines in {"4h-s2-B1-seed1": [gen], "4h-s2-B1-seed2": [gen, done]}.items():
+        (runs / name / "logs").mkdir(parents=True)
+        (runs / name / "logs" / "discovery_1_20261019_213000.log").write_text("\n".join(lines) + "\n")
+    (runs / "1d-s3-B2-seed1").mkdir(parents=True)
+    assert budget.main([*_cli(tmp_path), "status"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "1d-s3-B2-seed1: starting (no discovery log yet)"
+    assert out[1].startswith("4h-s2-B1-seed1: gen 7/20 best=0.4121 ETA 796s (log idle ")
+    assert out[2] == "4h-s2-B1-seed2: complete"
+    assert out[3] == "status: 1/3 complete"
