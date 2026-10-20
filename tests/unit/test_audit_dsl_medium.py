@@ -247,5 +247,12 @@ def test_compiler_version_hash_covers_all_runtime_sources(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(Path, "read_bytes", spy)
     compiler_version_hash()
-    for name in ("compute_builtins.py", "derived.py", "schema.py", "kama.py", "frama.py"):
+    for name in (
+        "compute_builtins.py",
+        "derived.py",
+        "schema.py",
+        "kama.py",
+        "frama.py",
+        "indicator_memo.py",
+    ):
         assert name in read

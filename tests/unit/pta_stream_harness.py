@@ -10,12 +10,13 @@ trims.
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from vibe_quant.dsl import indicator_memo
 from vibe_quant.dsl.compiler import StrategyCompiler
 from vibe_quant.dsl.indicators import pta_buffer_cap, pta_lookback
 from vibe_quant.dsl.parser import validate_strategy_dict
@@ -25,18 +26,20 @@ from vibe_quant.dsl.pta_buffer import PtaBuffer
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
+    from vibe_quant.dsl.schema import StrategyDSL
+
 # (timeframe, open, high, low, close, volume)
 BarEvent = tuple[str, float, float, float, float, float]
 
 
-def compile_indicators(
+def _strategy_dict(
     indicators: dict[str, dict[str, Any]],
-    timeframe: str = "1h",
-    additional_timeframes: list[str] | None = None,
-) -> tuple[ModuleType, type]:
-    """Compile a strategy whose only content is ``indicators`` (a raw DSL dict)."""
+    timeframe: str,
+    additional_timeframes: list[str] | None,
+) -> StrategyDSL:
+    """The minimal validated strategy that declares exactly ``indicators``."""
     names = list(indicators)
-    dsl = validate_strategy_dict(
+    return validate_strategy_dict(
         {
             "name": "pta_stream",
             "timeframe": timeframe,
@@ -48,6 +51,24 @@ def compile_indicators(
             "take_profit": {"type": "fixed_pct", "percent": 4.0},
         }
     )
+
+
+def compile_source(
+    indicators: dict[str, dict[str, Any]],
+    timeframe: str = "1h",
+    additional_timeframes: list[str] | None = None,
+) -> str:
+    """Generated source for a strategy whose only content is ``indicators``."""
+    return StrategyCompiler().compile(_strategy_dict(indicators, timeframe, additional_timeframes))
+
+
+def compile_indicators(
+    indicators: dict[str, dict[str, Any]],
+    timeframe: str = "1h",
+    additional_timeframes: list[str] | None = None,
+) -> tuple[ModuleType, type]:
+    """Compile a strategy whose only content is ``indicators`` (a raw DSL dict)."""
+    dsl = _strategy_dict(indicators, timeframe, additional_timeframes)
     module = StrategyCompiler().compile_to_module(dsl)
     cls = next(v for k, v in vars(module).items() if k.endswith("Strategy") and k != "Strategy")
     return module, cls
@@ -76,11 +97,15 @@ def run_stream(
     memo: bool,
     *,
     specs: dict[str, tuple[str, dict[str, object], str]],
+    ind_memo: bool = False,
 ) -> list[dict[str, float]]:
     """Feed ``bars`` and return the ``_pta_values`` snapshot after each event.
 
     ``specs``: indicator name -> (registry type, params, timeframe), mirroring
-    what the generated ``__init__`` derives from the config.
+    what the generated ``__init__`` derives from the config. ``ind_memo`` wraps
+    the whole bar loop in one ``indicator_memo.session()`` (the discovery
+    activation shape); the store is NOT cleared, so a caller can warm it with
+    one stream and measure the next.
     """
     harness: Any = type("Harness", (compiled_cls,), {"config": SimpleNamespace(instrument_id="X")})
     inst: Any = harness.__new__(harness)
@@ -97,7 +122,7 @@ def run_stream(
     }
     inst._pta_bufs = {tf: PtaBuffer(inst._pta_buffer_cap[tf]) for tf in tfs}
     out: list[dict[str, float]] = []
-    with memo_env(memo):
+    with memo_env(memo), (indicator_memo.session() if ind_memo else nullcontext()):
         for tf, o, h, lo, c, v in bars:
             bar = SimpleNamespace(open=o, high=h, low=lo, close=c, volume=v)
             inst._feed_pta_buffer(tf, bar)

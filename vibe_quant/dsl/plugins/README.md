@@ -111,6 +111,8 @@ def compute_fn(df: pd.DataFrame, params: dict[str, object]) -> pd.Series | dict[
 
 NaN values are expected during the warmup period. The compiler handles NaN filtering.
 
+A `compute_fn` must be a pure function of `df`'s OHLCV values and `params`: no hidden state, no mutation of `df` or `params`, no `df.attrs` reads unless `needs_context`; the discovery tail memo reuses outputs across genomes; `test_indicator_memo_stream.py` enforces it.
+
 **Rewriting a compute_fn for speed** (a numpy port of a pandas-ta-classic call) must stay bit-identical to the reference for every input the schema accepts, including parameter boundaries (`0`, `-1`): same NaN positions and the same exception class and message, tested through `invoke_compute_fn` (rev-ind-speed-1: a port turned `length=0` into finite signals).
 
 ### Validating output with `invoke_compute_fn`
