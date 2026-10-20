@@ -179,6 +179,15 @@ def _refuse_if_account_busy(testnet: bool) -> None:
     except ConfigurationError as exc:
         # 28j0h: no passwd home -> no lock dir -> refuse with the reason (503), not a bare 500.
         raise HTTPException(status_code=503, detail=str(exc)) from None
+    except OSError as exc:
+        # 65iq3: an unopenable lock file (permissions, I/O) is a 503 naming the class;
+        # the text may carry a path, so only the class is logged and returned.
+        logger.warning("paper lock probe failed (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail=f"cannot probe the paper account lock ({type(exc).__name__}); "
+            "check the lock dir",
+        ) from None
     if holder is not None:
         raise HTTPException(
             status_code=409,

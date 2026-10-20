@@ -362,6 +362,36 @@ async def test_restore_503_when_the_os_home_cannot_be_resolved(
     assert _paper_run_count(ctx.state) == before
 
 
+async def test_start_503_when_the_lock_probe_cannot_open_the_lock_file(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """65iq3: an OSError opening the lock file (e.g. PermissionError) is a 503 naming
+    the problem class, not a bare 500; no run row, no launch, no exception text."""
+    marker = "EACCES-TEXT-MARKER-65"
+    fd = _hold_raw_fd(ctx.tmp, _api_account())
+    os.close(fd)
+    real_open = os.open
+
+    def _denied(path: object, flags: int, *args: object) -> int:
+        if str(path).endswith(".lock"):
+            raise PermissionError(errno.EACCES, marker)
+        return real_open(path, flags, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _denied)
+    before = _paper_run_count(ctx.state)
+    with caplog.at_level(logging.DEBUG):
+        r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == (
+        "cannot probe the paper account lock (PermissionError); check the lock dir"
+    )
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+    assert marker not in caplog.text
+    assert marker not in r.text
+
+
 async def test_start_409_when_the_holder_body_is_unreadable(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
