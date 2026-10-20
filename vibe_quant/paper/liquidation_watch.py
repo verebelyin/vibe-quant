@@ -114,9 +114,9 @@ class LiquidationWatcher:
         now_ms: Injected clock in epoch milliseconds, read once per cycle (R46).
         cursors: Restored per-symbol cursors from the checkpoint, or ``None``. A
             symbol with no restored cursor starts at the current ``now_ms`` (R50). A
-            restored symbol this watcher does not trade is carried through
-            ``state()`` unchanged, so a later session that trades it rescans from
-            the right cursor (vibe-quant-0m3tf).
+            restored symbol this watcher does not trade is polled too, after the
+            traded symbols, with the same cadence and per-symbol backoff
+            (vibe-quant-0m3tf, vibe-quant-1cvw6).
         seen: Restored ``key -> update_ms`` map, or ``None`` (R50).
         interval_s: Healthy cadence in seconds.
         max_backoff_s: Cap on the per-symbol backoff, in seconds (R52).
@@ -178,13 +178,11 @@ class LiquidationWatcher:
         node_start_ms = now_ms()
         restored = {symbol: int(value) for symbol, value in (cursors or {}).items()}
         # R50: fresh start = node start ms; restore = the checkpoint's per-symbol
-        # cursor, else the node start ms. 0m3tf: a restored symbol this session does
-        # not trade is carried through ``state()`` untouched -- never polled, never in
-        # the failure/backoff bookkeeping -- so the next session trading it still
-        # rescans from the right cursor.
-        self._carried = {
-            symbol: ms for symbol, ms in restored.items() if symbol not in self._symbols
-        }
+        # cursor, else the node start ms. 1cvw6: a restored symbol this session does
+        # not trade is WATCHED too (after the traded ones, in symbol order) with the
+        # same cadence, backoff and degraded/recovered alerts, so a liquidation of a
+        # leftover position is reported during this session.
+        self._symbols += sorted(symbol for symbol in restored if symbol not in self._symbols)
         self._cursors = {
             symbol: restored.get(symbol, node_start_ms) for symbol in self._symbols
         }
@@ -198,13 +196,13 @@ class LiquidationWatcher:
     def state(self) -> dict[str, dict[str, int]]:
         """Return the checkpoint payload, already pruned (R50).
 
-        0m3tf: the cursors of symbols this session does not trade ride along, so a
-        later session on the account that trades them rescans from here instead of
-        from a later timestamp.
+        1cvw6: the cursor of a restored symbol this session does not trade is in the
+        same map, advanced by the same poll loop, so a later session on the account
+        rescans from here instead of from a later timestamp.
         """
         self._prune_seen()
         return {
-            "cursors": {**self._carried, **self._cursors},
+            "cursors": dict(self._cursors),
             "seen": dict(self._seen),
         }
 
@@ -349,7 +347,7 @@ class LiquidationWatcher:
         never starts earlier than that), so a stale carried cursor cannot pin it low
         and keep keys no later request can return.
         """
-        cursors = [*self._carried.values(), *self._cursors.values()]
+        cursors = list(self._cursors.values())
         if not cursors:
             return
         floor_ms = max(

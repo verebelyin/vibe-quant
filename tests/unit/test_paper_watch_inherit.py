@@ -24,9 +24,12 @@ from tests.unit.test_paper_halt_restore import seeded  # noqa: F401  (fixture)
 from tests.unit.test_paper_liquidation_detector import (
     _CHECKPOINT_MS,
     _CHECKPOINT_STAMP,
+    _OVERLAP_MS,
+    _START_MS,
     _TRADER_ID,
     _harness,
     _order,
+    _spy_methods,
     _write_checkpoint,
 )
 from tests.unit.test_paper_liquidation_detector import (
@@ -399,12 +402,12 @@ def _run_with_symbols(state_seeded: dict[str, Any], symbols: list[str]) -> int:
     return rid
 
 
-async def test_disjoint_chain_keeps_the_untraded_cursor_through_the_middle_checkpoint(
+async def test_disjoint_chain_middle_session_alerts_the_untraded_gap_once(
     detector_seeded: dict[str, Any],  # noqa: F811
     detector_fake_tradingnode: Any,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """0m3tf/N1: A(BTC) -> B(ETH) -> C(BTC) keeps A's BTC cursor and alerts the gap."""
+    """1cvw6/N1: A(BTC) -> B(ETH) -> C(BTC): B watches the gap and alerts it once."""
     acct = account_id(_config(detector_seeded).binance)
     btc_run = _run_with_symbols(detector_seeded, ["BTCUSDT"])
     eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
@@ -423,10 +426,13 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_through_the_middle_check
         detector_seeded,
         trader_id="PAPER-002",
         validation_run_id=eth_run,
+        orders={"BTCUSDT": [_order(update_time_ms=_GAP_MS)]},
     )
     try:
         watcher = middle.node._build_liquidation_watcher()
         await watcher.poll_once()
+        assert len(middle.events(EventType.LIQUIDATION)) == 1, "B watches the untraded BTC gap"
+        assert len(middle.alerts.calls) == 1
         status = middle.node._capture_checkpoint().node_status
     finally:
         await middle.node._shutdown()
@@ -438,8 +444,7 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_through_the_middle_check
     )
 
     middle_watch = status["liquidation_watch"]
-    assert middle_watch["cursors"]["BTCUSDT"] == _OWN_MS, "the untraded BTC cursor is carried"
-    assert "ETHUSDT" in middle_watch["cursors"]
+    assert middle_watch["cursors"] == {"ETHUSDT": _START_MS, "BTCUSDT": _START_MS}
 
     last = await _harness(
         monkeypatch,
@@ -449,13 +454,11 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_through_the_middle_check
         orders={"BTCUSDT": [_order(update_time_ms=_GAP_MS)]},
     )
     try:
-        assert last.node._restored_watch is not None
-        assert last.node._restored_watch["cursors"]["BTCUSDT"] == _OWN_MS
         watcher = last.node._build_liquidation_watcher()
         await watcher.poll_once()
 
-        assert len(last.events(EventType.LIQUIDATION)) == 1
-        assert len(last.alerts.calls) == 1
+        assert last.events(EventType.LIQUIDATION) == []
+        assert last.alerts.calls == []
     finally:
         await last.node._shutdown()
 
@@ -516,6 +519,68 @@ async def test_disjoint_chain_carries_the_seen_key_and_does_not_re_alert(
         assert last.alerts.calls == []
     finally:
         await last.node._shutdown()
+
+
+async def test_untraded_symbol_liquidation_is_reported_without_touching_strategy_or_guard(
+    detector_seeded: dict[str, Any],  # noqa: F811
+    detector_fake_tradingnode: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1cvw6/R5: a liquidation on a restored untraded symbol reports; nothing else moves."""
+    acct = account_id(_config(detector_seeded).binance)
+    eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
+    _write_checkpoint(
+        detector_seeded,
+        trader_id=_TRADER_ID,
+        stamp=_OWN_STAMP,
+        node_status={
+            "account": acct,
+            "liquidation_watch": {"cursors": {"BTCUSDT": _OWN_MS}, "seen": {}},
+        },
+    )
+
+    harness = await _harness(
+        monkeypatch,
+        detector_seeded,
+        orders={"BTCUSDT": [_order(update_time_ms=_GAP_MS)]},
+        validation_run_id=eth_run,
+    )
+    guard = harness.node.guard
+    assert guard is not None
+    guard_spies = _spy_methods(
+        monkeypatch, guard, ("halt", "pause", "resume", "close_all", "evaluate_risk")
+    )
+
+    watcher = harness.node._build_liquidation_watcher()
+    await watcher.poll_once()
+
+    try:
+        assert harness.fetch.requests == [
+            ("ETHUSDT", _OWN_MS - _OVERLAP_MS, _START_MS),
+            ("BTCUSDT", _OWN_MS - _OVERLAP_MS, _START_MS),
+        ]
+        events = harness.events(EventType.LIQUIDATION)
+        assert len(events) == 1, f"exactly one LIQUIDATION event, got {events}"
+        assert events[0]["data"]["symbol"] == "BTCUSDT"
+        assert events[0]["data"]["position_id"] == "BTCUSDT-PERP.BINANCE"
+        assert events[0]["data"]["mode"] == "cross"
+        assert harness.alerts.calls == [
+            (
+                "error",
+                "EXCHANGE LIQUIDATION BTCUSDT SELL qty 0.4 @ 2500.5 "
+                "(order 1596107620040000020); paper position state may be stale; "
+                "NO paper action taken",
+                True,
+            )
+        ]
+        assert all(not spy.calls for spy in guard_spies.values()), guard_spies
+        assert harness.events(EventType.ORDER) == []
+        assert harness.node._capture_checkpoint().node_status["liquidation_watch"] == {
+            "cursors": {"ETHUSDT": 1_767_322_800_000, "BTCUSDT": 1_767_322_800_000},
+            "seen": {},
+        }
+    finally:
+        await harness.node._shutdown()
 
 
 async def test_own_older_row_merges_a_carrying_sources_untraded_cursor(

@@ -1730,8 +1730,8 @@ class PaperTradingNode:
         if restored is not None:
             # R50b/R50c: the checkpoint's own cursor per traded symbol; one it does not
             # name starts at the checkpoint itself, which covers the downtime gap.
-            # 0m3tf: restored cursors of symbols this session does NOT trade are handed
-            # over as well, so the watcher carries them through every checkpoint.
+            # 0m3tf/1cvw6: restored cursors of symbols this session does NOT trade are
+            # handed over as well; the watcher polls them after the traded symbols.
             cursors = dict(restored["cursors"])
             for symbol in resolved.symbols:
                 cursors.setdefault(symbol, self._restored_watch_ms)

@@ -1037,7 +1037,10 @@ async def test_run_cycle_failure_log_is_redacted_and_has_no_traceback(
 
 
 async def test_untraded_restored_cursor_is_carried_through_state() -> None:
-    """0m3tf/W1: ``state()`` keeps a restored cursor for a symbol this session skips."""
+    """0m3tf/W1: ``state()`` keeps a restored cursor for a symbol this session skips.
+
+    That symbol is watched after the traded ones.
+    """
     recorder = _Recorder()
     fetch = _FakeFetch()
     btc_cursor = _START_MS - 60_000
@@ -1053,12 +1056,45 @@ async def test_untraded_restored_cursor_is_carried_through_state() -> None:
         "cursors": {"BTCUSDT": btc_cursor, "ETHUSDT": _START_MS},
         "seen": {"BTCUSDT:1": btc_cursor},
     }
-    assert watcher._carried == {"BTCUSDT": btc_cursor}
-    assert "BTCUSDT" not in watcher._cursors
+    assert watcher._symbols == ["ETHUSDT", "BTCUSDT"]
 
 
-async def test_carried_cursor_is_never_polled_advanced_or_backed_off() -> None:
-    """0m3tf/W2: a carried symbol is not in the poll loop, its state or its backoff."""
+async def test_carried_symbol_is_polled_after_the_traded_ones_every_cycle() -> None:
+    """1cvw6/R1: a restored untraded symbol is polled after the traded ones, every cycle."""
+    recorder = _Recorder()
+    fetch = _FakeFetch()
+    sol_cursor = _START_MS - 120_000
+    btc_cursor = _START_MS - 60_000
+    clock = _Clock()
+    watcher = _make_watcher(
+        fetch,
+        recorder,
+        symbols=("ETHUSDT",),
+        clock=clock,
+        cursors={"SOLUSDT": sol_cursor, "BTCUSDT": btc_cursor, "ETHUSDT": _START_MS},
+    )
+
+    await watcher.poll_once()
+    clock.advance(60)
+    await watcher.poll_once()
+
+    assert fetch.requests == [
+        ("ETHUSDT", _START_MS - _OVERLAP_MS, _START_MS),
+        ("BTCUSDT", btc_cursor - _OVERLAP_MS, _START_MS),
+        ("SOLUSDT", sol_cursor - _OVERLAP_MS, _START_MS),
+        ("ETHUSDT", _START_MS - _OVERLAP_MS, _START_MS + 60_000),
+        ("BTCUSDT", _START_MS - _OVERLAP_MS, _START_MS + 60_000),
+        ("SOLUSDT", _START_MS - _OVERLAP_MS, _START_MS + 60_000),
+    ]
+    assert watcher.state()["cursors"] == {
+        "ETHUSDT": _START_MS + 60_000,
+        "BTCUSDT": _START_MS + 60_000,
+        "SOLUSDT": _START_MS + 60_000,
+    }
+
+
+async def test_carried_symbol_has_its_own_backoff_degraded_and_recovered() -> None:
+    """1cvw6/R3: a restored untraded symbol backs off, degrades and recovers like a traded one."""
     recorder = _Recorder()
     fetch = _FakeFetch()
     btc_cursor = _START_MS - 60_000
@@ -1070,21 +1106,73 @@ async def test_carried_cursor_is_never_polled_advanced_or_backed_off() -> None:
         clock=clock,
         cursors={"BTCUSDT": btc_cursor, "ETHUSDT": _START_MS},
     )
+    fetch.errors["BTCUSDT"] = TimeoutError("binance timeout")
 
     for _ in range(3):
+        clock.advance(600)
         await watcher.poll_once()
-        clock.advance(60)
 
-    assert [symbol for symbol, _, _ in fetch.requests] == ["ETHUSDT"] * 3
-    assert watcher.state()["cursors"]["BTCUSDT"] == btc_cursor
-    assert "BTCUSDT" not in watcher._failures
-    assert "BTCUSDT" not in watcher._next_attempt_ms
-    assert "BTCUSDT" not in watcher._degraded
-    assert "BTCUSDT" not in watcher._clamped
+    assert recorder.warnings == ["liquidation detector degraded: BTCUSDT TimeoutError"]
+    assert recorder.recoveries == []
+    assert watcher.state()["cursors"] == {
+        "ETHUSDT": _START_MS + 1_800_000,
+        "BTCUSDT": btc_cursor,
+    }
+    assert [symbol for symbol, _, _ in fetch.requests] == ["ETHUSDT", "BTCUSDT"] * 3
+
+    del fetch.errors["BTCUSDT"]
+    clock.advance(600)
+    await watcher.poll_once()
+
+    assert recorder.recoveries == [("BTCUSDT", 3)]
+    assert watcher.state()["cursors"] == {
+        "ETHUSDT": _START_MS + 2_400_000,
+        "BTCUSDT": _START_MS + 2_400_000,
+    }
+    assert fetch.requests[-1] == (
+        "BTCUSDT",
+        btc_cursor - _OVERLAP_MS,
+        _START_MS + 2_400_000,
+    )
+
+
+async def test_stale_carried_cursor_is_clamped_with_one_warning() -> None:
+    """1cvw6/R4: a carried cursor older than the 7-day cap is clamped, one warning only."""
+    recorder = _Recorder()
+    fetch = _FakeFetch()
+    clock = _Clock()
+    stale = _START_MS - _EIGHT_DAYS_MS
+    fetch.orders["BTCUSDT"] = [
+        _order(order_id=1, update_time_ms=stale + 1_000),
+        _order(order_id=2, update_time_ms=_START_MS - 3 * 86_400_000),
+    ]
+    watcher = _make_watcher(
+        fetch,
+        recorder,
+        symbols=("ETHUSDT",),
+        clock=clock,
+        cursors={"BTCUSDT": stale, "ETHUSDT": _START_MS},
+    )
+
+    await watcher.poll_once()
+    clock.advance(60)
+    await watcher.poll_once()
+
+    assert fetch.requests[1] == (
+        "BTCUSDT",
+        _START_MS - _LOOKBACK_CAP_MS + _CLAMP_SLACK_MS,
+        _START_MS,
+    )
+    assert recorder.warnings == ["liquidation detector lookback clamped to 7 days: BTCUSDT"]
+    assert [event.order_id for event in recorder.events] == [2]
+    assert watcher.state()["cursors"] == {
+        "ETHUSDT": _START_MS + 60_000,
+        "BTCUSDT": _START_MS + 60_000,
+    }
 
 
 async def test_disjoint_chain_keeps_the_untraded_cursor_and_its_seen_key() -> None:
-    """0m3tf/W3: A(BTC) -> B(ETH) -> C(BTC) rescans from A's cursor, no re-delivery."""
+    """0m3tf/W3: B watches the carried BTC and delivers row 8; C does not re-deliver."""
     recorder_a = _Recorder()
     recorder_b = _Recorder()
     recorder_c = _Recorder()
@@ -1112,8 +1200,9 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_and_its_seen_key() -> No
     )
     await second.poll_once()
     state_b = second.state()
+    assert [event.order_id for event in recorder_b.events] == [8]
     assert state_b["cursors"] == {
-        "BTCUSDT": _START_MS,
+        "BTCUSDT": _START_MS + 60_000,
         "ETHUSDT": _START_MS + 60_000,
     }
 
@@ -1129,11 +1218,11 @@ async def test_disjoint_chain_keeps_the_untraded_cursor_and_its_seen_key() -> No
     await third.poll_once()
 
     btc_requests = [request for request in fetch.requests if request[0] == "BTCUSDT"]
-    assert btc_requests[-1][1] == _START_MS - _OVERLAP_MS
-    assert [event.order_id for event in recorder_c.events] == [8]
+    assert btc_requests[-1][1] == _START_MS + 60_000 - _OVERLAP_MS
+    assert recorder_c.events == []
     assert third.state()["cursors"] == {
         "BTCUSDT": _START_MS + 120_000,
-        "ETHUSDT": _START_MS + 60_000,
+        "ETHUSDT": _START_MS + 120_000,
     }
 
 
@@ -1162,7 +1251,7 @@ async def test_overlapping_chain_carries_every_symbol_without_duplicates() -> No
     await second.poll_once()
     state_b = second.state()
     assert state_b["cursors"] == {
-        "BTCUSDT": _START_MS,
+        "BTCUSDT": _START_MS + 60_000,
         "ETHUSDT": _START_MS + 60_000,
         "SOLUSDT": _START_MS + 60_000,
     }
@@ -1180,7 +1269,7 @@ async def test_overlapping_chain_carries_every_symbol_without_duplicates() -> No
 
     assert third.state()["cursors"] == {
         "BTCUSDT": _START_MS + 120_000,
-        "ETHUSDT": _START_MS + 60_000,
+        "ETHUSDT": _START_MS + 120_000,
         "SOLUSDT": _START_MS + 120_000,
     }
 
@@ -1235,7 +1324,6 @@ async def test_carried_symbol_later_traded_is_polled_and_not_duplicated() -> Non
     )
     await second.poll_once()
 
-    assert second._carried == {}
     assert fetch.requests == [
         ("BTCUSDT", btc_cursor - _OVERLAP_MS, _START_MS),
         ("ETHUSDT", _START_MS - _OVERLAP_MS, _START_MS),
