@@ -18,16 +18,7 @@ Algorithmic trading engine for crypto perpetual futures (Binance USDT-M; Etherea
 
 ## Vocabulary
 
-- **screening** — fast NT backtest with simplified fills; discovery uses the same code path.
-- **validation** — full-fidelity NT backtest on 1m detail bars; the reference for fills.
-- **discovery** — GA search over DSL genomes; a **champion** is a genome that passes every **gate** (bootstrap CI, DSR, cross-window, WFA, **holdout**).
-- **eval windows** — discovery scores the worst of N sub-windows.
-- **exactness proof** — `exactness_239.py` must reproduce the pinned strategy-239 metrics bit for bit.
-- **comparability break** — a dated change after which older metrics can't be compared with newer ones.
-- **fill tick / outbox** — orders queue per instrument and release on that instrument's next price update.
-- **archive → catalog** — raw downloads in SQLite, rebuilt into the Parquet catalog the engine reads.
-- **plugin** — a drop-in indicator file in `vibe_quant/dsl/plugins/`.
-- **chief / maker / checker** — orchestrator / coding agent / reviewer; **bead** — an issue in `bd`.
+Domain terms (screening, validation, champion, gate, eval windows, exactness proof, comparability break, …) live in [`GLOSSARY.md`](GLOSSARY.md). Read it before naming a concept or writing docs/UI text; use its canonical words and qualify the overloaded ones it lists (window, run, session, seed, gate, validation).
 
 ## This file
 
