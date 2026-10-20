@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,10 +37,12 @@ import pytest
 
 import vibe_quant.paper.node as node_module
 from tests.unit.test_audit_paper_node import DSL, _config
+from tests.unit.test_paper_risk_inherit import _risk
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
+from vibe_quant.paper.config import account_id
 from vibe_quant.paper.force_orders import ForceOrder
-from vibe_quant.paper.node import PaperTradingNode
+from vibe_quant.paper.node import HaltReason, NodeState, PaperTradingNode
 from vibe_quant.paper.persistence import StatePersistence
 
 if TYPE_CHECKING:
@@ -748,6 +751,103 @@ async def test_first_ever_start_checkpoint_carries_no_watch_state(
     harness = await _harness(monkeypatch, seeded, trader_id=_RESTART_ID)
     assert _latest_watch(harness) is None
     await harness.node._shutdown()
+
+
+# ------------------------------------------------------------------------ gzf8x
+
+
+_HALT_STAMP = "2026-01-02 00:30:00"
+_HALT_STAMP_MS = 1_767_313_800_000
+
+
+def _newest_checkpoint_cursors(seeded: dict[str, Any]) -> Any:
+    """R1: the watch cursors of the newest row (persistence picks ``ORDER BY id DESC``)."""
+    conn = sqlite3.connect(seeded["db"])
+    try:
+        row = conn.execute(
+            "SELECT node_status FROM paper_trading_checkpoints ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return json.loads(row[0])["liquidation_watch"]["cursors"]
+
+
+async def _started_session(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    logs_dir: str,
+) -> tuple[PaperTradingNode, _FakeFetch, _Alerts]:
+    """Run the real ``start()`` until the watcher has polled both traded symbols."""
+    fetch = _FakeFetch({"BTCUSDT": [_order(update_time_ms=_CHECKPOINT_MS - 3_600_000)]})
+    alerts = _Alerts()
+    node = PaperTradingNode(
+        _config(seeded, trader_id=_TRADER_ID, logs_path=seeded["tmp"] / logs_dir)
+    )
+    monkeypatch.setattr(node, "_now", _Clock())
+    monkeypatch.setattr(node, "_send_telegram_alert", alerts)
+    monkeypatch.setattr(node_module, "build_binance_fetch", _FetchFactory(fetch))
+
+    async def two_requests(_self: _FakeTradingNode) -> None:
+        for _ in range(400):
+            if len(fetch.requests) >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(fake_tradingnode, "run_async", two_requests)
+    await node.start()
+    return node, fetch, alerts
+
+
+@pytest.mark.parametrize("halt", ["error", None])
+async def test_halted_error_shutdown_checkpoint_keeps_the_polled_watch(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded: dict[str, Any],
+    fake_tradingnode: type[_FakeTradingNode],
+    halt: str | None,
+) -> None:
+    """gzf8x R1-R3: a session that stops while halted-ERROR saves the POLLED watch.
+
+    The shutdown checkpoint must carry the cursors the watcher reached, not the
+    pre-poll copy restored at init, so the next start sends no duplicate alert.
+    """
+    node_status: dict[str, Any] = {
+        "account": account_id(_config(seeded).binance),
+        "risk": _risk(high_water_mark="10000"),
+        "liquidation_watch": {"cursors": {"BTCUSDT": _HALT_STAMP_MS}, "seen": {}},
+    }
+    if halt is not None:
+        node_status.update(
+            {"halt_reason": halt, "state": "halted", "error_message": "boom"}
+        )
+    _write_checkpoint(
+        seeded, trader_id=_TRADER_ID, stamp=_HALT_STAMP, node_status=node_status
+    )
+
+    first, _, first_alerts = await _started_session(
+        monkeypatch, seeded, fake_tradingnode, "l1"
+    )
+    exchange = [call for call in first_alerts.calls if call[2] and "EXCHANGE" in call[1]]
+    assert len(exchange) == 1, "run1 reports the liquidation it polled"
+    assert first.status.state is NodeState.STOPPED
+    assert first.status.halt_reason is (HaltReason.ERROR if halt is not None else None)
+    assert _newest_checkpoint_cursors(seeded) == {
+        "BTCUSDT": _START_MS,
+        "ETHUSDT": _START_MS,
+    }, "the final row carries the polled cursors, not the pre-poll copy"
+
+    _, second_fetch, second_alerts = await _started_session(
+        monkeypatch, seeded, fake_tradingnode, "l2"
+    )
+    assert [
+        call for call in second_alerts.calls if call[2] and "EXCHANGE" in call[1]
+    ] == [], "no duplicate alert on the next start"
+    assert second_fetch.requests[0] == (
+        "BTCUSDT",
+        _START_MS - _OVERLAP_MS,
+        _START_MS,
+    ), "run2 starts from run1's polled cursor (minus the overlap)"
 
 
 # ------------------------------------------------------------------------ R52g
