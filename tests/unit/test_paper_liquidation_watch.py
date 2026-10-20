@@ -113,6 +113,44 @@ def _order(
     )
 
 
+async def test_hung_symbols_time_out_together_not_one_after_another() -> None:
+    """qe6ye: one cycle fetches every due symbol concurrently, so N hung symbols cost
+    one ``fetch_timeout_s``, not N of them, and a healthy symbol still delivers.
+
+    Serial polling stretched the traded symbols' cadence to max(60, 30 N) s
+    (MEASURED 241 s at N=8 in risk-watch-carried-1's scaled probe).
+    """
+    recorder = _Recorder()
+    hung = [f"H{i}USDT" for i in range(8)]
+    in_flight = 0
+    peak = 0
+    requests: list[str] = []
+
+    async def fetch(symbol: str, start_ms: int, end_ms: int) -> list[ForceOrder]:
+        nonlocal in_flight, peak
+        requests.append(symbol)
+        if symbol == "BTCUSDT":
+            return [_order(order_id=61, update_time_ms=_START_MS - 1_000)]
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await asyncio.Event().wait()  # never comes back
+        finally:
+            in_flight -= 1
+        return []
+
+    watcher = _make_watcher(
+        fetch, recorder, symbols=("BTCUSDT", *hung), fetch_timeout_s=0.05
+    )
+
+    await asyncio.wait_for(watcher.poll_once(), timeout=2)
+
+    assert peak == 8
+    assert requests == ["BTCUSDT", *hung]
+    assert [event.order_id for event in recorder.events] == [61]
+    assert watcher.state()["cursors"]["BTCUSDT"] == _START_MS
+
+
 def _make_watcher(
     fetch: Callable[[str, int, int], Awaitable[list[ForceOrder]]],
     recorder: _Recorder,

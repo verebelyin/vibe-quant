@@ -210,21 +210,24 @@ class LiquidationWatcher:
         """Run one cycle over the symbols that are due by their own backoff (R46).
 
         Only ``asyncio.CancelledError`` escapes: a fetch, decode or handler error
-        fails that symbol alone (R52).
+        fails that symbol alone (R52). qe6ye: the due symbols run concurrently, so N
+        hung fetches cost one ``fetch_timeout_s`` per cycle, not N of them.
         """
         end_ms = self._now_ms()
-        for symbol in self._symbols:
-            if self._next_attempt_ms[symbol] > end_ms:
-                continue
-            try:
-                await self._poll_symbol(symbol, end_ms)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                await self._note_failure(symbol, exc)
-            else:
-                await self._note_success(symbol)
+        due = [s for s in self._symbols if self._next_attempt_ms[s] <= end_ms]
+        await asyncio.gather(*(self._poll_one(symbol, end_ms) for symbol in due))
         self._prune_seen()
+
+    async def _poll_one(self, symbol: str, end_ms: int) -> None:
+        """One symbol's cycle with its own failure/success bookkeeping (R52)."""
+        try:
+            await self._poll_symbol(symbol, end_ms)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._note_failure(symbol, exc)
+        else:
+            await self._note_success(symbol)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Poll until ``stop`` is set or the task is cancelled (R53).

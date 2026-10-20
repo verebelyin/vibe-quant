@@ -790,8 +790,15 @@ async def _started_session(
     monkeypatch.setattr(node_module, "build_binance_fetch", _FetchFactory(fetch))
 
     async def two_requests(_self: _FakeTradingNode) -> None:
+        # qe6ye: symbols are fetched concurrently, so wait for the cycle to FINISH
+        # (both cursors advanced), not merely for both requests to be sent.
         for _ in range(400):
-            if len(fetch.requests) >= 2:
+            watcher = node._liquidation_watcher
+            if (
+                len(fetch.requests) >= 2
+                and watcher is not None
+                and set(watcher.state()["cursors"].values()) == {_START_MS}
+            ):
                 break
             await asyncio.sleep(0.01)
 
