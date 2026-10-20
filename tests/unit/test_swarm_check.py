@@ -2547,6 +2547,8 @@ class TestInheritedSwarmEnv:
             "SWARM_BUS": str(live_bus),
             "SWARM_AGENT": "probe",
             "PYTHONPATH": str(root),
+            # The gate exports PYTEST_ADDOPTS="-q ..."; its -q would cancel the -v below.
+            "PYTEST_ADDOPTS": "",
         }
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", str(root / "tests/unit/test_swarm_check.py"),
