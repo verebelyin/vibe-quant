@@ -446,6 +446,9 @@ class _GuardBridge(GuardListener):
     def on_position_closed(self, event: Any) -> None:
         self._node._on_position_closed(event)
 
+    def on_position_close_settled(self, event: Any) -> None:
+        self._node._on_position_close_settled(event)
+
     def on_warning(self, message: str) -> None:
         self._node._on_guard_warning(message)
 
@@ -2233,6 +2236,10 @@ class PaperTradingNode:
             lambda: self._trade_close_message(event, net, commissions, exit_reason)
         )
 
+    def _on_position_close_settled(self, event: Any) -> None:
+        """8vc7h: checkpoint right after a close so a SIGKILL cannot lose the losing streak."""
+        self._save_checkpoint_now()
+
     def _count_closed_trade(self) -> None:
         today = datetime.now(UTC).date()
         if self._trades_day != today:
@@ -2464,8 +2471,11 @@ class PaperTradingNode:
         The trader's own latest checkpoint (restart / /restore) is read as before.
         Unless ``start_fresh``, the newest checkpoint of ANOTHER trader on the same
         account that is newer than the own one is the source of the risk bookkeeping
-        (high water mark, UTC-day baseline, consecutive losses), so a new session id
-        cannot reset the drawdown/daily-loss limits. Halts: the own halt always
+        (high water mark, UTC-day baseline, consecutive losses) AND of the liquidation
+        watch (forceOrders cursors + dedupe keys, merged with the own row's cursors
+        and bounded by the older of the two timestamps), so a new session id cannot
+        reset the drawdown/daily-loss limits and no venue liquidation between the two
+        sessions is skipped. Halts: the own halt always
         wins; from another session only an ERROR halt is inherited (an unrecognised
         reason counts as ERROR). ``start_fresh`` never discards the own checkpoint.
         Positions and orders come from NautilusTrader's venue reconciliation
@@ -2508,14 +2518,23 @@ class PaperTradingNode:
                         account,
                     )
                 return
-            if own is not None:
-                # R50b/R50c: any own checkpoint restores the watch state; the ones written
-                # before the watcher existed still cover the downtime gap through their
-                # timestamp. The watch is never inherited from another session.
-                self._restored_watch_ms = self._checkpoint_ms(own.timestamp)
-                self._restored_watch = self._restored_watch_state(
-                    own.node_status.get("liquidation_watch")
-                )
+            # 1zh0m: the watch follows the risk source, merged with the own row. The
+            # newer row wins for a symbol both name; a symbol only the own (older) row
+            # names keeps ITS cursor, and every symbol neither names starts at the
+            # older of the two timestamps, so no venue liquidation in the gap is
+            # skipped. With no own row the source row bounds the gap by itself.
+            self._restored_watch_ms = self._checkpoint_ms(
+                own.timestamp if own is not None else source.timestamp
+            )
+            merged_watch = self._restored_watch_state(
+                own.node_status.get("liquidation_watch") if own is not None else None
+            )
+            source_watch = self._restored_watch_state(
+                source.node_status.get("liquidation_watch")
+            )
+            merged_watch["cursors"].update(source_watch["cursors"])
+            merged_watch["seen"].update(source_watch["seen"])
+            self._restored_watch = merged_watch
             self._restored_risk, problems = RiskState.from_checkpoint(
                 source.node_status.get("risk")
             )

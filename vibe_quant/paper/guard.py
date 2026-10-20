@@ -322,6 +322,9 @@ class GuardListener:
     def on_position_closed(self, event: Any) -> None:
         """A guarded strategy closed a position."""
 
+    def on_position_close_settled(self, event: Any) -> None:
+        """A guarded strategy's close is fully booked (losing streak and risk evaluated)."""
+
     def on_warning(self, message: str) -> None:
         """Non-fatal condition the operator should know about."""
 
@@ -789,6 +792,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
 
     def _on_position_event(self, event: Any) -> None:
         guarded = self._is_guarded_strategy(event.strategy_id)
+        closed_guarded = False
         if isinstance(event, PositionOpened):
             if guarded:
                 self._listener.on_position_opened(event)
@@ -800,8 +804,11 @@ class TradingGuard(Actor):  # type: ignore[misc]
                     self._risk.consecutive_losses += 1
                 else:
                     self._risk.consecutive_losses = 0
+                closed_guarded = True
             self._stop_exited_strategies()
         self.evaluate_risk()
+        if closed_guarded:
+            self._listener.on_position_close_settled(event)
 
     # ------------------------------------------------------------------- risk
 
