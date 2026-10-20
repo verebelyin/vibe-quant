@@ -8060,6 +8060,13 @@
               }
             ],
             "title": "Message"
+          },
+          "snapshot_errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Snapshot Errors"
           }
         },
         "type": "object",

@@ -487,6 +487,51 @@ async def test_status_reports_node_state_from_checkpoint(ctx: Ctx, tmp_db: Path)
     assert body["pnl_metrics"] == {"drawdown_pct": "0.06"}
 
 
+async def test_status_exposes_snapshot_errors(ctx: Ctx, tmp_db: Path) -> None:
+    """A checkpoint whose position snapshot failed must surface the error list."""
+    _run_id, trader_id = await _start(ctx)
+    p = StatePersistence(tmp_db, trader_id)
+    p.save_checkpoint(
+        StateCheckpoint(
+            trader_id=trader_id,
+            node_status={
+                "state": "running",
+                "snapshot_errors": ["positions: RuntimeError", "order O-2: KeyError"],
+            },
+        )
+    )
+    p.close()
+    body = (await ctx.ac.get("/api/paper/status")).json()
+    assert body["snapshot_errors"] == ["positions: RuntimeError", "order O-2: KeyError"]
+
+
+async def test_status_snapshot_errors_empty_when_clean(ctx: Ctx, tmp_db: Path) -> None:
+    """Idle, pre-checkpoint and clean-checkpoint responses all carry an empty list."""
+    idle = (await ctx.ac.get("/api/paper/status")).json()
+    assert idle["state"] == "idle"
+    assert idle["snapshot_errors"] == []
+    _run_id, trader_id = await _start(ctx)
+    assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
+    p = StatePersistence(tmp_db, trader_id)
+    p.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status={"state": "running"}))
+    p.close()
+    assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
+
+
+async def test_status_snapshot_errors_malformed_is_empty(ctx: Ctx, tmp_db: Path) -> None:
+    """node_status is untyped JSON: a non-list value must not leak through."""
+    _run_id, trader_id = await _start(ctx)
+    p = StatePersistence(tmp_db, trader_id)
+    p.save_checkpoint(
+        StateCheckpoint(
+            trader_id=trader_id,
+            node_status={"state": "running", "snapshot_errors": "boom"},
+        )
+    )
+    p.close()
+    assert (await ctx.ac.get("/api/paper/status")).json()["snapshot_errors"] == []
+
+
 async def test_positions_and_orders_map_nautilus_to_dict(ctx: Ctx, tmp_db: Path) -> None:
     """Audit: UI showed symbol '' and entry 0 for real Position/Order.to_dict() data."""
     p = StatePersistence(tmp_db, "PAPER-042")

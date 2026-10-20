@@ -37,7 +37,9 @@ export function PaperTradingPage() {
 
       <SessionControl />
 
-      {isActive && <LiveDashboard traderId={traderId || undefined} />}
+      {isActive && (
+        <LiveDashboard traderId={traderId || undefined} snapshotErrors={status?.snapshot_errors} />
+      )}
 
       <Tabs defaultValue="session">
         <TabsList>
@@ -48,7 +50,10 @@ export function PaperTradingPage() {
         <TabsContent value="session" className="mt-4">
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
-              <PositionsTable traderId={traderId || undefined} />
+              <PositionsTable
+                traderId={traderId || undefined}
+                snapshotErrors={status?.snapshot_errors}
+              />
             </div>
             <div className="rounded-xl border border-border/60 bg-card/40 p-5 backdrop-blur-sm">
               <CheckpointsList traderId={traderId || undefined} sessionActive={isActive} />

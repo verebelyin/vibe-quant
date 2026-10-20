@@ -621,6 +621,8 @@ async def get_status(state: StateMgr, jobs: JobMgr) -> PaperStatusResponse:
         )
     node_status = checkpoint.node_status or {}
     risk = node_status.get("risk") if isinstance(node_status.get("risk"), dict) else None
+    raw_errors = node_status.get("snapshot_errors")
+    snapshot_errors = [str(e) for e in raw_errors] if isinstance(raw_errors, list) else []
     return PaperStatusResponse(
         state=str(node_status.get("state", "unknown")),
         pnl_metrics=risk,
@@ -630,6 +632,7 @@ async def get_status(state: StateMgr, jobs: JobMgr) -> PaperStatusResponse:
         testnet=testnet if isinstance(testnet, bool) else None,
         halt_reason=node_status.get("halt_reason"),
         message=node_status.get("error_message"),
+        snapshot_errors=snapshot_errors,
     )
 
 

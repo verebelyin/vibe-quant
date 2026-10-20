@@ -76,6 +76,7 @@ class PaperStatusResponse(BaseModel):
     testnet: bool | None = None
     halt_reason: str | None = None
     message: str | None = None
+    snapshot_errors: list[str] = Field(default_factory=list)
 
 
 class PaperPositionResponse(BaseModel):

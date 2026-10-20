@@ -14,6 +14,7 @@ import {
   useGetPositionsApiPaperPositionsGet,
 } from "@/api/generated/paper/paper";
 import { queryClient } from "@/api/query-client";
+import { positionsEmptyView, SNAPSHOT_WARNING_TITLE } from "@/components/paper/snapshotWarning";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -84,6 +85,7 @@ function EquityTooltip({
 
 interface LiveDashboardProps {
   traderId?: string | undefined;
+  snapshotErrors?: string[] | undefined;
 }
 
 export function LiveDashboard(props: LiveDashboardProps = {}) {
@@ -97,6 +99,7 @@ export function LiveDashboard(props: LiveDashboardProps = {}) {
   const flashTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const traderId = props.traderId;
+  const emptyView = positionsEmptyView(props.snapshotErrors);
 
   const { data: posResp } = useGetPositionsApiPaperPositionsGet(
     traderId ? { trader_id: traderId } : undefined,
@@ -288,8 +291,16 @@ export function LiveDashboard(props: LiveDashboardProps = {}) {
       {/* Open positions with live flash */}
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-muted-foreground">Open Positions</h4>
+        {emptyView.warnings.length > 0 && (
+          <ul className="space-y-1 text-xs text-destructive" role="alert">
+            <li className="font-medium">{SNAPSHOT_WARNING_TITLE}</li>
+            {emptyView.warnings.map((error) => (
+              <li key={error}>{error}</li>
+            ))}
+          </ul>
+        )}
         {positions.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No open positions.</p>
+          <p className="text-xs text-muted-foreground">{emptyView.emptyText}</p>
         ) : (
           <Table>
             <TableHeader>

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { PaperPositionResponse } from "@/api/generated/models";
 import { useGetPositionsApiPaperPositionsGet } from "@/api/generated/paper/paper";
+import { positionsEmptyView, SNAPSHOT_WARNING_TITLE } from "@/components/paper/snapshotWarning";
 import {
   Table,
   TableBody,
@@ -13,9 +14,10 @@ import { cn } from "@/lib/utils";
 
 interface PositionsTableProps {
   traderId?: string | undefined;
+  snapshotErrors?: readonly string[] | undefined;
 }
 
-export function PositionsTable({ traderId }: PositionsTableProps = {}) {
+export function PositionsTable({ traderId, snapshotErrors }: PositionsTableProps = {}) {
   const { data: posResp, isLoading } = useGetPositionsApiPaperPositionsGet(
     traderId ? { trader_id: traderId } : undefined,
     { query: { enabled: !!traderId, refetchInterval: traderId ? 5_000 : false } },
@@ -27,14 +29,25 @@ export function PositionsTable({ traderId }: PositionsTableProps = {}) {
     return [];
   }, [posResp]);
 
+  const emptyView = positionsEmptyView(snapshotErrors);
+
   return (
     <div className="space-y-3">
       <h2 className="text-sm font-semibold text-foreground">Open Positions</h2>
 
+      {emptyView.warnings.length > 0 && (
+        <ul className="space-y-1 text-xs text-destructive" role="alert">
+          <li className="font-medium">{SNAPSHOT_WARNING_TITLE}</li>
+          {emptyView.warnings.map((error) => (
+            <li key={error}>{error}</li>
+          ))}
+        </ul>
+      )}
+
       {isLoading ? (
         <p className="text-xs text-muted-foreground">Loading positions...</p>
       ) : positions.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No open positions.</p>
+        <p className="text-xs text-muted-foreground">{emptyView.emptyText}</p>
       ) : (
         <Table>
           <TableHeader>

@@ -15,4 +15,5 @@ export interface PaperStatusResponse {
   testnet?: boolean | null;
   halt_reason?: string | null;
   message?: string | null;
+  snapshot_errors?: string[];
 }
