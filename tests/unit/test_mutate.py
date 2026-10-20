@@ -698,3 +698,140 @@ def test_auto_diff_with_nothing_to_mutate_is_an_error(
     base = _git(repo, "rev-parse", "HEAD").strip()
     assert mutate.main(["--repo", str(repo), "--auto-diff", base, "--", "true"]) == 2
     assert "no mutable added line" in capsys.readouterr().out
+
+
+def test_auto_diff_deletes_added_call_and_assignment_lines(tmp_path: Path) -> None:
+    """A line that only adds a call or an assignment has no cmp/bool/not/int mutant; deleting
+    it (as `pass`, so the block stays valid) is the behaviour change to probe."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "svc.py").write_text(
+        "def run(s):\n"
+        "    s.start()\n"
+        '    s.mode = "x"\n'
+        "    total = s.count\n"
+        "    return total\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
+    got = {(m.name, m.new.strip()) for m in mutants}
+    # The string assignment (3) and the return (5) are not deletable; neither is `def run`.
+    assert got == {
+        ("vibe_quant/svc.py:2:del", "pass"),
+        ("vibe_quant/svc.py:4:del", "pass"),
+    }
+    assert mutants[0].new == "    pass"  # same indent as the deleted line
+
+
+def test_auto_diff_swaps_added_bool_literals(tmp_path: Path) -> None:
+    """`enabled = True` gets a `flag` mutant on top of its `del` one; a True inside a string
+    literal is not a flag."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "flag.py").write_text(
+        "def build(s):\n"
+        "    enabled = True\n"
+        '    x = "True"\n'
+        "    f(strict=False)\n"
+        "    return enabled\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 8)
+    got = {(m.name, m.new.strip()) for m in mutants}
+    assert got == {
+        ("vibe_quant/flag.py:2:flag", "enabled = False"),
+        ("vibe_quant/flag.py:2:del", "pass"),
+        ("vibe_quant/flag.py:4:flag", "f(strict=True)"),
+        ("vibe_quant/flag.py:4:del", "pass"),
+    }
+
+
+def test_auto_diff_never_deletes_inert_lines(tmp_path: Path) -> None:
+    """Docstring/comment/blank/pass/import/annotation/ellipsis/multi-line-statement lines are
+    not deletable: deleting them changes nothing or breaks the file."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "inert.py").write_text(
+        '"""Module docstring."""\n'
+        "\n"
+        "# a comment\n"
+        "import os\n"
+        "from collections import deque\n"
+        "\n"
+        "def inert(x: int) -> None:\n"
+        '    """Doc."""\n'
+        "    pass\n"
+        "    ...\n"
+        "    y: int\n"
+        "    foo(\n"
+        "        x,\n"
+        "    )\n"
+        "    do()\n"
+        "    a = 1; b = 2\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 99)
+    # only the plain single-line call is deletable: the multi-line call and `a = 1; b = 2`
+    # (two statements on one line) are not
+    assert [m.name for m in mutants if m.name.endswith(":del")] == ["vibe_quant/inert.py:15:del"]
+    # the int on `a = 1; b = 2` still yields its operator mutant, so this is not "no mutants"
+    assert ("vibe_quant/inert.py:16:int", "    a = 2; b = 2") in {
+        (m.name, m.new) for m in mutants
+    }
+
+
+def test_auto_diff_never_deletes_compound_header_lines(tmp_path: Path) -> None:
+    """A simple statement that shares its line with a compound header (`try:`, `else:`,
+    `if x:`, `with ...:`) is not a complete single-line statement: replacing the whole line
+    with `pass` would delete the header too. Only `s.go()` is deletable here."""
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "compound.py").write_text(
+        "def compound(s, x, items):\n"
+        "    try: s.start()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    if x:\n"
+        "        pass\n"
+        "    else: y = 2\n"
+        "    with s: s.start()\n"
+        "    for i in items: s.step(i)\n"
+        "    while x: s.step(x)\n"
+        "    s.go()\n"
+    )
+    mutants = mutate.diff_mutants(repo, base, "vibe_quant/*.py", 99)
+    assert [m.name for m in mutants if m.name.endswith(":del")] == ["vibe_quant/compound.py:11:del"]
+
+
+def test_auto_diff_cli_kills_delete_mutant(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "hook.py").write_text('def setup(reg):\n    reg.append("ok")\n')
+    (repo / "tests" / "unit" / "test_hook.py").write_text(
+        "from vibe_quant.hook import setup\n\n\n"
+        "def test_registers() -> None:\n"
+        "    reg = []\n"
+        "    setup(reg)\n"
+        '    assert reg == ["ok"]\n'
+    )
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--", sys.executable, "-m", "pytest",
+         "tests/unit/test_hook.py", "-q"]
+    )  # fmt: skip
+    assert rc == 0  # the `del` mutant empties reg, so the assertion kills it
+
+
+def test_auto_diff_cli_reports_surviving_delete_mutant(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _make_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "vibe_quant" / "hook.py").write_text('def setup(reg):\n    reg.append("ok")\n')
+    (repo / "tests" / "unit" / "test_hook.py").write_text(
+        "from vibe_quant.hook import setup\n\n\ndef test_setup() -> None:\n    setup([])\n"
+    )
+    rc = mutate.main(
+        ["--repo", str(repo), "--auto-diff", base, "--", sys.executable, "-m", "pytest",
+         "tests/unit/test_hook.py", "-q"]
+    )  # fmt: skip
+    out = _lines(capsys)
+    assert rc == 1
+    assert out[0].startswith("SURVIVED vibe_quant/hook.py:2:del (")
+    assert out[-1] == "MUTANTS killed=0 survived=1 errors=0"

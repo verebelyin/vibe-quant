@@ -50,8 +50,13 @@ assertion/error line>` (tells an assertion kill from an import/SQL error); `--qu
 `--auto-diff BASE [--max N] [--glob G]` generates the mutants instead: for each line ADDED
 in `git diff BASE` of files matching `--glob` (default `vibe_quant/*.py`), the first
 applicable of comparison flip (`<=`/`<`, `>=`/`>`, `==`/`!=`), boolean swap (`and`/`or`),
-dropped `not`, or integer literal +1, as one whole-line replacement (the line must be unique
-in its file), at most `--max` (default 8), round-robin over files. Named `<file>:<line>:<op>`.
+dropped `not`, or integer literal +1. A line none of those hit falls back to swapping its
+first `True`/`False` (`flag`) and, when it is a complete single-line call or assignment that
+starts at the line's indent (not `try: s.start()` or `else: y = 2`), replacing it with `pass`
+at the same indent (`del`); docstrings, comments, blanks, `pass`,
+imports, annotations, `...`, `return`/`raise`/`assert`, string assignments and meta lines
+yield none. Each is one whole-line replacement (the line must be unique in its file), at most
+`--max` (default 8), round-robin over files. Named `<file>:<line>:<op>`.
 Makers picked easy mutants: 5 of 9 fix rounds in one job came from mutants a reviewer found.
 
 `<name>` defaults to `<file>:<line of the match>` (just `<file>` when `old` is absent).
@@ -91,6 +96,8 @@ _OPERATORS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("not", re.compile(r"\bnot\s+")),
     ("int", re.compile(r"(?<![\w.])(\d+)(?![\w.])")),
 )
+# fallbacks, only for an added line none of _OPERATORS hits
+_FLAG_RE = re.compile(r"\b(True|False)\b")
 
 TOOL_TIMEOUT = 300.0  # seconds; --timeout overrides
 DATA_LINKS = ("data/catalog", "data/archive")
@@ -361,6 +368,8 @@ def _mutated(op: str, match: re.Match[str]) -> str:
         return "or" if match.group(1) == "and" else "and"
     if op == "not":
         return ""
+    if op == "flag":
+        return "False" if match.group(1) == "True" else "True"
     return str(int(match.group(1)) + 1)
 
 
@@ -404,17 +413,73 @@ def string_lines(source: str) -> set[int]:
     return lines
 
 
+def _is_str_constant(node: ast.expr | None) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _deletable(node: ast.stmt) -> bool:
+    """A statement whose replacement by `pass` is a behaviour change: a call expression (not a
+    bare constant or `...`), or an assignment that actually stores a non-string value."""
+    if isinstance(node, ast.Expr):
+        return isinstance(node.value, ast.Call)
+    if isinstance(node, ast.Assign):
+        return not _is_str_constant(node.value)
+    if isinstance(node, ast.AnnAssign):
+        return node.value is not None and not _is_str_constant(node.value)
+    return isinstance(node, ast.AugAssign)
+
+
+def deletable_lines(source: str) -> dict[int, str]:
+    """{line number: leading indent} of the complete single-line statements a `del` mutant may
+    replace with `pass`. Only a simple statement that starts at the line's indentation and ends
+    on that same line qualifies: a statement spanning several lines (a multi-line call) has no
+    whole-line replacement, two statements on one line (`a = 1; b = 2`) would need both
+    deleted, and a simple statement sharing its line with a compound header (`try: s.start()`,
+    `else: y = 2`, `if x: f()`, `with s: s.start()`) cannot be replaced without deleting the
+    header too."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    lines = source.splitlines()
+    whole: dict[int, bool] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt):
+            continue
+        lineno = node.lineno
+        end = getattr(node, "end_lineno", None)
+        good = False
+        if end is not None and end == lineno and 0 < lineno <= len(lines):
+            line = lines[lineno - 1]
+            good = _deletable(node) and node.col_offset == len(line) - len(line.lstrip())
+        whole[lineno] = good if lineno not in whole else False
+    found: dict[int, str] = {}
+    for lineno, deletable in whole.items():
+        if deletable:
+            line = lines[lineno - 1]
+            found[lineno] = line[: len(line) - len(line.lstrip())]
+    return found
+
+
 def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
     """At most ``limit`` whole-line mutants on added code lines, round-robin over files."""
     by_file: dict[str, list[Mutant]] = {}
+    sources: dict[str, str | None] = {}
     prose: dict[str, set[int]] = {}
+    deletable: dict[str, dict[int, str]] = {}
     for path, lineno, text in added_lines(repo, base, glob):
+        if path not in sources:
+            try:
+                sources[path] = (repo / path).read_text(encoding="utf-8")
+            except OSError:
+                sources[path] = None
+        source = sources[path]
+        if source is None:
+            continue
         if path.endswith(".py"):
             if path not in prose:
-                try:
-                    prose[path] = string_lines((repo / path).read_text(encoding="utf-8"))
-                except OSError:
-                    prose[path] = set()
+                prose[path] = string_lines(source)
+                deletable[path] = deletable_lines(source)
             if lineno in prose[path]:
                 continue
         # blank out string-literal contents (same length, so offsets still index `text`)
@@ -422,18 +487,24 @@ def diff_mutants(repo: Path, base: str, glob: str, limit: int) -> list[Mutant]:
         code = code.split("#", 1)[0]
         if not code.strip() or _SKIP_LINE_RE.match(text):
             continue
-        try:
-            source = (repo / path).read_text(encoding="utf-8")
-        except OSError:
-            continue
         if source.count(text) != 1:
             continue
+        found: list[Mutant] = []
         for op, pattern in _OPERATORS:
             m = pattern.search(code)
             if m is not None:
                 new = text[: m.start()] + _mutated(op, m) + text[m.end() :]
-                by_file.setdefault(path, []).append(Mutant(f"{path}:{lineno}:{op}", path, text, new))
+                found.append(Mutant(f"{path}:{lineno}:{op}", path, text, new))
                 break
+        if not found:
+            flag = _FLAG_RE.search(code)
+            if flag is not None:
+                new = text[: flag.start()] + _mutated("flag", flag) + text[flag.end() :]
+                found.append(Mutant(f"{path}:{lineno}:flag", path, text, new))
+            indent = deletable.get(path, {}).get(lineno)
+            if indent is not None:
+                found.append(Mutant(f"{path}:{lineno}:del", path, text, indent + "pass"))
+        by_file.setdefault(path, []).extend(found)
     picked: list[Mutant] = []
     queues = list(by_file.values())
     while len(picked) < limit and any(queues):
@@ -449,7 +520,10 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="repo-relative file to mutate")
     source.add_argument("--spec", help="JSON list of {name, file, old, new}")
-    source.add_argument("--auto-diff", metavar="BASE", help="generate mutants on lines added since BASE")
+    source.add_argument(
+        "--auto-diff", metavar="BASE",
+        help="generate mutants (flip/swap/drop/delete) on lines added since BASE",
+    )
     parser.add_argument("--max", type=int, default=8, help="--auto-diff: mutant cap (default 8)")
     parser.add_argument("--glob", default="vibe_quant/*.py", help="--auto-diff: files to mutate")
     parser.add_argument("--old", help="text to replace; must occur exactly once")
