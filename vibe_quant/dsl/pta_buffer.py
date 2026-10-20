@@ -19,6 +19,8 @@ DataFrame handed out by an earlier :meth:`frame` never observes later writes.
 
 from __future__ import annotations
 
+from hashlib import blake2b
+
 import numpy as np
 import pandas as pd
 
@@ -43,6 +45,7 @@ class PtaBuffer:
         "_volume",
         "_close_ns",
         "_df",
+        "_fp",
     )
 
     def __init__(self, cap: int, with_close_ns: bool = False) -> None:
@@ -59,9 +62,35 @@ class PtaBuffer:
             np.empty(capacity, dtype=np.int64) if self._with_close_ns else None
         )
         self._df: pd.DataFrame | None = None
+        self._fp: bytes | None = None
 
     def __len__(self) -> int:
         return self._n
+
+    @property
+    def cap(self) -> int:
+        """Rolling cap in bars (``0`` = unbounded)."""
+        return self._cap
+
+    def fingerprint(self) -> bytes:
+        """blake2b-128 digest of the buffered content (length + every column).
+
+        Cached until the next :meth:`append`; a caller that stores indicator
+        results keyed on this digest gets the SAME ``bytes`` object for every
+        indicator of one bar, so the digest is allocated once per bar. Two
+        buffers holding the same ``n`` bars of the same series share a digest
+        whatever their caps (the digest covers content, not capacity).
+        """
+        fp = self._fp
+        if fp is None:
+            n = self._n
+            h = blake2b(digest_size=16)
+            h.update(n.to_bytes(8, "little"))
+            for arr in (self._open, self._high, self._low, self._close, self._volume):
+                h.update(memoryview(arr[:n]))
+            fp = h.digest()
+            self._fp = fp
+        return fp
 
     def append(
         self,
@@ -94,6 +123,9 @@ class PtaBuffer:
             ns[i] = close_ns
         self._n = i + 1
         self._df = None
+        # Reset BEFORE the trim check: the appended bar invalidates the digest
+        # whatever the trim does with it.
+        self._fp = None
         cap = self._cap
         if cap and self._n > cap + (cap // 4):
             self._trim()

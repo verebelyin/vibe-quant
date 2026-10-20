@@ -195,6 +195,55 @@ def test_unbounded_close_ns_survives_growth() -> None:
     assert ns[1100] == ref.cols["close_ns"][1100]
 
 
+def test_fingerprint_changes_on_append_and_trim() -> None:
+    """R5: a new digest after every append; trim leaves the same digest as a fresh equal buffer.
+
+    The digest is cached per buffer state, so the repeat call without an append
+    must return the SAME object (no re-hash) and an append must reset it even
+    when that append also crosses the trim point.
+    """
+    buf = PtaBuffer(4)
+    bars = _bars(6, seed=5)
+    seen: list[bytes] = []
+    for bar in bars:
+        buf.append(*bar)
+        fp = buf.fingerprint()
+        assert isinstance(fp, bytes)
+        assert len(fp) == 16
+        assert fp not in seen, "fingerprint did not change after append"
+        seen.append(fp)
+
+    assert len(buf) == 4  # 6 appends on cap 4 crossed 4 + 4//4 and trimmed
+    fresh = PtaBuffer(4)
+    for bar in bars[-4:]:
+        fresh.append(*bar)
+    assert buf.fingerprint() == fresh.fingerprint()
+
+    cached = buf.fingerprint()
+    assert buf.fingerprint() is cached  # repeat call without append: no re-hash
+    buf.append(*bars[0])
+    assert buf.fingerprint() is not cached
+
+
+def test_fingerprint_covers_every_column() -> None:
+    """R5b: changing one value of any OHLCV column at one bar changes the digest."""
+    base = [list(bar) for bar in _bars(10, seed=9)]
+
+    def digest(rows: list[list[float]]) -> bytes:
+        buf = PtaBuffer(0)
+        for row in rows:
+            buf.append(*row)
+        return buf.fingerprint()
+
+    digests = [digest(base)]
+    for idx in range(len(_COLUMNS)):
+        changed = [list(row) for row in base]
+        changed[5][idx] += 1.0
+        digests.append(digest(changed))
+
+    assert len(set(digests)) == len(_COLUMNS) + 1, "a column is missing from the fingerprint"
+
+
 def test_frame_build_is_fast_at_1500_rows() -> None:
     """Per-bar frame() rebuild on a ~1500-row buffer stays well under the list path.
 
