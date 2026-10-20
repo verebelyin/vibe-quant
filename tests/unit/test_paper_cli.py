@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,9 +17,11 @@ from vibe_quant.alerts.telegram import (
 from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
 )
+from vibe_quant.paper.account_lock import acquire_account_lock
 from vibe_quant.paper.cli import (
     _decimal_from_str,
     load_config_from_json,
+    main,
     run_with_config,
     save_config_to_json,
 )
@@ -26,6 +31,7 @@ from vibe_quant.paper.config import (
     PaperTradingConfig,
     RiskModuleConfig,
     SizingModuleConfig,
+    account_id,
 )
 
 
@@ -401,6 +407,296 @@ class TestRunWithConfig:
         assert "RuntimeError: kaboom" in fake_manager.completed_calls[0][1]
         assert stop_calls["count"] == 1
         assert fake_manager.closed
+
+
+def _testnet_account() -> str:
+    """The account id the minimal config's ``test_key`` resolves to."""
+    return account_id(
+        BinanceTestnetConfig(api_key="test_key", api_secret="test_secret", testnet=True)
+    )
+
+
+class TestAccountLock:
+    """rw1g8: two CLI runs on one account must not run with separate guards."""
+
+    @staticmethod
+    def _write_minimal_config(path: Path) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001",
+                    "binance": {"testnet": True},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                }
+            )
+        )
+
+    @staticmethod
+    def _fake_heartbeat(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[list[tuple[int, str | None]], dict[str, int]]:
+        completed: list[tuple[int, str | None]] = []
+        stops = {"count": 0}
+
+        class _FakeManager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                completed.append((run_id, error))
+
+            def close(self) -> None:
+                return
+
+        def _stop() -> None:
+            stops["count"] += 1
+
+        monkeypatch.setattr(
+            "vibe_quant.paper.cli.run_with_heartbeat",
+            lambda run_id, db_path: (_FakeManager(), _stop),
+        )
+        return completed, stops
+
+    @pytest.mark.asyncio
+    async def test_held_lock_refuses_marks_failed_and_never_runs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        completed, stops = self._fake_heartbeat(monkeypatch)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        held = acquire_account_lock(_testnet_account(), "PAPER-OTHER")
+        try:
+            rc = await run_with_config(config_path, run_id=7)
+        finally:
+            held.release()
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert started == []
+        assert err.splitlines() == [
+            "Paper trading error: AccountBusyError: Paper session already running on "
+            f"account {_testnet_account()} (pid {os.getpid()}, trader PAPER-OTHER); "
+            "stop it first (run 7)"
+        ]
+        assert len(completed) == 1
+        assert completed[0][0] == 7
+        assert "AccountBusyError" in (completed[0][1] or "")
+        assert stops["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_held_lock_with_unreadable_body_still_refuses_as_busy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """F1: an EIO reading the holder's body must not turn the refusal into OSError."""
+        marker = "EIO-TEXT-MARKER-91"
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        completed, stops = self._fake_heartbeat(monkeypatch)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        def _eio(_fd: int, _length: int, _offset: int) -> bytes:
+            raise OSError(errno.EIO, marker)
+
+        held = acquire_account_lock(_testnet_account(), "PAPER-OTHER")
+        monkeypatch.setattr(os, "pread", _eio)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                rc = await run_with_config(config_path, run_id=7)
+        finally:
+            held.release()
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert started == []
+        assert err.splitlines() == [
+            "Paper trading error: AccountBusyError: Paper session already running on "
+            f"account {_testnet_account()} (pid unknown, trader unknown); "
+            "stop it first (run 7)"
+        ]
+        assert "AccountBusyError" in (completed[0][1] or "")
+        assert stops["count"] == 1
+        assert marker not in caplog.text
+        assert marker not in err
+
+    @pytest.mark.asyncio
+    async def test_success_releases_the_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        async def _fake_run(_config: PaperTradingConfig) -> None:
+            return
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        assert await run_with_config(config_path) == 0
+
+        # A second session on the same account may start immediately: the first released.
+        lock = acquire_account_lock(_testnet_account(), "PAPER-002")
+        lock.release()
+
+    @pytest.mark.asyncio
+    async def test_failure_releases_the_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+
+        async def _failing_run(_config: PaperTradingConfig) -> None:
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _failing_run)
+
+        assert await run_with_config(config_path) == 1
+
+        lock = acquire_account_lock(_testnet_account(), "PAPER-002")
+        lock.release()
+
+    @pytest.mark.asyncio
+    async def test_a_different_account_is_not_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "paper_config.json"
+        self._write_minimal_config(config_path)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        other = account_id(
+            BinanceTestnetConfig(api_key="other_key", api_secret="s", testnet=True)
+        )
+        held = acquire_account_lock(other, "PAPER-OTHER")
+        try:
+            assert await run_with_config(config_path) == 0
+        finally:
+            held.release()
+        assert len(started) == 1
+
+
+class TestLiveStartFresh:
+    """v4l2n: a LIVE start_fresh resets real-money limits, so it needs its own flag."""
+
+    @staticmethod
+    def _write(path: Path, *, testnet: bool, start_fresh: bool) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "LIVE-001" if not testnet else "PAPER-001",
+                    "binance": {"testnet": testnet},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                    "start_fresh": start_fresh,
+                }
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_live_start_fresh_refused_without_its_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "live_fresh.json"
+        self._write(config_path, testnet=False, start_fresh=True)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        assert await run_with_config(config_path, allow_live=True) == 1
+
+        err = capsys.readouterr().err
+        assert started == []
+        assert err.splitlines() == [
+            "Refusing LIVE start_fresh: it resets the real-money drawdown, daily-loss and "
+            "losing-streak limits; re-run with --confirm-fresh-live to confirm"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_live_start_fresh_runs_once_confirmed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "live_fresh.json"
+        self._write(config_path, testnet=False, start_fresh=True)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        assert await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
+        assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, True)]
+
+    @pytest.mark.asyncio
+    async def test_testnet_start_fresh_needs_no_extra_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "testnet_fresh.json"
+        self._write(config_path, testnet=True, start_fresh=True)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        assert await run_with_config(config_path) == 0
+        assert [(c.binance.testnet, c.start_fresh) for c in started] == [(True, True)]
+
+
+def test_main_passes_both_live_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--confirm-fresh-live`` reaches ``run_with_config`` as ``allow_fresh_live``."""
+    seen: list[tuple[Path, int | None, dict[str, bool]]] = []
+
+    async def _fake(
+        config_path: Path, run_id: int | None = None, **kwargs: bool
+    ) -> int:
+        seen.append((config_path, run_id, kwargs))
+        return 0
+
+    monkeypatch.setattr("vibe_quant.paper.cli.run_with_config", _fake)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "start",
+            "--config",
+            "config.json",
+            "--run-id",
+            "9",
+            "--live",
+            "--confirm-fresh-live",
+        ],
+    )
+
+    assert main() == 0
+    assert seen == [(Path("config.json"), 9, {"allow_live": True, "allow_fresh_live": True})]
 
 
 class TestMarkCompletedFailure:

@@ -7840,6 +7840,12 @@
             "description": "Must be true together with testnet=false to trade real funds.",
             "default": false
           },
+          "confirm_fresh_live": {
+            "type": "boolean",
+            "title": "Confirm Fresh Live",
+            "description": "Must be true together with testnet=false AND start_fresh=true: a live start fresh resets the real-money drawdown, daily-loss and losing-streak limits.",
+            "default": false
+          },
           "trader_id": {
             "anyOf": [
               {

@@ -86,6 +86,7 @@ export function SessionControl() {
   const [symbolsText, setSymbolsText] = useState("BTCUSDT");
   const [testnet, setTestnet] = useState(true);
   const [confirmLive, setConfirmLive] = useState(false);
+  const [confirmFreshLive, setConfirmFreshLive] = useState(false);
   // Sizing overrides: blank = keep what the validation run used.
   const [maxLeverage, setMaxLeverage] = useState<number | "">("");
   const [maxPositionPct, setMaxPositionPct] = useState<number | "">("");
@@ -156,6 +157,10 @@ export function SessionControl() {
       toast.error("Live trading needs explicit confirmation");
       return;
     }
+    if (!testnet && startFresh && !confirmFreshLive) {
+      toast.error("Live start fresh needs its own confirmation");
+      return;
+    }
     const symbols = symbolsText
       .split(",")
       .map((s) => s.trim().toUpperCase())
@@ -170,6 +175,7 @@ export function SessionControl() {
       symbols: selectedRun ? null : symbols,
       testnet,
       confirm_live: !testnet && confirmLive,
+      confirm_fresh_live: !testnet && startFresh && confirmFreshLive,
       trader_id: traderId,
       start_fresh: startFresh,
       trade_alerts: tradeAlerts,
@@ -191,6 +197,7 @@ export function SessionControl() {
             });
             setTraderId(newTraderId());
             setStartFresh(false);
+            setConfirmFreshLive(false);
             setTradeAlerts(false);
           }
         },
@@ -394,7 +401,13 @@ export function SessionControl() {
 
           <div className="space-y-1">
             <Label className="flex items-center gap-2">
-              <Checkbox checked={startFresh} onCheckedChange={(v) => setStartFresh(v === true)} />
+              <Checkbox
+                checked={startFresh}
+                onCheckedChange={(v) => {
+                  setStartFresh(v === true);
+                  setConfirmFreshLive(false);
+                }}
+              />
               <span className="text-sm">
                 Start fresh: count peak, daily loss and losing streak from now
               </span>
@@ -493,6 +506,7 @@ export function SessionControl() {
                 onCheckedChange={(v) => {
                   setTestnet(v === true);
                   setConfirmLive(false);
+                  setConfirmFreshLive(false);
                 }}
               />
               <span className="text-sm">Binance testnet (uses BINANCE_TESTNET_* keys)</span>
@@ -505,6 +519,18 @@ export function SessionControl() {
                     onCheckedChange={(v) => setConfirmLive(v === true)}
                   />
                   I understand this trades REAL funds on Binance (BINANCE_API_* keys)
+                </Label>
+              </div>
+            )}
+            {!testnet && startFresh && (
+              <div className="rounded-md border border-destructive bg-destructive/10 p-3">
+                <Label className="flex items-center gap-2 text-sm font-normal text-destructive">
+                  <Checkbox
+                    checked={confirmFreshLive}
+                    onCheckedChange={(v) => setConfirmFreshLive(v === true)}
+                  />
+                  I understand starting fresh resets my LIVE drawdown, daily-loss and losing-streak
+                  limits
                 </Label>
               </div>
             )}

@@ -28,6 +28,12 @@ class PaperStartRequest(BaseModel):
         default=False,
         description="Must be true together with testnet=false to trade real funds.",
     )
+    confirm_fresh_live: bool = Field(
+        default=False,
+        strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
+        description="Must be true together with testnet=false AND start_fresh=true: a live "
+        "start fresh resets the real-money drawdown, daily-loss and losing-streak limits.",
+    )
     trader_id: str | None = None
     start_fresh: bool = Field(
         default=False,

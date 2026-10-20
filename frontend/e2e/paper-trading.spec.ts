@@ -77,6 +77,41 @@ test.describe("Paper Trading page", () => {
     await expect(page.getByText("Never clears this trader's own halt.")).toBeVisible();
   });
 
+  test("live start fresh needs its own confirmation", async ({ page }) => {
+    // v4l2n: a LIVE session with start fresh resets the real-money limits, so it has
+    // a second destructive checkbox of its own, separate from the live-funds one.
+    const testnet = page.getByRole("checkbox", { name: /binance testnet/i });
+    const startFresh = page.getByRole("checkbox", {
+      name: "Start fresh: count peak, daily loss and losing streak from now",
+      exact: true,
+    });
+    const confirmLive = page.getByRole("checkbox", {
+      name: /I understand this trades REAL funds/i,
+    });
+    const confirmFreshLive = page.getByRole("checkbox", {
+      name: /starting fresh resets my LIVE/i,
+    });
+
+    // Testnet start fresh: no second confirmation is asked for.
+    await expect(confirmFreshLive).toHaveCount(0);
+
+    await testnet.click();
+    await expect(testnet).not.toBeChecked();
+    await confirmLive.click();
+    await expect(confirmLive).toBeChecked();
+    await expect(confirmFreshLive).toHaveCount(0);
+
+    await startFresh.click();
+    await expect(startFresh).toBeChecked();
+    await expect(confirmFreshLive).toBeVisible();
+    await expect(confirmFreshLive).not.toBeChecked();
+
+    // Turning start fresh off removes the gate again.
+    await startFresh.click();
+    await expect(startFresh).not.toBeChecked();
+    await expect(confirmFreshLive).toHaveCount(0);
+  });
+
   test("sizing configuration fields are visible", async ({ page }) => {
     await expect(page.getByLabel("Max Leverage")).toBeVisible();
     await expect(page.getByLabel("Max Position %")).toBeVisible();

@@ -177,6 +177,26 @@ def _no_telegram_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_paper_account_locks(tmp_path: Any) -> Iterator[None]:
+    """Point the per-account paper lock dir at this test's tmp_path (never the real ``~``).
+
+    Every CLI/API test reuses the same fake api key, so one real lock file would
+    couple parallel xdist workers (vibe-quant-rw1g8). ``acquire_account_lock`` and
+    ``account_lock_holder`` resolve ``PAPER_LOCK_DIR`` at call time, so patching the
+    module attribute reaches ``paper/cli.py`` and the API router alike.
+
+    Own ``MonkeyPatch`` instance, like ``_forbid_inherited_swarm_env``: a test that
+    calls ``monkeypatch.undo()`` must not restore the repo path mid-test.
+    """
+    from vibe_quant.paper import account_lock
+
+    guard = pytest.MonkeyPatch()
+    guard.setattr(account_lock, "PAPER_LOCK_DIR", tmp_path / "paper_locks")
+    yield
+    guard.undo()
+
+
+@pytest.fixture(autouse=True)
 def _restore_aux_data_paths() -> Iterator[None]:
     """Undo ``aux_data.configure`` leaks: its archive/catalog paths are module globals.
 

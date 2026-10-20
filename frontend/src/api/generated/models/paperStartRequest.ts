@@ -22,6 +22,8 @@ export interface PaperStartRequest {
   testnet?: boolean;
   /** Must be true together with testnet=false to trade real funds. */
   confirm_live?: boolean;
+  /** Must be true together with testnet=false AND start_fresh=true: a live start fresh resets the real-money drawdown, daily-loss and losing-streak limits. */
+  confirm_fresh_live?: boolean;
   trader_id?: string | null;
   /** Skip inheriting the last session's peak, daily-loss and losing-streak limits for this account (default: continue from that session's risk state). */
   start_fresh?: boolean;

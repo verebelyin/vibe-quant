@@ -33,9 +33,12 @@ from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.schema import SystemStateMissingError
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.paper.account_lock import account_lock_holder
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
+    BinanceTestnetConfig,
     ConfigurationError,
+    account_id,
     check_paper_exposure,
     credential_env_names,
     default_paper_trader_id,
@@ -131,6 +134,29 @@ def _refuse_if_active(jobs: BacktestJobManager) -> None:
         )
 
 
+def _refuse_if_account_busy(testnet: bool) -> None:
+    """Refuse while another process holds this account's paper lock (vibe-quant-rw1g8).
+
+    Advisory only (TOCTOU): the child CLI's ``flock`` is the real gate; this probe
+    turns the common CLI-running case into a 409 before a run row is written. No
+    awaits here, so it is safe next to the post-await re-check.
+    """
+    key_var, secret_var = credential_env_names(testnet)
+    account = account_id(
+        BinanceTestnetConfig(
+            api_key=os.environ.get(key_var, ""),
+            api_secret=os.environ.get(secret_var, ""),
+            testnet=testnet,
+        )
+    )
+    holder = account_lock_holder(account)
+    if holder is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Paper session already holds account {account} ({holder}); stop it first",
+        )
+
+
 async def _require_working_telegram_or_503() -> None:
     """Refuse with 503 when Telegram is configured but not working (vibe-quant-u2r9r).
 
@@ -150,6 +176,7 @@ def _launch(
     config_data: dict[str, Any],
     *,
     live: bool,
+    fresh_confirmed: bool = False,
 ) -> int:
     PAPER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     config_path = PAPER_CONFIG_DIR / f"paper_{run_id}.json"
@@ -168,6 +195,10 @@ def _launch(
         "--run-id",
         str(run_id),
     ]
+    # The confirmation is a launch flag, never a config key: a copied or restored
+    # config cannot carry it. It goes before --live, which stays last.
+    if fresh_confirmed:
+        command.append("--confirm-fresh-live")
     if live:
         command.append("--live")
 
@@ -196,6 +227,14 @@ async def start_paper(
         raise HTTPException(
             status_code=400,
             detail="testnet=false trades real funds: set confirm_live=true to proceed",
+        )
+    if not body.testnet and body.start_fresh and not body.confirm_fresh_live:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "start_fresh with testnet=false resets the LIVE drawdown, daily-loss and "
+                "losing-streak limits: set confirm_fresh_live=true to proceed"
+            ),
         )
     if body.trader_id is not None and not is_valid_trader_id(body.trader_id):
         raise HTTPException(
@@ -262,6 +301,7 @@ async def start_paper(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     _require_credentials(body.testnet)
+    _refuse_if_account_busy(body.testnet)
 
     await _require_working_telegram_or_503()
 
@@ -335,7 +375,14 @@ async def start_paper(
     if risk:
         config_data["risk"] = risk
 
-    pid = _launch(jobs, state, run_id, config_data, live=not body.testnet)
+    pid = _launch(
+        jobs,
+        state,
+        run_id,
+        config_data,
+        live=not body.testnet,
+        fresh_confirmed=not body.testnet and body.start_fresh and body.confirm_fresh_live,
+    )
     logger.info(
         "paper trading started run_id=%d pid=%d trader_id=%s testnet=%s",
         run_id,
@@ -427,6 +474,7 @@ async def restore_paper(
             detail="This trader_id traded LIVE: set confirm_live=true to restore it",
         )
     _require_credentials(testnet)
+    _refuse_if_account_busy(testnet)
 
     await _require_working_telegram_or_503()
 

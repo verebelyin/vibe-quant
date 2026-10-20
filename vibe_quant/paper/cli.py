@@ -25,6 +25,7 @@ from vibe_quant.alerts.telegram import (
     redact_token,
 )
 from vibe_quant.jobs.manager import run_with_heartbeat
+from vibe_quant.paper.account_lock import AccountLock, acquire_account_lock
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
     BinanceTestnetConfig,
@@ -32,6 +33,7 @@ from vibe_quant.paper.config import (
     PaperTradingConfig,
     RiskModuleConfig,
     SizingModuleConfig,
+    account_id,
     credential_env_names,
 )
 from vibe_quant.paper.node import run_paper_trading, validated_leverage_override
@@ -243,7 +245,11 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
 
 
 async def run_with_config(
-    config_path: Path, run_id: int | None = None, *, allow_live: bool = False
+    config_path: Path,
+    run_id: int | None = None,
+    *,
+    allow_live: bool = False,
+    allow_fresh_live: bool = False,
 ) -> int:
     """Run paper trading with config file.
 
@@ -251,6 +257,8 @@ async def run_with_config(
         config_path: Path to JSON config file.
         run_id: Optional run ID for heartbeat registration.
         allow_live: Must be True (``--live``) to run a config with testnet=false.
+        allow_fresh_live: Must be True (``--confirm-fresh-live``) to run a LIVE
+            config with ``start_fresh``, which resets the real-money limits.
 
     Returns:
         Exit code (0 for success, 1 for error).
@@ -272,6 +280,16 @@ async def run_with_config(
         )
         return 1
 
+    # v4l2n: a LIVE start_fresh discards the real-money drawdown / daily-loss /
+    # losing-streak baselines, so --live alone is not enough consent.
+    if not config.binance.testnet and config.start_fresh and not allow_fresh_live:
+        print(
+            "Refusing LIVE start_fresh: it resets the real-money drawdown, daily-loss and "
+            "losing-streak limits; re-run with --confirm-fresh-live to confirm",
+            file=sys.stderr,
+        )
+        return 1
+
     # Validate config
     errors = config.validate()
     if errors:
@@ -280,12 +298,16 @@ async def run_with_config(
 
     heartbeat_manager: BacktestJobManager | None = None
     stop_heartbeat: Callable[[], None] | None = None
+    account_lock: AccountLock | None = None
 
     # Start heartbeat thread if run_id provided
     if run_id is not None:
         heartbeat_manager, stop_heartbeat = run_with_heartbeat(run_id, config.db_path)
 
     try:
+        # rw1g8: one paper session per account. Held for the whole process life;
+        # the kernel drops it on death (SIGKILL included), so no stale lock.
+        account_lock = acquire_account_lock(account_id(config.binance), config.trader_id)
         await run_paper_trading(config)
         if run_id is not None and heartbeat_manager is not None:
             try:
@@ -313,6 +335,8 @@ async def run_with_config(
             print(f"Paper trading error: {type(e).__name__}{detail}", file=sys.stderr)
         return 1
     finally:
+        if account_lock is not None:
+            account_lock.release()
         if stop_heartbeat is not None:
             with contextlib.suppress(Exception):
                 stop_heartbeat()
@@ -349,11 +373,26 @@ def main() -> int:
         action="store_true",
         help="Confirm LIVE (real-money) trading for configs with binance.testnet=false",
     )
+    start_parser.add_argument(
+        "--confirm-fresh-live",
+        action="store_true",
+        help=(
+            "Confirm a LIVE start_fresh (resets the real-money drawdown, daily-loss "
+            "and losing-streak limits)"
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.command == "start":
-        return asyncio.run(run_with_config(args.config, args.run_id, allow_live=args.live))
+        return asyncio.run(
+            run_with_config(
+                args.config,
+                args.run_id,
+                allow_live=args.live,
+                allow_fresh_live=args.confirm_fresh_live,
+            )
+        )
 
     return 1
 
