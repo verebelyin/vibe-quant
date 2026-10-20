@@ -487,3 +487,69 @@ def test_length_mismatch_raises() -> None:
     """R33: a misaligned hours list is a ValueError, never a silent 8h default."""
     with pytest.raises(ValueError, match=r"^hours has 3 entries for 4 settlements$"):
         missing_settlements([T0_NS + i for i in range(4)], [8, 8, 8], T0_NS, T0_NS + 1)
+
+
+def _copied_missing_settlements(
+    times_ns: list[int], hours: list[int], lo_ns: int, hi_ns: int, tol_ns: int = TOL_NS
+) -> list[tuple[int, int]]:
+    """The pre-optimisation body (copies ``times`` and every ``hours`` entry per call)."""
+    from bisect import bisect_right
+
+    from vibe_quant.validation.funding import _multiples
+
+    times = list(times_ns)
+    n = len(times)
+    if len(hours) != n:
+        raise ValueError("length")
+    if n == 0:
+        return [(ts, 8) for ts in _multiples(8 * HOUR_NS, lo_ns, hi_ns)]
+    aligned = [int(h) for h in hours]
+    i0 = max(0, bisect_left(times, lo_ns - tol_ns) - 1)
+    i1 = min(n, bisect_right(times, hi_ns + tol_ns) + 1)
+    found: list[tuple[int, int]] = []
+    if i0 == 0:
+        head = min(hi_ns, times[0] - tol_ns - 1)
+        found.extend((ts, aligned[0]) for ts in _multiples(aligned[0] * HOUR_NS, lo_ns, head))
+    for i in range(i0, i1 - 1):
+        h = max(aligned[i], aligned[i + 1])
+        low = max(lo_ns, times[i] + tol_ns)
+        high = min(hi_ns, times[i + 1] - tol_ns - 1)
+        found.extend((ts, h) for ts in _multiples(h * HOUR_NS, low, high))
+    if i1 == n:
+        found.extend(
+            (ts, aligned[-1])
+            for ts in _multiples(aligned[-1] * HOUR_NS, max(lo_ns, times[-1] + tol_ns), hi_ns)
+        )
+    found.sort()
+    return found
+
+
+def test_missing_settlements_equals_the_copying_body_on_random_series() -> None:
+    """The in-place rewrite returns exactly what the copying body did, tuple or list input.
+
+    Random series cover empty, single-row, unsorted and duplicated times, mixed 2/4/8h
+    intervals, jittered rows (inside and just outside the 60 s tolerance) and windows
+    starting/ending ON a row, on the tolerance edge, before the first row and past the last.
+    """
+    rng = random.Random(7)
+    checked = 0
+    for _ in range(600):
+        n = rng.choice([0, 1, 2, 3, 8, 30])
+        base = rng.randrange(0, 5) * 8 * HOUR_NS
+        times = [
+            base + i * rng.choice([2, 4, 8]) * HOUR_NS + rng.choice([0, 0, 59, 60, 61]) * 10**9
+            for i in range(n)
+        ]
+        if rng.random() < 0.8:
+            times.sort()
+        if times and rng.random() < 0.2:
+            times.append(times[rng.randrange(len(times))])  # a duplicate
+        hours = [rng.choice([2, 4, 8, 8, 8]) for _ in times]
+        edges = [base + k * HOUR_NS + d for k in range(-3, 40) for d in (0, TOL_NS, -TOL_NS, 1)]
+        for _ in range(4):
+            lo, hi = sorted(rng.sample(edges, 2))
+            expected = _copied_missing_settlements(times, hours, lo, hi)
+            assert missing_settlements(times, hours, lo, hi) == expected
+            assert missing_settlements(tuple(times), tuple(hours), lo, hi) == expected
+            checked += 1
+    assert checked == 2400

@@ -122,7 +122,9 @@ def missing_settlements(
     deletions of SOL 2022-11-09..19 are detected; the masked one is 11-09 20:00,
     an 8h row whose neighbours' 4h grid does not expect it.
     """
-    times = list(times_ns)
+    # indexed in place: this runs once per window per symbol over a series of thousands of
+    # rows, of which only the neighbourhood of the window is ever read
+    times = times_ns if isinstance(times_ns, (list, tuple)) else list(times_ns)
     n = len(times)
     if len(hours) != n:
         raise ValueError(f"hours has {len(hours)} entries for {len(times)} settlements")
@@ -131,26 +133,27 @@ def missing_settlements(
             (ts, FUNDING_PERIOD_HOURS)
             for ts in _multiples(FUNDING_PERIOD_HOURS * _NS_PER_HOUR, lo_ns, hi_ns)
         ]
-    aligned = [int(h) for h in hours]
     i0 = max(0, bisect_left(times, lo_ns - tol_ns) - 1)
     i1 = min(n, bisect_right(times, hi_ns + tol_ns) + 1)
     found: list[tuple[int, int]] = []
     if i0 == 0:
         # Before the first row the interval is the first row's own.
         head = min(hi_ns, times[0] - tol_ns - 1)
-        found.extend((ts, aligned[0]) for ts in _multiples(aligned[0] * _NS_PER_HOUR, lo_ns, head))
+        first_hours = int(hours[0])
+        found.extend(
+            (ts, first_hours) for ts in _multiples(first_hours * _NS_PER_HOUR, lo_ns, head)
+        )
     for i in range(i0, i1 - 1):
-        h = max(aligned[i], aligned[i + 1])
+        h = max(int(hours[i]), int(hours[i + 1]))
         low = max(lo_ns, times[i] + tol_ns)
         high = min(hi_ns, times[i + 1] - tol_ns - 1)
         found.extend((ts, h) for ts in _multiples(h * _NS_PER_HOUR, low, high))
     if i1 == n:
         # After the last row the interval is the last row's own.
+        last_hours = int(hours[-1])
         found.extend(
-            (ts, aligned[-1])
-            for ts in _multiples(
-                aligned[-1] * _NS_PER_HOUR, max(lo_ns, times[-1] + tol_ns), hi_ns
-            )
+            (ts, last_hours)
+            for ts in _multiples(last_hours * _NS_PER_HOUR, max(lo_ns, times[-1] + tol_ns), hi_ns)
         )
     found.sort()
     return found

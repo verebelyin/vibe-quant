@@ -393,3 +393,91 @@ def test_carry_run_carries_both_executors_output(tmp_path: Path) -> None:
     assert run.final_steps == {"BTCUSDT": 100}
     assert steps_held(run.fills, "BTCUSDT", _settle(2)) == 100
     assert list(run.payments) == sorted(run.payments, key=lambda p: (p.ts, p.symbol))
+
+
+def _copied_equity_at(
+    initial_balance: float,
+    fills: list[CarryFill],
+    payments: list[FundingPayment],
+    prices: dict[str, float],
+    at_ns: int,
+) -> float:
+    """The pre-optimisation body: full scans of fills and payments, a repr per fill."""
+    import math
+
+    cash = math.fsum(-fill.qty * fill.price - fill.fee for fill in fills if fill.ts < at_ns)
+    funding = math.fsum(payment.amount for payment in payments if payment.ts < at_ns)
+    step_sums: dict[str, int] = {}
+    steps: dict[str, Decimal] = {}
+    for fill in fills:
+        if fill.ts >= at_ns:
+            continue
+        step_sums[fill.symbol] = step_sums.get(fill.symbol, 0) + fill.steps
+        if fill.steps:
+            step = Decimal(repr(fill.qty)) / Decimal(fill.steps)
+            if steps.setdefault(fill.symbol, step) != step:
+                raise CarryExecutionError("inconsistent")
+    marked: list[float] = []
+    for symbol, step_sum in step_sums.items():
+        if step_sum == 0:
+            continue
+        if symbol not in prices:
+            raise CarryDataError("no price")
+        marked.append(float(Decimal(step_sum) * steps[symbol]) * prices[symbol])
+    return initial_balance + cash - funding + math.fsum(marked)
+
+
+def test_equity_at_equals_the_full_scan_body_bit_for_bit() -> None:
+    """The prefix-of-payments / memoised-increment rewrite changes no float, at any instant.
+
+    Random books (both symbols, resizes, flips to flat, zero-step fills, duplicate
+    timestamps), non-trivial float amounts, and ``at_ns`` landing exactly on, one
+    nanosecond either side of, and between event timestamps.
+    """
+    import random
+
+    rng = random.Random(11)
+    checked = 0
+    for _ in range(250):
+        stamps = sorted(rng.randrange(0, 400) * 1_000 for _ in range(rng.randrange(0, 40)))
+        fills = [
+            _fill(
+                rng.choice(["BTCUSDT", "ETHUSDT"]),
+                ts,
+                rng.choice([-300, -17, 0, 5, 98, 1682]),
+                price=rng.uniform(1.0, 70_000.0),
+                fee=rng.uniform(0.0, 3.0),
+            )
+            for ts in stamps
+        ]
+        pay_stamps = sorted(rng.randrange(0, 400) * 1_000 for _ in range(rng.randrange(0, 60)))
+        payments = [
+            FundingPayment(rng.choice(["BTCUSDT", "ETHUSDT"]), ts, rng.uniform(-9.0, 9.0), False)
+            for ts in pay_stamps
+        ]
+        prices = {"BTCUSDT": rng.uniform(1.0, 70_000.0), "ETHUSDT": rng.uniform(1.0, 5_000.0)}
+        probes = {0, 1, 400_000, 10**9}
+        for event in [*stamps, *pay_stamps]:
+            probes.update({event - 1, event, event + 1})
+        for at_ns in sorted(probes):
+            expected = _copied_equity_at(10_000.0, fills, payments, prices, at_ns)
+            assert equity_at(10_000.0, fills, payments, prices, at_ns) == expected
+            assert equity_at(10_000.0, tuple(fills), tuple(payments), prices, at_ns) == expected
+            checked += 1
+    assert checked > 5_000
+
+
+def test_accumulated_payments_ascend_by_timestamp_across_windows(tmp_path: Path) -> None:
+    """``equity_at`` takes payments before ``at_ns`` as a prefix: windows must stack in order."""
+    rates = dict.fromkeys(range(8), 0.0001)
+    calc = _archive(tmp_path / "a.db", rates)
+    _add_rates(tmp_path / "a.db", "ETHUSDT", rates)
+    marks = {"BTCUSDT": _marks(51000.0), "ETHUSDT": _marks(3000.0)}
+    acc = FundingAccumulator(calc, marks, _specs(), _settle(0))
+    fills = [_fill("BTCUSDT", _settle(0) + _HOUR_NS, 98), _fill("ETHUSDT", _settle(0), -500)]
+    for window in range(1, 6):
+        acc.advance(fills, _settle(window) + 10**9)
+        fills.append(_fill("BTCUSDT", _settle(window) + 2 * _HOUR_NS, 10 * window))
+    stamps = [payment.ts for payment in acc.payments]
+    assert len(stamps) >= 10
+    assert stamps == sorted(stamps)

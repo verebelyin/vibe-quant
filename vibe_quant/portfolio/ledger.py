@@ -19,6 +19,8 @@ no-NT reference simulator, §1.2):
 
 from __future__ import annotations
 
+import bisect
+import functools
 import math
 from dataclasses import dataclass
 from decimal import Decimal
@@ -155,6 +157,16 @@ class FundingAccumulator:
         ]
 
 
+@functools.lru_cache(maxsize=65_536)
+def _size_increment(qty: float, steps: int) -> Decimal:
+    """The size increment a fill implies: ``repr`` round-trips ``float(Decimal(steps) * step)``."""
+    return Decimal(repr(qty)) / Decimal(steps)
+
+
+def _payment_ts(payment: FundingPayment) -> int:
+    return payment.ts
+
+
 def equity_at(
     initial_balance: float,
     fills: Sequence[CarryFill],
@@ -171,21 +183,26 @@ def equity_at(
         CarryDataError: if a leg is held and no price is given for it (fail closed).
         CarryExecutionError: if one symbol's fills imply different size increments.
     """
-    cash = math.fsum(-fill.qty * fill.price - fill.fee for fill in fills if fill.ts < at_ns)
-    funding = math.fsum(payment.amount for payment in payments if payment.ts < at_ns)
+    cash_terms: list[float] = []
     step_sums: dict[str, int] = {}
     steps: dict[str, Decimal] = {}
     for fill in fills:
         if fill.ts >= at_ns:
             continue
+        cash_terms.append(-fill.qty * fill.price - fill.fee)
         step_sums[fill.symbol] = step_sums.get(fill.symbol, 0) + fill.steps
         if fill.steps:
             # qty was built as float(Decimal(steps) * step): repr round-trips the exact step
-            step = Decimal(repr(fill.qty)) / Decimal(fill.steps)
+            step = _size_increment(fill.qty, fill.steps)
             if steps.setdefault(fill.symbol, step) != step:
                 raise CarryExecutionError(
                     f"inconsistent size increment for {fill.symbol}: {steps[fill.symbol]} vs {step}"
                 )
+    cash = math.fsum(cash_terms)
+    # payments ascend by ts (FundingAccumulator writes windows in order), so those strictly
+    # before at_ns are a prefix
+    due = bisect.bisect_left(payments, at_ns, key=_payment_ts)
+    funding = math.fsum([payment.amount for payment in payments[:due]])
     marked: list[float] = []
     for symbol, step_sum in step_sums.items():
         if step_sum == 0:

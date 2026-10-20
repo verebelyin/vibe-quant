@@ -12,6 +12,7 @@ import pytest
 
 from vibe_quant.portfolio.signal import (
     Settlements,
+    _trailing_funding,
     carry_hours,
     rank_weights,
     trailing_funding,
@@ -201,3 +202,33 @@ def test_carry_hours_collapses_all_8h() -> None:
     assert carry_hours((8, 8, 8)) is None
     assert carry_hours((8, 2, 8)) == (8, 2, 8)
     assert carry_hours((2, 2)) == (2, 2)
+
+
+def test_trailing_funding_memo_returns_the_uncached_value_every_time() -> None:
+    """The per-Settlements memo hands back exactly what the rule computes, hole or not."""
+    grid = _grid()
+    full = _settlements(grid, [0.0001] * 21)
+    holed = _settlements(grid[:10] + grid[11:], [0.0001] * 20)
+    for settlements, expected in ((full, _ON_GRID_SUM), (holed, None)):
+        assert _trailing_funding(settlements, _D) == expected
+        for _ in range(3):
+            assert trailing_funding(settlements, _D) == expected
+    # another decision on the same series is its own entry, not the first one's value
+    assert trailing_funding(full, _D + _EIGHT_HOURS_NS) == _trailing_funding(
+        full, _D + _EIGHT_HOURS_NS
+    )
+    assert set(full._trailing) == {_D, _D + _EIGHT_HOURS_NS}
+
+
+def test_trailing_funding_memo_is_per_series_and_not_part_of_equality() -> None:
+    """Two series never share a memo; the memo does not change ==, hash or repr."""
+    grid = _grid()
+    one = _settlements(grid, [0.0001] * 21)
+    other = _settlements(grid, [0.0002] * 21)
+    assert trailing_funding(one, _D) == _ON_GRID_SUM
+    assert trailing_funding(other, _D) == 0.0042000000000000006
+    assert one._trailing is not other._trailing
+    fresh = _settlements(grid, [0.0001] * 21)
+    assert one == fresh
+    assert hash(one) == hash(fresh)
+    assert repr(one) == repr(fresh)

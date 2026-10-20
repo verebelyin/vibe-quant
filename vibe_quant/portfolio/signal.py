@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import bisect
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from vibe_quant.portfolio.spec import LOOKBACK_NS, SIGNAL_SAFETY_NS
@@ -38,6 +38,11 @@ class Settlements:
     times_ns: tuple[int, ...]
     rates: tuple[float, ...]
     hours: tuple[int, ...] | None = None
+    # trailing_funding memo by decision_ns: the fields above are immutable, so the value is
+    # a pure function of the decision and every research draw re-asks the same ~225.
+    _trailing: dict[int, float | None] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.hours is not None and len(self.hours) != len(self.times_ns):
@@ -61,6 +66,13 @@ def carry_hours(hours: tuple[int, ...]) -> tuple[int, ...] | None:
 
 def trailing_funding(settlements: Settlements, decision_ns: int) -> float | None:
     """7-day funding sum for ``decision_ns``; ``None`` = an expected row is missing."""
+    memo = settlements._trailing
+    if decision_ns not in memo:
+        memo[decision_ns] = _trailing_funding(settlements, decision_ns)
+    return memo[decision_ns]
+
+
+def _trailing_funding(settlements: Settlements, decision_ns: int) -> float | None:
     upper_ns = decision_ns - SIGNAL_SAFETY_NS
     lower_ns = upper_ns - LOOKBACK_NS
     hours = settlements.hours or (FUNDING_PERIOD_HOURS,) * len(settlements.times_ns)
