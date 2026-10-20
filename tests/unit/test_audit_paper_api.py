@@ -298,6 +298,70 @@ async def test_start_409_when_another_process_holds_the_account_lock(ctx: Ctx) -
     assert r2.status_code == 201, r2.text
 
 
+def _missing_passwd_entry(_uid: int) -> None:
+    raise KeyError("no such uid")
+
+
+def _empty_passwd_home(_uid: int) -> SimpleNamespace:
+    return SimpleNamespace(pw_dir="")
+
+
+_OS_HOME_REFUSAL = "cannot resolve the OS user's home dir for the paper lock"
+
+
+@pytest.mark.parametrize(
+    "getpwuid",
+    [_missing_passwd_entry, _empty_passwd_home],
+    ids=["no-passwd-entry", "empty-pw-dir"],
+)
+async def test_start_503_when_the_os_home_cannot_be_resolved(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, getpwuid: Any
+) -> None:
+    """28j0h: no passwd home -> no lock dir -> 503 with the reason, not a bare 500.
+
+    The raise happens inside the lock probe, before any run row or launch; the real
+    home is never touched because no lock path is built.
+    """
+    monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
+    monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", getpwuid)
+    before = _paper_run_count(ctx.state)
+
+    r = await ctx.ac.post("/api/paper/start", json={"validation_run_id": ctx.validation_run})
+
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == _OS_HOME_REFUSAL
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+
+async def test_restore_503_when_the_os_home_cannot_be_resolved(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """28j0h: /restore refuses with the same 503 reason before the run row."""
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "PAPER-009",
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": True},
+            }
+        )
+    )
+    monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
+    monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", _missing_passwd_entry)
+    before = _paper_run_count(ctx.state)
+
+    r = await ctx.ac.post("/api/paper/restore", json={"trader_id": "PAPER-009"})
+
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == _OS_HOME_REFUSAL
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+
 async def test_start_409_when_the_holder_body_is_unreadable(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

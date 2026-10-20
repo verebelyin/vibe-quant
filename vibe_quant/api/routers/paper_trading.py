@@ -174,7 +174,11 @@ def _refuse_if_account_busy(testnet: bool) -> None:
     awaits here, so it is safe next to the post-await re-check.
     """
     account = _env_account_id(testnet)
-    holder = account_lock_holder(account)
+    try:
+        holder = account_lock_holder(account)
+    except ConfigurationError as exc:
+        # 28j0h: no passwd home -> no lock dir -> refuse with the reason (503), not a bare 500.
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if holder is not None:
         raise HTTPException(
             status_code=409,
