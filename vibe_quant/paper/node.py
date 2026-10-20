@@ -1807,10 +1807,17 @@ class PaperTradingNode:
             "error",
             f"EXCHANGE {order.auto_close_type} {order.symbol} {order.side} "
             f"qty {order.executed_qty} @ {order.avg_price} (order {order.order_id}); "
-            "paper position state may be stale; NO paper action taken",
+            f"{self._liquidation_scope(order.symbol)}; NO paper action taken",
             critical=True,
             timestamp=_ns_to_dt(order.ts_ns),
         )
+
+    def _liquidation_scope(self, symbol: str) -> str:
+        """toqng: a carried symbol's alert says the position predates this session."""
+        resolved = self._resolved
+        if resolved is not None and symbol not in resolved.symbols:
+            return "not traded this session (position left by an earlier session)"
+        return "paper position state may be stale"
 
     async def _on_liquidation_warning(self, message: str) -> None:
         """R52: a degraded or clamped detector warns without a critical alert."""

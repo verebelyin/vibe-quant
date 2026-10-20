@@ -1150,7 +1150,9 @@ async def test_carried_symbol_has_its_own_backoff_degraded_and_recovered() -> No
         clock.advance(600)
         await watcher.poll_once()
 
-    assert recorder.warnings == ["liquidation detector degraded: BTCUSDT TimeoutError"]
+    assert recorder.warnings == [
+        "liquidation detector degraded: BTCUSDT TimeoutError (not traded this session)"
+    ]
     assert recorder.recoveries == []
     assert watcher.state()["cursors"] == {
         "ETHUSDT": _START_MS + 1_800_000,
@@ -1201,7 +1203,9 @@ async def test_stale_carried_cursor_is_clamped_with_one_warning() -> None:
         _START_MS - _LOOKBACK_CAP_MS + _CLAMP_SLACK_MS,
         _START_MS,
     )
-    assert recorder.warnings == ["liquidation detector lookback clamped to 7 days: BTCUSDT"]
+    assert recorder.warnings == [
+        "liquidation detector lookback clamped to 7 days: BTCUSDT (not traded this session)"
+    ]
     assert [event.order_id for event in recorder.events] == [2]
     assert watcher.state()["cursors"] == {
         "ETHUSDT": _START_MS + 60_000,

@@ -182,6 +182,7 @@ class LiquidationWatcher:
         # not trade is WATCHED too (after the traded ones, in symbol order) with the
         # same cadence, backoff and degraded/recovered alerts, so a liquidation of a
         # leftover position is reported during this session.
+        self._traded = frozenset(self._symbols)
         self._symbols += sorted(symbol for symbol in restored if symbol not in self._symbols)
         self._cursors = {
             symbol: restored.get(symbol, node_start_ms) for symbol in self._symbols
@@ -294,7 +295,7 @@ class LiquidationWatcher:
         self._clamped.add(symbol)
         await self._alert_warning(
             f"liquidation detector lookback clamped to "
-            f"{self._lookback_cap_ms // _MS_PER_DAY} days: {symbol}",
+            f"{self._lookback_cap_ms // _MS_PER_DAY} days: {symbol}{self._untraded(symbol)}",
         )
 
     async def _note_failure(self, symbol: str, exc: Exception) -> None:
@@ -313,7 +314,8 @@ class LiquidationWatcher:
         if failures == self._degraded_after:
             self._degraded.add(symbol)
             await self._alert_warning(
-                f"liquidation detector degraded: {symbol} {type(exc).__name__}",
+                f"liquidation detector degraded: {symbol} {type(exc).__name__}"
+                f"{self._untraded(symbol)}",
             )
 
     async def _note_success(self, symbol: str) -> None:
@@ -325,6 +327,10 @@ class LiquidationWatcher:
             return
         self._degraded.discard(symbol)
         await self._alert_handled(self._on_recovered, symbol, failures)
+
+    def _untraded(self, symbol: str) -> str:
+        """toqng: the warning suffix that marks a carried symbol this session skips."""
+        return "" if symbol in self._traded else " (not traded this session)"
 
     async def _alert_warning(self, message: str) -> None:
         """Chief ruling R52d(3): a failing alert never affects detection (R52)."""

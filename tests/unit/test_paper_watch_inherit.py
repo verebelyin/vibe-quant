@@ -521,6 +521,46 @@ async def test_disjoint_chain_carries_the_seen_key_and_does_not_re_alert(
         await last.node._shutdown()
 
 
+async def test_halted_error_session_still_watches_untraded_symbols(
+    detector_seeded: dict[str, Any],  # noqa: F811
+    detector_fake_tradingnode: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """toqng/R13: a session restored HALTED (ERROR) still polls a carried untraded
+    symbol and reports its liquidation; the halt is untouched."""
+    acct = account_id(_config(detector_seeded).binance)
+    eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
+    _write_checkpoint(
+        detector_seeded,
+        trader_id=_TRADER_ID,
+        stamp=_OWN_STAMP,
+        node_status={
+            "account": acct,
+            "state": "halted",
+            "halt_reason": "error",
+            "error_message": "boom",
+            "liquidation_watch": {"cursors": {"BTCUSDT": _OWN_MS}, "seen": {}},
+        },
+    )
+    harness = await _harness(
+        monkeypatch,
+        detector_seeded,
+        orders={"BTCUSDT": [_order(update_time_ms=_GAP_MS)]},
+        validation_run_id=eth_run,
+    )
+    try:
+        assert harness.node.status.state == NodeState.HALTED
+        watcher = harness.node._build_liquidation_watcher()
+        await watcher.poll_once()
+
+        assert [symbol for symbol, _, _ in harness.fetch.requests] == ["ETHUSDT", "BTCUSDT"]
+        events = harness.events(EventType.LIQUIDATION)
+        assert [event["data"]["symbol"] for event in events] == ["BTCUSDT"]
+        assert harness.node.status.state == NodeState.HALTED
+    finally:
+        await harness.node._shutdown()
+
+
 async def test_untraded_symbol_liquidation_is_reported_without_touching_strategy_or_guard(
     detector_seeded: dict[str, Any],  # noqa: F811
     detector_fake_tradingnode: Any,  # noqa: F811
@@ -568,8 +608,8 @@ async def test_untraded_symbol_liquidation_is_reported_without_touching_strategy
             (
                 "error",
                 "EXCHANGE LIQUIDATION BTCUSDT SELL qty 0.4 @ 2500.5 "
-                "(order 1596107620040000020); paper position state may be stale; "
-                "NO paper action taken",
+                "(order 1596107620040000020); not traded this session (position "
+                "left by an earlier session); NO paper action taken",
                 True,
             )
         ]
