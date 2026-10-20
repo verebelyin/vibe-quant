@@ -1,6 +1,6 @@
 # Brief checklist (chief, before every dispatch)
 
-`scripts/agents/mkbrief.py` already guarantees: the brief file exists before dispatch, the dispatched text carries the TELEMETRY line, every SCOPE glob matches a file (`+path` for new files), the gate command is literal, and reviewer ranges come from `git merge-base`. This list covers what a script can't check. Each line cost at least one extra round when missed.
+`scripts/agents/mkbrief.py` already guarantees: the brief file exists before dispatch, the dispatched text carries the TELEMETRY line, every SCOPE glob matches a file (`+path` for new files), the gate command is literal, and reviewer ranges come from `git merge-base`. This list covers what a script can't check; each line cost a round when missed.
 
 ## Scope: find every file the task must touch
 - A helper module with a single consumer goes in the same task as its consumer.
@@ -15,7 +15,7 @@
 - A new Pydantic response model or `BacktestMetrics` field: `tests/unit/api/test_openapi.py` EXPECTED_SCHEMA_COUNT and `equal_metrics` in `tests/unit/test_screening_liquidation.py`.
 - A new archive table: SPEC § Raw Data Archive schema block joins the docs task.
 - LIVE: each SCOPE path is imported or called from a live entry point (`rg`), so nobody builds dead code.
-- A launch precheck or anything that mirrors a subprocess: list the subprocess's input precedence (overrides such as `parameters.dsl_override`, which loader runs on which input) and every error class each step raises, as contract rows, and name every call site of the mirrored resolver (screening and discovery).
+- A launch precheck or anything that mirrors a subprocess: list the subprocess's input precedence (overrides such as `parameters.dsl_override`, which loader runs on which input) and every error class each step raises, as contract rows, and every call site of the mirrored resolver.
 - Splitting one change into tasks: assign every string, doc and claim the change invalidates to exactly one task.
 
 ## Facts the maker needs
@@ -23,22 +23,22 @@
 - Name the mechanism a fix must call (found with `rg` at an existing call site) and the fixture builders that already exist (file:symbol, and whether they cover the case).
 - Changes to an input domain (parser, validator, translator): a table of input classes up front — numbers, integral floats, numeric strings, bools, None, non-numeric strings, inf/nan, huge ints — with the intended outcome of each, plus the frontend mirror.
 - Tests of NT callbacks build real NT events (`TestEventStubs`, `nautilus_trader.test_kit`), never hand-made fakes.
-- Name existing tests that already pin unchanged contract rows, so the maker re-runs them instead of duplicating them.
-- Lint counts come from the tool's severity output (`ruff --statistics`, `biome lint --reporter=json`), never from rule names.
-- Diagnosis briefs list hypotheses on every layer the symptom crosses (data, API, frontend lifecycle).
+- Name existing tests that already pin unchanged contract rows, so the maker re-runs them.
+- Lint counts come from the tool's severity output, never from rule names.
+- Diagnosis briefs list hypotheses on every layer the symptom crosses.
 - When a fact depends on a sibling task landing, say so. When design and FACTS disagree, say which wins.
 - Two beads in one brief: name the commit order and which files go in which commit.
 
 ## Contracts and rulings
 - Anything touching fills, funding, fees, liquidation, metrics, fitness, gates or time windows gets the architect's semantics-contract table (boundary rows with expected numbers) before dispatch, pasted into every maker and reviewer brief.
 - A mid-task ruling becomes the next numbered row (R7, R7b…) under that task's heading in `brief.md`, with its expected numbers and the round that raised it. Append with an absolute path. More than 2 mid-flight rows on one task means the contract missed a question class: tell the architect.
-- A ruling that adds an error names the exception class, every payload field and the raise site.
-- A ruling that widens a match predicate (retry on text, ignore on substring) names what must never match.
+- A ruling that adds an error names the exception class, payload fields and raise site; one that widens a match predicate (retry on text, ignore on substring) names what must never match.
+- Process-control changes (spawning a child, writing run/job status) get a contract row for every parent/child interleaving and every exception boundary between spawn and registration.
 - Parity demands name the exact rows that must match.
 
 ## Fix rounds
 - Quote each finding's bullet and the reviewer's FIX text verbatim; reference code by symbol.
 - A fix that adds an `except` returning a fallback under `vibe_quant/` must log (no `exc_info` on money paths): `tests/unit/test_exception_hygiene.py` ratchets silent handlers.
 - The gate scope is the whole task scope (round 1 plus this round). Stacked task: `--base <parent branch>`; two or more parents: merge them in the new worktree and use `--base <merge sha>`.
-- Re-review briefs carry prior findings plus the fix delta, not a fresh full-surface hunt.
+- Re-review briefs carry prior findings plus the fix delta, not a fresh hunt.
 - After 2 failed rounds on one task, stop and do a design pass: fold every ruling and finding into contract rows, then ask whether the remaining findings come from a missing row, duplicated logic or an unreachable edge, and re-scope. After 3, also change the model or ask the user.
