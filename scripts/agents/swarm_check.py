@@ -456,6 +456,11 @@ def git_state(wt: Path, base: str, run: RunFn) -> GitState:
     return GitState(changed=list(seen), untracked=untracked, uncommitted=uncommitted)
 
 
+def parse_scope(raw: str) -> tuple[str, ...]:
+    """Comma-separated SCOPE globs; a leading `+` (a brief's new-file marker) is dropped."""
+    return tuple(g for g in (s.strip().lstrip("+") for s in raw.split(",")) if g)
+
+
 def scope_offenders(paths: Sequence[str], globs: Sequence[str]) -> list[str]:
     """Paths matching no glob. NB fnmatch: '*' also crosses '/', so 'vibe_quant/*' covers
     vibe_quant/a/b.py."""
@@ -1468,7 +1473,7 @@ def main(argv: Sequence[str] | None = None, run: RunFn | None = None) -> int:
         worktree=wt,
         main_root=_derive_main_root(wt),
         base=base,
-        scope=tuple(g for g in (s.strip() for s in args.scope.split(",")) if g),
+        scope=parse_scope(args.scope),
         exactness=args.exactness,
         frontend=args.frontend,
         json_out=Path(args.json_out) if args.json_out else None,

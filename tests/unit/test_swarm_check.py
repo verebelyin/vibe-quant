@@ -2853,3 +2853,9 @@ def test_gate_pytest_runs_quiet_and_the_fail_line_names_the_test(tmp_path: Path)
     ]  # fmt: skip
     assert pytest_envs
     assert all(e is not None and "-q -rfE" in e["PYTEST_ADDOPTS"] for e in pytest_envs)
+
+
+def test_parse_scope_strips_the_new_file_marker() -> None:
+    """Briefs mark new files `+path`; the gate must accept the same scope string verbatim."""
+    assert swarm_check.parse_scope("+a.py, b/*,,+frontend/c.ts ") == ("a.py", "b/*", "frontend/c.ts")
+    assert swarm_check.parse_scope("") == ()
