@@ -24,7 +24,7 @@ from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
     redact_token,
 )
-from vibe_quant.jobs.manager import run_with_heartbeat
+from vibe_quant.jobs.manager import BacktestJobManager, run_with_heartbeat
 from vibe_quant.paper.account_lock import AccountLock, acquire_account_lock
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -37,12 +37,11 @@ from vibe_quant.paper.config import (
     credential_env_names,
 )
 from vibe_quant.paper.node import run_paper_trading, validated_leverage_override
+from vibe_quant.paper.persistence import StatePersistence
 from vibe_quant.sizing_settings import SizingConfigError, SizingSettings
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from vibe_quant.jobs.manager import BacktestJobManager
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +243,47 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
         json.dump(data, f, indent=2)
 
 
+def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
+    """Does this config's account have ANY saved checkpoint (any trader's row)?
+
+    Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
+    start is refused rather than starting the limits from zero. Class only in the
+    log: this runs on the money path.
+    """
+    try:
+        persistence = StatePersistence(
+            db_path=config.db_path, trader_id=config.trader_id
+        )
+        try:
+            return persistence.has_account_checkpoint(
+                account_id(config.binance), config.trader_id
+            )
+        finally:
+            persistence.close()
+    except Exception as exc:
+        logger.warning("paper account checkpoint lookup failed (%s)", type(exc).__name__)
+        return False
+
+
+def _persist_refusal(run_id: int, db_path: Path | None, message: str) -> None:
+    """Record a consent refusal as the run's and job's terminal failure.
+
+    An API-launched child (e.g. ``/restore`` after an API-key rotation) exits 1
+    here; without this its run stays ``running`` with no error and a later job
+    sync only reports "Process terminated unexpectedly". No heartbeat is started
+    and no lock is taken: a refused start must leave nothing held. Best effort,
+    class only in the log (money path): the refusal and exit code are unchanged.
+    """
+    try:
+        manager = BacktestJobManager(db_path)
+        try:
+            manager.mark_completed(run_id, error=message)
+        finally:
+            manager.close()
+    except Exception as exc:
+        logger.error("paper refusal could not be persisted (%s)", type(exc).__name__)
+
+
 async def run_with_config(
     config_path: Path,
     run_id: int | None = None,
@@ -258,7 +298,8 @@ async def run_with_config(
         run_id: Optional run ID for heartbeat registration.
         allow_live: Must be True (``--live``) to run a config with testnet=false.
         allow_fresh_live: Must be True (``--confirm-fresh-live``) to run a LIVE
-            config with ``start_fresh``, which resets the real-money limits.
+            config with ``start_fresh``, or one whose account has no saved risk
+            state; both reset the real-money limits.
 
     Returns:
         Exit code (0 for success, 1 for error).
@@ -288,6 +329,25 @@ async def run_with_config(
             "losing-streak limits; re-run with --confirm-fresh-live to confirm",
             file=sys.stderr,
         )
+        return 1
+
+    # 6ub67: a first LIVE session, or a rotated / second API key on the same
+    # Binance account, resolves to an account id with no checkpoint. The limits
+    # would then start from zero, so consent is required. Before the lock and the
+    # heartbeat: a refused start must leave nothing held.
+    if (
+        not config.binance.testnet
+        and not allow_fresh_live
+        and not _has_account_checkpoint(config)
+    ):
+        message = (
+            "Refusing LIVE start: no saved risk state for this account (new or rotated "
+            "API key, or first live session): drawdown, daily-loss and losing-streak "
+            "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+        )
+        print(message, file=sys.stderr)
+        if run_id is not None:
+            _persist_refusal(run_id, config.db_path, message)
         return 1
 
     # Validate config
@@ -377,8 +437,8 @@ def main() -> int:
         "--confirm-fresh-live",
         action="store_true",
         help=(
-            "Confirm a LIVE start_fresh (resets the real-money drawdown, daily-loss "
-            "and losing-streak limits)"
+            "Confirm a LIVE start_fresh or a LIVE account with no saved risk state "
+            "(both reset the real-money drawdown, daily-loss and losing-streak limits)"
         ),
     )
 

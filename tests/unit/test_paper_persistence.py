@@ -202,6 +202,61 @@ class TestStatePersistence:
         p.close()
 
 
+class TestHasAccountCheckpoint:
+    """6ub67: does this account have ANY saved risk state (any trader)?"""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> Generator[StatePersistence]:
+        p = StatePersistence(tmp_path / "accounts.db", trader_id="OWN-001")
+        yield p
+        p.close()
+
+    @staticmethod
+    def _save(store: StatePersistence, trader_id: str, node_status: dict[str, object]) -> None:
+        store.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status=node_status))
+
+    @staticmethod
+    def _save_raw(store: StatePersistence, trader_id: str, node_status: str) -> None:
+        store.conn.execute(
+            """INSERT INTO paper_trading_checkpoints
+               (trader_id, positions, orders, balance, node_status)
+               VALUES (?, '{}', '{}', '{}', ?)""",
+            (trader_id, node_status),
+        )
+        store.conn.commit()
+
+    def test_empty_table_has_no_checkpoint(self, store: StatePersistence) -> None:
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_another_trader_on_the_account_counts(self, store: StatePersistence) -> None:
+        # A rotated key resumes the account through a DIFFERENT trader id.
+        self._save(store, "OTHER-001", {"account": "binance:live:aaaa"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+
+    def test_another_account_does_not_count(self, store: StatePersistence) -> None:
+        self._save(store, "OTHER-001", {"account": "binance:live:bbbb"})
+        self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_legacy_row_of_this_trader_counts(self, store: StatePersistence) -> None:
+        """A row without the account key predates account identity: it is this trader's."""
+        self._save(store, "OWN-001", {"state": "running"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+
+    def test_legacy_row_of_another_trader_does_not_count(self, store: StatePersistence) -> None:
+        self._save(store, "OTHER-001", {"state": "running"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_invalid_json_of_another_trader_does_not_count(self, store: StatePersistence) -> None:
+        self._save_raw(store, "OTHER-001", "{not json")
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_invalid_json_of_this_trader_does_not_count(self, store: StatePersistence) -> None:
+        """Conservative: an unparseable own row cannot prove the account, so refuse."""
+        self._save_raw(store, "OWN-001", "{not json")
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+
 class TestPeriodicCheckpointing:
     """Tests for periodic checkpointing."""
 

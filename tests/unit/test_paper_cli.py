@@ -33,6 +33,7 @@ from vibe_quant.paper.config import (
     SizingModuleConfig,
     account_id,
 )
+from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
 
 
 class TestDecimalFromStr:
@@ -319,7 +320,8 @@ class TestRunWithConfig:
         monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
         assert await run_with_config(config_path) == 1
         assert started == []
-        assert await run_with_config(config_path, allow_live=True) == 0
+        # 6ub67: no checkpoint for this live account, so the fresh flag is consent.
+        assert await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
         assert started[0].binance.testnet is False
         assert started[0].binance.api_key == "live_key"
 
@@ -413,6 +415,13 @@ def _testnet_account() -> str:
     """The account id the minimal config's ``test_key`` resolves to."""
     return account_id(
         BinanceTestnetConfig(api_key="test_key", api_secret="test_secret", testnet=True)
+    )
+
+
+def _live_account() -> str:
+    """The account id the live config's ``live_key`` resolves to."""
+    return account_id(
+        BinanceTestnetConfig(api_key="live_key", api_secret="live_secret", testnet=False)
     )
 
 
@@ -667,6 +676,315 @@ class TestLiveStartFresh:
 
         assert await run_with_config(config_path) == 0
         assert [(c.binance.testnet, c.start_fresh) for c in started] == [(True, True)]
+
+
+class TestLiveAccountWithoutCheckpoint:
+    """6ub67: a LIVE account with no saved risk state refuses unless consented.
+
+    A first LIVE session, or a rotated / second API key on the same Binance
+    account, resolves to an account id with no checkpoint: the drawdown,
+    daily-loss and losing-streak limits would silently start from zero.
+    """
+
+    _REFUSAL = (
+        "Refusing LIVE start: no saved risk state for this account (new or rotated "
+        "API key, or first live session): drawdown, daily-loss and losing-streak "
+        "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+    )
+
+    @staticmethod
+    def _write(path: Path, *, db_path: Path, testnet: bool = False) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "trader_id": "PAPER-001" if testnet else "LIVE-001",
+                    "binance": {"testnet": testnet},
+                    "symbols": ["BTCUSDT"],
+                    "strategy_id": 1,
+                    "db_path": str(db_path),
+                }
+            )
+        )
+
+    @staticmethod
+    def _seed(db_path: Path, account: str, trader_id: str = "OTHER-001") -> None:
+        store = StatePersistence(db_path, trader_id=trader_id)
+        try:
+            store.save_checkpoint(
+                StateCheckpoint(trader_id=trader_id, node_status={"account": account})
+            )
+        finally:
+            store.close()
+
+    @staticmethod
+    def _patch(
+        monkeypatch: pytest.MonkeyPatch,
+        started: list[PaperTradingConfig],
+        heartbeats: list[int | None],
+    ) -> None:
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        class _Manager:
+            def mark_completed(self, run_id: int, error: str | None = None) -> None:
+                raise AssertionError("a refused start must not reach mark_completed")
+
+            def close(self) -> None:
+                raise AssertionError("a refused start must not open a manager")
+
+        def _fake_heartbeat(run_id: int | None, db_path: Path | None) -> tuple[_Manager, object]:
+            heartbeats.append(run_id)
+            return _Manager(), lambda: None
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+        monkeypatch.setattr("vibe_quant.paper.cli.run_with_heartbeat", _fake_heartbeat)
+
+    @pytest.mark.asyncio
+    async def test_refused_before_lock_and_heartbeat(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=tmp_path / "state.db")
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path, run_id=7, allow_live=True) == 1
+
+        assert started == []
+        assert heartbeats == []
+        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
+        # Nothing was created or held: the lock dir itself is untouched.
+        assert not (tmp_path / "paper_locks").exists()
+
+    @pytest.mark.asyncio
+    async def test_runs_once_confirmed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=tmp_path / "state.db")
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert (
+            await run_with_config(config_path, allow_live=True, allow_fresh_live=True) == 0
+        )
+        assert [(c.binance.testnet, c.start_fresh) for c in started] == [(False, False)]
+
+    @pytest.mark.asyncio
+    async def test_a_checkpoint_on_the_account_runs_without_the_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = tmp_path / "state.db"
+        self._seed(db_path, _live_account())
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=db_path)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path, allow_live=True) == 0
+        assert [c.binance.testnet for c in started] == [False]
+
+    @pytest.mark.asyncio
+    async def test_another_accounts_checkpoint_does_not_count(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "state.db"
+        self._seed(db_path, _testnet_account(), trader_id="LIVE-001")
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=db_path)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path, allow_live=True) == 1
+        assert started == []
+        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
+
+    @pytest.mark.asyncio
+    async def test_testnet_needs_no_checkpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "testnet.json"
+        self._write(config_path, db_path=tmp_path / "state.db", testnet=True)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path) == 0
+        assert [c.binance.testnet for c in started] == [True]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_refuses_and_leaks_no_text(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Fail closed: a lookup that cannot answer is "no checkpoint", class only."""
+        marker = "LOOKUP-TEXT-MARKER-42"
+
+        def _boom(self: StatePersistence, account: str, trader_id: str) -> bool:
+            raise RuntimeError(marker)
+
+        monkeypatch.setattr(StatePersistence, "has_account_checkpoint", _boom)
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=tmp_path / "state.db")
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        with caplog.at_level(logging.DEBUG):
+            assert await run_with_config(config_path, allow_live=True) == 1
+
+        assert started == []
+        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
+        assert marker not in caplog.text
+
+
+class TestNoCheckpointRefusalIsPersisted:
+    """6ub67 F1: with --run-id the consent refusal is the run's terminal failure.
+
+    Without it the API-launched run (e.g. /restore after a key rotation) stays
+    ``running`` with no error after the child exits, and a later job sync only
+    records "Process terminated unexpectedly", hiding the operator action.
+    """
+
+    @staticmethod
+    def _live_run(db_path: Path) -> int:
+        """A paper run + running job row, as the API leaves them after launching the CLI."""
+        from vibe_quant.db.state_manager import StateManager
+
+        state = StateManager(db_path=db_path)
+        try:
+            strategy_id = state.create_strategy(
+                "s",
+                {
+                    "name": "s",
+                    "timeframe": "1h",
+                    "indicators": {"rsi_14": {"type": "RSI", "period": 14}},
+                    "entry_conditions": {"long": ["rsi_14 < 30"]},
+                    "stop_loss": {"type": "fixed_pct", "percent": 2.0},
+                    "take_profit": {"type": "fixed_pct", "percent": 4.0},
+                },
+            )
+            run_id = state.create_backtest_run(
+                strategy_id=strategy_id,
+                run_mode="paper",
+                symbols=["BTCUSDT"],
+                timeframe="",
+                start_date="",
+                end_date="",
+                parameters={},
+            )
+            state.update_backtest_run_status(run_id, "running", pid=4242)
+            state.conn.execute(
+                """INSERT INTO background_jobs
+                   (run_id, pid, job_type, status, started_at, heartbeat_at)
+                   VALUES (?, 4242, 'paper', 'running', datetime('now'), datetime('now'))""",
+                (run_id,),
+            )
+            state.conn.commit()
+            return run_id
+        finally:
+            state.close()
+
+    @staticmethod
+    def _rows(db_path: Path, run_id: int) -> tuple[tuple[str, str | None], tuple[str, str | None]]:
+        import sqlite3
+
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            run = conn.execute(
+                "SELECT status, error_message FROM backtest_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            job = conn.execute(
+                "SELECT status, error_message FROM background_jobs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return (run[0], run[1]), (job[0], job[1])
+
+    @pytest.mark.asyncio
+    async def test_run_and_job_fail_with_the_curated_text(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "state.db"
+        run_id = self._live_run(db_path)
+        config_path = tmp_path / "live.json"
+        TestLiveAccountWithoutCheckpoint._write(config_path, db_path=db_path)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        TestLiveAccountWithoutCheckpoint._patch(monkeypatch, started, heartbeats)
+
+        rc = await run_with_config(config_path, run_id=run_id, allow_live=True)
+
+        refusal = TestLiveAccountWithoutCheckpoint._REFUSAL
+        assert rc == 1
+        assert started == []
+        assert heartbeats == []
+        assert capsys.readouterr().err.splitlines() == [refusal]
+        assert self._rows(db_path, run_id) == (("failed", refusal), ("failed", refusal))
+        assert not (tmp_path / "paper_locks").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_persistence_failure_keeps_the_refusal_and_leaks_no_text(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from vibe_quant.jobs.manager import BacktestJobManager
+
+        marker = "PERSIST-TEXT-MARKER-77"
+
+        def _boom(self: BacktestJobManager, run_id: int, error: str | None = None) -> None:
+            raise RuntimeError(marker)
+
+        monkeypatch.setattr(BacktestJobManager, "mark_completed", _boom)
+        db_path = tmp_path / "state.db"
+        run_id = self._live_run(db_path)
+        config_path = tmp_path / "live.json"
+        TestLiveAccountWithoutCheckpoint._write(config_path, db_path=db_path)
+        TestLiveAccountWithoutCheckpoint._patch(monkeypatch, [], [])
+
+        with caplog.at_level(logging.DEBUG):
+            rc = await run_with_config(config_path, run_id=run_id, allow_live=True)
+
+        assert rc == 1
+        assert capsys.readouterr().err.splitlines() == [TestLiveAccountWithoutCheckpoint._REFUSAL]
+        assert "RuntimeError" in caplog.text
+        assert marker not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_run_id_touches_no_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Direct CLI use (no --run-id) never opens a job manager."""
+        from vibe_quant.jobs.manager import BacktestJobManager
+
+        def _forbidden(self: BacktestJobManager, run_id: int, error: str | None = None) -> None:
+            raise AssertionError("no run id, nothing to persist")
+
+        monkeypatch.setattr(BacktestJobManager, "mark_completed", _forbidden)
+        config_path = tmp_path / "live.json"
+        TestLiveAccountWithoutCheckpoint._write(config_path, db_path=tmp_path / "state.db")
+        TestLiveAccountWithoutCheckpoint._patch(monkeypatch, [], [])
+
+        assert await run_with_config(config_path, allow_live=True) == 1
 
 
 def test_main_passes_both_live_flags(monkeypatch: pytest.MonkeyPatch) -> None:

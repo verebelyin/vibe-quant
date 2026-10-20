@@ -255,13 +255,25 @@ class BacktestJobManager:
             if existing and existing["status"] == "running":
                 raise ValueError(f"Run {run_id} already has an active job (pid={existing['pid']})")
 
-            log_handle = None
-            if log_file:
-                log_path = Path(log_file)
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                log_handle = log_path.open("w")
+            # A (re-)launch is a fresh attempt: reopen the run and job rows BEFORE
+            # spawning, so the child's terminal write (it may refuse within
+            # milliseconds, e.g. a paper consent refusal) always lands after this
+            # reset and nothing below can overwrite it. The job row is 'pending'
+            # (pid 0, never signalled) until the pid is known.
+            prior_job = self._row_dict(
+                self.conn.execute("SELECT * FROM background_jobs WHERE run_id = ?", (run_id,))
+            )
+            prior_run = self._row_dict(
+                self.conn.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,))
+            )
+            self._open_attempt(run_id, job_type, log_file, exists=prior_job is not None)
 
+            log_handle = None
             try:
+                if log_file:
+                    log_path = Path(log_file)
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    log_handle = log_path.open("w")
                 proc = subprocess.Popen(
                     command,
                     stdout=log_handle or subprocess.DEVNULL,
@@ -269,52 +281,122 @@ class BacktestJobManager:
                     start_new_session=True,  # Detach from parent process group
                     env=env,
                 )
-            finally:
-                # The child holds its own copy of the fd; ours would leak one
-                # descriptor per job (it was only closed if this same manager
-                # instance later saw the job finish, which it never does).
+            except BaseException:
+                # Nothing was spawned: put the rows back as they were.
                 if log_handle is not None:
+                    with contextlib.suppress(OSError):
+                        log_handle.close()
+                self._restore_attempt(run_id, prior_job, prior_run)
+                raise
+
+            # The child holds its own copy of the fd; ours would leak one
+            # descriptor per job (it was only closed if this same manager
+            # instance later saw the job finish, which it never does). A child
+            # now exists and may already have written its terminal result, so a
+            # close error must neither undo the attempt nor skip registration.
+            if log_handle is not None:
+                try:
                     log_handle.close()
+                except OSError as exc:
+                    logger.warning(
+                        "start_job run_id=%d: closing the log handle failed (%s)",
+                        run_id,
+                        type(exc).__name__,
+                    )
 
             pid = proc.pid
             pid_start = process_start_time(pid)
 
-            # Register job in database while still holding lock to prevent
-            # race: two callers both passing the active-job check, both
-            # spawning processes, second write clobbering first PID.
-            existing_rec = self.conn.execute(
-                "SELECT id FROM background_jobs WHERE run_id = ?", (run_id,)
-            ).fetchone()
-            if existing_rec:
-                self.conn.execute(
-                    """UPDATE background_jobs
-                       SET pid = ?, pid_start_time = ?, job_type = ?, status = 'running',
-                           log_file = ?, started_at = datetime('now'),
-                           heartbeat_at = datetime('now'), completed_at = NULL,
-                           error_message = NULL
-                       WHERE run_id = ?""",
-                    (pid, pid_start, job_type, log_file, run_id),
-                )
-            else:
-                self.conn.execute(
-                    """INSERT INTO background_jobs
-                       (run_id, pid, pid_start_time, job_type, status, log_file,
-                        started_at, heartbeat_at)
-                       VALUES (?, ?, ?, ?, 'running', ?, datetime('now'), datetime('now'))""",
-                    (run_id, pid, pid_start, job_type, log_file),
-                )
-            # Also update backtest_runs (a re-launch starts a fresh attempt).
+            # Complete the registration while still holding the lock (two callers
+            # must not both spawn, second write clobbering first PID). Monotonic:
+            # only a still-'pending' job becomes 'running'; if the child already
+            # reported a terminal status, that result stands and only the pid
+            # (which identifies the exited process) is recorded.
+            self.conn.execute(
+                """UPDATE background_jobs
+                   SET pid = ?, pid_start_time = ?,
+                       status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
+                       heartbeat_at = CASE WHEN status = 'pending'
+                                           THEN datetime('now') ELSE heartbeat_at END
+                   WHERE run_id = ?""",
+                (pid, pid_start, run_id),
+            )
             self.conn.execute(
                 """UPDATE backtest_runs
-                   SET status = 'running', pid = ?, started_at = datetime('now'),
-                       heartbeat_at = datetime('now'), completed_at = NULL,
-                       error_message = NULL
+                   SET pid = ?,
+                       heartbeat_at = CASE WHEN status = 'running'
+                                           THEN datetime('now') ELSE heartbeat_at END
                    WHERE id = ?""",
                 (pid, run_id),
             )
             self.conn.commit()
 
         return pid
+
+    @staticmethod
+    def _row_dict(cursor: sqlite3.Cursor) -> RowDict | None:
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def _open_attempt(
+        self, run_id: int, job_type: str, log_file: str | None, *, exists: bool
+    ) -> None:
+        """Commit the fresh-attempt reset of the job and run rows (caller holds the lock)."""
+        if exists:
+            self.conn.execute(
+                """UPDATE background_jobs
+                   SET pid = 0, pid_start_time = NULL, job_type = ?, status = 'pending',
+                       log_file = ?, started_at = datetime('now'),
+                       heartbeat_at = datetime('now'), completed_at = NULL,
+                       error_message = NULL
+                   WHERE run_id = ?""",
+                (job_type, log_file, run_id),
+            )
+        else:
+            self.conn.execute(
+                """INSERT INTO background_jobs
+                   (run_id, pid, pid_start_time, job_type, status, log_file,
+                    started_at, heartbeat_at)
+                   VALUES (?, 0, NULL, ?, 'pending', ?, datetime('now'), datetime('now'))""",
+                (run_id, job_type, log_file),
+            )
+        self.conn.execute(
+            """UPDATE backtest_runs
+               SET status = 'running', pid = NULL, started_at = datetime('now'),
+                   heartbeat_at = datetime('now'), completed_at = NULL,
+                   error_message = NULL
+               WHERE id = ?""",
+            (run_id,),
+        )
+        self.conn.commit()
+
+    def _restore_attempt(
+        self, run_id: int, prior_job: RowDict | None, prior_run: RowDict | None
+    ) -> None:
+        """Undo :meth:`_open_attempt` after a failed spawn (caller holds the lock)."""
+        if prior_job is None:
+            self.conn.execute("DELETE FROM background_jobs WHERE run_id = ?", (run_id,))
+        else:
+            cols = [c for c in prior_job if c not in ("id", "run_id")]
+            self.conn.execute(
+                f"UPDATE background_jobs SET {', '.join(f'{c} = ?' for c in cols)} "
+                "WHERE run_id = ?",
+                [prior_job[c] for c in cols] + [run_id],
+            )
+        if prior_run is not None:
+            fields = (
+                "status",
+                "pid",
+                "started_at",
+                "heartbeat_at",
+                "completed_at",
+                "error_message",
+            )
+            self.conn.execute(
+                f"UPDATE backtest_runs SET {', '.join(f'{c} = ?' for c in fields)} WHERE id = ?",
+                [prior_run[c] for c in fields] + [run_id],
+            )
+        self.conn.commit()
 
     def get_status(self, run_id: int) -> JobStatus | None:
         """Get job status for a run.

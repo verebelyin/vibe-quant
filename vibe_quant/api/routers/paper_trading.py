@@ -134,6 +134,38 @@ def _refuse_if_active(jobs: BacktestJobManager) -> None:
         )
 
 
+def _env_account_id(testnet: bool) -> str:
+    """The account id the backend env credentials resolve to (testnet or LIVE)."""
+    key_var, secret_var = credential_env_names(testnet)
+    return account_id(
+        BinanceTestnetConfig(
+            api_key=os.environ.get(key_var, ""),
+            api_secret=os.environ.get(secret_var, ""),
+            testnet=testnet,
+        )
+    )
+
+
+def _live_account_has_checkpoint(state: StateManager, trader_id: str) -> bool:
+    """Does the LIVE env account have any saved risk state (any trader's row)?
+
+    Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
+    start is refused rather than starting the limits from zero. Advisory like the
+    lock probe; the CLI gate is authoritative.
+    """
+    try:
+        persistence = StatePersistence(_state_db_path(state))
+        try:
+            return persistence.has_account_checkpoint(
+                _env_account_id(testnet=False), trader_id
+            )
+        finally:
+            persistence.close()
+    except Exception as exc:
+        logger.warning("paper account checkpoint lookup failed (%s)", type(exc).__name__)
+        return False
+
+
 def _refuse_if_account_busy(testnet: bool) -> None:
     """Refuse while another process holds this account's paper lock (vibe-quant-rw1g8).
 
@@ -141,14 +173,7 @@ def _refuse_if_account_busy(testnet: bool) -> None:
     turns the common CLI-running case into a 409 before a run row is written. No
     awaits here, so it is safe next to the post-await re-check.
     """
-    key_var, secret_var = credential_env_names(testnet)
-    account = account_id(
-        BinanceTestnetConfig(
-            api_key=os.environ.get(key_var, ""),
-            api_secret=os.environ.get(secret_var, ""),
-            testnet=testnet,
-        )
-    )
+    account = _env_account_id(testnet)
     holder = account_lock_holder(account)
     if holder is not None:
         raise HTTPException(
@@ -303,6 +328,23 @@ async def start_paper(
     _require_credentials(body.testnet)
     _refuse_if_account_busy(body.testnet)
 
+    # 6ub67: a first LIVE session, or a rotated / second API key on the same
+    # Binance account, resolves to an account id with no checkpoint. The limits
+    # would then start from zero, so consent is required. Before the run row.
+    no_checkpoint = False
+    if not body.testnet:
+        no_checkpoint = not _live_account_has_checkpoint(state, body.trader_id or "")
+        if no_checkpoint and not body.confirm_fresh_live:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "LIVE start has no saved risk state for this account (new or rotated "
+                    "API key, or first live session): drawdown, daily-loss and "
+                    "losing-streak limits start from zero: set confirm_fresh_live=true "
+                    "to proceed"
+                ),
+            )
+
     await _require_working_telegram_or_503()
 
     # P-R1: the probe awaits, which opened a window in which a second concurrent
@@ -381,7 +423,12 @@ async def start_paper(
         run_id,
         config_data,
         live=not body.testnet,
-        fresh_confirmed=not body.testnet and body.start_fresh and body.confirm_fresh_live,
+        # Forward the consent only when it was needed: start_fresh or no checkpoint.
+        fresh_confirmed=(
+            not body.testnet
+            and body.confirm_fresh_live
+            and (body.start_fresh or no_checkpoint)
+        ),
     )
     logger.info(
         "paper trading started run_id=%d pid=%d trader_id=%s testnet=%s",

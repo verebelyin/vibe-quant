@@ -78,8 +78,9 @@ test.describe("Paper Trading page", () => {
   });
 
   test("live start fresh needs its own confirmation", async ({ page }) => {
-    // v4l2n: a LIVE session with start fresh resets the real-money limits, so it has
-    // a second destructive checkbox of its own, separate from the live-funds one.
+    // v4l2n + 6ub67: a LIVE session always shows the fresh/risk-state confirmation.
+    // It is required client-side with start fresh; without it the wording explains
+    // that an account with no saved risk state would start its limits from zero.
     const testnet = page.getByRole("checkbox", { name: /binance testnet/i });
     const startFresh = page.getByRole("checkbox", {
       name: "Start fresh: count peak, daily loss and losing streak from now",
@@ -88,28 +89,46 @@ test.describe("Paper Trading page", () => {
     const confirmLive = page.getByRole("checkbox", {
       name: /I understand this trades REAL funds/i,
     });
-    const confirmFreshLive = page.getByRole("checkbox", {
+    const optionalFresh = page.getByRole("checkbox", { name: /may have no saved risk state/i });
+    const freshOnStart = page.getByRole("checkbox", {
       name: /starting fresh resets my LIVE/i,
     });
 
-    // Testnet start fresh: no second confirmation is asked for.
-    await expect(confirmFreshLive).toHaveCount(0);
+    // Testnet: no second confirmation is asked for.
+    await expect(optionalFresh).toHaveCount(0);
+    await expect(freshOnStart).toHaveCount(0);
 
     await testnet.click();
     await expect(testnet).not.toBeChecked();
+    await expect(optionalFresh).toBeVisible();
+    await expect(optionalFresh).not.toBeChecked();
+    await expect(freshOnStart).toHaveCount(0);
+
     await confirmLive.click();
     await expect(confirmLive).toBeChecked();
-    await expect(confirmFreshLive).toHaveCount(0);
 
     await startFresh.click();
     await expect(startFresh).toBeChecked();
-    await expect(confirmFreshLive).toBeVisible();
-    await expect(confirmFreshLive).not.toBeChecked();
+    await expect(freshOnStart).toBeVisible();
+    await expect(freshOnStart).not.toBeChecked();
+    await expect(optionalFresh).toHaveCount(0);
 
-    // Turning start fresh off removes the gate again.
+    // Turning start fresh off returns to the optional (no saved state) wording.
     await startFresh.click();
     await expect(startFresh).not.toBeChecked();
-    await expect(confirmFreshLive).toHaveCount(0);
+    await expect(optionalFresh).toBeVisible();
+    await expect(freshOnStart).toHaveCount(0);
+  });
+
+  test("testnet hides the live account fresh confirmation", async ({ page }) => {
+    // 6ub67: the LIVE block exists only for live; testnet reuses the account's
+    // saved limits without any extra consent.
+    await expect(page.getByRole("checkbox", { name: /may have no saved risk state/i })).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByRole("checkbox", { name: /starting fresh resets my LIVE/i }),
+    ).toHaveCount(0);
   });
 
   test("sizing configuration fields are visible", async ({ page }) => {

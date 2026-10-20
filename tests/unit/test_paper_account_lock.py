@@ -11,6 +11,7 @@ import errno
 import fcntl
 import logging
 import os
+import types
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,7 +23,7 @@ from vibe_quant.paper.account_lock import (
     acquire_account_lock,
     default_lock_dir,
 )
-from vibe_quant.paper.config import BinanceTestnetConfig, account_id
+from vibe_quant.paper.config import BinanceTestnetConfig, ConfigurationError, account_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -54,29 +55,65 @@ def _hold(lock_dir: Path, account: str, body: bytes = b"4242 PAPER-OTHER\n") -> 
 
 
 class TestAcquireAccountLock:
-    def test_default_lock_dir_is_machine_wide_under_home(
+    def test_default_lock_dir_uses_the_passwd_home_not_home_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """L5: ``~/.vibe-quant/paper_locks`` resolved at call time, so a main checkout,
-        a worktree and a ui-check stack on one machine contend on the same file."""
-        monkeypatch.setenv("HOME", str(tmp_path / "home_a"))
-        assert default_lock_dir() == tmp_path / "home_a" / ".vibe-quant" / "paper_locks"
-        monkeypatch.setenv("HOME", str(tmp_path / "home_b"))
-        assert default_lock_dir() == tmp_path / "home_b" / ".vibe-quant" / "paper_locks"
+        """6ub67: the lock dir comes from the passwd database, so a rewritten $HOME
+        cannot split one machine's sessions onto two lock files."""
+        pw_home = tmp_path / "pw_home"
+        monkeypatch.setenv("HOME", str(tmp_path / "fake_home"))
+        monkeypatch.setattr(
+            "vibe_quant.paper.account_lock.pwd.getpwuid",
+            lambda uid: types.SimpleNamespace(pw_dir=str(pw_home)),
+        )
+        assert default_lock_dir() == pw_home / ".vibe-quant" / "paper_locks"
+        # A different $HOME is ignored.
+        monkeypatch.setenv("HOME", str(tmp_path / "other_home"))
+        assert default_lock_dir() == pw_home / ".vibe-quant" / "paper_locks"
         assert default_lock_dir().is_absolute()
 
-    def test_without_an_override_the_lock_file_lands_under_home(
+    def test_default_lock_dir_fails_closed_without_a_passwd_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No passwd row (KeyError) is a refusal, never a $HOME fallback."""
+
+        def _missing(_uid: int) -> None:
+            raise KeyError("no such uid")
+
+        monkeypatch.setattr("vibe_quant.paper.account_lock.pwd.getpwuid", _missing)
+        with pytest.raises(ConfigurationError, match="home"):
+            default_lock_dir()
+
+    def test_default_lock_dir_fails_closed_on_an_empty_home(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "vibe_quant.paper.account_lock.pwd.getpwuid",
+            lambda uid: types.SimpleNamespace(pw_dir=""),
+        )
+        with pytest.raises(ConfigurationError, match="home"):
+            default_lock_dir()
+
+    def test_without_an_override_the_lock_file_lands_under_the_passwd_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("vibe_quant.paper.account_lock.PAPER_LOCK_DIR", None)
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        fake_home = tmp_path / "home"
+        pw_home = tmp_path / "pw_home"
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setattr(
+            "vibe_quant.paper.account_lock.pwd.getpwuid",
+            lambda uid: types.SimpleNamespace(pw_dir=str(pw_home)),
+        )
         account = _account()
 
         lock = acquire_account_lock(account, "PAPER-001")
         try:
-            expected = tmp_path / "home" / ".vibe-quant" / "paper_locks"
+            expected = pw_home / ".vibe-quant" / "paper_locks"
             assert _lock_path(expected, account).read_text() == f"{os.getpid()} PAPER-001\n"
             assert account_lock_holder(account) == f"{os.getpid()} PAPER-001"
+            # $HOME was never used: the code must not have created its lock dir.
+            assert not fake_home.exists()
         finally:
             lock.release()
 

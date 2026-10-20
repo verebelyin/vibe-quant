@@ -354,6 +354,29 @@ class StatePersistence:
             return None
         return self._row_to_checkpoint(row)
 
+    def has_account_checkpoint(self, account: str, trader_id: str) -> bool:
+        """True if ``account`` has any prior checkpoint: any trader's row carrying its
+        account key, or this trader's legacy row without the key.
+
+        The LIVE-start gate uses this to decide whether the real-money drawdown,
+        daily-loss and losing-streak limits would start from zero (first session,
+        rotated or second API key). Rows of another trader whose ``node_status`` is
+        not valid JSON are ignored: their account cannot be known, so counting them
+        would let an unrelated row satisfy the gate.
+        """
+        cursor = self.conn.execute(
+            """SELECT 1 FROM paper_trading_checkpoints
+               WHERE (json_valid(node_status)
+                      AND json_extract(node_status, '$.account') = ?)
+                  OR (trader_id = ?
+                      AND CASE WHEN json_valid(node_status)
+                               THEN json_extract(node_status, '$.account') IS NULL
+                               ELSE 0 END)
+               LIMIT 1""",
+            (account, trader_id),
+        )
+        return cursor.fetchone() is not None
+
     def list_checkpoints(
         self, trader_id: str | None = None, limit: int = 100
     ) -> list[StateCheckpoint]:

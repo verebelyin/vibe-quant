@@ -175,7 +175,7 @@ export function SessionControl() {
       symbols: selectedRun ? null : symbols,
       testnet,
       confirm_live: !testnet && confirmLive,
-      confirm_fresh_live: !testnet && startFresh && confirmFreshLive,
+      confirm_fresh_live: !testnet && confirmFreshLive,
       trader_id: traderId,
       start_fresh: startFresh,
       trade_alerts: tradeAlerts,
@@ -522,15 +522,16 @@ export function SessionControl() {
                 </Label>
               </div>
             )}
-            {!testnet && startFresh && (
+            {!testnet && (
               <div className="rounded-md border border-destructive bg-destructive/10 p-3">
                 <Label className="flex items-center gap-2 text-sm font-normal text-destructive">
                   <Checkbox
                     checked={confirmFreshLive}
                     onCheckedChange={(v) => setConfirmFreshLive(v === true)}
                   />
-                  I understand starting fresh resets my LIVE drawdown, daily-loss and losing-streak
-                  limits
+                  {startFresh
+                    ? "I understand starting fresh resets my LIVE drawdown, daily-loss and losing-streak limits"
+                    : "This LIVE account may have no saved risk state (new or rotated API key, first live session): I understand the drawdown, daily-loss and losing-streak limits then start from zero"}
                 </Label>
               </div>
             )}

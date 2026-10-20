@@ -1,8 +1,9 @@
 """One active paper session per account: an OS advisory lock keyed by account id.
 
 The gate is ``fcntl.flock`` on ``<lock dir>/<account id>.lock`` held for the whole
-process life. The lock dir is per machine (``~/.vibe-quant/paper_locks``), so a main
-checkout, a worktree and a ui-check stack contend on the same file. The kernel drops it when the holder dies (``SIGKILL`` included), so
+process life. The lock dir is per machine (the OS user's home from the passwd
+database, not ``$HOME``), so a main checkout, a worktree and a ui-check stack
+contend on the same file. The kernel drops it when the holder dies (``SIGKILL`` included), so
 there is no stale-lock file to time out or clean up.
 
 The API's probe (:func:`account_lock_holder`) is advisory only: between the probe
@@ -15,6 +16,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+import pwd
 from pathlib import Path
 
 from vibe_quant.paper.config import ConfigurationError
@@ -23,12 +25,26 @@ logger = logging.getLogger(__name__)
 
 
 def default_lock_dir() -> Path:
-    """``~/.vibe-quant/paper_locks``: absolute, machine-wide, resolved at call time.
+    """``<OS user's home>/.vibe-quant/paper_locks``: absolute, machine-wide, at call time.
 
-    Not anchored at the checkout: sessions from main, a worktree or a ui-check
-    stack share one real account, so they must share one lock file.
+    The home comes from the passwd database (``pwd.getpwuid``), never ``$HOME``: a
+    session started with a rewritten ``HOME`` must still share the machine's lock
+    file. Not anchored at the checkout either: sessions from main, a worktree or a
+    ui-check stack share one real account, so they must share one lock file.
+
+    Raises:
+        ConfigurationError: The OS user has no passwd entry or no home dir. Fail
+            closed: there is no ``Path.home()`` fallback.
     """
-    return Path.home() / ".vibe-quant" / "paper_locks"
+    try:
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:
+        raise ConfigurationError(
+            "cannot resolve the OS user's home dir for the paper lock"
+        ) from None
+    if not home:
+        raise ConfigurationError("cannot resolve the OS user's home dir for the paper lock")
+    return Path(home) / ".vibe-quant" / "paper_locks"
 
 
 #: Test override; ``None`` = :func:`default_lock_dir`. Both helpers resolve it at

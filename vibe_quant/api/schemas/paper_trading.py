@@ -31,8 +31,9 @@ class PaperStartRequest(BaseModel):
     confirm_fresh_live: bool = Field(
         default=False,
         strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
-        description="Must be true together with testnet=false AND start_fresh=true: a live "
-        "start fresh resets the real-money drawdown, daily-loss and losing-streak limits.",
+        description="Required with testnet=false when start_fresh=true OR the account "
+        "has no saved risk state (new/rotated API key, first live session): the live "
+        "drawdown, daily-loss and losing-streak limits start from zero.",
     )
     trader_id: str | None = None
     start_fresh: bool = Field(

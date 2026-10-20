@@ -717,11 +717,18 @@ class StateManager:
             status: New status (pending, running, completed, failed).
             pid: Process ID if running.
             error_message: Error message if failed.
+
+        ``running`` is monotonic: it only opens a pending/running run. A terminal
+        run (failed/completed/cancelled/killed) keeps its status, pid and error —
+        a launch that resumes after the child already reported must not erase the
+        child's result. A deliberate re-launch goes through ``start_job``.
         """
         updates = ["status = ?"]
         params: list[Any] = [status]
+        guard = ""
 
         if status == "running":
+            guard = " AND status NOT IN ('failed', 'completed', 'cancelled', 'killed')"
             updates.append("started_at = datetime('now')")
             if pid is not None:
                 updates.append("pid = ?")
@@ -735,7 +742,7 @@ class StateManager:
         params.append(run_id)
         with self._write_lock:
             self.conn.execute(
-                f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?", params
+                f"UPDATE backtest_runs SET {', '.join(updates)} WHERE id = ?{guard}", params
             )
             self.conn.commit()
 
