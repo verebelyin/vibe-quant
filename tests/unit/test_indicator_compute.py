@@ -7,9 +7,15 @@ import pandas as pd
 import pandas_ta_classic  # noqa: F401 — registers .ta accessor
 import pytest
 
+from tests.unit.pta_stream_harness import compile_indicators, random_walk_bars, run_stream
 from vibe_quant.data.indicator_compute import compute_indicators
 from vibe_quant.dsl.compute_builtins import compute_bbands
-from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry, invoke_compute_fn
+from vibe_quant.dsl.indicators import (
+    IndicatorSpec,
+    indicator_registry,
+    invoke_compute_fn,
+    pta_lookback,
+)
 
 
 def _ohlcv(n: int = 120) -> pd.DataFrame:
@@ -95,8 +101,12 @@ _COMPUTABLE_FROM_OHLCV = [
 def test_registry_fallback_matches_the_strategy_compute_path(
     indicator_type: str, params: dict[str, object]
 ) -> None:
-    """Values must equal ``invoke_compute_fn(spec, df, params)`` bit for bit —
-    the same function and params the strategy compiler uses."""
+    """Short histories match ``invoke_compute_fn`` full history bit for bit.
+
+    ``n=400`` is below the first trim (``cap + cap // 4 >= 500``) and the
+    overlay also reproduces the runtime warmup gate, so the comparison starts
+    at ``pta_lookback``; the post-trim stream is pinned in test_pta_replay.py.
+    """
     df = _ohlcv(n=400)
     out = compute_indicators(df, [{"type": indicator_type, **params}])
 
@@ -112,7 +122,12 @@ def test_registry_fallback_matches_the_strategy_compute_path(
     expected = ref.to_numpy(dtype=np.float64)
     assert np.isfinite(expected).any(), f"{indicator_type}: reference is all-NaN"
 
-    np.testing.assert_array_equal(_values(series), expected, err_msg=indicator_type)
+    lookback = pta_lookback(spec, params)
+    chart = _values(series)
+    assert np.isnan(chart[: lookback - 1]).all(), f"{indicator_type}: warmup gate"
+    np.testing.assert_array_equal(
+        chart[lookback - 1 :], expected[lookback - 1 :], err_msg=indicator_type
+    )
 
 
 _UNSUPPORTED_FROM_OHLCV = [
@@ -166,9 +181,10 @@ def test_registry_fallback_with_omitted_params_uses_the_spec_defaults(
     indicator_type: str,
 ) -> None:
     """A request that omits params must equal ``invoke_compute_fn(spec, df,
-    spec.default_params)``. PRICE_POSITION's compute_fn falls back to period
-    14 while its spec default is 52, so the raw-params call diverged."""
-    df = _ohlcv(n=600)
+    spec.default_params)`` after the runtime warmup gate. PRICE_POSITION's
+    compute_fn falls back to period 14 while its spec default is 52, so the
+    raw-params call diverged. ``n=400`` is below the first buffer trim."""
+    df = _ohlcv(n=400)
     out = compute_indicators(df, [{"type": indicator_type}])
 
     assert len(out) == 1, f"{indicator_type}: expected one series, got {len(out)}"
@@ -182,7 +198,12 @@ def test_registry_fallback_with_omitted_params_uses_the_spec_defaults(
     expected = ref.to_numpy(dtype=np.float64)
     assert np.isfinite(expected).any(), f"{indicator_type}: reference is all-NaN"
 
-    np.testing.assert_array_equal(_values(series), expected, err_msg=indicator_type)
+    lookback = pta_lookback(spec, spec.default_params)
+    chart = _values(series)
+    assert np.isnan(chart[: lookback - 1]).all(), f"{indicator_type}: warmup gate"
+    np.testing.assert_array_equal(
+        chart[lookback - 1 :], expected[lookback - 1 :], err_msg=indicator_type
+    )
 
 
 def test_registry_fallback_multi_output_series_follow_spec_output_order() -> None:
@@ -208,6 +229,8 @@ def test_registry_fallback_multi_output_series_follow_spec_output_order() -> Non
             param_schema={},
             output_names=("lower", "upper", "signal"),
             compute_fn=_compute,
+            # Gate from the first bar: this test pins output order, not warmup.
+            pta_lookback_fn=lambda _params: 1,
         )
     )
     try:
@@ -216,3 +239,75 @@ def test_registry_fallback_multi_output_series_follow_spec_output_order() -> Non
         np.testing.assert_array_equal(_values(out[2]), (df["close"] * 3.0).to_numpy())
     finally:
         indicator_registry.unregister(name)
+
+
+# ---------------------------------------------------------------------------
+# Chart overlay == strategy runtime path. The generated strategy feeds each
+# compute_fn a capped rolling PtaBuffer (trim once len > cap + cap // 4) and
+# calls it per bar; the overlay must reproduce that stream bar for bar, not
+# the full-history value.
+# ---------------------------------------------------------------------------
+
+# The registry-fallback overlay types whose runtime window truncation changes
+# the value (ADAPTIVE_RSI/VIDYA) or exercises repeated trims anyway.
+_CHART_PARITY_CASES = [
+    ("ADAPTIVE_RSI", {"period": 14, "alpha": 0.5}),
+    ("VIDYA", {"period": 14}),
+    ("KAMA", {"period": 10}),
+    ("FRAMA", {"period": 16}),
+    ("RAMS", {"period": 50}),
+    ("TREND_ENSEMBLE", {"max_lookback": 250}),
+]
+
+
+def _frame_from_bars(
+    bars: list[tuple[str, float, float, float, float, float]],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "open_time": np.arange(len(bars), dtype=np.int64) * 3_600_000,
+            "open": [b[1] for b in bars],
+            "high": [b[2] for b in bars],
+            "low": [b[3] for b in bars],
+            "close": [b[4] for b in bars],
+            "volume": [b[5] for b in bars],
+        }
+    )
+
+
+@pytest.mark.parametrize(("indicator_type", "params"), _CHART_PARITY_CASES)
+def test_chart_overlay_equals_runtime_stream_bar_for_bar(
+    indicator_type: str, params: dict[str, object]
+) -> None:
+    """The overlay equals the generated strategy's capped-buffer stream bitwise."""
+    bars = random_walk_bars(3000, seed=7)
+    df = _frame_from_bars(bars)
+
+    _, cls = compile_indicators({"ind": {"type": indicator_type, **params}})
+    snapshots = run_stream(
+        cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")}
+    )
+    runtime = np.array([snap.get("ind", np.nan) for snap in snapshots], dtype=np.float64)
+
+    out = compute_indicators(df, [{"type": indicator_type, **params}])
+    assert len(out) == 1, f"{indicator_type}: expected one series, got {len(out)}"
+    chart = _values(out[0])
+    assert len(chart) == len(runtime)
+
+    differing = int((~((chart == runtime) | (np.isnan(chart) & np.isnan(runtime)))).sum())
+    assert np.array_equal(chart, runtime, equal_nan=True), (
+        f"{indicator_type}: chart overlay differs from the runtime stream on "
+        f"{differing}/{len(chart)} bars"
+    )
+
+    if indicator_type in {"ADAPTIVE_RSI", "VIDYA"}:
+        # Guard against a vacuous test: for these path-dependent plugins the
+        # runtime (and now the chart) last value differs from full history.
+        spec = indicator_registry.get(indicator_type)
+        full = invoke_compute_fn(spec, df, params)
+        assert not isinstance(full, dict)
+        assert np.isfinite(chart[-1])
+        assert chart[-1] != float(full.iloc[-1]), (
+            f"{indicator_type}: chart[-1] equals the full-history value; the "
+            "capped runtime differs, so this assertion is vacuous"
+        )

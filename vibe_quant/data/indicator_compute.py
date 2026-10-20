@@ -3,25 +3,25 @@
 Used by the /api/data/indicators/{symbol} endpoint to compute indicator
 series for chart overlays. No storage — computed fresh each request.
 
-Plugins are computed over the full request history. The strategy runtime
-instead feeds compute_fn a capped rolling buffer, so path-dependent
-indicators (e.g. ADAPTIVE_RSI, VIDYA) can differ slightly between the chart
-and the strategy for the same bars (follow-up bead). Values still come from
-the same compute_fn with the same effective params, so differences are
-confined to that buffer-truncation effect.
+Registry-fallback indicators (plugins and compute_fn-only built-ins) replay
+the strategy runtime's capped-buffer schedule: the generated strategy feeds
+each compute_fn a rolling ``PtaBuffer`` (trim to the cap once it exceeds
+``cap + cap // 4``) and reads the last value per bar, so the overlay must
+reproduce that stream rather than compute over the full request history.
+Hard-coded pandas-ta branches below keep their full-history formulas.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    import pandas as pd
+import pandas as pd
 
 from vibe_quant.api.schemas.data import IndicatorSeries, IndicatorSeriesPoint
-from vibe_quant.dsl.indicators import indicator_registry, invoke_compute_fn
+from vibe_quant.dsl.indicators import indicator_registry, pta_buffer_cap, pta_lookback
+from vibe_quant.dsl.pta_replay import replay_pta_series
 
 logger = logging.getLogger(__name__)
 
@@ -297,9 +297,10 @@ def _compute_single(
 
     # Generic registry fallback: any registered type without a hard-coded
     # branch above is computed through the spec's own compute_fn — the same
-    # function (and params) the strategy compiler calls, so chart values equal
-    # strategy values. Specs that cannot run on OHLCV alone raise
-    # _UnsupportedIndicatorError, which compute_indicators reports explicitly.
+    # function (and params) the strategy compiler calls, replayed over the
+    # runtime's capped buffer schedule and warmup gate. Specs that cannot run
+    # on OHLCV alone raise _UnsupportedIndicatorError, which compute_indicators
+    # reports explicitly.
     spec = indicator_registry.get(upper)
     if spec is None:
         logger.warning("Unknown indicator type for computation: %s", indicator_type)
@@ -320,10 +321,14 @@ def _compute_single(
     # spec default the strategy path uses (52), so chart and strategy values
     # diverge. Response params still echo the request verbatim.
     merged = {**spec.default_params, **params}
-    result = invoke_compute_fn(spec, df, merged)
-    if isinstance(result, dict):
-        return [(name, result[name]) for name in spec.output_names if name in result]
-    return [(spec.output_names[0], result)]
+    cap = pta_buffer_cap([pta_lookback(spec, merged)], full_history=spec.requires_full_history)
+    ohlcv = df[["open", "high", "low", "close", "volume"]].astype("float64")
+    replayed = replay_pta_series(spec, ohlcv, merged, cap)
+    return [
+        (name, pd.Series(replayed[name], index=df.index))
+        for name in spec.output_names
+        if name in replayed
+    ]
 
 
 def compute_indicators(
