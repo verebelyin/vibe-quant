@@ -337,6 +337,11 @@ class TestRunWithConfig:
                 self.completed_calls: list[tuple[int, str | None]] = []
                 self.closed = False
 
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 self.completed_calls.append((run_id, error))
 
@@ -377,6 +382,11 @@ class TestRunWithConfig:
             def __init__(self) -> None:
                 self.completed_calls: list[tuple[int, str | None]] = []
                 self.closed = False
+
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
 
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 self.completed_calls.append((run_id, error))
@@ -449,6 +459,11 @@ class TestAccountLock:
         stops = {"count": 0}
 
         class _FakeManager:
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 completed.append((run_id, error))
 
@@ -1044,6 +1059,11 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 raise RuntimeError("mark failed: HEARTBEAT_SECRET_MARKER")
 
@@ -1081,6 +1101,11 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 raise SystemError("mark failed: HEARTBEAT_SECRET_MARKER")
 
@@ -1119,6 +1144,11 @@ class TestMarkCompletedFailure:
         self._write_minimal_config(config_path)
 
         class _FakeManager:
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 return
 
@@ -1326,6 +1356,11 @@ class TestAllowlistedRefusalMessage:
     @staticmethod
     def _fake_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
         class _FakeManager:
+            def claim_process(
+                self, run_id: int, pid: int, identity: str | None
+            ) -> str | None:
+                return None
+
             def mark_completed(self, run_id: int, error: str | None = None) -> None:
                 return
 

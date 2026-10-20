@@ -162,6 +162,18 @@ _STICKY_ON_COMPLETE = frozenset({"failed", "killed", "cancelled"})
 # ... and that a later failure report must not overwrite (user intent wins).
 _STICKY_ON_FAIL = frozenset({"killed", "cancelled"})
 
+# Statuses in which a process may still claim its job row.
+_OPEN = ("pending", "running")
+# Fail both rows when the claim cannot establish a verifiable process identity.
+_FAIL_JOB_SQL = (
+    "UPDATE background_jobs SET status = 'failed', completed_at = datetime('now'), "
+    "error_message = ? WHERE run_id = ?"
+)
+_FAIL_RUN_SQL = (
+    "UPDATE backtest_runs SET status = 'failed', completed_at = datetime('now'), "
+    "error_message = ? WHERE id = ?"
+)
+
 
 class BacktestJobManager:
     """Manages background backtest jobs with subprocess tracking.
@@ -185,6 +197,9 @@ class BacktestJobManager:
         self._start_lock = threading.Lock()
         # The connection is shared by the heartbeat thread and API threads.
         self._db_lock = threading.RLock()
+        # run_id -> pid this manager claimed, so a terminal write cannot land on
+        # a row a re-launch has since given to another process (vibe-quant-qgtdz).
+        self._claimed: dict[int, int] = {}
 
     @property
     def db_path(self) -> Path:
@@ -312,15 +327,23 @@ class BacktestJobManager:
             # only a still-'pending' job becomes 'running'; if the child already
             # reported a terminal status, that result stands and only the pid
             # (which identifies the exited process) is recorded.
-            self.conn.execute(
+            cursor = self.conn.execute(
                 """UPDATE background_jobs
                    SET pid = ?, pid_start_time = ?,
                        status = CASE WHEN status = 'pending' THEN 'running' ELSE status END,
                        heartbeat_at = CASE WHEN status = 'pending'
                                            THEN datetime('now') ELSE heartbeat_at END
-                   WHERE run_id = ?""",
-                (pid, pid_start, run_id),
+                   WHERE run_id = ? AND pid IN (0, ?)""",
+                (pid, pid_start, run_id, pid),
             )
+            if cursor.rowcount == 0:
+                owner = self.conn.execute(
+                    "SELECT pid FROM background_jobs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self.conn.commit()
+                raise ValueError(
+                    f"Run {run_id} already has an active job (pid={owner['pid'] if owner else 0})"
+                )
             self.conn.execute(
                 """UPDATE backtest_runs
                    SET pid = ?,
@@ -332,6 +355,73 @@ class BacktestJobManager:
             self.conn.commit()
 
         return pid
+
+    def claim_process(self, run_id: int, pid: int, identity: str | None) -> str | None:
+        """The job's own process records its pid + start time (vibe-quant-qgtdz).
+
+        Returns None once the job row is 'running' with (pid, identity); otherwise the
+        refusal text, and the caller must not trade. Never revives a terminal row and
+        never overwrites another live attempt's pid.
+        """
+        with self._db_lock:
+            conn = self.conn
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                job = conn.execute(
+                    "SELECT status, pid, pid_start_time FROM background_jobs WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                run = conn.execute(
+                    "SELECT status FROM backtest_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                refusal: str | None = None
+                if job is None or run is None:
+                    refusal = (
+                        f"Refusing to trade: run {run_id} has no job or run row "
+                        "to record this process in"
+                    )
+                elif int(job["pid"]) not in (0, pid) or (
+                    int(job["pid"]) == pid and job["pid_start_time"] not in (None, identity)
+                ):
+                    refusal = (
+                        f"Refusing to trade: run {run_id} is recorded for pid "
+                        f"{job['pid']}, not this process (pid {pid})"
+                    )
+                elif job["status"] not in _OPEN or run["status"] not in _OPEN:
+                    refusal = (
+                        f"Refusing to trade: run {run_id} is already {run['status']} "
+                        f"(job {job['status']}); a finished run is never reopened"
+                    )
+                elif identity is None:
+                    refusal = (
+                        "Refusing to trade: cannot read this process's start time "
+                        f"(pid {pid}), so stop/kill could not verify it"
+                    )
+                    for sql in (_FAIL_JOB_SQL, _FAIL_RUN_SQL):
+                        conn.execute(sql, (refusal, run_id))
+                    conn.commit()
+                    return refusal
+                if refusal is not None:
+                    conn.rollback()
+                    return refusal
+                conn.execute(
+                    """UPDATE background_jobs
+                       SET pid = ?, pid_start_time = ?, status = 'running',
+                           heartbeat_at = datetime('now')
+                       WHERE run_id = ?""",
+                    (pid, identity, run_id),
+                )
+                conn.execute(
+                    "UPDATE backtest_runs SET pid = ?, heartbeat_at = datetime('now') WHERE id = ?",
+                    (pid, run_id),
+                )
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+        self._claimed[run_id] = pid
+        return None
 
     @staticmethod
     def _row_dict(cursor: sqlite3.Cursor) -> RowDict | None:
@@ -853,11 +943,23 @@ class BacktestJobManager:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 job = conn.execute(
-                    "SELECT status FROM background_jobs WHERE run_id = ?", (run_id,)
+                    "SELECT status, pid FROM background_jobs WHERE run_id = ?", (run_id,)
                 ).fetchone()
                 run = conn.execute(
                     "SELECT status, error_message FROM backtest_runs WHERE id = ?", (run_id,)
                 ).fetchone()
+                owner = self._claimed.get(run_id)
+                if owner is not None and (job is None or int(job["pid"]) != owner):
+                    # qgtdz: a re-launch owns the rows now; this process's result is not theirs.
+                    conn.rollback()
+                    logger.warning(
+                        "run %d: job row now records pid %s, not this process (pid %d); "
+                        "result not recorded",
+                        run_id,
+                        job["pid"] if job else None,
+                        owner,
+                    )
+                    return False
                 job_status = job["status"] if job else None
                 run_status = run["status"] if run else None
                 if reconcile and job_status != JobStatus.RUNNING.value:

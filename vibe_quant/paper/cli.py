@@ -24,7 +24,11 @@ from vibe_quant.alerts.telegram import (
     TelegramUnavailableError,
     redact_token,
 )
-from vibe_quant.jobs.manager import BacktestJobManager, run_with_heartbeat
+from vibe_quant.jobs.manager import (
+    BacktestJobManager,
+    process_start_time,
+    run_with_heartbeat,
+)
 from vibe_quant.paper.account_lock import AccountLock, acquire_account_lock
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
@@ -265,6 +269,16 @@ def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
         return False
 
 
+def _claim_own_process(manager: BacktestJobManager, run_id: int) -> str | None:
+    """qgtdz: record this process in the job row before trading; text = refuse."""
+    pid = os.getpid()
+    try:
+        return manager.claim_process(run_id, pid, process_start_time(pid))
+    except Exception as exc:
+        logger.error("paper process claim failed (%s)", type(exc).__name__)
+        return f"Refusing to trade: could not record this process for run {run_id} ({type(exc).__name__})"
+
+
 def _persist_refusal(run_id: int, db_path: Path | None, message: str) -> None:
     """Record a consent refusal as the run's and job's terminal failure.
 
@@ -365,6 +379,11 @@ async def run_with_config(
         heartbeat_manager, stop_heartbeat = run_with_heartbeat(run_id, config.db_path)
 
     try:
+        if run_id is not None and heartbeat_manager is not None:
+            refusal = _claim_own_process(heartbeat_manager, run_id)
+            if refusal is not None:
+                print(refusal, file=sys.stderr)
+                return 1
         # rw1g8: one paper session per account. Held for the whole process life;
         # the kernel drops it on death (SIGKILL included), so no stale lock.
         account_lock = acquire_account_lock(account_id(config.binance), config.trader_id)
