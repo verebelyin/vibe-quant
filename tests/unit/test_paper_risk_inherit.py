@@ -973,13 +973,63 @@ async def test_legacy_own_row_without_account_is_restored(
         await node._shutdown()
 
 
-async def test_own_row_of_other_key_carries_nothing(
+@pytest.mark.parametrize(
+    ("halt", "reason"),
+    [("error", HaltReason.ERROR), ("manual", HaltReason.MANUAL),
+     ("kill_switch", HaltReason.KILL_SWITCH), ("signal", HaltReason.SIGNAL)],
+)
+async def test_key_rotation_carries_the_own_risk_and_halt(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+    halt: str,
+    reason: HaltReason,
+) -> None:
+    """qa42q: an own KEY-B row into a KEY-A node (same env: a key rotation) is the
+    trader's own row, so its risk and halt carry and a rotation cannot re-arm a
+    halted trader."""
+    _put(seeded["db"], "PAPER-007", account=ACCOUNT_B, risk=_risk(), halt=halt,
+         message="X", state="halted")
+    node, events = _node(monkeypatch, seeded)
+    await node._initialize()
+    try:
+        assert node._restored_risk is not None
+        assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
+        assert node._restored_halt is not None
+        assert node._restored_halt.reason == reason
+        assert node.status.state == NodeState.HALTED
+        assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-007"
+    finally:
+        await node._shutdown()
+
+
+async def test_key_rotation_carries_the_risk_so_a_drawdown_retrips(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P-R7: an own KEY-B row into a KEY-A node carries no risk and no halt."""
-    _put(seeded["db"], "PAPER-007", account=ACCOUNT_B, risk=_risk(), halt="error",
+    """qa42q: a risk halt is not restored as a halt; it re-trips from the carried
+    bookkeeping, so the rotated row's high water mark must survive the rotation."""
+    _put(seeded["db"], "PAPER-007", account=ACCOUNT_B,
+         risk=_risk(high_water_mark="20000"), halt="max_drawdown", state="halted")
+    node, _events = _node(monkeypatch, seeded)
+    await node._initialize()
+    try:
+        assert node._restored_risk is not None
+        assert node._restored_risk.to_dict()["high_water_mark"] == "20000"
+        assert node._restored_halt is None
+    finally:
+        await node._shutdown()
+
+
+async def test_other_trader_row_of_another_key_carries_nothing(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[_FakeTradingNode],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qa42q boundary: only the trader's OWN row crosses a key rotation; another
+    trader's KEY-B row stays on its account."""
+    _put(seeded["db"], "PAPER-041", account=ACCOUNT_B, risk=_risk(), halt="error",
          message="X", state="halted")
     node, events = _node(monkeypatch, seeded)
     await node._initialize()
