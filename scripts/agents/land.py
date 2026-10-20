@@ -14,7 +14,8 @@ Run from the main checkout, on ``main``. In order:
    fork is ``merge-base(<main at start>, <task>)``, or the parent's tip for ``child@parent``
    (a stacked task). A two-dot ``git diff main <task>`` would revert what main gained since
    the fork. A path the 3-way apply leaves conflicted is taken from ``--verified`` when no
-   later task in the list touches it; otherwise the land fails as before.
+   later task in the list touches it; otherwise the land fails as before. Before that
+   fallback ``merge_words.py`` tries a word-level merge of the conflict hunks.
 3. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
    prints the diff stat and exits 1: reset main to the printed start SHA (unpushed) and redo.
 4. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
@@ -31,6 +32,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import merge_words  # noqa: E402
 
 MIRROR_PATHS = ("docs/orchestration/board/", "docs/orchestration/telemetry/")
 _EXCLUDE_MIRRORS = [f":(exclude){p}" for p in MIRROR_PATHS]
@@ -92,6 +96,17 @@ def task_fork(repo: Path, start: str, task: Task) -> str:
     return git(repo, "merge-base", start, task.branch).strip()
 
 
+def word_merged(repo: Path, path: str) -> bool:
+    """Resolve ``path``'s conflict hunks word by word and stage it; False when it can't."""
+    try:
+        if not merge_words.resolve(repo / path):
+            return False
+    except (merge_words.MergeError, OSError):
+        return False
+    git(repo, "add", "--", path)
+    return True
+
+
 def land_task(repo: Path, start: str, task: Task, later: set[str], verified: str) -> str:
     fork = task_fork(repo, start, task)
     diff = git(repo, "diff", "--binary", fork, task.branch, "--", ".", *_EXCLUDE_MIRRORS)
@@ -111,6 +126,9 @@ def land_task(repo: Path, start: str, task: Task, later: set[str], verified: str
                 f"{(applied.stderr or applied.stdout).strip()}"
             )
         for path in conflicted:
+            if word_merged(repo, path):
+                print(f"land: {task.branch}: {path} conflicted, merged by words")
+                continue
             exists = subprocess.run(
                 ["git", "-C", str(repo), "cat-file", "-e", f"{verified}:{path}"],
                 capture_output=True,

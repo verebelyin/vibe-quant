@@ -243,3 +243,48 @@ def test_refuses_off_main(tmp_path: Path, monkeypatch: object) -> None:
     repo, (m1, _m2) = _job(tmp_path, monkeypatch)
     _git(repo, "checkout", "-q", "t1")
     assert land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"]) == 2
+
+
+def test_same_line_conflict_is_word_merged_before_the_verified_fallback(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    base = "fees are 4 bps and funding is paid every 8 hours on the open notional\n"
+    one = base.replace("4 bps", "5 bps")
+    two = base.replace("every 8 hours", "every 4 hours")
+    both = one.replace("every 8 hours", "every 4 hours")
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, "SPEC.md", base)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    for name, text in (("ta", one), ("tb", two)):
+        _git(repo, "checkout", "-qb", name, "main")
+        _write(repo, "SPEC.md", text)
+        _git(repo, "commit", "-qam", f"wip {name}")
+    _git(repo, "checkout", "-qb", "job", "ta")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-edit", "tb"],
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    assert merge.returncode != 0  # same line: git cannot merge it
+    _write(repo, "SPEC.md", both)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "merge tb")
+    _git(repo, "checkout", "-q", "main")
+    msgs = []
+    for name in ("ta", "tb"):
+        msg = tmp_path / f"{name}.txt"
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
+        msgs.append(str(msg))
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={msgs[0]}", f"tb={msgs[1]}"]
+    )
+    assert rc == 0
+    assert (repo / "SPEC.md").read_text() == both
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "SPEC.md conflicted, merged by words" in out and "took job version" not in out
