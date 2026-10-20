@@ -56,12 +56,13 @@ from vibe_quant.discovery.operators import (
     scalar_gene_count,
     tournament_select,
 )
+from vibe_quant.dsl import indicator_memo
 from vibe_quant.dsl.identity import dsl_body_key
 from vibe_quant.errors import DataUnavailableError
 from vibe_quant.utils import compute_day_count
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from vibe_quant.discovery.operators import Direction
     from vibe_quant.metrics import DailyReturns
@@ -512,6 +513,37 @@ _FAILED_WINDOW = HoldoutResult(
 )
 
 
+def _rate_str(hits: int, misses: int) -> str:
+    """Hit rate with two decimals, ``n/a`` when nothing was called."""
+    calls = hits + misses
+    return "n/a" if calls == 0 else f"{hits / calls:.2f}"
+
+
+def _ind_memo_generation_line(
+    prev: Mapping[str, object] | None, cur: Mapping[str, object]
+) -> str:
+    """Per-generation ``IndMemo:`` line: this generation's deltas + the run so far.
+
+    ``prev`` is the previous generation's ``run_summary()`` (None for the
+    first), so ``gen`` counts only the sessions since the last line and
+    ``run`` is cumulative over every process.
+    """
+    prev_hits = cast("int", prev["hits"]) if prev is not None else 0
+    prev_misses = cast("int", prev["misses"]) if prev is not None else 0
+    hits = cast("int", cur["hits"])
+    misses = cast("int", cur["misses"])
+    return (
+        f"  IndMemo: gen hits={hits - prev_hits} misses={misses - prev_misses} "
+        f"rate={_rate_str(hits - prev_hits, misses - prev_misses)} | "
+        f"run rate={_rate_str(hits, misses)} entries_max={cur['entries_max']} "
+        f"est_mb_max={cast('float', cur['est_mb_max']):.1f} "
+        f"rss_growth_mb_max={cur['rss_growth_mb_max']} evictions={cur['evictions']} "
+        f"off={cur['off_processes']}/{cur['processes']} procs "
+        f"peak_rss_max_worker={cur['peak_rss_mb_max_worker']} MB "
+        f"parent_rss={cast('float', cur['peak_rss_mb_parent']):.0f} MB"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -565,6 +597,8 @@ class DiscoveryPipeline:
         self._dsr_trials: dict[str, object] | None = None
         self._buy_hold_records: dict[str, dict[str, object]] = {}
         self._buy_hold_gate: dict[str, object] | None = None
+        # Last generation's run_summary() (None = no IndMemo line logged yet).
+        self._ind_memo_prev: dict[str, object] | None = None
         # DSR tests the candidate's MARK-TO-MARKET daily return series
         # (bd vibe-quant-yul7u.24, y9ywf). A real NT backtest fn is told to
         # collect it, and a candidate without one then fails DSR closed;
@@ -954,6 +988,10 @@ class DiscoveryPipeline:
 
         phase_start = time.monotonic()
         evaluated_at_phase_start = 0
+        self._ind_memo_prev = None
+        # Generation 1 has no cross-genome reuse (measured: 0 hits per run), so its
+        # sessions are never judged; the flag flips after _evaluate_new returns.
+        self._set_ind_memo_judge(False)
         for gen in range(cfg.max_generations):
             # Evaluate individuals without known fitness (initial population,
             # tournament offspring, immigrants). Crowding offspring were
@@ -1045,6 +1083,10 @@ class DiscoveryPipeline:
             phase_start = time.monotonic()
             evaluated_at_phase_start = self._total_evaluated
 
+            # Only now that the generation's tasks are pickled (lazy: at submit
+            # time) every later evaluation (crowding offspring, next generations)
+            # is judged by the memo's adaptive window.
+            self._set_ind_memo_judge(True)
             population, known = self._evolve_generation(population, fitness_results)
             population, known = self._maybe_inject_immigrants(population, known)
 
@@ -1122,13 +1164,15 @@ class DiscoveryPipeline:
 
         self._log_top_strategies(top_strategies)
 
-        return self._apply_validation_gates(
+        result = self._apply_validation_gates(
             top_strategies,
             generations=generation_results,
             total_evaluated=total_evaluated,
             converged=converged,
             convergence_gen=convergence_gen,
         )
+        self._log_ind_memo_run_end()
+        return result
 
     # -- validation gates ----------------------------------------------------
 
@@ -1807,6 +1851,44 @@ class DiscoveryPipeline:
             gen_elapsed,
             self._total_evaluated,
         )
+        self._log_ind_memo_generation(self._ind_memo_prev, indicator_memo.run_summary())
+
+    def _set_ind_memo_judge(self, judge: bool) -> None:
+        """Set the memo's adaptive judge on the run's backtest fn (NT fns only)."""
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+        if isinstance(self._backtest_fn, NTBacktestFn):
+            self._backtest_fn.ind_memo_judge = judge
+
+    def _log_ind_memo_generation(
+        self, prev: Mapping[str, object] | None, cur: Mapping[str, object]
+    ) -> None:
+        """Log the per-generation IndMemo line for an NT run (no-op otherwise)."""
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+        if not isinstance(self._backtest_fn, NTBacktestFn):
+            return
+        logger.info("%s", _ind_memo_generation_line(prev, cur))
+        self._ind_memo_prev = dict(cur)
+
+    def _log_ind_memo_run_end(self) -> None:
+        """Log the run's final memo summary, and warn when the cap was too small."""
+        from vibe_quant.discovery.backtest_fn import NTBacktestFn
+
+        if not isinstance(self._backtest_fn, NTBacktestFn):
+            return
+        summary = indicator_memo.run_summary()
+        logger.info("IndMemo run summary: %s", json.dumps(summary, sort_keys=True))
+        evictions = cast("int", summary["evictions"])
+        if evictions > 0:
+            rate = summary["hit_rate"]
+            logger.warning(
+                "IndMemo cap reached: %d evictions, hit rate %s; consider %s=%d",
+                evictions,
+                "n/a" if rate is None else f"{cast('float', rate):.2f}",
+                "VIBE_QUANT_IND_MEMO_MAX_MB",
+                2 * cast("int", summary["max_mb"]),
+            )
 
     def _log_top_strategies(
         self, top_strategies: list[tuple[StrategyChromosome, FitnessResult]],

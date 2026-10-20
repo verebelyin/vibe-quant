@@ -60,7 +60,8 @@ pipeline logs per generation/run and persists as ``notes["ind_memo"]``:
 ``enabled``, ``max_mb``, ``processes``, ``hits``, ``misses``, ``hit_rate``,
 ``bypassed``, ``evictions``, ``switch_offs``, ``off_processes``,
 ``parent_sessions``, ``entries_max``, ``est_mb_max``, ``rss_growth_mb_max``,
-``peak_rss_mb_max_worker``, ``peak_rss_mb_parent``. ``evictions > 0`` means the
+``peak_rss_mb_max_worker``, ``peak_rss_mb_parent``. ``max_mb`` is the largest
+worker cap (the parent's own when no worker reported); ``evictions > 0`` means the
 cap is too small for the run and ``VIBE_QUANT_IND_MEMO_MAX_MB`` should be
 raised.
 
@@ -414,9 +415,12 @@ def run_summary() -> dict[str, object]:
         if p["rss_at_first_session_bytes"] is not None
     ]
     worker_peaks = [_int(p, "peak_rss_bytes") for proc, p in procs.items() if proc != own_id]
+    # The workers hold the memos; the parent's cap is the default until its first session.
+    worker_caps = [_int(p, "max_bytes") for proc, p in procs.items() if proc != own_id]
+    cap = max(worker_caps) if worker_caps else _int(own, "max_bytes")
     return {
         "enabled": own["enabled"],
-        "max_mb": _int(own, "max_bytes") // 1_000_000,
+        "max_mb": cap // 1_000_000,
         "processes": len(procs),
         "hits": hits,
         "misses": misses,

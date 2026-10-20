@@ -778,6 +778,19 @@ def _resolve_seed(arg: int | None) -> int:
     return arg if arg is not None else random.SystemRandom().randrange(2**32)
 
 
+def _attach_ind_memo(notes: dict[str, object], *, use_mock: bool) -> None:
+    """Record the indicator-memo run summary in the persisted notes.
+
+    Called right before each save so the full-range headline backtests are
+    included; mock runs never touch the memo, so they carry no key.
+    """
+    if use_mock:
+        return
+    from vibe_quant.dsl import indicator_memo
+
+    notes["ind_memo"] = indicator_memo.run_summary()
+
+
 def _run_provenance_notes(
     result: DiscoveryResult,
     *,
@@ -1853,6 +1866,7 @@ def main() -> int:
                 "top_strategies": [],
                 "guardrail_rejections": result.guardrail_rejections,
             }
+            _attach_ind_memo(summary_notes, use_mock=use_mock)
             state.save_backtest_result(
                 args.run_id,
                 {
@@ -2005,6 +2019,9 @@ def main() -> int:
                 is_days=compute_day_count(*result.train_dates),
             )
 
+        run_notes["top_strategies"] = top_dsls
+        run_notes["guardrail_rejections"] = result.guardrail_rejections or None
+        _attach_ind_memo(run_notes, use_mock=use_mock)
         state.save_backtest_result(
             args.run_id,
             {
@@ -2017,13 +2034,7 @@ def main() -> int:
                 "kurtosis": best_fitness.kurtosis,
                 "execution_time_seconds": execution_time,
                 "walk_forward_efficiency": wfa_efficiency,
-                "notes": json.dumps(
-                    {
-                        **run_notes,
-                        "top_strategies": top_dsls,
-                        "guardrail_rejections": result.guardrail_rejections or None,
-                    }
-                ),
+                "notes": json.dumps(run_notes),
             },
         )
         state.update_backtest_run_status(args.run_id, "completed")

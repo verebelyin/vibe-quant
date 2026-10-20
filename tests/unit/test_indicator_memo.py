@@ -808,3 +808,35 @@ def test_snapshot_keys_and_rss_units(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with indicator_memo.session():
         assert indicator_memo.snapshot()["rss_at_first_session_bytes"] == 337_999_872
+
+
+def _worker_snap(proc_id: str, max_bytes: int) -> dict[str, object]:
+    snap = dict(indicator_memo.snapshot())
+    snap["proc_id"] = proc_id
+    snap["max_bytes"] = max_bytes
+    snap["evictions"] = 1
+    return snap
+
+
+def test_run_summary_max_mb_is_the_workers_cap() -> None:
+    """D12: the parent never opened a session (default cap), the workers ran with 8."""
+    indicator_memo.record_worker(_worker_snap("w1", 8_000_000))
+    summary = indicator_memo.run_summary()
+    assert summary["parent_sessions"] == 0
+    assert summary["max_mb"] == 8
+    assert summary["evictions"] == 1
+
+
+def test_run_summary_max_mb_is_the_largest_worker_cap() -> None:
+    indicator_memo.record_worker(_worker_snap("w1", 8_000_000))
+    indicator_memo.record_worker(_worker_snap("w2", 16_000_000))
+    assert indicator_memo.run_summary()["max_mb"] == 16
+
+
+def test_run_summary_max_mb_without_workers_is_the_parents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VIBE_QUANT_IND_MEMO_MAX_MB", "5")
+    with indicator_memo.session():
+        pass
+    assert indicator_memo.run_summary()["max_mb"] == 5
