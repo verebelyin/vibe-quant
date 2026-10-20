@@ -114,6 +114,60 @@ def _adjacent_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]
     return repo, msgs
 
 
+def _mixed_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+    """main: SPEC.md and NOTES.md l1..l5; ta edits l2 of both and tb edits l3 of both
+    (adjacent lines: applying tb after ta conflicts on BOTH files); tc, landed after tb,
+    edits only NOTES.md. The verified job branch is a hand-resolved merge of all three."""
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    base = "l1\nl2\nl3\nl4\nl5\n"
+    _write(repo, "SPEC.md", base)
+    _write(repo, "NOTES.md", base)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-qb", "ta")
+    _write(repo, "SPEC.md", "l1\nl2a\nl3\nl4\nl5\n")
+    _write(repo, "NOTES.md", "l1\nl2a\nl3\nl4\nl5\n")
+    _git(repo, "commit", "-qam", "wip ta")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "tb")
+    _write(repo, "SPEC.md", "l1\nl2\nl3b\nl4\nl5\n")
+    _write(repo, "NOTES.md", "l1\nl2\nl3b\nl4\nl5\n")
+    _git(repo, "commit", "-qam", "wip tb")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "tc")  # later than tb; touches only NOTES.md
+    _write(repo, "NOTES.md", "l1\nl2\nl3\nl4\nl5c\n")
+    _git(repo, "commit", "-qam", "wip tc")
+    _git(repo, "checkout", "-q", "main")
+    _write(repo, "moved.py", "M = 1\n")  # main moved on after the forks
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main moves")
+    _git(repo, "checkout", "-qb", "job")
+    _git(repo, "merge", "-q", "--no-edit", "ta")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-edit", "tb"],
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    assert merge.returncode != 0  # adjacent edits conflict on both files
+    _write(repo, "SPEC.md", "l1\nl2a\nl3b\nl4\nl5\n")
+    _write(repo, "NOTES.md", "l1\nl2a\nl3b\nl4\nl5\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "merge tb")
+    _git(repo, "merge", "-q", "--no-edit", "tc")  # l5, far from both edits: clean
+    _git(repo, "checkout", "-q", "main")
+    msgs = []
+    for name in ("ta", "tb", "tc"):
+        msg = tmp_path / f"{name}.txt"
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
+        msgs.append(str(msg))
+    return repo, msgs
+
+
 def test_conflict_on_a_path_no_later_task_touches_takes_the_verified_version(
     tmp_path: Path, monkeypatch: object, capsys: object
 ) -> None:
@@ -156,6 +210,31 @@ def test_conflict_on_a_path_a_later_task_touches_still_fails(
     assert rc == 1
     err = capsys.readouterr().err  # type: ignore[attr-defined]
     assert "git apply --index --3way" in err and "main started at" in err
+
+
+def test_mixed_conflict_one_path_a_later_task_touches_still_fails(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (ma, mb, mc) = _mixed_job(tmp_path, monkeypatch)
+    start = _git(repo, "rev-parse", "HEAD")
+    rc = land.main(
+        [
+            "--repo",
+            str(repo),
+            "--job",
+            "j",
+            "--verified",
+            "job",
+            f"ta={ma}",
+            f"tb={mb}",
+            f"tc={mc}",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "git apply --index --3way" in err and "main started at" in err
+    assert _git(repo, "rev-parse", "HEAD^") == start  # only ta landed
+    assert _git(repo, "log", "--format=%s", "-2").splitlines() == ["feat: ta", "main moves"]
 
 
 def test_a_non_conflict_apply_failure_still_fails(
