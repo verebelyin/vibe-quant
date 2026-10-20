@@ -311,3 +311,66 @@ def test_chart_overlay_equals_runtime_stream_bar_for_bar(
             f"{indicator_type}: chart[-1] equals the full-history value; the "
             "capped runtime differs, so this assertion is vacuous"
         )
+
+
+# Built-in types whose registry spec has ``nt_class is None`` (compute_fn path
+# at runtime). Every one of them must replay the runtime's capped buffer, not a
+# full-history pandas-ta formula. Random volume matters: MFI and VOLSMA read it,
+# and random_walk_bars uses a constant 1.0 that hides their drift.
+_MOVED_PARITY_CASES = [
+    ("TEMA", {"period": 14}),
+    ("MACD", {"fast_period": 12, "slow_period": 26, "signal_period": 9}),
+    ("ADX", {"period": 14}),
+    ("WILLR", {"period": 14}),
+    ("MFI", {"period": 14}),
+    ("ICHIMOKU", {"tenkan": 9, "kijun": 26, "senkou": 52}),
+    ("VOLSMA", {"period": 20}),
+]
+
+
+def _bars_with_random_volume(
+    n: int = 3000, seed: int = 7
+) -> list[tuple[str, float, float, float, float, float]]:
+    volumes = np.random.RandomState(seed).uniform(1.0, 100.0, n)
+    return [
+        (tf, o, h, lo, c, float(v))
+        for (tf, o, h, lo, c, _), v in zip(random_walk_bars(n, seed=seed), volumes, strict=True)
+    ]
+
+
+@pytest.mark.parametrize(("indicator_type", "params"), _MOVED_PARITY_CASES)
+def test_hardcoded_pta_overlay_equals_runtime_stream_bar_for_bar(
+    indicator_type: str, params: dict[str, object]
+) -> None:
+    """Every compute_fn-path built-in overlay equals the runtime stream bitwise."""
+    bars = _bars_with_random_volume()
+    df = _frame_from_bars(bars)
+
+    spec = indicator_registry.get(indicator_type)
+    assert spec is not None
+    outputs = spec.output_names
+
+    _, cls = compile_indicators({"ind": {"type": indicator_type, **params}})
+    snapshots = run_stream(
+        cls, bars, memo=False, specs={"ind": (indicator_type, params, "1h")}
+    )
+
+    out = compute_indicators(df, [{"type": indicator_type, **params}])
+    assert [s.output_name for s in out] == list(outputs), (
+        f"{indicator_type}: expected one series per spec output in spec order "
+        f"{outputs}, got {[s.output_name for s in out]}"
+    )
+    by_name = {s.output_name: s for s in out}
+    assert len(by_name) == len(outputs)
+
+    for output in outputs:
+        key = "ind" if len(outputs) == 1 else f"ind_{output}"
+        runtime = np.array([snap.get(key, np.nan) for snap in snapshots], dtype=np.float64)
+        chart = _values(by_name[output])
+        assert len(chart) == len(runtime)
+
+        differing = int((~((chart == runtime) | (np.isnan(chart) & np.isnan(runtime)))).sum())
+        assert np.array_equal(chart, runtime, equal_nan=True), (
+            f"{indicator_type}/{output}: chart overlay differs from the runtime "
+            f"stream on {differing}/{len(chart)} bars"
+        )

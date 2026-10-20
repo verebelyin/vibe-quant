@@ -8,7 +8,11 @@ the strategy runtime's capped-buffer schedule: the generated strategy feeds
 each compute_fn a rolling ``PtaBuffer`` (trim to the cap once it exceeds
 ``cap + cap // 4``) and reads the last value per bar, so the overlay must
 reproduce that stream rather than compute over the full request history.
-Hard-coded pandas-ta branches below keep their full-history formulas.
+The hard-coded pandas-ta branches below are only the types whose runtime is a
+NautilusTrader indicator (SMA/EMA/WMA/DEMA/RSI/BBANDS/STOCH/ATR/CCI/ROC/OBV/
+VWAP/KC/DONCHIAN): they keep a full-history formula and are not bit-equal to
+NT's own values. Every type on the compute_fn path (TEMA, MACD, ADX, WILLR,
+MFI, ICHIMOKU, VOLSMA and plugins) replays the runtime capped buffer.
 """
 
 from __future__ import annotations
@@ -126,7 +130,7 @@ def _compute_single(
     low = df["low"]
     volume = df["volume"]
 
-    if upper in {"SMA", "EMA", "WMA", "DEMA", "TEMA"}:
+    if upper in {"SMA", "EMA", "WMA", "DEMA"}:
         period = params.get("period", 20)
         func = getattr(df.ta, upper.lower(), None)
         if func is None:
@@ -142,26 +146,6 @@ def _compute_single(
         if result is None:
             return []
         return [("value", result)]
-
-    if upper == "MACD":
-        fast = params.get("fast_period", 12)
-        slow = params.get("slow_period", 26)
-        signal = params.get("signal_period", 9)
-        result = df.ta.macd(close=close, fast=fast, slow=slow, signal=signal)
-        if result is None:
-            return []
-        cols = result.columns.tolist()
-        # pandas-ta returns columns like MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
-        outputs: list[tuple[str, pd.Series]] = []
-        for col in cols:
-            col_lower = col.lower()
-            if "macdh" in col_lower or "histogram" in col_lower:
-                outputs.append(("histogram", result[col]))
-            elif "macds" in col_lower or "signal" in col_lower:
-                outputs.append(("signal", result[col]))
-            elif "macd" in col_lower:
-                outputs.append(("macd", result[col]))
-        return outputs
 
     if upper == "BBANDS":
         period = params.get("period", 20)
@@ -205,24 +189,12 @@ def _compute_single(
             return []
         return [("value", result)]
 
-    if upper == "ADX":
-        period = params.get("period", 14)
-        result = df.ta.adx(high=high, low=low, close=close, length=period)
-        if result is None:
-            return []
-        for col in result.columns:
-            if col.lower().startswith("adx_") and "dm" not in col.lower():
-                return [("value", result[col])]
-        return []
-
-    if upper in {"CCI", "WILLR", "ROC", "MFI"}:
+    if upper in {"CCI", "ROC"}:
         period = params.get("period", 14)
         func = getattr(df.ta, upper.lower(), None)
         if func is None:
             return []
-        if upper == "MFI":
-            result = func(high=high, low=low, close=close, volume=volume, length=period)
-        elif upper in {"CCI", "WILLR"}:
+        if upper == "CCI":
             result = func(high=high, low=low, close=close, length=period)
         else:
             result = func(close=close, length=period)
@@ -264,43 +236,13 @@ def _compute_single(
                 outputs.append(("middle", result[col]))
         return outputs
 
-    if upper == "ICHIMOKU":
-        tenkan = params.get("tenkan", 9)
-        kijun = params.get("kijun", 26)
-        senkou = params.get("senkou", 52)
-        # the accessor returns the visible-period DataFrame (pandas-ta-classic >= 0.8)
-        result = df.ta.ichimoku(tenkan=tenkan, kijun=kijun, senkou=senkou)
-        if result is None:
-            return []
-        cols = result.columns.tolist()
-        outputs = []
-        name_map = {
-            "isa": "span_a",
-            "isb": "span_b",
-            "its": "conversion",
-            "iks": "base",
-        }
-        for col in cols:
-            col_lower = col.lower()
-            for key, out_name in name_map.items():
-                if key in col_lower:
-                    outputs.append((out_name, result[col]))
-                    break
-        return outputs
-
-    if upper == "VOLSMA":
-        period = params.get("period", 20)
-        result = df.ta.sma(close=volume, length=period)
-        if result is None:
-            return []
-        return [("value", result)]
-
     # Generic registry fallback: any registered type without a hard-coded
-    # branch above is computed through the spec's own compute_fn — the same
-    # function (and params) the strategy compiler calls, replayed over the
-    # runtime's capped buffer schedule and warmup gate. Specs that cannot run
-    # on OHLCV alone raise _UnsupportedIndicatorError, which compute_indicators
-    # reports explicitly.
+    # branch above — every compute_fn-path built-in (TEMA, MACD, ADX, WILLR,
+    # MFI, ICHIMOKU, VOLSMA) and every plugin — is computed through the spec's
+    # own compute_fn: the same function (and params) the strategy compiler
+    # calls, replayed over the runtime's capped buffer schedule and warmup
+    # gate. Specs that cannot run on OHLCV alone raise
+    # _UnsupportedIndicatorError, which compute_indicators reports explicitly.
     spec = indicator_registry.get(upper)
     if spec is None:
         logger.warning("Unknown indicator type for computation: %s", indicator_type)
