@@ -22,9 +22,9 @@
           "reasoningEffort": "high"
         }
       },
-      "enabled": true,
-      "until": null,
-      "note": "user 2026-10-17: Sol OK for review again"
+      "enabled": false,
+      "until": "2026-10-21T08:00:00",
+      "note": "user 2026-10-20: ran out of limit, use something else for review"
     },
     "sonnet": {
       "runtime": "claude",
@@ -96,5 +96,5 @@
       "sonnet"
     ]
   },
-  "changed": "2026-10-17T21:40:10.234347+02:00"
+  "changed": "2026-10-20T11:35:33.008177+02:00"
 }
