@@ -349,15 +349,18 @@ async def _harness(
     trader_id: str = _TRADER_ID,
     logs_dir: str = "logs",
     validation_run_id: int | None = None,
+    start_fresh: bool = False,
 ) -> _Harness:
     """An initialized node whose watch fetcher and clock are injected seams."""
     fetch = _FakeFetch(orders, errors)
     factory = _FetchFactory(fetch)
     clock = clock if clock is not None else _Clock()
     alerts = alerts if alerts is not None else _Alerts()
-    overrides: dict[str, Any] = {} if validation_run_id is None else {
-        "validation_run_id": validation_run_id
-    }
+    overrides: dict[str, Any] = {}
+    if validation_run_id is not None:
+        overrides["validation_run_id"] = validation_run_id
+    if start_fresh:
+        overrides["start_fresh"] = True
     node = PaperTradingNode(
         _config(
             seeded, trader_id=trader_id, logs_path=seeded["tmp"] / logs_dir, **overrides
@@ -625,7 +628,11 @@ async def test_restore_uses_checkpoint_cursors_and_timestamp_for_missing_symbols
     watcher = harness.node._build_liquidation_watcher()
 
     assert watcher.state() == {
-        "cursors": {"BTCUSDT": 1_767_321_000_000, "ETHUSDT": _CHECKPOINT_MS},
+        "cursors": {
+            "BTCUSDT": 1_767_321_000_000,
+            "ETHUSDT": _CHECKPOINT_MS,
+            "STALEUSDT": 1,
+        },
         "seen": {"BTCUSDT:7": 1_767_320_000_000},
     }
     await harness.node._shutdown()

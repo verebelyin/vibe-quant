@@ -395,15 +395,20 @@ async def test_own_newer_than_account_row_unchanged(
 # ------------------------------------------------------------ R11 start fresh
 
 
-async def test_start_fresh_never_discards_own_checkpoint(
+async def test_start_fresh_keeps_own_risk_and_halt_but_looks_up_the_watch(
     seeded: dict[str, Any],  # noqa: F811
     fake_tradingnode: type[_FakeTradingNode],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R11: start_fresh keeps the own row (and its halt) and never queries the account."""
+    """R11: start_fresh keeps the own risk and halt; the account lookup runs for the watch.
+
+    1ghod: the liquidation watch is report-only, so it is still inherited from the
+    newer account row -- but the risk bookkeeping and the halt stay the own row's.
+    """
     _put(seeded["db"], "PAPER-007", risk=_risk(high_water_mark="10000"), halt="manual",
          message="M", state="halted")
-    _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="11000"))
+    _put(seeded["db"], "PAPER-041", risk=_risk(high_water_mark="11000"),
+         extra={"liquidation_watch": {"cursors": {"BTCUSDT": 5}, "seen": {}}})
     calls: list[tuple[str, str]] = []
     original = StatePersistence.load_newer_account_checkpoint
 
@@ -415,12 +420,13 @@ async def test_start_fresh_never_discards_own_checkpoint(
     node, events = _node(monkeypatch, seeded, start_fresh=True)
     await node._initialize()
     try:
-        assert calls == []
+        assert calls == [(ACCOUNT_A, "PAPER-007")]
         assert node._restored_risk is not None
         assert node._restored_risk.to_dict()["high_water_mark"] == "10000"
         assert node.status.state == NodeState.HALTED
         assert node.status.halt_reason == HaltReason.MANUAL
         assert _restores(events)[0]["risk_source_trader_id"] == "PAPER-007"
+        assert node._restored_watch == {"cursors": {"BTCUSDT": 5}, "seen": {}}
     finally:
         await node._shutdown()
 

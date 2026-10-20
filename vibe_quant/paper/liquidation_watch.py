@@ -113,7 +113,10 @@ class LiquidationWatcher:
             consecutive failures that just ended (R52).
         now_ms: Injected clock in epoch milliseconds, read once per cycle (R46).
         cursors: Restored per-symbol cursors from the checkpoint, or ``None``. A
-            symbol with no restored cursor starts at the current ``now_ms`` (R50).
+            symbol with no restored cursor starts at the current ``now_ms`` (R50). A
+            restored symbol this watcher does not trade is carried through
+            ``state()`` unchanged, so a later session that trades it rescans from
+            the right cursor (vibe-quant-0m3tf).
         seen: Restored ``key -> update_ms`` map, or ``None`` (R50).
         interval_s: Healthy cadence in seconds.
         max_backoff_s: Cap on the per-symbol backoff, in seconds (R52).
@@ -173,11 +176,17 @@ class LiquidationWatcher:
         self._fetch_timeout_s = fetch_timeout_s
 
         node_start_ms = now_ms()
-        restored = cursors or {}
+        restored = {symbol: int(value) for symbol, value in (cursors or {}).items()}
         # R50: fresh start = node start ms; restore = the checkpoint's per-symbol
-        # cursor, else the node start ms.
+        # cursor, else the node start ms. 0m3tf: a restored symbol this session does
+        # not trade is carried through ``state()`` untouched -- never polled, never in
+        # the failure/backoff bookkeeping -- so the next session trading it still
+        # rescans from the right cursor.
+        self._carried = {
+            symbol: ms for symbol, ms in restored.items() if symbol not in self._symbols
+        }
         self._cursors = {
-            symbol: int(restored.get(symbol, node_start_ms)) for symbol in self._symbols
+            symbol: restored.get(symbol, node_start_ms) for symbol in self._symbols
         }
         self._seen = {key: int(value) for key, value in (seen or {}).items()}
         self._failures: dict[str, int] = dict.fromkeys(self._symbols, 0)
@@ -187,9 +196,17 @@ class LiquidationWatcher:
         self._prune_seen()
 
     def state(self) -> dict[str, dict[str, int]]:
-        """Return the checkpoint payload, already pruned (R50)."""
+        """Return the checkpoint payload, already pruned (R50).
+
+        0m3tf: the cursors of symbols this session does not trade ride along, so a
+        later session on the account that trades them rescans from here instead of
+        from a later timestamp.
+        """
         self._prune_seen()
-        return {"cursors": dict(self._cursors), "seen": dict(self._seen)}
+        return {
+            "cursors": {**self._carried, **self._cursors},
+            "seen": dict(self._seen),
+        }
 
     async def poll_once(self) -> None:
         """Run one cycle over the symbols that are due by their own backoff (R46).
@@ -326,10 +343,19 @@ class LiquidationWatcher:
             )
 
     def _prune_seen(self) -> None:
-        """R50: keep only keys the next request window can return again."""
-        if not self._cursors:
+        """R50: keep only keys the next request window can return again.
+
+        0m3tf/W1: the floor is clamped at ``now - lookback_cap_ms`` (the R46 window
+        never starts earlier than that), so a stale carried cursor cannot pin it low
+        and keep keys no later request can return.
+        """
+        cursors = [*self._carried.values(), *self._cursors.values()]
+        if not cursors:
             return
-        floor_ms = min(self._cursors.values()) - self._overlap_ms
+        floor_ms = max(
+            min(cursors) - self._overlap_ms,
+            self._now_ms() - self._lookback_cap_ms,
+        )
         self._seen = {key: ms for key, ms in self._seen.items() if ms >= floor_ms}
 
     def _time_to_next_attempt_s(self) -> float:

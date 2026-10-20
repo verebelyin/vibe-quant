@@ -1730,10 +1730,11 @@ class PaperTradingNode:
         if restored is not None:
             # R50b/R50c: the checkpoint's own cursor per traded symbol; one it does not
             # name starts at the checkpoint itself, which covers the downtime gap.
-            cursors = {
-                symbol: restored["cursors"].get(symbol, self._restored_watch_ms)
-                for symbol in resolved.symbols
-            }
+            # 0m3tf: restored cursors of symbols this session does NOT trade are handed
+            # over as well, so the watcher carries them through every checkpoint.
+            cursors = dict(restored["cursors"])
+            for symbol in resolved.symbols:
+                cursors.setdefault(symbol, self._restored_watch_ms)
             seen = restored["seen"]
         watcher = LiquidationWatcher(
             fetch,
@@ -2469,15 +2470,20 @@ class PaperTradingNode:
         """Restore the risk state (and halt) of the previous session.
 
         The trader's own latest checkpoint (restart / /restore) is read as before.
-        Unless ``start_fresh``, the newest checkpoint of ANOTHER trader on the same
-        account that is newer than the own one is the source of the risk bookkeeping
-        (high water mark, UTC-day baseline, consecutive losses) AND of the liquidation
-        watch (forceOrders cursors + dedupe keys, merged with the own row's cursors
-        and bounded by the older of the two timestamps), so a new session id cannot
-        reset the drawdown/daily-loss limits and no venue liquidation between the two
-        sessions is skipped. Halts: the own halt always
-        wins; from another session only an ERROR halt is inherited (an unrecognised
-        reason counts as ERROR). ``start_fresh`` never discards the own checkpoint.
+        The newest checkpoint of ANOTHER trader on the same account that is newer than
+        the own one is ALWAYS looked up. Unless ``start_fresh``, it is the source of
+        the risk bookkeeping (high water mark, UTC-day baseline, consecutive losses),
+        so a new session id cannot reset the drawdown/daily-loss limits. The
+        liquidation watch (forceOrders cursors + dedupe keys) is inherited from that
+        newer row regardless of ``start_fresh`` -- it is report-only, never a risk
+        limit -- merged with the own row's cursors and bounded by the older of the two
+        timestamps, so no venue liquidation between the two sessions is skipped. The
+        own watch is captured BEFORE the newer-row lookup, so an unreadable newer row
+        (which halts ERROR) never discards it.
+        Halts: the own halt always wins; from another session only an ERROR halt is
+        inherited (an unrecognised reason counts as ERROR). ``start_fresh`` never
+        discards the own checkpoint; it resets only the risk/halt inheritance
+        (vibe-quant-1ghod).
         Positions and orders come from NautilusTrader's venue reconciliation
         (claimed via ``external_order_claims``); the checkpoint copy is only logged.
         """
@@ -2491,6 +2497,14 @@ class PaperTradingNode:
             own = self._persistence.load_latest_account_checkpoint(
                 self._config.trader_id, account
             )
+            # W5/1ghod: the OWN watch is captured BEFORE the newer-row lookup, so an
+            # unreadable newer row still halts ERROR (W3) without discarding the own
+            # cursors and dedupe keys -- a duplicate alert is acceptable, a miss is not.
+            if own is not None:
+                self._restored_watch_ms = self._checkpoint_ms(own.timestamp)
+                self._restored_watch = self._restored_watch_state(
+                    own.node_status.get("liquidation_watch")
+                )
             newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
             if newest is not None:
                 newest_account = newest.node_status.get("account")
@@ -2501,14 +2515,32 @@ class PaperTradingNode:
                         newest_account,
                         account,
                     )
-            inherited = (
-                None
-                if self._config.start_fresh
-                else self._persistence.load_newer_account_checkpoint(
-                    account, self._config.trader_id
-                )
+            newer = self._persistence.load_newer_account_checkpoint(
+                account, self._config.trader_id
             )
+            # 1ghod: the lookup ALWAYS runs. ``start_fresh`` only drops the newer row
+            # as the RISK/halt source -- the liquidation watch is report-only and is
+            # still inherited, so a venue liquidation in the gap is never silent.
+            inherited = None if self._config.start_fresh else newer
             source = inherited if inherited is not None else own
+            # 1zh0m + 1ghod: the watch source is the newer row whatever start_fresh
+            # says, merged over the own row captured above. The newer row wins for a
+            # symbol both name; a symbol only the own (older) row names keeps ITS
+            # cursor, and every symbol neither names starts at the older of the two
+            # timestamps, so no venue liquidation in the gap is skipped. With no own row
+            # the watch source bounds the gap by itself.
+            if newer is not None:
+                if own is None:
+                    self._restored_watch_ms = self._checkpoint_ms(newer.timestamp)
+                merged_watch = self._restored_watch
+                if merged_watch is None:
+                    merged_watch = {"cursors": {}, "seen": {}}
+                source_watch = self._restored_watch_state(
+                    newer.node_status.get("liquidation_watch")
+                )
+                merged_watch["cursors"].update(source_watch["cursors"])
+                merged_watch["seen"].update(source_watch["seen"])
+                self._restored_watch = merged_watch
             if source is None:
                 if not self._config.start_fresh:
                     logger.warning(
@@ -2518,23 +2550,6 @@ class PaperTradingNode:
                         account,
                     )
                 return
-            # 1zh0m: the watch follows the risk source, merged with the own row. The
-            # newer row wins for a symbol both name; a symbol only the own (older) row
-            # names keeps ITS cursor, and every symbol neither names starts at the
-            # older of the two timestamps, so no venue liquidation in the gap is
-            # skipped. With no own row the source row bounds the gap by itself.
-            self._restored_watch_ms = self._checkpoint_ms(
-                own.timestamp if own is not None else source.timestamp
-            )
-            merged_watch = self._restored_watch_state(
-                own.node_status.get("liquidation_watch") if own is not None else None
-            )
-            source_watch = self._restored_watch_state(
-                source.node_status.get("liquidation_watch")
-            )
-            merged_watch["cursors"].update(source_watch["cursors"])
-            merged_watch["seen"].update(source_watch["seen"])
-            self._restored_watch = merged_watch
             self._restored_risk, problems = RiskState.from_checkpoint(
                 source.node_status.get("risk")
             )
