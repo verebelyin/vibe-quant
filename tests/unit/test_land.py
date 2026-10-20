@@ -70,6 +70,130 @@ def _job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
     return repo, msgs
 
 
+def _adjacent_job(tmp_path: Path, monkeypatch: object) -> tuple[Path, list[str]]:
+    """main: SPEC.md l1..l5; ta edits l2 and tb edits l3 (same fork, adjacent lines);
+    main then moves on; the verified job branch merges ta and tb, resolving the
+    SPEC.md conflict by hand."""
+    for k, v in _ENV.items():
+        monkeypatch.setenv(k, v)  # type: ignore[attr-defined]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _write(repo, "SPEC.md", "l1\nl2\nl3\nl4\nl5\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-qb", "ta")
+    _write(repo, "SPEC.md", "l1\nl2a\nl3\nl4\nl5\n")
+    _git(repo, "commit", "-qam", "wip ta")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "tb")
+    _write(repo, "SPEC.md", "l1\nl2\nl3b\nl4\nl5\n")
+    _git(repo, "commit", "-qam", "wip tb")
+    _git(repo, "checkout", "-q", "main")
+    _write(repo, "moved.py", "M = 1\n")  # main moved on after the fork
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main moves")
+    _git(repo, "checkout", "-qb", "job")
+    _git(repo, "merge", "-q", "--no-edit", "ta")
+    merge = subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-edit", "tb"],
+        capture_output=True,
+        text=True,
+        env=_ENV,
+    )
+    assert merge.returncode != 0  # adjacent edits conflict
+    _write(repo, "SPEC.md", "l1\nl2a\nl3b\nl4\nl5\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "merge tb")
+    _git(repo, "checkout", "-q", "main")
+    msgs = []
+    for name in ("ta", "tb"):
+        msg = tmp_path / f"{name}.txt"
+        msg.write_text(f"feat: {name}\n\nWhy:\nx\n")
+        msgs.append(str(msg))
+    return repo, msgs
+
+
+def test_conflict_on_a_path_no_later_task_touches_takes_the_verified_version(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (ma, mb) = _adjacent_job(tmp_path, monkeypatch)
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"ta={ma}", f"tb={mb}"])
+    assert rc == 0
+    assert (repo / "SPEC.md").read_text() == "l1\nl2a\nl3b\nl4\nl5\n"
+    assert _git(repo, "log", "--format=%s", "-3").splitlines() == [
+        "feat: tb",
+        "feat: ta",
+        "main moves",
+    ]
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "SPEC.md conflicted" in out and "tree equals job" in out
+
+
+def test_conflict_on_a_path_a_later_task_touches_still_fails(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (ma, mb) = _adjacent_job(tmp_path, monkeypatch)
+    _git(repo, "checkout", "-qb", "tc")  # a third sibling, landed after tb
+    _write(repo, "SPEC.md", "l1\nl2\nl3\nl4\nl5c\n")
+    _git(repo, "commit", "-qam", "wip tc")
+    _git(repo, "checkout", "-q", "main")
+    msg = tmp_path / "tc.txt"
+    msg.write_text("feat: tc\n\nWhy:\nx\n")
+    rc = land.main(
+        [
+            "--repo",
+            str(repo),
+            "--job",
+            "j",
+            "--verified",
+            "job",
+            f"ta={ma}",
+            f"tb={mb}",
+            f"tc={msg}",
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "git apply --index --3way" in err and "main started at" in err
+
+
+def test_a_non_conflict_apply_failure_still_fails(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (m1, _m2) = _job(tmp_path, monkeypatch)
+    real_run = land.subprocess.run
+
+    def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+        if "apply" in cmd:  # a failure with nothing left unmerged
+            return subprocess.CompletedProcess(cmd, 1, "", "patch does not apply")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(land.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+    rc = land.main(["--repo", str(repo), "--job", "j", "--verified", "job", f"t1={m1}"])
+    assert rc == 1
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "git apply --index --3way - failed: patch does not apply" in err
+
+
+def test_a_resolved_conflict_is_still_checked_against_verified(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    repo, (ma, mb) = _adjacent_job(tmp_path, monkeypatch)
+    _git(repo, "checkout", "-q", "job")
+    _git(repo, "checkout", "-qb", "other")
+    _write(repo, "extra.py", "E = 1\n")  # verified tree holds a file the job lacks
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "other")
+    _git(repo, "checkout", "-q", "main")
+    rc = land.main(
+        ["--repo", str(repo), "--job", "j", "--verified", "other", f"ta={ma}", f"tb={mb}"]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err  # type: ignore[attr-defined]
+    assert "tree differs from other" in err and "extra.py" in err
+
+
 def test_lands_one_commit_per_task_and_keeps_mains_own_changes(
     tmp_path: Path, monkeypatch: object
 ) -> None:

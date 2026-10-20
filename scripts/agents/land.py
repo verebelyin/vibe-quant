@@ -13,7 +13,8 @@ Run from the main checkout, on ``main``. In order:
    and committed with ``git commit -F <message file>`` (the commit-msg hook checks it). The
    fork is ``merge-base(<main at start>, <task>)``, or the parent's tip for ``child@parent``
    (a stacked task). A two-dot ``git diff main <task>`` would revert what main gained since
-   the fork.
+   the fork. A path the 3-way apply leaves conflicted is taken from ``--verified`` when no
+   later task in the list touches it; otherwise the land fails as before.
 3. The tree must then equal ``--verified`` (board/telemetry paths excluded); otherwise it
    prints the diff stat and exits 1: reset main to the printed start SHA (unpushed) and redo.
 4. ``--push``: ``git pull --rebase --autostash`` then ``git push``.
@@ -46,10 +47,8 @@ class LandError(Exception):
     """A step failed; the message says what state main is in."""
 
 
-def git(repo: Path, *args: str, stdin: str | None = None, check: bool = True) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args], input=stdin, capture_output=True, text=True
-    )
+def git(repo: Path, *args: str, check: bool = True) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if check and proc.returncode != 0:
         raise LandError(f"git {' '.join(args)} failed: {(proc.stderr or proc.stdout).strip()}")
     return proc.stdout
@@ -86,16 +85,44 @@ def commit_mirrors(repo: Path, job: str) -> bool:
     return True
 
 
-def land_task(repo: Path, start: str, task: Task) -> str:
-    fork = (
-        git(repo, "rev-parse", task.parent).strip()
-        if task.parent
-        else (git(repo, "merge-base", start, task.branch).strip())
-    )
+def task_fork(repo: Path, start: str, task: Task) -> str:
+    """A stacked task forks at its parent's tip; otherwise at merge-base(start, branch)."""
+    if task.parent:
+        return git(repo, "rev-parse", task.parent).strip()
+    return git(repo, "merge-base", start, task.branch).strip()
+
+
+def land_task(repo: Path, start: str, task: Task, later: set[str], verified: str) -> str:
+    fork = task_fork(repo, start, task)
     diff = git(repo, "diff", "--binary", fork, task.branch, "--", ".", *_EXCLUDE_MIRRORS)
     if not diff.strip():
         raise LandError(f"{task.branch}: empty delta from {fork[:12]}")
-    git(repo, "apply", "--index", "--3way", "-", stdin=diff)
+    applied = subprocess.run(
+        ["git", "-C", str(repo), "apply", "--index", "--3way", "-"],
+        input=diff,
+        capture_output=True,
+        text=True,
+    )
+    if applied.returncode != 0:
+        conflicted = git(repo, "diff", "--name-only", "--diff-filter=U").split()
+        if not conflicted or any(path in later for path in conflicted):
+            raise LandError(
+                f"git apply --index --3way - failed: "
+                f"{(applied.stderr or applied.stdout).strip()}"
+            )
+        for path in conflicted:
+            exists = subprocess.run(
+                ["git", "-C", str(repo), "cat-file", "-e", f"{verified}:{path}"],
+                capture_output=True,
+            ).returncode == 0
+            if exists:
+                git(repo, "checkout", verified, "--", path)
+            else:
+                git(repo, "rm", "-q", "-f", "--", path)
+            print(
+                f"land: {task.branch}: {path} conflicted, took {verified} version "
+                "(no later task touches it)"
+            )
     git(repo, "commit", "-q", "-F", str(task.message))
     return git(repo, "rev-parse", "HEAD").strip()
 
@@ -129,8 +156,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"land: {exc}", file=sys.stderr)
         return 2
     try:
-        for task in args.tasks:
-            sha = land_task(repo, start, task)
+        for i, task in enumerate(args.tasks):
+            later = {
+                path
+                for other in args.tasks[i + 1 :]
+                for path in git(
+                    repo,
+                    "diff",
+                    "--name-only",
+                    task_fork(repo, start, other),
+                    other.branch,
+                    "--",
+                    ".",
+                    *_EXCLUDE_MIRRORS,
+                ).split()
+            }
+            sha = land_task(repo, start, task, later, args.verified)
             print(f"land: {task.branch} -> {sha[:12]}")
         stat = tree_mismatch(repo, args.verified)
         if stat:
