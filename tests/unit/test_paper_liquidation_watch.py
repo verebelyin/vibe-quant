@@ -151,6 +151,25 @@ async def test_hung_symbols_time_out_together_not_one_after_another() -> None:
     assert watcher.state()["cursors"]["BTCUSDT"] == _START_MS
 
 
+@pytest.mark.parametrize(
+    ("n_symbols", "interval_s", "weight"),
+    [(1, 60, 20), (12, 60, 240), (13, 60, 260), (12, 30, 480)],
+)
+async def test_request_weight_per_minute_counts_every_watched_symbol(
+    n_symbols: int, interval_s: int, weight: int
+) -> None:
+    """altqb: forceOrders with a symbol weighs 20 (Binance SDK docstring); a cycle
+    per ``interval_s`` over every watched symbol, traded or carried."""
+    recorder = _Recorder()
+    symbols = [f"S{i}USDT" for i in range(n_symbols)]
+    watcher = _make_watcher(
+        _FakeFetch(), recorder, symbols=symbols[:1],
+        cursors={s: _START_MS for s in symbols}, interval_s=interval_s,
+    )
+
+    assert watcher.weight_per_minute() == weight
+
+
 def _make_watcher(
     fetch: Callable[[str, int, int], Awaitable[list[ForceOrder]]],
     recorder: _Recorder,

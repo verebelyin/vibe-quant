@@ -86,7 +86,12 @@ from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_WATCH_TICK_S,
     KillSwitchMonitor,
 )
-from vibe_quant.paper.liquidation_watch import LiquidationWatcher
+from vibe_quant.paper.liquidation_watch import (
+    FORCE_ORDERS_WEIGHT,
+    IP_WEIGHT_LIMIT_PER_MIN,
+    WATCH_WEIGHT_BUDGET_PER_MIN,
+    LiquidationWatcher,
+)
 from vibe_quant.paper.persistence import (
     PaperCommand,
     PaperCommandQueue,
@@ -1751,6 +1756,18 @@ class PaperTradingNode:
             cursors=cursors,
             seen=seen,
         )
+        weight = watcher.weight_per_minute()
+        if weight > WATCH_WEIGHT_BUDGET_PER_MIN:
+            logger.warning(
+                "paper %s: liquidation watch request weight %d/min over the %d/min budget "
+                "(%d symbols x %d per 60 s; Binance IP cap %d/min)",
+                self._config.trader_id,
+                weight,
+                WATCH_WEIGHT_BUDGET_PER_MIN,
+                len(watcher.state()["cursors"]),
+                FORCE_ORDERS_WEIGHT,
+                IP_WEIGHT_LIMIT_PER_MIN,
+            )
         self._liquidation_watcher = watcher
         return watcher
 

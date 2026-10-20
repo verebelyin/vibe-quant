@@ -17,7 +17,9 @@ is still inherited and merged with the own row (vibe-quant-1ghod).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import pytest
 
 from tests.unit.test_audit_paper_node import _config
 from tests.unit.test_paper_halt_restore import seeded  # noqa: F401  (fixture)
@@ -56,10 +58,6 @@ from vibe_quant.paper.config import account_id
 from vibe_quant.paper.guard import RESTORED_HALT_PREFIX, HaltReason
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 from vibe_quant.paper.persistence import StateCheckpoint, StatePersistence
-
-if TYPE_CHECKING:
-    import pytest
-
 
 _WATCH_CURSOR = 1_700_000_000_000
 #: Own row 00:30Z and the newer other-session row 02:00Z (_CHECKPOINT_STAMP).
@@ -519,6 +517,42 @@ async def test_disjoint_chain_carries_the_seen_key_and_does_not_re_alert(
         assert last.alerts.calls == []
     finally:
         await last.node._shutdown()
+
+
+@pytest.mark.parametrize(("carried", "warns"), [(11, False), (12, True)])
+async def test_watch_over_the_request_budget_warns_at_build(
+    detector_seeded: dict[str, Any],  # noqa: F811
+    detector_fake_tradingnode: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    carried: int,
+    warns: bool,
+) -> None:
+    """altqb: ETHUSDT + N carried symbols; above 240 weight/min (10% of the 2400/min
+    IP cap) the watcher build logs one WARNING with the numbers; at 240 it is quiet."""
+    acct = account_id(_config(detector_seeded).binance)
+    eth_run = _run_with_symbols(detector_seeded, ["ETHUSDT"])
+    cursors = {f"C{i}USDT": _OWN_MS for i in range(carried)}
+    _write_checkpoint(
+        detector_seeded,
+        trader_id=_TRADER_ID,
+        stamp=_OWN_STAMP,
+        node_status={"account": acct, "liquidation_watch": {"cursors": cursors, "seen": {}}},
+    )
+    harness = await _harness(monkeypatch, detector_seeded, orders={}, validation_run_id=eth_run)
+    try:
+        with caplog.at_level(logging.WARNING):
+            harness.node._build_liquidation_watcher()
+        hits = [r.getMessage() for r in caplog.records if "request weight" in r.getMessage()]
+        if warns:
+            assert hits == [
+                f"paper {_TRADER_ID}: liquidation watch request weight 260/min over the "
+                "240/min budget (13 symbols x 20 per 60 s; Binance IP cap 2400/min)"
+            ]
+        else:
+            assert hits == []
+    finally:
+        await harness.node._shutdown()
 
 
 async def test_halted_error_session_still_watches_untraded_symbols(

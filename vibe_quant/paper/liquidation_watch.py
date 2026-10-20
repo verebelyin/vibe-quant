@@ -62,6 +62,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: altqb: GET /fapi/v1/forceOrders weighs 20 with a symbol, 50 without (Binance
+#: SDK docstring, binance-connector-js trade-api.ts); the USD-M IP cap is 2400/min
+#: (public exchangeInfo, 2026-10-20). The watch keeps itself under 10% of the cap.
+FORCE_ORDERS_WEIGHT = 20
+IP_WEIGHT_LIMIT_PER_MIN = 2400
+WATCH_WEIGHT_BUDGET_PER_MIN = IP_WEIGHT_LIMIT_PER_MIN // 10
+
 #: R46: the clamped window is the lookback cap minus one minute.
 _CLAMP_SLACK_MS = 60_000
 _MS_PER_DAY = 86_400_000
@@ -193,6 +200,10 @@ class LiquidationWatcher:
         self._degraded: set[str] = set()
         self._clamped: set[str] = set()
         self._prune_seen()
+
+    def weight_per_minute(self) -> int:
+        """altqb: request weight this watcher spends per minute (traded + carried)."""
+        return FORCE_ORDERS_WEIGHT * len(self._symbols) * 60 // self._interval_s
 
     def state(self) -> dict[str, dict[str, int]]:
         """Return the checkpoint payload, already pruned (R50).
