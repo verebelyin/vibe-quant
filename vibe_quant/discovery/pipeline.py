@@ -44,6 +44,7 @@ from vibe_quant.discovery.fitness import FitnessResult, evaluate_population
 from vibe_quant.discovery.genome import chromosome_to_dsl
 from vibe_quant.discovery.guardrails import GuardrailConfig, GuardrailResult, apply_guardrails
 from vibe_quant.discovery.operators import (
+    MAX_SCALAR_GENES,
     StrategyChromosome,
     _random_chromosome,
     apply_elitism,
@@ -2141,7 +2142,7 @@ class DiscoveryPipeline:
         """
         guardrail_cfg = GuardrailConfig(
             min_trades=self.config.min_trades,
-            max_complexity=8,
+            max_complexity=MAX_SCALAR_GENES,
             require_dsr=self.config.require_dsr,
             dsr_rule=self.config.dsr_rule,
             require_wfa=False,  # WFA requires separate out-of-sample data

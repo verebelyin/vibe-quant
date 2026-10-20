@@ -6,7 +6,7 @@ genes excluded, as on main). T3 makes the three duplicated
 genome is penalised and guardrailed for BOTH sides:
 
 * ``fitness._evaluate_single`` (the Occam / complexity penalty, R20),
-* ``pipeline._validate_top_strategies`` (the ``max_complexity=8`` guardrail),
+* ``pipeline._validate_top_strategies`` (the ``max_complexity=10`` guardrail),
 * ``scripts/research/power/gatechain.evaluate_candidate`` (same guardrail).
 
 R22 is a property of the T1 DSL: a both genome's short side is part of its
@@ -46,6 +46,7 @@ from vibe_quant.discovery.fitness import (  # noqa: E402
 from vibe_quant.discovery.genome import chromosome_to_dsl  # noqa: E402
 from vibe_quant.discovery.guardrails import check_complexity  # noqa: E402
 from vibe_quant.discovery.operators import (  # noqa: E402
+    MAX_SCALAR_GENES,
     ConditionType,
     Direction,
     StrategyChromosome,
@@ -57,7 +58,6 @@ from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline  # 
 
 DIGEST_SEED = 7
 COUNT = 200
-MAX_COMPLEXITY = 8
 
 
 # ---------------------------------------------------------------------------
@@ -157,17 +157,17 @@ def test_both_complexity_counts_short_genes() -> None:
 
 
 def test_complexity_guardrail_equality_edge_and_existing_reason() -> None:
-    # 2+2 long + 2+2 short = 8 genes: exactly max_complexity -> passes.
-    edge = _both(2, 2, 2, 2)
-    assert scalar_gene_count(edge) == 8
-    assert check_complexity(scalar_gene_count(edge), MAX_COMPLEXITY) == (True, None)
+    # 3+2 long + 3+2 short = 10 genes: exactly max_complexity -> passes.
+    edge = _both(3, 2, 3, 2)
+    assert scalar_gene_count(edge) == 10
+    assert check_complexity(scalar_gene_count(edge), MAX_SCALAR_GENES) == (True, None)
 
-    # 3+2 long + 3+2 short = 10 genes: rejected, with the untouched reason text.
-    over = _both(3, 2, 3, 2)
-    assert scalar_gene_count(over) == 10
-    assert check_complexity(scalar_gene_count(over), MAX_COMPLEXITY) == (
+    # 3+3 long + 3+2 short = 11 genes: rejected, with the untouched reason text.
+    over = _both(3, 3, 3, 2)
+    assert scalar_gene_count(over) == 11
+    assert check_complexity(scalar_gene_count(over), MAX_SCALAR_GENES) == (
         False,
-        "Too complex: 10 genes > 8 max",
+        "Too complex: 11 genes > 10 max",
     )
 
 
@@ -180,16 +180,16 @@ def test_pipeline_guardrail_counts_short_genes() -> None:
     pipe = _pipe()
     fit = _fit()
 
-    # 8 genes: at the max -> kept (the short side is counted, not double-rejected).
-    at_edge = _both(2, 2, 2, 2)
+    # 10 genes: at the max -> kept (the short side is counted, not double-rejected).
+    at_edge = _both(3, 2, 3, 2)
     assert [c for c, _ in pipe._validate_top_strategies([(at_edge, fit)], 1)] == [at_edge]
 
-    # 10 genes: rejected by the complexity guardrail with the existing reason.
-    over = _both(3, 2, 3, 2)
+    # 11 genes: rejected by the complexity guardrail with the existing reason.
+    over = _both(3, 3, 3, 2)
     assert pipe._validate_top_strategies([(over, fit)], 1) == []
     [rejection] = pipe._guardrail_rejections
     assert rejection["stage"] == "guardrails"
-    assert "Too complex: 10 genes > 8 max" in rejection["reasons"]
+    assert "Too complex: 11 genes > 10 max" in rejection["reasons"]
 
 
 # ---------------------------------------------------------------------------
@@ -203,13 +203,13 @@ def test_gatechain_complexity_marginal_counts_short_genes() -> None:
     closes = _flat_closes(N_DAYS)
     fit = _fit(mtm_daily_returns=_series(2.0, N_DAYS, 21))
 
-    at_edge = _both(2, 2, 2, 2)  # 8 genes -> complexity passes
+    at_edge = _both(3, 2, 3, 2)  # 10 genes -> complexity passes
     out_edge = gatechain.evaluate_candidate(
         at_edge, fit, _pass_holdout(), windows, closes, settings
     )
     assert out_edge["marginals"]["complexity"] is True
 
-    over = _both(3, 2, 3, 2)  # 10 genes -> complexity rejects
+    over = _both(3, 3, 3, 2)  # 11 genes -> complexity rejects
     out_over = gatechain.evaluate_candidate(over, fit, _pass_holdout(), windows, closes, settings)
     assert out_over["marginals"]["complexity"] is False
 

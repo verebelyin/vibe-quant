@@ -251,6 +251,11 @@ MIN_ENTRY_GENES = 1
 MAX_ENTRY_GENES = 5
 MIN_EXIT_GENES = 1
 MAX_EXIT_GENES = 3
+# Cap on the scalar-threshold genes counted by ``scalar_gene_count`` (both sides;
+# MA genes excluded). A single-direction genome tops out at 5 + 3 = 8, so this
+# only binds direction=BOTH (up to 5 + 3 + 5 + 3 = 16); >= 4 keeps the trim from
+# ever emptying one of the four lists.
+MAX_SCALAR_GENES = 10
 # MA genes optional (min=0) and capped at 1 each so they don't combinatorially
 # narrow entries when paired with the scalar-threshold genes.
 MAX_MA_ENTRY_GENES = 1
@@ -333,6 +338,29 @@ def scalar_gene_count(chrom: StrategyChromosome) -> int:
         + len(chrom.short_entry_genes)
         + len(chrom.short_exit_genes)
     )
+
+
+def _enforce_complexity_cap(chrom: StrategyChromosome) -> None:
+    """Trim a chromosome to ``MAX_SCALAR_GENES`` scalar genes, in place.
+
+    Pops the last gene of the longest of the four scalar lists until the total
+    fits; ties go to the first list in (entry, exit, short_entry, short_exit)
+    order. A total above the cap over four non-empty lists means the longest
+    list holds at least 3 genes, so the trim never empties a list.
+
+    Draws no RNG -- it is a deterministic tail cut. That keeps every
+    long/short run's random stream bit-identical (R16) and lets a bred child
+    be repaired instead of re-sampled.
+    """
+    while scalar_gene_count(chrom) > MAX_SCALAR_GENES:
+        longest = max(
+            chrom.entry_genes,
+            chrom.exit_genes,
+            chrom.short_entry_genes,
+            chrom.short_exit_genes,
+            key=len,
+        )
+        longest.pop()
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +731,11 @@ def is_valid_chromosome(chrom: StrategyChromosome) -> bool:
     ):
         return False
 
+    # Complexity backstop (vibe-quant-dktr4): producers trim to the cap, so this
+    # never fires for a genome an operator built -- it only catches hand-built ones.
+    if scalar_gene_count(chrom) > MAX_SCALAR_GENES:
+        return False
+
     for gene in (
         chrom.entry_genes + chrom.exit_genes + chrom.short_entry_genes + chrom.short_exit_genes
     ):
@@ -762,7 +795,8 @@ def _sync_direction_genes(chrom: StrategyChromosome) -> None:
 
     A non-BOTH chromosome owns no short-side genes. A BOTH chromosome must carry
     1-5 short entries, 1-3 short exits and at most one short MA gene per slot, so
-    ``genome.chromosome_to_dsl`` can emit a short side the compiler will run.
+    ``genome.chromosome_to_dsl`` can emit a short side the compiler will run, and
+    its total scalar count is trimmed to ``MAX_SCALAR_GENES``.
     Missing slots are filled with a fresh random gene; non-BOTH never draws RNG,
     which keeps a single-direction GA run bit-identical (R16).
     """
@@ -780,6 +814,9 @@ def _sync_direction_genes(chrom: StrategyChromosome) -> None:
     del chrom.short_exit_genes[MAX_EXIT_GENES:]
     del chrom.short_ma_entry_genes[MAX_MA_ENTRY_GENES:]
     del chrom.short_ma_exit_genes[MAX_MA_EXIT_GENES:]
+    # Last, after every draw: crossover children (via _repair_chromosome) and
+    # warm-start seeds leave here within the scalar-gene cap.
+    _enforce_complexity_cap(chrom)
 
 
 def _repair_chromosome(chrom: StrategyChromosome) -> StrategyChromosome:
@@ -1110,6 +1147,9 @@ def mutate(chromosome: StrategyChromosome, mutation_rate: float = 0.1) -> Strate
         chrom.short_ma_exit_genes = _mutate_ma_genes(
             chrom.short_ma_exit_genes, mutation_rate, MAX_MA_EXIT_GENES
         )
+        # mutate never calls _repair_chromosome, so enforce the scalar-gene cap
+        # here -- after every draw, and without drawing any of its own.
+        _enforce_complexity_cap(chrom)
 
     return chrom
 
@@ -1479,6 +1519,8 @@ def _random_chromosome(
         chrom.short_exit_genes = [
             _random_gene() for _ in range(random.randint(MIN_EXIT_GENES, MAX_EXIT_GENES))
         ]
+        # Same reason as in mutate: trim after every draw, drawing nothing.
+        _enforce_complexity_cap(chrom)
     return chrom
 
 

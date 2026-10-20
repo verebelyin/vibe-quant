@@ -52,7 +52,7 @@ class TestGuardrailConfig:
     def test_defaults(self) -> None:
         cfg = GuardrailConfig()
         assert cfg.min_trades == 50
-        assert cfg.max_complexity == 8
+        assert cfg.max_complexity == 10
         assert cfg.require_dsr is True
         assert cfg.dsr_significance_level == 0.05
         assert cfg.require_wfa is True

@@ -32,7 +32,7 @@ from vibe_quant.discovery.guardrails import (
     apply_discovery_dsr_returns,
     apply_guardrails,
 )
-from vibe_quant.discovery.operators import scalar_gene_count
+from vibe_quant.discovery.operators import MAX_SCALAR_GENES, scalar_gene_count
 from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
@@ -215,7 +215,7 @@ def evaluate_candidate(
         num_genes=num_genes,
         config=GuardrailConfig(
             min_trades=cfg.min_trades,
-            max_complexity=8,
+            max_complexity=MAX_SCALAR_GENES,
             require_dsr=False,
             require_wfa=False,
             require_purged_kfold=False,

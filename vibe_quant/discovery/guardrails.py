@@ -66,7 +66,8 @@ class GuardrailConfig:
 
     Attributes:
         min_trades: Minimum trades required per candidate.
-        max_complexity: Maximum total genes (entry + exit) allowed.
+        max_complexity: Maximum scalar-threshold genes (both sides, MA genes
+            excluded) allowed; mirrors ``operators.MAX_SCALAR_GENES``.
         require_dsr: Whether to apply DSR multiple-testing correction.
         dsr_significance_level: p-value threshold for DSR significance.
         dsr_rule: ``"q95"`` (default, the quantile-matched Monte-Carlo spread;
@@ -79,7 +80,7 @@ class GuardrailConfig:
 
     min_trades: int = 50
     min_return: float = 0.0  # minimum total return (fraction, e.g. 0.0 = breakeven)
-    max_complexity: int = 8
+    max_complexity: int = 10
     require_dsr: bool = True
     dsr_significance_level: float = 0.05
     dsr_rule: Literal["emax", "q95"] = "q95"
