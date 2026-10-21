@@ -761,7 +761,7 @@ def test_route_prints_the_delegate_call_and_appends_a_ledger_row(
     rows = (job / "ledger.md").read_text().splitlines()
     assert rows[1] == "| agent | runtime | model | task | bead | worktree | status |"
     assert rows[-1].startswith(f"| cc-rd-demo-1 | t3 | flash | rd-demo | vq-1 | {repo} | ")
-    assert rows[-1].endswith(" dispatched |")
+    assert rows[-1].endswith(" rendered |")
 
 
 def test_route_with_no_available_model_exits_2(

@@ -384,7 +384,10 @@ def _sibling(name: str) -> Any:
 
 
 def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str) -> int:
-    """--route: one ready-to-send dispatch line + the ledger's "dispatched" row (exit 2: no route)."""
+    """--route: one ready-to-send dispatch line + a "rendered" ledger row (exit 2: no route).
+
+    The row says rendered, not dispatched: the chief records the real dispatch (taskId)
+    with ledger.py once delegate_task returns."""
     models = _sibling("models")
     default = Path(__file__).resolve().parents[2] / "docs" / "orchestration" / "models.json"
     data = models.load(Path(os.environ.get("VQ_MODELS_JSON") or default))
@@ -404,7 +407,7 @@ def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str)
     ledger = _sibling("ledger")
     ledger.append_row(job, {
         "agent": args.id, "runtime": runtime, "model": key, "task": task, "bead": args.bead,
-        "worktree": args.worktree, "status": f"{ledger.now_hm()} dispatched",
+        "worktree": args.worktree, "status": f"{ledger.now_hm()} rendered",
     })  # fmt: skip
     return 0
 
