@@ -19,8 +19,10 @@ import pytest
 from vibe_quant.paper.account_lock import (
     AccountBusyError,
     AccountLock,
+    TraderBusyError,
     account_lock_holder,
     acquire_account_lock,
+    acquire_trader_lock,
     default_lock_dir,
 )
 from vibe_quant.paper.config import BinanceTestnetConfig, ConfigurationError, account_id
@@ -48,6 +50,22 @@ def _hold(lock_dir: Path, account: str, body: bytes = b"4242 PAPER-OTHER\n") -> 
     """An independent holder: its own open file description, as a child process has."""
     lock_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(_lock_path(lock_dir, account), os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if body:
+        os.write(fd, body)
+    return fd
+
+
+def _trader_lock_path(lock_dir: Path, trader_id: str) -> Path:
+    return lock_dir / f"trader_{trader_id}.lock"
+
+
+def _hold_trader(
+    lock_dir: Path, trader_id: str, body: bytes = b"4242 binance:testnet:old\n"
+) -> int:
+    """An independent holder of a trader id's lock, as a running session is."""
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_trader_lock_path(lock_dir, trader_id), os.O_CREAT | os.O_RDWR)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if body:
         os.write(fd, body)
@@ -333,3 +351,86 @@ class TestUnreadableHolderMetadata:
 
         lock = acquire_account_lock(account, "PAPER-001", lock_dir)  # not left held
         lock.release()
+
+
+class TestAcquireTraderLock:
+    """2q7cv: one paper session per trader id, on any key or venue."""
+
+    @pytest.mark.parametrize(
+        ("trader_id", "account"),
+        [
+            ("PAPER-001", "binance:testnet:0123456789abcdef"),
+            ("LIVE-2", "binance:live:fedcba9876543210"),
+        ],
+    )
+    def test_lock_file_and_body_are_per_trader(
+        self, tmp_path: Path, trader_id: str, account: str
+    ) -> None:
+        lock_dir = tmp_path / "locks"
+
+        lock = acquire_trader_lock(trader_id, account, lock_dir)
+        try:
+            path = _trader_lock_path(lock_dir, trader_id)
+            assert path.read_text() == f"{os.getpid()} {account}\n"
+            # Another trader id is a different file, not a different body in this one.
+            assert not _trader_lock_path(lock_dir, "OTHER-9").exists()
+        finally:
+            lock.release()
+
+    def test_trader_lock_is_per_trader(self, tmp_path: Path) -> None:
+        """R39: another trader id on another account takes its own lock."""
+        lock_dir = tmp_path / "locks"
+
+        first = acquire_trader_lock("PAPER-001", _account("KEY-A", testnet=True), lock_dir)
+        try:
+            second = acquire_trader_lock("PAPER-002", _account("KEY-B", testnet=False), lock_dir)
+            try:
+                assert _trader_lock_path(lock_dir, "PAPER-002").exists()
+            finally:
+                second.release()
+        finally:
+            first.release()
+
+    def test_message_names_the_holder_account(self, tmp_path: Path) -> None:
+        """The refusal names the account the running session holds, never the new one."""
+        lock_dir = tmp_path / "locks"
+        fd = _hold_trader(lock_dir, "PAPER-001", b"4242 binance:testnet:old\n")
+        try:
+            with pytest.raises(TraderBusyError) as excinfo:
+                acquire_trader_lock("PAPER-001", "binance:testnet:new", lock_dir)
+        finally:
+            os.close(fd)
+
+        assert str(excinfo.value) == (
+            "Paper session already running for trader PAPER-001 "
+            "(pid 4242, account binance:testnet:old); stop it first"
+        )
+        assert "binance:testnet:new" not in str(excinfo.value)
+
+    def test_trader_lock_released_on_release(self, tmp_path: Path) -> None:
+        """R40: a released holder (or a dead one: the kernel drops the flock) never blocks."""
+        lock_dir = tmp_path / "locks"
+
+        first = acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        first.release()
+        first.release()  # idempotent, like the account lock
+        second = acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        second.release()
+
+        fd = _hold_trader(lock_dir, "PAPER-001")
+        with pytest.raises(TraderBusyError):
+            acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        os.close(fd)  # the kernel drops the flock with the last descriptor
+        again = acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        again.release()
+
+    def test_trader_lock_unopenable_raises(self, tmp_path: Path) -> None:
+        """R41: an unopenable lock file propagates the OSError (class only at the CLI)."""
+        lock_dir = tmp_path / "readonly"
+        lock_dir.mkdir()
+        lock_dir.chmod(0o500)
+        try:
+            with pytest.raises(PermissionError):
+                acquire_trader_lock("PAPER-001", _account(), lock_dir)
+        finally:
+            lock_dir.chmod(0o700)

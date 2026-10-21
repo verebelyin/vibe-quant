@@ -29,7 +29,11 @@ from vibe_quant.jobs.manager import (
     process_start_time,
     run_with_heartbeat,
 )
-from vibe_quant.paper.account_lock import AccountLock, acquire_account_lock
+from vibe_quant.paper.account_lock import (
+    AccountLock,
+    acquire_account_lock,
+    acquire_trader_lock,
+)
 from vibe_quant.paper.config import (
     DEFAULT_PAPER_LOGS_PATH,
     BinanceTestnetConfig,
@@ -284,11 +288,12 @@ def _claim_own_process(manager: BacktestJobManager, run_id: int) -> str | None:
 def _persist_refusal(run_id: int, db_path: Path | None, message: str) -> None:
     """Record a consent refusal as the run's and job's terminal failure.
 
-    An API-launched child (e.g. ``/restore`` after an API-key rotation) exits 1
-    here; without this its run stays ``running`` with no error and a later job
-    sync only reports "Process terminated unexpectedly". No heartbeat is started
-    and no lock is taken: a refused start must leave nothing held. Best effort,
-    class only in the log (money path): the refusal and exit code are unchanged.
+    An API-launched child (e.g. a LIVE ``/restore`` of a trader with no saved
+    risk state to carry) exits 1 here; without this its run stays ``running``
+    with no error and a later job sync only reports "Process terminated
+    unexpectedly". No heartbeat is started and no lock is taken: a refused start
+    must leave nothing held. Best effort, class only in the log (money path): the
+    refusal and exit code are unchanged.
     """
     try:
         manager = BacktestJobManager(db_path)
@@ -381,6 +386,7 @@ async def run_with_config(
     heartbeat_manager: BacktestJobManager | None = None
     stop_heartbeat: Callable[[], None] | None = None
     account_lock: AccountLock | None = None
+    trader_lock: AccountLock | None = None
 
     # Start heartbeat thread if run_id provided
     if run_id is not None:
@@ -395,6 +401,9 @@ async def run_with_config(
         # rw1g8: one paper session per account. Held for the whole process life;
         # the kernel drops it on death (SIGKILL included), so no stale lock.
         account_lock = acquire_account_lock(account_id(config.binance), config.trader_id)
+        # 2q7cv: one session per trader id too, on any key and either venue; the
+        # account lock comes first so a same-account start keeps its AccountBusyError.
+        trader_lock = acquire_trader_lock(config.trader_id, account_id(config.binance))
         await run_paper_trading(config)
         if run_id is not None and heartbeat_manager is not None:
             try:
@@ -422,6 +431,8 @@ async def run_with_config(
             print(f"Paper trading error: {type(e).__name__}{detail}", file=sys.stderr)
         return 1
     finally:
+        if trader_lock is not None:
+            trader_lock.release()
         if account_lock is not None:
             account_lock.release()
         if stop_heartbeat is not None:
