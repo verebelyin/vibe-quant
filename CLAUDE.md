@@ -124,7 +124,7 @@ Measured: full `tests/unit` ≈ 1 min under `-n auto`, 3 min serial · `swarm-ch
 - A missing `system_state` row is re-created **ENGAGED** (`kill-switch record was missing; re-created engaged`), never unlocked — only a brand-new DB starts unlocked; paper reads the kill switch on a background thread, never on the trading loop.
 - Use `?` placeholders for every value; handle `None` before formatting; `conn.commit()` after writes; `row_factory = sqlite3.Row` for dict access.
 - Discovery runs live in `backtest_runs` with `run_mode='discovery'` (there is no `discovery_runs` table). `backtest_results` has ONE row per run (re-runs replace result + trades); its `notes` column is machine JSON (discovery payload, `data_window`, funding, consistency, `dsr_trials`) and user text lives in `user_notes`.
-- Key tables: `backtest_runs` (all run modes), `strategies`, `backtest_results`, `sweep_results` (screening/replay metrics), `background_jobs`, `trades`, `research_extraction_jobs`, `download_sessions` (status `completed|partial|failed`).
+- Key tables: `backtest_runs` (all run modes), `strategies`, `backtest_results`, `sweep_results` (screening/replay metrics), `background_jobs`, `trades`, `research_extraction_jobs`. `download_sessions` (status `running|completed|partial|failed`) lives in the archive DB `data/archive/raw_data.db`, not here.
 - `StateManager` shares one connection across threads: reads used from worker/API threads take `_write_lock` (an unlocked read caused `sqlite3.InterfaceError`; bead `vibe-quant-jfxsr` covers the rest).
 
 ## Architecture
