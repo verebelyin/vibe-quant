@@ -52,6 +52,13 @@ _Avoid_: quick backtest, NT simplified
 The full-fidelity engine tier that fills orders on 1-minute detail bars and charges full costs; it is the reference for how fills really happen.
 _Avoid_: full backtest; never use bare "validation" for cross-window, cross-validation or DSL checks
 
+**Fast tier**:
+An exploration-only replay of screening for 1-minute, single-symbol genomes that needs no engine run; it must match screening fill for fill, and it never yields champions or gate inputs.
+_Avoid_: fast screening, approximate backtest
+
+**Burst**:
+Many tiny seeded discoveries on a scratch database (indicator pair × direction × symbol × month × leverage) used to choose where a real discovery should search.
+
 **Detail bars**:
 The 1-minute bars validation uses to release and fill orders placed on a slower timeframe.
 

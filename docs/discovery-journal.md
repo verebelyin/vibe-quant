@@ -4,6 +4,51 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-21: RESULT runs 979/980 — REJECTED (both families, 1m majors); fast tier + 1m bursts built (pre-discovery)
+
+**976–978 (2026-10-20, 1m 2026-03-01..10-14, isolated 10×, 1 h cap; not journaled before):** 0 champions. 976 long HYPE/NEAR/SUI/ZEC ROC/DONCHIAN/NATR/RSI stopped at gen 3/6, best score 0.5270 (`445da8081fad`, worse window Sharpe 1.43, PF 1.68, DD 3.5%, +2.4%, 110 trades; never gated, and below the alts' B&H Sharpe 2.34 anyway); 977 short majors STOCH/CCI/RSI all 0 (overtraders −40..−98%); 978 both, all 8, 4/4 gens, all 0. `disc_watch --kill-after` never fired (vibe-quant-ab16c).
+
+**979/980 (pre-registered below):** both scored worst-window Sharpe far under the 1.13 falsifier bar → REJECT for both families on 1m majors. 0 champions, 0 ERROR/Traceback lines (logs 96 MB / 151 MB, almost all sizing-skip WARNs, vibe-quant-jgr32).
+
+| run | family | gens | best genome (log `Best:`) | gates |
+|---|---|---|---|---|
+| 979 | DONCHIAN/ROC/NATR/PRICE_POSITION | 4/8, stopped (no gain in gen 4, user rule) | entry NATR+DONCHIAN, exit ROC, sl 1.3% tp 3.6%: sharpe 0.34, pf 1.06, dd 26.2%, +4.1%, 1118 trades | not reached |
+| 980 | KAMA/RSI/NATR | 8/8 | entry NATR, exit NATR×2 (KAMA bred out), sl 5.5% tp 10.4%: sharpe 0.68, pf 1.19, dd 20.1%, +6.2%, 143 trades | 5/5 rejected: DSR p 0.98–0.99 (pooled daily SR 0.63–0.85 ann, N=236), bootstrap lb −1.75..−0.49 |
+
+Speed (MEASURED from the logs): one generation 15–39 min (pop 16, 4 symbols × 2 windows, 1m, 7.5 months); one gate-phase backtest 462–468 s. This is why 1m discovery was too slow to iterate.
+
+**Fast tier (vibe-quant-z8vqv, `vibe_quant/fast_tier/`):** an exploration-only replay of 1m single-symbol screening without an engine run. Signals come from the generated strategy's own indicator/condition code (compute_fn indicators via `pta_replay`), fills from an event-jumping replay of NT's bar-tick matching (seeded fill RNG, 1-tick slip, at-limit draws), metrics from the screening runner's own `_extract_metrics` over a cache facade. Parity with NT screening (`scripts/agents/fast_tier_parity.py`, every fill and the five fitness metrics compared exactly), MEASURED:
+
+| window | genomes (random, full non-context pool) | liquidation | match | NT s | fast s |
+|---|---|---|---|---|---|
+| ZECUSDT 2026-03-02..09 | 6 (seed 1) | off | 4 + 2 fixed (run-end close ts) | 173.3 | 159.6 (before compute_fn replay) |
+| BTCUSDT 2026-03-02..09 | 8 (seed 2) | off | 8/8 | 122.2 | 2.1 |
+| ETHUSDT 2026-09 | 16 (seed 5) | isolated 25× | 16/16 | 2478.5 | 17.3 |
+| BTCUSDT 2026-03 | 24 (seed 3) | off | 24/24 | 3487.0 | 30.2 |
+
+Data refreshed to 2026-10-19 for all 8 symbols (update, MARK, funding intervals, `verify` EXIT 0); `exactness_239.py` IDENTICAL after it.
+
+**Bursts (`scripts/agents/burst.py`, ledger `data/swarm/burst-20261020/`):** tiny seeded discoveries on a scratch DB per cell (pair × direction × symbol × window × leverage). Burst trials never enter a real run's DSR count, so a burst result is never evidence — it only chooses where a real discovery searches; user chose to tune on all data to 2026-10-19, so paper trading is the out-of-sample test.
+- NT-engine pilot: 10 cells in 42 min on 2 cores (34–600 s per cell; overtrading genomes cost 200 s per backtest).
+- Round 1 (fast tier, pop 12 × 3, one month per cell, 8 pairs × long/short/both × 8 symbols × Mar–Oct19 × 3/10/25×): 689 cells, 14,838 distinct evaluations in 30 min on 7 cores; report `round1_report.txt`. Win share (profitable ≥ 50-trade genomes / all): KAMA+NATR 0.051, ROC+PRICE_POSITION 0.028 best; CCI+STOCH 0.011 worst; both 0.033 > long 0.022 > short 0.009; ZECUSDT 0.053 best, BTCUSDT 0.010 worst. Leverage changes nothing (identical genomes score identically at 3/10/25×: sizing ignores leverage; stops ≤ 10% sit inside the liquidation distance).
+- Reading: most top cells beat zero but not the same month's buy-and-hold (NEAR 2026-09 +59.5% vs B&H +178.1%); the only cells beating B&H are in falling months (ROC+PRICE_POSITION both ZEC 2026-10 +5.8% vs −19.9%; KAMA+NATR short ZEC 2026-10 +8.2% vs −19.9%). Single month, best of ~20 genomes: a map, not an edge.
+- Round 2 (persistence; fast tier, pop 16 × 4, 3-month window per cell scored worst-of-3 sub-windows `--eval-windows 3`, so each sub-window needs ≥ 8 trades, 50 summed, and a profit; KAMA+NATR / ROC+PRICE_POSITION / SQUEEZE_RATIO+ROC × both/long × ZEC/NEAR/HYPE/SUI/ETH/SOL × 6 rolling windows Mar..Oct19 × 10×, 2 seeds): 307 of 432 cells (budget stop; the laptop slept, which paused the budget clock), 16,894 distinct evaluations, 0 failed; report `round2_report.txt` (`burst.py report --filter '|ew3|fast'`). Win share is flat across families (ROC+PRICE_POSITION 0.015, KAMA+NATR 0.013, SQUEEZE_RATIO+ROC 0.013) and directions (long 0.014, both 0.013); symbol dominates: ZECUSDT 0.031, the others 0.005–0.014. Best window 2026-07..09 (0.033), worst 2026-06..08 (0.003).
+- B&H reading (report `ret` = the worst sub-window's return; `(1+ret)³−1` is a rough lower bound on the 3-window return since each sub-window restarts at the starting balance): 53 of the 97 cells with a winner clear their full-window B&H on that bound (ROC+PRICE_POSITION 23, KAMA+NATR 18, SQUEEZE_RATIO+ROC 12; both 37, long 16; ZEC 18, SUI 10, SOL 8; 16 of them in falling windows). Most persistent: ROC+PRICE_POSITION both ZECUSDT has a B&H-beating winner in 5 of 6 windows (starts 03..07, worst-sub-window Sharpe 1.909–3.086). Biggest numbers are pump-window NEAR cells (ROC+PRICE_POSITION both 2026-08..10: worst sub-window +134.1%, 111 trades, vs B&H +194.5%) — check those on NT before believing them. Every number is the best of ~55 genomes in a cell, with no holdout and no gates: still a map, not evidence.
+
+---
+
+## 2026-10-20: PRE-REGISTRATION — 1m majors, both directions, breakout vs adaptive-MA trend (follow-up to runs 976–978)
+
+**Why not the 976 follow-up:** 976's best (long HYPE/NEAR/SUI/ZEC, worst-window Sharpe 1.43) cannot pass the buy-and-hold gate: the EW B&H of those alts on the train window 2026-03-02..08-29 has ann √365 Sharpe 2.34 (+111.9%), 3.99 on the holdout. Majors (BTC/ETH/SOL/BNB) B&H: 1.13 train, 0.58 holdout — a bar a `both` strategy can beat. Also, a warm-start from 976 is refused at launch (no champions, vibe-quant-r5g9v).
+
+Setup (both runs): BTC/ETH/SOL/BNB, 1m, 2026-03-01..2026-10-15, direction both, portfolio, eval_windows 2, split 0.8, pop 16 × 8, liquidation isolated 10×, max_margin_pct 0.5, max_workers 4, default gates (q95 DSR, bootstrap floor 0.5, B&H).
+- **A — breakout:** DONCHIAN, ROC, NATR, PRICE_POSITION (976's only family with signal, plus a ≤ 4h range horizon to cut trade count).
+- **B — adaptive trend:** KAMA (price-vs-MA gene), RSI, NATR.
+
+**Falsifier:** a run is a REJECT for its family on 1m majors if no genome reaches a non-zero score (both windows ≥ 50 trades and profitable), or its best non-zero genome's worst-window Sharpe < 1.13 (the B&H bar). A champion counts only after every gate passes.
+
+---
+
 ## 2026-10-19: RESULT — first real BTCUSDT batch at the new defaults (50×20, q95 DSR): 0 champions on 4h and 1d; best candidates far below the bar
 
 Runs 955 (4h, 2023-06-01..2026-06-01) and 956 (1d, 2021-01-01..2026-10-15): BTCUSDT, population 50 × 20 generations, convergence 10, `--direction both` (own short genes since inydc), full indicator pool, eval_windows 3, split 0.8, `--dsr-rule q95` (explicit; default since fc5d4958), `--max-workers 3`, run in parallel with other jobs. Handoff `data/swarm/20261019-budget-dsr/handoffs/op-disc-q95-1.md`; no ERROR/Traceback in `logs/discovery_95{5,6}_20261019_173845.log`.
