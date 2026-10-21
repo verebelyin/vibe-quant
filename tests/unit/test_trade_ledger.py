@@ -414,3 +414,73 @@ def test_stats_returns_fill_only_fields_the_pnl_stats_left_unset() -> None:
     result = ValidationResult()
     extract_stats(result, bt)
     assert (result.sharpe_ratio, result.sortino_ratio) == (0.0, 1.2)
+
+
+# Several matching stats_returns keys per field, ordered: the base extractors tested
+# only the fields stats_pnls had populated, so the LAST matching returns key won.
+_MULTI_RETURNS = {
+    "Sharpe Ratio (252 days)": 0.1,
+    "Sharpe Ratio (365 days)": 0.2,
+    "Sortino Ratio (252 days)": 0.3,
+    "Sortino Ratio (365 days)": 0.4,
+    "Max Drawdown": -0.5,
+    "Max Drawdown (peak)": -0.6,
+    "Win Rate": 0.7,
+    "win rate": 0.8,
+}
+
+
+def test_multiple_matching_returns_keys_last_one_wins_in_both_tiers() -> None:
+    """No stats_pnls: later matching returns keys keep overwriting (base behaviour)."""
+    bt = fake_bt_result(stats_pnls={}, stats_returns=_MULTI_RETURNS)
+
+    stats = parse_nt_stats(bt, tier="validation")
+    assert (stats.sharpe, stats.sortino, stats.max_drawdown, stats.win_rate) == (
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+    )
+    assert parse_nt_stats(bt, tier="screening") == stats
+
+    screening = _runner()._extract_metrics({}, bt, fake_engine([]), 0.0, starting_balance=1000.0)
+    assert (screening.sharpe_ratio, screening.sortino_ratio) == (0.2, 0.4)
+
+    result = ValidationResult()
+    extract_stats(result, bt)
+    assert (result.sharpe_ratio, result.sortino_ratio) == (0.2, 0.4)
+    assert (result.max_drawdown, result.win_rate) == (0.6, 0.8)
+
+
+def test_pnl_populated_fields_beat_every_returns_key_including_zero() -> None:
+    """Control: PnL-populated fields (legitimate 0.0 too) ignore all returns keys."""
+    pnls = {
+        "USDT": {
+            "Sharpe Ratio (252 days)": 0.0,
+            "Sortino Ratio (252 days)": 9.0,
+            "Max Drawdown": 0.0,
+            "Win Rate": 0.0,
+        }
+    }
+    bt = fake_bt_result(stats_pnls=pnls, stats_returns=_MULTI_RETURNS)
+
+    stats = parse_nt_stats(bt, tier="validation")
+    assert (stats.sharpe, stats.sortino, stats.max_drawdown, stats.win_rate) == (0.0, 9.0, 0.0, 0.0)
+    assert parse_nt_stats(bt, tier="screening") == stats
+
+    screening = _runner()._extract_metrics({}, bt, fake_engine([]), 0.0, starting_balance=1000.0)
+    assert (screening.sharpe_ratio, screening.sortino_ratio) == (0.0, 9.0)
+
+    result = ValidationResult()
+    extract_stats(result, bt)
+    assert (result.sharpe_ratio, result.sortino_ratio) == (0.0, 9.0)
+    assert (result.max_drawdown, result.win_rate) == (0.0, 0.0)
+
+
+def test_returns_fill_only_unpopulated_fields_with_last_key_winning() -> None:
+    """Mixed: PnL sets sharpe only; sortino/drawdown/win rate come from the last returns key."""
+    bt = fake_bt_result(
+        stats_pnls={"USDT": {"Sharpe Ratio (252 days)": 3.0}}, stats_returns=_MULTI_RETURNS
+    )
+    stats = parse_nt_stats(bt, tier="validation")
+    assert (stats.sharpe, stats.sortino, stats.max_drawdown, stats.win_rate) == (3.0, 0.4, 0.6, 0.8)

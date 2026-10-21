@@ -114,6 +114,9 @@ def parse_nt_stats(bt_result: Any, *, tier: Tier) -> NtStats:
             elif not any(k in key_lower for k in known_pnl):
                 logger.debug("Unmatched PnL stats key: %s = %s", key, value)
 
+    # Frozen before the returns pass: only stats_pnls fields block the fallback, so
+    # the last matching returns key keeps winning (as in the two copies replaced).
+    populated = frozenset(values)
     stats_returns = bt_result.stats_returns or {}
     for key, value in stats_returns.items():
         if value is None:
@@ -127,13 +130,13 @@ def parse_nt_stats(bt_result: Any, *, tier: Tier) -> NtStats:
             else:
                 logger.warning("Could not convert returns stat %s=%r to float", key, value)
             continue
-        if "sharpe" in key_lower and "sharpe" not in values:
+        if "sharpe" in key_lower and "sharpe" not in populated:
             values["sharpe"] = fval
-        elif "sortino" in key_lower and "sortino" not in values:
+        elif "sortino" in key_lower and "sortino" not in populated:
             values["sortino"] = fval
-        elif "max drawdown" in key_lower and "max_drawdown" not in values:
+        elif "max drawdown" in key_lower and "max_drawdown" not in populated:
             values["max_drawdown"] = abs(fval)
-        elif key_lower == "win rate" and "win_rate" not in values:
+        elif key_lower == "win rate" and "win_rate" not in populated:
             values["win_rate"] = fval
         elif not any(k in key_lower for k in known_returns):
             logger.debug("Unmatched returns stats key: %s = %s", key, value)
