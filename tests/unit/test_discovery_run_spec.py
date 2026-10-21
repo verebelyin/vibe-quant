@@ -10,24 +10,27 @@ them before any caller moves onto it:
 - R13: a repeated flag keeps its last value and is emitted once.
 - R20: one spec field per ``build_parser()`` dest, minus the process settings
   the CLI keeps (``run_id``, ``db``, ``mock``) and ``help``.
-- ``plan()`` is exactly what ``plan_from_args`` returns for the same argv.
+- ``plan()`` is exactly what the shared window check (``plan_windows``) derives.
+- R16: ``to_config`` builds the exact ``DiscoveryConfig`` each golden CLI row ran
+  on.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import fields
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from vibe_quant.bankroll_grid import BankrollGridError
 from vibe_quant.discovery.config_check import DiscoveryConfigError
 from vibe_quant.discovery.run_spec import (
     DiscoveryRunSpec,
     build_parser,
-    plan_from_args,
 )
+from vibe_quant.liquidation_settings import LiquidationConfigError
 
 GOLDEN_PATH = (
     Path(__file__).resolve().parents[1] / "fixtures" / "discovery" / "run_spec_golden.json"
@@ -171,22 +174,35 @@ def test_spec_fields_match_parser_dests() -> None:
     assert len(parser_dests) == 47
 
 
-# --- plan == plan_from_args ------------------------------------------------
+# --- plan ------------------------------------------------------------------
 
 
-def test_plan_matches_plan_from_args_every_golden_row() -> None:
-    """``plan()`` returns exactly what ``plan_from_args`` derives, every row.
+def _reference_plan(argv: list[str]) -> Any:
+    """The window plan argv derives, straight from ``config_check`` (reference)."""
+    from vibe_quant.discovery.config_check import parse_cross_window_months, plan_windows
+
+    args = build_parser().parse_args(["--run-id", "0", *argv])
+    return plan_windows(
+        args.start_date,
+        args.end_date,
+        train_test_split=args.train_test_split,
+        eval_windows=args.eval_windows,
+        cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
+        wfa_oos_step_days=args.wfa_oos_step_days,
+    )
+
+
+def test_plan_matches_reference_windows_every_golden_row() -> None:
+    """``plan()`` returns exactly what the shared window check derives, every row.
 
     The ``cross_months_negative`` row is the API's 422 row, so both raise the
     same ``DiscoveryConfigError`` text (pinned below).
     """
-    parser = build_parser()
     raised: list[str] = []
     for name, argv in _golden_rows():
         spec = DiscoveryRunSpec.from_argv(argv)
-        args = parser.parse_args(["--run-id", "0", *argv])
         try:
-            expected = plan_from_args(args)
+            expected = _reference_plan(argv)
         except DiscoveryConfigError as exc:
             with pytest.raises(DiscoveryConfigError) as spec_exc:
                 spec.plan()
@@ -197,20 +213,18 @@ def test_plan_matches_plan_from_args_every_golden_row() -> None:
     assert raised == ["api/cross_months_negative"]
 
 
-def test_plan_rejects_invalid_windows_like_plan_from_args() -> None:
+def test_plan_rejects_invalid_windows_like_the_reference() -> None:
     """A bad window config raises the same ``DiscoveryConfigError`` text."""
-    parser = build_parser()
     for argv in (
         ["--cross-window-months", "0"],
         ["--cross-window-months", "abc"],
         ["--wfa-oos-step-days", "-1"],
     ):
         spec = DiscoveryRunSpec.from_argv(argv)
-        args = parser.parse_args(["--run-id", "0", *argv])
         with pytest.raises(DiscoveryConfigError) as spec_exc:
             spec.plan()
         with pytest.raises(DiscoveryConfigError) as args_exc:
-            plan_from_args(args)
+            _reference_plan(argv)
         assert str(spec_exc.value) == str(args_exc.value)
 
 
@@ -231,6 +245,160 @@ def test_from_args_reads_every_dest_and_keeps_given() -> None:
         parser.parse_args(["--run-id", "0", "--population-size", "5"]),
         frozenset({"population_size"}),
     )
+
+
+# --- to_config (R16) ------------------------------------------------------
+
+
+def test_to_config_matches_golden() -> None:
+    """R16: ``to_config`` is the exact ``DiscoveryConfig`` every CLI golden row ran on.
+
+    ``prior_trials_fn`` is the only non-data field (``None`` in a mock run), and
+    the parser's timeframe rule sets ``min_trades`` to 100 for sub-5m through
+    ``DiscoveryConfig.__post_init__``.
+    """
+    golden = _golden()
+    for name, row in golden["cli"].items():
+        spec = DiscoveryRunSpec.from_argv(row["argv"])
+        captured = asdict(
+            spec.to_config(
+                spec.plan(),
+                symbols=spec.symbol_list() or row["run_symbols"],
+                prior_trials_fn=None,
+            )
+        )
+        captured.pop("prior_trials_fn")
+        assert captured == row["config"], name
+
+
+# --- settings helpers ------------------------------------------------------
+
+
+def test_resolved_bootstrap_min_sharpe_uses_the_timeframe_floor() -> None:
+    """The floor table: 1m 0.5, 4h/1d 0.0, anything else 1.0; an explicit value wins."""
+    for argv, expected in (
+        ([], 0.0),  # 4h
+        (["--timeframe", "1m"], 0.5),
+        (["--timeframe", "1d"], 0.0),
+        (["--timeframe", "1h"], 1.0),
+        (["--timeframe", "1m", "--bootstrap-min-sharpe", "0.2"], 0.2),
+        (["--timeframe", "1h", "--bootstrap-min-sharpe", "0.0"], 0.0),
+    ):
+        assert DiscoveryRunSpec.from_argv(argv).resolved_bootstrap_min_sharpe() == expected, argv
+
+
+def test_list_and_count_helpers() -> None:
+    """Two unrelated argv rows: the parsed lists/counts main reads, literally."""
+    spec = DiscoveryRunSpec.from_argv([
+        "--symbols", " BTCUSDT , ETHUSDT ",
+        "--indicator-pool", " RSI , KAMA ",
+        "--eval-windows", "0",
+        "--max-workers", "-1",
+        "--cross-window-months=-1,3",
+    ])
+    assert spec.symbol_list() == ["BTCUSDT", "ETHUSDT"]
+    assert spec.indicator_pool_list() == ["RSI", "KAMA"]
+    assert spec.eval_window_count() == 1
+    assert spec.worker_count() is None
+    assert spec.cross_window_month_list() == [-1, 3]
+
+    other = DiscoveryRunSpec.from_argv([
+        "--symbols", "",
+        "--eval-windows", "3",
+        "--max-workers", "0",
+    ])
+    assert other.symbol_list() == []
+    assert other.indicator_pool_list() is None
+    assert other.eval_window_count() == 3
+    assert other.worker_count() == 0
+    assert other.cross_window_month_list() == []
+
+
+def test_fee_schedule_helper() -> None:
+    """The fee schedule main builds, and the tier error main lets escape."""
+    default = DiscoveryRunSpec.from_argv([]).fee_schedule()
+    assert default.to_notes() == {"fee_tier": "VIP0", "bnb_discount": False}
+    other = DiscoveryRunSpec.from_argv(["--fee-tier", "VIP0", "--bnb-discount"]).fee_schedule()
+    assert other.to_notes() == {"fee_tier": "VIP0", "bnb_discount": True}
+
+    with pytest.raises(ValueError) as exc:
+        DiscoveryRunSpec.from_argv(["--fee-tier", "VIP99"]).fee_schedule()
+    assert str(exc.value) == "unknown fee tier 'VIP99'; known tiers: ['VIP0']"
+
+
+def test_liquidation_settings_helper() -> None:
+    """Mode + resolved leverage, and the alias conflict main fails the run with."""
+    off = DiscoveryRunSpec.from_argv(["--leverage", "5"]).liquidation_settings()
+    assert (off.mode, off.leverage) == ("off", 5.0)
+    cross = DiscoveryRunSpec.from_argv(
+        ["--liquidation-mode", "cross", "--leverage", "20"]
+    ).liquidation_settings()
+    assert (cross.mode, cross.leverage) == ("cross", 20.0)
+    alias = DiscoveryRunSpec.from_argv(["--liquidation-leverage", "7"]).liquidation_settings()
+    assert (alias.mode, alias.leverage) == ("off", 7.0)
+
+    with pytest.raises(LiquidationConfigError) as exc:
+        DiscoveryRunSpec.from_argv(
+            ["--leverage", "5", "--liquidation-leverage", "7"]
+        ).liquidation_settings()
+    assert str(exc.value) == "conflicting leverage 5.0 and liquidation_leverage 7.0"
+
+
+def test_sizing_settings_helper() -> None:
+    """Only given sizing keys reach the settings; every default is unchanged."""
+    default = DiscoveryRunSpec.from_argv([]).sizing_settings()
+    assert default.max_position_pct == 0.5
+    assert default.risk_per_trade == 0.02
+    assert default.max_margin_pct is None
+    assert default.to_params() == {}
+
+    other = DiscoveryRunSpec.from_argv([
+        "--max-position-pct", "2",
+        "--risk-per-trade", "0.01",
+        "--max-margin-pct", "0.3",
+    ]).sizing_settings()
+    assert other.to_params() == {
+        "max_position_pct": 2.0,
+        "risk_per_trade": 0.01,
+        "max_margin_pct": 0.3,
+    }
+
+
+def test_is_grid_and_bankroll_cells() -> None:
+    """R15: a partial grid is refused with today's text; a full one builds every cell."""
+    assert DiscoveryRunSpec.from_argv([]).is_grid() is False
+
+    with pytest.raises(BankrollGridError) as exc:
+        DiscoveryRunSpec.from_argv(["--bankroll-modes", "isolated"]).is_grid()
+    assert str(exc.value) == (
+        "give all three of --bankroll-modes, --bankroll-leverages and "
+        "--bankroll-max-margin-pcts together"
+    )
+
+    with pytest.raises(BankrollGridError) as exc:
+        DiscoveryRunSpec.from_argv([
+            "--bankroll-modes", "isolated",
+            "--bankroll-leverages", "5",
+            "--bankroll-max-margin-pcts", "0.5",
+            "--leverage", "5",
+        ]).is_grid()
+    assert str(exc.value).endswith(
+        "use either the bankroll grid or --liquidation-mode/--leverage/--max-margin-pct"
+    )
+
+    spec = DiscoveryRunSpec.from_argv([
+        "--bankroll-modes", "isolated,cross",
+        "--bankroll-leverages", "5,10",
+        "--bankroll-max-margin-pcts", "0.5",
+    ])
+    assert spec.is_grid() is True
+    cells = spec.bankroll_cells(spec.sizing_settings())
+    assert [(c.mode, c.leverage, c.max_margin_pct) for c in cells] == [
+        ("isolated", 5.0, 0.5),
+        ("isolated", 10.0, 0.5),
+        ("cross", 5.0, 0.5),
+        ("cross", 10.0, 0.5),
+    ]
 
 
 # --- bad argv --------------------------------------------------------------

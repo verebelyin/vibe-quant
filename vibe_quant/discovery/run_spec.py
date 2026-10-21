@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from vibe_quant.bankroll_grid import (
     BankrollCell,
@@ -22,7 +22,7 @@ from vibe_quant.discovery.config_check import (
     parse_cross_window_months,
     plan_windows,
 )
-from vibe_quant.fees import DEFAULT_TIER
+from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
     LIQUIDATION_MODES,
@@ -31,12 +31,14 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
     resolve_leverage,
 )
+from vibe_quant.sizing_settings import SizingSettings
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
-    from vibe_quant.sizing_settings import SizingSettings
+    from vibe_quant.discovery.pipeline import DiscoveryConfig
+    from vibe_quant.liquidation_settings import LiquidationMode
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
 # - 1m: high-frequency noise widens Sharpe CIs; 1.0 rejects nearly everything.
@@ -352,25 +354,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def plan_from_args(args: argparse.Namespace) -> WindowPlan:
-    """Derive the train/holdout/eval/cross/WFA windows from parsed CLI args.
-
-    Shared by ``main`` and the API launch precheck so a bad window config
-    fails in seconds (CLI: run marked failed; API: 422 before a run row).
-
-    Raises:
-        DiscoveryConfigError: The window config cannot produce valid windows.
-    """
-    return plan_windows(
-        args.start_date,
-        args.end_date,
-        train_test_split=args.train_test_split,
-        eval_windows=args.eval_windows,
-        cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
-        wfa_oos_step_days=args.wfa_oos_step_days,
-    )
-
-
 _UNSET = object()
 
 # One spec field per build_parser() dest EXCEPT run_id, db and mock (process
@@ -598,49 +581,167 @@ class DiscoveryRunSpec:
             wfa_oos_step_days=self.wfa_oos_step_days,
         )
 
+    def to_config(
+        self,
+        plan: WindowPlan,
+        *,
+        symbols: list[str],
+        prior_trials_fn: Callable[[str, str], int | None] | None,
+    ) -> DiscoveryConfig:
+        """The ``DiscoveryConfig`` this run executes with.
 
-def _grid_flags_given(args: argparse.Namespace) -> bool:
-    """Whether any ``--bankroll-*`` flag was passed (all three are then required)."""
-    flags = (args.bankroll_modes, args.bankroll_leverages, args.bankroll_max_margin_pcts)
-    if all(f is None for f in flags):
-        return False
-    if any(f is None for f in flags):
-        msg = (
-            "give all three of --bankroll-modes, --bankroll-leverages and "
-            "--bankroll-max-margin-pcts together"
+        ``symbols`` is the RESOLVED list the caller runs the backtests on (the
+        CLI falls back to the run row's symbols when ``--symbols ""``).
+        """
+        from vibe_quant.discovery.pipeline import DiscoveryConfig
+
+        return DiscoveryConfig(
+            prior_trials_fn=prior_trials_fn,
+            population_size=self.population_size,
+            max_generations=self.max_generations,
+            mutation_rate=self.mutation_rate,
+            crossover_rate=self.crossover_rate,
+            elite_count=self.elite_count,
+            tournament_size=self.tournament_size,
+            convergence_generations=self.convergence_generations,
+            max_workers=self.worker_count(),
+            symbols=symbols,
+            timeframe=self.timeframe,
+            start_date=plan.train_start,
+            end_date=plan.train_end,
+            indicator_pool=self.indicator_pool_list(),
+            direction=self.direction,
+            eval_windows=self.eval_window_count(),
+            symbol_agg=self.symbol_agg,
+            train_test_split=self.train_test_split,
+            holdout_start_date=plan.holdout_start or "",
+            holdout_end_date=plan.holdout_end or "",
+            cross_window_months=self.cross_window_month_list(),
+            cross_window_min_sharpe=self.cross_window_min_sharpe,
+            wfa_oos_step_days=self.wfa_oos_step_days,
+            wfa_min_consistency=self.wfa_min_consistency,
+            holdout_min_sharpe=self.holdout_min_sharpe,
+            holdout_min_trades=self.holdout_min_trades,
+            require_bootstrap_ci=self.require_bootstrap_ci,
+            bootstrap_min_sharpe=self.resolved_bootstrap_min_sharpe(),
+            bootstrap_ci_level=self.bootstrap_ci_level,
+            require_dsr=self.require_dsr,
+            dsr_rule=cast("Literal['emax', 'q95']", self.dsr_rule),
+            require_buy_hold=self.require_buy_hold,
+            use_crowding=self.use_crowding,
+            immigrant_fraction=self.immigrant_fraction,
+            entropy_threshold=self.entropy_threshold,
         )
-        raise BankrollGridError(msg)
-    reject_run_level_with_grid(
-        liquidation_mode=args.liquidation_mode,
-        leverage=args.leverage,
-        liquidation_leverage=args.liquidation_leverage,
-        max_margin_pct=args.max_margin_pct,
-    )
-    return True
 
+    def symbol_list(self) -> list[str]:
+        """``--symbols`` split and stripped (empty when the flag is empty)."""
+        return [item.strip() for item in self.symbols.split(",") if item.strip()]
 
-def _grid_cells_from_args(args: argparse.Namespace, sizing: SizingSettings) -> list[BankrollCell]:
-    """The cells of ``--bankroll-*`` (validated against the run's exposure cap)."""
+    def indicator_pool_list(self) -> list[str] | None:
+        """``--indicator-pool`` split and stripped; ``None`` when not given."""
+        if not self.indicator_pool:
+            return None
+        return [item.strip() for item in self.indicator_pool.split(",") if item.strip()]
 
-    def _items(text: str) -> list[str]:
-        return [item.strip() for item in text.split(",") if item.strip()]
+    def worker_count(self) -> int | None:
+        """``--max-workers``: a negative value means sequential (``None``)."""
+        return self.max_workers if self.max_workers >= 0 else None
 
-    def _numbers(name: str, text: str) -> list[object]:
-        out: list[object] = []
-        for item in _items(text):
-            try:
-                out.append(float(item))
-            except ValueError as exc:
-                msg = f"{name} must be comma-separated numbers, got {item!r}"
-                raise BankrollGridError(msg) from exc
-        return out
+    def eval_window_count(self) -> int:
+        """The effective multi-window count (at least 1)."""
+        return max(1, self.eval_windows)
 
-    return build_cells(
-        _items(args.bankroll_modes),
-        _numbers("--bankroll-leverages", args.bankroll_leverages),
-        _numbers("--bankroll-max-margin-pcts", args.bankroll_max_margin_pcts),
-        sizing,
-    )
+    def cross_window_month_list(self) -> list[int]:
+        """``--cross-window-months`` parsed into month offsets."""
+        return parse_cross_window_months(self.cross_window_months or "")
+
+    def resolved_bootstrap_min_sharpe(self) -> float:
+        """``--bootstrap-min-sharpe``, or the timeframe-aware floor when not given."""
+        if self.bootstrap_min_sharpe is None:
+            return _default_bootstrap_min_sharpe(self.timeframe)
+        return self.bootstrap_min_sharpe
+
+    def fee_schedule(self) -> FeeSchedule:
+        """The venue fee schedule every screening backtest of this run uses."""
+        return FeeSchedule(tier=self.fee_tier, bnb_discount=self.bnb_discount)
+
+    def liquidation_settings(self) -> LiquidationSettings:
+        """The run-level liquidation settings (``--leverage`` vs its deprecated alias).
+
+        Raises:
+            LiquidationConfigError: The mode/leverage pair is invalid.
+        """
+        resolved = resolve_leverage(
+            MISSING if self.leverage is None else self.leverage,
+            MISSING if self.liquidation_leverage is None else self.liquidation_leverage,
+        )
+        if resolved is MISSING:
+            resolved = DEFAULT_LEVERAGE
+        return LiquidationSettings(
+            mode=cast("LiquidationMode", self.liquidation_mode),
+            leverage=cast("float", resolved),
+        )
+
+    def sizing_settings(self) -> SizingSettings:
+        """The run-level exposure cap / risk / margin limit (only given keys)."""
+        return SizingSettings.from_params(
+            {
+                key: value
+                for key, value in (
+                    ("max_position_pct", self.max_position_pct),
+                    ("risk_per_trade", self.risk_per_trade),
+                    ("max_margin_pct", self.max_margin_pct),
+                )
+                if value is not None
+            }
+        )
+
+    def is_grid(self) -> bool:
+        """Whether any ``--bankroll-*`` flag was passed (all three are then required).
+
+        Raises:
+            BankrollGridError: A partial grid, or a grid mixed with the run-level
+                liquidation/leverage/margin flags.
+        """
+        flags = (self.bankroll_modes, self.bankroll_leverages, self.bankroll_max_margin_pcts)
+        if all(f is None for f in flags):
+            return False
+        if any(f is None for f in flags):
+            msg = (
+                "give all three of --bankroll-modes, --bankroll-leverages and "
+                "--bankroll-max-margin-pcts together"
+            )
+            raise BankrollGridError(msg)
+        reject_run_level_with_grid(
+            liquidation_mode=self.liquidation_mode,
+            leverage=self.leverage,
+            liquidation_leverage=self.liquidation_leverage,
+            max_margin_pct=self.max_margin_pct,
+        )
+        return True
+
+    def bankroll_cells(self, sizing: SizingSettings) -> list[BankrollCell]:
+        """The cells of ``--bankroll-*`` (validated against the run's exposure cap)."""
+
+        def _items(text: str) -> list[str]:
+            return [item.strip() for item in text.split(",") if item.strip()]
+
+        def _numbers(name: str, text: str) -> list[object]:
+            out: list[object] = []
+            for item in _items(text):
+                try:
+                    out.append(float(item))
+                except ValueError as exc:
+                    msg = f"{name} must be comma-separated numbers, got {item!r}"
+                    raise BankrollGridError(msg) from exc
+            return out
+
+        return build_cells(
+            _items(cast("str", self.bankroll_modes)),
+            _numbers("--bankroll-leverages", cast("str", self.bankroll_leverages)),
+            _numbers("--bankroll-max-margin-pcts", cast("str", self.bankroll_max_margin_pcts)),
+            sizing,
+        )
 
 
 def check_launch_leverage(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:

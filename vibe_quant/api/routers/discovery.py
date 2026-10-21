@@ -358,7 +358,7 @@ class _CliArgsError(Exception):
 def _precheck_discovery_config(cli_args: list[str]) -> None:
     """422 on a bad window/gate config; 500 if our own argv does not parse."""
     from vibe_quant.discovery.config_check import DiscoveryConfigError
-    from vibe_quant.discovery.run_spec import build_parser, plan_from_args
+    from vibe_quant.discovery.run_spec import DiscoveryRunSpec, build_parser
 
     parser = build_parser()
 
@@ -376,7 +376,7 @@ def _precheck_discovery_config(cli_args: list[str]) -> None:
             detail=f"Internal error building discovery command: {exc}",
         ) from None
     try:
-        plan_from_args(args)
+        DiscoveryRunSpec.from_args(args).plan()
     except DiscoveryConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
