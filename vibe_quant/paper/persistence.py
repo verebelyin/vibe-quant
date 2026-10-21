@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
-from vibe_quant.paper.config import is_key_rotation
+from vibe_quant.paper.config import account_env, is_key_rotation
 
 if TYPE_CHECKING:
     import sqlite3
@@ -108,6 +108,18 @@ CREATE TABLE IF NOT EXISTS paper_trading_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_checkpoints_trader ON paper_trading_checkpoints(trader_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON paper_trading_checkpoints(created_at);
 """
+
+#: ae6ah: the trader's rows in one venue + env: any key of that env, a legacy row (no /
+#: null account), an unreadable row, or a non-string account (the last two fail closed
+#: when parsed or checked). One predicate for the consent gate and the restore, so
+#: "the gate asks for consent" and "nothing carries" cannot drift apart. Parameters:
+#: ``(trader_id, account_env(account) + ":", account_env(account) + ":")``.
+_ENV_ROW_WHERE = """trader_id = ?
+  AND CASE WHEN json_valid(node_status)
+           THEN CASE json_type(node_status, '$.account')
+                    WHEN 'text' THEN substr(json_extract(node_status, '$.account'), 1, length(?)) = ?
+                    ELSE 1 END
+           ELSE 1 END"""
 
 
 @dataclass
@@ -295,6 +307,28 @@ class StatePersistence:
             return None
         return self._row_to_checkpoint(row)
 
+    def load_latest_env_checkpoint(
+        self, trader_id: str, account: str
+    ) -> StateCheckpoint | None:
+        """Newest checkpoint of ``trader_id`` in ``account``'s venue + env (any key).
+
+        Ae6ah (D1=A): rotating back A -> B -> A restores the newest row of the env,
+        so an older key's own row is never hidden by a row of the other env. Parsed
+        strictly (an unreadable row raises, the restore fails closed).
+        """
+        prefix = account_env(account) + ":"
+        cursor = self.conn.execute(
+            f"""SELECT * FROM paper_trading_checkpoints
+               WHERE {_ENV_ROW_WHERE}
+               ORDER BY id DESC
+               LIMIT 1""",
+            (trader_id, prefix, prefix),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_checkpoint(row)
+
     def load_latest_account_checkpoint(
         self, trader_id: str, account: str
     ) -> StateCheckpoint | None:
@@ -359,9 +393,9 @@ class StatePersistence:
         """True if a LIVE start on ``account`` has saved risk state to carry.
 
         That is any trader's row carrying the account key, this trader's legacy row
-        without the key, or a KEY ROTATION: this trader's newest row (any account) is
-        another key of the same venue + env, whose risk and halt the restore carries
-        (qa42q). The rotation read is the row ``load_latest_checkpoint(trader_id)``
+        without the key, or a KEY ROTATION: this trader's newest row in the same venue
+        + env (any key) is another key, whose risk and halt the restore carries
+        (ae6ah, qa42q). The rotation read is the row ``load_latest_env_checkpoint``
         returns and the predicate is :func:`is_key_rotation`, the restore's own rule,
         so "the gate asks for consent" and "nothing carries" cannot drift apart
         (vibe-quant-neuvu.2). Rows of another trader whose ``node_status`` is not
@@ -381,14 +415,15 @@ class StatePersistence:
         )
         if cursor.fetchone() is not None:
             return True
+        prefix = account_env(account) + ":"
         newest = self.conn.execute(
-            """SELECT CASE WHEN json_valid(node_status)
+            f"""SELECT CASE WHEN json_valid(node_status)
                            THEN json_extract(node_status, '$.account') END AS account
                FROM paper_trading_checkpoints
-               WHERE trader_id = ?
+               WHERE {_ENV_ROW_WHERE}
                ORDER BY id DESC
                LIMIT 1""",
-            (trader_id,),
+            (trader_id, prefix, prefix),
         ).fetchone()
         if newest is None:
             return False

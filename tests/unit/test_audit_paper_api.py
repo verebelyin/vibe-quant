@@ -630,15 +630,25 @@ async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
     assert "--confirm-fresh-live" not in ctx.launched[0]
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [("LIVE-001", "old-key", False)],
+        [("LIVE-001", "old-key", False), ("LIVE-001", "tk", True)],  # G4
+    ],
+    ids=["rotation", "G4-newest-is-testnet"],
+)
 async def test_rotation_start_needs_no_fresh_consent(
-    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch, rows: list[tuple[str, str, bool]]
 ) -> None:
-    """neuvu.2 R23: the SAME trader_id on a new live key carries its risk and halt."""
+    """neuvu.2 R23 + R4 (D1=A): the SAME trader_id on a new live key carries its
+    risk and halt, even under a newer row of the other env."""
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
-    _seed_account_checkpoint(
-        ctx.tmp / "api.db", api_key="old-key", testnet=False, trader_id="LIVE-001"
-    )
+    for trader_id, key, testnet in rows:
+        _seed_account_checkpoint(
+            ctx.tmp / "api.db", api_key=key, testnet=testnet, trader_id=trader_id
+        )
 
     r = await ctx.ac.post(
         "/api/paper/start",
@@ -658,13 +668,12 @@ async def test_rotation_start_needs_no_fresh_consent(
 @pytest.mark.parametrize(
     ("rows", "post_trader"),
     [
-        ([("LIVE-001", "old-key", False), ("LIVE-001", "tk", True)], "LIVE-001"),  # G4
         ([("LIVE-001", "tk", True)], "LIVE-001"),  # G5
         ([("PAPER-041", "old-key", False)], "LIVE-001"),  # G6
         ([("LIVE-001", "old-key", False)], "LIVE-002"),  # new trader id on a new key
         ([("LIVE-001", "old-key", False)], None),  # R40: trader_id omitted
     ],
-    ids=["G4-newest-is-testnet", "G5-own-testnet", "G6-other-trader", "new-trader-id", "no-trader-id"],
+    ids=["G5-own-testnet", "G6-other-trader", "new-trader-id", "no-trader-id"],
 )
 async def test_live_start_with_nothing_to_carry_still_needs_consent(
     ctx: Ctx,
