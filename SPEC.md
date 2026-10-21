@@ -1462,7 +1462,7 @@ Transient errors (WebSocket disconnect, API timeout) are handled by NautilusTrad
 
 ### Structured Event Logging
 
-Every significant event is logged as a JSON line to `logs/events/{run_id}.jsonl`:
+Every significant event is logged as a JSON line. A validation run writes `logs/events/{run_id}.jsonl`; a paper session writes `logs/paper/{trader_id}.jsonl` (its `logs_path`, stored in the run parameters; reconciliation reads that file). `VIBE_QUANT_LOG_DIR` moves both:
 
 ```json
 {"ts": "2025-01-15T10:30:00.123Z", "event": "SIGNAL", "strategy": "rsi_mean_reversion_mtf", "symbol": "BTCUSDT-PERP", "direction": "LONG", "context": {"rsi": 28.5, "rsi_1h": 45.2, "ema_trend_4h": 42100}}
