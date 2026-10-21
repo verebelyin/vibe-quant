@@ -90,7 +90,7 @@ def _guarded_engine() -> SimpleNamespace:
     kernel = SimpleNamespace(
         get_log_guard=lambda: None, portfolio=SimpleNamespace(analyzer=analyzer)
     )
-    return SimpleNamespace(kernel=kernel)
+    return SimpleNamespace(kernel=kernel, trader=SimpleNamespace(strategies=list))
 
 
 def test_run_backtest_hands_extract_metrics_the_runners_balance(

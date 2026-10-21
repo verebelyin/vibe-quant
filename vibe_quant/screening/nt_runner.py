@@ -8,7 +8,9 @@ picklable for :class:`concurrent.futures.ProcessPoolExecutor`.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -29,9 +31,11 @@ from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
+    import numpy as np
     from nautilus_trader.config import BacktestRunConfig
 
     from vibe_quant.data.fill_ticks import FillTickSet
+    from vibe_quant.dsl.pta_replay import PtaPrecomputed
     from vibe_quant.liquidation.overlay import OverlayResult
     from vibe_quant.metrics import DailyReturns, LedgerEvent
     from vibe_quant.screening.types import BacktestMetrics
@@ -45,6 +49,38 @@ logger = logging.getLogger(__name__)
 # boundary resting fill (``(ts_event + 1 ms) % execution_bar_ns == 0``, R18) sits exactly on
 # it and its 1m window is ``[ts + 1 ms - E, ts]`` (R19).
 _ONE_MS = 1_000_000
+
+
+# Catalog bars of the precompute seam as ARRAYS (never the Bar list: hundreds of MB on a long
+# 1m window), keyed (catalog path, bar type, start, end); process-level LRU of 4 entries.
+_PTA_ARRAYS_MAX = 4
+_PTA_ARRAYS: OrderedDict[tuple[str, str, str, str], dict[str, np.ndarray]] = OrderedDict()
+
+
+def _pta_bar_arrays(
+    catalog_path: str, bar_type: str, start: str, end: str
+) -> dict[str, np.ndarray]:
+    """``ts_init`` (int64) and OHLCV (float64) arrays of the catalog query a BacktestDataConfig runs."""
+    key = (catalog_path, bar_type, start, end)
+    cached = _PTA_ARRAYS.get(key)
+    if cached is not None:
+        _PTA_ARRAYS.move_to_end(key)
+        return cached
+    import numpy as np
+    from nautilus_trader.persistence.catalog import ParquetDataCatalog
+
+    bars = ParquetDataCatalog(catalog_path).bars(bar_types=[bar_type], start=start, end=end)
+    arrays: dict[str, np.ndarray] = {
+        "ts_init": np.fromiter((b.ts_init for b in bars), dtype=np.int64, count=len(bars)),
+    }
+    for field in ("open", "high", "low", "close", "volume"):
+        arrays[field] = np.fromiter(
+            (float(getattr(b, field)) for b in bars), dtype=np.float64, count=len(bars)
+        )
+    _PTA_ARRAYS[key] = arrays
+    while len(_PTA_ARRAYS) > _PTA_ARRAYS_MAX:
+        _PTA_ARRAYS.popitem(last=False)
+    return arrays
 
 
 def _no_exit_timing() -> dict[str, Any]:
@@ -327,6 +363,7 @@ class NTScreeningRunner:
         leverage: float = DEFAULT_LEVERAGE,
         starting_balance: int = DEFAULT_STARTING_BALANCE_USDT,
         sizing: SizingSettings | None = None,
+        pta_precompute: bool = True,
     ) -> None:
         """Initialize NTScreeningRunner.
 
@@ -376,6 +413,12 @@ class NTScreeningRunner:
                 so they can never meet the sweep rejection, and their cap is re-checked
                 against ``leverage`` here as a defence. None = the defaults, which add no
                 key and keep every pre-existing number byte-identical.
+            pta_precompute: Replay each strategy's compute_fn indicators once over the
+                run's catalog bars and install the columns on the generated strategies
+                instead of recomputing them every bar (bead vibe-quant-surto). Every number
+                is bit-identical; a bar the columns do not cover recomputes live. False,
+                or env ``VIBE_QUANT_PTA_PRECOMPUTE=0``, keeps the per-bar path. What a run
+                installed and fed is in ``last_pta_precompute``.
 
         Raises:
             ValueError: ``entry_order`` is not ``"market"``, or the liquidation settings
@@ -411,6 +454,10 @@ class NTScreeningRunner:
         # (bd vibe-quant-2gyk1.4); not part of BacktestMetrics.
         self.last_starting_balance: float = 0.0
         self.last_days: int = 0
+        self._pta_precompute = pta_precompute
+        # One entry per (strategy, tf) the last run installed: instrument, tf, n, fed,
+        # failed_at (filled after the run); [] when off. Not part of BacktestMetrics.
+        self.last_pta_precompute: list[dict[str, object]] = []
         self._dsl_dict = dsl_dict
         self._symbols = sorted(symbols)
         self._fill_ticks = fill_ticks
@@ -460,6 +507,7 @@ class NTScreeningRunner:
         self.last_starting_balance = 0.0
         self.last_days = 0
         self.last_liquidation_notes = None
+        self.last_pta_precompute = []
         try:
             return self._run_backtest(params, start_time)
         except (UnknownStrategyParamError, DataUnavailableError, FillTickCatalogModifiedError):
@@ -767,6 +815,93 @@ class NTScreeningRunner:
         # default run stays byte-identical.
         return replace(config, default_leverage=Decimal(str(self._leverage)))
 
+    def _install_pta_precompute(
+        self, node: Any
+    ) -> list[tuple[str, str, PtaPrecomputed]]:
+        """Install precomputed compute_fn columns on the built strategies.
+
+        One ``{tf: PtaPrecomputed}`` per strategy with a ``_PTA_META`` (S1 emits none for
+        needs_context strategies), from the same catalog query the engine's data config
+        runs. An error on a (strategy, tf) leaves that tf on the live per-bar path (the
+        reference), so the broad except is safe here. Returns (instrument, tf, installed).
+        """
+        if not self._pta_precompute or os.environ.get("VIBE_QUANT_PTA_PRECOMPUTE") == "0":
+            return []
+        import pandas as pd
+
+        from vibe_quant.data.catalog import INTERVAL_TO_AGGREGATION
+        from vibe_quant.dsl.pta_replay import PtaPrecomputed, strategy_pta_columns
+
+        catalog_str = str(self._resolved_catalog_path.resolve())
+        installed: list[tuple[str, str, PtaPrecomputed]] = []
+        for engine in node.get_engines():
+            for strategy in engine.trader.strategies():
+                meta = getattr(type(strategy), "_PTA_META", None)
+                if not meta:
+                    continue
+                instrument_id = str(strategy.config.instrument_id)
+                pre: dict[str, PtaPrecomputed] = {}
+                for tf in sorted({tf for _, tf in meta.values()}):
+                    try:
+                        step, agg = INTERVAL_TO_AGGREGATION[tf]
+                        bar_type = f"{instrument_id}-{step}-{agg.name}-LAST-EXTERNAL"
+                        arrays = _pta_bar_arrays(
+                            catalog_str, bar_type, self._start_date, self._end_date
+                        )
+                        frame = pd.DataFrame(
+                            {k: arrays[k] for k in ("open", "high", "low", "close", "volume")}
+                        )
+                        columns = strategy_pta_columns(
+                            strategy._pta_params, meta, strategy._pta_buffer_cap, tf, frame
+                        )
+                        precomputed = PtaPrecomputed(
+                            arrays["ts_init"].tolist(),
+                            arrays["close"].tolist(),
+                            [(key, column.tolist()) for key, column in columns],
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "PTA precompute off for %s %s: %s: %s",
+                            instrument_id,
+                            tf,
+                            type(exc).__name__,
+                            exc,
+                        )
+                    else:
+                        pre[tf] = precomputed
+                        installed.append((instrument_id, tf, precomputed))
+                if pre:
+                    strategy._pta_pre = pre
+        return installed
+
+    def _report_pta_precompute(
+        self, installed: list[tuple[str, str, PtaPrecomputed]]
+    ) -> None:
+        """Record what the run fed per installed (strategy, tf); warn where speed was lost.
+
+        A fallback is still exact (the feed guard recomputes live); the warning is the
+        only signal that the precompute stopped covering the run.
+        """
+        self.last_pta_precompute = []
+        for instrument_id, tf, pre in installed:
+            self.last_pta_precompute.append(
+                {
+                    "instrument": instrument_id,
+                    "tf": tf,
+                    "n": pre.n,
+                    "fed": pre.fed,
+                    "failed_at": pre.failed_at,
+                }
+            )
+            if pre.failed_at is not None or pre.fed != pre.n:
+                logger.warning(
+                    "PTA precompute fell back for %s %s at bar %d of %d",
+                    instrument_id,
+                    tf,
+                    pre.fed if pre.failed_at is None else pre.failed_at,
+                    pre.n,
+                )
+
     def _run_backtest(self, params: dict[str, float | int], start_time: float) -> BacktestMetrics:
         """Execute the NautilusTrader backtest."""
         import contextlib
@@ -808,7 +943,9 @@ class NTScreeningRunner:
                 for stat in stats:
                     analyzer.register_statistic(stat)
 
+            pta_installed = self._install_pta_precompute(node)
             node.run()
+            self._report_pta_precompute(pta_installed)
 
             engine = node.get_engine(bt_run_config.id)
             if engine is None:

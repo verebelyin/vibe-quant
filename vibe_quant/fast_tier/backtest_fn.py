@@ -97,6 +97,9 @@ class FastBacktestFn(NTBacktestFn):
         twin.__dict__.update(
             {k: v for k, v in self.__dict__.items() if k not in ("nt_fallback", "last_positions")}
         )
+        # The confirm is an INDEPENDENT check of the replay: it keeps the per-bar indicator
+        # path, so a bug in the (shared) replay cannot also sit in the confirming run.
+        twin.pta_precompute = False
         return twin
 
     def _run_single(

@@ -153,7 +153,11 @@ def test_nt_twin_copies_every_setting_and_is_a_plain_nt_fn() -> None:
     fast.collect_daily_returns = True  # what the pipeline sets after construction
     twin = fast.nt_twin()
     assert type(twin) is NTBacktestFn
-    assert {k: v for k, v in vars(fast).items() if k != "nt_fallback"} == vars(twin)
+    # the confirm keeps the per-bar indicator path: the one setting that differs (Q6)
+    assert fast.pta_precompute is True and twin.pta_precompute is False
+    assert {k: v for k, v in vars(fast).items() if k != "nt_fallback"} | {
+        "pta_precompute": False
+    } == vars(twin)
 
 
 def test_cell_fns_put_the_fast_tier_on_the_train_fn_only() -> None:
@@ -173,11 +177,36 @@ def test_cell_fns_put_the_fast_tier_on_the_train_fn_only() -> None:
     nt = _make_cell_fns(**kw)
     assert isinstance(fast.backtest_fn, FastBacktestFn) and fast.backtest_fn.nt_fallback
     assert type(nt.backtest_fn) is NTBacktestFn
-    assert vars(fast.backtest_fn.nt_twin()) == vars(nt.backtest_fn)
+    twin_vars = vars(fast.backtest_fn.nt_twin())
+    assert twin_vars["pta_precompute"] is False and vars(nt.backtest_fn)["pta_precompute"] is True
+    assert twin_vars == {**vars(nt.backtest_fn), "pta_precompute": False}
     for fns in (fast, nt):
         assert type(fns.holdout_backtest_fn) is NTBacktestFn
         assert fns.backtest_fn_factory is not None
         assert type(fns.backtest_fn_factory(START, END)) is NTBacktestFn
+
+
+def test_nt_twin_runs_live_indicator_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The confirm twin builds runners with pta_precompute False; the fast fn's own NT fallback ON."""
+    from vibe_quant.screening import nt_runner
+
+    seen: list[bool] = []
+    original = nt_runner.NTScreeningRunner.__init__
+
+    def spy(self: Any, *args: Any, **kwargs: Any) -> None:
+        seen.append(kwargs["pta_precompute"])
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(nt_runner.NTScreeningRunner, "__init__", spy)
+    fast = FastBacktestFn(["BTCUSDT"], "1m", START, END, nt_fallback=True)
+    fast._make_runner({"name": "x", "timeframe": "1m", "indicators": {}}, START, END)
+    fast.nt_twin()._make_runner({"name": "x", "timeframe": "1m", "indicators": {}}, START, END)
+    assert seen == [True, False]
+    # a callable built without __init__ (older pickle) defaults to ON
+    bare = NTBacktestFn.__new__(NTBacktestFn)
+    bare.__dict__.update({k: v for k, v in vars(fast).items() if k != "pta_precompute"})
+    bare._make_runner({"name": "x", "timeframe": "1m", "indicators": {}}, START, END)
+    assert seen == [True, False, True]
 
 
 # ---------------------------------------------------------------------------

@@ -167,6 +167,10 @@ class NTBacktestFn:
         # judges its last 100 sessions). Every submit pickles the callable, so a
         # worker sees the value at submit time.
         self.ind_memo_judge: bool = True
+        # Precomputed compute_fn columns in the NT runner (bead vibe-quant-surto). The
+        # fast evaluator's NT confirm (FastBacktestFn.nt_twin) turns it off to stay an
+        # independent per-bar check of the replay. Plain bool: it pickles into workers.
+        self.pta_precompute: bool = True
 
     def _make_runner(
         self,
@@ -194,6 +198,7 @@ class NTBacktestFn:
             liquidation_mode=self.liquidation.mode,
             leverage=self.liquidation.leverage,
             sizing=self.sizing,
+            pta_precompute=getattr(self, "pta_precompute", True),
         )
 
     def _run_single(
