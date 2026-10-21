@@ -652,6 +652,23 @@ def _hold_trader_lock(trader_id: str, account: str) -> int:
     return fd
 
 
+def _trader_lock_is_free(trader_id: str) -> bool:
+    """Independently take, then release, the trader lock in the patched lock dir.
+
+    A second open file description contends with a leaked one even inside this
+    process, so a returned run that never released its fd still holds the lock
+    here. False (not ``TraderBusyError``) so the caller's assertion names the leak.
+    """
+    lock_dir = account_lock_module.PAPER_LOCK_DIR
+    assert lock_dir is not None
+    try:
+        probe = account_lock_module.acquire_trader_lock(trader_id, "PAPER-PROBE", lock_dir)
+    except account_lock_module.TraderBusyError:
+        return False
+    probe.release()
+    return True
+
+
 class TestTraderLock:
     """2q7cv: one paper session per trader id, across keys and across venues."""
 
@@ -786,6 +803,61 @@ class TestTraderLock:
             "Paper trading error: AccountBusyError: Paper session already running on "
             f"account {account} (pid {os.getpid()}, trader PAPER-001); stop it first"
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("trader_id", ["PAPER-001", "PAPER-002"])
+    async def test_successful_run_releases_the_trader_lock(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        trader_id: str,
+    ) -> None:
+        """A returned session releases its own trader lock (F1: a leaked fd still holds it)."""
+        config_path = tmp_path / "paper_config.json"
+        _write_trader_config(config_path, trader_id=trader_id)
+        TestAccountLock._fake_heartbeat(monkeypatch)
+        started: list[PaperTradingConfig] = []
+
+        async def _fake_run(config: PaperTradingConfig) -> None:
+            started.append(config)
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _fake_run)
+
+        assert await run_with_config(config_path) == 0
+        assert [c.trader_id for c in started] == [trader_id]
+        assert _trader_lock_is_free(trader_id), (
+            f"the returned run left trader {trader_id}'s lock held"
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_run_releases_the_trader_lock(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A trading exception still releases the trader lock before run_with_config returns."""
+        config_path = tmp_path / "paper_config.json"
+        _write_trader_config(config_path)
+        completed, stops = TestAccountLock._fake_heartbeat(monkeypatch)
+        started: list[PaperTradingConfig] = []
+
+        async def _boom(config: PaperTradingConfig) -> None:
+            started.append(config)
+            raise RuntimeError("trading failed")
+
+        monkeypatch.setattr("vibe_quant.paper.cli.run_paper_trading", _boom)
+
+        assert await run_with_config(config_path, run_id=11) == 1
+        assert [c.trader_id for c in started] == ["PAPER-001"]
+        assert capsys.readouterr().err.splitlines() == [
+            "Paper trading error: RuntimeError (run 11)"
+        ]
+        assert completed == [(11, "RuntimeError: trading failed")]
+        assert stops["count"] == 1
+        assert _trader_lock_is_free("PAPER-001"), (
+            "the failed run left the trader lock held"
+        )
 
     @pytest.mark.asyncio
     async def test_unopenable_trader_lock_exits_one_with_the_class_only(
