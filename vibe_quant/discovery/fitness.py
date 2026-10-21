@@ -7,7 +7,9 @@ overtrading penalty, complexity penalty, and Pareto ranking for selection.
 from __future__ import annotations
 
 import logging
+import random
 import statistics
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
@@ -18,7 +20,7 @@ from vibe_quant.errors import DataUnavailableError
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from vibe_quant.discovery.backtest_fn import NTBacktestFn
     from vibe_quant.discovery.operators import StrategyChromosome
@@ -701,6 +703,16 @@ def _sanity_check_metrics(
 _parallel_broken: bool = False
 
 
+@contextmanager
+def preserve_global_random() -> Iterator[None]:
+    """Restore the global ``random`` state on exit (NT's FillModel reseeds it, vibe-quant-0bwe2/qei3p)."""
+    state = random.getstate()
+    try:
+        yield
+    finally:
+        random.setstate(state)
+
+
 def evaluate_population(
     chromosomes: list[StrategyChromosome],
     backtest_fn: Callable[[StrategyChromosome], dict[str, float | int]],
@@ -739,7 +751,8 @@ def evaluate_population(
             _parallel_broken = True
             logger.warning("Parallel evaluation failed, falling back to sequential for remainder of run", exc_info=True)
 
-    return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe) for chrom in chromosomes]
+    with preserve_global_random():
+        return [_evaluate_single(chrom, backtest_fn, filter_fn, min_trades=min_trades, timeframe=timeframe) for chrom in chromosomes]
 
 
 _TASK_ERROR = "__task_error__"
