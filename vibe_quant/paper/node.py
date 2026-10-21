@@ -2720,7 +2720,8 @@ class PaperTradingNode:
             logger.warning(
                 "paper %s: inherited risk state from %s (high water mark %s, "
                 "%d consecutive losses); a limit breach halts at the first equity read; "
-                "start fresh resets",
+                "start fresh skips this other trader id's risk state; "
+                "this trader id's own saved limits and halt still carry",
                 self._config.trader_id,
                 self._risk_inherited_from,
                 self._restored_risk.high_water_mark,

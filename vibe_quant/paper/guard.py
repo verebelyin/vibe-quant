@@ -449,7 +449,8 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._risk = risk_state or RiskState()
         # Trader whose checkpoint supplied the risk state (None: this trader's own).
         self._risk_hint = (
-            f" (limits inherited from {risk_source}; start fresh to reset)"
+            f" (limits inherited from {risk_source}; start fresh skips that trader id's "
+            "risk state; this trader id's own saved limits and halt still carry)"
             if risk_source is not None
             else ""
         )
