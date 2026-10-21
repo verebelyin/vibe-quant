@@ -136,7 +136,7 @@ def test_discovery_refuses_post_only() -> None:
 
 def test_cli_bnb_discount_flag() -> None:
     """--bnb-discount opts in; --fee-tier defaults to VIP0 and BNB is off by default."""
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     parser = build_parser()
     opted_in = parser.parse_args(["--run-id", "1", "--bnb-discount"])

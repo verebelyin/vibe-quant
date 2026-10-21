@@ -588,7 +588,7 @@ def test_rejected_buy_hold_candidate_keeps_dsl() -> None:
 
 
 def test_cli_buy_hold_gate_defaults_on_with_opt_out() -> None:
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     assert build_parser().parse_args(["--run-id", "1"]).require_buy_hold is True
     args = build_parser().parse_args(["--run-id", "1", "--no-buy-hold-gate"])

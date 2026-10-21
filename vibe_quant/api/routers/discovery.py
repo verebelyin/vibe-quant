@@ -357,8 +357,8 @@ class _CliArgsError(Exception):
 
 def _precheck_discovery_config(cli_args: list[str]) -> None:
     """422 on a bad window/gate config; 500 if our own argv does not parse."""
-    from vibe_quant.discovery.__main__ import build_parser, plan_from_args
     from vibe_quant.discovery.config_check import DiscoveryConfigError
+    from vibe_quant.discovery.run_spec import build_parser, plan_from_args
 
     parser = build_parser()
 

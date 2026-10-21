@@ -391,8 +391,8 @@ def test_q95_flag_off_is_bit_identical() -> None:
 def test_q95_rule_absent_defaults_to_q95() -> None:
     """R9/T4: no body/JSON/config key -> "q95"; emax is the explicit opt-out."""
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
-    from vibe_quant.discovery.__main__ import build_parser
     from vibe_quant.discovery.pipeline import DiscoveryConfig
+    from vibe_quant.discovery.run_spec import build_parser
 
     assert DiscoveryConfig().dsr_rule == "q95"
     assert "dsr_rule" not in DiscoveryLaunchRequest.model_fields
