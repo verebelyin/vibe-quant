@@ -27,15 +27,19 @@ from vibe_quant.liquidation_settings import (
 )
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
 from vibe_quant.trade_ledger import (
+    _FUNDING_REFINE_MIN_BAR_NS,
+    SCREENING_RULES,
+    _funding_close_ns,
+    accumulate,
+    cost_positions,
     parse_nt_stats,
     screening_liquidation_moments,
     screening_moments,
     split_positions,
 )
-from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     import numpy as np
     from nautilus_trader.config import BacktestRunConfig
@@ -100,30 +104,8 @@ def _no_exit_timing() -> dict[str, Any]:
 
 
 # One 8h funding period in ns: the smallest execution bar whose close can host a settlement
-# that validation's 1m fill never charged (vibe-quant-6osqd). A bar of exactly this length is
-# NOT refined (R9b: the guard is a strict ``>``).
-_FUNDING_REFINE_MIN_BAR_NS = FUNDING_PERIOD_HOURS * 3_600 * 1_000_000_000
-
-
-def _funding_close_ns(
-    pos: Any,
-    scan_fill_ts: Mapping[str, Mapping[int, int]] | None,
-    execution_bar_ns: int,
-) -> int:
-    """Funding exit of a CLOSED position: its closing fill's refined ts, else ``ts_closed``.
-
-    R9/R9b: only an execution bar strictly longer than 8h is refined; anything else (and an
-    empty scan) returns the NT ``ts_closed`` without importing ``vibe_quant.liquidation``.
-    R6: the CLOSING fill is ``events[len - 1]``, so a partial exit refined earlier does not
-    move the funding exit.
-    """
-    nt = int(pos.ts_closed)
-    if execution_bar_ns <= _FUNDING_REFINE_MIN_BAR_NS or not scan_fill_ts:
-        return nt
-    from vibe_quant.screening.liquidation_metrics import position_key
-
-    refined = (scan_fill_ts.get(position_key(pos)) or {}).get(len(pos.events) - 1)
-    return nt if refined is None else refined
+# that validation's 1m fill never charged (vibe-quant-6osqd). The constant and
+# ``_funding_close_ns`` live in trade_ledger with the shared cost loop (imported above).
 
 
 def refuse_non_market_entry(entry_order: str) -> None:
@@ -1039,7 +1021,6 @@ class NTScreeningRunner:
         from vibe_quant.screening.types import BacktestMetrics
         from vibe_quant.utils import compute_day_count
         from vibe_quant.validation.extraction import (
-            accrue_position_funding,
             daily_sharpe_sortino,
             date_to_ns,
             finest_timeframe,
@@ -1101,12 +1082,6 @@ class NTScreeningRunner:
         end_ns = date_to_ns(self._end_date)
         execution_tf = finest_timeframe(getattr(self, "_all_timeframes", ()))
         catalog_path = getattr(self, "_resolved_catalog_path", None)
-        trade_pnls: list[float] = []
-        closed_net: list[tuple[int, float]] = []
-        cash_events: list[tuple[int, float]] = []
-        funding_cash: dict[str, list[tuple[int, float]]] = {}
-        total_funding = 0.0
-        funding_fallbacks = 0
         closed, still_open = split_positions(engine)
         funding_calc = FundingCalculator(self._funding_archive_path)
         liquidation_on = self._liquidation_mode != "off"
@@ -1168,36 +1143,26 @@ class NTScreeningRunner:
                 (p, None) for p in closed
             ]
             trade_inputs.extend((mark.position, mark) for mark in open_marks)
-            total_fees = 0.0
-            unrealized_at_end = 0.0
-            for pos, mark in trade_inputs:
-                instrument_cash = funding_cash.setdefault(str(pos.instrument_id), [])
-                total_fees += sum(abs(float(c)) for c in pos.commissions())
-                # NT realized_pnl is net of commissions
-                realized = float(pos.realized_pnl)
-                if mark is None:
-                    exit_ns = int(pos.ts_closed)
-                    # R8: a CLOSED position only; an open mark funds to its mark (R15/R16).
-                    funding_exit_ns = _funding_close_ns(pos, scan_fill_ts, execution_bar_ns)
-                else:
-                    exit_ns = mark.ts
-                    funding_exit_ns = mark.ts
-                    total_fees += mark.exit_fee
-                    realized += mark.unrealized - mark.exit_fee
-                    unrealized_at_end += mark.unrealized - mark.exit_fee
-                    instrument_cash.append((mark.ts, -mark.exit_fee))
-                # Funding is modeled post-hoc (NT's engine applies none) with
-                # the same calculator validation uses (bd vibe-quant-e70tl.20).
-                # R15: only the funding exit moves; realized PnL, the ledger and the cash
-                # flows keep the NT fill timestamp (exit_ns).
-                accrual = accrue_position_funding(funding_calc, pos, exit_ns=funding_exit_ns)
-                total_funding += accrual.total
-                funding_fallbacks += accrual.fallback_settlements
-                trade_pnls.append(realized - accrual.total)
-                closed_net.append((exit_ns, realized - accrual.total))
-                cash_events.append((exit_ns, realized))
-                cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
-                instrument_cash.extend((ts, -amount) for ts, amount in accrual.payments)
+            # One shared cost/accumulate pass (trade_ledger): the screening-tier rules keep
+            # this tier's fee association, funding exit and cash order (R5/R7).
+            accounting = accumulate(
+                cost_positions(
+                    trade_inputs,
+                    SCREENING_RULES,
+                    funding=funding_calc,
+                    scan_fill_ts=scan_fill_ts,
+                    execution_bar_ns=execution_bar_ns,
+                ),
+                SCREENING_RULES,
+            )
+            total_fees = accounting.total_fees
+            total_funding = accounting.total_funding
+            funding_fallbacks = accounting.funding_fallbacks
+            unrealized_at_end = accounting.unrealized_at_end
+            trade_pnls = accounting.net_pnls
+            closed_net = accounting.closed_net
+            cash_events = accounting.cash_events
+            funding_cash = accounting.modeled_cash
             # Opt-in liquidation: unless the scan hit nothing, every trade-level number
             # below is rebuilt from the truncated ledgers (identity overlay: the NT path
             # above stands).
@@ -1509,9 +1474,9 @@ class NTScreeningRunner:
         from vibe_quant.liquidation.apply import apply_liquidation
         from vibe_quant.metrics import LedgerEvent
         from vibe_quant.screening.liquidation_metrics import position_key
+        from vibe_quant.trade_ledger import accrue_position_funding
         from vibe_quant.validation.extraction import (
             _TIMEFRAME_SECONDS,
-            accrue_position_funding,
             mark_open_positions,
         )
 
