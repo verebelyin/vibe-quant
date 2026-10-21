@@ -78,6 +78,7 @@ from vibe_quant.paper.guard import (
     RiskState,
     TradingGuard,
     TradingGuardConfig,
+    halt_supersedes,
 )
 from vibe_quant.paper.kill_switch_monitor import (
     KILL_SWITCH_RESUME_FRESH_S,
@@ -530,6 +531,9 @@ class PaperTradingNode:
         #: Symbols whose raising-entry-check refusal was already alerted (re-armed on entry).
         self._entry_check_alerted: set[str] = set()
         self._restored_halt: RestoredHalt | None = None
+        #: A halt that arrived before the guard existed (SIGUSR1 during start-up); the
+        #: guard applies it right after it is built (``_apply_startup_halt``).
+        self._startup_halt: tuple[HaltReason, str] | None = None
         self._resolved: ResolvedRunConfig | None = None
         self._shutdown_event = asyncio.Event()
         self._strategy: StrategyDSL | None = None
@@ -2930,6 +2934,9 @@ class PaperTradingNode:
                 logger.warning("failed %d stale running paper command(s) at startup", swept)
 
         self._trading_node = self._create_live_trading_node()
+        # No await between the guard's creation and the replay, so no signal can land
+        # in between; the init checkpoint below then carries the halt.
+        self._apply_startup_halt()
         await self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint())
 
     async def _run_loop(self) -> None:
@@ -2940,7 +2947,17 @@ class PaperTradingNode:
         if self._trading_node is None:
             raise RuntimeError("Trading node is not initialized")
 
-        if self._restored_halt is not None:
+        guard = self._guard
+        if guard is not None:
+            # The guard is the authority: a halt it took at start-up (restored, or a
+            # replayed SIGUSR1) must not be reset to "running" here.
+            self._status.state = _GUARD_TO_NODE_STATE[guard.guard_state]
+            if guard.guard_state == GuardState.HALTED:
+                self._status.halt_reason = guard.halt_reason
+                self._status.error_message = guard.message
+            else:
+                self._status.halt_reason = None
+        elif self._restored_halt is not None:
             self._status.state = NodeState.HALTED
             self._status.halt_reason = self._restored_halt.reason
             self._status.error_message = self._restored_halt.message
@@ -3216,22 +3233,32 @@ class PaperTradingNode:
         if self._guard is not None:
             self._guard.halt(reason, msg)
             return
-        # Before the trading node exists there is nothing to flatten; record it.
+        # Before the guard exists there is nothing to flatten: record the halt. The guard
+        # applies it when it is built (_apply_startup_halt), through its own severity rule,
+        # flatten, event, single alert and checkpoint. No event write, alert or DB call
+        # here: the alert would be a no-op before Telegram is built (W1-W3).
+        if self._status.state == NodeState.HALTED and not halt_supersedes(
+            reason, self._status.halt_reason
+        ):
+            return
         if self._status.state in (NodeState.RUNNING, NodeState.PAUSED):
             self._previous_state = self._status.state
         self._status.state = NodeState.HALTED
         self._status.halt_reason = reason
         self._status.error_message = msg
         self._status.updated_at = datetime.now(UTC)
-        # R1 (k8oei): the CRITICAL halt alert cannot be swallowed by a failing event
-        # write; the write's own error then propagates to the caller.
-        self._write_then_alert(
-            EventType.RISK_CHECK,
-            {"action": "halt", "reason": reason.value, "message": msg, "passed": False},
-            "circuit_breaker",
-            f"HALT ({reason.value}): {msg}",
-            critical=True,
+        self._startup_halt = (reason, msg)
+        logger.warning(
+            "paper %s: %s halt during start-up recorded; the trading guard applies it when built",
+            self._config.trader_id,
+            reason.value,
         )
+
+    def _apply_startup_halt(self) -> None:
+        """Replay a halt recorded before the guard existed through the new guard."""
+        pending, self._startup_halt = self._startup_halt, None
+        if pending is not None and self._guard is not None:
+            self._guard.halt(*pending)
 
     def pause(self) -> None:
         """Block new entries; keep protective SL/TP orders and exit logic running."""
@@ -3289,6 +3316,7 @@ class PaperTradingNode:
             self._status.error_message = None
             self._status.updated_at = datetime.now(UTC)
             self._previous_state = None
+            self._startup_halt = None
             self._write_event(
                 EventType.SIGNAL,
                 {

@@ -25,6 +25,7 @@ from vibe_quant.paper.config import (
     create_trading_node_config,
 )
 from vibe_quant.paper.node import (
+    GuardState,
     HaltReason,
     NodeState,
     NodeStatus,
@@ -487,7 +488,7 @@ class TestPaperTradingNode:
         )
         node = PaperTradingNode(config)
         node._event_writer = EventWriter(run_id="PAPER-001", base_path=tmp_path / "logs")
-        node.halt(HaltReason.MAX_DRAWDOWN, "dd 6%")
+        node._on_guard_state_change(GuardState.HALTED, HaltReason.MAX_DRAWDOWN, "dd 6%", {})
         node._event_log.barrier().result(10)  # the line is appended on the event worker
         node._event_writer.close()
         records = [

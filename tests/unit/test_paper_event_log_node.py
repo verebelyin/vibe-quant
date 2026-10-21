@@ -51,7 +51,7 @@ from vibe_quant.logging.events import EventType
 from vibe_quant.logging.writer import EventWriter
 from vibe_quant.paper.config import ConfigurationError
 from vibe_quant.paper.event_log import EventLogFullError, EventLogWorker, EventWriteTimeoutError
-from vibe_quant.paper.guard import HaltReason
+from vibe_quant.paper.guard import GuardState, HaltReason
 from vibe_quant.paper.node import PaperTradingNode
 from vibe_quant.paper.persistence import StateCheckpoint
 
@@ -244,7 +244,7 @@ def test_sync_alert_site_never_waits_for_the_disk(
     seeded: dict[str, Any],  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R6: a pre-guard halt alerts at once while the event write is still stalled."""
+    """R6: a guard halt alerts at once while the event write is still stalled."""
     node = _node(seeded)
     writer = _GateWriter()
     node._event_writer = writer  # type: ignore[assignment]
@@ -252,7 +252,7 @@ def test_sync_alert_site_never_waits_for_the_disk(
     monkeypatch.setattr(node, "_send_telegram_alert", alerts)
     try:
         started = time.monotonic()
-        node.halt(HaltReason.MANUAL, "x")
+        node._on_guard_state_change(GuardState.HALTED, HaltReason.MANUAL, "x", {})
         elapsed = time.monotonic() - started
 
         assert elapsed < 0.05, elapsed

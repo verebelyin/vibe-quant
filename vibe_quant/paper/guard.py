@@ -110,6 +110,12 @@ _HALT_PRIORITY: dict[HaltReason, int] = {
     HaltReason.KILL_SWITCH: 6,
 }
 
+
+def halt_supersedes(new: HaltReason, current: HaltReason | None) -> bool:
+    """True when ``new`` may replace ``current`` (strictly more severe, or nothing active)."""
+    return current is None or _HALT_PRIORITY[new] > _HALT_PRIORITY[current]
+
+
 # Halts that flatten and block entries but keep strategies running so they can
 # resume automatically (daily loss lifts at the next UTC midnight).
 _KEEP_STRATEGIES_RUNNING: frozenset[HaltReason] = frozenset({HaltReason.MAX_DAILY_LOSS})
@@ -479,6 +485,10 @@ class TradingGuard(Actor):  # type: ignore[misc]
         return self._halt_reason
 
     @property
+    def message(self) -> str:
+        return self._message
+
+    @property
     def risk_state(self) -> RiskState:
         return self._risk
 
@@ -520,10 +530,17 @@ class TradingGuard(Actor):  # type: ignore[misc]
             interval=timedelta(seconds=self._cfg.check_interval_secs),
             callback=self._on_tick,
         )
-        if self._restored_halt is not None and self._state == GuardState.HALTED:
+        if (
+            self._restored_halt is not None
+            and self._state == GuardState.HALTED
+            and self._halt_reason == self._restored_halt.reason
+        ):
             # The state check is defensive (kept, no behaviour change): a resume
             # before on_start (H20) already cleared the flag in _lift_halt, and
-            # _on_tick re-checks HALTED before using it.
+            # _on_tick re-checks HALTED before using it. Armed only while the restored
+            # halt is still the active one: a halt applied before on_start (the node's
+            # replayed start-up SIGUSR1) that superseded it already flattened or queued
+            # the exit, and a second flatten on the first tick would repeat it.
             self._restored_flatten_pending = True
         self.evaluate_risk()
         if (
@@ -898,12 +915,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
         Returns True if the halt was applied (False when an equal-or-more-severe
         halt is already active).
         """
-        current = self._halt_reason
-        if (
-            self._state == GuardState.HALTED
-            and current is not None
-            and _HALT_PRIORITY[reason] <= _HALT_PRIORITY[current]
-        ):
+        if self._state == GuardState.HALTED and not halt_supersedes(reason, self._halt_reason):
             return False
         if self._state != GuardState.HALTED:
             # A paused session that gets halted returns to PAUSED on resume.

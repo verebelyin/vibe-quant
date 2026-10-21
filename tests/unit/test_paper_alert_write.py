@@ -10,13 +10,15 @@ can leak.
 
 Contract rows (brief cc-fu-paperalert; chief ruling R8 adds the 7 remaining pairs):
 
-* R1  ``halt()`` pre-guard branch
+* R1  ``halt()`` pre-guard branch (neuvu.1: now records only, see R16/R18 below; the
+       write-then-alert pin moved to the replay through ``_on_guard_state_change``)
 * R2  ``_on_guard_warning``
 * R3  ``start()`` failure path (the ORIGINAL exception propagates, not the write's)
 * R4  ``_liquidation_loop`` failure log is class-only
 * R5  ``_shutdown`` stop-event write is caught (class-only) and shutdown continues
 * R6  ``_shutdown`` ``_event_writer.close()`` raising is caught the same way
-* R7  with a healthy writer every site still writes before it alerts
+* R7  with a healthy writer every site still writes before it alerts (the pre-guard
+       ``halt()`` is no longer a site: it neither writes nor alerts)
 * R8  the 7 further pairs: _on_error_alert, both _check_connectivity sites,
        both _on_guard_state_change branches, _on_order_denied, close_all_positions
 * R9  each converted site pins its full event tuple (type, payload, timestamp) and a
@@ -56,7 +58,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from tests.unit.test_audit_paper_node import DSL, _config
+import vibe_quant.paper.node as node_module
+from tests.unit.test_audit_paper_node import DSL, _config, fake_tradingnode  # noqa: F401
+from tests.unit.test_paper_halt_restore import _UnitGuard
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.logging.events import EventType
 from vibe_quant.paper.errors import ErrorCategory, ErrorContext
@@ -148,49 +152,99 @@ def _trace_checkpoint(monkeypatch: pytest.MonkeyPatch, spy: _Spy, node: PaperTra
 # ------------------------------------------------------------------- R1 halt()
 
 
-def test_halt_pre_guard_writes_before_it_alerts(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+def test_halt_pre_guard_records_without_write_or_alert(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """R7: ``halt()`` before a guard exists writes the RISK_CHECK, then alerts."""
+    """R18 (neuvu.1): ``halt()`` before a guard exists only records the halt on the node:
+    no event write and no alert (the guard's listener does both once, at the replay), one
+    class-free WARNING without a traceback."""
     node = _node(seeded)
     spy = _Spy()
     spy.install(monkeypatch, node)
 
-    node.halt(HaltReason.MANUAL, "boom")
-
-    assert spy.order == ["write", "alert"]
-    assert spy.writes == [
-        (
-            EventType.RISK_CHECK,
-            {"action": "halt", "reason": "manual", "message": "boom", "passed": False},
-            None,
-        )
-    ]
-    assert spy.alerts == [("circuit_breaker", "HALT (manual): boom", True)]
-
-
-def test_halt_pre_guard_alert_survives_a_failing_write(
-    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R1: the OSError propagates after the alert; the status is set before the write."""
-    node = _node(seeded)
-    error, spy = _fail_write(monkeypatch, node)
-
-    with pytest.raises(OSError) as caught:
+    with caplog.at_level(logging.WARNING):
         node.halt(HaltReason.MANUAL, "boom")
 
-    assert caught.value is error, "the write's own exception object is re-raised"
-    assert spy.order == ["write", "alert"], "the alert follows the attempted write"
-    assert spy.writes == [
+    assert spy.writes == []
+    assert spy.alerts == []
+    assert node.status.state is NodeState.HALTED
+    assert node.status.halt_reason is HaltReason.MANUAL
+    assert node.status.error_message == "boom"
+    assert node._startup_halt == (HaltReason.MANUAL, "boom")
+    records = [r for r in caplog.records if "during start-up" in r.getMessage()]
+    assert [(r.levelno, r.getMessage()) for r in records] == [
         (
-            EventType.RISK_CHECK,
-            {"action": "halt", "reason": "manual", "message": "boom", "passed": False},
-            None,
+            logging.WARNING,
+            "paper PAPER-007: manual halt during start-up recorded; "
+            "the trading guard applies it when built",
         )
     ]
-    assert spy.alerts == [("circuit_breaker", "HALT (manual): boom", True)]
-    assert node.status.state is NodeState.HALTED
-    assert node.status.error_message == "boom"
+    assert records[0].exc_info is None
+
+
+async def test_startup_halt_replay_alerts_despite_failing_write(
+    seeded: dict[str, Any], monkeypatch: pytest.MonkeyPatch, fake_tradingnode: Any  # noqa: F811
+) -> None:
+    """R16 (neuvu.1): the replayed start-up halt keeps the write -> alert -> checkpoint
+    order of the guard path even when the event submit raises; the OSError then leaves
+    ``_initialize``, ``start()`` ends ERROR keeping halt_reason signal, and the failure
+    checkpoint says so."""
+    node = _node(seeded)
+    error = OSError("disk full")
+    spy = _Spy()
+    spy.install(monkeypatch, node)
+    monkeypatch.setattr(node_module, "TradingGuard", _UnitGuard)
+    monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
+    original_build = node._create_live_trading_node
+
+    def build() -> Any:
+        built = original_build()
+        spy.error = error  # from here on every event write fails
+        spy.order.clear()
+        spy.writes.clear()
+        return built
+
+    monkeypatch.setattr(node, "_create_live_trading_node", build)
+    original_read = node._kill_monitor.wait_first_read
+
+    async def read(timeout: float) -> Any:
+        node.halt(HaltReason.SIGNAL, "halt via SIGUSR1")  # what the handler does
+        return await original_read(timeout)
+
+    monkeypatch.setattr(node._kill_monitor, "wait_first_read", read)
+    original_checkpoint = node._save_checkpoint_now
+    monkeypatch.setattr(
+        node,
+        "_save_checkpoint_now",
+        lambda: (spy.order.append("checkpoint"), original_checkpoint())[0],
+    )
+
+    with pytest.raises(OSError) as caught:
+        await node.start()
+
+    assert caught.value is error
+    assert spy.order[:3] == ["write", "alert", "checkpoint"]
+    assert spy.writes[0] == (
+        EventType.RISK_CHECK,
+        {
+            "action": "halt",
+            "check_type": "signal",
+            "reason": "signal",
+            "message": "halt via SIGUSR1",
+            "passed": False,
+        },
+        None,
+    )
+    assert spy.alerts[0] == ("circuit_breaker", "HALT (signal): halt via SIGUSR1", True)
+    assert node.status.state is NodeState.ERROR
+    assert node.status.halt_reason is HaltReason.SIGNAL
+    persistence = StatePersistence(db_path=seeded["db"], trader_id="PAPER-007")
+    try:
+        checkpoint = persistence.load_latest_checkpoint()
+    finally:
+        persistence.close()
+    assert checkpoint is not None
+    assert checkpoint.node_status["halt_reason"] == "signal"
 
 
 # --------------------------------------------------------- R2 _on_guard_warning
