@@ -57,6 +57,7 @@ from vibe_quant.paper.config import (
     check_paper_exposure,
     effective_max_margin_pct,
     effective_max_position_pct,
+    is_key_rotation,
 )
 from vibe_quant.paper.config import (
     account_id as binance_account_id,
@@ -370,11 +371,6 @@ def validated_leverage_override(value: object) -> int:
     except LiquidationConfigError as exc:
         raise ConfigurationError(str(exc)) from exc
     return int(settings.leverage)
-
-
-def _account_env(account: str) -> str:
-    """``binance:testnet:<hash>`` -> ``binance:testnet`` (qa42q: same venue + env)."""
-    return account.rpartition(":")[0]
 
 
 def restored_halt_from_status(node_status: object, checkpoint_time: str) -> RestoredHalt | None:
@@ -2546,7 +2542,7 @@ class PaperTradingNode:
             if newest is not None:
                 newest_account = newest.node_status.get("account")
                 if newest_account is not None and newest_account != account:
-                    if own is None and _account_env(newest_account) == _account_env(account):
+                    if own is None and is_key_rotation(newest_account, account):
                         rotated = newest
                         logger.warning(
                             "paper %s: key rotation from account %s to %s; "

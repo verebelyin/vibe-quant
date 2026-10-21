@@ -248,8 +248,10 @@ def save_config_to_json(config: PaperTradingConfig, config_path: Path) -> None:
 
 
 def _has_account_checkpoint(config: PaperTradingConfig) -> bool:
-    """Does this config's account have ANY saved checkpoint (any trader's row)?
+    """Does a LIVE start on this config's account have saved risk state to carry?
 
+    Any trader's row on the account, or this trader's own row on another key of the
+    same env (a key rotation; ``StatePersistence.has_account_checkpoint``).
     Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
     start is refused rather than starting the limits from zero. Class only in the
     log: this runs on the money path.
@@ -312,8 +314,8 @@ async def run_with_config(
         run_id: Optional run ID for heartbeat registration.
         allow_live: Must be True (``--live``) to run a config with testnet=false.
         allow_fresh_live: Must be True (``--confirm-fresh-live``) to run a LIVE
-            config with ``start_fresh``, or one whose account has no saved risk
-            state; both reset the real-money limits.
+            config with ``start_fresh``, or one with no saved risk state to carry;
+            both reset the real-money limits.
 
     Returns:
         Exit code (0 for success, 1 for error).
@@ -345,19 +347,22 @@ async def run_with_config(
         )
         return 1
 
-    # 6ub67: a first LIVE session, or a rotated / second API key on the same
-    # Binance account, resolves to an account id with no checkpoint. The limits
-    # would then start from zero, so consent is required. Before the lock and the
-    # heartbeat: a refused start must leave nothing held.
+    # 6ub67 + neuvu.2: a LIVE start with no saved risk state to carry (a first
+    # session, or a new trader id on a new key: no checkpoint on the account and no
+    # earlier live session of this trader on another key) would start the limits
+    # from zero, so consent is required. A key rotation by the same trader id carries
+    # its risk and halt and needs none. Before the lock and the heartbeat: a refused
+    # start must leave nothing held.
     if (
         not config.binance.testnet
         and not allow_fresh_live
         and not _has_account_checkpoint(config)
     ):
         message = (
-            "Refusing LIVE start: no saved risk state for this account (new or rotated "
-            "API key, or first live session): drawdown, daily-loss and losing-streak "
-            "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+            "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
+            "account and no earlier live session of this trader on another key): "
+            "drawdown, daily-loss and losing-streak limits would start from zero; "
+            "re-run with --confirm-fresh-live to confirm"
         )
         print(message, file=sys.stderr)
         if run_id is not None:
@@ -456,8 +461,8 @@ def main() -> int:
         "--confirm-fresh-live",
         action="store_true",
         help=(
-            "Confirm a LIVE start_fresh or a LIVE account with no saved risk state "
-            "(both reset the real-money drawdown, daily-loss and losing-streak limits)"
+            "Confirm a LIVE start_fresh or a LIVE start with no saved risk state to "
+            "carry (both reset the real-money drawdown, daily-loss and losing-streak limits)"
         ),
     )
 

@@ -147,7 +147,10 @@ def _env_account_id(testnet: bool) -> str:
 
 
 def _live_account_has_checkpoint(state: StateManager, trader_id: str) -> bool:
-    """Does the LIVE env account have any saved risk state (any trader's row)?
+    """Does a LIVE start on the env account have saved risk state to carry?
+
+    Any trader's row on the account, or ``trader_id``'s own row on another key of the
+    same env (a key rotation; ``StatePersistence.has_account_checkpoint``).
 
     Fail closed: a lookup that cannot answer counts as "no checkpoint", so a LIVE
     start is refused rather than starting the limits from zero. Advisory like the
@@ -341,9 +344,10 @@ async def start_paper(
     _require_credentials(body.testnet)
     _refuse_if_account_busy(body.testnet)
 
-    # 6ub67: a first LIVE session, or a rotated / second API key on the same
-    # Binance account, resolves to an account id with no checkpoint. The limits
-    # would then start from zero, so consent is required. Before the run row.
+    # 6ub67 + neuvu.2: a LIVE start with no saved risk state to carry (a first
+    # session, or a new trader id on a new key) would start the limits from zero, so
+    # consent is required. A key rotation by the same trader id carries its risk and
+    # halt and needs none. Before the run row.
     no_checkpoint = False
     if not body.testnet:
         no_checkpoint = not _live_account_has_checkpoint(state, body.trader_id or "")
@@ -351,10 +355,10 @@ async def start_paper(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "LIVE start has no saved risk state for this account (new or rotated "
-                    "API key, or first live session): drawdown, daily-loss and "
-                    "losing-streak limits start from zero: set confirm_fresh_live=true "
-                    "to proceed"
+                    "LIVE start has no saved risk state to carry (no checkpoint on this "
+                    "account and no earlier live session of this trader on another key): "
+                    "drawdown, daily-loss and losing-streak limits start from zero: set "
+                    "confirm_fresh_live=true to proceed"
                 ),
             )
 

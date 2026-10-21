@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.db.connection import get_connection
+from vibe_quant.paper.config import is_key_rotation
 
 if TYPE_CHECKING:
     import sqlite3
@@ -355,14 +356,17 @@ class StatePersistence:
         return self._row_to_checkpoint(row)
 
     def has_account_checkpoint(self, account: str, trader_id: str) -> bool:
-        """True if ``account`` has any prior checkpoint: any trader's row carrying its
-        account key, or this trader's legacy row without the key.
+        """True if a LIVE start on ``account`` has saved risk state to carry.
 
-        The LIVE-start gate uses this to decide whether the real-money drawdown,
-        daily-loss and losing-streak limits would start from zero (first session,
-        rotated or second API key). Rows of another trader whose ``node_status`` is
-        not valid JSON are ignored: their account cannot be known, so counting them
-        would let an unrelated row satisfy the gate.
+        That is any trader's row carrying the account key, this trader's legacy row
+        without the key, or a KEY ROTATION: this trader's newest row (any account) is
+        another key of the same venue + env, whose risk and halt the restore carries
+        (qa42q). The rotation read is the row ``load_latest_checkpoint(trader_id)``
+        returns and the predicate is :func:`is_key_rotation`, the restore's own rule,
+        so "the gate asks for consent" and "nothing carries" cannot drift apart
+        (vibe-quant-neuvu.2). Rows of another trader whose ``node_status`` is not
+        valid JSON are ignored: their account cannot be known, so counting them
+        would let an unrelated row satisfy the gate. Never raises for row content.
         """
         cursor = self.conn.execute(
             """SELECT 1 FROM paper_trading_checkpoints
@@ -375,7 +379,21 @@ class StatePersistence:
                LIMIT 1""",
             (account, trader_id),
         )
-        return cursor.fetchone() is not None
+        if cursor.fetchone() is not None:
+            return True
+        newest = self.conn.execute(
+            """SELECT CASE WHEN json_valid(node_status)
+                           THEN json_extract(node_status, '$.account') END AS account
+               FROM paper_trading_checkpoints
+               WHERE trader_id = ?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (trader_id,),
+        ).fetchone()
+        if newest is None:
+            return False
+        newest_account = newest["account"]
+        return isinstance(newest_account, str) and is_key_rotation(newest_account, account)
 
     def list_checkpoints(
         self, trader_id: str | None = None, limit: int = 100

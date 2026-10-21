@@ -31,9 +31,11 @@ class PaperStartRequest(BaseModel):
     confirm_fresh_live: bool = Field(
         default=False,
         strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
-        description="Required with testnet=false when start_fresh=true OR the account "
-        "has no saved risk state (new/rotated API key, first live session): the live "
-        "drawdown, daily-loss and losing-streak limits start from zero.",
+        description="Required with testnet=false when start_fresh=true OR there is no "
+        "saved risk state to carry (no checkpoint on the account and no earlier live "
+        "session of this trader_id on another key): the live drawdown, daily-loss and "
+        "losing-streak limits start from zero. A key rotation that keeps the trader_id "
+        "carries its risk state and halt.",
     )
     trader_id: str | None = None
     start_fresh: bool = Field(

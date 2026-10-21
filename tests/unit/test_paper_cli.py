@@ -428,10 +428,10 @@ def _testnet_account() -> str:
     )
 
 
-def _live_account() -> str:
-    """The account id the live config's ``live_key`` resolves to."""
+def _live_account(api_key: str = "live_key", *, testnet: bool = False) -> str:
+    """The account id the live config's ``live_key`` (or another key) resolves to."""
     return account_id(
-        BinanceTestnetConfig(api_key="live_key", api_secret="live_secret", testnet=False)
+        BinanceTestnetConfig(api_key=api_key, api_secret="live_secret", testnet=testnet)
     )
 
 
@@ -694,17 +694,19 @@ class TestLiveStartFresh:
 
 
 class TestLiveAccountWithoutCheckpoint:
-    """6ub67: a LIVE account with no saved risk state refuses unless consented.
+    """6ub67 + neuvu.2: a LIVE start with no saved risk state to carry refuses unless consented.
 
-    A first LIVE session, or a rotated / second API key on the same Binance
-    account, resolves to an account id with no checkpoint: the drawdown,
-    daily-loss and losing-streak limits would silently start from zero.
+    A first LIVE session, or a new trader id on a new key (no checkpoint on the
+    account, no earlier live session of this trader on another key): the drawdown,
+    daily-loss and losing-streak limits would silently start from zero. A key
+    rotation by the SAME trader id carries its own risk and halt and needs no consent.
     """
 
     _REFUSAL = (
-        "Refusing LIVE start: no saved risk state for this account (new or rotated "
-        "API key, or first live session): drawdown, daily-loss and losing-streak "
-        "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+        "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
+        "account and no earlier live session of this trader on another key): "
+        "drawdown, daily-loss and losing-streak limits would start from zero; "
+        "re-run with --confirm-fresh-live to confirm"
     )
 
     @staticmethod
@@ -806,6 +808,53 @@ class TestLiveAccountWithoutCheckpoint:
         assert [c.binance.testnet for c in started] == [False]
 
     @pytest.mark.asyncio
+    async def test_rotation_start_needs_no_fresh_consent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """neuvu.2 R23: the SAME trader on a new live key carries its risk: no flag."""
+        db_path = tmp_path / "state.db"
+        self._seed(db_path, _live_account("old_key"), trader_id="LIVE-001")
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=db_path)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path, allow_live=True) == 0
+        assert [(c.trader_id, c.binance.testnet) for c in started] == [("LIVE-001", False)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rows", "label"),
+        [
+            ([("LIVE-001", "old_key", False), ("LIVE-001", "test_key", True)], "G4 newest is testnet"),
+            ([("LIVE-001", "test_key", True)], "G5 own testnet only"),
+            ([("OTHER-001", "old_key", False)], "G6 another trader's old key"),
+        ],
+    )
+    async def test_nothing_to_carry_is_still_refused(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        rows: list[tuple[str, str, bool]],
+        label: str,
+    ) -> None:
+        """neuvu.2 R25-R27: no own live row on another key in the env -> consent needed."""
+        db_path = tmp_path / "state.db"
+        for trader_id, key, testnet in rows:
+            self._seed(db_path, _live_account(key, testnet=testnet), trader_id=trader_id)
+        config_path = tmp_path / "live.json"
+        self._write(config_path, db_path=db_path)
+        started: list[PaperTradingConfig] = []
+        heartbeats: list[int | None] = []
+        self._patch(monkeypatch, started, heartbeats)
+
+        assert await run_with_config(config_path, allow_live=True) == 1, label
+        assert started == []
+        assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
+
+    @pytest.mark.asyncio
     async def test_another_accounts_checkpoint_does_not_count(
         self,
         tmp_path: Path,
@@ -863,13 +912,15 @@ class TestLiveAccountWithoutCheckpoint:
 
         assert started == []
         assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
+        assert "paper account checkpoint lookup failed (RuntimeError)" in caplog.text
         assert marker not in caplog.text
 
 
 class TestNoCheckpointRefusalIsPersisted:
     """6ub67 F1: with --run-id the consent refusal is the run's terminal failure.
 
-    Without it the API-launched run (e.g. /restore after a key rotation) stays
+    Without it the API-launched run (e.g. /restore of a trader with no risk state to
+    carry) stays
     ``running`` with no error after the child exits, and a later job sync only
     records "Process terminated unexpectedly", hiding the operator action.
     """

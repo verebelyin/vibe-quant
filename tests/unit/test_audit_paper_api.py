@@ -630,6 +630,78 @@ async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
     assert "--confirm-fresh-live" not in ctx.launched[0]
 
 
+async def test_rotation_start_needs_no_fresh_consent(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """neuvu.2 R23: the SAME trader_id on a new live key carries its risk and halt."""
+    monkeypatch.setenv("BINANCE_API_KEY", "lk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
+    _seed_account_checkpoint(
+        ctx.tmp / "api.db", api_key="old-key", testnet=False, trader_id="LIVE-001"
+    )
+
+    r = await ctx.ac.post(
+        "/api/paper/start",
+        json={
+            "validation_run_id": ctx.validation_run,
+            "testnet": False,
+            "confirm_live": True,
+            "trader_id": "LIVE-001",
+        },
+    )
+
+    assert r.status_code == 201, r.text
+    assert ctx.launched[0][-1] == "--live"
+    assert "--confirm-fresh-live" not in ctx.launched[0]
+
+
+@pytest.mark.parametrize(
+    ("rows", "post_trader"),
+    [
+        ([("LIVE-001", "old-key", False), ("LIVE-001", "tk", True)], "LIVE-001"),  # G4
+        ([("LIVE-001", "tk", True)], "LIVE-001"),  # G5
+        ([("PAPER-041", "old-key", False)], "LIVE-001"),  # G6
+        ([("LIVE-001", "old-key", False)], "LIVE-002"),  # new trader id on a new key
+        ([("LIVE-001", "old-key", False)], None),  # R40: trader_id omitted
+    ],
+    ids=["G4-newest-is-testnet", "G5-own-testnet", "G6-other-trader", "new-trader-id", "no-trader-id"],
+)
+async def test_live_start_with_nothing_to_carry_still_needs_consent(
+    ctx: Ctx,
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[str, str, bool]],
+    post_trader: str | None,
+) -> None:
+    """neuvu.2 R25-R27, R40: only the trader's own earlier live key counts as a rotation."""
+    monkeypatch.setenv("BINANCE_API_KEY", "lk")
+    monkeypatch.setenv("BINANCE_API_SECRET", "ls")
+    for trader_id, key, testnet in rows:
+        _seed_account_checkpoint(
+            ctx.tmp / "api.db", api_key=key, testnet=testnet, trader_id=trader_id
+        )
+    payload: dict[str, object] = {
+        "validation_run_id": ctx.validation_run,
+        "testnet": False,
+        "confirm_live": True,
+    }
+    if post_trader is not None:
+        payload["trader_id"] = post_trader
+    before = _paper_run_count(ctx.state)
+
+    refused = await ctx.ac.post("/api/paper/start", json=payload)
+
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["detail"].startswith("LIVE start has no saved risk state to carry")
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+    consented = await ctx.ac.post(
+        "/api/paper/start", json={**payload, "confirm_fresh_live": True}
+    )
+    assert consented.status_code == 201, consented.text
+    assert ctx.launched[0][-2:] == ["--confirm-fresh-live", "--live"]
+
+
 @pytest.mark.parametrize(
     ("exc", "marker"),
     [
@@ -666,10 +738,10 @@ async def test_live_start_fails_closed_when_the_checkpoint_lookup_raises(
 
     assert refused.status_code == 400, refused.text
     assert refused.json()["detail"] == (
-        "LIVE start has no saved risk state for this account (new or rotated "
-        "API key, or first live session): drawdown, daily-loss and "
-        "losing-streak limits start from zero: set confirm_fresh_live=true "
-        "to proceed"
+        "LIVE start has no saved risk state to carry (no checkpoint on this "
+        "account and no earlier live session of this trader on another key): "
+        "drawdown, daily-loss and losing-streak limits start from zero: set "
+        "confirm_fresh_live=true to proceed"
     )
     assert ctx.launched == []
     assert _paper_run_count(ctx.state) == before
@@ -1066,15 +1138,16 @@ async def test_restore_409_when_the_account_lock_is_held(ctx: Ctx) -> None:
     assert _paper_run_count(ctx.state) == before
 
 
-async def test_restore_after_key_rotation_persists_the_curated_refusal(
+async def test_restore_without_risk_state_persists_the_curated_refusal(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """6ub67 F1: a /restore whose real child refuses leaves a curated terminal failure.
 
-    The saved trader traded LIVE on another key; the env key resolves to an
-    account with no checkpoint, so the REAL CLI child refuses. The run and the job
-    must end ``failed`` carrying the curated text (not stay ``running``, not be
-    reduced to "Process terminated unexpectedly" by a later sync).
+    Another trader (PAPER-OTHER) traded LIVE on another key; the env key resolves to
+    an account with no risk state to carry for LIVE-001, so the REAL CLI child
+    refuses. The run and the job must end ``failed`` carrying the curated text (not
+    stay ``running``, not be reduced to "Process terminated unexpectedly" by a later
+    sync).
     """
     from pathlib import Path as _Path
 
@@ -1114,9 +1187,10 @@ async def test_restore_after_key_rotation_persists_the_curated_refusal(
         await asyncio.sleep(0.25)
 
     curated = (
-        "Refusing LIVE start: no saved risk state for this account (new or rotated "
-        "API key, or first live session): drawdown, daily-loss and losing-streak "
-        "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+        "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
+        "account and no earlier live session of this trader on another key): "
+        "drawdown, daily-loss and losing-streak limits would start from zero; "
+        "re-run with --confirm-fresh-live to confirm"
     )
     run = ctx.state.get_backtest_run(run_id)
     assert run is not None
@@ -1129,6 +1203,78 @@ async def test_restore_after_key_rotation_persists_the_curated_refusal(
     ctx.jobs.sync_job_status(run_id)
     run = ctx.state.get_backtest_run(run_id)
     assert run is not None and run["error_message"] == curated
+
+
+async def test_restore_after_rotation_runs(
+    ctx: Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """neuvu.2 R24: /restore after a key rotation is not refused by the CLI child.
+
+    The API launches the child through the fixture's recording launcher; the child's
+    ``run_with_config`` then runs in-process (no real node): it must reach the trading
+    entry with the saved trader, and no curated refusal may be persisted on the run.
+    """
+    from pathlib import Path as _Path
+
+    from vibe_quant.paper import cli as paper_cli
+
+    monkeypatch.setenv("BINANCE_API_KEY", "rotated-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "rotated-secret")
+    _seed_account_checkpoint(
+        ctx.tmp / "api.db", api_key="old-key", testnet=False, trader_id="LIVE-001"
+    )
+    cfg_dir = ctx.tmp / "paper_configs"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "paper_1.json").write_text(
+        json.dumps(
+            {
+                "trader_id": "LIVE-001",
+                "strategy_id": ctx.strategy_id,
+                "symbols": ["BTCUSDT"],
+                "binance": {"testnet": False},
+            }
+        )
+    )
+    r = await ctx.ac.post(
+        "/api/paper/restore", json={"trader_id": "LIVE-001", "confirm_live": True}
+    )
+    assert r.status_code == 201, r.text
+    run_id = r.json()["run_id"]
+    argv = ctx.launched[0]
+    assert "--confirm-fresh-live" not in argv
+
+    started: list[str] = []
+    completed: list[tuple[int, str | None]] = []
+
+    async def _fake_run(config: Any) -> None:
+        started.append(config.trader_id)
+
+    class _Manager:
+        def claim_process(self, run_id: int, pid: int, identity: str | None) -> None:
+            return None
+
+        def mark_completed(self, run_id: int, error: str | None = None) -> None:
+            completed.append((run_id, error))
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(paper_cli, "run_paper_trading", _fake_run)
+    monkeypatch.setattr(
+        paper_cli, "run_with_heartbeat", lambda rid, db_path: (_Manager(), lambda: None)
+    )
+
+    code = await paper_cli.run_with_config(
+        _Path(argv[argv.index("--config") + 1]), run_id, allow_live=True
+    )
+
+    assert code == 0
+    assert started == ["LIVE-001"]
+    assert completed == [(run_id, None)]
+    run = ctx.state.get_backtest_run(run_id)
+    assert run is not None
+    assert run["status"] != "failed"
+    assert run["error_message"] is None
 
 
 async def test_restore_live_session_requires_confirmation(ctx: Ctx) -> None:

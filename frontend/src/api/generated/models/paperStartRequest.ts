@@ -22,7 +22,7 @@ export interface PaperStartRequest {
   testnet?: boolean;
   /** Must be true together with testnet=false to trade real funds. */
   confirm_live?: boolean;
-  /** Required with testnet=false when start_fresh=true OR the account has no saved risk state (new/rotated API key, first live session): the live drawdown, daily-loss and losing-streak limits start from zero. */
+  /** Required with testnet=false when start_fresh=true OR there is no saved risk state to carry (no checkpoint on the account and no earlier live session of this trader_id on another key): the live drawdown, daily-loss and losing-streak limits start from zero. A key rotation that keeps the trader_id carries its risk state and halt. */
   confirm_fresh_live?: boolean;
   trader_id?: string | null;
   /** Skip inheriting the last session's peak, daily-loss and losing-streak limits for this account (default: continue from that session's risk state). */

@@ -256,6 +256,47 @@ class TestHasAccountCheckpoint:
         self._save_raw(store, "OWN-001", "{not json")
         assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
 
+    # neuvu.2: a key rotation by the same trader id carries its risk, so it counts.
+
+    def test_own_row_on_another_live_key_is_a_rotation(self, store: StatePersistence) -> None:
+        """R23: same trader, same venue + env, other key -> something carries."""
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+
+    def test_rotation_needs_the_own_row_not_another_traders(self, store: StatePersistence) -> None:
+        self._save(store, "OTHER-001", {"account": "binance:live:bbbb"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_rotation_reads_the_newest_own_row_only(self, store: StatePersistence) -> None:
+        """R25 vs R23: an older old-key row under a newer testnet row carries nothing."""
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        self._save(store, "OWN-001", {"account": "binance:testnet:bbbb"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        # ... and the order flipped: the old-key row is the newest
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+
+    def test_rotation_stays_inside_the_venue_and_env(self, store: StatePersistence) -> None:
+        self._save(store, "OWN-001", {"account": "binance:testnet:bbbb"})
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_non_string_account_is_not_a_rotation_and_never_raises(
+        self, store: StatePersistence
+    ) -> None:
+        """R32: a corrupt account value fails closed (no consent saved), no exception."""
+        self._save_raw(store, "OWN-001", '{"account": 5}')
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+        self._save_raw(store, "OWN-001", '{"account": ["binance:live:bbbb"]}')
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+    def test_invalid_json_newest_row_is_not_a_rotation_and_never_raises(
+        self, store: StatePersistence
+    ) -> None:
+        """R30: an unparseable newest own row cannot prove a rotation."""
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        self._save_raw(store, "OWN-001", "{not json")
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
 
 class TestPeriodicCheckpointing:
     """Tests for periodic checkpointing."""

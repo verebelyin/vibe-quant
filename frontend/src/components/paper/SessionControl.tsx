@@ -531,7 +531,7 @@ export function SessionControl() {
                   />
                   {startFresh
                     ? "I understand starting fresh resets my LIVE drawdown, daily-loss and losing-streak limits"
-                    : "This LIVE account may have no saved risk state (new or rotated API key, first live session): I understand the drawdown, daily-loss and losing-streak limits then start from zero"}
+                    : "This LIVE start may have no saved risk state (first live session, or a new trader id): I understand the drawdown, daily-loss and losing-streak limits then start from zero"}
                 </Label>
               </div>
             )}

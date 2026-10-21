@@ -1,10 +1,10 @@
 """A child's terminal result survives the parent's launch bookkeeping (6ub67 F1, I7).
 
-The real ``/restore`` child (``vibe_quant.paper.cli``) refuses a rotated key and
-records a curated terminal failure on the run and job rows while the API parent
-is still inside ``start_job`` / ``_launch``. The probes below force both parent/
-child interleavings with the actual CLI child and database; the terminal write
-is never replaced. Status transitions are monotonic: terminal never goes back to
+The real ``/restore`` child (``vibe_quant.paper.cli``) refuses an account with no
+risk state to carry and records a curated terminal failure on the run and job rows
+while the API parent is still inside ``start_job`` / ``_launch``. The probes below
+force both parent/child interleavings with the actual CLI child and database; the
+terminal write is never replaced. Status transitions are monotonic: terminal never goes back to
 ``running`` and its error text is never cleared by a later launch write.
 """
 
@@ -30,13 +30,14 @@ ctx = audit.ctx
 tmp_db = audit.tmp_db
 
 CURATED = (
-    "Refusing LIVE start: no saved risk state for this account (new or rotated "
-    "API key, or first live session): drawdown, daily-loss and losing-streak "
-    "limits would start from zero; re-run with --confirm-fresh-live to confirm"
+    "Refusing LIVE start: no saved risk state to carry (no checkpoint on this "
+    "account and no earlier live session of this trader on another key): "
+    "drawdown, daily-loss and losing-streak limits would start from zero; "
+    "re-run with --confirm-fresh-live to confirm"
 )
 
 
-def _prepare_rotated_key_restore(ctx: audit.Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+def _prepare_restore_without_risk_state(ctx: audit.Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BINANCE_API_KEY", "rotated-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "rotated-secret")
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2]))
@@ -94,7 +95,7 @@ async def test_restore_terminal_refusal_survives_delayed_parent(
         original(run_id, status, pid=pid, error_message=error_message)
 
     monkeypatch.setattr(ctx.state, "update_backtest_run_status", delayed_update)
-    _prepare_rotated_key_restore(ctx, monkeypatch)
+    _prepare_restore_without_risk_state(ctx, monkeypatch)
 
     response = await ctx.ac.post(
         "/api/paper/restore", json={"trader_id": "LIVE-001", "confirm_live": True}
@@ -126,7 +127,7 @@ async def test_restore_terminal_refusal_survives_delayed_registration(
         return original(pid)
 
     monkeypatch.setattr(manager_module, "process_start_time", delayed_identity)
-    _prepare_rotated_key_restore(ctx, monkeypatch)
+    _prepare_restore_without_risk_state(ctx, monkeypatch)
 
     response = await ctx.ac.post(
         "/api/paper/restore", json={"trader_id": "LIVE-001", "confirm_live": True}
@@ -251,7 +252,7 @@ async def test_restore_terminal_refusal_survives_log_close_error(
             return handle
 
     monkeypatch.setattr(manager_module, "Path", _Path)
-    _prepare_rotated_key_restore(ctx, monkeypatch)
+    _prepare_restore_without_risk_state(ctx, monkeypatch)
 
     with caplog.at_level(logging.WARNING, logger=manager_module.__name__):
         response = await ctx.ac.post(
