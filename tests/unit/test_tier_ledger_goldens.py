@@ -1,7 +1,8 @@
-"""Mode-off trade-ledger goldens: one fake run per scenario through BOTH tiers.
+"""Trade-ledger goldens: one fake run per scenario through BOTH tiers.
 
-Owned by rabmo.2 L1: the shared fake engine (``tests/unit/fake_engine.py``) and
-the base goldens that rabmo.2's ledger refactors must leave bit-identical.
+Owned by rabmo.2 L1 (mode-off G1-G13) and L2 (liquidation G8-G12): the shared fake
+engine (``tests/unit/fake_engine.py``) and the base goldens that rabmo.2's ledger
+refactors must leave bit-identical.
 
 Each scenario runs the SAME positions/bars through
 ``NTScreeningRunner._extract_metrics`` and through validation's
@@ -20,6 +21,12 @@ Serialization (``_golden``): dataclass -> ``{field: _golden(value)}`` over
 ``dataclasses.fields()``; float -> ``repr``; tuple/list -> list; numpy array ->
 ``[repr(v)]``; ``DailyReturns`` -> ``{"start_day": int, "values": [repr]}``;
 dict -> sorted keys. The file holds ``{"base": "a557a612", "cases": {...}}``.
+
+Liquidation scenarios (G8-G12, rabmo.2 L2) run with ``liquidation_mode`` on and the
+runner's/venue's catalog pointing at a real temp catalog of MARK bars, built by the
+MARK-bar helpers of ``test_screening_liquidation`` (imported, not copied). Their
+LAST execution bars are stamped at the minute close (as catalog bars are), so a
+survivor has the valuation horizon both tiers mark it at.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from tests.unit.fake_engine import (
     fake_engine,
     fake_venue,
 )
+from tests.unit.test_screening_liquidation import CALM, CRASH, Bars, write_marks
 from vibe_quant.data.archive import RawDataArchive
 from vibe_quant.metrics import DailyReturns
 from vibe_quant.screening.nt_runner import NTScreeningRunner
@@ -64,7 +72,10 @@ BTC = "BTCUSDT-PERP.BINANCE"
 ETH = "ETHUSDT-PERP.BINANCE"
 BALANCE = 1000.0
 FUNDING_RATE = 0.0003  # 3x the fallback, so G3's archived rate is visible
-SCENARIOS = ["G1", "G2", "G3", "G4", "G5", "G5b", "G6", "G7", "G13"]
+MODE_OFF_SCENARIOS = ["G1", "G2", "G3", "G4", "G5", "G5b", "G6", "G7", "G13"]
+#: rabmo.2 L2: the liquidation goldens, each pinned with the mode ON in both tiers.
+#: Every intended hit: liquidation_count >= the value here (0 = identity overlay).
+LIQUIDATION_HITS = {"G8": 1, "G9": 1, "G10": 0, "G11": 1, "G12": 1}
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +95,9 @@ class _Inputs:
     runner: NTScreeningRunner
     funding_archive: Path
     balance: float = BALANCE
+    liquidation_mode: str = "off"
+    leverage: int = 10
+    catalog_path: Path | None = None
 
 
 def _bar_type(instrument_id: str) -> str:
@@ -126,6 +140,19 @@ class _Bar:
         return 1000.0
 
 
+@dataclass(frozen=True)
+class _OHLCBar:
+    """A LAST execution bar with real OHLC, stamped at the minute close like a catalog bar."""
+
+    bar_type: BarType
+    ts_init: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float = 1000.0
+
+
 def _empty_archive(tmp_path: Path, name: str = "funding.db") -> Path:
     path = tmp_path / name
     archive = RawDataArchive(path)
@@ -135,7 +162,13 @@ def _empty_archive(tmp_path: Path, name: str = "funding.db") -> Path:
 
 
 def _runner(
-    symbols: list[str], funding_archive: Path, balance: int = int(BALANCE)
+    symbols: list[str],
+    funding_archive: Path,
+    balance: int = int(BALANCE),
+    *,
+    liquidation_mode: str = "off",
+    leverage: int = 10,
+    catalog_path: Path | None = None,
 ) -> NTScreeningRunner:
     runner = NTScreeningRunner(
         dsl_dict={},
@@ -144,12 +177,13 @@ def _runner(
         end_date=WINDOW_END,
         catalog_path=None,
         funding_archive_path=str(funding_archive),
-        liquidation_mode="off",
+        liquidation_mode=liquidation_mode,  # type: ignore[arg-type]
+        leverage=leverage,
         starting_balance=balance,
     )
     # Set during __call__ by a real run; the extractor reads them directly.
     runner._all_timeframes = {"1m"}
-    runner._resolved_catalog_path = None
+    runner._resolved_catalog_path = catalog_path
     return runner
 
 
@@ -160,14 +194,29 @@ def _inputs(
     *,
     symbols: list[str],
     funding_archive: Path | None = None,
+    balance: float = BALANCE,
+    liquidation_mode: str = "off",
+    leverage: int = 10,
+    catalog_path: Path | None = None,
 ) -> _Inputs:
     archive = _empty_archive(tmp_path) if funding_archive is None else funding_archive
     return _Inputs(
         positions=positions,
         bars_by_type=bars_by_type,
         bt_result=fake_bt_result(total_positions=len(positions)),
-        runner=_runner(symbols, archive),
+        runner=_runner(
+            symbols,
+            archive,
+            int(balance),
+            liquidation_mode=liquidation_mode,
+            leverage=leverage,
+            catalog_path=catalog_path,
+        ),
         funding_archive=archive,
+        balance=balance,
+        liquidation_mode=liquidation_mode,
+        leverage=leverage,
+        catalog_path=catalog_path,
     )
 
 
@@ -192,9 +241,141 @@ def _flat_trade(pid: str, open_min: int, close_min: int, realized: float) -> Fak
     )
 
 
-def _scenario(name: str, tmp_path: Path) -> _Inputs:
+def _liquidation_bars(bars: Bars) -> dict[str, list[Any]]:
+    """LAST 1m bars mirroring the MARK bars, stamped at the minute close (catalog-style)."""
+    bar_type = BarType.from_str(_bar_type(BTC))
+    return {
+        _bar_type(BTC): [
+            _OHLCBar(bar_type, at(i) + MIN - 1_000_000, o, h, low, c)
+            for i, (o, h, low, c) in enumerate(
+                zip(bars.open, bars.high, bars.low, bars.close, strict=True)
+            )
+        ]
+    }
+
+
+def _liquidated_long(
+    pid: str, open_min: int, close_min: int, fees: tuple[float, float] = (0.0, 0.0)
+) -> FakePosition:
+    """The 1 BTC long @40000 of the MARK scenarios: NT sells it at 38000 after the arena did."""
+    return FakePosition.closed(
+        pid,
+        BTC,
+        entry_ns=at(open_min),
+        exit_ns=at(close_min),
+        entry_price=40000.0,
+        exit_price=38000.0,
+        entry_fee=fees[0],
+        exit_fee=fees[1],
+    )
+
+
+def _winner(pid: str, open_min: int, close_min: int, exit_price: float) -> FakePosition:
+    return FakePosition.closed(
+        pid,
+        BTC,
+        entry_ns=at(open_min),
+        exit_ns=at(close_min),
+        entry_price=40000.0,
+        exit_price=exit_price,
+    )
+
+
+def _liquidation_scenario(name: str, tmp_path: Path, mode: str | None) -> _Inputs:
+    """G8-G12 on the MARK bars of ``test_screening_liquidation`` (CRASH = 30000 at 07:30)."""
+    if name == "G8":
+        # Isolated hit: A is liquidated at 07:30, its NT close at 09:00 never happens.
+        positions = [
+            _liquidated_long("A", 420, 540, (20.0, 19.0)),
+            _winner("B1", DAY_MIN + 600, DAY_MIN + 700, 40500.0),
+            _winner("B2", DAY_MIN + 720, DAY_MIN + 780, 40200.0),
+            _winner("B3", 2 * DAY_MIN + 600, 2 * DAY_MIN + 660, 39900.0),
+        ]
+        return _inputs(
+            positions,
+            _liquidation_bars(CRASH),
+            tmp_path,
+            symbols=["BTCUSDT"],
+            balance=40000.0,
+            liquidation_mode=mode or "isolated",
+            catalog_path=write_marks(tmp_path, CRASH),
+        )
+
+    if name == "G9":
+        # Cross bust: the 4000 wallet is wiped at 07:30 and equity never goes below 0.
+        # (G12 adds a position that the bust drops; here the hit is the whole account.)
+        positions = [_liquidated_long("A", 420, 540, (20.0, 19.0))]
+        return _inputs(
+            positions,
+            _liquidation_bars(CRASH),
+            tmp_path,
+            symbols=["BTCUSDT"],
+            balance=4000.0,
+            liquidation_mode=mode or "cross",
+            catalog_path=write_marks(tmp_path, CRASH),
+        )
+
+    if name == "G10":
+        # Identity overlay: calm market, nothing truncated; metrics == mode off.
+        positions = [
+            _liquidated_long("A", 420, 540, (20.0, 19.0)),
+            _winner("B1", DAY_MIN + 600, DAY_MIN + 700, 40500.0),
+            _winner("B2", DAY_MIN + 720, DAY_MIN + 780, 40200.0),
+            _winner("B3", 2 * DAY_MIN + 600, 2 * DAY_MIN + 660, 39900.0),
+        ]
+        return _inputs(
+            positions,
+            _liquidation_bars(CALM),
+            tmp_path,
+            symbols=["BTCUSDT"],
+            balance=40000.0,
+            liquidation_mode=mode or "cross",
+            catalog_path=write_marks(tmp_path, CALM),
+        )
+
+    if name == "G11":
+        # Survivor marked at the run end (40000) with its modeled exit fee.
+        positions = [
+            _liquidated_long("A", 420, 540, (20.0, 19.0)),
+            FakePosition.open(
+                "S", BTC, entry_ns=at(2 * DAY_MIN + 600), entry_price=40000.0, entry_fee=20.0
+            ),
+        ]
+        return _inputs(
+            positions,
+            _liquidation_bars(CRASH),
+            tmp_path,
+            symbols=["BTCUSDT"],
+            balance=40000.0,
+            liquidation_mode=mode or "isolated",
+            catalog_path=write_marks(tmp_path, CRASH),
+        )
+
+    if name == "G12":
+        # Dropped open position: A is still open when the 4000 wallet busts at 07:30 and
+        # B1 opens at 10:00; neither is ever marked (and B1 leaves no trade).
+        positions = [
+            FakePosition.open("A", BTC, entry_ns=at(420), entry_price=40000.0, entry_fee=20.0),
+            FakePosition.open("B1", BTC, entry_ns=at(600), entry_price=40000.0),
+        ]
+        return _inputs(
+            positions,
+            _liquidation_bars(CRASH),
+            tmp_path,
+            symbols=["BTCUSDT"],
+            balance=4000.0,
+            liquidation_mode=mode or "cross",
+            catalog_path=write_marks(tmp_path, CRASH),
+        )
+
+    raise AssertionError(f"unknown liquidation scenario {name}")
+
+
+def _scenario(name: str, tmp_path: Path, mode: str | None = None) -> _Inputs:
     """The scenario fixtures; every trade stays inside one 8h funding block
     unless the scenario is G3 (which reads an archived settlement)."""
+    if name in LIQUIDATION_HITS:
+        return _liquidation_scenario(name, tmp_path, mode)
     one_btc = {_bar_type(BTC): _flat_bars(BTC)}
 
     if name == "G1":
@@ -397,12 +578,14 @@ def _golden(obj: Any) -> Any:
         return {field.name: _golden(getattr(obj, field.name)) for field in fields(obj)}
     if isinstance(obj, np.ndarray):
         return [repr(v) for v in obj.tolist()]
-    if isinstance(obj, float):
-        return repr(obj)
+    if isinstance(obj, (float, np.floating)):  # np.float64 reprs as "np.float64(...)"
+        return repr(float(obj))
     if isinstance(obj, (list, tuple)):
         return [_golden(value) for value in obj]
     if isinstance(obj, dict):
         return {str(key): _golden(obj[key]) for key in sorted(obj, key=str)}
+    if isinstance(obj, np.bool_):
+        return bool(obj)
     if isinstance(obj, np.integer):
         return int(obj)
     return obj
@@ -427,14 +610,14 @@ def _observed(inputs: _Inputs, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any
             strategy_name="golden",
             bt_result=inputs.bt_result,
             engine=fake_engine(inputs.positions, inputs.bars_by_type),
-            venue_config=fake_venue(slippage, inputs.balance, 10),
+            venue_config=fake_venue(slippage, inputs.balance, inputs.leverage),
             primary_timeframe="1m",
             funding_calculator=FundingCalculator(inputs.funding_archive),
             run_start_date=WINDOW_START,
             run_end_date=WINDOW_END,
             execution_timeframe="1m",
-            catalog_path=None,
-            liquidation_mode="off",
+            catalog_path=inputs.catalog_path,
+            liquidation_mode=inputs.liquidation_mode,
         )
         cases[label] = _golden(result)
     return cases
@@ -450,7 +633,20 @@ def _capture(scenario: str, observed: dict[str, Any]) -> None:
     GOLDEN.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS)
+def _check_golden(scenario: str, observed: dict[str, Any]) -> None:
+    if os.environ.get(CAPTURE_ENV) == "1":
+        _capture(scenario, observed)
+        return
+    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    assert golden["base"] == BASE
+    assert observed == golden["cases"][scenario]
+
+
+def _without(record: dict[str, Any], *keys: str) -> dict[str, Any]:
+    return {key: value for key, value in record.items() if key not in keys}
+
+
+@pytest.mark.parametrize("scenario", MODE_OFF_SCENARIOS)
 def test_mode_off_goldens_match(
     scenario: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -479,10 +675,37 @@ def test_mode_off_goldens_match(
             "using closed-trade drawdown, which ignores open-trade losses"
         ) in messages
 
-    if os.environ.get(CAPTURE_ENV) == "1":
-        _capture(scenario, observed)
-        return
+    _check_golden(scenario, observed)
 
-    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
-    assert golden["base"] == BASE
-    assert observed == golden["cases"][scenario]
+
+@pytest.mark.parametrize("scenario", list(LIQUIDATION_HITS))
+def test_liquidation_goldens_match(
+    scenario: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R14/R17: the liquidation rebuilds of both tiers, pinned on the same fake run."""
+    inputs = _scenario(scenario, tmp_path)
+    with caplog.at_level(logging.WARNING):
+        observed = _observed(inputs, monkeypatch)
+
+    expected = LIQUIDATION_HITS[scenario]
+    assert observed["screening"]["liquidation_count"] >= expected
+    for label in ("validation_post_fill", "validation_engine_slippage"):
+        assert observed[label]["notes"]["liquidation"]["count"] >= expected
+
+    if scenario == "G10":
+        # Identity overlay: the mode-on run keeps every mode-off number (the note and
+        # the mode-on exit-timing diagnostic are the only additions).
+        off = _observed(_scenario("G10", tmp_path, mode="off"), monkeypatch)
+        assert observed["screening"]["liquidation_count"] == 0
+        assert _without(observed["screening"], "exit_timing") == _without(
+            off["screening"], "exit_timing"
+        )
+        for label in ("validation_post_fill", "validation_engine_slippage"):
+            assert _without(observed[label], "notes", "liquidation_events") == _without(
+                off[label], "notes", "liquidation_events"
+            )
+
+    _check_golden(scenario, observed)
