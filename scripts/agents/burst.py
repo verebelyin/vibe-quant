@@ -205,7 +205,10 @@ def run_cell(cell: dict[str, Any], result_path: Path) -> int:
         # checked by scripts/agents/fast_tier_parity.py
         from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
-        setattr(discovery_cli, "NTBacktestFn", FastBacktestFn)  # noqa: B010
+        class _BurstFast(FastBacktestFn):
+            confirm_on_nt = False  # scratch-DB exploration: never a verdict, no NT re-run
+
+        setattr(discovery_cli, "NTBacktestFn", _BurstFast)  # noqa: B010
     discovery_main = discovery_cli.main
 
     t0 = time.perf_counter()

@@ -28,6 +28,7 @@ from vibe_quant.discovery.pipeline import (
     DiscoveryConfig,
     DiscoveryPipeline,
     DiscoveryResult,
+    FastTierConfirm,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
@@ -229,6 +230,7 @@ def _make_cell_fns(
     min_trades: int,
     holdout: tuple[str, str] | None,
     needs_factory: bool,
+    evaluator: str = "nt",
 ) -> _CellFns:
     """The train / holdout / cross-window + WFA functions of ONE bankroll setup.
 
@@ -255,6 +257,17 @@ def _make_cell_fns(
         liquidation=liquidation,
         sizing=sizing,
     )
+    if evaluator == "fast":
+        # The fast tier scores the GA (NT for genomes it cannot replay); the pipeline
+        # re-runs the top-K on NT before any gate (vibe-quant-z8vqv.5). Holdout,
+        # cross-window and WFA below stay NT.
+        from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
+
+        backtest_fn = FastBacktestFn(
+            symbols, timeframe, train_start, train_end, windows=eval_windows,
+            min_trades=min_trades, symbol_agg=symbol_agg, fee_schedule=fee_schedule,
+            entry_order=entry_order, liquidation=liquidation, sizing=sizing, nt_fallback=True,
+        )
     holdout_backtest_fn = (
         _make_nt_backtest_fn(
             symbols=symbols,
@@ -389,6 +402,7 @@ def _pool_runs(
     convergence_gen: int | None = None
     result_metadata: DiscoveryResult | None = None
     cell_of: dict[int, BankrollCell] = {}  # id(per-run result) -> the cell it ran under
+    confirms: list[FastTierConfirm] = []  # --evaluator fast: every run's NT confirm
 
     for seed_idx, run in enumerate(runs):
         seed_val = run.seed  # Deterministic but varied seeds
@@ -410,6 +424,8 @@ def _pool_runs(
             seed_chromosomes=seed_chromosomes,
         )
         result = pipeline.run()
+        if result.fast_tier_confirm is not None:
+            confirms.append(result.fast_tier_confirm)
         if run.cell is not None:
             cell_of[id(result)] = run.cell
         if run.cell is None:
@@ -640,6 +656,7 @@ def _pool_runs(
         # re-check above runs guardrails only, never the buy-hold gate).
         buy_hold_records=buy_hold_records,
         buy_hold_gate=result_metadata.buy_hold_gate if result_metadata else None,
+        fast_tier_confirm=sum(confirms[1:], confirms[0]) if confirms else None,
     )
     return merged, [cell_of.get(id(result)) for _, _, result, _ in selected_entries]
 
@@ -891,6 +908,8 @@ def _run_provenance_notes(
         # GA rank score over the per-symbol adjusted fitness; champions still
         # need every symbol's train return > 0 and trades >= min (hard gate).
         notes["worst_mode_score"] = "0.5*min+0.5*median"
+    if result.fast_tier_confirm is not None:
+        notes["evaluator"] = {"name": "fast", "nt_confirmed": result.fast_tier_confirm.confirmed}
     if result.dsr_trials is not None:
         notes["dsr_trials"] = _dsr_trials_note(result, prior_run_ids or [], prior_legacy)
     elif not use_mock:
@@ -1156,6 +1175,14 @@ def build_parser() -> argparse.ArgumentParser:
         "the min-trades gate) and every window needs >= max(1, min_trades // (2N)) "
         "trades. Forces regime-robust strategies (default: 3; pass 1 for a "
         "single window).",
+    )
+    parser.add_argument(
+        "--evaluator",
+        choices=["nt", "fast"],
+        default="nt",
+        help="GA fitness evaluator: 'nt' = NautilusTrader screening (default); 'fast' = "
+        "the fast tier (1m single-symbol replay, exact vs NT screening; other genomes "
+        "run on NT), with the top-K re-run on NT before every gate.",
     )
     parser.add_argument(
         "--symbol-agg",
@@ -1705,6 +1732,15 @@ def main() -> int:
                 )
                 raise RuntimeError(msg)
             logger.info("Using real NautilusTrader backtest for symbols=%s", symbols)
+            if args.evaluator == "fast" and (
+                args.timeframe != "1m" or (len(symbols) > 1 and args.symbol_agg == "portfolio")
+            ):
+                logger.warning(
+                    "--evaluator fast replays 1m single-symbol accounts only: with "
+                    "timeframe=%s symbols=%d symbol_agg=%s every genome runs on NT "
+                    "(use --symbol-agg worst for multi-symbol)",
+                    args.timeframe, len(symbols), args.symbol_agg,
+                )
         if split_ratio <= 0:
             logger.warning(
                 "No holdout (--train-test-split 0): champions get NO out-of-sample gate"
@@ -1735,6 +1771,7 @@ def main() -> int:
                 min_trades=config.min_trades,
                 holdout=holdout_range,
                 needs_factory=needs_factory,
+                evaluator=args.evaluator,
             )
 
         # Load seed chromosomes from prior run if requested

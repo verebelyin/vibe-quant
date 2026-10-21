@@ -9,6 +9,7 @@ is the screening code.
 
 from __future__ import annotations
 
+import random
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -72,7 +73,27 @@ def _facade_result(positions: list[Any], starting_balance: float) -> Any:
 
 
 class FastBacktestFn(NTBacktestFn):
-    """Exploration-only twin of :class:`NTBacktestFn` (1m, single symbol, market entries)."""
+    """Exploration-only twin of :class:`NTBacktestFn` (1m, single symbol, market entries).
+
+    ``nt_fallback=True`` (discovery ``--evaluator fast``) runs a genome the replay cannot
+    handle on the NT engine instead of raising, so the GA's search space is unchanged.
+    """
+
+    # Discovery re-runs on NT every result a gate reads (DiscoveryPipeline._confirm_on_nt).
+    # Only scratch-DB exploration (scripts/agents/burst.py) turns it off.
+    confirm_on_nt = True
+
+    def __init__(self, *args: Any, nt_fallback: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.nt_fallback = nt_fallback
+
+    def nt_twin(self) -> NTBacktestFn:
+        """An :class:`NTBacktestFn` with this fn's whole state (windows, fill ticks, sizing...)."""
+        twin = NTBacktestFn.__new__(NTBacktestFn)
+        twin.__dict__.update(
+            {k: v for k, v in self.__dict__.items() if k not in ("nt_fallback", "last_positions")}
+        )
+        return twin
 
     def _run_single(
         self,
@@ -80,6 +101,26 @@ class FastBacktestFn(NTBacktestFn):
         start_date: str,
         end_date: str,
         symbols: list[str] | None = None,
+    ) -> dict[str, float | int]:
+        try:
+            return self._run_fast(chromosome, start_date, end_date, symbols)
+        except FastTierUnsupported:
+            if not self.nt_fallback:
+                raise
+        # NT's fill model re-seeds and draws from the global random (vibe-quant-0bwe2); the
+        # replay draws none, so a fallback must not either (the GA's seeded search).
+        state = random.getstate()
+        try:
+            return super()._run_single(chromosome, start_date, end_date, symbols)
+        finally:
+            random.setstate(state)
+
+    def _run_fast(
+        self,
+        chromosome: StrategyChromosome,
+        start_date: str,
+        end_date: str,
+        symbols: list[str] | None,
     ) -> dict[str, float | int]:
         from vibe_quant.discovery.genome import chromosome_to_dsl
         from vibe_quant.fast_tier.fills import Replay

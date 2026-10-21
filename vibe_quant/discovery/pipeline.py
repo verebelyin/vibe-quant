@@ -80,6 +80,10 @@ class DiscoveryEvaluationError(RuntimeError):
     """Every evaluation in a batch raised: systemic failure, not bad strategies."""
 
 
+class FastTierParityError(DiscoveryEvaluationError):
+    """``--evaluator fast``: a fast-tier result differs from NT (a fast-tier bug; run fails)."""
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -367,6 +371,38 @@ class DiscoveryResult:
     # rejection row both carry it) and the run-level ``{"enforced": ...}`` status.
     buy_hold_records: dict[str, dict[str, object]] = field(default_factory=dict)
     buy_hold_gate: dict[str, object] | None = None
+    # ``--evaluator fast`` only (vibe-quant-z8vqv.5); None = NT evaluator.
+    fast_tier_confirm: FastTierConfirm | None = None
+
+
+@dataclass(frozen=True)
+class FastTierConfirm:
+    """``--evaluator fast``: genomes re-run on NT before the gates (all equal, else the run fails)."""
+
+    confirmed: int
+
+    def __add__(self, other: FastTierConfirm) -> FastTierConfirm:
+        return FastTierConfirm(self.confirmed + other.confirmed)
+
+
+def _canonical(value: object) -> object:
+    """Exact, NaN-safe comparison form of a FitnessResult field (series by their bytes)."""
+    from vibe_quant.metrics import DailyReturns
+
+    if isinstance(value, DailyReturns):
+        return ("daily", value.first_day, value.values.tobytes())
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _canonical(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_canonical(v) for v in value)
+    return repr(value)
+
+
+def _confirm_key(fr: FitnessResult) -> tuple[object, ...]:
+    """Every FitnessResult field: what the fast-tier confirm requires to be identical."""
+    import dataclasses
+
+    return tuple((f.name, _canonical(getattr(fr, f.name))) for f in dataclasses.fields(fr))
 
 
 def _behaviour_fingerprint(
@@ -597,6 +633,10 @@ class DiscoveryPipeline:
         self._dsr_trials: dict[str, object] | None = None
         self._buy_hold_records: dict[str, dict[str, object]] = {}
         self._buy_hold_gate: dict[str, object] | None = None
+        self._fast_tier_confirm: FastTierConfirm | None = None
+        # --evaluator fast: every genome whose result keeps an MTM series (the DSR
+        # effective-N rows) by DSL key, so _confirm_on_nt can re-run it on NT.
+        self._series_chroms: dict[str, StrategyChromosome] = {}
         # Last generation's run_summary() (None = no IndMemo line logged yet).
         self._ind_memo_prev: dict[str, object] | None = None
         # DSR tests the candidate's MARK-TO-MARKET daily return series
@@ -607,7 +647,9 @@ class DiscoveryPipeline:
         # still collect it -- without touching ``_dsr_requires_returns`` (DSR's
         # own fail-closed rule).
         from vibe_quant.discovery.backtest_fn import NTBacktestFn
+        from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
 
+        self._fast_evaluator = isinstance(backtest_fn, FastBacktestFn) and backtest_fn.confirm_on_nt
         self._dsr_requires_returns = False
         if isinstance(backtest_fn, NTBacktestFn):
             if config.require_dsr or config.require_buy_hold:
@@ -870,6 +912,8 @@ class DiscoveryPipeline:
             for (key, idx), fr in zip(todo.items(), fresh, strict=True):
                 self._fitness_cache[key] = fr
                 self._total_evaluated += 1
+                if self._fast_evaluator and (fr.mtm_daily_returns is not None or fr.symbol_mtm_daily):
+                    self._series_chroms[key] = chroms[idx].clone()
                 if fr.adjusted_score > 0:
                     self._all_scored.append((chroms[idx].clone(), fr))
         return [self._fitness_cache[key] for key in keys]
@@ -957,6 +1001,8 @@ class DiscoveryPipeline:
         self._dsr_trials = None
         self._buy_hold_records = {}
         self._buy_hold_gate = None
+        self._fast_tier_confirm = None
+        self._series_chroms = {}
 
         converged = False
         convergence_gen: int | None = None
@@ -1130,6 +1176,9 @@ class DiscoveryPipeline:
                 len(sharpes), mean_sr, var_sr ** 0.5, min(sharpes), max(sharpes),
             )
 
+        # --evaluator fast: the gates below see NT numbers only.
+        top_strategies = self._confirm_on_nt(top_strategies)
+
         # Gate 1: guardrails (DSR + min trades + complexity + bootstrap CI).
         # Fails closed: candidates failing ANY guardrail are dropped.
         top_strategies = self._validate_top_strategies(top_strategies, total_evaluated)
@@ -1175,6 +1224,58 @@ class DiscoveryPipeline:
         return result
 
     # -- validation gates ----------------------------------------------------
+
+    def _confirm_on_nt(
+        self, top_strategies: list[tuple[StrategyChromosome, FitnessResult]]
+    ) -> list[tuple[StrategyChromosome, FitnessResult]]:
+        """``--evaluator fast``: re-run on NT every result a gate reads; the run fails on any difference.
+
+        The fast tier scored the GA. Before the gates, the top-K AND every cached genome
+        that kept an MTM series (the DSR effective-N rows, read from ``_fitness_cache``)
+        are re-run on the NT engine; each NT result must equal the fast one in EVERY
+        FitnessResult field, else :class:`FastTierParityError` fails the run (a fast-tier
+        bug must never reach a verdict). The NT results replace the cached and top-K ones,
+        so every gate (guardrails, worst-symbol, buy-and-hold) and the multi-seed pooled
+        re-check read NT numbers. A no-op for other fns.
+        """
+        if not self._fast_evaluator:
+            return top_strategies
+        from vibe_quant.fast_tier.backtest_fn import FastBacktestFn
+
+        fn = self._backtest_fn
+        assert isinstance(fn, FastBacktestFn)
+        todo = dict(self._series_chroms)
+        for chrom, _ in top_strategies:
+            todo.setdefault(self._dsl_key(chrom), chrom)
+        cfg = self.config
+        # NT's fill model re-seeds and draws from the GLOBAL random (vibe-quant-0bwe2): an
+        # in-process confirm must not move what runs after it.
+        rng_state = random.getstate()
+        try:
+            nt_results = evaluate_population(
+                list(todo.values()),
+                fn.nt_twin(),
+                self._filter_fn,
+                max_workers=cfg.max_workers,
+                min_trades=cfg.min_trades,
+                timeframe=cfg.timeframe,
+            ) if todo else []
+        finally:
+            random.setstate(rng_state)
+        nt_by_key = dict(zip(todo, nt_results, strict=True))
+        differ = [
+            todo[key].uid for key, nt_fr in nt_by_key.items()
+            if _confirm_key(self._fitness_cache[key]) != _confirm_key(nt_fr)
+        ]
+        if differ:
+            raise FastTierParityError(
+                f"fast tier != NT for {len(differ)} of {len(todo)} confirmed genomes "
+                f"(first uids {differ[:5]}): run failed, no verdict from fast-tier numbers"
+            )
+        self._fitness_cache.update(nt_by_key)
+        self._fast_tier_confirm = FastTierConfirm(len(todo))
+        logger.info("Fast tier confirm: %d genomes re-run on NT, all identical", len(todo))
+        return [(chrom, nt_by_key[self._dsl_key(chrom)]) for chrom, _ in top_strategies]
 
     def _reject(
         self,
@@ -1402,6 +1503,7 @@ class DiscoveryPipeline:
             dsr_trials=self._dsr_trials,
             buy_hold_records=dict(self._buy_hold_records),
             buy_hold_gate=self._buy_hold_gate,
+            fast_tier_confirm=self._fast_tier_confirm,
         )
 
     def _apply_buy_hold_gate(
