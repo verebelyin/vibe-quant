@@ -213,7 +213,11 @@ Re-runs a genome on train ranges shifted in time; every shift must pass.
 Repeated optimise-then-test on rolling windows to measure how well in-sample results carry forward.
 
 **Walk-forward efficiency (WFE)**:
-Out-of-sample return relative to in-sample return across WFA windows.
+Mean out-of-sample return per day over mean in-sample return per day, across WFA windows.
+
+**Rolling-window check**:
+Discovery's opt-in stability gate (`--wfa-oos-step-days`): back-to-back windows over the train range, no re-optimisation; a share of them must be profitable.
+_Avoid_: WFA (alone; that is the overfitting pipeline's walk-forward analysis)
 
 **Purged k-fold**:
 Cross-validation with gaps between folds so overlapping trades cannot leak.

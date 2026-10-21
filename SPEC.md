@@ -1136,11 +1136,11 @@ Sliding window train/test validation:
 - With 2 years of data (24 months): produces ~13 windows (floor((24-9-3)/1) + 1 = 13)
 
 **Metrics:**
-- Walk-forward efficiency: `mean(OOS_return) / mean(IS_return)` -- should be > 0.5
+- Walk-forward efficiency (length-normalised, Pardo): `mean(OOS_return / OOS_days) / mean(IS_return / IS_days)`, days counted inclusive from each window's dates; 0.0 when the mean IS return per day is below 0.001 / mean IS days (no in-sample edge); capped at 5.0 -- should be > 0.5
 - OOS Sharpe: Sharpe ratio computed only on out-of-sample periods
 - Consistency: percentage of OOS windows that are profitable
 
-**Filter threshold:** Walk-forward efficiency > 0.5 AND > 50% of OOS windows profitable
+**Filter threshold:** walk-forward efficiency > 0.5 AND more than 50% of OOS windows profitable (OOS return > 0) AND the sum of OOS window returns > 0
 
 ### Purged K-Fold Cross-Validation
 
@@ -1712,7 +1712,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 2. **Walk-Forward Analysis**
    - Configurable window generator (train_days, test_days, step_days)
    - For each window: run NautilusTrader screening-mode backtest on train set, validate on test set
-   - Compute WF efficiency: `mean(OOS_return) / mean(IS_return)`
+   - Compute WF efficiency: `mean(OOS_return / OOS_days) / mean(IS_return / IS_days)`
    - Compute consistency: % of OOS windows profitable
    - Filter: min efficiency, min profitable windows
    - Default windows sized for 2-year data: 9m train / 3m test / 1m step → ~12 windows
@@ -1953,7 +1953,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
    - Minimum 50 trades per candidate (prevents overfitting to few trades)
    - Complexity penalty prevents bloated strategies, plus a hard cap of <= 10 scalar genes (entry + exit, long + short; MA genes excluded) enforced inside the GA (init, mutation, crossover, seeding trim the longest list's tail without RNG); the final guardrail is a fail-closed backstop
    - DSR applied to the whole discovery run on its **effective** trial count: `notes.dsr_trials.run_n_eff` (this run's EV-matched count; raw when fewer than 2 retained series) plus the summed `run_n_eff` of earlier same-timeframe overlapping-train runs recorded under `n_rule` `cumulative_effective_same_tf_overlapping_train`; earlier runs are tallied (`prior_legacy_raw`) but not charged (see `docs/claude/discovery.md`, comparability break 2026-10-18)
-   - Walk-Forward required for final candidates before promotion
+   - Rolling-window stability check (opt-in: `--wfa-oos-step-days N`, API `wfa_oos_step_days`; default 0 = off): tiles the TRAIN range (never the holdout) with back-to-back N-day windows, re-runs each champion unchanged on every window (no re-optimisation, no efficiency ratio) and passes when at least `wfa_min_consistency` (default 0.75) of the windows have return > 0; a range too short for one window fails closed. The windows are in-sample for the GA, so this measures stability, not out-of-sample skill (the holdout is that gate). §8's walk-forward analysis runs only in the overfitting CLI (`python -m vibe_quant overfitting`); promotion does not require it
    - Multi-symbol scoring (`--symbol-agg`, API `symbol_agg`): `portfolio` (default) runs ONE shared-account backtest over all symbols, so one symbol can carry the rest; `worst` (opt-in) backtests each symbol alone (all eval windows per symbol) and scores the genome by its worst symbol: min Sharpe / return / PF, max drawdown, MIN trades across symbols (so `min_trades` applies per symbol), bootstrap trade returns concatenated. The GA RANK score in worst mode is soft (a hard worst-of score is 0 whenever any symbol loses, so the GA had no gradient): `adjusted_score = 0.5*min + 0.5*median` of the PER-SYMBOL adjusted fitness (each symbol scored exactly like a standalone run on its own window-aggregated metrics, incl. its hard trade/return gate and penalties; recorded in notes as `worst_mode_score` and per champion as `symbol_scores`); the reported metrics stay worst-of, and there is no across-symbol early exit (per-window early exit inside a symbol still applies). Champions keep a HARD worst-symbol train gate before the other gates: every symbol's train worst-of-windows return must be > 0 and its trades >= `min_trades`, else the candidate is rejected (`guardrail_rejections` stage `worst_symbol_train`, e.g. "worst-symbol train return <= 0 (SYM)"); holdout/bootstrap/DSR/cross-window/WFA gates are unchanged. Gate-passing candidates are ranked ahead of gate-failing ones when picking top-K. The same mode is used by every backtest fn of the run (GA, holdout, full-range headline, cross-window, WFA) and is recorded in the run notes as `symbol_agg`; a replay of such a run is a portfolio backtest and carries a `metrics_note`. Single-symbol runs are identical in both modes. In worst mode the GA soft score applies each symbol's own penalties (overtrade on that symbol's trades); only the reported worst-of fields and the hard worst-symbol champion gate use per-symbol minimums. Worst-mode `full_range`/`holdout` entries also persist `*trades_sum` and per-symbol `symbol_metrics`; validation consistency and replay-drift compare trades against `trades_sum` (skipped, with a note, for legacy notes without it) because validation/replay are portfolio runs, and read the reference Sharpe as the worst symbol.
 
 ### Acceptance Criteria
