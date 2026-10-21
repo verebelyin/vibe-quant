@@ -8,7 +8,8 @@ share one definition of a discovery run.
 from __future__ import annotations
 
 import argparse
-from typing import TYPE_CHECKING, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
 
 from vibe_quant.bankroll_grid import (
     BankrollCell,
@@ -33,6 +34,8 @@ from vibe_quant.liquidation_settings import (
 from vibe_quant.symbol_leverage import SymbolLeverageError, check_leverage
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from vibe_quant.sizing_settings import SizingSettings
 
 # Timeframe-aware bootstrap-CI floor defaults (vibe-quant-gds1c):
@@ -366,6 +369,234 @@ def plan_from_args(args: argparse.Namespace) -> WindowPlan:
         cross_window_months=parse_cross_window_months(args.cross_window_months or ""),
         wfa_oos_step_days=args.wfa_oos_step_days,
     )
+
+
+_UNSET = object()
+
+# One spec field per build_parser() dest EXCEPT run_id, db and mock (process
+# settings the CLI keeps), named exactly as the dest.
+_SPEC_DESTS: tuple[str, ...] = (
+    "population_size",
+    "max_generations",
+    "mutation_rate",
+    "crossover_rate",
+    "elite_count",
+    "tournament_size",
+    "convergence_generations",
+    "max_workers",
+    "symbols",
+    "timeframe",
+    "start_date",
+    "end_date",
+    "indicator_pool",
+    "direction",
+    "eval_windows",
+    "evaluator",
+    "symbol_agg",
+    "train_test_split",
+    "cross_window_months",
+    "holdout_min_sharpe",
+    "holdout_min_trades",
+    "cross_window_min_sharpe",
+    "seed_from_run",
+    "wfa_oos_step_days",
+    "wfa_min_consistency",
+    "num_seeds",
+    "seed",
+    "bootstrap_min_sharpe",
+    "bootstrap_ci_level",
+    "require_bootstrap_ci",
+    "require_dsr",
+    "dsr_rule",
+    "require_buy_hold",
+    "fee_tier",
+    "bnb_discount",
+    "liquidation_mode",
+    "leverage",
+    "liquidation_leverage",
+    "max_position_pct",
+    "risk_per_trade",
+    "max_margin_pct",
+    "bankroll_modes",
+    "bankroll_leverages",
+    "bankroll_max_margin_pcts",
+    "immigrant_fraction",
+    "entropy_threshold",
+    "use_crowding",
+)
+
+# Canonical argv order (design 2.2.1): the router's order first, then the
+# CLI-only flags in parser order. ``cross_window_months`` is emitted in the
+# "--flag=value" form: a leading negative month ("-1,2") would otherwise parse
+# as a flag.
+_ARGV_FIELDS: tuple[tuple[str, str], ...] = (
+    ("population_size", "--population-size"),
+    ("max_generations", "--max-generations"),
+    ("mutation_rate", "--mutation-rate"),
+    ("crossover_rate", "--crossover-rate"),
+    ("elite_count", "--elite-count"),
+    ("tournament_size", "--tournament-size"),
+    ("convergence_generations", "--convergence-generations"),
+    ("max_workers", "--max-workers"),
+    ("symbols", "--symbols"),
+    ("timeframe", "--timeframe"),
+    ("start_date", "--start-date"),
+    ("end_date", "--end-date"),
+    ("indicator_pool", "--indicator-pool"),
+    ("direction", "--direction"),
+    ("eval_windows", "--eval-windows"),
+    ("symbol_agg", "--symbol-agg"),
+    ("train_test_split", "--train-test-split"),
+    ("cross_window_months", "--cross-window-months"),
+    ("cross_window_min_sharpe", "--cross-window-min-sharpe"),
+    ("num_seeds", "--num-seeds"),
+    ("wfa_oos_step_days", "--wfa-oos-step-days"),
+    ("wfa_min_consistency", "--wfa-min-consistency"),
+    ("immigrant_fraction", "--immigrant-fraction"),
+    ("entropy_threshold", "--entropy-threshold"),
+    ("use_crowding", "--no-crowding"),
+    ("seed_from_run", "--seed-from-run"),
+    ("seed", "--seed"),
+    ("require_bootstrap_ci", "--no-bootstrap-ci"),
+    ("bootstrap_min_sharpe", "--bootstrap-min-sharpe"),
+    ("bnb_discount", "--bnb-discount"),
+    ("evaluator", "--evaluator"),
+    ("liquidation_mode", "--liquidation-mode"),
+    ("leverage", "--leverage"),
+    ("max_position_pct", "--max-position-pct"),
+    ("risk_per_trade", "--risk-per-trade"),
+    ("max_margin_pct", "--max-margin-pct"),
+    ("bankroll_modes", "--bankroll-modes"),
+    ("bankroll_leverages", "--bankroll-leverages"),
+    ("bankroll_max_margin_pcts", "--bankroll-max-margin-pcts"),
+    ("holdout_min_sharpe", "--holdout-min-sharpe"),
+    ("holdout_min_trades", "--holdout-min-trades"),
+    ("bootstrap_ci_level", "--bootstrap-ci-level"),
+    ("require_dsr", "--no-dsr"),
+    ("dsr_rule", "--dsr-rule"),
+    ("require_buy_hold", "--no-buy-hold-gate"),
+    ("fee_tier", "--fee-tier"),
+    ("liquidation_leverage", "--liquidation-leverage"),
+)
+
+# store_true/store_false dests: the bare flag carries the value.
+_BARE_FLAGS: frozenset[str] = frozenset(
+    {"use_crowding", "require_bootstrap_ci", "bnb_discount", "require_dsr", "require_buy_hold"}
+)
+
+
+@dataclass(frozen=True)
+class DiscoveryRunSpec:
+    """One discovery run as parsed from CLI argv.
+
+    Every field is one ``build_parser()`` dest, typed as argparse produces it,
+    with no default: the parser owns the defaults. ``given`` records which
+    dests appeared on the argv, so ``to_argv`` re-emits exactly those in
+    canonical order.
+    """
+
+    population_size: int
+    max_generations: int
+    mutation_rate: float
+    crossover_rate: float
+    elite_count: int
+    tournament_size: int
+    convergence_generations: int
+    max_workers: int
+    symbols: str
+    timeframe: str
+    start_date: str
+    end_date: str
+    indicator_pool: str | None
+    direction: str | None
+    eval_windows: int
+    evaluator: str
+    symbol_agg: str
+    train_test_split: float
+    cross_window_months: str | None
+    holdout_min_sharpe: float
+    holdout_min_trades: int | None
+    cross_window_min_sharpe: float
+    seed_from_run: int | None
+    wfa_oos_step_days: int
+    wfa_min_consistency: float
+    num_seeds: int
+    seed: int | None
+    bootstrap_min_sharpe: float | None
+    bootstrap_ci_level: float
+    require_bootstrap_ci: bool
+    require_dsr: bool
+    dsr_rule: str
+    require_buy_hold: bool
+    fee_tier: str
+    bnb_discount: bool
+    liquidation_mode: str
+    leverage: float | None
+    liquidation_leverage: float | None
+    max_position_pct: float | None
+    risk_per_trade: float | None
+    max_margin_pct: float | None
+    bankroll_modes: str | None
+    bankroll_leverages: str | None
+    bankroll_max_margin_pcts: str | None
+    immigrant_fraction: float
+    entropy_threshold: float
+    use_crowding: bool
+    given: frozenset[str]
+
+    @classmethod
+    def from_args(
+        cls, args: argparse.Namespace, given: frozenset[str] = frozenset()
+    ) -> DiscoveryRunSpec:
+        """Read every spec dest from a parsed namespace."""
+        values: dict[str, Any] = {dest: getattr(args, dest) for dest in _SPEC_DESTS}
+        return cls(**values, given=given)
+
+    @classmethod
+    def from_argv(cls, argv: Sequence[str]) -> DiscoveryRunSpec:
+        """Parse argv (without ``--run-id``) into a spec.
+
+        The namespace is pre-filled with ``_UNSET`` for every spec dest, so a
+        dest is ``given`` exactly when the argv set it; every other dest takes
+        the parser default. Bad argv keeps argparse's own SystemExit(2).
+        """
+        parser = build_parser()
+        namespace = argparse.Namespace(**dict.fromkeys(_SPEC_DESTS, _UNSET))
+        parsed = parser.parse_args(["--run-id", "0", *argv], namespace=namespace)
+        given = frozenset(dest for dest in _SPEC_DESTS if getattr(parsed, dest) is not _UNSET)
+        for dest in _SPEC_DESTS:
+            if getattr(parsed, dest) is _UNSET:
+                setattr(parsed, dest, parser.get_default(dest))
+        return cls.from_args(parsed, given)
+
+    def to_argv(self) -> list[str]:
+        """The CLI argv for the ``given`` dests, in canonical order."""
+        argv: list[str] = []
+        for dest, flag in _ARGV_FIELDS:
+            if dest not in self.given:
+                continue
+            if dest in _BARE_FLAGS:
+                argv.append(flag)
+            elif dest == "cross_window_months":
+                argv.append(f"{flag}={getattr(self, dest)}")
+            else:
+                argv.extend([flag, str(getattr(self, dest))])
+        return argv
+
+    def plan(self) -> WindowPlan:
+        """The windows this run will use.
+
+        Raises:
+            DiscoveryConfigError: The window config cannot produce valid windows.
+        """
+        return plan_windows(
+            self.start_date,
+            self.end_date,
+            train_test_split=self.train_test_split,
+            eval_windows=self.eval_windows,
+            cross_window_months=parse_cross_window_months(self.cross_window_months or ""),
+            wfa_oos_step_days=self.wfa_oos_step_days,
+        )
 
 
 def _grid_flags_given(args: argparse.Namespace) -> bool:
