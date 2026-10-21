@@ -186,8 +186,9 @@ def test_restored_halt_first_tick_warning_list_unchanged() -> None:
 
 def test_escalation_in_on_start_warns_once() -> None:
     """R18: a drawdown breach inside ``on_start`` escalates the pre-start SIGNAL
-    halt; its flatten is the only warning (dropping the ``_started`` reset makes
-    ``on_start`` report a second one)."""
+    halt; its flatten is the only warning. Dropping the ``_started`` reset is
+    not observable here: the escalation's flatten records the same unowned list
+    ``on_start`` re-reads, so the list dedupe still suppresses a second report."""
     risk = RiskState(
         high_water_mark=Decimal("10600"),
         day=date(2026, 1, 5),
@@ -228,16 +229,26 @@ def test_resume_before_start_reports_nothing() -> None:
 # --------------------------------------------------------------- R20
 
 
+@pytest.mark.parametrize(
+    ("exc_type", "expected_log"),
+    [
+        (RuntimeError, "unowned-position report failed (RuntimeError)"),
+        (OSError, "unowned-position report failed (OSError)"),
+    ],
+)
 def test_report_failure_is_class_only(
     caplog: pytest.LogCaptureFixture,
+    exc_type: type[Exception],
+    expected_log: str,
 ) -> None:
     """R20: a raising ``on_warning`` in the report does not break ``on_start``;
-    the ERROR log names the class only and carries no exception text/``exc_info``."""
+    the ERROR log names the class only and carries no exception text/``exc_info``.
+    Two unrelated classes pin the forwarded class name."""
     h = harness.build(symbols=(_SYMBOL,))
     assert h.guard.halt(HaltReason.SIGNAL, _SIGNAL_MSG) is True
 
     def boom(message: str) -> None:
-        raise RuntimeError("telegram token ZZLEAK9")
+        raise exc_type("telegram token ZZLEAK9")
 
     h.listener.on_warning = boom  # type: ignore[method-assign]
     _add_external(h.engine)
@@ -247,7 +258,7 @@ def test_report_failure_is_class_only(
 
     assert h.guard.guard_state == GuardState.HALTED, "on_start completed"
     errors = [r for r in caplog.records if "unowned-position report failed" in r.getMessage()]
-    assert [r.getMessage() for r in errors] == ["unowned-position report failed (RuntimeError)"]
+    assert [r.getMessage() for r in errors] == [expected_log]
     assert errors[0].exc_info is None, "no exc_info on the report failure"
     assert "ZZLEAK9" not in caplog.text
     assert [str(p.id) for p in h.engine.cache.positions_open()] == ["P-EXT-1"]
