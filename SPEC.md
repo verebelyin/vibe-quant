@@ -976,17 +976,17 @@ python -m vibe_quant.data download-mark --start 2024-01-01 --end 2026-03-17 --ca
 
 ### Position sizing
 
-Every entry is sized by the rule below (settings validated by `vibe_quant/sizing_settings.py`; sizing code in the generated strategy, `vibe_quant/dsl/templates.py`). `equity` is the account balance (no unrealised PnL):
+Every entry is sized by the rule below (settings validated by `vibe_quant/sizing_settings.py`; sizing code in the generated strategy, `vibe_quant/dsl/templates.py`). It reads the **balance**: the account's wallet balance (NT `balance_total`), without unrealised PnL. (**Equity** = balance + unrealised PnL is what the margin limit and the paper guard read.)
 
 ```
-size = min(equity * risk_per_trade / stop_distance, equity * max_position_pct / price)
+size = min(balance * risk_per_trade / stop_distance, balance * max_position_pct / price)
 ```
 
-Then: a size below the instrument's min quantity is raised to the min quantity when that still fits under the `max_position_pct` cap, and the entry is skipped when it does not (so at small equity a trade can risk more than `risk_per_trade`, never more than the cap); the size is rounded down to the size increment (skipped if that leaves nothing); an entry below the min notional is skipped.
+Then: a size below the instrument's min quantity is raised to the min quantity when that still fits under the `max_position_pct` cap, and the entry is skipped when it does not (so at small balance a trade can risk more than `risk_per_trade`, never more than the cap); the size is rounded down to the size increment (skipped if that leaves nothing); an entry below the min notional is skipped.
 
 Two **run-level** settings drive it:
 
-- `max_position_pct` — "Max exposure (× equity)", default **0.5**, range `(0, 125]`. It is a **cap, not a target** (the risk rule can size smaller), and it is **per symbol**: N symbols can hold up to N × cap in total.
+- `max_position_pct` — "Max exposure (× balance)", default **0.5**, range `(0, 125]`. It is a **cap, not a target** (the risk rule can size smaller), and it is **per symbol**: N symbols can hold up to N × cap in total.
 - `risk_per_trade` — "Risk per trade", default **0.02** (the UI shows percent: default 2, max 50), range `(0, 0.5]`.
 
 A third run-level setting is a **limit on margin in use**, not a sizing rule:
@@ -1193,23 +1193,23 @@ Risk management is decoupled from strategy logic. Three module types attach to a
 # sizing_config.yaml
 method: fixed_fractional
 config:
-  risk_per_trade: 0.02            # 2% of equity per trade
+  risk_per_trade: 0.02            # 2% of balance per trade
   max_position_pct: 0.10          # Max 10% in single position
   max_leverage: 20
 ```
 
-The run-level sizing implemented today is the min(risk, cap) rule (defaults: 2% risk per trade, 0.5 × equity cap per symbol) — see [§ Position sizing](#position-sizing).
+The run-level sizing implemented today is the min(risk, cap) rule (defaults: 2% risk per trade, 0.5 × balance cap per symbol) — see [§ Position sizing](#position-sizing).
 
 **Available methods:**
 
 | Method | Formula | Use Case |
 |--------|---------|----------|
-| Fixed Fractional | `position = (equity * risk_pct) / (entry - stop_loss)` | Conservative, consistent risk |
+| Fixed Fractional | `position = (balance * risk_pct) / (entry - stop_loss)` | Conservative, consistent risk |
 | Kelly Criterion | `f* = (W - (1-W)/R) * kelly_fraction` | Optimal growth, uses half-Kelly (0.5) |
-| ATR-Based | `position = (equity * risk_pct) / (ATR * multiplier)` | Volatility-adaptive sizing |
+| ATR-Based | `position = (balance * risk_pct) / (ATR * multiplier)` | Volatility-adaptive sizing |
 
 All methods enforce:
-- Maximum position size as % of equity
+- Maximum position size as % of balance
 - Maximum leverage limit
 - Maximum portfolio heat (total risk across all positions)
 

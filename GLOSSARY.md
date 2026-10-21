@@ -134,12 +134,18 @@ _Avoid_: position size gene (sizing is never searched)
 The fraction of balance a trade loses if its stop is hit.
 
 **Max exposure**:
-The largest notional a single position may hold, as a multiple of equity.
+The largest notional a single position may hold, as a multiple of balance.
 _Avoid_: position cap, exposure cap
 
 **Margin limit**:
 A ceiling on margin in use as a fraction of equity; an entry that would cross it is refused, never shrunk.
 _Avoid_: cushion, total exposure cap
+
+**Balance**:
+The account's wallet balance without unrealised PnL; sizing reads it.
+
+**Equity**:
+Balance plus the unrealised PnL of open positions; the margin limit and the paper guard read it.
 
 **Starting balance**:
 The account balance a run starts with.
@@ -420,6 +426,6 @@ Always qualify these; each means several different things here.
 - **pooled**: carry's shared account, pooled trial count across seeds, pooled daily returns across symbols.
 - **portfolio**: funding carry, portfolio symbol aggregation, portfolio-level risk limits.
 - **maker**: the maker fee rate, the coding agent.
-- **equity**: balance before unrealised PnL (in sizing) vs balance plus unrealised PnL (in margin limit and guard). Say which.
+- **equity**: means balance plus unrealised PnL; sizing reads balance (no unrealised PnL), so say balance there. Older code comments and API error texts still say equity for balance.
 - **consistency**: screening–validation consistency vs the share of profitable WFA windows.
 - **archive**: the market-data archive vs storing research items.
