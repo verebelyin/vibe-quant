@@ -1,7 +1,8 @@
 """Fitness evaluation for genetic strategy discovery.
 
-Multi-objective fitness: Sharpe, MaxDD, ProfitFactor with commission-aware
-overtrading penalty, complexity penalty, and Pareto ranking for selection.
+Weighted scalar fitness (35% Sharpe, 25% 1-MaxDD, 20% PF, 20% return) minus
+commission-aware overtrading, complexity and SL/TP-imbalance penalties. Discovery
+selects on this scalar; ``pareto_rank`` below has no caller in discovery.
 """
 
 from __future__ import annotations
