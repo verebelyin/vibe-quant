@@ -31,7 +31,8 @@ class PaperStartRequest(BaseModel):
     confirm_fresh_live: bool = Field(
         default=False,
         strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
-        description="Required with testnet=false when start_fresh=true OR there is no "
+        description="Required with testnet=false when start_fresh=true (skips another "
+        "trader_id's carried risk state on this account) OR there is no "
         "saved risk state to carry (no checkpoint on the account and no earlier live "
         "session of this trader_id on another key): the live drawdown, daily-loss and "
         "losing-streak limits start from zero. A key rotation that keeps the trader_id "
@@ -41,8 +42,9 @@ class PaperStartRequest(BaseModel):
     start_fresh: bool = Field(
         default=False,
         strict=True,  # "true" / 1 / null are 422, not coerced: only a JSON bool flips it
-        description="Skip inheriting the last session's peak, daily-loss and losing-streak "
-        "limits for this account (default: continue from that session's risk state).",
+        description="Skip inheriting the peak, daily-loss and losing-streak state (and an "
+        "ERROR halt) another trader_id left on this account; this trader_id's own saved "
+        "state and halt always carry (default: inherit).",
     )
     trade_alerts: bool = Field(
         default=False,

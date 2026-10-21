@@ -273,8 +273,9 @@ async def start_paper(
         raise HTTPException(
             status_code=400,
             detail=(
-                "start_fresh with testnet=false resets the LIVE drawdown, daily-loss and "
-                "losing-streak limits: set confirm_fresh_live=true to proceed"
+                "start_fresh with testnet=false skips the LIVE risk state another trader id left "
+                "on this account (peak, daily loss, losing streak, ERROR halt); this trader id's "
+                "own saved limits and halt are kept: set confirm_fresh_live=true to proceed"
             ),
         )
     if body.trader_id is not None and not is_valid_trader_id(body.trader_id):
@@ -561,8 +562,8 @@ async def restore_paper(
         "sizing": prior_config.get("sizing") or {},
         "risk": prior_config.get("risk") or {},
         "restored_from_trader_id": body.trader_id,
-        # K4: a saved config may carry start_fresh: true; /restore must not
-        # re-inject it, or the copied prior config resets the limits it restored.
+        # K4: /restore forces start_fresh=False so it continues account risk inheritance;
+        # it must not replay a saved choice to skip another trader id's risk state.
         "start_fresh": False,
         "trade_alerts": trade_alerts,
     }
