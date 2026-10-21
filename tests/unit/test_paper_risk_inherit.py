@@ -713,7 +713,10 @@ def test_inherited_halt_message_strips_both_prefixes(message: str, expected: str
 # --------------------------------------------------------------------- R15
 
 
-_INHERIT_HINT = " (limits inherited from PAPER-041; start fresh to reset)"
+_INHERIT_HINT = (
+    " (limits inherited from PAPER-041; start fresh skips that trader id's risk state; "
+    "this trader id's own saved limits and halt still carry)"
+)
 
 
 def _wire_guard(monkeypatch: pytest.MonkeyPatch, equity: str) -> _SettablePortfolio:
@@ -819,7 +822,8 @@ async def test_inherited_risk_logs_warning_naming_source(
     assert record.getMessage() == (
         "paper PAPER-007: inherited risk state from PAPER-041 (high water mark 10600, "
         "3 consecutive losses); a limit breach halts at the first equity read; "
-        "start fresh resets"
+        "start fresh skips this other trader id's risk state; "
+        "this trader id's own saved limits and halt still carry"
     )
     caplog.clear()
     _sql(seeded["db"], "DELETE FROM paper_trading_checkpoints")

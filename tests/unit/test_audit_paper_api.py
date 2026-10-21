@@ -560,7 +560,8 @@ async def test_live_start_fresh_confirmation_rows(
     fresh_flag: bool,
     seed_checkpoint: bool,
 ) -> None:
-    """v4l2n + 6ub67: a LIVE start needs consent when it resets the limits or has none."""
+    """v4l2n + 6ub67: LIVE starts need consent to skip another trader id's risk state or
+    start with no saved risk state."""
     monkeypatch.setenv("BINANCE_API_KEY", "lk")
     monkeypatch.setenv("BINANCE_API_SECRET", "ls")
     if seed_checkpoint:

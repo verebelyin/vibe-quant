@@ -319,8 +319,9 @@ async def run_with_config(
         run_id: Optional run ID for heartbeat registration.
         allow_live: Must be True (``--live``) to run a config with testnet=false.
         allow_fresh_live: Must be True (``--confirm-fresh-live``) to run a LIVE
-            config with ``start_fresh``, or one with no saved risk state to carry;
-            both reset the real-money limits.
+            config with ``start_fresh`` (skips another trader id's risk state;
+            this trader id's own saved limits and halt are kept), or a LIVE start
+            with no saved risk state to carry (limits start from current equity).
 
     Returns:
         Exit code (0 for success, 1 for error).

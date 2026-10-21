@@ -562,8 +562,8 @@ async def restore_paper(
         "sizing": prior_config.get("sizing") or {},
         "risk": prior_config.get("risk") or {},
         "restored_from_trader_id": body.trader_id,
-        # K4: a saved config may carry start_fresh: true; /restore must not
-        # re-inject it, or the copied prior config resets the limits it restored.
+        # K4: /restore forces start_fresh=False so it continues account risk inheritance;
+        # it must not replay a saved choice to skip another trader id's risk state.
         "start_fresh": False,
         "trade_alerts": trade_alerts,
     }
