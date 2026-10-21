@@ -768,7 +768,10 @@ def _recording_seed(seen: list[int], real_seed: Any) -> Any:
     return _seed
 
 
-def test_multi_seed_default_base_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_multi_seed_seed_autodrawn_and_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
     import random
 
     db_path = tmp_path / "state.db"
@@ -776,9 +779,53 @@ def test_multi_seed_default_base_unchanged(tmp_path: Path, monkeypatch: pytest.M
     seen: list[int] = []
     real_seed = random.seed
     monkeypatch.setattr(random, "seed", _recording_seed(seen, real_seed))
+    monkeypatch.setattr(random.SystemRandom, "randrange", lambda self, *a, **k: 1234)
     monkeypatch.setattr("sys.argv", _seed_argv(db_path, run_id, "--num-seeds", "2"))
+    caplog.set_level(logging.INFO, logger="vibe_quant.discovery.__main__")
     assert main() == 0
-    assert seen[:2] == [42, 7961]
+    assert seen[:2] == [1234, 9153]
+    assert _run_notes(db_path, run_id)["seed"] == 1234
+    assert "Discovery seed: 1234" in caplog.text
+
+
+def test_multi_seed_explicit_seed_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import random
+
+    db_path = tmp_path / "state.db"
+    run_id = _create_discovery_run(db_path)
+    seen: list[int] = []
+    real_seed = random.seed
+    monkeypatch.setattr(random, "seed", _recording_seed(seen, real_seed))
+    monkeypatch.setattr("sys.argv", _seed_argv(db_path, run_id, "--num-seeds", "2", "--seed", "5"))
+    assert main() == 0
+    assert seen[:2] == [5, 7924]
+    assert _run_notes(db_path, run_id)["seed"] == 5
+
+
+def test_multi_seed_seed_differs_across_launches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hostile probe: two launches without --seed must not repeat the same base."""
+    db_a = tmp_path / "a.db"
+    run_a = _create_discovery_run(db_a)
+    monkeypatch.setattr("sys.argv", _seed_argv(db_a, run_a, "--num-seeds", "2"))
+    assert main() == 0
+    db_b = tmp_path / "b.db"
+    run_b = _create_discovery_run(db_b)
+    monkeypatch.setattr("sys.argv", _seed_argv(db_b, run_b, "--num-seeds", "2"))
+    assert main() == 0
+    assert _run_notes(db_a, run_a)["seed"] != _run_notes(db_b, run_b)["seed"]
+
+
+def test_seed_help_has_no_fixed_default() -> None:
+    import re
+
+    help_text = build_parser().format_help()
+    seed_help = help_text.split("\n  --seed ", 1)[1].split("\n  --", 1)[0]
+    assert re.search(r"default\s+base", seed_help) is None
+    assert "42" not in seed_help
 
 
 def test_multi_seed_explicit_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

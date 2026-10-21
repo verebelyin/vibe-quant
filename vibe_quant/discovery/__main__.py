@@ -1258,8 +1258,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="RNG seed for reproducible GA runs. Default: random (recorded in "
-        "notes). With --num-seeds >1 it is the base: seed i = base + i*7919 "
-        "(default base 42).",
+        "notes). With --num-seeds >1 it is the base: seed i = base + i*7919.",
     )
     parser.add_argument(
         "--bootstrap-min-sharpe",
@@ -1832,7 +1831,8 @@ def main() -> int:
         else:
             # Multi-seed ensemble: run N times with different seeds
             fns = fns_for(liquidation, sizing)
-            seed = args.seed if args.seed is not None else 42
+            seed = _resolve_seed(args.seed)
+            logger.info("Discovery seed: %d", seed)
             result = _run_multi_seed(
                 num_seeds=num_seeds,
                 config=config,
