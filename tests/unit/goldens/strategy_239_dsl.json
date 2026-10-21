@@ -1,0 +1,45 @@
+{
+  "base": "a557a612",
+  "dsl": {
+    "entry_conditions": {
+      "long": [
+        "price_position_entry_0 crosses_below 0.2045"
+      ]
+    },
+    "exit_conditions": {
+      "long": [
+        "adx_exit_0 > 42.6885",
+        "kama_ma_exit_0_fast > kama_ma_exit_0_slow"
+      ]
+    },
+    "indicators": {
+      "adx_exit_0": {
+        "period": 12,
+        "type": "ADX"
+      },
+      "kama_ma_exit_0_fast": {
+        "period": 25,
+        "type": "KAMA"
+      },
+      "kama_ma_exit_0_slow": {
+        "period": 48,
+        "type": "KAMA"
+      },
+      "price_position_entry_0": {
+        "period": 133,
+        "type": "PRICE_POSITION"
+      }
+    },
+    "name": "genome_47b1365029e0",
+    "stop_loss": {
+      "percent": 0.88,
+      "type": "fixed_pct"
+    },
+    "take_profit": {
+      "percent": 5.91,
+      "type": "fixed_pct"
+    },
+    "timeframe": "4h"
+  },
+  "source": "strategies.id=239 (main checkout data/state/vibe_quant.db)"
+}
