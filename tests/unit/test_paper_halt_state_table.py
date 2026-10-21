@@ -157,7 +157,7 @@ def test_table_guard_halt(reason: HaltReason, start: _GuardStart) -> None:
         assert guard.guard_state is GuardState.HALTED
         assert guard.halt_reason is start.reason
         assert guard.message == _PRIOR
-        assert guard._state_before_halt is GuardState.RUNNING
+        assert guard._halt.before_halt is GuardState.RUNNING
         assert _changes(listener) == []
         assert guard.status()["state"] == "halted"
         assert guard.status()["halt_reason"] == start.reason.value
@@ -167,7 +167,7 @@ def test_table_guard_halt(reason: HaltReason, start: _GuardStart) -> None:
     assert guard.halt_reason is reason
     assert guard.message == _MSG
     expected_before = start.state if start.state is not GuardState.HALTED else GuardState.RUNNING
-    assert guard._state_before_halt is expected_before
+    assert guard._halt.before_halt is expected_before
     assert _changes(listener) == [(GuardState.HALTED, reason, _MSG)]
     assert guard.status()["state"] == "halted"
     assert guard.status()["halt_reason"] == reason.value
@@ -264,7 +264,7 @@ def test_table_guard_resume(start: _GuardResumeStart, engaged: bool) -> None:
     assert guard.guard_state is start.prior
     assert guard.halt_reason is None
     assert guard.message == "resumed by operator"
-    assert guard._state_before_halt is GuardState.RUNNING
+    assert guard._halt.before_halt is GuardState.RUNNING
     assert _changes(listener) == [(start.prior, None, "resumed by operator")]
 
 
@@ -307,7 +307,7 @@ def test_table_guard_restored_halt_at_construction(reason: HaltReason) -> None:
     assert guard.guard_state is GuardState.HALTED
     assert guard.halt_reason is reason
     assert guard.message == "restored after restart: halt via API"
-    assert guard._state_before_halt is GuardState.RUNNING
+    assert guard._halt.before_halt is GuardState.RUNNING
     assert guard.status()["state"] == "halted"
     assert guard.status()["halt_reason"] == reason.value
     assert listener.changes == []

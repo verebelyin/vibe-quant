@@ -931,7 +931,7 @@ def test_resume_before_trader_start_lifts_restored_halt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """H20: the restored state is applied in ``__init__`` (state, reason,
-    message, ``_state_before_halt``); ``on_start`` arms the flatten flag and
+    message, ``_halt.before_halt``); ``on_start`` arms the flatten flag and
     notifies only while still HALTED, so a resume before start gives a real
     RUNNING session: no flatten, no halt notify, strategies trade normally."""
     h = _restored_harness(monkeypatch, strategy_kwargs={"mode": "every_bar"})
@@ -939,7 +939,7 @@ def test_resume_before_trader_start_lifts_restored_halt(
     assert guard.guard_state == GuardState.HALTED
     assert guard.halt_reason == HaltReason.MANUAL
     assert guard.status()["message"] == _RESTORED_MESSAGE
-    assert guard._state_before_halt == GuardState.RUNNING
+    assert guard._halt.before_halt == GuardState.RUNNING
     calls = _count_flatten(guard)
 
     assert guard.resume() == (True, "resumed from halt")
