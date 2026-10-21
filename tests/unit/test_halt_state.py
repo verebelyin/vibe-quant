@@ -26,6 +26,8 @@ from dataclasses import dataclass
 import pytest
 
 import vibe_quant.paper.guard as guard_module
+from tests.unit.test_audit_paper_guard import RecordingListener
+from tests.unit.test_paper_guard_prestart_halt import _unit_guard
 from vibe_quant.paper.halt_state import (
     OPERATOR_RESUMABLE_HALTS,
     RESTORED_HALT_PREFIX,
@@ -409,6 +411,91 @@ def test_a_refused_halt_keeps_the_earlier_pending_halt() -> None:
     assert halt.record(GuardState.HALTED, HaltReason.SIGNAL, HaltReason.ERROR, _MSG) is False
 
     assert halt.take() == (HaltReason.SIGNAL, _PRIOR)
+
+
+# ------------------------------------------- TradingGuard holds one HaltState (T7b)
+
+
+def test_guard_owns_one_halt_state_and_its_props_read_it() -> None:
+    """T7b: the four loose fields are gone; ``guard._halt`` is the only state."""
+    guard = _unit_guard([])
+
+    assert isinstance(guard._halt, HaltState)
+    assert (guard._halt.state, guard._halt.reason, guard._halt.message) == (
+        GuardState.RUNNING,
+        None,
+        "",
+    )
+    assert (guard.guard_state, guard.halt_reason, guard.message) == (
+        GuardState.RUNNING,
+        None,
+        "",
+    )
+
+    assert guard.halt(HaltReason.MANUAL, _MSG) is True
+    assert guard.guard_state is guard._halt.state is GuardState.HALTED
+    assert guard.halt_reason is guard._halt.reason is HaltReason.MANUAL
+    assert guard.message == guard._halt.message == _MSG
+    assert guard._halt.before_halt is GuardState.RUNNING
+
+    assert guard.resume() == (True, _RESUMED_FROM_HALT)
+    assert guard.guard_state is guard._halt.state is GuardState.RUNNING
+    assert guard.halt_reason is guard._halt.reason is None
+    assert guard.message == guard._halt.message == "resumed by operator"
+    assert guard._halt.before_halt is GuardState.RUNNING
+
+
+def test_guard_starts_from_from_restored_halt_state() -> None:
+    """T7b: a restored halt seeds the machine, exactly as the old init block did."""
+    restored = RestoredHalt(HaltReason.MANUAL, f"{RESTORED_HALT_PREFIX}halt via API", _ISO)
+    guard = _unit_guard([], restored_halt=restored)
+
+    assert (
+        guard._halt.state,
+        guard._halt.reason,
+        guard._halt.message,
+        guard._halt.before_halt,
+    ) == (
+        GuardState.HALTED,
+        HaltReason.MANUAL,
+        "restored after restart: halt via API",
+        GuardState.RUNNING,
+    )
+    assert (guard.guard_state, guard.halt_reason, guard.message) == (
+        GuardState.HALTED,
+        HaltReason.MANUAL,
+        "restored after restart: halt via API",
+    )
+
+    assert guard.pause() is False
+    assert (guard._halt.state, guard._halt.message) == (
+        GuardState.HALTED,
+        "restored after restart: halt via API",
+    )
+
+
+def test_guard_pause_and_resume_transition_the_halt_state() -> None:
+    """T7b: pause/resume delegate the transition; the listener still fires once."""
+    guard = _unit_guard([])
+    listener = RecordingListener()
+    guard._listener = listener
+
+    assert guard.pause() is True
+    assert (guard._halt.state, guard._halt.reason, guard._halt.message) == (
+        GuardState.PAUSED,
+        None,
+        _PAUSED_BY_OPERATOR,
+    )
+    assert guard.resume() == (True, _RESUMED_FROM_PAUSE)
+    assert (guard._halt.state, guard._halt.reason, guard._halt.message) == (
+        GuardState.RUNNING,
+        None,
+        "resumed",
+    )
+    assert [(state, reason, message) for _ns, state, reason, message in listener.changes] == [
+        (GuardState.PAUSED, None, _PAUSED_BY_OPERATOR),
+        (GuardState.RUNNING, None, "resumed"),
+    ]
 
 
 # --------------------------------------------------------------- re-exports
