@@ -1,0 +1,292 @@
+{
+  "failure": {
+    "no_catalog_data": {
+      "exit": 1,
+      "log_lines": [],
+      "result": null,
+      "run": {
+        "error_message": "RuntimeError: No catalog bar data for symbols=['BTCUSDT'] \u2014 download data first (Data Management) or pass --mock for a synthetic run",
+        "status": "failed"
+      },
+      "stdout": [
+        "Discovery failed: No catalog bar data for symbols=['BTCUSDT'] \u2014 download data first (Data Management) or pass --mock for a synthetic run"
+      ],
+      "traceback": true
+    },
+    "partial_grid": {
+      "exit": 2,
+      "log_lines": [],
+      "result": null,
+      "run": {
+        "error_message": "BankrollGridError: give all three of --bankroll-modes, --bankroll-leverages and --bankroll-max-margin-pcts together",
+        "status": "failed"
+      },
+      "stdout": [
+        "Discovery failed: give all three of --bankroll-modes, --bankroll-leverages and --bankroll-max-margin-pcts together"
+      ],
+      "traceback": true
+    },
+    "run_missing": {
+      "exit": 1,
+      "log_lines": [],
+      "result": null,
+      "run": null,
+      "stdout": [
+        "Run 999 not found"
+      ],
+      "traceback": false
+    },
+    "seed_from_run_empty": {
+      "exit": 1,
+      "log_lines": [],
+      "result": null,
+      "run": {
+        "error_message": "ValueError: warm-start run 1 has no persisted champions to seed from (guardrails may have rejected all candidates); launch without seed_run_id instead",
+        "status": "failed"
+      },
+      "stdout": [
+        "Discovery failed: warm-start run 1 has no persisted champions to seed from (guardrails may have rejected all candidates); launch without seed_run_id instead"
+      ],
+      "traceback": true
+    }
+  },
+  "note": "Characterization golden for the mock discovery run (rabmo.7 T3): main() on a temp DB, pop=6 gens=2. Elapsed times, created_at and compiler_version are masked; everything else is literal.",
+  "success": {
+    "bankroll_grid": {
+      "exit": 0,
+      "log_lines": [
+        "Discovery seed: 7",
+        "=== MULTI-SEED RUN 1/2 (seed=7) ===",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5827 mean=0.4951 median=0.4857 std=0.0528 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5869 mean=0.5236 median=0.5309 std=0.0535 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> \u0394best=+0.0042",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 10 evaluated | converged=False ===",
+        "=== HOLDOUT EVALUATION: 5 strategies ===",
+        "=== MULTI-SEED RUN 2/2 (seed=7) ===",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5827 mean=0.4951 median=0.4857 std=0.0528 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5869 mean=0.5236 median=0.5309 std=0.0535 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> \u0394best=+0.0042",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 10 evaluated | converged=False ===",
+        "=== HOLDOUT EVALUATION: 5 strategies ===",
+        "=== MULTI-SEED SUMMARY (2 seeds) ==="
+      ],
+      "result": {
+        "avg_loss": null,
+        "avg_trade_duration_hours": null,
+        "avg_win": null,
+        "cagr": null,
+        "calmar_ratio": null,
+        "created_at": "<created_at>",
+        "deflated_sharpe": null,
+        "id": 1,
+        "kurtosis": 3.0,
+        "largest_loss": null,
+        "largest_win": null,
+        "losing_trades": null,
+        "max_consecutive_losses": null,
+        "max_consecutive_wins": null,
+        "max_drawdown": 0.2132967477121334,
+        "max_drawdown_duration_days": null,
+        "notes": "{\"type\": \"discovery\", \"generations\": 4, \"evaluated\": 20, \"converged\": false, \"mock\": true, \"synthetic\": true, \"compiler_version\": \"<masked>\", \"eval_windows\": 3, \"eval_window_aggregation\": \"worst_of_n\", \"eval_window_ranges\": [[\"2024-01-01\", \"2024-04-07\"], [\"2024-04-07\", \"2024-07-13\"], [\"2024-07-13\", \"2024-10-19\"]], \"symbol_agg\": \"portfolio\", \"train_test_split\": 0.8, \"train_dates\": [\"2024-01-01\", \"2024-10-19\"], \"holdout_dates\": [\"2024-10-19\", \"2025-01-01\"], \"holdout_gate\": {\"min_trades\": 6, \"min_sharpe\": 0.0, \"min_return\": 0.0}, \"direction\": null, \"cross_window_months\": null, \"cross_window_min_sharpe\": null, \"wfa_oos_step_days\": null, \"wfa_min_consistency\": null, \"num_seeds\": null, \"seed\": 7, \"bootstrap_min_sharpe\": 0.0, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}, \"buy_hold_gate\": {\"enforced\": false, \"benchmark\": \"equal_weight_daily_rebalanced_1d_close\", \"candidate_series\": \"mark_to_market_daily\", \"symbols\": [\"BTCUSDT\"], \"ann_factor\": 365, \"per_symbol\": false}, \"bankroll_grid\": {\"cells\": [{\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, {\"liquidation_mode\": \"isolated\", \"leverage\": 10.0, \"max_margin_pct\": 0.5}], \"n_cells\": 2}, \"top_strategies\": [{\"dsl\": {\"name\": \"genome_ec3b4274a3eb\", \"timeframe\": \"4h\", \"indicators\": {\"stoch_entry_0\": {\"type\": \"STOCH\", \"period\": 16, \"d_period\": 3}, \"squeeze_ratio_exit_0\": {\"type\": \"SQUEEZE_RATIO\", \"length\": 28, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"frama_ma_entry_0\": {\"type\": \"FRAMA\", \"period\": 37}, \"donchian_short_entry_0\": {\"type\": \"DONCHIAN\", \"period\": 7}, \"rams_short_exit_0\": {\"type\": \"RAMS\", \"period\": 64}}, \"entry_conditions\": {\"long\": [\"stoch_entry_0 <= 55.1337\", \"close crosses_below frama_ma_entry_0\"], \"short\": [\"donchian_short_entry_0.position <= 0.9333\"]}, \"exit_conditions\": {\"long\": [\"squeeze_ratio_exit_0 > 0.5452\"], \"short\": [\"rams_short_exit_0 crosses_below 2.8033\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 2.22}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 11.84}, \"take_profit_short\": {\"type\": \"fixed_pct\", \"percent\": 3.72}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"STOCH\", \"parameters\": {\"period_k\": 16.0, \"period_d\": 3.0}, \"condition\": \"<=\", \"threshold\": 55.1337, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"SQUEEZE_RATIO\", \"parameters\": {\"length\": 28.0, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"condition\": \">\", \"threshold\": 0.5452, \"sub_value\": null}], \"stop_loss_pct\": 2.2169, \"take_profit_pct\": 11.8412, \"direction\": \"both\", \"ma_entry_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 37.0}, \"op\": \"crosses_below\"}], \"short_entry_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 7.0}, \"condition\": \"<=\", \"threshold\": 0.9333, \"sub_value\": \"position\"}], \"short_exit_genes\": [{\"indicator_type\": \"RAMS\", \"parameters\": {\"period\": 64.0}, \"condition\": \"crosses_below\", \"threshold\": 2.8033, \"sub_value\": null}], \"take_profit_short_pct\": 3.7168}, \"score\": 0.5372873315401208, \"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"bankroll\": {\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, \"full_range_sharpe\": 2.0684260612299736, \"full_range_trades\": 196, \"full_range_max_dd\": 0.2132967477121334, \"full_range_pf\": 1.8928828495161008, \"full_range_return_pct\": 0.3515957030211782, \"holdout\": {\"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782}}, {\"dsl\": {\"name\": \"genome_796ffaf55496\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 7.53}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 127.0}, \"condition\": \"<\", \"threshold\": 0.3692, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 7.528, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5868841460834179, \"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"bankroll\": {\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, \"full_range_sharpe\": 2.026087951181328, \"full_range_trades\": 195, \"full_range_max_dd\": 0.12053686622570396, \"full_range_pf\": 1.5408574595134834, \"full_range_return_pct\": 0.40336861514917327, \"holdout\": {\"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327}}, {\"dsl\": {\"name\": \"genome_60509d33a01c\", \"timeframe\": \"4h\", \"indicators\": {\"roc_entry_0\": {\"type\": \"ROC\", \"period\": 5}, \"donchian_exit_0\": {\"type\": \"DONCHIAN\", \"period\": 44}, \"frama_ma_exit_0\": {\"type\": \"FRAMA\", \"period\": 19}}, \"entry_conditions\": {\"short\": [\"roc_entry_0 > 1.0073\"]}, \"exit_conditions\": {\"short\": [\"donchian_exit_0.position >= 0.5366\", \"close > frama_ma_exit_0\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 0.74}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 17.55}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"ROC\", \"parameters\": {\"period\": 5.0}, \"condition\": \">\", \"threshold\": 1.0073, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 44.0}, \"condition\": \">=\", \"threshold\": 0.5366, \"sub_value\": \"position\"}], \"stop_loss_pct\": 0.7423, \"take_profit_pct\": 17.5495, \"direction\": \"short\", \"ma_exit_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 19.0}, \"op\": \">\"}]}, \"score\": 0.5827077197804891, \"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"bankroll\": {\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, \"full_range_sharpe\": 2.00714960349293, \"full_range_trades\": 139, \"full_range_max_dd\": 0.1582749010351119, \"full_range_pf\": 1.7320143148474862, \"full_range_return_pct\": 0.387431003012938, \"holdout\": {\"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938}}, {\"dsl\": {\"name\": \"genome_153e26a2c0bd\", \"timeframe\": \"4h\", \"indicators\": {\"trend_ensemble_entry_0\": {\"type\": \"TREND_ENSEMBLE\", \"max_lookback\": 162}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 241}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"trend_ensemble_entry_0 <= -0.8388\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 <= 0.73\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"TREND_ENSEMBLE\", \"parameters\": {\"max_lookback\": 162.0}, \"condition\": \"<=\", \"threshold\": -0.8388, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 241.0}, \"condition\": \"<=\", \"threshold\": 0.73, \"sub_value\": null}, {\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 8.8998, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5396828192402808, \"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"bankroll\": {\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, \"full_range_sharpe\": 1.9443316825962036, \"full_range_trades\": 133, \"full_range_max_dd\": 0.1668520663338155, \"full_range_pf\": 1.631989028305038, \"full_range_return_pct\": 0.20019585364698528, \"holdout\": {\"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528}}, {\"dsl\": {\"name\": \"genome_dfb8d37ee915\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"rsi_exit_0\": {\"type\": \"RSI\", \"period\": 13}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"rsi_exit_0 >= 55.4906\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 9.4}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 127.0}, \"condition\": \"<\", \"threshold\": 0.3692, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"RSI\", \"parameters\": {\"period\": 13.0}, \"condition\": \">=\", \"threshold\": 55.4906, \"sub_value\": null}, {\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 8.8998, \"take_profit_pct\": 9.4046, \"direction\": \"long\"}, \"score\": 0.5244924654544538, \"sharpe\": 1.8008959928943984, \"max_dd\": 0.2272191452456812, \"pf\": 1.6709424474026138, \"trades\": 173, \"return_pct\": 0.3259525155074261, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"bankroll\": {\"liquidation_mode\": \"isolated\", \"leverage\": 5.0, \"max_margin_pct\": 0.5}, \"full_range_sharpe\": 1.8008959928943984, \"full_range_trades\": 173, \"full_range_max_dd\": 0.2272191452456812, \"full_range_pf\": 1.6709424474026138, \"full_range_return_pct\": 0.3259525155074261, \"holdout\": {\"sharpe\": 1.8008959928943984, \"max_dd\": 0.2272191452456812, \"pf\": 1.6709424474026138, \"trades\": 173, \"return_pct\": 0.3259525155074261}}], \"guardrail_rejections\": null}",
+        "profit_factor": 1.8928828495161008,
+        "purged_kfold_mean_sharpe": null,
+        "run_id": 1,
+        "sharpe_ratio": 2.0684260612299736,
+        "skewness": 0.0,
+        "sortino_ratio": null,
+        "starting_balance": null,
+        "total_fees": null,
+        "total_funding": null,
+        "total_return": 0.3515957030211782,
+        "total_slippage": null,
+        "total_trades": 196,
+        "user_notes": null,
+        "volatility_annual": null,
+        "walk_forward_efficiency": 3.945945945945946,
+        "win_rate": null,
+        "winning_trades": null
+      },
+      "run": {
+        "error_message": null,
+        "status": "completed"
+      },
+      "stdout": [
+        "Discovery complete: top_score=0.5373, candidates=20, mock=True"
+      ],
+      "traceback": false
+    },
+    "champions": {
+      "exit": 0,
+      "log_lines": [
+        "Discovery seed: 7",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5827 mean=0.4951 median=0.4857 std=0.0528 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5869 mean=0.5236 median=0.5309 std=0.0535 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> \u0394best=+0.0042",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 10 evaluated | converged=False ===",
+        "=== HOLDOUT EVALUATION: 5 strategies ==="
+      ],
+      "result": {
+        "avg_loss": null,
+        "avg_trade_duration_hours": null,
+        "avg_win": null,
+        "cagr": null,
+        "calmar_ratio": null,
+        "created_at": "<created_at>",
+        "deflated_sharpe": null,
+        "id": 1,
+        "kurtosis": 3.0,
+        "largest_loss": null,
+        "largest_win": null,
+        "losing_trades": null,
+        "max_consecutive_losses": null,
+        "max_consecutive_wins": null,
+        "max_drawdown": 0.12053686622570396,
+        "max_drawdown_duration_days": null,
+        "notes": "{\"type\": \"discovery\", \"generations\": 2, \"evaluated\": 10, \"converged\": false, \"mock\": true, \"synthetic\": true, \"compiler_version\": \"<masked>\", \"eval_windows\": 3, \"eval_window_aggregation\": \"worst_of_n\", \"eval_window_ranges\": [[\"2024-01-01\", \"2024-04-07\"], [\"2024-04-07\", \"2024-07-13\"], [\"2024-07-13\", \"2024-10-19\"]], \"symbol_agg\": \"portfolio\", \"train_test_split\": 0.8, \"train_dates\": [\"2024-01-01\", \"2024-10-19\"], \"holdout_dates\": [\"2024-10-19\", \"2025-01-01\"], \"holdout_gate\": {\"min_trades\": 6, \"min_sharpe\": 0.0, \"min_return\": 0.0}, \"direction\": null, \"cross_window_months\": null, \"cross_window_min_sharpe\": null, \"wfa_oos_step_days\": null, \"wfa_min_consistency\": null, \"num_seeds\": null, \"seed\": 7, \"bootstrap_min_sharpe\": 0.0, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}, \"buy_hold_gate\": {\"enforced\": false, \"benchmark\": \"equal_weight_daily_rebalanced_1d_close\", \"candidate_series\": \"mark_to_market_daily\", \"symbols\": [\"BTCUSDT\"], \"ann_factor\": 365, \"per_symbol\": false}, \"top_strategies\": [{\"dsl\": {\"name\": \"genome_796ffaf55496\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 7.53}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 127.0}, \"condition\": \"<\", \"threshold\": 0.3692, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 7.528, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5868841460834179, \"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.026087951181328, \"full_range_trades\": 195, \"full_range_max_dd\": 0.12053686622570396, \"full_range_pf\": 1.5408574595134834, \"full_range_return_pct\": 0.40336861514917327, \"holdout\": {\"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327}}, {\"dsl\": {\"name\": \"genome_60509d33a01c\", \"timeframe\": \"4h\", \"indicators\": {\"roc_entry_0\": {\"type\": \"ROC\", \"period\": 5}, \"donchian_exit_0\": {\"type\": \"DONCHIAN\", \"period\": 44}, \"frama_ma_exit_0\": {\"type\": \"FRAMA\", \"period\": 19}}, \"entry_conditions\": {\"short\": [\"roc_entry_0 > 1.0073\"]}, \"exit_conditions\": {\"short\": [\"donchian_exit_0.position >= 0.5366\", \"close > frama_ma_exit_0\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 0.74}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 17.55}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"ROC\", \"parameters\": {\"period\": 5.0}, \"condition\": \">\", \"threshold\": 1.0073, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 44.0}, \"condition\": \">=\", \"threshold\": 0.5366, \"sub_value\": \"position\"}], \"stop_loss_pct\": 0.7423, \"take_profit_pct\": 17.5495, \"direction\": \"short\", \"ma_exit_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 19.0}, \"op\": \">\"}]}, \"score\": 0.5827077197804891, \"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.00714960349293, \"full_range_trades\": 139, \"full_range_max_dd\": 0.1582749010351119, \"full_range_pf\": 1.7320143148474862, \"full_range_return_pct\": 0.387431003012938, \"holdout\": {\"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938}}, {\"dsl\": {\"name\": \"genome_153e26a2c0bd\", \"timeframe\": \"4h\", \"indicators\": {\"trend_ensemble_entry_0\": {\"type\": \"TREND_ENSEMBLE\", \"max_lookback\": 162}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 241}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"trend_ensemble_entry_0 <= -0.8388\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 <= 0.73\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"TREND_ENSEMBLE\", \"parameters\": {\"max_lookback\": 162.0}, \"condition\": \"<=\", \"threshold\": -0.8388, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 241.0}, \"condition\": \"<=\", \"threshold\": 0.73, \"sub_value\": null}, {\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 8.8998, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5396828192402808, \"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 1.9443316825962036, \"full_range_trades\": 133, \"full_range_max_dd\": 0.1668520663338155, \"full_range_pf\": 1.631989028305038, \"full_range_return_pct\": 0.20019585364698528, \"holdout\": {\"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528}}, {\"dsl\": {\"name\": \"genome_ec3b4274a3eb\", \"timeframe\": \"4h\", \"indicators\": {\"stoch_entry_0\": {\"type\": \"STOCH\", \"period\": 16, \"d_period\": 3}, \"squeeze_ratio_exit_0\": {\"type\": \"SQUEEZE_RATIO\", \"length\": 28, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"frama_ma_entry_0\": {\"type\": \"FRAMA\", \"period\": 37}, \"donchian_short_entry_0\": {\"type\": \"DONCHIAN\", \"period\": 7}, \"rams_short_exit_0\": {\"type\": \"RAMS\", \"period\": 64}}, \"entry_conditions\": {\"long\": [\"stoch_entry_0 <= 55.1337\", \"close crosses_below frama_ma_entry_0\"], \"short\": [\"donchian_short_entry_0.position <= 0.9333\"]}, \"exit_conditions\": {\"long\": [\"squeeze_ratio_exit_0 > 0.5452\"], \"short\": [\"rams_short_exit_0 crosses_below 2.8033\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 2.22}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 11.84}, \"take_profit_short\": {\"type\": \"fixed_pct\", \"percent\": 3.72}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"STOCH\", \"parameters\": {\"period_k\": 16.0, \"period_d\": 3.0}, \"condition\": \"<=\", \"threshold\": 55.1337, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"SQUEEZE_RATIO\", \"parameters\": {\"length\": 28.0, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"condition\": \">\", \"threshold\": 0.5452, \"sub_value\": null}], \"stop_loss_pct\": 2.2169, \"take_profit_pct\": 11.8412, \"direction\": \"both\", \"ma_entry_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 37.0}, \"op\": \"crosses_below\"}], \"short_entry_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 7.0}, \"condition\": \"<=\", \"threshold\": 0.9333, \"sub_value\": \"position\"}], \"short_exit_genes\": [{\"indicator_type\": \"RAMS\", \"parameters\": {\"period\": 64.0}, \"condition\": \"crosses_below\", \"threshold\": 2.8033, \"sub_value\": null}], \"take_profit_short_pct\": 3.7168}, \"score\": 0.5372873315401208, \"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.0684260612299736, \"full_range_trades\": 196, \"full_range_max_dd\": 0.2132967477121334, \"full_range_pf\": 1.8928828495161008, \"full_range_return_pct\": 0.3515957030211782, \"holdout\": {\"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782}}, {\"dsl\": {\"name\": \"genome_dfb8d37ee915\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"rsi_exit_0\": {\"type\": \"RSI\", \"period\": 13}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"rsi_exit_0 >= 55.4906\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 9.4}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 127.0}, \"condition\": \"<\", \"threshold\": 0.3692, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"RSI\", \"parameters\": {\"period\": 13.0}, \"condition\": \">=\", \"threshold\": 55.4906, \"sub_value\": null}, {\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 8.8998, \"take_profit_pct\": 9.4046, \"direction\": \"long\"}, \"score\": 0.5244924654544538, \"sharpe\": 1.8008959928943984, \"max_dd\": 0.2272191452456812, \"pf\": 1.6709424474026138, \"trades\": 173, \"return_pct\": 0.3259525155074261, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 1.8008959928943984, \"full_range_trades\": 173, \"full_range_max_dd\": 0.2272191452456812, \"full_range_pf\": 1.6709424474026138, \"full_range_return_pct\": 0.3259525155074261, \"holdout\": {\"sharpe\": 1.8008959928943984, \"max_dd\": 0.2272191452456812, \"pf\": 1.6709424474026138, \"trades\": 173, \"return_pct\": 0.3259525155074261}}], \"guardrail_rejections\": null}",
+        "profit_factor": 1.5408574595134834,
+        "purged_kfold_mean_sharpe": null,
+        "run_id": 1,
+        "sharpe_ratio": 2.026087951181328,
+        "skewness": 0.0,
+        "sortino_ratio": null,
+        "starting_balance": null,
+        "total_fees": null,
+        "total_funding": null,
+        "total_return": 0.40336861514917327,
+        "total_slippage": null,
+        "total_trades": 195,
+        "user_notes": null,
+        "volatility_annual": null,
+        "walk_forward_efficiency": 3.945945945945946,
+        "win_rate": null,
+        "winning_trades": null
+      },
+      "run": {
+        "error_message": null,
+        "status": "completed"
+      },
+      "stdout": [
+        "Discovery complete: top_score=0.5869, candidates=10, mock=True"
+      ],
+      "traceback": false
+    },
+    "multi_seed": {
+      "exit": 0,
+      "log_lines": [
+        "Discovery seed: 7",
+        "=== MULTI-SEED RUN 1/2 (seed=7) ===",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5827 mean=0.4951 median=0.4857 std=0.0528 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5869 mean=0.5236 median=0.5309 std=0.0535 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> \u0394best=+0.0042",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 10 evaluated | converged=False ===",
+        "=== HOLDOUT EVALUATION: 5 strategies ===",
+        "=== MULTI-SEED RUN 2/2 (seed=7926) ===",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5265 mean=0.4847 median=0.4856 std=0.0333 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5265 mean=0.4852 median=0.4856 std=0.0325 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (no change)",
+        "=== CONVERGED at gen 2/2 after <t> ===",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 9 evaluated | converged=True ===",
+        "=== HOLDOUT EVALUATION: 5 strategies ===",
+        "=== MULTI-SEED SUMMARY (2 seeds) ==="
+      ],
+      "result": {
+        "avg_loss": null,
+        "avg_trade_duration_hours": null,
+        "avg_win": null,
+        "cagr": null,
+        "calmar_ratio": null,
+        "created_at": "<created_at>",
+        "deflated_sharpe": null,
+        "id": 1,
+        "kurtosis": 3.0,
+        "largest_loss": null,
+        "largest_win": null,
+        "losing_trades": null,
+        "max_consecutive_losses": null,
+        "max_consecutive_wins": null,
+        "max_drawdown": 0.2132967477121334,
+        "max_drawdown_duration_days": null,
+        "notes": "{\"type\": \"discovery\", \"generations\": 4, \"evaluated\": 19, \"converged\": true, \"mock\": true, \"synthetic\": true, \"compiler_version\": \"<masked>\", \"eval_windows\": 3, \"eval_window_aggregation\": \"worst_of_n\", \"eval_window_ranges\": [[\"2024-01-01\", \"2024-04-07\"], [\"2024-04-07\", \"2024-07-13\"], [\"2024-07-13\", \"2024-10-19\"]], \"symbol_agg\": \"portfolio\", \"train_test_split\": 0.8, \"train_dates\": [\"2024-01-01\", \"2024-10-19\"], \"holdout_dates\": [\"2024-10-19\", \"2025-01-01\"], \"holdout_gate\": {\"min_trades\": 6, \"min_sharpe\": 0.0, \"min_return\": 0.0}, \"direction\": null, \"cross_window_months\": null, \"cross_window_min_sharpe\": null, \"wfa_oos_step_days\": null, \"wfa_min_consistency\": null, \"num_seeds\": 2, \"seed\": 7, \"bootstrap_min_sharpe\": 0.0, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}, \"buy_hold_gate\": {\"enforced\": false, \"benchmark\": \"equal_weight_daily_rebalanced_1d_close\", \"candidate_series\": \"mark_to_market_daily\", \"symbols\": [\"BTCUSDT\"], \"ann_factor\": 365, \"per_symbol\": false}, \"top_strategies\": [{\"dsl\": {\"name\": \"genome_ec3b4274a3eb\", \"timeframe\": \"4h\", \"indicators\": {\"stoch_entry_0\": {\"type\": \"STOCH\", \"period\": 16, \"d_period\": 3}, \"squeeze_ratio_exit_0\": {\"type\": \"SQUEEZE_RATIO\", \"length\": 28, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"frama_ma_entry_0\": {\"type\": \"FRAMA\", \"period\": 37}, \"donchian_short_entry_0\": {\"type\": \"DONCHIAN\", \"period\": 7}, \"rams_short_exit_0\": {\"type\": \"RAMS\", \"period\": 64}}, \"entry_conditions\": {\"long\": [\"stoch_entry_0 <= 55.1337\", \"close crosses_below frama_ma_entry_0\"], \"short\": [\"donchian_short_entry_0.position <= 0.9333\"]}, \"exit_conditions\": {\"long\": [\"squeeze_ratio_exit_0 > 0.5452\"], \"short\": [\"rams_short_exit_0 crosses_below 2.8033\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 2.22}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 11.84}, \"take_profit_short\": {\"type\": \"fixed_pct\", \"percent\": 3.72}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"STOCH\", \"parameters\": {\"period_k\": 16.0, \"period_d\": 3.0}, \"condition\": \"<=\", \"threshold\": 55.1337, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"SQUEEZE_RATIO\", \"parameters\": {\"length\": 28.0, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"condition\": \">\", \"threshold\": 0.5452, \"sub_value\": null}], \"stop_loss_pct\": 2.2169, \"take_profit_pct\": 11.8412, \"direction\": \"both\", \"ma_entry_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 37.0}, \"op\": \"crosses_below\"}], \"short_entry_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 7.0}, \"condition\": \"<=\", \"threshold\": 0.9333, \"sub_value\": \"position\"}], \"short_exit_genes\": [{\"indicator_type\": \"RAMS\", \"parameters\": {\"period\": 64.0}, \"condition\": \"crosses_below\", \"threshold\": 2.8033, \"sub_value\": null}], \"take_profit_short_pct\": 3.7168}, \"score\": 0.5372873315401208, \"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.0684260612299736, \"full_range_trades\": 196, \"full_range_max_dd\": 0.2132967477121334, \"full_range_pf\": 1.8928828495161008, \"full_range_return_pct\": 0.3515957030211782, \"holdout\": {\"sharpe\": 2.0684260612299736, \"max_dd\": 0.2132967477121334, \"pf\": 1.8928828495161008, \"trades\": 196, \"return_pct\": 0.3515957030211782}}, {\"dsl\": {\"name\": \"genome_796ffaf55496\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 7.53}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 127.0}, \"condition\": \"<\", \"threshold\": 0.3692, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 7.528, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5868841460834179, \"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.026087951181328, \"full_range_trades\": 195, \"full_range_max_dd\": 0.12053686622570396, \"full_range_pf\": 1.5408574595134834, \"full_range_return_pct\": 0.40336861514917327, \"holdout\": {\"sharpe\": 2.026087951181328, \"max_dd\": 0.12053686622570396, \"pf\": 1.5408574595134834, \"trades\": 195, \"return_pct\": 0.40336861514917327}}, {\"dsl\": {\"name\": \"genome_60509d33a01c\", \"timeframe\": \"4h\", \"indicators\": {\"roc_entry_0\": {\"type\": \"ROC\", \"period\": 5}, \"donchian_exit_0\": {\"type\": \"DONCHIAN\", \"period\": 44}, \"frama_ma_exit_0\": {\"type\": \"FRAMA\", \"period\": 19}}, \"entry_conditions\": {\"short\": [\"roc_entry_0 > 1.0073\"]}, \"exit_conditions\": {\"short\": [\"donchian_exit_0.position >= 0.5366\", \"close > frama_ma_exit_0\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 0.74}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 17.55}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"ROC\", \"parameters\": {\"period\": 5.0}, \"condition\": \">\", \"threshold\": 1.0073, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"DONCHIAN\", \"parameters\": {\"period\": 44.0}, \"condition\": \">=\", \"threshold\": 0.5366, \"sub_value\": \"position\"}], \"stop_loss_pct\": 0.7423, \"take_profit_pct\": 17.5495, \"direction\": \"short\", \"ma_exit_genes\": [{\"indicator_type\": \"FRAMA\", \"parameters\": {\"period\": 19.0}, \"op\": \">\"}]}, \"score\": 0.5827077197804891, \"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 2.00714960349293, \"full_range_trades\": 139, \"full_range_max_dd\": 0.1582749010351119, \"full_range_pf\": 1.7320143148474862, \"full_range_return_pct\": 0.387431003012938, \"holdout\": {\"sharpe\": 2.00714960349293, \"max_dd\": 0.1582749010351119, \"pf\": 1.7320143148474862, \"trades\": 139, \"return_pct\": 0.387431003012938}}, {\"dsl\": {\"name\": \"genome_153e26a2c0bd\", \"timeframe\": \"4h\", \"indicators\": {\"trend_ensemble_entry_0\": {\"type\": \"TREND_ENSEMBLE\", \"max_lookback\": 162}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 241}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"trend_ensemble_entry_0 <= -0.8388\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 <= 0.73\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"TREND_ENSEMBLE\", \"parameters\": {\"max_lookback\": 162.0}, \"condition\": \"<=\", \"threshold\": -0.8388, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 241.0}, \"condition\": \"<=\", \"threshold\": 0.73, \"sub_value\": null}, {\"indicator_type\": \"PRICE_POSITION\", \"parameters\": {\"period\": 194.0}, \"condition\": \">=\", \"threshold\": 0.6238, \"sub_value\": null}], \"stop_loss_pct\": 8.8998, \"take_profit_pct\": 19.1758, \"direction\": \"long\"}, \"score\": 0.5396828192402808, \"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 1.9443316825962036, \"full_range_trades\": 133, \"full_range_max_dd\": 0.1668520663338155, \"full_range_pf\": 1.631989028305038, \"full_range_return_pct\": 0.20019585364698528, \"holdout\": {\"sharpe\": 1.9443316825962036, \"max_dd\": 0.1668520663338155, \"pf\": 1.631989028305038, \"trades\": 133, \"return_pct\": 0.20019585364698528}}, {\"dsl\": {\"name\": \"genome_f73215d9bd3e\", \"timeframe\": \"4h\", \"indicators\": {\"squeeze_ratio_entry_0\": {\"type\": \"SQUEEZE_RATIO\", \"length\": 21, \"bb_mult\": 1.7846, \"kc_mult\": 1.6872}, \"natr_exit_0\": {\"type\": \"NATR\", \"period\": 15}, \"adx_short_entry_0\": {\"type\": \"ADX\", \"period\": 16}, \"adx_short_entry_1\": {\"type\": \"ADX\", \"period\": 23}, \"adaptive_rsi_short_entry_2\": {\"type\": \"ADAPTIVE_RSI\", \"period\": 40, \"alpha\": 0.8191}, \"macd_short_entry_3\": {\"type\": \"MACD\", \"fast_period\": 10, \"slow_period\": 25, \"signal_period\": 7}, \"willr_short_exit_0\": {\"type\": \"WILLR\", \"period\": 24}}, \"entry_conditions\": {\"long\": [\"squeeze_ratio_entry_0 <= 1.6875\"], \"short\": [\"adx_short_entry_0 crosses_below 38.6103\", \"adx_short_entry_1 <= 39.274\", \"adaptive_rsi_short_entry_2 crosses_below 35.668\", \"macd_short_entry_3.signal crosses_below 0.0459\"]}, \"exit_conditions\": {\"long\": [\"natr_exit_0 <= 0.9327\"], \"short\": [\"willr_short_exit_0 < -62.5516\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 0.97}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 7.5}, \"stop_loss_long\": {\"type\": \"fixed_pct\", \"percent\": 8.68}, \"stop_loss_short\": {\"type\": \"fixed_pct\", \"percent\": 4.5}, \"take_profit_long\": {\"type\": \"fixed_pct\", \"percent\": 5.86}, \"take_profit_short\": {\"type\": \"fixed_pct\", \"percent\": 15.02}}, \"chromosome\": {\"entry_genes\": [{\"indicator_type\": \"SQUEEZE_RATIO\", \"parameters\": {\"length\": 21.0, \"bb_mult\": 1.7846, \"kc_mult\": 1.6872}, \"condition\": \"<=\", \"threshold\": 1.6875, \"sub_value\": null}], \"exit_genes\": [{\"indicator_type\": \"NATR\", \"parameters\": {\"period\": 15.0}, \"condition\": \"<=\", \"threshold\": 0.9327, \"sub_value\": null}], \"stop_loss_pct\": 0.9735, \"take_profit_pct\": 7.5016, \"direction\": \"both\", \"short_entry_genes\": [{\"indicator_type\": \"ADX\", \"parameters\": {\"period\": 16.0}, \"condition\": \"crosses_below\", \"threshold\": 38.6103, \"sub_value\": null}, {\"indicator_type\": \"ADX\", \"parameters\": {\"period\": 23.0}, \"condition\": \"<=\", \"threshold\": 39.274, \"sub_value\": null}, {\"indicator_type\": \"ADAPTIVE_RSI\", \"parameters\": {\"period\": 40.0, \"alpha\": 0.8191}, \"condition\": \"crosses_below\", \"threshold\": 35.668, \"sub_value\": null}, {\"indicator_type\": \"MACD\", \"parameters\": {\"fast_period\": 10.0, \"slow_period\": 25.0, \"signal_period\": 7.0}, \"condition\": \"crosses_below\", \"threshold\": 0.0459, \"sub_value\": \"signal\"}], \"short_exit_genes\": [{\"indicator_type\": \"WILLR\", \"parameters\": {\"period\": 24.0}, \"condition\": \"<\", \"threshold\": -62.5516, \"sub_value\": null}], \"stop_loss_long_pct\": 8.6752, \"stop_loss_short_pct\": 4.5016, \"take_profit_long_pct\": 5.8648, \"take_profit_short_pct\": 15.0181}, \"score\": 0.46358025136113346, \"sharpe\": 1.9200062228968613, \"max_dd\": 0.14408738530759607, \"pf\": 1.520369642679828, \"trades\": 152, \"return_pct\": 0.2658031456708858, \"fee_drag\": null, \"fees_pct_equity_yr\": null, \"full_range_sharpe\": 1.9200062228968613, \"full_range_trades\": 152, \"full_range_max_dd\": 0.14408738530759607, \"full_range_pf\": 1.520369642679828, \"full_range_return_pct\": 0.2658031456708858, \"holdout\": {\"sharpe\": 1.9200062228968613, \"max_dd\": 0.14408738530759607, \"pf\": 1.520369642679828, \"trades\": 152, \"return_pct\": 0.2658031456708858}}], \"guardrail_rejections\": null}",
+        "profit_factor": 1.8928828495161008,
+        "purged_kfold_mean_sharpe": null,
+        "run_id": 1,
+        "sharpe_ratio": 2.0684260612299736,
+        "skewness": 0.0,
+        "sortino_ratio": null,
+        "starting_balance": null,
+        "total_fees": null,
+        "total_funding": null,
+        "total_return": 0.3515957030211782,
+        "total_slippage": null,
+        "total_trades": 196,
+        "user_notes": null,
+        "volatility_annual": null,
+        "walk_forward_efficiency": 3.945945945945946,
+        "win_rate": null,
+        "winning_trades": null
+      },
+      "run": {
+        "error_message": null,
+        "status": "completed"
+      },
+      "stdout": [
+        "Discovery complete: top_score=0.5373, candidates=19, mock=True"
+      ],
+      "traceback": false
+    },
+    "plain": {
+      "exit": 0,
+      "log_lines": [
+        "Discovery seed: 7",
+        "=== DISCOVERY START: pop=6 max_gen=2 symbols=['BTCUSDT'] tf=4h ===",
+        "=== GEN 1/2 === best=0.5827 mean=0.4951 median=0.4857 std=0.0528 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> (initial)",
+        "=== GEN 2/2 === best=0.5869 mean=0.5236 median=0.5309 std=0.0535 | zero_score=0/6 | gen_time=<t> total=<t> ETA=<t> \u0394best=+0.0042",
+        "=== DISCOVERY COMPLETE: <t> total (<t>/gen avg) | 2 gens | 10 evaluated | converged=False ==="
+      ],
+      "result": {
+        "avg_loss": null,
+        "avg_trade_duration_hours": null,
+        "avg_win": null,
+        "cagr": null,
+        "calmar_ratio": null,
+        "created_at": "<created_at>",
+        "deflated_sharpe": null,
+        "id": 1,
+        "kurtosis": 3.0,
+        "largest_loss": null,
+        "largest_win": null,
+        "losing_trades": null,
+        "max_consecutive_losses": null,
+        "max_consecutive_wins": null,
+        "max_drawdown": 0.0,
+        "max_drawdown_duration_days": null,
+        "notes": "{\"type\": \"discovery\", \"generations\": 2, \"evaluated\": 10, \"converged\": false, \"mock\": true, \"synthetic\": true, \"compiler_version\": \"<masked>\", \"eval_windows\": 3, \"eval_window_aggregation\": \"worst_of_n\", \"eval_window_ranges\": [[\"2024-01-01\", \"2024-04-07\"], [\"2024-04-07\", \"2024-07-13\"], [\"2024-07-13\", \"2024-10-19\"]], \"symbol_agg\": \"portfolio\", \"train_test_split\": 0.8, \"train_dates\": [\"2024-01-01\", \"2024-10-19\"], \"holdout_dates\": [\"2024-10-19\", \"2025-01-01\"], \"holdout_gate\": {\"min_trades\": 6, \"min_sharpe\": 0.0, \"min_return\": 0.0}, \"direction\": null, \"cross_window_months\": null, \"cross_window_min_sharpe\": null, \"wfa_oos_step_days\": null, \"wfa_min_consistency\": null, \"num_seeds\": null, \"seed\": 7, \"bootstrap_min_sharpe\": 0.0, \"fee_schedule\": {\"fee_tier\": \"VIP0\", \"bnb_discount\": false}, \"dsr_trials\": {\"raw\": 10, \"non_flat\": 0, \"neff_mean_corr\": null, \"neff_eig_pr\": null, \"neff_subsampled_from\": null, \"neff_ev\": null, \"neff_ev_q95_spread\": null, \"run_n_eff\": 10, \"neff_ev_source\": \"fallback_raw\", \"neff_fallback_reason\": \"fewer_than_2_series\", \"neff_ev_draws\": 4096, \"neff_ev_seed\": 20261018, \"dsr_rule\": \"q95\", \"gate_n\": 10, \"prior_n\": 0, \"n_rule\": \"cumulative_effective_same_tf_overlapping_train\", \"prior_run_ids\": [], \"prior_legacy_runs\": 0, \"prior_legacy_raw\": 0}, \"buy_hold_gate\": {\"enforced\": false, \"benchmark\": \"equal_weight_daily_rebalanced_1d_close\", \"candidate_series\": \"mark_to_market_daily\", \"symbols\": [\"BTCUSDT\"], \"ann_factor\": 365, \"per_symbol\": false}, \"outcome\": \"no_viable_strategies\", \"best_raw_score\": 0.5868841460834179, \"reason\": \"No candidate passed every gate (rejected at: guardrails). See guardrail_rejections for per-candidate reasons. Consider: longer date range, larger population, or a different indicator pool.\", \"top_strategies\": [], \"guardrail_rejections\": [{\"uid\": \"796ffaf55496\", \"stage\": \"guardrails\", \"score\": 0.5869, \"sharpe\": 2.026, \"trades\": 195, \"reasons\": [\"DSR not significant: p=0.2742 >= 0.05\"], \"dsl\": {\"name\": \"genome_796ffaf55496\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 7.53}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"dsr\": {\"input\": \"fitness_sharpe\", \"trials\": 10, \"observations\": 292, \"p_value\": 0.2741886626273289, \"significant\": false}, \"fee_drag\": null, \"fees_pct_equity_yr\": null}, {\"uid\": \"60509d33a01c\", \"stage\": \"guardrails\", \"score\": 0.5827, \"sharpe\": 2.007, \"trades\": 139, \"reasons\": [\"DSR not significant: p=0.2810 >= 0.05\"], \"dsl\": {\"name\": \"genome_60509d33a01c\", \"timeframe\": \"4h\", \"indicators\": {\"roc_entry_0\": {\"type\": \"ROC\", \"period\": 5}, \"donchian_exit_0\": {\"type\": \"DONCHIAN\", \"period\": 44}, \"frama_ma_exit_0\": {\"type\": \"FRAMA\", \"period\": 19}}, \"entry_conditions\": {\"short\": [\"roc_entry_0 > 1.0073\"]}, \"exit_conditions\": {\"short\": [\"donchian_exit_0.position >= 0.5366\", \"close > frama_ma_exit_0\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 0.74}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 17.55}}, \"dsr\": {\"input\": \"fitness_sharpe\", \"trials\": 10, \"observations\": 292, \"p_value\": 0.28096800074362216, \"significant\": false}, \"fee_drag\": null, \"fees_pct_equity_yr\": null}, {\"uid\": \"153e26a2c0bd\", \"stage\": \"guardrails\", \"score\": 0.5397, \"sharpe\": 1.944, \"trades\": 133, \"reasons\": [\"DSR not significant: p=0.3040 >= 0.05\"], \"dsl\": {\"name\": \"genome_153e26a2c0bd\", \"timeframe\": \"4h\", \"indicators\": {\"trend_ensemble_entry_0\": {\"type\": \"TREND_ENSEMBLE\", \"max_lookback\": 162}, \"price_position_exit_0\": {\"type\": \"PRICE_POSITION\", \"period\": 241}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"trend_ensemble_entry_0 <= -0.8388\"]}, \"exit_conditions\": {\"long\": [\"price_position_exit_0 <= 0.73\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 19.18}}, \"dsr\": {\"input\": \"fitness_sharpe\", \"trials\": 10, \"observations\": 292, \"p_value\": 0.3040254182406483, \"significant\": false}, \"fee_drag\": null, \"fees_pct_equity_yr\": null}, {\"uid\": \"ec3b4274a3eb\", \"stage\": \"guardrails\", \"score\": 0.5373, \"sharpe\": 2.068, \"trades\": 196, \"reasons\": [\"DSR not significant: p=0.2593 >= 0.05\"], \"dsl\": {\"name\": \"genome_ec3b4274a3eb\", \"timeframe\": \"4h\", \"indicators\": {\"stoch_entry_0\": {\"type\": \"STOCH\", \"period\": 16, \"d_period\": 3}, \"squeeze_ratio_exit_0\": {\"type\": \"SQUEEZE_RATIO\", \"length\": 28, \"bb_mult\": 1.8085, \"kc_mult\": 1.8161}, \"frama_ma_entry_0\": {\"type\": \"FRAMA\", \"period\": 37}, \"donchian_short_entry_0\": {\"type\": \"DONCHIAN\", \"period\": 7}, \"rams_short_exit_0\": {\"type\": \"RAMS\", \"period\": 64}}, \"entry_conditions\": {\"long\": [\"stoch_entry_0 <= 55.1337\", \"close crosses_below frama_ma_entry_0\"], \"short\": [\"donchian_short_entry_0.position <= 0.9333\"]}, \"exit_conditions\": {\"long\": [\"squeeze_ratio_exit_0 > 0.5452\"], \"short\": [\"rams_short_exit_0 crosses_below 2.8033\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 2.22}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 11.84}, \"take_profit_short\": {\"type\": \"fixed_pct\", \"percent\": 3.72}}, \"dsr\": {\"input\": \"fitness_sharpe\", \"trials\": 10, \"observations\": 292, \"p_value\": 0.2593354066943159, \"significant\": false}, \"fee_drag\": null, \"fees_pct_equity_yr\": null}, {\"uid\": \"dfb8d37ee915\", \"stage\": \"guardrails\", \"score\": 0.5245, \"sharpe\": 1.801, \"trades\": 173, \"reasons\": [\"DSR not significant: p=0.3596 >= 0.05\"], \"dsl\": {\"name\": \"genome_dfb8d37ee915\", \"timeframe\": \"4h\", \"indicators\": {\"price_position_entry_0\": {\"type\": \"PRICE_POSITION\", \"period\": 127}, \"rsi_exit_0\": {\"type\": \"RSI\", \"period\": 13}, \"price_position_exit_1\": {\"type\": \"PRICE_POSITION\", \"period\": 194}}, \"entry_conditions\": {\"long\": [\"price_position_entry_0 < 0.3692\"]}, \"exit_conditions\": {\"long\": [\"rsi_exit_0 >= 55.4906\", \"price_position_exit_1 >= 0.6238\"]}, \"stop_loss\": {\"type\": \"fixed_pct\", \"percent\": 8.9}, \"take_profit\": {\"type\": \"fixed_pct\", \"percent\": 9.4}}, \"dsr\": {\"input\": \"fitness_sharpe\", \"trials\": 10, \"observations\": 292, \"p_value\": 0.35961539498119466, \"significant\": false}, \"fee_drag\": null, \"fees_pct_equity_yr\": null}]}",
+        "profit_factor": 0.0,
+        "purged_kfold_mean_sharpe": null,
+        "run_id": 1,
+        "sharpe_ratio": 0.0,
+        "skewness": 0.0,
+        "sortino_ratio": null,
+        "starting_balance": null,
+        "total_fees": null,
+        "total_funding": null,
+        "total_return": 0.0,
+        "total_slippage": null,
+        "total_trades": 0,
+        "user_notes": null,
+        "volatility_annual": null,
+        "walk_forward_efficiency": null,
+        "win_rate": null,
+        "winning_trades": null
+      },
+      "run": {
+        "error_message": null,
+        "status": "completed"
+      },
+      "stdout": [
+        "Discovery complete: no viable strategies (evaluated=10, best_raw_score=0.5869)"
+      ],
+      "traceback": false
+    }
+  }
+}
