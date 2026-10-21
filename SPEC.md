@@ -875,7 +875,7 @@ venue_config = BacktestVenueConfig(
     default_leverage=Decimal("10"),
     leverages={"BTCUSDT-PERP.BINANCE": Decimal("20")},
     fill_model=custom_fill_model,          # Custom volume-based slippage
-    fee_model=BinanceFeeModel(),           # Maker 0.02%, Taker 0.04% (note: verify current rates; Binance adjusts fees by VIP tier and promotions -- consider making configurable in DSL)
+    fee_model=fee_model,                   # VIP0 maker 0.02% / taker 0.05% (vibe_quant/fees.py); run-level fee tier and BNB discount (x0.9)
     latency_model=latency_model,           # Network latency simulation (tick data only; bars release via the per-instrument outbox)
 )
 ```
@@ -1654,7 +1654,7 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 
 1. **Validation venue configuration**
    - Custom `FillModel`: volume-based slippage with square-root market impact
-   - Fee model: Binance maker 0.02% / taker 0.04%
+   - Fee model: Binance VIP0 maker 0.02% / taker 0.05% (`vibe_quant/fees.py`)
    - `LatencyModelConfig` with presets, tick data only (co-located, domestic, international, retail, custom)
    - Venue config: BINANCE, NETTING, MARGIN, starting balance, leverage
    - Funding rate integration: subscribe to `FundingRateUpdate`, accrue per 8h period
