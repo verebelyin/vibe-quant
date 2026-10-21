@@ -78,6 +78,9 @@ ENTRY_CHECK_FAILED_PREFIX = f"{GATE_DENIAL_PREFIX}: entry check failed ("
 _RISK_ENDPOINT = "RiskEngine.execute"
 _TICK_TIMER = "TradingGuard.tick"
 
+#: Prefix on the warning listing open positions no guarded strategy owns.
+_UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
+
 
 class GuardState(StrEnum):
     """Trading state owned by the guard."""
@@ -468,6 +471,11 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._gate_denials = 0
         self._restored_halt = restored_halt
         self._restored_flatten_pending = False
+        # True once on_start ran: after that a halt's flatten is the only report.
+        self._started = False
+        # Unowned positions a pre-start halt's flatten saw (NT reconciles the
+        # account's open positions after that halt, before on_start).
+        self._prestart_unowned: list[str] | None = None
         if restored_halt is not None:
             self._state = GuardState.HALTED
             self._halt_reason = restored_halt.reason
@@ -521,6 +529,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
     # -------------------------------------------------------------- lifecycle
 
     def on_start(self) -> None:
+        self._started = True
         self.install_gate()
         self.msgbus.subscribe(topic="events.position.*", handler=self._on_position_event)
         self.msgbus.subscribe(topic="events.order.*", handler=self._on_order_event)
@@ -563,6 +572,20 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 )
             except Exception as exc:
                 logger.error("restored halt notify failed (%s)", type(exc).__name__)
+
+        # A halt applied before this actor started flattened the book as it was
+        # then; NT reconciles the account's open positions after that halt and
+        # before this point, so report what it found once. An escalation above
+        # (evaluate_risk -> halt, _started already True) cleared the list: its
+        # own flatten is the only warning.
+        reported, self._prestart_unowned = self._prestart_unowned, None
+        if reported is not None and self._state == GuardState.HALTED:
+            unowned = self._split_positions()[1]
+            if unowned and unowned != reported:
+                try:
+                    self._listener.on_warning(_UNOWNED_PREFIX + ", ".join(unowned))
+                except Exception as exc:
+                    logger.error("unowned-position report failed (%s)", type(exc).__name__)
 
     def on_stop(self) -> None:
         # The gate stays installed: strategies may still be running and must
@@ -927,7 +950,9 @@ class TradingGuard(Actor):  # type: ignore[misc]
         # run again on the first tick (H8: exactly once).
         self._restored_flatten_pending = False
         stop = reason not in _KEEP_STRATEGIES_RUNNING
-        errors = self._flatten(stop_strategies=stop).errors
+        result = self._flatten(stop_strategies=stop)
+        errors = result.errors
+        self._prestart_unowned = list(result.unowned_positions) if not self._started else None
         payload: dict[str, object] = dict(metrics or {})
         if errors:
             payload["flatten_errors"] = errors
@@ -987,16 +1012,23 @@ class TradingGuard(Actor):  # type: ignore[misc]
         self._message = message
         self._listener.on_state_change(self._state, None, message, {})
 
-    def _flatten(self, *, stop_strategies: bool) -> CloseAllResult:
-        result = CloseAllResult()
+    def _split_positions(self) -> tuple[list[str], list[str]]:
+        """Open positions split into (guarded strategy ids, unowned descriptions)."""
+        targeted: list[str] = []
+        unowned: list[str] = []
         guarded_ids = {str(s.id) for s in self._strategies}
         for position in self.cache.positions_open():
             if str(position.strategy_id) in guarded_ids:
-                result.targeted_positions.append(str(position.id))
+                targeted.append(str(position.id))
             else:
-                result.unowned_positions.append(
+                unowned.append(
                     f"{position.id} (strategy {position.strategy_id}, {position.instrument_id})"
                 )
+        return targeted, unowned
+
+    def _flatten(self, *, stop_strategies: bool) -> CloseAllResult:
+        result = CloseAllResult()
+        result.targeted_positions, result.unowned_positions = self._split_positions()
 
         for strategy in self._strategies:
             sid = str(strategy.id)
@@ -1020,9 +1052,7 @@ class TradingGuard(Actor):  # type: ignore[misc]
                 result.errors.append(f"{sid}: {type(exc).__name__}: {exc}")
 
         if result.unowned_positions:
-            msg = "positions not owned by any guarded strategy were NOT closed: " + ", ".join(
-                result.unowned_positions
-            )
+            msg = _UNOWNED_PREFIX + ", ".join(result.unowned_positions)
             result.errors.append(msg)
             self._listener.on_warning(msg)
         return result
