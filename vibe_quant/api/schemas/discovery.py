@@ -79,7 +79,7 @@ class DiscoveryLaunchRequest(BaseModel):
     crowding_enabled: bool = True  # deterministic crowding selection (vs classic tournament)
     seed_run_id: int | None = None  # warm-start GA from top chromosomes of prior run
     no_bootstrap_ci: bool = False  # True disables bootstrap-CI hard gate (low-budget regimes)
-    bootstrap_min_sharpe: float | None = None  # override timeframe-aware default (0.5 for 1m, 1.0 otherwise)
+    bootstrap_min_sharpe: float | None = None  # None = the CLI's timeframe default (1m 0.5, 4h/1d 0.0, else 1.0)
     seed: int | None = Field(default=None, ge=0, lt=2**32)  # RNG seed to replay a run; None = random
     max_workers: int = Field(default=4, ge=1, le=64)  # backtest processes for this run
     # GA fitness evaluator (bead vibe-quant-z8vqv.5): "fast" scores genomes with the

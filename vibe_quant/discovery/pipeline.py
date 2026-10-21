@@ -101,7 +101,8 @@ class DiscoveryConfig:
             are copied directly with probability (1 - crossover_rate).
         elite_count: Number of top individuals preserved unchanged.
         tournament_size: Tournament selection pool size.
-        convergence_generations: Stop after N generations with no improvement.
+        convergence_generations: Stop after N generations with no improvement
+            (capped at max_generations // 2; checked from generation 2N on).
         top_k: Number of top strategies to output.
         min_trades: Minimum trades for a strategy to be considered valid.
         symbols: Trading symbols to evaluate on.
@@ -124,6 +125,8 @@ class DiscoveryConfig:
         holdout_min_trades: Holdout trade floor. ``None`` = derived: half the
             trade rate the train gate demands, ``max(1, min_trades *
             holdout_days / (2 * train_days))``.
+        bootstrap_min_sharpe: Bootstrap t-stat CI floor, already resolved by the caller
+            (the CLI's timeframe rule: 1m 0.5, 4h/1d 0.0, else 1.0); 1.0 is the fallback.
     """
 
     population_size: int = 20
@@ -132,7 +135,7 @@ class DiscoveryConfig:
     crossover_rate: float = 0.8
     elite_count: int = 2
     tournament_size: int = 3
-    convergence_generations: int = 3
+    convergence_generations: int = 10
     top_k: int = 5
     min_trades: int = 50
     max_workers: int | None = 0  # 0 = auto (cpu_count), None = sequential

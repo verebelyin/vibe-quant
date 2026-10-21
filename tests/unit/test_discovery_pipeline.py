@@ -118,7 +118,13 @@ class TestDiscoveryConfig:
         assert cfg.mutation_rate == 0.1
         assert cfg.elite_count == 2
         assert cfg.tournament_size == 3
-        assert cfg.convergence_generations == 3
+        assert cfg.convergence_generations == 7
+        assert (
+            DiscoveryConfig(
+                max_generations=4, symbols=["BTC/USDT"], start_date="2024-01-01", end_date="2024-06-01"
+            ).convergence_generations
+            == 2
+        )
         assert cfg.top_k == 5
         assert cfg.min_trades == 50
         assert cfg.max_workers == 0
