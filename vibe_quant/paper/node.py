@@ -54,6 +54,7 @@ from vibe_quant.paper.config import (
     DEFAULT_VALIDATION_LEVERAGE,
     ConfigurationError,
     PaperTradingConfig,
+    account_env,
     check_paper_exposure,
     effective_max_margin_pct,
     effective_max_position_pct,
@@ -2534,30 +2535,35 @@ class PaperTradingNode:
                 self._restored_watch = self._restored_watch_state(
                     own.node_status.get("liquidation_watch")
                 )
-            newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
-            # qa42q: the trader's own row of ANOTHER KEY in the same env is a key
-            # rotation; its risk and halt carry (below), so a rotation can neither
-            # re-arm a halted trader nor reset its drawdown/streak bookkeeping.
+            # qa42q/ae6ah: the trader's own NEWEST row in the same venue + env (any
+            # key) is a key rotation; its risk and halt carry (below), so a rotation
+            # can neither re-arm a halted trader nor reset its drawdown/streak
+            # bookkeeping, and rotating back A -> B -> A restores B's newer row.
+            latest = self._persistence.load_latest_env_checkpoint(
+                self._config.trader_id, account
+            )
             rotated = None
+            if latest is not None and is_key_rotation(latest.node_status.get("account"), account):
+                rotated = latest
+                logger.warning(
+                    "paper %s: key rotation from account %s to %s; "
+                    "own risk and halt carried",
+                    self._config.trader_id,
+                    latest.node_status.get("account"),
+                    account,
+                )
+            newest = self._persistence.load_latest_checkpoint(self._config.trader_id)
             if newest is not None:
                 newest_account = newest.node_status.get("account")
-                if newest_account is not None and newest_account != account:
-                    if own is None and is_key_rotation(newest_account, account):
-                        rotated = newest
-                        logger.warning(
-                            "paper %s: key rotation from account %s to %s; "
-                            "own risk and halt carried",
-                            self._config.trader_id,
-                            newest_account,
-                            account,
-                        )
-                    else:
-                        logger.warning(
-                            "paper %s: own checkpoint is for account %s, not %s; ignored",
-                            self._config.trader_id,
-                            newest_account,
-                            account,
-                        )
+                if isinstance(newest_account, str) and account_env(
+                    newest_account
+                ) != account_env(account):
+                    logger.warning(
+                        "paper %s: own checkpoint is for account %s, not %s; ignored",
+                        self._config.trader_id,
+                        newest_account,
+                        account,
+                    )
             newer = self._persistence.load_newer_account_checkpoint(
                 account, self._config.trader_id
             )

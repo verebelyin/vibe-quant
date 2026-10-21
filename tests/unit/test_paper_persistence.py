@@ -268,11 +268,15 @@ class TestHasAccountCheckpoint:
         assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
 
     def test_rotation_reads_the_newest_own_row_only(self, store: StatePersistence) -> None:
-        """R25 vs R23: an older old-key row under a newer testnet row carries nothing."""
+        """R13/ae6ah (D1=A): an older live-key row under a newer testnet row carries.
+
+        The gate reads the newest row IN the venue + env, so another env's newer row
+        never hides the trader's own earlier live session on another key.
+        """
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         self._save(store, "OWN-001", {"account": "binance:testnet:bbbb"})
-        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
-        # ... and the order flipped: the old-key row is the newest
+        assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
+        # ... rotating back to the first key keeps it True (A -> B -> A)
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is True
 
@@ -296,6 +300,80 @@ class TestHasAccountCheckpoint:
         self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
         self._save_raw(store, "OWN-001", "{not json")
         assert store.has_account_checkpoint("binance:live:aaaa", "OWN-001") is False
+
+
+class TestLatestEnvCheckpoint:
+    """R13 (ae6ah): the newest own row in one venue + env, whatever its key."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> Generator[StatePersistence]:
+        p = StatePersistence(tmp_path / "env.db", trader_id="OWN-001")
+        yield p
+        p.close()
+
+    @staticmethod
+    def _save(store: StatePersistence, trader_id: str, node_status: dict[str, object]) -> None:
+        store.save_checkpoint(StateCheckpoint(trader_id=trader_id, node_status=node_status))
+
+    @staticmethod
+    def _save_raw(store: StatePersistence, trader_id: str, node_status: str) -> None:
+        store.conn.execute(
+            """INSERT INTO paper_trading_checkpoints
+               (trader_id, positions, orders, balance, node_status)
+               VALUES (?, '{}', '{}', '{}', ?)""",
+            (trader_id, node_status),
+        )
+        store.conn.commit()
+
+    def test_same_env_and_legacy_rows_count(self, store: StatePersistence) -> None:
+        """Any key of the env, a null account and a legacy row (no key) all count."""
+        self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
+        self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        assert latest is not None
+        assert latest.node_status == {"account": "binance:live:bbbb"}
+        # a JSON null account is this env, and being newest it wins
+        self._save(store, "OWN-001", {"account": None})
+        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        assert latest is not None
+        assert latest.node_status == {"account": None}
+        # so is a legacy row without the key
+        self._save(store, "OWN-001", {"state": "running"})
+        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        assert latest is not None
+        assert latest.node_status == {"state": "running"}
+
+    def test_other_env_rows_skipped(self, store: StatePersistence) -> None:
+        """Testnet and live (or another venue) never serve each other's rows."""
+        self._save(store, "OWN-001", {"account": "binance:testnet:aaaa"})
+        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        latest = store.load_latest_env_checkpoint("OWN-001", "binance:testnet:aaaa")
+        assert latest is not None
+        assert latest.node_status == {"account": "binance:testnet:aaaa"}
+        self._save(store, "OWN-001", {"account": "other:live:aaaa"})
+        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+
+    def test_env_prefix_without_hash_is_skipped(self, store: StatePersistence) -> None:
+        """'binance:live' and 'binance:livex:...' are not 'binance:live:' rows."""
+        self._save_raw(store, "OWN-001", '{"account": "binance:live"}')
+        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        self._save(store, "OWN-001", {"account": "binance:livex:aaaa"})
+        assert store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa") is None
+        self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
+        latest = store.load_latest_env_checkpoint("OWN-001", "binance:live:aaaa")
+        assert latest is not None
+        assert latest.node_status == {"account": "binance:live:aaaa"}
+
+    def test_gate_rotation_read_uses_the_env_row(self, store: StatePersistence) -> None:
+        """A->B->A: the gate finds the newest same-env key row, not the newest row."""
+        self._save(store, "OWN-001", {"account": "binance:live:aaaa"})
+        self._save(store, "OWN-001", {"account": "binance:live:bbbb"})
+        # a third live key rotates from B's row
+        assert store.has_account_checkpoint("binance:live:cccc", "OWN-001") is True
+        # ... even when another env's row is newer (the D1=A flip)
+        self._save(store, "OWN-001", {"account": "binance:testnet:cccc"})
+        assert store.has_account_checkpoint("binance:live:cccc", "OWN-001") is True
 
 
 class TestPeriodicCheckpointing:
