@@ -1877,31 +1877,27 @@ class StrategyCompiler:
         minutes_before = cfg.minutes_before if cfg else 5
         minutes_after = cfg.minutes_after if cfg else 5
 
+        hour_ns = 3_600 * 1_000_000_000
+        before_ns = minutes_before * 60 * 1_000_000_000
+        after_ns = minutes_after * 60 * 1_000_000_000
+        # Integer ns only. A settlement S blocks [S, S+after) and [S-before, S); both
+        # windows are capped at one hour, so only the two hour boundaries around ts
+        # matter: h0 (ts - h0 < after) and h0 + 1h (ts >= h0 + 1h - before). The
+        # cheap comparisons run first, so the archive lookup happens only near a boundary.
         lines = [
             "def _is_near_funding_time(self, ts_ns: int) -> bool:",
-            '    """Check if near funding settlement (Binance: 00:00, 08:00, 16:00 UTC)."""',
-            "    from datetime import datetime, timezone",
+            '    """Check if near a funding settlement of this instrument\'s own interval."""',
+            f"    h0 = ts_ns - ts_ns % {hour_ns}",
+            f"    near_after = ts_ns - h0 < {after_ns}",
+            f"    near_before = ts_ns >= h0 + {hour_ns} - {before_ns}",
+            "    if not (near_after or near_before):",
+            "        return False",
+            "    from vibe_quant.dsl.aux_data import is_funding_settlement",
             "",
-            "    dt = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc)",
-            "    hour = dt.hour",
-            "    minute = dt.minute",
-            "",
-            "    # Binance funding times: 00:00, 08:00, 16:00 UTC",
-            "    funding_hours = [0, 8, 16]",
-            "",
-            "    for fh in funding_hours:",
-            f"        minutes_before = {minutes_before}",
-            f"        minutes_after = {minutes_after}",
-            "",
-            "        # Check if within window before funding",
-            "        if hour == fh and minute < minutes_after:",
-            "            return True",
-            "        # Check if within window before funding (previous hour)",
-            "        prev_hour = (fh - 1) % 24",
-            "        if hour == prev_hour and minute >= (60 - minutes_before):",
-            "            return True",
-            "",
-            "    return False",
+            "    iid = self.config.instrument_id",
+            "    if near_after and is_funding_settlement(iid, h0):",
+            "        return True",
+            f"    return near_before and is_funding_settlement(iid, h0 + {hour_ns})",
         ]
         return lines
 

@@ -28,7 +28,9 @@ funding periods old (archive hole; stale rates are never forward-filled).
 
 from __future__ import annotations
 
+import logging
 import os
+from bisect import bisect_left
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,6 +41,9 @@ from vibe_quant.errors import DataUnavailableError
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuxDataUnavailableError(DataUnavailableError):
@@ -57,6 +62,14 @@ _catalog_path: Path | None = None
 _SNAPPED: dict[tuple[str, str], tuple[object, np.ndarray, np.ndarray]] = {}
 # (archive path, symbol, kind, period) -> (source tuple, derived series)
 _DERIVED: dict[tuple[str, str, str, int], tuple[object, np.ndarray]] = {}
+# (archive path, symbol) -> (times list from _RATE_CACHE, minute-rounded times, interval hours)
+_GRIDS: dict[tuple[str, str], tuple[object, list[int], list[int]]] = {}
+# (archive path, symbol) pairs already warned about falling back to 8h (cleared by configure)
+_GRID_WARNED: set[tuple[str, str]] = set()
+
+_HOUR_NS = 3_600 * 1_000_000_000
+_MINUTE_NS = 60 * 1_000_000_000
+_DEFAULT_INTERVAL_H = 8
 
 
 def configure(archive_path: Path | str | None, catalog_path: Path | str | None = None) -> None:
@@ -67,6 +80,7 @@ def configure(archive_path: Path | str | None, catalog_path: Path | str | None =
     # Reference bars are resolved once per run (preflight / first use), not per bar.
     _REF.clear()
     _REF_DERIVED.clear()
+    _GRID_WARNED.clear()  # a new run may warn about a missing grid again
 
 
 def archive_path() -> Path | None:
@@ -114,6 +128,87 @@ def settlement_series(symbol: str) -> tuple[np.ndarray, np.ndarray]:
     r = np.asarray(rates, dtype=np.float64)
     _SNAPPED[key] = (source, snapped, r)
     return snapped, r
+
+
+def _settlement_grid(path: Path, symbol: str) -> tuple[list[int], list[int]] | None:
+    """(minute-rounded settlement times ns, interval hours) of ``symbol``, None if none archived.
+
+    Cached per (archive, symbol) on the IDENTITY of the ``_RATE_CACHE`` times list,
+    so ``clear_rate_cache`` invalidates it like the snapped series above.
+    """
+    from vibe_quant.validation.funding import FundingCalculator
+
+    calc = FundingCalculator(path)
+    times, _ = calc._load_rates(symbol)
+    if not times:
+        return None
+    key = (str(path), symbol)
+    hit = _GRIDS.get(key)
+    if hit is not None and hit[0] is times:
+        return hit[1], hit[2]
+    rounded = [(t + _MINUTE_NS // 2) // _MINUTE_NS * _MINUTE_NS for t in times]
+    hours = calc._load_intervals(symbol)
+    _GRIDS[key] = (times, rounded, hours)
+    return rounded, hours
+
+
+def _log_grid_fallback_once(path: Path, symbol: str, why: str) -> None:
+    key = (str(path), symbol)
+    if key not in _GRID_WARNED:
+        _GRID_WARNED.add(key)
+        logger.warning(
+            "%s: %s; funding avoidance uses the %dh grid (00:00, 08:00, 16:00 UTC)",
+            symbol,
+            why,
+            _DEFAULT_INTERVAL_H,
+        )
+
+
+def is_funding_settlement(instrument_id: str, hour_ns: int) -> bool:
+    """Whether the whole UTC hour ``hour_ns`` (ns) is a funding settlement of the symbol.
+
+    ``S(s)`` iff ``s % (H(s) * 1h) == 0``, where ``H(s)`` is the archived settlement
+    interval (hours) of the first row whose minute-rounded time is ``>= s``. That row is
+    used only when it is at most one of its own intervals away (past the last row: the
+    last row's). Across a wider archive hole the previous row's interval is used
+    (causal: a rate archived later cannot change an earlier decision), and before the
+    first row the 8h fallback applies. Archive file missing, symbol without rows, a
+    pre-coverage hour or any lookup failure: the 8h rule, with one WARNING per
+    (archive, symbol) until :func:`configure` runs again.
+
+    Never raises: NT swallows exceptions inside ``on_bar``, which would turn missing
+    data into a silent zero-trade run (see the module docstring).
+    """
+    path = _resolved_archive()
+    symbol = instrument_id
+    interval = _DEFAULT_INTERVAL_H
+    try:
+        from vibe_quant.validation.funding import FundingCalculator
+
+        symbol = FundingCalculator.symbol_from_instrument_id(instrument_id)
+        if not path.exists():
+            _log_grid_fallback_once(path, symbol, f"funding archive {path} not found")
+        else:
+            grid = _settlement_grid(path, symbol)
+            if grid is None:
+                _log_grid_fallback_once(path, symbol, f"no funding intervals archived in {path}")
+            else:
+                rounded, hours = grid
+                i = bisect_left(rounded, hour_ns)
+                if i == 0 and hour_ns < rounded[0]:
+                    _log_grid_fallback_once(
+                        path, symbol, f"no funding settlement archived at or before {_iso(hour_ns)}"
+                    )
+                elif i == len(rounded):
+                    interval = hours[-1]
+                elif rounded[i] - hour_ns > hours[i] * _HOUR_NS:
+                    interval = hours[i - 1]
+                else:
+                    interval = hours[i]
+        return hour_ns % (interval * _HOUR_NS) == 0
+    except Exception as e:
+        _log_grid_fallback_once(path, symbol, f"funding interval lookup failed ({type(e).__name__})")
+        return hour_ns % (_DEFAULT_INTERVAL_H * _HOUR_NS) == 0
 
 
 def _date_ns(value: str) -> int:
@@ -424,3 +519,4 @@ def context_of(df: pd.DataFrame) -> tuple[str, np.ndarray]:
         msg = f"bar_close_ns has {ns.size} entries for {len(df.index)} rows"
         raise ValueError(msg)
     return FundingCalculator.symbol_from_instrument_id(instrument), ns
+

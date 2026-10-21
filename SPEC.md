@@ -680,7 +680,7 @@ The DSL compiler generates a NautilusTrader Strategy that:
 Time filters are evaluated before condition checks in the `on_bar()` handler:
 - **Session filters**: Compare current bar timestamp against allowed UTC windows
 - **Day filters**: Skip signals on blocked days of the week
-- **Funding avoidance**: Skip entry signals within N minutes of known funding settlement times (Binance: 00:00, 08:00, 16:00 UTC; Ethereal: every hour)
+- **Funding avoidance**: Skip entry signals within N minutes of the symbol's own funding settlement times: the archived per-symbol interval decides, causally (most Binance USDT-M perps settle every 8h at 00:00, 08:00, 16:00 UTC; HYPEUSDT settles every 4h; Ethereal: every hour). A settlement archived later never changes an earlier decision: across an archive hole wider than the next row's own interval the previous row's interval applies, and before the first archived row (or with no archived interval at all) the 8h grid applies with a WARNING.
 
 ### Position Management (Future Extension)
 
@@ -936,7 +936,7 @@ Custom fill model loaded via `ImportableFillModelConfig` (specifying `fill_model
 
 **Funding rate simulation:**
 - Subscribe to `FundingRateUpdate` data (stored in catalog)
-- Binance: Applied every 8 hours (00:00, 08:00, 16:00 UTC)
+- Binance: applied at each settlement of the symbol's own interval (8h at 00:00, 08:00, 16:00 UTC for most symbols; the archive's `funding_interval_hours` decides, e.g. HYPEUSDT every 4h)
 - Positive rate: long positions pay, short positions receive
 - Negative rate: short positions pay, long positions receive
 - Accrual: `position_notional * funding_rate` per period

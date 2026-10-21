@@ -336,7 +336,7 @@ class TestCompileWithTimeFilters:
         source = compiler.compile(dsl)
 
         assert "_is_near_funding_time" in source
-        assert "funding_hours" in source
+        assert "is_funding_settlement" in source
 
 
 class TestConditionCodeGeneration:
