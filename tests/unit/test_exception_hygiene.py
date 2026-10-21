@@ -26,11 +26,14 @@ scanner lives here next to it so both move together.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
+
+    import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,6 +50,11 @@ SCAN_PACKAGES: tuple[str, ...] = (
     "data",
     "portfolio",
 )
+
+#: Root modules (no package directory) whose moved handlers must stay counted. Scanned
+#: only when present, so a module lands under the ratchet in the same commit that
+#: creates it (rabmo.2 L4 adds trade_ledger.py; rabmo.3/rabmo.4 add the other two).
+SCAN_FILES: tuple[str, ...] = ("trade_ledger.py", "launch_settings.py", "engine_run.py")
 
 #: Substrings that mark a call as "this handler reports what happened". Matched
 #: case-insensitively against the callee's name/attribute.
@@ -93,6 +101,7 @@ BASELINE: dict[str, int] = {
     "vibe_quant/screening/__main__.py": 1,
     "vibe_quant/screening/nt_runner.py": 1,
     "vibe_quant/screening/replay_drift.py": 3,
+    "vibe_quant/trade_ledger.py": 0,
     "vibe_quant/validation/consistency.py": 6,
     "vibe_quant/validation/extraction.py": 5,
     "vibe_quant/validation/runner.py": 1,
@@ -228,11 +237,23 @@ def _scan_package(package: str) -> Iterable[tuple[str, list[Swallow]]]:
         yield relative, find_swallows(path.read_text(), relative)
 
 
+def _scan_root_file(name: str) -> Iterable[tuple[str, list[Swallow]]]:
+    path = REPO_ROOT / "vibe_quant" / name
+    if not path.is_file():
+        return
+    relative = path.relative_to(REPO_ROOT).as_posix()
+    yield relative, find_swallows(path.read_text(), relative)
+
+
 def scan_money_packages() -> dict[str, list[Swallow]]:
-    """Map every money-package file with ≥1 swallow to its swallows."""
+    """Map every money-package or root-module file with ≥1 swallow to its swallows."""
     found: dict[str, list[Swallow]] = {}
     for package in SCAN_PACKAGES:
         for relative, swallows in _scan_package(package):
+            if swallows:
+                found[relative] = swallows
+    for name in SCAN_FILES:
+        for relative, swallows in _scan_root_file(name):
             if swallows:
                 found[relative] = swallows
     return found
@@ -348,3 +369,29 @@ def test_scanner_counts_bare_except() -> None:
 def test_scanner_ignores_narrow_working_handler() -> None:
     source = "try:\n    risky()\nexcept ValueError:\n    x = f()\n"
     assert find_swallows(source) == []
+
+
+def test_root_scan_files_are_ratcheted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A swallow in a root module is found by the scan, so its baseline can pin it."""
+    (tmp_path / "vibe_quant").mkdir()
+    (tmp_path / "vibe_quant" / "trade_ledger.py").write_text(
+        "try:\n    risky()\nexcept Exception:\n    pass\n"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+    found = scan_money_packages()
+    assert list(found) == ["vibe_quant/trade_ledger.py"]
+
+
+def test_l4_moved_no_swallow_across_the_touched_files() -> None:
+    """r3 F10: L4 moves handlers; the touched files' total must not change (1 + 5 + 0)."""
+    found = scan_money_packages()
+    touched = (
+        "vibe_quant/screening/nt_runner.py",
+        "vibe_quant/validation/extraction.py",
+        "vibe_quant/trade_ledger.py",
+    )
+    assert sum(len(found.get(path, ())) for path in touched) == 6
+    assert "vibe_quant/trade_ledger.py" not in found
+    assert BASELINE["vibe_quant/trade_ledger.py"] == 0

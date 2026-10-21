@@ -26,6 +26,12 @@ from vibe_quant.liquidation_settings import (
     LiquidationSettings,
 )
 from vibe_quant.sizing_settings import SIZING_FIELDS, SizingSettings
+from vibe_quant.trade_ledger import (
+    parse_nt_stats,
+    screening_liquidation_moments,
+    screening_moments,
+    split_positions,
+)
 from vibe_quant.validation.funding import FUNDING_PERIOD_HOURS
 
 if TYPE_CHECKING:
@@ -1034,7 +1040,6 @@ class NTScreeningRunner:
         from vibe_quant.utils import compute_day_count
         from vibe_quant.validation.extraction import (
             accrue_position_funding,
-            all_positions,
             daily_sharpe_sortino,
             date_to_ns,
             finest_timeframe,
@@ -1054,73 +1059,23 @@ class NTScreeningRunner:
 
         metrics.total_trades = bt_result.total_positions
 
-        # Extract from PnL stats first (more comprehensive, includes total return)
-        _known_pnl_keys = {
-            "pnl (total)",
-            "pnl% (total)",
-            "sharpe",
-            "sortino",
-            "max drawdown",
-            "win rate",
-            "profit factor",
-        }
-        # Track which fields were set by PnL stats so returns-stats fallback
-        # doesn't overwrite legitimate zero values (bug: == 0.0 sentinel)
-        _populated: set[str] = set()
+        # Extract from PnL stats first (more comprehensive, includes total return).
+        # The per-tier key sets and log levels live in trade_ledger.parse_nt_stats.
         stats_pnls = bt_result.stats_pnls or {}
         if not stats_pnls:
             logger.debug("No stats_pnls in bt_result for params %s", params)
-        for _currency, pnl_stats in stats_pnls.items():
-            for key, value in pnl_stats.items():
-                if value is None:
-                    continue
-                key_lower = key.lower()
-                try:
-                    fval = float(value)
-                except (ValueError, TypeError):
-                    logger.warning("Could not convert PnL stat %s=%r to float", key, value)
-                    continue
-                if key_lower == "pnl% (total)":
-                    # NT reports as percentage; store as fraction
-                    metrics.total_return = fval / 100.0
-                    _populated.add("total_return")
-                elif "sharpe" in key_lower:
-                    metrics.sharpe_ratio = fval
-                    _populated.add("sharpe_ratio")
-                elif "sortino" in key_lower:
-                    metrics.sortino_ratio = fval
-                    _populated.add("sortino_ratio")
-                elif key_lower == "max drawdown":
-                    metrics.max_drawdown = abs(fval)
-                    _populated.add("max_drawdown")
-                elif key_lower == "win rate":
-                    metrics.win_rate = fval
-                    _populated.add("win_rate")
-                elif not any(k in key_lower for k in _known_pnl_keys):
-                    logger.debug("Unmatched PnL stats key: %s = %s", key, value)
-
-        # Fill from returns stats only if not already set by PnL stats
-        _known_returns_keys = {"sharpe", "sortino", "max drawdown", "win rate", "profit factor"}
         stats_returns = bt_result.stats_returns or {}
-        for key, value in stats_returns.items():
-            if value is None:
-                continue
-            key_lower = key.lower()
-            try:
-                fval = float(value)
-            except (ValueError, TypeError):
-                logger.warning("Could not convert returns stat %s=%r to float", key, value)
-                continue
-            if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
-                metrics.sharpe_ratio = fval
-            elif "sortino" in key_lower and "sortino_ratio" not in _populated:
-                metrics.sortino_ratio = fval
-            elif "max drawdown" in key_lower and "max_drawdown" not in _populated:
-                metrics.max_drawdown = abs(fval)
-            elif key_lower == "win rate" and "win_rate" not in _populated:
-                metrics.win_rate = fval
-            elif not any(k in key_lower for k in _known_returns_keys):
-                logger.debug("Unmatched returns stats key: %s = %s", key, value)
+        stats = parse_nt_stats(bt_result, tier="screening")
+        if stats.total_return is not None:
+            metrics.total_return = stats.total_return
+        if stats.sharpe is not None:
+            metrics.sharpe_ratio = stats.sharpe
+        if stats.sortino is not None:
+            metrics.sortino_ratio = stats.sortino
+        if stats.max_drawdown is not None:
+            metrics.max_drawdown = stats.max_drawdown
+        if stats.win_rate is not None:
+            metrics.win_rate = stats.win_rate
 
         # Warn if extraction produced no meaningful metrics
         if (
@@ -1152,15 +1107,7 @@ class NTScreeningRunner:
         funding_cash: dict[str, list[tuple[int, float]]] = {}
         total_funding = 0.0
         funding_fallbacks = 0
-        try:
-            everything = all_positions(engine)
-            closed = [p for p in everything if p.is_closed]
-            still_open = [
-                p for p in everything if not p.is_closed and getattr(p, "is_open", False)
-            ]
-        except Exception:
-            logger.warning("Could not read positions from engine cache", exc_info=True)
-            closed, still_open = [], []
+        closed, still_open = split_positions(engine)
         funding_calc = FundingCalculator(self._funding_archive_path)
         liquidation_on = self._liquidation_mode != "off"
         overlay: OverlayResult | None = None
@@ -1353,11 +1300,11 @@ class NTScreeningRunner:
         # Compute return distribution moments (skewness/kurtosis) and per-trade returns
         if liquidated is not None:
             metrics.skewness, metrics.kurtosis, metrics.trade_returns = (
-                self._liquidation_return_moments(liquidated.returns, liquidated.n_closed)
+                screening_liquidation_moments(liquidated.returns, liquidated.n_closed)
             )
         else:
-            metrics.skewness, metrics.kurtosis, metrics.trade_returns = (
-                self._compute_return_moments(engine)
+            metrics.skewness, metrics.kurtosis, metrics.trade_returns = screening_moments(
+                engine
             )
 
         # Mark-to-market paths, built once: they feed the max drawdown (incl.
@@ -1411,87 +1358,6 @@ class NTScreeningRunner:
         metrics.max_drawdown = mtm_dd
 
         return metrics
-
-    @staticmethod
-    def _compute_return_moments(engine: Any) -> tuple[float, float, tuple[float, ...]]:
-        """Compute skewness, kurtosis, and per-trade returns from closed positions.
-
-        Uses adjusted Fisher-Pearson G1 (skewness) and G2 (excess kurtosis)
-        formulas — the same as scipy.stats.skew(bias=False) and
-        scipy.stats.kurtosis(bias=False). Returns full kurtosis (G2 + 3).
-
-        Falls back to (0.0, 3.0, ()) — normal distribution defaults — if
-        fewer than 4 trades or computation fails.
-        """
-        try:
-            cache = engine.kernel.cache  # type: ignore[union-attr]
-            all_positions = list(cache.positions()) + list(cache.position_snapshots())
-            closed = [p for p in all_positions if p.is_closed]
-            if len(closed) < 4:
-                return 0.0, 3.0, ()
-
-            # Per-trade return as fraction of notional entry value
-            returns: list[float] = []
-            for pos in closed:
-                # Use peak_qty (not quantity which is 0 for closed positions)
-                entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
-                if entry_val > 0:
-                    returns.append(float(pos.realized_pnl) / entry_val)
-
-            return NTScreeningRunner._moments_from_returns(returns)
-        except Exception:
-            logger.warning("Could not compute return moments", exc_info=True)
-            return 0.0, 3.0, ()
-
-    @staticmethod
-    def _moments_from_returns(returns: list[float]) -> tuple[float, float, tuple[float, ...]]:
-        """Skewness, kurtosis and per-trade returns of ``returns`` (see _compute_return_moments)."""
-        import math
-
-        n = len(returns)
-        if n < 4:
-            return 0.0, 3.0, tuple(returns)
-
-        mean = sum(returns) / n
-        diffs = [r - mean for r in returns]
-        # Biased central moments (population moments)
-        m2 = sum(d * d for d in diffs) / n
-        if m2 == 0:
-            return 0.0, 3.0, tuple(returns)
-
-        m3 = sum(d**3 for d in diffs) / n
-        m4 = sum(d**4 for d in diffs) / n
-
-        # Adjusted Fisher-Pearson G1 skewness (bias-corrected)
-        # G1 = sqrt(n(n-1)) / (n-2) * (m3 / m2^1.5)
-        skewness = (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5)
-
-        # Adjusted Fisher G2 excess kurtosis (bias-corrected)
-        # G2 = (n+1)(n-1) / ((n-2)(n-3)) * m4/m2² - 3(n-1)² / ((n-2)(n-3))
-        excess = ((n + 1) * (n - 1) * m4) / (
-            (n - 2) * (n - 3) * m2**2
-        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
-
-        # Full kurtosis = excess + 3 (DSR expects gamma_4, not excess)
-        kurtosis = excess + 3.0
-
-        # Clamp kurtosis to valid range (>=1 per DSR validator)
-        kurtosis = max(1.0, kurtosis)
-
-        return round(skewness, 4), round(kurtosis, 4), tuple(returns)
-
-    @staticmethod
-    def _liquidation_return_moments(
-        returns: list[float], n_closed: int
-    ) -> tuple[float, float, tuple[float, ...]]:
-        """The return moments of the liquidation-adjusted trades (same rules as the NT path)."""
-        try:
-            if n_closed < 4:
-                return 0.0, 3.0, ()
-            return NTScreeningRunner._moments_from_returns(returns)
-        except Exception:
-            logger.warning("Could not compute return moments", exc_info=True)
-            return 0.0, 3.0, ()
 
     def _boundary_exit_scan_ts(
         self,

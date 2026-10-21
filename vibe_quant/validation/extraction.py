@@ -29,6 +29,12 @@ from vibe_quant.metrics import (
     profit_factor,
     trade_win_rate,
 )
+from vibe_quant.trade_ledger import (
+    apply_validation_moments,
+    parse_nt_stats,
+    split_positions,
+    validation_engine_moments,
+)
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
 
@@ -836,53 +842,6 @@ def _ns_to_isoformat(ns_timestamp: int | float | str) -> str:
     return datetime.fromtimestamp(ns / 1e9, tz=UTC).isoformat()
 
 
-def _extract_return_moments(result: ValidationResult, engine: BacktestEngine) -> None:
-    """Compute skewness/kurtosis from closed positions and set on result."""
-    try:
-        cache = engine.kernel.cache
-        all_positions = list(cache.positions()) + list(cache.position_snapshots())
-        closed = [p for p in all_positions if p.is_closed]
-        if len(closed) < 4:
-            return
-
-        returns: list[float] = []
-        for pos in closed:
-            entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
-            if entry_val > 0:
-                returns.append(float(pos.realized_pnl) / entry_val)
-    except Exception:
-        logger.warning("Could not compute return moments", exc_info=True)
-        return
-    set_return_moments(result, returns)
-
-
-def set_return_moments(result: ValidationResult, returns: list[float]) -> None:
-    """Skewness/kurtosis of per-trade returns (``realized pnl / entry notional``) on result."""
-    try:
-        n = len(returns)
-        if n < 4:
-            return
-
-        mean = sum(returns) / n
-        diffs = [r - mean for r in returns]
-        m2 = sum(d * d for d in diffs) / n
-        if m2 == 0:
-            return
-
-        m3 = sum(d**3 for d in diffs) / n
-        m4 = sum(d**4 for d in diffs) / n
-
-        result.skewness = round(
-            (math.sqrt(n * (n - 1)) / (n - 2)) * (m3 / m2**1.5), 4
-        )
-        excess = ((n + 1) * (n - 1) * m4) / (
-            (n - 2) * (n - 3) * m2**2
-        ) - (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
-        result.kurtosis = round(max(1.0, excess + 3.0), 4)
-    except Exception:
-        logger.warning("Could not compute return moments", exc_info=True)
-
-
 def extract_results(
     run_id: int,
     strategy_name: str,
@@ -936,7 +895,7 @@ def extract_results(
         liquidation_mode=liquidation_mode,
     )
     if not moments_done:
-        _extract_return_moments(result, engine)
+        validation_engine_moments(result, engine)
 
     return result
 
@@ -965,91 +924,21 @@ def extract_stats(
         result: ValidationResult to populate (mutated in place).
         bt_result: NautilusTrader BacktestResult.
     """
-    stats_returns = bt_result.stats_returns or {}
-    stats_pnls = bt_result.stats_pnls or {}
-
-    _known_pnl_keys = {
-        "pnl (total)",
-        "pnl% (total)",
-        "sharpe",
-        "sortino",
-        "max drawdown",
-        "win rate",
-        "profit factor",
-        "expectancy",
-        "avg winner",
-        "avg loser",
-        "long ratio",
-    }
-
-    # Track which fields were populated from stats_pnls so we only
-    # fall back to stats_returns for fields that weren't set.
-    _populated: set[str] = set()
-
-    for _currency, pnl_stats in stats_pnls.items():
-        for key, value in pnl_stats.items():
-            if value is None:
-                continue
-            key_lower = key.lower()
-            try:
-                fval = float(value)
-            except (ValueError, TypeError):
-                logger.debug("Non-numeric PnL stat skipped: %s = %r", key, value)
-                continue
-            if key_lower == "pnl% (total)":
-                # NT reports as percentage (e.g. -13.06 for -13.06%);
-                # we store as fraction (e.g. -0.1306)
-                result.total_return = fval / 100.0
-                _populated.add("total_return")
-            elif "sharpe" in key_lower:
-                result.sharpe_ratio = fval
-                _populated.add("sharpe_ratio")
-            elif "sortino" in key_lower:
-                result.sortino_ratio = fval
-                _populated.add("sortino_ratio")
-            elif key_lower == "max drawdown":
-                result.max_drawdown = abs(fval)
-                _populated.add("max_drawdown")
-            elif key_lower == "win rate":
-                result.win_rate = fval
-                _populated.add("win_rate")
-            elif key_lower == "avg winner":
-                result.avg_win = fval
-            elif key_lower == "avg loser":
-                result.avg_loss = fval
-            elif not any(k in key_lower for k in _known_pnl_keys):
-                logger.debug("Unmatched PnL stats key: %s = %s", key, value)
-
-    _known_returns_keys = {
-        "sharpe",
-        "sortino",
-        "max drawdown",
-        "win rate",
-        "profit factor",
-        "expectancy",
-        "avg winner",
-        "avg loser",
-        "long ratio",
-    }
-    for key, value in stats_returns.items():
-        if value is None:
-            continue
-        key_lower = key.lower()
-        try:
-            fval = float(value)
-        except (ValueError, TypeError):
-            logger.debug("Non-numeric returns stat skipped: %s = %r", key, value)
-            continue
-        if "sharpe" in key_lower and "sharpe_ratio" not in _populated:
-            result.sharpe_ratio = fval
-        elif "sortino" in key_lower and "sortino_ratio" not in _populated:
-            result.sortino_ratio = fval
-        elif "max drawdown" in key_lower and "max_drawdown" not in _populated:
-            result.max_drawdown = abs(fval)
-        elif key_lower == "win rate" and "win_rate" not in _populated:
-            result.win_rate = fval
-        elif not any(k in key_lower for k in _known_returns_keys):
-            logger.debug("Unmatched returns stats key: %s = %s", key, value)
+    stats = parse_nt_stats(bt_result, tier="validation")
+    if stats.total_return is not None:
+        result.total_return = stats.total_return
+    if stats.sharpe is not None:
+        result.sharpe_ratio = stats.sharpe
+    if stats.sortino is not None:
+        result.sortino_ratio = stats.sortino
+    if stats.max_drawdown is not None:
+        result.max_drawdown = stats.max_drawdown
+    if stats.win_rate is not None:
+        result.win_rate = stats.win_rate
+    if stats.avg_win is not None:
+        result.avg_win = stats.avg_win
+    if stats.avg_loss is not None:
+        result.avg_loss = stats.avg_loss
 
 
 def liquidation_execution_bar_ns(execution_timeframe: str | None) -> int:
@@ -1398,17 +1287,7 @@ def extract_trades(
     liquidation_bar_ns = (
         liquidation_execution_bar_ns(execution_timeframe) if liquidation_mode != "off" else 0
     )
-    try:
-        # NT netting mode reuses position IDs: when a position closes and reopens,
-        # it's removed from _index_positions_closed. The closed state is preserved
-        # as a "snapshot". We must combine positions() + position_snapshots() and
-        # filter by is_closed, exactly as NT's own "Total positions" log does.
-        everything = all_positions(engine)
-        positions = [p for p in everything if p.is_closed]
-        still_open = [p for p in everything if not p.is_closed and getattr(p, "is_open", False)]
-    except Exception:
-        logger.warning("Could not read positions from engine cache", exc_info=True)
-        positions, still_open = [], []
+    positions, still_open = split_positions(engine)
 
     # Positions still open when the engine stopped (with latency the on_stop
     # flatten order is still in flight) used to vanish from trades and
@@ -1705,7 +1584,7 @@ def extract_trades(
         )
         result.trades.append(trade)
         if mark is None and abs(quantity * entry_price) > 0:
-            # same per-trade return as _extract_return_moments (closed positions only)
+            # same per-trade return as trade_ledger.closed_returns (closed positions only)
             return_moments.append(realized_pnl / abs(quantity * entry_price))
 
     result.total_trades = len(result.trades)
@@ -1795,7 +1674,7 @@ def extract_trades(
             {**hit.to_dict(), "mode": overlay.result.mode} for hit in overlay.result.hits
         ]
     if recomputed:
-        set_return_moments(result, return_moments)
+        apply_validation_moments(result, return_moments)
     return recomputed
 
 
