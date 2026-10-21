@@ -620,7 +620,7 @@ class TestAccountLock:
 
 
 class TestLiveStartFresh:
-    """v4l2n: a LIVE start_fresh resets real-money limits, so it needs its own flag."""
+    """v4l2n + 30vki: a LIVE start_fresh skips another trader id's risk carry."""
 
     @staticmethod
     def _write(path: Path, *, testnet: bool, start_fresh: bool) -> None:
@@ -657,8 +657,10 @@ class TestLiveStartFresh:
         err = capsys.readouterr().err
         assert started == []
         assert err.splitlines() == [
-            "Refusing LIVE start_fresh: it resets the real-money drawdown, daily-loss and "
-            "losing-streak limits; re-run with --confirm-fresh-live to confirm"
+            "Refusing LIVE start_fresh: it skips the risk state another trader id left on this "
+            "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
+            "current equity; this trader id's own saved limits and halt are kept; re-run with "
+            "--confirm-fresh-live to confirm"
         ]
 
     @pytest.mark.asyncio

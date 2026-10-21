@@ -601,6 +601,28 @@ async def test_live_start_fresh_confirmation_rows(
         assert detail_marker in json.dumps(r.json()["detail"])
 
 
+async def test_live_start_fresh_refusal_says_what_it_skips(ctx: Ctx) -> None:
+    """R24 (30vki): the 400 detail names another trader id's state, not a reset."""
+    before = _paper_run_count(ctx.state)
+    r = await ctx.ac.post(
+        "/api/paper/start",
+        json={
+            "validation_run_id": ctx.validation_run,
+            "testnet": False,
+            "start_fresh": True,
+            "confirm_live": True,
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == (
+        "start_fresh with testnet=false skips the LIVE risk state another trader id left on "
+        "this account (peak, daily loss, losing streak, ERROR halt); this trader id's own saved "
+        "limits and halt are kept: set confirm_fresh_live=true to proceed"
+    )
+    assert ctx.launched == []
+    assert _paper_run_count(ctx.state) == before
+
+
 async def test_live_start_accepts_a_legacy_checkpoint_of_the_posted_trader(
     ctx: Ctx, monkeypatch: pytest.MonkeyPatch
 ) -> None:

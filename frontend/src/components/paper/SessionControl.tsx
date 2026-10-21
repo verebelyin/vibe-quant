@@ -409,13 +409,14 @@ export function SessionControl() {
                 }}
               />
               <span className="text-sm">
-                Start fresh: count peak, daily loss and losing streak from now
+                Start fresh: skip what another trader id left on this account
               </span>
             </Label>
             <p className="text-xs text-muted-foreground">
               Unchecked (default): continues this account&apos;s last session, so a drawdown or
-              losing streak that halted it halts again. Checked: those limits count from current
-              equity. Never clears this trader&apos;s own halt.
+              losing streak that halted it halts again. Checked: skips the peak, daily loss and
+              losing streak another trader id left here; this trader id&apos;s own limits and halt
+              still carry.
             </p>
           </div>
 
@@ -530,7 +531,7 @@ export function SessionControl() {
                     onCheckedChange={(v) => setConfirmFreshLive(v === true)}
                   />
                   {startFresh
-                    ? "I understand starting fresh resets my LIVE drawdown, daily-loss and losing-streak limits"
+                    ? "I understand starting fresh skips the LIVE drawdown, daily-loss and losing-streak state another trader id left on this account (this trader id's own limits and halt still carry)"
                     : "This LIVE start may have no saved risk state (first live session, or a new trader id): I understand the drawdown, daily-loss and losing-streak limits then start from zero"}
                 </Label>
               </div>

@@ -337,12 +337,14 @@ async def run_with_config(
         )
         return 1
 
-    # v4l2n: a LIVE start_fresh discards the real-money drawdown / daily-loss /
-    # losing-streak baselines, so --live alone is not enough consent.
+    # v4l2n + 30vki: a LIVE start_fresh skips the risk state ANOTHER trader id left
+    # on the account, so --live alone is not enough consent (own state always carries).
     if not config.binance.testnet and config.start_fresh and not allow_fresh_live:
         print(
-            "Refusing LIVE start_fresh: it resets the real-money drawdown, daily-loss and "
-            "losing-streak limits; re-run with --confirm-fresh-live to confirm",
+            "Refusing LIVE start_fresh: it skips the risk state another trader id left on this "
+            "account (peak, daily loss, losing streak, ERROR halt), so those limits may count from "
+            "current equity; this trader id's own saved limits and halt are kept; re-run with "
+            "--confirm-fresh-live to confirm",
             file=sys.stderr,
         )
         return 1
@@ -461,8 +463,9 @@ def main() -> int:
         "--confirm-fresh-live",
         action="store_true",
         help=(
-            "Confirm a LIVE start_fresh or a LIVE start with no saved risk state to "
-            "carry (both reset the real-money drawdown, daily-loss and losing-streak limits)"
+            "Confirm a LIVE start_fresh (skips the risk state another trader id left on the "
+            "account) or a LIVE start with no saved risk state to carry (drawdown, daily-loss "
+            "and losing-streak limits start from zero)"
         ),
     )
 
