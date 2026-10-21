@@ -9,7 +9,7 @@ import pytest
 
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery.__main__ import main
-from vibe_quant.discovery.run_spec import build_parser, plan_from_args
+from vibe_quant.discovery.run_spec import DiscoveryRunSpec, build_parser
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -879,7 +879,7 @@ def test_plan_windows_matches_legacy_split(start: str, end: str, split: float, n
             "--train-test-split", str(split), "--eval-windows", str(n_eval),
         ]
     )
-    plan = plan_from_args(args)
+    plan = DiscoveryRunSpec.from_args(args).plan()
     expected = _legacy_windows(start, end, split, n_eval)
     assert (
         plan.train_start, plan.train_end, plan.holdout_start, plan.holdout_end, plan.eval_windows
@@ -912,16 +912,16 @@ def test_bad_window_config_fails_run_fast(tmp_path: Path, monkeypatch) -> None:
     assert run["error_message"].startswith("DiscoveryConfigError:")
 
 
-def test_main_derives_windows_via_plan_from_args(tmp_path: Path, monkeypatch) -> None:
-    """main() must call plan_from_args (a bypass would be masked by the pipeline gate)."""
+def test_main_derives_windows_via_the_spec(tmp_path: Path, monkeypatch) -> None:
+    """main() must plan through the spec (a bypass would be masked by the pipeline gate)."""
 
     class _Sentinel(Exception):
         pass
 
-    def _boom(_args: object) -> None:
-        raise _Sentinel("plan_from_args reached")
+    def _boom(_self: object) -> None:
+        raise _Sentinel("spec.plan reached")
 
-    monkeypatch.setattr("vibe_quant.discovery.__main__.plan_from_args", _boom)
+    monkeypatch.setattr(DiscoveryRunSpec, "plan", _boom)
     db_path = tmp_path / "state.db"
     run_id = _create_discovery_run(db_path)
     monkeypatch.setattr(
@@ -939,7 +939,7 @@ def test_main_derives_windows_via_plan_from_args(tmp_path: Path, monkeypatch) ->
     state.close()
     assert run is not None
     assert run["status"] == "failed"
-    assert "plan_from_args reached" in run["error_message"]
+    assert "spec.plan reached" in run["error_message"]
 
 
 def test_cross_window_months_equals_form_parses_negative() -> None:

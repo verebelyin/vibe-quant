@@ -14,9 +14,6 @@ from vibe_quant.bankroll_grid import (
     BankrollGridError,
     bankroll_grid_note,
 )
-from vibe_quant.discovery.config_check import (
-    parse_cross_window_months,
-)
 from vibe_quant.discovery.mock_backtest import mock_backtest as _mock_backtest
 from vibe_quant.discovery.neff import N_RULE_EFFECTIVE
 from vibe_quant.discovery.pipeline import (
@@ -26,23 +23,17 @@ from vibe_quant.discovery.pipeline import (
     FastTierConfirm,
 )
 from vibe_quant.discovery.run_spec import (
-    _default_bootstrap_min_sharpe,
-    _grid_cells_from_args,
-    _grid_flags_given,
+    DiscoveryRunSpec,
     build_parser,
     check_launch_leverage,
-    plan_from_args,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
 from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fees import FeeSchedule
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
-    MISSING,
     LiquidationSettings,
-    resolve_leverage,
 )
-from vibe_quant.sizing_settings import SizingSettings
 from vibe_quant.utils import compute_day_count, log_dir
 
 logger = logging.getLogger(__name__)
@@ -59,6 +50,7 @@ if TYPE_CHECKING:
         HoldoutResult,
         WFARollingResult,
     )
+    from vibe_quant.sizing_settings import SizingSettings
 
 
 def _get_compiler_version() -> str:
@@ -1142,22 +1134,19 @@ def main() -> int:
             print(error)
             return 1
 
-        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        spec = DiscoveryRunSpec.from_args(args)
+
+        symbols = spec.symbol_list()
         if not symbols:
             symbols = run.get("symbols", [])
 
-        max_workers = args.max_workers if args.max_workers >= 0 else None
-        ind_pool = (
-            [s.strip() for s in args.indicator_pool.split(",") if s.strip()]
-            if args.indicator_pool
-            else None
-        )
+        ind_pool = spec.indicator_pool_list()
 
         # Venue-level fee schedule (bd vibe-quant-2gyk1.4) shared by every
         # screening backtest of this run (train, holdout, cross-window, WFA).
         # The entry-order mode comes from the run parameters: post-only is
         # validation-only and NTBacktestFn refuses it before any engine runs.
-        fee_schedule = FeeSchedule(tier=args.fee_tier, bnb_discount=args.bnb_discount)
+        fee_schedule = spec.fee_schedule()
         raw_run_params = run.get("parameters") or {}
         if isinstance(raw_run_params, str):
             import json as _json
@@ -1177,49 +1166,30 @@ def main() -> int:
         # first given win and fails the run when the two disagree. Validated up
         # front so a bad leverage fails the run with the message rather than a
         # silent 10x.
-        grid_run = _grid_flags_given(args)  # BankrollGridError -> exit 2, before anything runs
-        resolved_leverage = resolve_leverage(
-            MISSING if args.leverage is None else args.leverage,
-            MISSING if args.liquidation_leverage is None else args.liquidation_leverage,
-        )
-        if resolved_leverage is MISSING:
-            resolved_leverage = DEFAULT_LEVERAGE
-        liquidation = LiquidationSettings(
-            mode=args.liquidation_mode,
-            leverage=cast("float", resolved_leverage),
-        )
+        grid_run = spec.is_grid()  # BankrollGridError -> exit 2, before anything runs
+        liquidation = spec.liquidation_settings()
         logger.info("Discovery liquidation settings: %s", liquidation.to_notes())
 
         # Run-level sizing settings (bead vibe-quant-2gyk1.2): parsed and checked
-        # against the resolved leverage BEFORE plan_from_args, so a corrupt or
+        # against the resolved leverage BEFORE the window plan, so a corrupt or
         # unmarginable cap fails the run with its message rather than a silent
         # default. An omitted flag means the default; the keys are stored only
         # when non-default (SIP -> notes.sizing).
-        sizing = SizingSettings.from_params(
-            {
-                key: value
-                for key, value in (
-                    ("max_position_pct", args.max_position_pct),
-                    ("risk_per_trade", args.risk_per_trade),
-                    ("max_margin_pct", args.max_margin_pct),
-                )
-                if value is not None
-            }
-        )
+        sizing = spec.sizing_settings()
         # A grid has no run-level leverage: every cell checks the cap at its own leverage.
-        cells = _grid_cells_from_args(args, sizing) if grid_run else None
+        cells = spec.bankroll_cells(sizing) if grid_run else None
         if cells is None:
-            sizing.check_leverage(cast("float", resolved_leverage))
+            sizing.check_leverage(liquidation.leverage)
         else:
             logger.info("Discovery bankroll grid: %d cells", len(cells))
         logger.info("Discovery sizing settings: %s", sizing)
 
         # Train/test split + eval/cross/WFA windows: one shared check (the API
-        # runs the same plan_from_args before creating a run row).
-        plan = plan_from_args(args)
+        # runs the same spec plan before creating a run row).
+        plan = spec.plan()
         train_start, train_end = plan.train_start, plan.train_end
         holdout_start, holdout_end = plan.holdout_start, plan.holdout_end
-        split_ratio = args.train_test_split
+        split_ratio = spec.train_test_split
         if split_ratio > 0:
             logger.info(
                 "Train/test split: ratio=%.2f train=%s→%s holdout=%s→%s",
@@ -1227,17 +1197,17 @@ def main() -> int:
             )
 
         # Resolve timeframe-aware bootstrap_min_sharpe default.
-        if args.bootstrap_min_sharpe is None:
-            args.bootstrap_min_sharpe = _default_bootstrap_min_sharpe(args.timeframe)
+        bootstrap_min_sharpe = spec.resolved_bootstrap_min_sharpe()
+        if spec.bootstrap_min_sharpe is None:
             logger.info(
                 "Bootstrap min t-stat default: %.1f (timeframe=%s)",
-                args.bootstrap_min_sharpe, args.timeframe,
+                bootstrap_min_sharpe, spec.timeframe,
             )
 
-        cross_window_months = parse_cross_window_months(args.cross_window_months or "")
+        cross_window_months = spec.cross_window_month_list()
 
         # Multi-window evaluation: sub-windows come from the plan
-        eval_windows_count = max(1, args.eval_windows)
+        eval_windows_count = spec.eval_window_count()
         eval_windows = plan.eval_windows
         if eval_windows is not None:
             logger.info(
@@ -1251,46 +1221,10 @@ def main() -> int:
         # with the same timeframe and an overlapping train window; earlier
         # (legacy) runs are tallied but not charged; mock runs keep run-only N.
         prior_trials_fn, prior_run_ids, prior_legacy = _build_prior_trials_fn(
-            state, args.run_id, args.timeframe, mock=bool(args.mock)
+            state, args.run_id, spec.timeframe, mock=bool(args.mock)
         )
 
-        config = DiscoveryConfig(
-            prior_trials_fn=prior_trials_fn,
-            population_size=args.population_size,
-            max_generations=args.max_generations,
-            mutation_rate=args.mutation_rate,
-            crossover_rate=args.crossover_rate,
-            elite_count=args.elite_count,
-            tournament_size=args.tournament_size,
-            convergence_generations=args.convergence_generations,
-            max_workers=max_workers,
-            symbols=symbols,
-            timeframe=args.timeframe,
-            start_date=train_start,
-            end_date=train_end,
-            indicator_pool=ind_pool,
-            direction=args.direction,
-            eval_windows=eval_windows_count,
-            symbol_agg=args.symbol_agg,
-            train_test_split=split_ratio,
-            holdout_start_date=holdout_start or "",
-            holdout_end_date=holdout_end or "",
-            cross_window_months=cross_window_months,
-            cross_window_min_sharpe=args.cross_window_min_sharpe,
-            wfa_oos_step_days=args.wfa_oos_step_days,
-            wfa_min_consistency=args.wfa_min_consistency,
-            holdout_min_sharpe=args.holdout_min_sharpe,
-            holdout_min_trades=args.holdout_min_trades,
-            require_bootstrap_ci=args.require_bootstrap_ci,
-            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
-            bootstrap_ci_level=args.bootstrap_ci_level,
-            require_dsr=args.require_dsr,
-            dsr_rule=args.dsr_rule,
-            require_buy_hold=args.require_buy_hold,
-            use_crowding=args.use_crowding,
-            immigrant_fraction=args.immigrant_fraction,
-            entropy_threshold=args.entropy_threshold,
-        )
+        config = spec.to_config(plan, symbols=symbols, prior_trials_fn=prior_trials_fn)
 
         # Log environment details for debugging and journal entries
         logger.info(
@@ -1301,9 +1235,9 @@ def main() -> int:
         )
         logger.info(
             "Data range: %s to %s | symbols=%s | timeframe=%s",
-            args.start_date, args.end_date, symbols, args.timeframe,
+            spec.start_date, spec.end_date, symbols, spec.timeframe,
         )
-        _log_data_catalog_info(symbols, args.timeframe)
+        _log_data_catalog_info(symbols, spec.timeframe)
 
         # Choose backtest function: real NT, or synthetic ONLY when explicitly
         # requested. Missing catalog data used to silently fall back to mock
@@ -1319,14 +1253,14 @@ def main() -> int:
                 )
                 raise RuntimeError(msg)
             logger.info("Using real NautilusTrader backtest for symbols=%s", symbols)
-            if args.evaluator == "fast" and (
-                args.timeframe != "1m" or (len(symbols) > 1 and args.symbol_agg == "portfolio")
+            if spec.evaluator == "fast" and (
+                spec.timeframe != "1m" or (len(symbols) > 1 and spec.symbol_agg == "portfolio")
             ):
                 logger.warning(
                     "--evaluator fast replays 1m single-symbol accounts only: with "
                     "timeframe=%s symbols=%d symbol_agg=%s every genome runs on NT "
                     "(use --symbol-agg worst for multi-symbol)",
-                    args.timeframe, len(symbols), args.symbol_agg,
+                    spec.timeframe, len(symbols), spec.symbol_agg,
                 )
         if split_ratio <= 0:
             logger.warning(
@@ -1340,14 +1274,14 @@ def main() -> int:
             if split_ratio > 0 and holdout_start and holdout_end
             else None
         )
-        needs_factory = bool(cross_window_months) or args.wfa_oos_step_days > 0
+        needs_factory = bool(cross_window_months) or spec.wfa_oos_step_days > 0
 
         def fns_for(liq: LiquidationSettings, siz: SizingSettings) -> _CellFns:
             return _make_cell_fns(
                 use_mock=use_mock,
                 symbols=symbols,
-                timeframe=args.timeframe,
-                symbol_agg=args.symbol_agg,
+                timeframe=spec.timeframe,
+                symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                 fee_schedule=fee_schedule,
                 entry_order=entry_order,
                 liquidation=liq,
@@ -1358,29 +1292,29 @@ def main() -> int:
                 min_trades=config.min_trades,
                 holdout=holdout_range,
                 needs_factory=needs_factory,
-                evaluator=args.evaluator,
+                evaluator=spec.evaluator,
             )
 
         # Load seed chromosomes from prior run if requested
         seed_chromosomes = None
-        if args.seed_from_run is not None:
-            seed_chromosomes = load_seed_chromosomes(state, args.seed_from_run)
+        if spec.seed_from_run is not None:
+            seed_chromosomes = load_seed_chromosomes(state, spec.seed_from_run)
             if seed_chromosomes:
                 logger.info(
                     "Loaded %d seed chromosomes from run %d",
-                    len(seed_chromosomes), args.seed_from_run,
+                    len(seed_chromosomes), spec.seed_from_run,
                 )
             else:
                 # An explicitly requested warm-start that can't be honored is
                 # an operator error — fail loudly instead of silently running
                 # a random population under a warm-start label.
                 raise ValueError(
-                    f"warm-start run {args.seed_from_run} has no persisted "
+                    f"warm-start run {spec.seed_from_run} has no persisted "
                     "champions to seed from (guardrails may have rejected "
                     "all candidates); launch without seed_run_id instead"
                 )
 
-        num_seeds = max(1, args.num_seeds)
+        num_seeds = max(1, spec.num_seeds)
         top_cells: list[BankrollCell] | None = None  # grid: the cell of each top strategy
         progress_file = str(log_dir() / f"discovery_{args.run_id}_progress.json")
         # A leftover file (another DB's run with the same id) would be served by
@@ -1390,7 +1324,7 @@ def main() -> int:
         if cells is not None:
             # Bankroll grid: one pipeline per (cell, seed), pooled like a multi-seed run;
             # each cell gets its own functions so every gate runs at the champion's bankroll.
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result, top_cells = _run_bankroll_grid(
                 cells,
@@ -1404,7 +1338,7 @@ def main() -> int:
         elif num_seeds == 1:
             # Single-seed run (default)
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             random.seed(seed)
             pipeline = DiscoveryPipeline(
@@ -1419,7 +1353,7 @@ def main() -> int:
         else:
             # Multi-seed ensemble: run N times with different seeds
             fns = fns_for(liquidation, sizing)
-            seed = _resolve_seed(args.seed)
+            seed = _resolve_seed(spec.seed)
             logger.info("Discovery seed: %d", seed)
             result = _run_multi_seed(
                 num_seeds=num_seeds,
@@ -1439,17 +1373,17 @@ def main() -> int:
             use_mock=use_mock,
             eval_windows_count=eval_windows_count,
             eval_windows=eval_windows,
-            symbol_agg=args.symbol_agg,
+            symbol_agg=spec.symbol_agg,
             split_ratio=split_ratio,
-            direction=args.direction,
+            direction=spec.direction,
             cross_window_months=cross_window_months,
-            cross_window_min_sharpe=args.cross_window_min_sharpe,
-            wfa_oos_step_days=args.wfa_oos_step_days,
-            wfa_min_consistency=args.wfa_min_consistency,
+            cross_window_min_sharpe=spec.cross_window_min_sharpe,
+            wfa_oos_step_days=spec.wfa_oos_step_days,
+            wfa_min_consistency=spec.wfa_min_consistency,
             num_seeds=num_seeds,
             seed=seed,
-            bootstrap_min_sharpe=args.bootstrap_min_sharpe,
-            holdout_min_sharpe=args.holdout_min_sharpe,
+            bootstrap_min_sharpe=bootstrap_min_sharpe,
+            holdout_min_sharpe=spec.holdout_min_sharpe,
             symbols=symbols,
             fee_schedule=fee_schedule,
             prior_run_ids=prior_run_ids,
@@ -1524,12 +1458,12 @@ def main() -> int:
         # split, cover only the training slice. Promotion replays ONE continuous
         # screening backtest over the full discovery range, so those numbers are a
         # different statistic and replay_drift flags the gap by construction. Re-run
-        # each champion ONCE over args.start_date..args.end_date (the exact range the
+        # each champion ONCE over spec.start_date..spec.end_date (the exact range the
         # promote endpoint replays) and persist THAT as the headline so the drift
         # check compares like-for-like. Skip the extra backtest only when fitness
         # already IS that continuous full-range metric (single window, no split) or
         # in mock mode. Bounded cost: top-K champions, once each, at save time.
-        worst_multi = args.symbol_agg == "worst" and len(symbols) > 1
+        worst_multi = spec.symbol_agg == "worst" and len(symbols) > 1
         # worst mode always needs the run: it carries trades_sum/symbol_metrics
         needs_full_range = not use_mock and (
             eval_windows_count >= 2 or split_ratio > 0 or worst_multi
@@ -1544,10 +1478,10 @@ def main() -> int:
             if cell not in full_range_fns:
                 full_range_fns[cell] = _make_nt_backtest_fn(
                     symbols=symbols,
-                    timeframe=args.timeframe,
-                    start_date=args.start_date,
-                    end_date=args.end_date,
-                    symbol_agg=args.symbol_agg,
+                    timeframe=spec.timeframe,
+                    start_date=spec.start_date,
+                    end_date=spec.end_date,
+                    symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=cell.liquidation if cell is not None else liquidation,
@@ -1559,7 +1493,7 @@ def main() -> int:
             logger.info(
                 "Computing full-range headline for top-%d champions over %s..%s "
                 "(multi-window/split fitness != continuous replay; bd-rewru)",
-                len(result.top_strategies[:5]), args.start_date, args.end_date,
+                len(result.top_strategies[:5]), spec.start_date, spec.end_date,
             )
 
         top_dsls = []
@@ -1567,7 +1501,7 @@ def main() -> int:
             entry = _champion_entry(
                 chrom,
                 fitness,
-                timeframe=args.timeframe,
+                timeframe=spec.timeframe,
                 dsr=result.dsr_records.get(chrom.uid),
                 buy_hold=result.buy_hold_records.get(chrom.uid),
             )
@@ -1625,10 +1559,10 @@ def main() -> int:
                 best_cell = top_cells[0] if top_cells is not None else None
                 train_metrics = _make_nt_backtest_fn(
                     symbols=symbols,
-                    timeframe=args.timeframe,
+                    timeframe=spec.timeframe,
                     start_date=result.train_dates[0],
                     end_date=result.train_dates[1],
-                    symbol_agg=args.symbol_agg,
+                    symbol_agg=cast("SymbolAgg", spec.symbol_agg),
                     fee_schedule=fee_schedule,
                     entry_order=entry_order,
                     liquidation=best_cell.liquidation if best_cell is not None else liquidation,
