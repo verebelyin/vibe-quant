@@ -36,7 +36,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from nautilus_trader.common.actor import Actor
@@ -60,6 +59,16 @@ from vibe_quant.margin_limit import (
     check_entry_margin,
     unique_pending_entries,
 )
+from vibe_quant.paper.halt_state import (
+    _KEEP_STRATEGIES_RUNNING,
+    OPERATOR_RESUMABLE_HALTS,
+    RESTORED_HALT_PREFIX,
+    RESTORED_HALTS,
+    GuardState,
+    HaltReason,
+    RestoredHalt,
+    halt_supersedes,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -82,74 +91,12 @@ _TICK_TIMER = "TradingGuard.tick"
 _UNOWNED_PREFIX = "positions not owned by any guarded strategy were NOT closed: "
 
 
-class GuardState(StrEnum):
-    """Trading state owned by the guard."""
-
-    RUNNING = "running"
-    PAUSED = "paused"
-    HALTED = "halted"
-
-
-class HaltReason(StrEnum):
-    """Reason for halting the trading node."""
-
-    MAX_DRAWDOWN = "max_drawdown"
-    MAX_DAILY_LOSS = "max_daily_loss"
-    MAX_CONSECUTIVE_LOSSES = "max_consecutive_losses"
-    MANUAL = "manual"
-    ERROR = "error"
-    SIGNAL = "signal"
-    KILL_SWITCH = "kill_switch"
-
-
-# A new halt only replaces the current one when it is at least as severe.
-_HALT_PRIORITY: dict[HaltReason, int] = {
-    HaltReason.MAX_DAILY_LOSS: 1,
-    HaltReason.ERROR: 2,
-    HaltReason.MANUAL: 3,
-    HaltReason.SIGNAL: 3,
-    HaltReason.MAX_CONSECUTIVE_LOSSES: 4,
-    HaltReason.MAX_DRAWDOWN: 5,
-    HaltReason.KILL_SWITCH: 6,
-}
-
-
-def halt_supersedes(new: HaltReason, current: HaltReason | None) -> bool:
-    """True when ``new`` may replace ``current`` (strictly more severe, or nothing active)."""
-    return current is None or _HALT_PRIORITY[new] > _HALT_PRIORITY[current]
-
-
-# Halts that flatten and block entries but keep strategies running so they can
-# resume automatically (daily loss lifts at the next UTC midnight).
-_KEEP_STRATEGIES_RUNNING: frozenset[HaltReason] = frozenset({HaltReason.MAX_DAILY_LOSS})
-
 # NT component states in which a guarded strategy has not started yet. A stopping
 # halt applied now (e.g. in on_start, before NT starts the strategies) cannot
 # flatten them, but must record them so they are stopped once they run.
 _STRATEGY_NOT_STARTED: frozenset[ComponentState] = frozenset(
     {ComponentState.PRE_INITIALIZED, ComponentState.READY, ComponentState.STARTING}
 )
-
-# Halts an operator may resume from without restarting the session.
-OPERATOR_RESUMABLE_HALTS: frozenset[HaltReason] = frozenset(
-    {HaltReason.MANUAL, HaltReason.SIGNAL, HaltReason.ERROR, HaltReason.KILL_SWITCH}
-)
-
-# Halts restored to HALTED after a restart: fail-closed until the operator
-# resumes (D-H1). Risk halts are re-derived from the restored bookkeeping.
-RESTORED_HALTS: frozenset[HaltReason] = OPERATOR_RESUMABLE_HALTS
-
-#: Prefix on every restored-halt message (stripped before re-prefixing, H13).
-RESTORED_HALT_PREFIX = "restored after restart: "
-
-
-@dataclass(frozen=True)
-class RestoredHalt:
-    """A halt restored from the prior session's checkpoint."""
-
-    reason: HaltReason
-    message: str  # already prefixed with RESTORED_HALT_PREFIX
-    checkpoint_time: str  # prior checkpoint timestamp (isoformat)
 
 
 @dataclass(frozen=True)
@@ -1131,4 +1078,5 @@ __all__ = [
     "RiskState",
     "TradingGuard",
     "TradingGuardConfig",
+    "halt_supersedes",
 ]
