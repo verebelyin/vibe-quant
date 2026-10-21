@@ -95,7 +95,7 @@ def settings_for(name: str) -> ChainSettings:
     if plan.holdout_start is None or plan.holdout_end is None:
         msg = f"{name}: no holdout split from {full_start}..{full_end}"
         raise ValueError(msg)
-    from vibe_quant.discovery.__main__ import _default_bootstrap_min_sharpe
+    from vibe_quant.discovery.run_spec import _default_bootstrap_min_sharpe
 
     config = DiscoveryConfig(
         population_size=12,

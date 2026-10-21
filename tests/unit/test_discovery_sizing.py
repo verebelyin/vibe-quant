@@ -237,7 +237,7 @@ def test_cli_help_says_notes_sizing(capsys: pytest.CaptureFixture[str]) -> None:
     whitespace is normalised before matching: the assertion is about the wording, not
     about where the wrap happens.
     """
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     with pytest.raises(SystemExit):
         build_parser().parse_args(["--help"])

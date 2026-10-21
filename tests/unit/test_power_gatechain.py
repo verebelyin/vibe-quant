@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "resear
 
 import gatechain  # noqa: E402
 
-from vibe_quant.discovery import __main__ as discovery_cli  # noqa: E402
+from vibe_quant.discovery import run_spec as discovery_cli  # noqa: E402
 from vibe_quant.discovery.backtest_fn import NTBacktestFn  # noqa: E402
 from vibe_quant.discovery.buyhold import buy_hold_daily, buy_hold_gate, daily_sharpe  # noqa: E402
 from vibe_quant.discovery.fitness import FitnessResult, _const_backtest, _evaluate_single  # noqa: E402

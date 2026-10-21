@@ -187,7 +187,7 @@ def test_r2_p4h_argv_is_byte_identical() -> None:
 
 def test_budget_argv_resolves_to_the_requested_dsr_rule_through_the_cli_parser() -> None:
     """Wave argv parsed by the discovery CLI: emax unless q95 is asked (the CLI default is q95)."""
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     def effective(argv: list[str]) -> str:
         return str(build_parser().parse_args(argv[argv.index("discovery") + 1 :]).dsr_rule)

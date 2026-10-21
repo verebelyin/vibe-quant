@@ -269,7 +269,7 @@ def test_holdout_used_only_for_survivors_not_ranking() -> None:
 
 def test_cli_and_api_default_to_a_holdout() -> None:
     from vibe_quant.api.schemas.discovery import DiscoveryLaunchRequest
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     assert build_parser().parse_args(["--run-id", "1"]).train_test_split == 0.8
     assert DiscoveryLaunchRequest().train_test_split == 0.8
@@ -383,7 +383,7 @@ def test_eval_windows_one_runs_single_backtest_unchanged(monkeypatch: pytest.Mon
 
 
 def test_replay_note_and_cli_help_say_worst_of_n() -> None:
-    from vibe_quant.discovery.__main__ import build_parser
+    from vibe_quant.discovery.run_spec import build_parser
 
     help_text = build_parser().format_help()
     assert "WORST" in help_text and "min Sharpe" in help_text

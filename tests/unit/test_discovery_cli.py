@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from vibe_quant.db.state_manager import StateManager
-from vibe_quant.discovery.__main__ import build_parser, main, plan_from_args
+from vibe_quant.discovery.__main__ import main
+from vibe_quant.discovery.run_spec import build_parser, plan_from_args
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -345,7 +346,7 @@ def test_4h_default_bootstrap_min_sharpe_is_0_0(tmp_path: Path, monkeypatch, cap
 
 
 def test_default_bootstrap_floor_by_timeframe() -> None:
-    from vibe_quant.discovery.__main__ import _default_bootstrap_min_sharpe
+    from vibe_quant.discovery.run_spec import _default_bootstrap_min_sharpe
 
     assert _default_bootstrap_min_sharpe("1m") == 0.5
     assert _default_bootstrap_min_sharpe("4h") == 0.0

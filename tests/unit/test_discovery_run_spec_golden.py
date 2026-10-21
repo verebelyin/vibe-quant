@@ -43,6 +43,7 @@ from vibe_quant.db.state_manager import StateManager
 from vibe_quant.discovery import __main__ as discovery_main
 from vibe_quant.discovery.campaign import RegimeCrossConfig, TrainWindow, run_discovery_subprocess
 from vibe_quant.discovery.pipeline import DiscoveryConfig, DiscoveryPipeline, DiscoveryResult
+from vibe_quant.discovery.run_spec import build_parser
 from vibe_quant.jobs.manager import BacktestJobManager, JobStatus
 
 if TYPE_CHECKING:
@@ -336,7 +337,7 @@ def _capture_campaign_argv() -> list[str]:
 
 def _help_text() -> str:
     with patch.dict(os.environ, {"COLUMNS": "80"}):
-        return discovery_main.build_parser().format_help()
+        return build_parser().format_help()
 
 
 def dump_golden() -> None:
@@ -397,7 +398,7 @@ def test_stored_params_match_golden(tmp_path: Path) -> None:
 def test_cli_help_matches_golden(monkeypatch: Any) -> None:
     """R14: ``--help`` is byte-identical at a fixed terminal width."""
     monkeypatch.setenv("COLUMNS", "80")
-    assert discovery_main.build_parser().format_help() == HELP_PATH.read_text()
+    assert build_parser().format_help() == HELP_PATH.read_text()
 
 
 def test_to_config_matches_golden(tmp_path: Path) -> None:
