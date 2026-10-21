@@ -377,7 +377,8 @@ class DeflatedSharpeRatio:
     def passes_threshold(self, result: DSRResult, threshold: float = 0.95) -> bool:
         """Check if result passes confidence threshold.
 
-        Per SPEC.md: DSR > 0.95 means 95% confidence Sharpe is not a fluke.
+        Legacy rule (SPEC §8): confidence 1 - p >= threshold. Discovery's default
+        q95 rule is ``discovery.guardrails.q95_dsr_decision``.
 
         Args:
             result: DSRResult from calculate().
