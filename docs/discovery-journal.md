@@ -4,6 +4,18 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-21: PRE-REGISTRATION — ROC+PRICE_POSITION on 1m alts (ZEC/SUI/SOL/HYPE), worst symbol, fast evaluator
+
+**Why this family:** round-2 bursts (above) — ROC+PRICE_POSITION `both` on ZECUSDT had a buy-and-hold-beating winner in 5 of 6 rolling windows; ZEC/SUI/SOL led the B&H-beating cells. Chosen by the user 2026-10-21. First real run with `--evaluator fast` (GA scored by the fast tier; NT re-runs every gate input before any gate, any mismatch fails the run; holdout stays on NT).
+
+**Setup:** ZECUSDT, SUIUSDT, SOLUSDT, HYPEUSDT · 1m · 2026-03-01..2026-10-20 · `symbol_agg worst` (each symbol backtested alone, scored by its worst) · direction both · pool ROC, PRICE_POSITION · eval_windows 3 · split 0.8 · pop 24 × 10, convergence 4 · liquidation isolated 10× · max_margin_pct 0.5 · evaluator fast · max_workers 6 · seed 20261021 · default gates (q95 DSR with cumulative 1m N, bootstrap floor 0.5, B&H incl. per-symbol, holdout). Launched through the API.
+
+**Falsifier (user OK 2026-10-21):** REJECT the family on 1m alts if no genome passes every gate (DSR, bootstrap, worst-symbol, per-symbol buy-and-hold, holdout).
+
+**Caveats, stated before the result:** the bursts (31,732 evaluations on a scratch DB) are NOT in the DSR count, and they saw every month up to 2026-10-19, so this holdout is not unseen: a champion here earns paper trading, and paper is the out-of-sample test.
+
+---
+
 ## 2026-10-21: RESULT runs 979/980 — REJECTED (both families, 1m majors); fast tier + 1m bursts built (pre-discovery)
 
 **976–978 (2026-10-20, 1m 2026-03-01..10-14, isolated 10×, 1 h cap; not journaled before):** 0 champions. 976 long HYPE/NEAR/SUI/ZEC ROC/DONCHIAN/NATR/RSI stopped at gen 3/6, best score 0.5270 (`445da8081fad`, worse window Sharpe 1.43, PF 1.68, DD 3.5%, +2.4%, 110 trades; never gated, and below the alts' B&H Sharpe 2.34 anyway); 977 short majors STOCH/CCI/RSI all 0 (overtraders −40..−98%); 978 both, all 8, 4/4 gens, all 0. `disc_watch --kill-after` never fired (vibe-quant-ab16c).
