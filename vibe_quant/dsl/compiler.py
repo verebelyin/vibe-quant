@@ -736,6 +736,8 @@ class StrategyCompiler:
             "        self._release_px: float | None = None",
             "        # Entries the margin limit refused (screening logs it, validation notes it)",
             "        self._margin_refusals = 0",
+            "        # Skipped entries per sizing reason (logged sparsely, summarised on stop)",
+            "        self._sizing_skips: dict[str, int] = {}",
             "        self._maker_bars = 0",
             "        # Seeded RNG for the probabilistic execution-delay path so",
             "        # identical validation replays are byte-reproducible.",

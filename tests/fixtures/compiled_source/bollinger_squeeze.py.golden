@@ -104,6 +104,8 @@ class BollingerSqueezeStrategy(Strategy):
         self._release_px: float | None = None
         # Entries the margin limit refused (screening logs it, validation notes it)
         self._margin_refusals = 0
+        # Skipped entries per sizing reason (logged sparsely, summarised on stop)
+        self._sizing_skips: dict[str, int] = {}
         self._maker_bars = 0
         # Seeded RNG for the probabilistic execution-delay path so
         # identical validation replays are byte-reproducible.
@@ -294,6 +296,10 @@ class BollingerSqueezeStrategy(Strategy):
         never releasing end-of-run closes; open positions are marked at the last
         price by the metrics layer.
         """
+        skips = getattr(self, '_sizing_skips', None)
+        if skips:
+            detail = ", ".join(f"{r}={n}" for r, n in sorted(skips.items()))
+            self.log.warning(f"Sizing: {sum(skips.values())} entries skipped ({detail})")
         if getattr(self.config, 'command_release', ''):
             return
         self.cancel_all_orders(self.instrument_id)
@@ -309,6 +315,7 @@ class BollingerSqueezeStrategy(Strategy):
         self._outbox = []
         self._release_px = None
         self._maker_bars = 0
+        self._sizing_skips = {}
 
     def _indicators_ready(self) -> bool:
         """Check if all indicators have enough data."""
@@ -967,6 +974,13 @@ class BollingerSqueezeStrategy(Strategy):
                     return entry_price - sl_distance * ratio
         return None
 
+    def _skip_entry(self, reason: str, msg: str) -> None:
+        """Count a skipped entry; log the 1st, 2nd, 4th, 8th ... per reason (vibe-quant-jgr32)."""
+        count = self._sizing_skips.get(reason, 0) + 1
+        self._sizing_skips[reason] = count
+        if count & (count - 1) == 0:
+            self.log.warning(msg if count == 1 else f"{msg} [{count} skips: {reason}]")
+
     def _calculate_position_size(self, bar: Bar, is_long: bool = True) -> Quantity | None:
         """Risk-based size, rounded DOWN to the size increment.
 
@@ -976,7 +990,7 @@ class BollingerSqueezeStrategy(Strategy):
         """
         account = self.cache.account_for_venue(self.instrument_id.venue)
         if account is None:
-            self.log.warning("Sizing: no account for venue yet -- entry skipped")
+            self._skip_entry("no_account", "Sizing: no account for venue yet -- entry skipped")
             return None
 
         # Equity in the settlement currency (USDT for USDT-M perps), never
@@ -985,12 +999,12 @@ class BollingerSqueezeStrategy(Strategy):
         balance = account.balance_total(ccy)
         equity = float(balance) if balance is not None else 0.0
         if equity <= 0:
-            self.log.warning(f"Sizing: no positive {ccy} equity ({equity}) -- entry skipped")
+            self._skip_entry("no_equity", f"Sizing: no positive {ccy} equity ({equity}) -- entry skipped")
             return None
 
         price = float(bar.close)
         if price <= 0:
-            self.log.warning(f"Sizing: invalid price {price} -- entry skipped")
+            self._skip_entry("invalid_price", f"Sizing: invalid price {price} -- entry skipped")
             return None
 
         # Fixed fractional sizing: risk_per_trade % of equity
@@ -1013,16 +1027,19 @@ class BollingerSqueezeStrategy(Strategy):
         max_size = (equity * max_pos_pct) / price
         final_size = min(raw_size, max_size)
         if final_size <= 0:
-            self.log.warning(f"Sizing: non-positive size {final_size} -- entry skipped")
+            self._skip_entry(
+                "non_positive_size", f"Sizing: non-positive size {final_size} -- entry skipped"
+            )
             return None
 
         # Instrument minimum: clamp up only while it stays within max_position_pct
         min_qty = self.instrument.min_quantity
         if min_qty is not None and final_size < float(min_qty):
             if float(min_qty) > max_size:
-                self.log.warning(
+                self._skip_entry(
+                    "min_qty_cap",
                     f"Sizing: min quantity {min_qty} exceeds max_position_pct cap "
-                    f"{max_size:.8f} -- entry skipped"
+                    f"{max_size:.8f} -- entry skipped",
                 )
                 return None
             final_size = float(min_qty)
@@ -1030,12 +1047,16 @@ class BollingerSqueezeStrategy(Strategy):
         try:
             qty = self.instrument.make_qty(final_size, round_down=True)
         except ValueError:
-            self.log.warning(f"Sizing: {final_size} rounds below the size increment -- entry skipped")
+            self._skip_entry(
+                "size_increment",
+                f"Sizing: {final_size} rounds below the size increment -- entry skipped",
+            )
             return None
         min_notional = self.instrument.min_notional
         if min_notional is not None and float(qty) * price < float(min_notional):
-            self.log.warning(
-                f"Sizing: notional {float(qty) * price:.2f} below minimum {min_notional} -- entry skipped"
+            self._skip_entry(
+                "min_notional",
+                f"Sizing: notional {float(qty) * price:.2f} below minimum {min_notional} -- entry skipped",
             )
             return None
         return qty
