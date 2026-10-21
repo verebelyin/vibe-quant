@@ -656,7 +656,7 @@ class PaperCommandQueue:
         self.conn.commit()
         return cursor.lastrowid or 0
 
-    #: k8ygz: commands applied before NautilusTrader starts (only a leading run of these).
+    #: k8ygz: commands the start-up drain applies before NautilusTrader starts (any not preceded by a pending resume).
     STARTUP_COMMANDS = frozenset({"halt", "kill"})
 
     def claim_startup_halts(self, trader_id: str) -> list[PaperCommand]:
