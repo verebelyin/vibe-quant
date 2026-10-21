@@ -4,6 +4,26 @@ Research diary tracking GA strategy discovery experiments, screening verificatio
 
 ---
 
+## 2026-10-21: RESULT run 981 — REJECTED (ROC+PRICE_POSITION, 1m alts, worst symbol)
+
+Pre-registered below. 8/10 gens (converged: best unchanged gens 4–8), 172 evaluated, 1391 s. 0 champions: all 5 top genomes failed at `worst_symbol_train` before DSR/bootstrap/B&H/holdout — every one loses on SUIUSDT, 4 of 5 also on SOLUSDT (and 3 of them trade < 50 times there). Falsifier met → REJECT the family on 1m alts.
+
+| uid | score | worst-symbol sharpe | trades | reasons |
+|---|---|---|---|---|
+| 56a070f8aba3 | 0.1664 (ZEC 0.3948, SUI 0.0, SOL 0.336, HYPE 0.3296) | -3.23 | 112 | SUI return <= 0; 57 liquidations, forfeited 112.37 |
+| a96df0ee5bb9 | 0.0891 | -0.654 | 77 | SUI, SOL return <= 0 |
+| 7b848c767fc7 | 0.0808 | 0.012 | 15 | SUI, SOL return <= 0 and < 50 trades |
+| 87d3a9cbd8fa | 0.0779 | -1.809 | 18 | same |
+| 73b2a2fb3040 | 0.0768 | -0.403 | 29 | same |
+
+- Population: gens 1–2 all 24 at 0 (median return about −20%, up to 8,240 trades); gen 8 still 16/24 at 0.
+- Reading: round-2 bursts found ZEC winners per 3-month window; on a 6-month train, scored by the worst of 4 alts, the same family loses on SUI. The burst signal was ZEC-specific and window-picked.
+- **Fast evaluator, first real run:** `Fast tier confirm: 5 genomes re-run on NT, all identical` (`notes.evaluator = {name: fast, nt_confirmed: 5}`). GA gens 84–145 s at 6 workers vs 15–39 min per gen for runs 979/980 (different symbols/pool/pop; not a like-for-like speedup). 23 GA backtests (gens 1–8) silently fell back to NT, reason not logged (vibe-quant-z8vqv.7); the confirm step ran 43 NT backtests (log `nt_runner: Screening backtest` lines).
+- DSR charge: `run_n_eff` 172 (raw fallback, `fewer_than_2_series`), `gate_n` 408 = 172 + prior 236 (runs 970/972/973/978/980): later overlapping 1m runs carry it.
+- Data: last ~60 (SOL, ZEC) / 120 (HYPE) funding rows had no Vision interval; previous row's interval used (refresh `funding-intervals` before the next run).
+
+---
+
 ## 2026-10-21: PRE-REGISTRATION — ROC+PRICE_POSITION on 1m alts (ZEC/SUI/SOL/HYPE), worst symbol, fast evaluator
 
 **Why this family:** round-2 bursts (above) — ROC+PRICE_POSITION `both` on ZECUSDT had a buy-and-hold-beating winner in 5 of 6 rolling windows; ZEC/SUI/SOL led the B&H-beating cells. Chosen by the user 2026-10-21. First real run with `--evaluator fast` (GA scored by the fast tier; NT re-runs every gate input before any gate, any mismatch fails the run; holdout stays on NT).
