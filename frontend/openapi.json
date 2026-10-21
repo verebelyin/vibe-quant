@@ -6064,6 +6064,15 @@
             "title": "Max Workers",
             "default": 4
           },
+          "evaluator": {
+            "type": "string",
+            "enum": [
+              "nt",
+              "fast"
+            ],
+            "title": "Evaluator",
+            "default": "nt"
+          },
           "bnb_discount": {
             "type": "boolean",
             "title": "Bnb Discount",

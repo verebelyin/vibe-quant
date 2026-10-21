@@ -508,3 +508,50 @@ async def test_discovery_launch_bnb_discount_must_be_a_bool(
     with patch.object(job_mgr, "is_process_alive", return_value=True):
         r = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "bnb_discount": value})
     assert r.status_code == 422, r.text
+
+
+async def test_discovery_launch_fast_evaluator_in_params_and_argv(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """evaluator="fast" lands in run params AND argv; the default "nt" adds neither."""
+    ac, state, job_mgr = client
+
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 12345
+        fast = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "evaluator": "fast"})
+        explicit_nt = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "evaluator": "nt"})
+        default = await ac.post("/api/discovery/launch", json=_BASE_BODY)
+
+    for r in (fast, explicit_nt, default):
+        assert r.status_code == 201, r.text
+    fast_run = state.get_backtest_run(fast.json()["run_id"])
+    assert fast_run is not None
+    assert fast_run["parameters"]["evaluator"] == "fast"
+    for r in (explicit_nt, default):
+        run = state.get_backtest_run(r.json()["run_id"])
+        assert run is not None
+        assert "evaluator" not in run["parameters"]
+
+    fast_args, nt_args, default_args = (c.args[0] for c in mock_popen.call_args_list)
+    i = fast_args.index("--evaluator")
+    assert fast_args[i + 1] == "fast"
+    assert "--evaluator" not in nt_args
+    assert "--evaluator" not in default_args
+
+
+@pytest.mark.parametrize("value", ["FAST", "numpy", "", None])
+async def test_discovery_launch_rejects_unknown_evaluator(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager], value: object
+) -> None:
+    ac, _state, job_mgr = client
+    with (
+        patch.object(job_mgr, "is_process_alive", return_value=True),
+        patch("subprocess.Popen") as mock_popen,
+    ):
+        mock_popen.return_value.pid = 1
+        r = await ac.post("/api/discovery/launch", json={**_BASE_BODY, "evaluator": value})
+    assert r.status_code == 422, r.text
+    assert mock_popen.call_count == 0

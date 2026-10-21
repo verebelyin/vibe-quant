@@ -38,6 +38,7 @@ export * from './dataStatusResponse';
 export * from './discoveryJobResponse';
 export * from './discoveryJobResponseProgress';
 export * from './discoveryLaunchRequest';
+export * from './discoveryLaunchRequestEvaluator';
 export * from './discoveryLaunchRequestLiquidationMode';
 export * from './discoveryLaunchRequestSymbolAgg';
 export * from './discoveryResultResponse';

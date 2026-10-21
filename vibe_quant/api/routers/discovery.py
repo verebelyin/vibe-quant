@@ -477,6 +477,8 @@ def _discovery_cli_args(
         command.extend(["--bootstrap-min-sharpe", str(body.bootstrap_min_sharpe)])
     if body.bnb_discount:
         command.append("--bnb-discount")
+    if body.evaluator != "nt":
+        command.extend(["--evaluator", body.evaluator])
     # Run-level leverage settings are forwarded only as needed (vibe-quant-6wq6w):
     # the mode when on, and --leverage only when it is not the default, so a
     # default launch keeps its argv identical to today (C6). The deprecated
@@ -580,6 +582,8 @@ async def launch_discovery(
         params["bootstrap_min_sharpe"] = body.bootstrap_min_sharpe
     if body.bnb_discount:
         params["bnb_discount"] = True
+    if body.evaluator != "nt":
+        params["evaluator"] = body.evaluator
     # Record the leverage settings the CLI will actually run with
     # (vibe-quant-6wq6w): nothing for a default launch, {"leverage": L} when off
     # at a non-default L, {"liquidation_mode", "leverage"} when on (C6/C8/C9).

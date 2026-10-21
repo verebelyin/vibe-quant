@@ -5,6 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { BankrollGridRequest } from './bankrollGridRequest';
+import type { DiscoveryLaunchRequestEvaluator } from './discoveryLaunchRequestEvaluator';
 import type { DiscoveryLaunchRequestLiquidationMode } from './discoveryLaunchRequestLiquidationMode';
 import type { DiscoveryLaunchRequestSymbolAgg } from './discoveryLaunchRequestSymbolAgg';
 
@@ -66,6 +67,7 @@ export interface DiscoveryLaunchRequest {
    * @maximum 64
    */
   max_workers?: number;
+  evaluator?: DiscoveryLaunchRequestEvaluator;
   bnb_discount?: boolean;
   entry_order?: string;
   liquidation_mode?: DiscoveryLaunchRequestLiquidationMode;

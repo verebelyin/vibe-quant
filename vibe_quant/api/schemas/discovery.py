@@ -82,6 +82,11 @@ class DiscoveryLaunchRequest(BaseModel):
     bootstrap_min_sharpe: float | None = None  # override timeframe-aware default (0.5 for 1m, 1.0 otherwise)
     seed: int | None = Field(default=None, ge=0, lt=2**32)  # RNG seed to replay a run; None = random
     max_workers: int = Field(default=4, ge=1, le=64)  # backtest processes for this run
+    # GA fitness evaluator (bead vibe-quant-z8vqv.5): "fast" scores genomes with the
+    # numpy fast tier and re-runs every gate input on NT before any gate (a mismatch
+    # fails the run). Forwarded and stored only when "fast", so a default launch keeps
+    # its stored params and argv unchanged.
+    evaluator: Literal["nt", "fast"] = "nt"
     # Charge the BNB-discounted (x0.9) fee schedule on every screening backtest
     # of this discovery (bd vibe-quant-2gyk1.4). Recorded in run parameters and
     # forwarded to the CLI only when true; the default keeps VIP0.
