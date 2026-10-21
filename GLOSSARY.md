@@ -294,7 +294,7 @@ A new session inheriting the risk bookkeeping and halt of its trader's latest ch
 _Avoid_: restore (alone)
 
 **Start fresh**:
-Starting a session that deliberately skips risk carry-over.
+Starting a session that skips risk carry-over from another trader id on the account; the trader id's own saved state always carries.
 
 **Live consent**:
 The explicit confirmation required to trade real money, and again to do so without carried-over risk.

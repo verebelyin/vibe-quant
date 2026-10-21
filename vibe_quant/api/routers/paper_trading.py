@@ -273,8 +273,9 @@ async def start_paper(
         raise HTTPException(
             status_code=400,
             detail=(
-                "start_fresh with testnet=false resets the LIVE drawdown, daily-loss and "
-                "losing-streak limits: set confirm_fresh_live=true to proceed"
+                "start_fresh with testnet=false skips the LIVE risk state another trader id left "
+                "on this account (peak, daily loss, losing streak, ERROR halt); this trader id's "
+                "own saved limits and halt are kept: set confirm_fresh_live=true to proceed"
             ),
         )
     if body.trader_id is not None and not is_valid_trader_id(body.trader_id):
