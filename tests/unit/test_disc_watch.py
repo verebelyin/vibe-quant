@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -522,3 +523,172 @@ def test_no_kill_without_kill_after(tmp_path: Path) -> None:
     _log(logs, [_complete()])
     code, out = _run([RUN], logs, db, mutations=[lambda: _set_status(db, RUN, "completed")])
     assert code == 0 and "KILL" not in out
+
+
+# --- chunked reads and the kill deadline (bead vibe-quant-ab16c) -------------------
+
+# The run-976 flood shape: ~205 bytes, no HEADER_RE match, so _handle_line ignores it.
+_SIZING_LINE = (
+    "\x1b[1m2026-03-12T21:43:59.999000000Z\x1b[0m \x1b[1;33m[WARN] "
+    "BACKTESTER-001.Genome5d677cf003d6Strategy: Sizing: notional 4.{digit} below minimum "
+    "5.00000000 USDT -- entry skipped\x1b[0m\n"
+)
+MIB = 1024 * 1024
+
+
+def _sizing_block(total: int) -> bytes:
+    """``total`` bytes of run-976-shaped Sizing lines (built in one shot, never per line)."""
+    sample = _SIZING_LINE.format(digit=0)
+    count = total // len(sample) + 1
+    return "".join(_SIZING_LINE.format(digit=i % 10) for i in range(count)).encode()[:total]
+
+
+def _error_line(msg: str) -> bytes:
+    return f"2026-10-17 19:34:00,000 [ERROR] vibe_quant.discovery.pipeline: {msg}\n".encode()
+
+
+def _bulk_log(
+    logs: Path, run_id: str, *, total: int = 20 * MIB, errors: Sequence[str] = ()
+) -> Path:
+    """A big Sizing flood for ``run_id`` with ERROR lines spliced at start/middle/end."""
+    logs.mkdir(parents=True, exist_ok=True)
+    path = logs / f"discovery_{run_id}_20261017_193121.log"
+    body = _sizing_block(total)
+    cuts = [0, len(body) // 2, len(body)]
+    for cut, msg in sorted(zip(cuts, errors, strict=False), reverse=True):
+        block = _error_line(msg)
+        body = block + body if cut == 0 else body[:cut] + b"\n" + block + body[cut:]
+    path.write_bytes(body)
+    return path
+
+
+def test_kill_fires_on_first_pass_before_reading_a_huge_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R19: the deadline is checked for every run before any log byte is handled."""
+    logs = tmp_path / "logs"
+    _bulk_log(logs, "938")
+    _bulk_log(logs, "939")
+    db = _db(tmp_path, {"938": "running", "939": "running"})
+    order: list[str] = []
+
+    def kill(run_id: str) -> str:
+        order.append(f"kill {run_id}")
+        _set_status(db, run_id, "cancelled")
+        return "HTTP 202"
+
+    original = disc_watch._handle_line
+
+    def spy(run, line, *, out, all_gens):  # noqa: ANN001, ANN202
+        order.append(f"handle {run.run_id}")
+        original(run, line, out=out, all_gens=all_gens)
+
+    monkeypatch.setattr(disc_watch, "_handle_line", spy)
+    out = io.StringIO()
+
+    def sleep(_seconds: float) -> None:
+        raise AssertionError("watch() slept while a backlog existed")
+
+    code = disc_watch.watch(
+        ["938", "939"], logs_dir=logs, db_path=db, out=out, sleep=sleep,
+        kill_after=0, kill=kill, clock=lambda: 0.0,
+    )  # fmt: skip
+
+    assert code == 1
+    assert out.getvalue().splitlines()[:2] == [
+        "run 938: KILL after 0s (HTTP 202)",
+        "run 939: KILL after 0s (HTTP 202)",
+    ]
+    assert order[:2] == ["kill 938", "kill 939"]
+    assert order[2:] and all(entry.startswith("handle ") for entry in order[2:])
+
+
+def test_one_pass_reads_at_most_one_chunk(tmp_path: Path) -> None:
+    """R19b: one pass over a 20 MB log consumes at most READ_CHUNK bytes."""
+    logs = tmp_path / "logs"
+    path = _bulk_log(logs, RUN)
+    run = disc_watch.Run(run_id=RUN, log=path)
+
+    lines = disc_watch._read_new_lines(run, terminal=False)
+
+    assert run.offset == disc_watch.READ_CHUNK
+    assert path.stat().st_size > disc_watch.READ_CHUNK
+    assert lines
+
+
+def test_chunked_catch_up_handles_every_line_without_sleeping(tmp_path: Path) -> None:
+    """R19c: ERROR lines at the start, middle and end all survive the chunked catch-up."""
+    logs = tmp_path / "logs"
+    _bulk_log(logs, RUN, errors=["boom-first", "boom-middle", "boom-last"])
+    db = _db(tmp_path, {RUN: "completed"})
+
+    code, out = _run([RUN], logs, db)  # its sleep raises: a backlog must never reach it
+
+    assert code == 0
+    assert out.count(": boom-") == 3
+    for marker in ("boom-first", "boom-middle", "boom-last"):
+        assert f"run 938: {marker}" in out
+
+
+def test_multibyte_char_across_chunk_boundary_is_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R20: a 2-byte character cut by the chunk boundary comes out whole, no U+FFFD."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / LOG_NAME
+    header = "2026-10-17 19:34:00,000 [ERROR] vibe_quant.discovery.pipeline: caf"
+    payload = f"{header}é boom\n".encode()
+    path.write_bytes(payload)
+    monkeypatch.setattr(disc_watch, "READ_CHUNK", payload.index("é".encode()) + 1)
+    run = disc_watch.Run(run_id=RUN, log=path)
+
+    assert disc_watch._read_new_lines(run, terminal=False) == []
+    lines = disc_watch._read_new_lines(run, terminal=False)
+
+    assert lines == [f"{header}é boom"]
+    assert "\ufffd" not in "".join(lines)
+
+
+def test_terminal_flush_waits_for_the_last_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R20b: a final line without a newline is flushed once, whole, only at EOF."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / LOG_NAME
+    path.write_bytes(b"first\nsecond\npartial-no-newline")
+    monkeypatch.setattr(disc_watch, "READ_CHUNK", 10)
+    run = disc_watch.Run(run_id=RUN, log=path)
+
+    first = disc_watch._read_new_lines(run, terminal=True)
+    assert run.offset == 10 and first == ["first"]
+
+    emitted = list(first)
+    while run.offset < path.stat().st_size or run.pending:
+        size = path.stat().st_size
+        for line in disc_watch._read_new_lines(run, terminal=True):
+            if run.offset < size:
+                assert line in {"first", "second"}, f"truncated line {line!r} emitted early"
+            emitted.append(line)
+
+    assert emitted == ["first", "second", "partial-no-newline"]
+
+
+@pytest.mark.timing
+def test_read_8mib_of_sizing_lines_is_linear(tmp_path: Path) -> None:
+    """8 MiB of run-976-shaped lines in one call: linear, well under the 5.83 s quadratic."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    path = logs / LOG_NAME
+    data = _sizing_block(8 * MIB)
+    path.write_bytes(data)
+    run = disc_watch.Run(run_id=RUN, log=path)
+
+    started = time.perf_counter()
+    lines = disc_watch._read_new_lines(run, terminal=False)
+    elapsed = time.perf_counter() - started
+
+    assert len(lines) == data.count(b"\n")
+    assert elapsed < 0.5, f"8 MiB of Sizing lines took {elapsed:.2f}s"
+# --- end chunked reads ------------------------------------------------------------

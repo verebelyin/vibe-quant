@@ -70,6 +70,7 @@ BAD_STATUSES = frozenset({"failed", "cancelled"})
 ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 SUMMARY_LEVELS = frozenset({"INFO", "WARNING"})
 TRACEBACK_MAX_LINES = 25
+READ_CHUNK = 8 * 1024 * 1024
 OK_RC = 0
 BAD_RC = 1
 UNKNOWN_RC = 2
@@ -165,9 +166,11 @@ def _emit(out: TextIO, run_id: str, text: str) -> None:
 def _read_new_lines(run: Run, *, terminal: bool) -> list[str]:
     """Complete lines appended since the last read, plus a final partial line when done.
 
-    Bytes are buffered so a split multi-byte character can never corrupt a line; the
-    trailing partial line is held back until the run is terminal, when it is flushed
-    rather than being waited on forever.
+    At most ``READ_CHUNK`` bytes are read per call, so one huge log cannot starve the
+    poll loop; the buffer is split once, which keeps the split linear and leaves a
+    multi-byte character that straddles a chunk boundary intact. The trailing partial
+    line is held back until the run is terminal AND the file is fully read, when it is
+    flushed rather than being waited on forever.
     """
     if run.log is None:
         return []
@@ -180,13 +183,13 @@ def _read_new_lines(run: Run, *, terminal: bool) -> list[str]:
     if size > run.offset:
         with run.log.open("rb") as fh:
             fh.seek(run.offset)
-            run.pending += fh.read()
-        run.offset = size
-    lines: list[str] = []
-    while b"\n" in run.pending:
-        raw, run.pending = run.pending.split(b"\n", 1)
-        lines.append(raw.decode("utf-8", "replace"))
-    if terminal and run.pending:
+            data = fh.read(READ_CHUNK)
+        run.pending += data
+        run.offset += len(data)
+    parts = run.pending.split(b"\n")
+    run.pending = parts.pop()
+    lines = [part.decode("utf-8", "replace") for part in parts]
+    if terminal and run.offset >= size and run.pending:
         lines.append(run.pending.decode("utf-8", "replace"))
         run.pending = b""
     return lines
@@ -269,6 +272,16 @@ def _drained(run: Run) -> bool:
         return True
 
 
+def _has_backlog(run: Run) -> bool:
+    """Bytes are waiting in the log that the last read did not consume."""
+    if run.log is None:
+        return False
+    try:
+        return run.log.stat().st_size > run.offset
+    except OSError:
+        return False
+
+
 def watch(
     run_ids: Sequence[str],
     *,
@@ -301,17 +314,20 @@ def watch(
             return UNKNOWN_RC
         started = clock()
         while True:
+            terminals: list[bool] = []
             for run in runs:
                 status = run_status(conn, run.run_id)
                 if status is not None:
                     run.status = status
                 terminal = run.status in TERMINAL_STATUSES
+                terminals.append(terminal)
                 if (
                     kill_after is not None and kill is not None and not terminal
                     and not run.killed and clock() - started >= kill_after
                 ):  # fmt: skip
                     run.killed = True
                     _emit(out, run.run_id, f"KILL after {clock() - started:.0f}s ({kill(run.run_id)})")
+            for run, terminal in zip(runs, terminals, strict=True):
                 if run.log is None:
                     run.log = newest_log(logs_dir, run.run_id)
                     if run.log is None and not run.waiting_printed:
@@ -324,6 +340,8 @@ def watch(
                     run.status_printed = True
             if all(run.status in TERMINAL_STATUSES and _drained(run) for run in runs):
                 break
+            if any(_has_backlog(run) for run in runs):
+                continue
             sleep(interval)
     finally:
         conn.close()
