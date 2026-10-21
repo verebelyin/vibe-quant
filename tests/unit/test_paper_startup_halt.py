@@ -318,11 +318,17 @@ def _restored(reason: str, message: str) -> RestoredHalt:
     return restored
 
 
-def test_replayed_startup_halt_denies_on_start_entries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R7: the halt applied BEFORE the engine starts (the replay) gate-denies the entries
-    submitted in ``on_start`` and on every bar, and the strategies end up stopped."""
+@pytest.mark.parametrize(
+    "reason", [HaltReason.SIGNAL, HaltReason.MANUAL, HaltReason.KILL_SWITCH]
+)
+def test_replayed_startup_halt_denies_on_start_entries(
+    reason: HaltReason, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R33: the halt applied before the engine starts (the replay, or a drained queued
+    halt/kill) gate-denies the entries submitted in ``on_start`` and on every bar for
+    every stopping reason, and the strategies end up stopped."""
     h = _startup_harness(monkeypatch)
-    assert h.guard.halt(HaltReason.SIGNAL, _MSG) is True
+    assert h.guard.halt(reason, _MSG) is True
     snaps: dict[str, Any] = {}
     harness.run(h, _bars(h, [100.0] * 5), actions=[(h.at(3.5), h.snap(snaps, "t3.5"))])
 
@@ -331,7 +337,7 @@ def test_replayed_startup_halt_denies_on_start_entries(monkeypatch: pytest.Monke
     assert len(h.filled_entries()) == 0
     assert [by_gate for _e, by_gate in h.listener.denied] == [True] * submitted
     assert [(c[1], c[2], c[3]) for c in h.listener.changes] == [
-        (GuardState.HALTED, HaltReason.SIGNAL, _MSG)
+        (GuardState.HALTED, reason, _MSG)
     ]
     assert snaps["t3.5"]["running"] == [False, False]
     assert snaps["t3.5"]["state"] == GuardState.HALTED

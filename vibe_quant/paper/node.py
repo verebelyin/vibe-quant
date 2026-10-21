@@ -1874,12 +1874,17 @@ class PaperTradingNode:
             "seen": _int_map(payload.get("seen")),
         }
 
-    async def process_commands(self) -> None:
-        """Execute queued operator commands for this trader."""
+    async def process_commands(self, *, startup_halts_only: bool = False) -> None:
+        """Execute queued operator commands for this trader.
+
+        ``startup_halts_only`` is the pre-NT drain: only the leading halts/kills that
+        no pending resume precedes are claimed (see ``claim_startup_halts``).
+        """
         commands = self._commands
         if commands is None:
             return
-        claim = self._cmd_worker.submit(commands.claim_pending, self._config.trader_id)
+        claim_fn = commands.claim_startup_halts if startup_halts_only else commands.claim_pending
+        claim = self._cmd_worker.submit(claim_fn, self._config.trader_id)
         try:
             claimed: list[PaperCommand] = await asyncio.wrap_future(claim)
         except asyncio.CancelledError:
@@ -2941,6 +2946,16 @@ class PaperTradingNode:
         # in between; the init checkpoint below then carries the halt.
         self._apply_startup_halt()
         await self._db_worker.run(self._persistence.save_checkpoint, self._capture_checkpoint())
+        # k8ygz: an API halt/kill (or the system kill cascade) queued during start-up
+        # reaches the guard before NT starts any strategy; this is the last await
+        # before run_async. A pending resume stops the drain there: its halt belongs
+        # to the control loop (a later operator action must win, in queue order).
+        try:
+            await self.process_commands(startup_halts_only=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("start-up command drain failed (%s)", type(exc).__name__)
 
     async def _run_loop(self) -> None:
         """Main event loop for paper trading.

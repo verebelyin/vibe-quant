@@ -656,6 +656,39 @@ class PaperCommandQueue:
         self.conn.commit()
         return cursor.lastrowid or 0
 
+    #: k8ygz: commands the start-up drain applies before NautilusTrader starts (any not preceded by a pending resume).
+    STARTUP_COMMANDS = frozenset({"halt", "kill"})
+
+    def claim_startup_halts(self, trader_id: str) -> list[PaperCommand]:
+        """Claim this trader's pending halts/kills that no pending ``resume`` precedes.
+
+        Rows are taken in id order; a pending ``resume`` stops the scan, and every row
+        before it that is not halt/kill stays pending for the control loop. Only this
+        trader's rows are touched; claimed rows move to ``running``. [] when none.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM paper_commands WHERE trader_id = ? AND status = 'pending' ORDER BY id",
+            (trader_id,),
+        ).fetchall()
+        claimed: list[PaperCommand] = []
+        for row in rows:
+            if row["command"] == "resume":
+                break
+            if row["command"] not in self.STARTUP_COMMANDS:
+                continue
+            cur = self.conn.execute(
+                "UPDATE paper_commands SET status = 'running', "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "WHERE id = ? AND status = 'pending'",
+                (row["id"],),
+            )
+            if cur.rowcount == 1:
+                cmd = self._row_to_command(row)
+                cmd.status = "running"
+                claimed.append(cmd)
+        self.conn.commit()
+        return claimed
+
     def claim_pending(self, trader_id: str) -> list[PaperCommand]:
         """Atomically move this trader's pending commands to ``running``."""
         rows = self.conn.execute(
