@@ -1924,24 +1924,22 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 2. **Genetic operators**
    - **Crossover**: Combine genes from two parent strategies
    - **Mutation**: Randomly change one gene (swap indicator, adjust parameter, change threshold)
-   - **Selection**: Tournament selection based on fitness (Pareto ranking)
-   - **Elitism**: Top N strategies survive unchanged to next generation
+   - **Selection**: deterministic crowding by default (each offspring replaces its most similar parent when at least as fit; 1 elite kept); `--no-crowding` (API `crowding_enabled=false`) = classic tournament (`tournament_size`, default 3). Both rank by the scalar `adjusted_score`; there is no Pareto ranking in discovery (Pareto fronts exist only in screening sweeps)
+   - **Elitism**: tournament mode keeps the top `elite_count` (default 2) unchanged; crowding keeps 1
 
 3. **Fitness function**
    - NautilusTrader screening-mode backtest of each candidate (parallel via multiprocessing)
-   - Multi-objective fitness: Sharpe, MaxDD, ProfitFactor
-   - Penalty for complexity (more indicators = slight fitness penalty, Occam's razor)
-   - Overfitting filter integration: candidates must pass enabled filters
+   - Scalar fitness (`discovery/fitness.py`): `raw = 0.35·Sharpe_n + 0.25·(1 - MaxDD) + 0.20·PF_n + 0.20·Return_n` (Sharpe clamped to [-1, 4], PF to [0, 5], return to [-100%, +200%], each scaled to [0, 1]); `adjusted_score = max(0, raw - complexity - overtrade - SL/TP-imbalance penalties)`, and 0 below `min_trades` (50) or at return <= 0. With `eval_windows` > 1 the metrics are worst-of-N windows
+   - Penalties: complexity 0.02 per scalar gene above 2 (cap 0.1); overtrade 0.05 per 100 trades above the timeframe threshold (cap 0.3); SL/TP imbalance 0.02 per unit of SL/TP ratio above 5 (cap 0.15)
+   - Gates are not part of the score: they run once on the final top-K (guard rails below)
 
 4. **Discovery pipeline**
    - Initialize population (N random valid strategies from grammar rules)
    - For each generation:
-     - Evaluate fitness via NautilusTrader screening mode (parallel)
-     - Apply overfitting filters
-     - Select parents (tournament)
-     - Generate offspring (crossover + mutation)
-     - Replace weakest with offspring
-   - Terminate after M generations or convergence
+     - Evaluate fitness via NautilusTrader screening mode (parallel; `--evaluator fast` scores with the fast tier and re-runs the top-K and every cached genome with an MTM series on NT before any gate (each NT result must equal the fast one in every field, else the run fails))
+     - Breed offspring (crossover + mutation) and select (crowding or tournament, above)
+     - Inject random immigrants when population entropy falls below `entropy_threshold` (0.4)
+   - Terminate after M generations, or when the best score has not improved over the last `convergence_generations` (capped at M // 2; checked from generation 2N on)
    - Output: top K strategies as DSL YAML for validation
 
 5. **Dashboard integration**
