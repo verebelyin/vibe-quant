@@ -479,7 +479,7 @@ export function BacktestLaunchForm() {
           {/* Sizing (vibe-quant-2gyk1.2) */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="max-exposure">Max exposure (× equity)</Label>
+              <Label htmlFor="max-exposure">Max exposure (× balance)</Label>
               <Input
                 id="max-exposure"
                 type="number"

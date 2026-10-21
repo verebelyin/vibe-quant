@@ -9,7 +9,7 @@
  * hold up to N × cap, D-S2) and leverage is a separate setting that must be at
  * least the cap.
  *
- * The launch forms enter the cap in multiples of equity and the risk in PERCENT;
+ * The launch forms enter the cap in multiples of balance and the risk in PERCENT;
  * `riskPctToFraction`/`riskFractionToPct` convert between the two with the
  * `toPrecision(12)` rounding that turns the measured `0.07 * 100`
  * (7.000000000000001) back into 7, so a default launch (50% cap, 2% risk) stores
@@ -28,7 +28,7 @@ export const DEFAULT_RISK_PER_TRADE = 0.02;
 /** The default risk as a percent, for the launch forms. */
 export const DEFAULT_RISK_PCT = 2;
 
-/** The exposure cap upper bound, in multiples of equity. */
+/** The exposure cap upper bound, in multiples of balance. */
 export const MAX_MAX_POSITION_PCT = 125;
 
 /** The risk upper bound, in percent. */
@@ -93,7 +93,7 @@ function enteredPct(value: number | ""): string {
 /**
  * The inline problems of the launch forms, in order: cap bounds, risk bounds,
  * then cap-vs-leverage (`[]` when the form is valid). The cap is entered in
- * multiples of equity and the risk in percent; both fields are REQUIRED, so an
+ * multiples of balance and the risk in percent; both fields are REQUIRED, so an
  * empty field is a problem ("you entered nothing").
  *
  * The cap-vs-leverage check runs only for a valid cap and a leverage inside
@@ -111,7 +111,7 @@ export function sizingProblems(
   const capValid = typeof maxPos === "number" && maxPos > 0 && maxPos <= MAX_MAX_POSITION_PCT;
   if (!capValid) {
     problems.push(
-      `Max exposure must be more than 0 and at most ${MAX_MAX_POSITION_PCT} × equity (you entered ${entered(maxPos)})`,
+      `Max exposure must be more than 0 and at most ${MAX_MAX_POSITION_PCT} × balance (you entered ${entered(maxPos)})`,
     );
   }
 
@@ -124,7 +124,7 @@ export function sizingProblems(
 
   const leverageValid = leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE;
   if (typeof maxPos === "number" && capValid && leverageValid && maxPos > leverage) {
-    problems.push(`Max exposure (${maxPos} × equity) must not exceed leverage (${leverage})`);
+    problems.push(`Max exposure (${maxPos} × balance) must not exceed leverage (${leverage})`);
   }
 
   return problems;

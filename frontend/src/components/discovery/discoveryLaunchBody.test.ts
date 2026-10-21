@@ -480,7 +480,7 @@ describe("gridCrossCheckLeverage", () => {
     const leverage = gridCrossCheckLeverage(on, 20);
     expect(sizingProblems(5, 2, leverage)).toStrictEqual([]);
     expect(sizingProblems(6, 2, leverage)).toStrictEqual([
-      "Max exposure (6 × equity) must not exceed leverage (5)",
+      "Max exposure (6 × balance) must not exceed leverage (5)",
     ]);
   });
 

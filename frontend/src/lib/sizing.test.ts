@@ -2,7 +2,7 @@
  * Tests for the frontend sizing rule (bead vibe-quant-2gyk1.2, S6): the mirror
  * of `vibe_quant/sizing_settings.py` (contract U1-U7).
  *
- * The cap is entered in multiples of equity and the risk in PERCENT; the
+ * The cap is entered in multiples of balance and the risk in PERCENT; the
  * conversion rounds to 12 significant digits so a default launch (50% cap, 2%
  * risk) stores no keys and the chip shows 7 for a stored 0.07. A recorded value
  * that is not a finite number in range is invalid, with the Python text.
@@ -75,7 +75,7 @@ describe("sizingProblems", () => {
 
   it("exposure bounds and leverage", () => {
     const problem = (entered: string) =>
-      `Max exposure must be more than 0 and at most 125 × equity (you entered ${entered})`;
+      `Max exposure must be more than 0 and at most 125 × balance (you entered ${entered})`;
 
     expect(sizingProblems(0, 2, 10)).toStrictEqual([problem("0")]);
     expect(sizingProblems(125.5, 2, 10)).toStrictEqual([problem("125.5")]);
@@ -85,7 +85,7 @@ describe("sizingProblems", () => {
     expect(sizingProblems(125.0001, 2, 125)).toStrictEqual([problem("125.0001")]);
 
     expect(sizingProblems(20, 2, 10)).toStrictEqual([
-      "Max exposure (20 × equity) must not exceed leverage (10)",
+      "Max exposure (20 × balance) must not exceed leverage (10)",
     ]);
     // The cap may equal the leverage.
     expect(sizingProblems(10, 2, 10)).toStrictEqual([]);
@@ -94,7 +94,7 @@ describe("sizingProblems", () => {
     expect(sizingProblems(20, 2, 0)).toStrictEqual([]);
     expect(sizingProblems(20, 2, 200)).toStrictEqual([]);
     expect(sizingProblems(20, 2, 3)).toStrictEqual([
-      "Max exposure (20 × equity) must not exceed leverage (3)",
+      "Max exposure (20 × balance) must not exceed leverage (3)",
     ]);
 
     // An invalid cap reports only its own problem (no redundant leverage one).

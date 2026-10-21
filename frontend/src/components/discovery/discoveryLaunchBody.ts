@@ -199,7 +199,7 @@ export interface DiscoveryLaunchForm {
   bnbDiscount: boolean;
   liquidationMode: LiquidationMode;
   leverage: number;
-  /** Max exposure in multiples of equity (validated by sizingProblems). */
+  /** Max exposure in multiples of balance (validated by sizingProblems). */
   maxPositionPct: number;
   /** Risk per trade in PERCENT (validated by sizingProblems). */
   riskPct: number;

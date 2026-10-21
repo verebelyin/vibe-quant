@@ -600,7 +600,7 @@ export function DiscoveryConfig({ onConvergenceChange }: DiscoveryConfigProps) {
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="disc-max-exposure">Max exposure (× equity)</Label>
+            <Label htmlFor="disc-max-exposure">Max exposure (× balance)</Label>
             <Input
               id="disc-max-exposure"
               type="number"
