@@ -1,0 +1,21 @@
+{
+ "source_run_id": 1,
+ "run": {
+  "symbols": [
+   "BTCUSDT"
+  ],
+  "timeframe": "1h",
+  "start_date": "2024-01-01",
+  "end_date": "2025-01-01",
+  "parameters": {
+   "population": 20,
+   "generations": 5,
+   "mutation_rate": 0.1,
+   "crossover_rate": 0.8,
+   "elite_count": 2,
+   "tournament_size": 3,
+   "convergence_generations": 3
+  }
+ },
+ "notes": "discovery: generations=5, evaluated=100, converged=False"
+}
