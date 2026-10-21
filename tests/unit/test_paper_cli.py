@@ -6,6 +6,7 @@ import errno
 import json
 import logging
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -808,12 +809,25 @@ class TestLiveAccountWithoutCheckpoint:
         assert [c.binance.testnet for c in started] == [False]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            [("LIVE-001", "old_key", False)],
+            [("LIVE-001", "old_key", False), ("LIVE-001", "test_key", True)],  # G4
+        ],
+        ids=["rotation", "G4-newest-is-testnet"],
+    )
     async def test_rotation_start_needs_no_fresh_consent(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        rows: list[tuple[str, str, bool]],
     ) -> None:
-        """neuvu.2 R23: the SAME trader on a new live key carries its risk: no flag."""
+        """neuvu.2 R23 + R4 (D1=A): the SAME trader on a new live key carries its
+        risk and halt, even under a newer row of the other env: no flag."""
         db_path = tmp_path / "state.db"
-        self._seed(db_path, _live_account("old_key"), trader_id="LIVE-001")
+        for trader_id, key, testnet in rows:
+            self._seed(db_path, _live_account(key, testnet=testnet), trader_id=trader_id)
         config_path = tmp_path / "live.json"
         self._write(config_path, db_path=db_path)
         started: list[PaperTradingConfig] = []
@@ -827,7 +841,6 @@ class TestLiveAccountWithoutCheckpoint:
     @pytest.mark.parametrize(
         ("rows", "label"),
         [
-            ([("LIVE-001", "old_key", False), ("LIVE-001", "test_key", True)], "G4 newest is testnet"),
             ([("LIVE-001", "test_key", True)], "G5 own testnet only"),
             ([("OTHER-001", "old_key", False)], "G6 another trader's old key"),
         ],
@@ -887,18 +900,30 @@ class TestLiveAccountWithoutCheckpoint:
         assert [c.binance.testnet for c in started] == [True]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("exc", "marker"),
+        [
+            (RuntimeError("LOOKUP-TEXT-MARKER-42"), "LOOKUP-TEXT-MARKER-42"),
+            (
+                sqlite3.OperationalError("database is locked LOOKUP-TEXT-MARKER-58"),
+                "LOOKUP-TEXT-MARKER-58",
+            ),
+        ],
+        ids=["runtime", "operational"],
+    )
     async def test_a_failed_lookup_refuses_and_leaks_no_text(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
         caplog: pytest.LogCaptureFixture,
+        exc: Exception,
+        marker: str,
     ) -> None:
-        """Fail closed: a lookup that cannot answer is "no checkpoint", class only."""
-        marker = "LOOKUP-TEXT-MARKER-42"
+        """R12: fail closed - a lookup that cannot answer is "no checkpoint"."""
 
         def _boom(self: StatePersistence, account: str, trader_id: str) -> bool:
-            raise RuntimeError(marker)
+            raise exc
 
         monkeypatch.setattr(StatePersistence, "has_account_checkpoint", _boom)
         config_path = tmp_path / "live.json"
@@ -912,7 +937,9 @@ class TestLiveAccountWithoutCheckpoint:
 
         assert started == []
         assert capsys.readouterr().err.splitlines() == [self._REFUSAL]
-        assert "paper account checkpoint lookup failed (RuntimeError)" in caplog.text
+        assert (
+            f"paper account checkpoint lookup failed ({type(exc).__name__})" in caplog.text
+        )
         assert marker not in caplog.text
 
 

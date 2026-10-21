@@ -18,10 +18,15 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests.unit.test_audit_paper_node import _config
-from tests.unit.test_paper_halt_restore import seeded  # noqa: F401  (fixture)
+from tests.unit.test_paper_halt_restore import (  # noqa: F401  (fixtures / helpers)
+    _latest_checkpoint,
+    _raises_venue_build,
+    fake_tradingnode,
+    seeded,
+)
 from tests.unit.test_paper_risk_inherit import _put, _risk
 from vibe_quant.paper.config import BinanceTestnetConfig, account_env, account_id, is_key_rotation
-from vibe_quant.paper.guard import HaltReason
+from vibe_quant.paper.guard import GuardState, HaltReason
 from vibe_quant.paper.node import NodeState, PaperTradingNode
 from vibe_quant.paper.persistence import StatePersistence
 
@@ -61,9 +66,13 @@ class Case:
     source: str | None  # risk_source_trader_id of the restore event (None = nothing carried)
     halt: HaltReason | None = None
     hwm: str | None = None
-    r36: bool = True  # False: excluded from the agreement invariant (G10)
+    r36: bool = True  # False: excluded from the agreement invariant (G10, G17, G18)
     error_has: str | None = None
-    warning_has: str | None = None
+    message: str | None = None  # asserted == node.status.error_message
+    status: NodeState | None = None  # asserted == node.status.state
+    warning_has: tuple[str, ...] | None = None
+    warning_absent: str | None = None
+    start_fresh: bool = False
 
 
 def _manual(account: str, *, hwm: str = "10600", trader: str = TRADER) -> Row:
@@ -79,12 +88,15 @@ CASES: dict[str, Case] = {
     "G3": Case(
         [_manual(K_OLD)], gate=True, source=TRADER, halt=HaltReason.MANUAL, hwm="10600"
     ),
-    # R25: own old-key row, then an own testnet row (newest): nothing carries
+    # R4 (D1=A, ae6ah): an older own live-key row carries even under a newer testnet
+    # row; the restore logs both "ignored" and the rotation.
     "G4": Case(
         [_manual(K_OLD), Row(TRADER, T_OLD)],
-        gate=False,
-        source=None,
-        warning_has="not " + K_NEW + "; ignored",
+        gate=True,
+        source=TRADER,
+        halt=HaltReason.MANUAL,
+        hwm="10600",
+        warning_has=("not " + K_NEW + "; ignored", "key rotation from account"),
     ),
     # R26: own testnet row only
     "G5": Case([Row(TRADER, T_OLD)], gate=False, source=None),
@@ -128,6 +140,89 @@ CASES: dict[str, Case] = {
         halt=HaltReason.MANUAL,
         hwm="12000",
     ),
+    # R1 (ae6ah): rotating back A -> B -> A restores the OLDER key's newer row.
+    "G13": Case(
+        [Row(TRADER, K_NEW, hwm="10000"), _manual(K_OLD)],
+        gate=True,
+        source=TRADER,
+        halt=HaltReason.MANUAL,
+        hwm="10600",
+        message="restored after restart: halt via API",
+        status=NodeState.HALTED,
+        warning_has=("key rotation from account " + K_OLD + " to " + K_NEW,),
+    ),
+    # R2: the same rotation with a non-halted old-key row: risk carries, no halt.
+    "G14": Case(
+        [Row(TRADER, K_NEW, hwm="10000"), Row(TRADER, K_OLD)],
+        gate=True,
+        source=TRADER,
+        halt=None,
+        hwm="10600",
+        warning_has=("key rotation from account " + K_OLD + " to " + K_NEW,),
+    ),
+    # R3: the own newest row wins over an older same-env row: no rotation.
+    "G15": Case(
+        [_manual(K_OLD), Row(TRADER, K_NEW, hwm="10000")],
+        gate=True,
+        source=TRADER,
+        halt=None,
+        hwm="10000",
+        warning_absent="key rotation from account",
+    ),
+    # R7: another trader's newer row on THIS account supplies the risk, the own
+    # (rotated) halt still wins (today's precedence, D5).
+    "G16": Case(
+        [
+            Row(TRADER, K_NEW, hwm="10000"),
+            Row("PAPER-041", K_NEW, hwm="12000"),
+            _manual(K_OLD),
+        ],
+        gate=True,
+        source="PAPER-041",
+        halt=HaltReason.MANUAL,
+        hwm="12000",
+    ),
+    # R7-fresh: start_fresh skips the other trader's risk, the own rotation carries.
+    "G16-fresh": Case(
+        [
+            Row(TRADER, K_NEW, hwm="10000"),
+            Row("PAPER-041", K_NEW, hwm="12000"),
+            _manual(K_OLD),
+        ],
+        gate=True,
+        source=TRADER,
+        halt=HaltReason.MANUAL,
+        hwm="10600",
+        start_fresh=True,
+    ),
+    # R8 (D8): a newer own row with a non-string account fails closed; the gate still
+    # sees the older own row on this key.
+    "G17": Case(
+        [Row(TRADER, K_NEW, hwm="10000"), Row(TRADER, raw='{"account": 5}')],
+        gate=True,
+        source=None,
+        halt=HaltReason.ERROR,
+        error_has="checkpoint unreadable (TypeError)",
+        r36=False,
+    ),
+    # R9: an unparseable newest row fails closed; the gate reads the older row.
+    "G18": Case(
+        [Row(TRADER, K_NEW), Row(TRADER, raw="{not json")],
+        gate=True,
+        source=None,
+        halt=HaltReason.ERROR,
+        error_has="checkpoint unreadable (JSONDecodeError)",
+        r36=False,
+    ),
+    # R10: the newest own row is a legacy row (no account): it is the source.
+    "G19": Case(
+        [_manual(K_OLD), Row(TRADER, None, hwm="11000")],
+        gate=True,
+        source=TRADER,
+        halt=None,
+        hwm="11000",
+        warning_absent="key rotation from account",
+    ),
 }
 
 
@@ -159,13 +254,17 @@ def _seed(db: Path, rows: list[Row]) -> None:
 
 def _restore(
     seeded: dict[str, Any],  # noqa: F811
+    *,
+    binance: BinanceTestnetConfig | None = None,
+    start_fresh: bool = False,
 ) -> tuple[PaperTradingNode, list[dict[str, object]], StatePersistence]:
     """A LIVE node on the NEW key with its persistence set, restore events captured."""
     node = PaperTradingNode(
         _config(
             seeded,
             trader_id=TRADER,
-            binance=BinanceTestnetConfig("new-key", "s", testnet=False),
+            binance=binance or BinanceTestnetConfig("new-key", "s", testnet=False),
+            start_fresh=start_fresh,
         )
     )
     persistence = StatePersistence(seeded["db"], trader_id=TRADER)
@@ -182,12 +281,12 @@ def test_gate_and_restore_agree_on_risk_carry(
     seeded: dict[str, Any],  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """R21-R33 + R36: the gate says "consent needed" exactly when nothing carries."""
+    """R1-R11: the gate says "consent needed" exactly when nothing carries."""
     case = CASES[name]
     _seed(seeded["db"], case.rows)
 
     with caplog.at_level(logging.WARNING):
-        node, events, persistence = _restore(seeded)
+        node, events, persistence = _restore(seeded, start_fresh=case.start_fresh)
     try:
         gate = persistence.has_account_checkpoint(K_NEW, TRADER)
         sources = [e["risk_source_trader_id"] for e in events if e.get("action") == "restore"]
@@ -209,11 +308,95 @@ def test_gate_and_restore_agree_on_risk_carry(
             assert node.status.halt_reason == HaltReason.ERROR
             assert node.status.error_message is not None
             assert case.error_has in node.status.error_message
-        if case.warning_has is not None:
-            assert case.warning_has in caplog.text
+        if case.message is not None:
+            assert node.status.error_message == case.message
+        if case.status is not None:
+            assert node.status.state == case.status
+        for text in case.warning_has or ():
+            assert text in caplog.text
+        if case.warning_absent is not None:
+            assert case.warning_absent not in caplog.text
     finally:
         persistence.close()
         node._state_manager.close()
+
+
+def test_testnet_start_ignores_live_rows(
+    seeded: dict[str, Any],  # noqa: F811
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5: a testnet start never mixes the live env's rows into its risk."""
+    _seed(seeded["db"], [Row(TRADER, T_OLD, hwm="10000"), _manual(K_OLD)])
+
+    with caplog.at_level(logging.WARNING):
+        node, events, persistence = _restore(
+            seeded, binance=BinanceTestnetConfig("old-key", "s", testnet=True)
+        )
+    try:
+        assert node._restored_halt is None
+        assert node._restored_risk is not None
+        assert node._restored_risk.to_dict()["high_water_mark"] == "10000"
+        assert "key rotation" not in caplog.text
+        sources = [e["risk_source_trader_id"] for e in events if e.get("action") == "restore"]
+        assert sources == [TRADER]
+    finally:
+        persistence.close()
+        node._state_manager.close()
+
+
+async def test_rotate_back_survives_two_failed_restarts(
+    seeded: dict[str, Any],  # noqa: F811
+    fake_tradingnode: type[Any],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R6: a failed restart checkpoints the rotated risk on the NEW key; restart 2
+    restores that own row (env-latest, no rotation) and restart 3 comes up
+    HALTED/MANUAL with the carried high water mark."""
+    _seed(seeded["db"], CASES["G13"].rows)
+    config = _config(
+        seeded,
+        trader_id=TRADER,
+        binance=BinanceTestnetConfig("new-key", "s", testnet=False),
+    )
+
+    def gate() -> bool:
+        persistence = StatePersistence(seeded["db"], trader_id=TRADER)
+        try:
+            return persistence.has_account_checkpoint(K_NEW, TRADER)
+        finally:
+            persistence.close()
+
+    assert gate() is True
+    for restart in (1, 2):
+        node = PaperTradingNode(config)
+        monkeypatch.setattr(node, "_setup_signal_handlers", lambda: None)
+        monkeypatch.setattr(node, "_create_live_trading_node", _raises_venue_build)
+        with pytest.raises(RuntimeError, match="venue build failed"):
+            await node.start()
+        assert gate() is True, restart
+        latest = _latest_checkpoint(seeded["db"], trader_id=TRADER)
+        assert latest is not None
+        assert latest.node_status["account"] == K_NEW
+        assert latest.node_status["halt_reason"] == "manual"
+        assert latest.node_status["risk"]["high_water_mark"] == "10600"
+        if restart == 2:
+            assert node._restored_risk is not None
+            assert node._restored_risk.to_dict()["high_water_mark"] == "10600"
+            assert node._restored_halt is not None
+            assert node._restored_halt.reason is HaltReason.MANUAL
+
+    node3 = PaperTradingNode(config)
+    await node3._initialize()
+    try:
+        assert gate() is True
+        assert node3._guard is not None
+        assert node3._guard.guard_state is GuardState.HALTED
+        assert node3._guard.halt_reason is HaltReason.MANUAL
+        assert node3._restored_risk is not None
+        assert node3._restored_risk.to_dict()["high_water_mark"] == "10600"
+    finally:
+        await node3._shutdown()
+
 
 
 def test_rotation_carries_halt_into_the_node_state(
