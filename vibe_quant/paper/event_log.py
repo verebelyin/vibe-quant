@@ -1,6 +1,6 @@
 """Bounded single-thread FIFO worker for paper event-log writes.
 
-Paper trading writes structured events (``logs/events/{run_id}.jsonl``) from the
+Paper trading writes structured events (``logs/paper/{trader_id}.jsonl``) from the
 trading loop. A blocking or hung disk write must never stall the loop, so every
 write is handed to one worker thread (a :class:`~vibe_quant.paper.persistence.StoreWorker`)
 and the caller only holds a future. The queue is bounded: when ``max_pending``

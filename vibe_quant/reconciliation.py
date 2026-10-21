@@ -183,7 +183,8 @@ def load_trades(
 ) -> list[Trade]:
     """Reconstruct round-trip trades from a run's event log.
 
-    Reads ``logs/events/{run_id}.jsonl`` line-by-line. Orphan opens
+    Reads ``{base_path}/{run_id}.jsonl`` line-by-line (a paper session's log is
+    ``logs/paper/{trader_id}.jsonl``: pass its ``logs_path``). Orphan opens
     (position opened but never closed within the log) are dropped with
     a warning — they represent trades still live at log-end and aren't
     comparable.

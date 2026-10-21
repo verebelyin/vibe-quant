@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+from datetime import datetime
 from pathlib import Path  # noqa: TCH003
 from unittest.mock import patch
 
@@ -13,6 +15,13 @@ from vibe_quant.api.app import create_app
 from vibe_quant.api.ws.manager import ConnectionManager
 from vibe_quant.db.state_manager import StateManager
 from vibe_quant.jobs.manager import BacktestJobManager
+from vibe_quant.logging.events import EventType, create_event
+from vibe_quant.logging.writer import EventWriter
+from vibe_quant.paper.config import (
+    DEFAULT_PAPER_LOGS_PATH,
+    PaperTradingConfig,
+    default_paper_trader_id,
+)
 
 
 @pytest.fixture()
@@ -310,3 +319,74 @@ async def test_reconcile_zero_trades_reports_no_data(
     assert summary["parity_rate"] is None
     assert summary["mean_entry_slippage"] is None
     assert summary["mean_pnl_delta"] is None
+
+
+async def test_reconcile_reads_log_written_at_paper_node_default_path(
+    client: tuple[AsyncClient, StateManager, BacktestJobManager],
+) -> None:
+    """A session without ``logs_path`` reconciles the node's default-dir log."""
+    ac, state, job_mgr = client
+    logs_field = next(
+        f for f in dataclasses.fields(PaperTradingConfig) if f.name == "logs_path"
+    )
+    factory = logs_field.default_factory
+    assert callable(factory)
+    assert factory() == DEFAULT_PAPER_LOGS_PATH
+
+    val_id = _insert_validation_run(state, strategy_id=9)
+    paper_id = _insert_stopped_paper_job(
+        state, job_mgr, strategy_id=9, parameters={"validation_run_id": val_id}
+    )
+    trader_id = default_paper_trader_id(paper_id)
+    path = DEFAULT_PAPER_LOGS_PATH / f"{trader_id}.jsonl"
+    assert not path.exists()
+
+    entry = "2026-01-01T00:00:00+00:00"
+    exit_ = "2026-01-01T00:10:00+00:00"
+    try:
+        DEFAULT_PAPER_LOGS_PATH.mkdir(parents=True, exist_ok=True)
+        with EventWriter(run_id=trader_id, base_path=DEFAULT_PAPER_LOGS_PATH) as writer:
+            writer.write(
+                create_event(
+                    EventType.POSITION_OPEN,
+                    run_id=trader_id,
+                    strategy_name="s",
+                    data={
+                        "position_id": "p1",
+                        "symbol": "BTCUSDT",
+                        "side": "LONG",
+                        "quantity": 0.1,
+                        "entry_price": 50000.0,
+                        "leverage": 1,
+                    },
+                    timestamp=datetime.fromisoformat(entry),
+                )
+            )
+            writer.write(
+                create_event(
+                    EventType.POSITION_CLOSE,
+                    run_id=trader_id,
+                    strategy_name="s",
+                    data={
+                        "position_id": "p1",
+                        "symbol": "BTCUSDT",
+                        "exit_price": 51000.0,
+                        "gross_pnl": 102.0,
+                        "net_pnl": 100.0,
+                        "exit_reason": "signal",
+                    },
+                    timestamp=datetime.fromisoformat(exit_),
+                )
+            )
+        _insert_validation_trade(
+            state, val_id, entry=entry, exit_=exit_, entry_price=50000.0, net_pnl=100.0
+        )
+        r = await ac.get(f"/api/reconciliation/{paper_id}")
+    finally:
+        path.unlink(missing_ok=True)
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert len(data["paired_trades"]) == 1
+    assert data["divergence_summary"]["matched"] == 1
+    assert data["divergence_summary"]["parity_rate"] == pytest.approx(1.0)
