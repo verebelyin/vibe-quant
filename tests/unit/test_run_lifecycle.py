@@ -317,6 +317,58 @@ def test_fail_orphan_run_guards_on_the_current_status(conn: sqlite3.Connection) 
     assert (done["status"], done["error_message"]) == ("completed", "done")
 
 
+def test_moved_sql_literals_are_byte_identical_to_base(conn: sqlite3.Connection) -> None:
+    """The four moved multi-line UPDATEs execute exactly the base SQL bytes.
+
+    Expected strings are the base (manager.py at 0eff3381) literal values with
+    parameters expanded the way sqlite3's trace callback renders them, so any
+    re-indentation of the source literal changes the compared bytes.
+    """
+    from vibe_quant.db.run_lifecycle import claim, fail_orphan_run, finish
+
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        finished = _run(conn, status="running")
+        _job(conn, finished)
+        assert finish(conn, finished, JobStatus.COMPLETED, None, reconcile=False, owner=None)
+
+        claimed = _run(conn, status="pending")
+        _job(conn, claimed, status="pending", pid=0, pid_start_time=None)
+        assert claim(conn, claimed, 5150, "linux:123") is None
+
+        orphan = _run(conn, status="running")
+        reason = "reaped at startup: no live job (was running)"
+        assert fail_orphan_run(conn, orphan, reason) is True
+    finally:
+        conn.set_trace_callback(None)
+
+    assert (
+        "UPDATE background_jobs\n"
+        "                       SET status = 'completed', completed_at = datetime('now'),\n"
+        "                           error_message = COALESCE(NULL, error_message)\n"
+        f"                       WHERE run_id = {finished}"
+    ) in statements
+    assert (
+        "UPDATE backtest_runs\n"
+        "                           SET status = 'completed', completed_at = datetime('now'),\n"
+        "                               error_message = COALESCE(NULL, error_message)\n"
+        f"                           WHERE id = {finished}"
+    ) in statements
+    assert (
+        "UPDATE background_jobs\n"
+        "                       SET pid = 5150, pid_start_time = 'linux:123', status = 'running',\n"
+        "                           heartbeat_at = datetime('now')\n"
+        f"                       WHERE run_id = {claimed}"
+    ) in statements
+    assert (
+        "UPDATE backtest_runs\n"
+        "                       SET status = 'failed', completed_at = datetime('now'),\n"
+        f"                           error_message = '{reason}'\n"
+        f"                       WHERE id = {orphan} AND status IN ('pending', 'running')"
+    ) in statements
+
+
 def test_fail_orphan_run_leaves_the_commit_to_its_caller(
     conn: sqlite3.Connection, db_path: Path
 ) -> None:

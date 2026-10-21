@@ -117,9 +117,9 @@ def finish(
 
         conn.execute(
             """UPDATE background_jobs
-               SET status = ?, completed_at = datetime('now'),
-                   error_message = COALESCE(?, error_message)
-               WHERE run_id = ?""",
+                       SET status = ?, completed_at = datetime('now'),
+                           error_message = COALESCE(?, error_message)
+                       WHERE run_id = ?""",
             (status, err, run_id),
         )
         update_run = run is not None and (
@@ -128,9 +128,9 @@ def finish(
         if update_run:
             conn.execute(
                 """UPDATE backtest_runs
-                   SET status = ?, completed_at = datetime('now'),
-                       error_message = COALESCE(?, error_message)
-                   WHERE id = ?""",
+                           SET status = ?, completed_at = datetime('now'),
+                               error_message = COALESCE(?, error_message)
+                           WHERE id = ?""",
                 (status, err, run_id),
             )
         conn.commit()
@@ -191,9 +191,9 @@ def claim(
             return refusal
         conn.execute(
             """UPDATE background_jobs
-               SET pid = ?, pid_start_time = ?, status = 'running',
-                   heartbeat_at = datetime('now')
-               WHERE run_id = ?""",
+                       SET pid = ?, pid_start_time = ?, status = 'running',
+                           heartbeat_at = datetime('now')
+                       WHERE run_id = ?""",
             (pid, identity, run_id),
         )
         conn.execute(
@@ -219,9 +219,9 @@ def fail_orphan_run(conn: sqlite3.Connection, run_id: int, error: str) -> bool:
     """
     cursor = conn.execute(
         """UPDATE backtest_runs
-           SET status = 'failed', completed_at = datetime('now'),
-               error_message = ?
-           WHERE id = ? AND status IN ('pending', 'running')""",
+                       SET status = 'failed', completed_at = datetime('now'),
+                           error_message = ?
+                       WHERE id = ? AND status IN ('pending', 'running')""",
         (error, run_id),
     )
     return cursor.rowcount == 1
