@@ -16,12 +16,17 @@ exact booleans the strategy sees on the bars where it asks.
 compute_fn (pandas) indicators are not recomputed per bar: their whole stream comes from
 :func:`vibe_quant.dsl.pta_replay.replay_pta_series` (the runtime's buffer schedule,
 lookback gate and NaN-hold, bit-exact for causal compute_fns) and is written into
-``_pta_values`` under the keys the generated ``_update_pta_indicators`` uses.
+``_pta_values`` under the keys the generated ``_update_pta_indicators`` uses. The replay is
+a pure function of (indicator, params, buffer cap, bars), so its output is memoised per
+process across genomes (GA children repeat their parents' params) in an LRU capped by
+``VIBE_QUANT_FAST_TIER_MEMO_MAX_MB`` (default 256).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +42,40 @@ logger = logging.getLogger(__name__)
 
 _BARS: dict[tuple[str, str, str, str], list[Bar]] = {}
 _INSTRUMENTS: dict[tuple[str, str], Instrument] = {}
+# key -> (bars, value, bytes); keys carry id(bars) and the entry holds the bars list, so
+# that id cannot be reused by another list while the entry lives
+_MEMO: OrderedDict[tuple[object, ...], tuple[list[Bar], Any, int]] = OrderedDict()
+_memo_bytes = 0
+MEMO_MAX_MB_ENV = "VIBE_QUANT_FAST_TIER_MEMO_MAX_MB"
+
+
+def _memo_cap_bytes() -> int:
+    raw = os.environ.get(MEMO_MAX_MB_ENV) or "256"
+    mb = int(raw)
+    if mb < 1:
+        raise ValueError(f"{MEMO_MAX_MB_ENV} must be an integer >= 1, got {raw!r}")
+    return mb * 1024 * 1024
+
+
+def _memo_get(key: tuple[object, ...]) -> Any:
+    hit = _MEMO.get(key)
+    if hit is None:
+        return None
+    _MEMO.move_to_end(key)
+    return hit[1]
+
+
+def _memo_put(key: tuple[object, ...], bars: list[Bar], value: Any, nbytes: int) -> None:
+    """Store ``value``, evicting least-recently-used entries past the cap (never errors)."""
+    global _memo_bytes
+    cap = _memo_cap_bytes()
+    if nbytes > cap:
+        return
+    while _MEMO and _memo_bytes + nbytes > cap:
+        _, (_, _, evicted) = _MEMO.popitem(last=False)
+        _memo_bytes -= evicted
+    _MEMO[key] = (bars, value, nbytes)
+    _memo_bytes += nbytes
 
 
 def load_instrument(catalog_path: str, instrument_id: str) -> Instrument:
@@ -171,22 +210,32 @@ def _pta_columns(
     from vibe_quant.dsl.indicators import indicator_registry
     from vibe_quant.dsl.pta_replay import replay_pta_series
 
-    frame = pd.DataFrame(
-        {
-            "open": [float(b.open) for b in bars],
-            "high": [float(b.high) for b in bars],
-            "low": [float(b.low) for b in bars],
-            "close": [float(b.close) for b in bars],
-            "volume": [float(b.volume) for b in bars],
-        }
-    )
+    frame_key = ("frame", id(bars))
+    frame = _memo_get(frame_key)
+    if frame is None:
+        frame = pd.DataFrame(
+            {
+                "open": [float(b.open) for b in bars],
+                "high": [float(b.high) for b in bars],
+                "low": [float(b.low) for b in bars],
+                "close": [float(b.close) for b in bars],
+                "volume": [float(b.volume) for b in bars],
+            }
+        )
+        _memo_put(frame_key, bars, frame, int(frame.memory_usage(index=False).sum()))
     cap = strategy._pta_buffer_cap["1m"]
     columns: list[tuple[str, np.ndarray]] = []
     for name, params in strategy._pta_params.items():
         spec = indicator_registry.get(indicator_types[name])
         if spec is None or spec.compute_fn is None or spec.needs_context:
             raise FastTierUnsupported(f"compute_fn indicator {name} cannot be replayed")
-        out = replay_pta_series(spec, frame, params, cap)
+        key = ("replay", spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap, id(bars))
+        out = _memo_get(key)
+        if out is None:
+            out = replay_pta_series(spec, frame, params, cap)
+            for arr in out.values():
+                arr.flags.writeable = False  # shared across genomes
+            _memo_put(key, bars, out, sum(arr.nbytes for arr in out.values()))
         names = spec.output_names
         if len(names) == 1:
             columns.append((name, out[names[0]]))
