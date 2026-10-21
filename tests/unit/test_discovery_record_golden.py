@@ -521,6 +521,17 @@ def _golden() -> dict[str, Any]:
     return json.loads(GOLDEN_PATH.read_text())  # type: ignore[no-any-return]
 
 
+@pytest.fixture(autouse=True)
+def _private_log_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test reads the jobs progress from its own empty log dir.
+
+    ``tests/conftest.py`` pins one ``VIBE_QUANT_LOG_DIR`` per worker, and any discovery
+    ``main()`` run with run id 1 leaves ``discovery_1_progress.json`` there -- so a later
+    test in the same xdist worker would see ``progress != None`` instead of the golden.
+    """
+    monkeypatch.setenv("VIBE_QUANT_LOG_DIR", str(tmp_path / "logs"))
+
+
 @pytest.fixture(scope="module")
 def tmp_module_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("discovery_record_golden")
