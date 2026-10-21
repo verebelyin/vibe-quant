@@ -418,19 +418,19 @@ def test_table_node_halt(
     applied = _supersedes(reason, start.reason) if start.state is NodeState.HALTED else True
     expected_previous = {
         NodeState.INITIALIZING: None,
-        NodeState.RUNNING: NodeState.RUNNING,
-        NodeState.PAUSED: NodeState.PAUSED,
-        NodeState.HALTED: NodeState.RUNNING,
+        NodeState.RUNNING: GuardState.RUNNING,
+        NodeState.PAUSED: GuardState.PAUSED,
+        NodeState.HALTED: GuardState.RUNNING,
     }[start.state]
-    assert node._previous_state is expected_previous
+    assert node._prestart.previous is expected_previous
     if not applied:
         assert _node_status(node) == (NodeState.HALTED, start.reason, _PRIOR)
-        assert node._startup_halt == (start.reason, _PRIOR)
+        assert node._prestart.pending == (start.reason, _PRIOR)
         assert trace.calls == []
         assert _warnings(caplog) == []
         return
     assert _node_status(node) == (NodeState.HALTED, reason, _MSG)
-    assert node._startup_halt == (reason, _MSG)
+    assert node._prestart.pending == (reason, _MSG)
     assert node._state_payload() == {
         "state": "halted",
         "halt_reason": reason.value,
@@ -450,7 +450,7 @@ def test_table_node_halt_defaults_the_message_to_the_reason(
     node.halt(reason)
 
     assert node.status.error_message == reason.value
-    assert node._startup_halt == (reason, reason.value)
+    assert node._prestart.pending == (reason, reason.value)
 
 
 @pytest.mark.parametrize("start", _NODE_HALT_STARTS, ids=lambda s: s.label)
@@ -566,8 +566,8 @@ def test_table_node_resume(
     target = start.previous or NodeState.RUNNING
     assert (ok, text) == (True, _RESUMED_FROM_HALT)
     assert _node_status(node) == (target, None, None)
-    assert node._previous_state is None
-    assert node._startup_halt is None
+    assert node._prestart.previous is None
+    assert node._prestart.pending is None
     assert trace.calls == [
         (
             "write",
