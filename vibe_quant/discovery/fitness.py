@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 from vibe_quant.discovery.operators import scalar_gene_count
 from vibe_quant.dsl import indicator_memo
 from vibe_quant.errors import DataUnavailableError
+from vibe_quant.fast_tier import fallbacks
 
 logger = logging.getLogger(__name__)
 
@@ -765,8 +766,8 @@ def _evaluate_single_task(
     filter_fn: Callable[[StrategyChromosome, dict[str, float | int]], dict[str, bool]] | None,
     min_trades: int,
     timeframe: str | None,
-) -> tuple[FitnessResult, dict[str, object]]:
-    """Pool task: one chromosome plus the worker's cumulative memo snapshot.
+) -> tuple[FitnessResult, dict[str, object], dict[str, object]]:
+    """Pool task: one chromosome plus the worker's cumulative memo/fallback snapshots.
 
     ``_evaluate_single`` is looked up as a module global so tests that
     monkeypatch it still apply.
@@ -774,12 +775,13 @@ def _evaluate_single_task(
     return (
         _evaluate_single(chrom, backtest_fn, filter_fn, min_trades, timeframe),
         indicator_memo.snapshot(),
+        fallbacks.snapshot(),
     )
 
 
 def _eval_symbol_task(
     fn: NTBacktestFn, chrom: StrategyChromosome, symbol: str
-) -> tuple[dict[str, float | int], dict[str, object]]:
+) -> tuple[dict[str, float | int], dict[str, object], dict[str, object]]:
     """Worker task: one chromosome on one symbol (all windows). Picklable.
 
     Exceptions never cross the pool boundary raw: one that cannot be unpickled
@@ -788,13 +790,17 @@ def _eval_symbol_task(
     decides, in symbol order.
     """
     try:
-        return fn._eval_symbols(chrom, [symbol]), indicator_memo.snapshot()
+        return (
+            fn._eval_symbols(chrom, [symbol]),
+            indicator_memo.snapshot(),
+            fallbacks.snapshot(),
+        )
     except Exception as e:
         desc = f"{type(e).__name__}: {e}"
         tagged: dict[str, float | int] = {_TASK_ERROR: desc}  # type: ignore[dict-item]
         if isinstance(e, DataUnavailableError):
             tagged[_TASK_DATA_UNAVAILABLE] = str(e)  # type: ignore[assignment]
-        return tagged, indicator_memo.snapshot()
+        return tagged, indicator_memo.snapshot(), fallbacks.snapshot()
 
 
 def _evaluate_parallel(
@@ -854,8 +860,9 @@ def _evaluate_parallel(
         for future in as_completed(future_to_key):
             i, j = future_to_key[future]
             try:
-                per_chrom[i][j], snap = future.result()
+                per_chrom[i][j], snap, fsnap = future.result()
                 indicator_memo.record_worker(snap)
+                fallbacks.record_worker(fsnap)
             except Exception as e:  # pool-level failure (e.g. broken worker)
                 per_chrom[i][j] = {_TASK_ERROR: f"{type(e).__name__}: {e}"}  # type: ignore[dict-item]
         for i, chrom in enumerate(chromosomes):
@@ -884,8 +891,9 @@ def _evaluate_parallel(
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
-                results[idx], snap = future.result()
+                results[idx], snap, fsnap = future.result()
                 indicator_memo.record_worker(snap)
+                fallbacks.record_worker(fsnap)
             except DataUnavailableError:
                 raise
             except Exception as e:

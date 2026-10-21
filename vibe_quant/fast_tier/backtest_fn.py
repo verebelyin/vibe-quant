@@ -9,18 +9,22 @@ is the screening code.
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from vibe_quant.discovery.backtest_fn import NTBacktestFn
+from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fast_tier.errors import FastTierUnsupported
 
 if TYPE_CHECKING:
     from vibe_quant.discovery.operators import StrategyChromosome
 
 _INSTRUMENT_SUFFIX = "-PERP.BINANCE"
+
+logger = logging.getLogger(__name__)
 
 
 class _FacadeCache:
@@ -104,9 +108,18 @@ class FastBacktestFn(NTBacktestFn):
     ) -> dict[str, float | int]:
         try:
             return self._run_fast(chromosome, start_date, end_date, symbols)
-        except FastTierUnsupported:
+        except FastTierUnsupported as exc:
             if not self.nt_fallback:
                 raise
+            fallbacks.record(str(exc))
+            logger.info(
+                "fast tier: NT fallback for genome %s %s %s..%s: %s",
+                chromosome.uid,
+                ",".join(symbols or self.symbols),
+                start_date,
+                end_date,
+                exc,
+            )
         # NT's fill model re-seeds and draws from the global random (vibe-quant-0bwe2); the
         # replay draws none, so a fallback must not either (the GA's seeded search).
         state = random.getstate()

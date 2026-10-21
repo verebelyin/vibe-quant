@@ -31,6 +31,7 @@ from vibe_quant.discovery.pipeline import (
     FastTierConfirm,
 )
 from vibe_quant.discovery.seed import load_seed_chromosomes
+from vibe_quant.fast_tier import fallbacks
 from vibe_quant.fees import DEFAULT_TIER, FeeSchedule
 from vibe_quant.liquidation_settings import (
     DEFAULT_LEVERAGE,
@@ -909,7 +910,11 @@ def _run_provenance_notes(
         # need every symbol's train return > 0 and trades >= min (hard gate).
         notes["worst_mode_score"] = "0.5*min+0.5*median"
     if result.fast_tier_confirm is not None:
-        notes["evaluator"] = {"name": "fast", "nt_confirmed": result.fast_tier_confirm.confirmed}
+        notes["evaluator"] = {
+            "name": "fast",
+            "nt_confirmed": result.fast_tier_confirm.confirmed,
+            "nt_fallbacks": fallbacks.summary(),
+        }
     if result.dsr_trials is not None:
         notes["dsr_trials"] = _dsr_trials_note(result, prior_run_ids or [], prior_legacy)
     elif not use_mock:
