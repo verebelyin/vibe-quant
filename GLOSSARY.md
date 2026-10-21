@@ -120,7 +120,7 @@ The exchange's reference price for liquidation and funding, as opposed to the la
 _Avoid_: index price
 
 **Leverage**:
-The multiple of equity a run's venue allows per position; a run-level setting, never searched.
+The venue's margin ratio: a position's margin is its notional / leverage. A run-level setting (whole number 1-125, default 10), never searched.
 
 **Liquidation overlay**:
 An opt-in model of exchange liquidation, either off, isolated margin or cross margin.

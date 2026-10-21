@@ -182,7 +182,7 @@ This is the standard and accepted way to use LGPL libraries from MIT-licensed pr
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Backtesting engine | NautilusTrader (single engine) | Rust performance, execution realism critical at 20x leverage, backtest-live parity, models leverage/funding always and liquidation as an opt-in per-run overlay (off by default) |
+| Backtesting engine | NautilusTrader (single engine) | Rust performance, execution realism critical for leveraged perps (run leverage 1-125x, default 10x), backtest-live parity, models leverage/funding always and liquidation as an opt-in per-run overlay (off by default) |
 | Parameter screening | NautilusTrader screening mode + multiprocessing | Simplified fills for speed, but still models margin/funding, and liquidation as an opt-in overlay (off by default), unlike vectorized alternatives which lack these features |
 | Strategy format | Declarative DSL | Single source auto-translates to NautilusTrader Strategy, UI form generation |
 | DSL expressiveness | Indicator + Condition + Action + Multi-TF + Time Filters + Position Mgmt | Covers most crypto perp futures strategies; multi-timeframe confirmation is essential |
@@ -728,7 +728,7 @@ parameters_schema:
 
 ### Architecture
 
-The screening pipeline uses NautilusTrader in a **simplified execution mode** for fast parameter sweeps. Unlike vectorized alternatives, this approach correctly models leverage, margin and funding rates even during screening -- critical for perpetual futures at 20x -- with liquidation available as an opt-in per-run overlay (OFF by default; see §7).
+The screening pipeline uses NautilusTrader in a **simplified execution mode** for fast parameter sweeps. Unlike vectorized alternatives, this approach correctly models leverage, margin and funding rates even during screening -- critical for leveraged perpetual futures (run leverage 1-125x, default 10x) -- with liquidation available as an opt-in per-run overlay (OFF by default; see §7).
 
 **Screening mode simplifications** (vs full validation):
 - Basic `FillModel` with simple probabilistic slippage (no custom volume-based model)
@@ -817,8 +817,7 @@ screening_venue_config = BacktestVenueConfig(
     account_type="MARGIN",
     base_currency=None,
     starting_balances=[f"{parameters.initial_balance} USDT"],  # parameters.initial_balance, default 1000
-    default_leverage=Decimal("10"),
-    leverages={"BTCUSDT-PERP.BINANCE": Decimal("20")},
+    default_leverage=parameters.leverage,  # run setting: whole number in [1, 125], default 10; no per-symbol overrides
     fill_model=ImportableFillModelConfig(
         fill_model_path="vibe_quant.backtesting.fill_models:ScreeningFillModel",
         config_path="vibe_quant.backtesting.fill_models:ScreeningFillModelConfig",
@@ -872,8 +871,7 @@ venue_config = BacktestVenueConfig(
     account_type="MARGIN",
     base_currency=None,
     starting_balances=[f"{parameters.initial_balance} USDT"],  # parameters.initial_balance, default 1000
-    default_leverage=Decimal("10"),
-    leverages={"BTCUSDT-PERP.BINANCE": Decimal("20")},
+    default_leverage=parameters.leverage,  # run setting: whole number in [1, 125], default 10; no per-symbol overrides
     fill_model=custom_fill_model,          # Custom volume-based slippage
     fee_model=fee_model,                   # VIP0 maker 0.02% / taker 0.05% (vibe_quant/fees.py); run-level fee tier and BNB discount (x0.9)
     latency_model=latency_model,           # Network latency simulation (tick data only; bars release via the per-instrument outbox)
@@ -1194,8 +1192,8 @@ Risk management is decoupled from strategy logic. Three module types attach to a
 method: fixed_fractional
 config:
   risk_per_trade: 0.02            # 2% of balance per trade
-  max_position_pct: 0.10          # Max 10% in single position
-  max_leverage: 20
+  max_position_pct: 0.5           # cap: 0.5 x balance per symbol (run default)
+  max_leverage: 10
 ```
 
 The run-level sizing implemented today is the min(risk, cap) rule (defaults: 2% risk per trade, 0.5 × balance cap per symbol) — see [§ Position sizing](#position-sizing).
@@ -1442,7 +1440,7 @@ On any unexpected error during paper/live:
 1. Cancel all open orders for the affected strategy
 2. Log the full error with stack trace (structured JSON)
 3. Send Telegram alert with error summary
-4. Set strategy state to `HALTED`
+4. Set node state to `HALTED`
 5. Wait for manual intervention (operator reviews, fixes, resumes)
 
 Transient errors (WebSocket disconnect, API timeout) are handled by NautilusTrader's built-in reconnection with exponential backoff. Strategy-level errors (invalid signal, sizing calculation failure) trigger the halt-and-alert flow.
@@ -1839,13 +1837,13 @@ Maintain a small set of backtest runs with pre-computed expected results for reg
 4. **Error handling**
    - Halt-and-alert flow for unexpected errors
    - NautilusTrader reconnection for transient errors
-   - Strategy state machine: ACTIVE → HALTED → manual RESUME
+   - Node state machine (`NodeState`, `paper/node.py`): INITIALIZING -> RUNNING; RUNNING -> PAUSED (reduce-only, `POST /api/paper/halt` with `mode=pause`) or HALTED (flatten, stop strategies; a daily-loss halt keeps strategies running and lifts at the next UTC midnight) -> manual RESUME; STOPPED and ERROR end a session
 
 5. **Paper trading dashboard tab**
    - Live P&L display
    - Open positions table
    - Recent trades list
-   - Strategy status (ACTIVE/HALTED)
+   - Node status (RUNNING/PAUSED/HALTED; also INITIALIZING/STOPPED/ERROR)
    - Manual controls: HALT, RESUME, CLOSE ALL
 
 6. **Manual promotion workflow**
@@ -1991,7 +1989,7 @@ All architecture decisions were made through a structured interview process and 
 
 | # | Question | Decision | Rationale |
 |---|----------|----------|-----------|
-| 1 | Core engine | NautilusTrader (single engine) | Execution realism critical at 20x leverage; Rust performance; backtest-live parity; correctly models funding/liquidation even during screening |
+| 1 | Core engine | NautilusTrader (single engine) | Execution realism critical for leveraged perps (run leverage 1-125x, default 10x); Rust performance; backtest-live parity; models funding always and liquidation as an opt-in overlay, even during screening |
 | 2 | Parameter screening | NautilusTrader screening mode + multiprocessing | Removed VectorBT: open-source lacks leverage/funding/liquidation support. Single engine ensures screening results are directionally consistent with validation |
 | 3 | Data storage | NautilusTrader ParquetDataCatalog + raw archive | Native NT integration; raw data archived in SQLite for reproducibility and rebuild |
 | 4 | State storage | SQLite (WAL mode) | Zero infrastructure; WAL enables concurrent dashboard + backtest access |
