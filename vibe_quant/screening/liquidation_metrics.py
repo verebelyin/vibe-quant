@@ -3,8 +3,9 @@
 ``NTScreeningRunner._extract_metrics`` keeps its NT-based path (byte-identical) for
 ``liquidation_mode="off"`` and for an identity overlay. When the overlay liquidated or
 dropped a position, NT's own figures (``total_positions``, ``PnL%``, win rate, return
-moments) still describe the untruncated run, so every trade-level number is rebuilt here
-from the same inputs as the NT path:
+moments) still describe the untruncated run, so every trade-level number is rebuilt from
+the same inputs as the NT path -- the trade lists and sums here, the profit factor and win
+rate in the runner from the rebuilt ``trade_pnls``:
 
 * a dropped position (a cross bust happened before it opened) is not a trade at all: no
   fees, funding, PnL or count;
@@ -165,14 +166,9 @@ class LiquidationTrades:
     trade_pnls: list[float] = field(default_factory=list)  # net of costs incl. funding
     closed_net: list[tuple[int, float]] = field(default_factory=list)
     cash_events: list[tuple[int, float]] = field(default_factory=list)
-    wins: int = 0  # trades with a positive realized PnL (NT's win-rate basis: before funding)
     # per-trade return on entry notional for the return moments (closed / liquidated only)
     returns: list[float] = field(default_factory=list)
     n_closed: int = 0
-
-    @property
-    def win_rate(self) -> float:
-        return self.wins / len(self.trade_pnls) if self.trade_pnls else 0.0
 
 
 def liquidation_trades(
@@ -223,8 +219,6 @@ def liquidation_trades(
         out.closed_net.append((exit_ns, realized - accrual.total))
         out.cash_events.append((exit_ns, realized))
         out.cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
-        if realized > 0.0:
-            out.wins += 1
         if closed:
             out.n_closed += 1
             entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))

@@ -50,6 +50,31 @@ def profit_factor(trade_pnls: Iterable[float]) -> float:
     return min(gross_profit / gross_loss, PROFIT_FACTOR_CAP)
 
 
+def trade_win_rate(net_pnls: Iterable[float]) -> float:
+    """Share of trades whose net PnL is above zero.
+
+    ``net_pnls`` are per-trade NET PnLs -- the same list :func:`profit_factor`
+    consumes (after fees and, where modeled, funding/slippage); a trade still
+    open at the end of the run counts at its mark. This is the single win-rate
+    definition shared by screening and validation (bd vibe-quant-neuvu.4;
+    user ruling Q1=A: win rate is net of every cost).
+
+    A trade netting exactly ``0.0`` is not a win. A non-finite PnL counts in
+    the denominator and is never a win -- unlike :func:`profit_factor`, which
+    skips it: win rate fails closed on purpose.
+
+    Returns:
+        ``0.0`` with no trades, else ``wins / len(net_pnls)``.
+    """
+    total = 0
+    wins = 0
+    for pnl in net_pnls:
+        total += 1
+        if math.isfinite(pnl) and pnl > 0.0:
+            wins += 1
+    return wins / total if total else 0.0
+
+
 def gross_pnl(
     net_pnl: float,
     fees: float,

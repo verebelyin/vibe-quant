@@ -52,6 +52,10 @@ _Avoid_: quick backtest, NT simplified
 The full-fidelity engine tier that fills orders on 1-minute detail bars and charges full costs; it is the reference for how fills really happen.
 _Avoid_: full backtest; never use bare "validation" for cross-window, cross-validation or DSL checks
 
+**Win rate**:
+Share of a run's trades whose net PnL (after fees, funding and modeled slippage) is above zero; trades still open at the end count at their mark.
+_Avoid_: hit rate
+
 **Fast tier**:
 An exploration-only replay of screening for 1-minute, single-symbol genomes that needs no engine run; it must match screening fill for fill, and it never yields champions or gate inputs.
 _Avoid_: fast screening, approximate backtest

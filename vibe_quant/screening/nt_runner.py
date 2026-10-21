@@ -891,6 +891,7 @@ class NTScreeningRunner:
             mark_to_market_daily_returns,
             mark_to_market_max_drawdown,
             profit_factor,
+            trade_win_rate,
         )
         from vibe_quant.screening.types import BacktestMetrics
         from vibe_quant.utils import compute_day_count
@@ -1149,7 +1150,6 @@ class NTScreeningRunner:
                     closed_net = liquidated.closed_net
                     cash_events = liquidated.cash_events
                     metrics.total_trades = len(trade_pnls)
-                    metrics.win_rate = liquidated.win_rate
                     metrics.liquidation_count = len(overlay.hits_by_key)
                     metrics.liquidation_forfeited = float(
                         sum(h.clearance_fee for h in overlay.hits_by_key.values())
@@ -1196,10 +1196,15 @@ class NTScreeningRunner:
         days = compute_day_count(self._start_date, self._end_date)
         self.last_days = int(days) if days else 0
 
-        # Trade-based profit factor on net PnL (shared definition with
-        # validation). NT's realized-PnL PF is unimplemented, and its
+        # Trade-based profit factor and win rate on net PnL (shared definitions
+        # with validation). NT's realized-PnL PF is unimplemented, and its
         # returns-based PF is a daily-return statistic (bd vibe-quant-e70tl.7).
+        # NT's WinRate is realized-before-funding and counts an open position as
+        # a loser at -entry fee, so it is overwritten from the same per-trade net
+        # list, on the mode-off, identity-overlay and liquidated paths alike
+        # (bd vibe-quant-neuvu.4).
         metrics.profit_factor = profit_factor(trade_pnls)
+        metrics.win_rate = trade_win_rate(trade_pnls)
 
         # Sharpe/Sortino from the daily realized balance INCLUDING funding,
         # over the whole backtest window (NT's series stops at the last fill

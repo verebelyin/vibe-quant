@@ -32,7 +32,7 @@ from vibe_quant.data.mark_bars import build_mark_bars
 from vibe_quant.errors import DataUnavailableError, LiquidationIntegrityError
 from vibe_quant.liquidation.scan import MissingMarkSeries
 from vibe_quant.liquidation.tiers import TierTableExceeded, UnknownSymbol
-from vibe_quant.metrics import fee_drag, profit_factor
+from vibe_quant.metrics import fee_drag, profit_factor, trade_win_rate
 from vibe_quant.overfitting.dsr import daily_sharpe_inputs
 from vibe_quant.screening.nt_runner import NTScreeningRunner
 from vibe_quant.validation.extraction import daily_sharpe_sortino
@@ -343,6 +343,33 @@ def test_hit_position_never_marked_to_market_when_nt_left_it_open(tmp_path: Path
     assert m.total_funding == 0.0
 
 
+def test_liquidated_run_counts_funding(tmp_path: Path) -> None:
+    """R9b: a survivor realized +10 that paid 15 funding is a LOSS (net -5). The removed
+    ``realized > 0`` basis counted it as a win; the shared net definition does not."""
+    catalog = write_marks(tmp_path, CRASH)
+    survivor = Pos(
+        id="B1",
+        instrument_id=BTC,
+        ts_opened=at(451),  # after the 07:30 crash: never marked at 30000
+        ts_closed=at(960),  # 16:00, across the 08:00 settlement
+        events=[
+            Fill(at(451), BUY, 1.25, 40000.0, 0.0),
+            Fill(at(960), SELL, 1.25, 40000.0, 0.0),
+        ],
+        realized_pnl=10.0,
+        peak_qty=1.25,  # entry notional 50000 -> one 0.0003 settlement = 15
+        commission_list=[0.0, 0.0],
+    )
+    m = extract(
+        make_runner(tmp_path, "isolated", catalog=catalog), [pos_a(), survivor], CRASH, n_positions=2
+    )
+    assert m.liquidation_count == 1
+    assert m.total_trades == 2
+    assert m.total_funding == pytest.approx(15.0)
+    assert m.total_return == pytest.approx((-4020.0 - 5.0) / BALANCE)
+    assert m.win_rate == trade_win_rate([-4020.0, -5.0]) == 0.0  # was 1/2
+
+
 def test_mode_off_ignores_the_crash_and_keeps_nt_numbers(tmp_path: Path) -> None:
     """Control: same engine, mode off = NT-untruncated figures (the numbers liquidation fixes)."""
     runner = make_runner(tmp_path, "off")
@@ -350,7 +377,11 @@ def test_mode_off_ignores_the_crash_and_keeps_nt_numbers(tmp_path: Path) -> None
     assert runner.last_liquidation_notes is None
     assert (m.liquidation_count, m.liquidation_forfeited) == (0, 0.0)
     assert m.total_trades == 9
-    assert m.win_rate == 0.9
+    # the one net definition (bd vibe-quant-neuvu.4): A realized -2039 and paid the 12
+    # funding of the 08:00 settlement it held across -> net -2051; B1/B2 won
+    nets = [-2051.0, 500.0, 200.0, -100.0]
+    assert m.win_rate == trade_win_rate(nets) == 0.5  # 2 of the 4 real trades won
+    assert m.win_rate != 0.9  # NT's stub reported 0.9
     assert m.total_funding == pytest.approx(_RATE * 40000.0)  # A held across 08:00
     assert m.max_drawdown == pytest.approx(10020.0 / 40000.0)  # untruncated 30000 low
 

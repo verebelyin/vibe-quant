@@ -27,6 +27,7 @@ from vibe_quant.metrics import (
     mark_to_market_max_drawdown,
     pnl_path,
     profit_factor,
+    trade_win_rate,
 )
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -1519,6 +1520,9 @@ def extract_trades(
     recomputed = overlay is not None and not overlay.is_identity
     if not positions and not open_marks and not recomputed:
         result.profit_factor = 0.0
+        # No trades: 0.0, never NT's stat (bd vibe-quant-neuvu.4). Same rule as
+        # the computed path below; this branch returns before it.
+        result.win_rate = 0.0
         result.max_drawdown = 0.0
         if has_window:
             result.sharpe_ratio, result.sortino_ratio = 0.0, 0.0
@@ -1709,7 +1713,6 @@ def extract_trades(
     if recomputed:
         # NT's counters/stats know nothing of the liquidation: nothing from extract_stats
         # that depends on the (untruncated) positions survives
-        result.win_rate = 0.0
         result.avg_win = result.avg_loss = 0.0
     result.winning_trades = winning
     result.losing_trades = losing
@@ -1723,10 +1726,10 @@ def extract_trades(
             "(no archived rate)",
             funding_fallbacks,
         )
-    if result.total_trades > 0:
-        result.win_rate = winning / result.total_trades
-    # Trade PF on net PnL (fees, modeled slippage and funding included) —
-    # same definition as screening (bd vibe-quant-e70tl.7).
+    # Trade win rate and PF on net PnL (fees, modeled slippage and funding
+    # included) — same definitions as screening (bd vibe-quant-e70tl.7,
+    # bd vibe-quant-neuvu.4). Zero trades -> 0.0.
+    result.win_rate = trade_win_rate(t.net_pnl for t in result.trades)
     result.profit_factor = profit_factor(t.net_pnl for t in result.trades)
 
     if recomputed:
