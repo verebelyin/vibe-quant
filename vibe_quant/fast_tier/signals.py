@@ -207,8 +207,11 @@ def _pta_columns(
         raise FastTierUnsupported(f"compute_fn indicators on {pta_tfs}: only 1m is replayed")
     import pandas as pd
 
-    from vibe_quant.dsl.indicators import indicator_registry
-    from vibe_quant.dsl.pta_replay import replay_pta_series
+    from vibe_quant.dsl.pta_replay import (
+        PtaReplayUnsupported,
+        replay_pta_series,
+        strategy_pta_columns,
+    )
 
     frame_key = ("frame", id(bars))
     frame = _memo_get(frame_key)
@@ -223,30 +226,31 @@ def _pta_columns(
             }
         )
         _memo_put(frame_key, bars, frame, int(frame.memory_usage(index=False).sum()))
-    cap = strategy._pta_buffer_cap["1m"]
-    columns: list[tuple[str, np.ndarray]] = []
-    for name, params in strategy._pta_params.items():
-        spec = indicator_registry.get(indicator_types[name])
-        if spec is None or spec.compute_fn is None or spec.needs_context:
-            raise FastTierUnsupported(f"compute_fn indicator {name} cannot be replayed")
+
+    def memoised_replay(
+        spec: Any, ohlcv: pd.DataFrame, params: dict[str, object], cap: int
+    ) -> dict[str, np.ndarray]:
         key = ("replay", spec.name, tuple(sorted((k, repr(v)) for k, v in params.items())), cap, id(bars))
         out = _memo_get(key)
         if out is None:
-            out = replay_pta_series(spec, frame, params, cap)
+            out = replay_pta_series(spec, ohlcv, params, cap)
             for arr in out.values():
                 arr.flags.writeable = False  # shared across genomes
             _memo_put(key, bars, out, sum(arr.nbytes for arr in out.values()))
-        names = spec.output_names
-        if len(names) == 1:
-            columns.append((name, out[names[0]]))
-        else:
-            from vibe_quant.dsl.compiler import StrategyCompiler
+        return out  # type: ignore[no-any-return]
 
-            primary = StrategyCompiler._effective_primary(spec)
-            if primary in out:
-                columns.append((name, out[primary]))
-            columns.extend((f"{name}_{key}", out[key]) for key in names)
-    return columns
+    meta = {name: (indicator_types[name], "1m") for name in strategy._pta_params}
+    try:
+        return strategy_pta_columns(
+            strategy._pta_params,
+            meta,
+            strategy._pta_buffer_cap,
+            "1m",
+            frame,
+            replay=memoised_replay,
+        )
+    except PtaReplayUnsupported as exc:
+        raise FastTierUnsupported(str(exc)) from exc
 
 
 def compute_signals(

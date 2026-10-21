@@ -179,10 +179,17 @@ PTA_FEED_LINES: tuple[str, ...] = (
     "    PtaBuffer trims to the cap (with 25% slack so the trim amortizes):",
     "    recomputing indicators over full history every bar is O(n^2) across a",
     "    backtest and dominates 1m-data runtime.",
+    "",
+    "    The buffer is always filled. A runner may install precomputed columns in",
+    "    ``_pta_pre`` ({tf: PtaPrecomputed}); a bar they cover (same ts_init and close)",
+    "    writes the identical values and skips the recompute, any other bar recomputes.",
     '    """',
     "    self._pta_bufs[tf].append(",
     "        float(bar.open), float(bar.high), float(bar.low), float(bar.close), float(bar.volume)",
     "    )",
+    "    _pre = self._pta_pre.get(tf) if self._pta_pre is not None else None",
+    "    if _pre is not None and _pre.feed(self._pta_values, bar.ts_init, float(bar.close)):",
+    "        return",
     "    self._update_pta_indicators(tf)",
 )
 

@@ -717,6 +717,7 @@ class StrategyCompiler:
             f"    {dsl.description or 'Auto-generated from DSL.'}",
             '    """',
             "",
+            *self._pta_seam_lines([i for i in indicators if self._is_pta(i)]),
             f"    def __init__(self, config: {config_name}) -> None:",
             f'        """Initialize {class_name}Strategy."""',
             "        super().__init__(config)",
@@ -1497,6 +1498,23 @@ class StrategyCompiler:
     def _has_context(infos: list[IndicatorInfo]) -> bool:
         """True when any compute_fn indicator needs aux context (FUNDING, ...)."""
         return any(i.spec.needs_context for i in infos)
+
+    def _pta_seam_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
+        """Class attributes of the precompute seam (non-context compute_fn strategies only).
+
+        ``_pta_pre`` None is the live per-bar path; a runner assigns
+        ``{tf: PtaPrecomputed}`` to switch. ``_PTA_META`` names each indicator's
+        registry type and timeframe for ``pta_replay.strategy_pta_columns``.
+        """
+        if not pta_infos or self._has_context(pta_infos):
+            return []
+        meta = ", ".join(f'"{i.name}": ("{i.spec.name}", "{i.timeframe}")' for i in pta_infos)
+        return [
+            "    # Precomputed compute_fn columns {tf: PtaPrecomputed}; None = live per-bar path",
+            "    _pta_pre = None",
+            f"    _PTA_META = {{{meta}}}",
+            "",
+        ]
 
     def _feed_lines(self, pta_infos: list[IndicatorInfo]) -> list[str]:
         """``_feed_pta_buffer`` source; context strategies also buffer bar close times."""

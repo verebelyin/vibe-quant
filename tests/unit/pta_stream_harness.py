@@ -26,6 +26,7 @@ from vibe_quant.dsl.pta_buffer import PtaBuffer
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
+    from vibe_quant.dsl.pta_replay import PtaPrecomputed
     from vibe_quant.dsl.schema import StrategyDSL
 
 # (timeframe, open, high, low, close, volume)
@@ -91,6 +92,19 @@ def memo_env(enabled: bool) -> Iterator[None]:
         refresh_enabled()
 
 
+def stream_buffer_caps(
+    specs: dict[str, tuple[str, dict[str, object], str]],
+) -> dict[str, int]:
+    """Per-timeframe buffer cap ``run_stream`` gives the harness strategy."""
+    lookback = {name: pta_lookback(t, params) for name, (t, params, _) in specs.items()}
+    return {
+        tf: pta_buffer_cap(
+            [lookback[n] for n, (_, _, t) in specs.items() if t == tf], full_history=False
+        )
+        for tf in sorted({tf for _, _, tf in specs.values()})
+    }
+
+
 def run_stream(
     compiled_cls: type,
     bars: Sequence[BarEvent],
@@ -98,6 +112,7 @@ def run_stream(
     *,
     specs: dict[str, tuple[str, dict[str, object], str]],
     ind_memo: bool = False,
+    precompute: dict[str, PtaPrecomputed] | None = None,
 ) -> list[dict[str, float]]:
     """Feed ``bars`` and return the ``_pta_values`` snapshot after each event.
 
@@ -105,7 +120,9 @@ def run_stream(
     what the generated ``__init__`` derives from the config. ``ind_memo`` wraps
     the whole bar loop in one ``indicator_memo.session()`` (the discovery
     activation shape); the store is NOT cleared, so a caller can warm it with
-    one stream and measure the next.
+    one stream and measure the next. ``precompute`` installs ``_pta_pre`` (the
+    runner's seam); each bar then carries ``ts_init`` = its index within its
+    timeframe. ``None`` leaves the strategy on the live per-bar path.
     """
     harness: Any = type("Harness", (compiled_cls,), {"config": SimpleNamespace(instrument_id="X")})
     inst: Any = harness.__new__(harness)
@@ -113,18 +130,16 @@ def run_stream(
     inst._pta_values = {}
     inst._pta_params = {name: params for name, (_, params, _) in specs.items()}
     inst._pta_lookback = {name: pta_lookback(t, params) for name, (t, params, _) in specs.items()}
-    inst._pta_buffer_cap = {
-        tf: pta_buffer_cap(
-            [inst._pta_lookback[n] for n, (_, _, t) in specs.items() if t == tf],
-            full_history=False,
-        )
-        for tf in tfs
-    }
+    inst._pta_buffer_cap = stream_buffer_caps(specs)
     inst._pta_bufs = {tf: PtaBuffer(inst._pta_buffer_cap[tf]) for tf in tfs}
+    if precompute is not None:
+        inst._pta_pre = precompute
+    seen = dict.fromkeys(tfs, 0)
     out: list[dict[str, float]] = []
     with memo_env(memo), (indicator_memo.session() if ind_memo else nullcontext()):
         for tf, o, h, lo, c, v in bars:
-            bar = SimpleNamespace(open=o, high=h, low=lo, close=c, volume=v)
+            bar = SimpleNamespace(open=o, high=h, low=lo, close=c, volume=v, ts_init=seen[tf])
+            seen[tf] += 1
             inst._feed_pta_buffer(tf, bar)
             out.append(dict(inst._pta_values))
     return out

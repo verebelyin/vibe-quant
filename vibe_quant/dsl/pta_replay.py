@@ -23,13 +23,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from vibe_quant.dsl.indicators import IndicatorSpec, pta_lookback
+from vibe_quant.dsl.indicators import IndicatorSpec, indicator_registry, pta_lookback
 from vibe_quant.dsl.pta_buffer import PtaBuffer
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pandas as pd
 
 _OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+class PtaReplayUnsupported(ValueError):
+    """A compute_fn indicator that cannot be replayed (missing, no compute_fn, needs context)."""
 
 
 def pta_window_starts(n_bars: int, cap: int) -> np.ndarray:
@@ -124,3 +130,85 @@ def _segment_arrays(
         if array.shape == (n_rows,):
             arrays[name] = array
     return arrays
+
+
+def strategy_pta_columns(
+    pta_params: dict[str, dict[str, object]],
+    meta: dict[str, tuple[str, str]],
+    caps: dict[str, int],
+    tf: str,
+    frame: pd.DataFrame,
+    *,
+    replay: Callable[
+        [IndicatorSpec, pd.DataFrame, dict[str, object], int], dict[str, np.ndarray]
+    ] = replay_pta_series,
+) -> list[tuple[str, np.ndarray]]:
+    """(``_pta_values`` key, held value per bar) for a strategy's compute_fn indicators on ``tf``.
+
+    The one rule shared by the fast tier and the NT precompute seam. ``pta_params``
+    and ``caps`` are the strategy's ``_pta_params`` / ``_pta_buffer_cap``, ``meta``
+    the generated ``_PTA_META`` (indicator name -> (registry type, timeframe)),
+    ``frame`` the OHLCV rows of ``tf``'s bars. Keys are exactly those the generated
+    ``_update_pta_indicators`` writes: a single output under ``name``; a multi-output
+    indicator's primary under ``name`` (when produced) and every output under
+    ``name_<key>``. ``replay`` lets a caller memoise the per-indicator replay.
+
+    Raises:
+        PtaReplayUnsupported: an indicator of ``tf`` is unknown, has no compute_fn
+            or needs aux context.
+    """
+    from vibe_quant.dsl.compiler import StrategyCompiler
+
+    columns: list[tuple[str, np.ndarray]] = []
+    for name, params in pta_params.items():
+        indicator_type, indicator_tf = meta[name]
+        if indicator_tf != tf:
+            continue
+        spec = indicator_registry.get(indicator_type)
+        if spec is None or spec.compute_fn is None or spec.needs_context:
+            raise PtaReplayUnsupported(f"compute_fn indicator {name} cannot be replayed")
+        out = replay(spec, frame, params, caps[tf])
+        names = spec.output_names
+        if len(names) == 1:
+            columns.append((name, out[names[0]]))
+        else:
+            primary = StrategyCompiler._effective_primary(spec)
+            if primary in out:
+                columns.append((name, out[primary]))
+            columns.extend((f"{name}_{key}", out[key]) for key in names)
+    return columns
+
+
+class PtaPrecomputed:
+    """Replayed compute_fn columns for one timeframe, fed bar by bar into ``_pta_values``.
+
+    Installed on a generated strategy as ``strategy._pta_pre = {tf: PtaPrecomputed(...)}``
+    (the runner's seam). Each bar must match the precompute's own index exactly
+    (``ts_init`` and ``close``): the first bar that does not, or a bar past the end,
+    fails it for good, and the generated feed then recomputes live from that bar on.
+    There is no offset search: a shifted start changes the buffer windows.
+    """
+
+    def __init__(
+        self, ts: list[int], close: list[float], columns: list[tuple[str, list[float]]]
+    ) -> None:
+        self.ts = ts
+        self.close = close
+        self.columns = columns
+        self.n = len(ts)
+        self.fed = 0
+        self.failed_at: int | None = None
+
+    def feed(self, values: dict[str, float], ts_init: int, close: float) -> bool:
+        """Write this bar's values into ``values``; False means the live path owns the bar."""
+        i = self.fed
+        if self.failed_at is not None or i >= self.n or self.ts[i] != ts_init or self.close[i] != close:
+            if self.failed_at is None:
+                self.failed_at = i
+            return False
+        for key, column in self.columns:
+            value = column[i]
+            if value == value:  # a NaN never overwrites the held value (runtime NaN-hold)
+                values[key] = value
+        self.fed = i + 1
+        return True
