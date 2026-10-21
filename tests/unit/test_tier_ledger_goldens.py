@@ -76,7 +76,6 @@ MODE_OFF_SCENARIOS = ["G1", "G2", "G3", "G4", "G5", "G5b", "G6", "G7", "G13"]
 #: rabmo.2 L2: the liquidation goldens, each pinned with the mode ON in both tiers.
 #: Every intended hit: liquidation_count >= the value here (0 = identity overlay).
 LIQUIDATION_HITS = {"G8": 1, "G9": 1, "G10": 0, "G11": 1, "G12": 1}
-SCENARIOS = [*MODE_OFF_SCENARIOS, *LIQUIDATION_HITS]
 
 
 @pytest.fixture(autouse=True)
@@ -176,7 +175,7 @@ def _runner(
         symbols=symbols,
         start_date=WINDOW_START,
         end_date=WINDOW_END,
-        catalog_path=str(catalog_path) if catalog_path is not None else None,
+        catalog_path=None,
         funding_archive_path=str(funding_archive),
         liquidation_mode=liquidation_mode,  # type: ignore[arg-type]
         leverage=leverage,
