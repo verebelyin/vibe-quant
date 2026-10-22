@@ -396,12 +396,12 @@ def test_identity_overlay_leaves_metrics_exactly_as_mode_off(
     positions = [long_trade("A", 420, 540, 38000.0, -2039.0, (20.0, 19.0)), *winners_and_loser()]
     off = extract(make_runner(tmp_path, "off", catalog=catalog), positions, CALM)
 
-    import vibe_quant.screening.liquidation_metrics as recompute
+    import vibe_quant.trade_ledger as recompute
 
     def must_not_run(*_a: Any, **_k: Any) -> None:
         raise AssertionError("the recompute helper ran for an identity overlay")
 
-    monkeypatch.setattr(recompute, "liquidation_trades", must_not_run)
+    monkeypatch.setattr(recompute, "screening_liquidation_trades", must_not_run)
     runner = make_runner(tmp_path, "cross", catalog=catalog)
     on = extract(runner, positions, CALM)
     assert equal_metrics(on, off)

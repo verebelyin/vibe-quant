@@ -1,5 +1,9 @@
 """Per-trade accounting of a screening run after the liquidation overlay hit something.
 
+The rebuild itself lives in :func:`vibe_quant.trade_ledger.screening_liquidation_trades`
+(bead vibe-quant-rabmo.2 L6); this module keeps the resting-exit inputs and ``position_key``.
+The rules below describe that rebuild.
+
 ``NTScreeningRunner._extract_metrics`` keeps its NT-based path (byte-identical) for
 ``liquidation_mode="off"`` and for an identity overlay. When the overlay liquidated or
 dropped a position, NT's own figures (``total_positions``, ``PnL%``, win rate, return
@@ -30,26 +34,16 @@ reports the clearance total separately as ``liquidation_forfeited``: it OVERLAPS
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from vibe_quant.liquidation.exit_timing import RestingExit
-from vibe_quant.liquidation.overlay import default_symbol, enum_name, position_views
-from vibe_quant.metrics import LedgerBook
-from vibe_quant.validation.extraction import accrue_position_funding
-from vibe_quant.validation.funding import FundingAccrual
+from vibe_quant.liquidation.overlay import default_symbol, enum_name
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
-    from vibe_quant.liquidation.overlay import OverlayResult
-    from vibe_quant.metrics import LedgerEvent
-    from vibe_quant.validation.extraction import OpenPositionMark
-    from vibe_quant.validation.funding import FundingCalculator
 
 __all__ = [
-    "LiquidationTrades",
-    "liquidation_trades",
     "position_key",
     "resting_exit_inputs",
 ]
@@ -154,95 +148,3 @@ def _active_from(order: Any, ts: int) -> int | None:
         if event_ts <= ts and (active is None or event_ts > active):
             active = event_ts
     return active
-
-
-@dataclass
-class LiquidationTrades:
-    """Trade-level sums and lists of a run with the liquidation overlay applied."""
-
-    total_fees: float = 0.0
-    total_funding: float = 0.0
-    funding_fallbacks: int = 0
-    trade_pnls: list[float] = field(default_factory=list)  # net of costs incl. funding
-    closed_net: list[tuple[int, float]] = field(default_factory=list)
-    cash_events: list[tuple[int, float]] = field(default_factory=list)
-    # per-trade return on entry notional for the return moments (closed / liquidated only)
-    returns: list[float] = field(default_factory=list)
-    n_closed: int = 0
-
-
-def liquidation_trades(
-    overlay: OverlayResult,
-    trade_inputs: Iterable[tuple[Any, OpenPositionMark | None]],
-    scan_funding: Mapping[str, FundingAccrual],
-    funding_calc: FundingCalculator,
-) -> LiquidationTrades:
-    """Rebuild the per-trade accounting of the screening run from the overlay result.
-
-    ``scan_funding`` is the funding the scan was given per position key (paid > 0);
-    ``funding_calc`` only recounts the fallback settlements a hit's truncation keeps.
-    """
-    out = LiquidationTrades()
-    for pos, mark in trade_inputs:
-        key = position_key(pos)
-        if key in overlay.dropped_keys:
-            continue
-        hit = overlay.hits_by_key.get(key)
-        accrual = scan_funding[key]
-        if hit is not None:
-            exit_ns, _venue_price = overlay.exit_override[key]
-            # position_views builds LedgerEvents (the EventLike protocol is their duck type)
-            kept = [
-                cast("LedgerEvent", e) for e in position_views([pos])[0].events if e.ts <= hit.ts
-            ]
-            book = LedgerBook()
-            for event in kept:
-                book.apply(event)
-            fees = sum(abs(e.cash) for e in kept) + hit.clearance_fee
-            realized = book.realized - hit.loss
-            closed = True
-            accrual = _funding_until(accrual, hit.ts, pos, funding_calc)
-        else:
-            fees = sum(abs(float(c)) for c in pos.commissions())
-            realized = float(pos.realized_pnl)
-            if mark is None:
-                exit_ns = int(pos.ts_closed)
-            else:
-                exit_ns = mark.ts
-                fees += mark.exit_fee
-                realized += mark.unrealized - mark.exit_fee
-            closed = mark is None
-        out.total_fees += fees
-        out.total_funding += accrual.total
-        out.funding_fallbacks += accrual.fallback_settlements
-        out.trade_pnls.append(realized - accrual.total)
-        out.closed_net.append((exit_ns, realized - accrual.total))
-        out.cash_events.append((exit_ns, realized))
-        out.cash_events.extend((ts, -amount) for ts, amount in accrual.payments)
-        if closed:
-            out.n_closed += 1
-            entry_val = abs(float(pos.peak_qty) * float(pos.avg_px_open))
-            if entry_val > 0:
-                out.returns.append(realized / entry_val)
-    return out
-
-
-def _funding_until(
-    accrual: FundingAccrual, ts: int, pos: Any, funding_calc: FundingCalculator
-) -> FundingAccrual:
-    """The scan's funding of ``pos`` truncated at ``ts`` (the overlay's ``<= ts`` rule).
-
-    The payments are the scan's own; only the fallback count is recounted, through the last
-    kept settlement (exactly the kept ones: ``accrue`` counts settlements in (entry, exit]).
-    """
-    kept = [(t, amount) for t, amount in accrual.payments if t <= ts]
-    if len(kept) == len(accrual.payments):
-        return accrual
-    fallbacks = (
-        accrue_position_funding(funding_calc, pos, exit_ns=kept[-1][0]).fallback_settlements
-        if kept
-        else 0
-    )
-    return FundingAccrual(
-        total=sum(amount for _, amount in kept), payments=kept, fallback_settlements=fallbacks
-    )
