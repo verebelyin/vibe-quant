@@ -957,6 +957,7 @@ def test_route_prints_the_delegate_call_and_appends_a_ledger_row(
     assert call["clientRequestId"] == "cc-rd-demo-1" and call["mode"] == "async"
     assert call["target"] == {"providerInstanceId": "cc", "model": "ds-flash"}
     assert call["task"].startswith("Read your brief at ") and "TELEMETRY: task=rd-demo round=1" in call["task"]
+    assert json.loads((job / "prompts" / "cc-rd-demo-1.delegate.json").read_text()) == call
     rows = (job / "ledger.md").read_text().splitlines()
     assert rows[1] == "| agent | runtime | model | task | bead | worktree | status |"
     assert rows[-1].startswith(f"| cc-rd-demo-1 | t3 | flash | rd-demo | vq-1 | {repo} | ")

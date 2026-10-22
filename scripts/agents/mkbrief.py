@@ -454,6 +454,7 @@ def dispatch(job: Path, args: argparse.Namespace, task: str, dispatch_text: str)
         call = {"task": dispatch_text, "target": model.get("target"), "mode": "async",
                 "clientRequestId": args.id}  # fmt: skip
         print("DELEGATE_TASK " + json.dumps(call))
+        (job / "prompts" / f"{args.id}.delegate.json").write_text(json.dumps(call) + "\n")
     else:
         print(f"ROUTE {args.route} -> {key} ({runtime}) {json.dumps(model.get('target'))}")
     ledger = _sibling("ledger")
