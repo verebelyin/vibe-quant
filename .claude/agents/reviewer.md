@@ -71,7 +71,7 @@ Each finding: severity (blocking / should-fix / nit), file:line, a failure scena
 
 Everything else is lower: correct code with a missing test is should-fix (`fix-route: deepseek`); a real but unreachable edge is should-fix or a follow-up bead (say why unreachable); a case the contract does not decide goes to `ask --to chief` before you classify it.
 
-**Re-review (round >= 2).** Confirm each prior finding is fixed, then review the fix delta (`git diff <prev>..<new>`) and what it touches; do not re-hunt the whole surface. A new issue outside the delta blocks only if it is a reachable silent wrong value or look-ahead; else `open:`.
+**One round only.** Yours is the only review of this task: report every finding in this pass, and give each blocking one a runnable repro (command or test) so the chief can verify the fix without a second review. A later pass happens only if the user authorises it.
 
 ## Worktree hygiene
 
@@ -82,7 +82,7 @@ Never run `git checkout`, `git switch`, `git reset` or `git stash` in the maker'
 End the verdicts with one line `fix-route: deepseek | sonnet | none`:
 - `none`: no blocking or should-fix findings (nits go under `open:`).
 - `deepseek`: 1-2 should-fix findings with exact mechanical fixes.
-- `sonnet`: any blocking finding, >= 3 should-fix, a second failed round on the same task, or defects showing the maker misunderstood the task. A Sonnet implementer fixes it; a fresh reviewer grades the delta.
+- `sonnet`: any blocking finding, >= 3 should-fix, a second failed round on the same task, or defects showing the maker misunderstood the task. A Sonnet implementer fixes it; the chief verifies the fix against your repro.
 
 The handoff carries `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route:`. `status: done` = no blocking findings; `failed` = at least one.
 

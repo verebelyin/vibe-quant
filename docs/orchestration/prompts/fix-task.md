@@ -1,5 +1,5 @@
 <!--
-Fix-round brief for an implementer (round >= 2). Render with scripts/agents/mkbrief.py:
+Fix-round brief for an implementer. Render with scripts/agents/mkbrief.py:
   mkbrief.py --job <job> --id impl-<slug>-<n> --template docs/orchestration/prompts/fix-task.md \
     --worktree <abs wt> --scope 'a.py,tests/unit/test_a.py' --set-file PRIOR_FINDINGS=<file> \
     --set-file RULINGS=<file> --set PEERS=... --append docs/orchestration/prompts/bus-protocol.md
@@ -10,7 +10,7 @@ ROLE: fixer "{ID}", job {JOB}, round {ROUND}
 
 WORKTREE: `{WT}` (the branch the reviewer judged). Your session starts in the main checkout: edit nothing there. Prefix EVERY shell command with `cd {WT} && `. Run Python as `{RUN_AS} ...`.
 
-GOAL: fix every finding below; they are binding. Keep what was right.
+GOAL: fix every finding below; they are binding. Keep what was right. The chief re-runs the reviewer's repros; no re-review.
 
 PRIOR FINDINGS (reviewer, verbatim):
 {PRIOR_FINDINGS}

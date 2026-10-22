@@ -8,7 +8,7 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 - [`prompts/`](prompts/): brief templates (`cmd-task.md`, `review-task.md`), the bus block (`bus-protocol.md`), the commit format (`commit-message.md`).
 - [`research-swarm.md`](research-swarm.md): the strategy-factory lane.
 - Agent definitions: [`.claude/agents/*.md`](../../.claude/agents/); each body is the agent's system prompt.
-- [`history.md`](history.md): archived changelogs. Nothing loads it.
+- [`history.md`](history.md): archived changelogs.
 
 ## Principles
 
@@ -27,7 +27,7 @@ How one **chief** (a Claude Code session running the [`orchestrate`](../../.clau
 | chief | both | ledger, merges, beads | decompose, dispatch, integrate, talk to the user | user gates |
 | `architect` | eng | design doc | spec → design → task plan with acceptance criteria and contract table | user gate, design review |
 | maker (`cmd`, T3) | eng | code + tests in a worktree | default maker for every task with clear acceptance criteria, test-first | reviewer + verifier |
-| `implementer` | eng | code + tests in a worktree | fixer on `fix-route: sonnet`; takes over after a stall or 2 failed rounds; tasks too risky for the cheap maker | fresh reviewer + verifier |
+| `implementer` | eng | code + tests in a worktree | fixer on `fix-route: sonnet`; takes over after a stall or 2 failed rounds; tasks too risky for the cheap maker | chief verifies + verifier |
 | `operator` | eng | nothing; runs scripts/CLIs on scratch or read-only data | runs existing scripts and CLIs, reports numbers verbatim; never edits code or commits; stops and reports when a script fails closed | chief |
 | `reviewer` | eng | nothing | two verdicts (spec, quality) + `fix-route` | chief |
 | `reviewer-lite` | eng | nothing | first pass on mechanical diffs; escalates semantics | chief |
@@ -94,38 +94,38 @@ Reviewers add `verdict: PASS | SHOULD-FIX | BLOCK` and `fix-route: deepseek | so
 | fitness/metric/fill/funding/indicator math, look-ahead-sensitive code, data writes, codegen, NT lifecycle, schema, concurrency or process control, risk/paper/live, new scripts or modules, > ~150 hand-written non-test lines | `reviewer` |
 | architect design | `design-review` route, `reviewer` in design mode |
 
-- **Fix route:** `deepseek` (1–2 mechanical should-fix) → a new maker round with the findings verbatim, back to the same reviewer. `sonnet` (any blocking finding, ≥ 3 should-fix, a 2nd failed round, or a misunderstood task) → `implementer` with the findings verbatim, then a fresh reviewer.
+- **Fix route:** `deepseek` (1–2 mechanical should-fix) → a new maker round with the findings verbatim, then the chief verifies. `sonnet` (any blocking finding, ≥ 3 should-fix, a 2nd failed round, or a misunderstood task) → `implementer` with the findings verbatim, then the chief verifies.
+- **One review round per task:** the reviewer reports every finding in that pass. On BLOCK the fixer fixes; the chief verifies (the reviewer's repros now fail closed or pass, targeted tests, the gate). No second review; new findings become follow-up beads. `risk-officer` and exactness proofs are separate checks, not rounds. Only the user can authorise another round.
 - **Paper or live diffs:** the `risk-officer` reviews in parallel with the reviewer.
-- **Nits never cost a round:** surviving mutants, test gaps outside money code and fail-closed findings in research tooling become follow-up beads. Mutants are capped at 5 per review and 3 per maker.
+- **Nits never cost a round:** surviving mutants, test gaps outside money code and fail-closed findings in research tooling become follow-up beads.
 
 ## Swarm bus
 
 `scripts/agents/bus.py` (shim: `scripts/agents/bus`) gives each job a mailbox and message board under `data/swarm/<job>/bus/`.
 
 - **Direct messages:** `post --to <agent|chief|all>`, `inbox`, `pending`, `ask` (blocks for the answer), `reply --ref`, `status` (the chief's ≤ 20-line overview).
-- **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`) and are mirrored to the committed `docs/orchestration/board/messages.jsonl`; human view [`board/BOARD.md`](board/BOARD.md). Verdicts and status go to DMs or handoffs.
+- **Board:** `board post --topic <t>`, `board read`, `board search [--global] [--topic ...] [--path ...] [--grep ...]`, `board render`. Topics `#gotchas`, `#findings`, `#decisions` hold cross-job rules (`RULE / WHEN / EVIDENCE`), mirrored to the committed `docs/orchestration/board/messages.jsonl`; view [`board/BOARD.md`](board/BOARD.md). Verdicts go to DMs or handoffs.
 - **Workers** get the bus block in every brief. The gate fails a hand-back while a chief DM is unread.
-- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); it keeps its own cursor, so a restart replays what it missed. Only one durable tail per (`--as`, `--to`) may run.
+- **Chief:** one durable tail as a background Bash call (`tail --to chief --durable --kinds question,blocker --exit-on-first`; task completions already notify); its cursor survives a restart. One durable tail per (`--as`, `--to`).
 - **User decisions:** `bus.py ask-user`; only the user closes them (`needs-user answer --user`).
 
 ## Swarm tools
 
 | Tool | What |
 |---|---|
-| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (`mkbrief.py` pins it to a SHA, so the gate diffs a frozen commit); board/telemetry mirror files are never offenders. Caches PASS per HEAD+base+scope; writes a LOG per run; fails closed. |
+| `swarm-check.sh <wt> --scope 'g,g' [--base REF] [--bus B --bus-agent A] [--no-cache]` | pre-review gate: scope must cover every path in `REF...HEAD`, clean tree, bus inbox, ruff, mypy, targeted + importer tests, pinned-text, exactness, frontend. `--base` takes any ref (`mkbrief.py` pins a SHA); board/telemetry mirror files are never offenders. Caches PASS per HEAD+base+scope; fails closed. |
 | `mkbrief.py [--route ROLE]` | renders, validates and writes a brief; prints the dispatch (`--route`: `delegate_task` JSON + ledger row) |
 | `review_pack.py <wt> --range B..H \| --merge-base P` | the review surface: log, stat, capped diff without lockfiles/generated files |
 | `mutate.py --file F --old X --new Y \| --auto-diff BASE -- <test>` | mutant checks; `--auto-diff` mutates added lines |
 | `land.py --job J --verified B <task>=<msg> ...` | one commit per task from its fork point; tree == verified |
-| `ledger.py --job J --id A --status S` | append a ledger row |
-| `session_stats.py [--since DAYS]` | retro numbers incl. T3 workers |
+| `ledger.py --job J --id A --status S` | append a ledger row; `session_stats.py [--since DAYS]` gives retro numbers |
 | `handoff_lint.py [--role reviewer] <file>` | checks the handoff block |
 | `models.py route <role> \| set \| show` | model routing from `models.json` |
 | `telemetry.py ingest-runs --job J \| review \| report` | cross-job task ledger `docs/orchestration/telemetry/tasks.jsonl` |
 
 ## Workspace
 
-`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a context compaction, re-read `brief.md`, `ledger.md` and the latest handoffs and continue. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
+`data/swarm/<YYYYMMDD-slug>/` (gitignored): `brief.md` (goal, constraints, contract tables, rulings; append-only), `ledger.md` (one row per task), `prompts/` (rendered briefs), `handoffs/` (verbatim), `bus/`, `hypotheses/` (research). After a compaction, re-read `brief.md`, `ledger.md` and the latest handoffs. Durable outcomes go to beads, `bd remember`, `docs/discovery-journal.md` and git.
 
 ## Lanes
 
