@@ -46,12 +46,16 @@ from vibe_quant.trade_ledger import (
     cost_positions,
     moments_from_returns,
     parse_nt_stats,
+    position_key,
     screening_liquidation_moments,
+    screening_liquidation_trades,
     screening_moments,
     split_positions,
     validation_engine_moments,
+    validation_liquidated_run,
 )
 from vibe_quant.validation.extraction import OpenPositionMark, extract_stats
+from vibe_quant.validation.funding import FundingAccrual
 from vibe_quant.validation.results import ValidationResult
 
 BTC = "BTCUSDT-PERP.BINANCE"
@@ -703,3 +707,88 @@ def test_returns_fill_only_unpopulated_fields_with_last_key_winning() -> None:
     )
     stats = parse_nt_stats(bt, tier="validation")
     assert (stats.sharpe, stats.sortino, stats.max_drawdown, stats.win_rate) == (3.0, 0.4, 0.6, 0.8)
+
+
+def test_screening_liquidated_fee_one_sum_witness() -> None:
+    """R17: a liquidated trade's fee is ONE sum (kept commissions + clearance) added to the
+    running total: 0.1417 + (0.8374 + 0.04384) = 1.02294, where stepwise adding gives
+    1.0229400000000002. The float order is the screening tier's, kept verbatim."""
+    closed = FakePosition.closed(
+        "C", BTC, entry_ns=0, exit_ns=DAY, entry_price=10.0, exit_price=11.0, entry_fee=0.1417
+    )
+    liquidated = FakePosition.open(
+        "L", BTC, entry_ns=2 * DAY, entry_price=10.0, entry_fee=0.8374
+    )
+    key = position_key(liquidated)
+    overlay = SimpleNamespace(
+        dropped_keys=frozenset(),
+        hits_by_key={key: SimpleNamespace(ts=3 * DAY, loss=5.0, clearance_fee=0.04384)},
+        exit_override={key: (3 * DAY, 9.0)},
+    )
+    scan_funding = {position_key(closed): FundingAccrual(), key: FundingAccrual()}
+
+    out = screening_liquidation_trades(
+        overlay,  # type: ignore[arg-type]
+        [(closed, None), (liquidated, None)],
+        scan_funding,
+        None,  # type: ignore[arg-type]
+    )
+
+    assert out.total_fees == 1.02294
+    assert out.total_fees != (0.1417 + 0.8374) + 0.04384
+    assert out.n_closed == 2
+
+
+def test_screening_liquidation_keeps_the_fill_at_the_hit_instant() -> None:
+    """Equality edge: a fill at ts == hit.ts is kept (<=), one a tick later is not."""
+    at_hit = FakePosition.open("H", BTC, entry_ns=5, entry_price=10.0, entry_fee=0.5)
+    key = position_key(at_hit)
+    hit = SimpleNamespace(ts=5, loss=2.0, clearance_fee=0.25)
+    overlay = SimpleNamespace(
+        dropped_keys=frozenset(), hits_by_key={key: hit}, exit_override={key: (5, 9.0)}
+    )
+    out = screening_liquidation_trades(
+        overlay,  # type: ignore[arg-type]
+        [(at_hit, None)],
+        {key: FundingAccrual()},
+        None,  # type: ignore[arg-type]
+    )
+    assert out.total_fees == 0.75  # 0.5 kept commission + 0.25 clearance
+
+    after = FakePosition.open("A", BTC, entry_ns=6, entry_price=10.0, entry_fee=0.5)
+    key = position_key(after)
+    overlay = SimpleNamespace(
+        dropped_keys=frozenset(), hits_by_key={key: hit}, exit_override={key: (5, 9.0)}
+    )
+    out = screening_liquidation_trades(
+        overlay,  # type: ignore[arg-type]
+        [(after, None)],
+        {key: FundingAccrual()},
+        None,  # type: ignore[arg-type]
+    )
+    assert out.total_fees == 0.25  # the later fill is not kept
+
+
+def test_validation_liquidated_run_keeps_the_fill_at_the_hit_instant() -> None:
+    """Equality edge: validation keeps a fill at ts == hit.ts (commission booked), drops a later one."""
+    hit = SimpleNamespace(ts=5, realized_pnl=-3.0, clearance_fee=0.25)
+    for entry_ns, kept_fee in ((5, 0.5), (6, 0.0)):
+        pos = FakePosition.open("V", BTC, entry_ns=entry_ns, entry_price=10.0, entry_fee=0.5)
+        key = position_key(pos)
+        overlay = SimpleNamespace(
+            dropped_keys=frozenset(),
+            hits_by_key={key: hit},
+            exit_override={key: (5, 9.0)},
+            ledgers={},
+        )
+        slip = SimpleNamespace(leg=lambda _pos, _price: 0.0)
+        adjusted, ledgers = validation_liquidated_run(
+            [], [pos], overlay, slip=slip, funding_by_key={}  # type: ignore[arg-type]
+        )
+        assert ledgers == {}
+        (item,) = adjusted
+        assert item.exit_reason == "liquidation"
+        assert item.fee_legs == (kept_fee, 0.25)
+        assert item.pos_fees == kept_fee + 0.25
+        assert item.exit_ns == 5
+        assert item.exit_price == 9.0

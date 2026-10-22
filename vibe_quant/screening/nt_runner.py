@@ -14,6 +14,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from vibe_quant import trade_ledger
 from vibe_quant.balance_settings import (
     DEFAULT_STARTING_BALANCE_USDT,
     validate_starting_balance,
@@ -1170,10 +1171,7 @@ class NTScreeningRunner:
             liquidation_ledgers: dict[str, list[LedgerEvent]] | None = None
             liquidation_floor_ns: int | None = None
             if overlay is not None:
-                from vibe_quant.screening.liquidation_metrics import (
-                    liquidation_trades,
-                    position_key,
-                )
+                from vibe_quant.screening.liquidation_metrics import position_key
 
                 if not overlay.is_identity:
                     # every raw position the venue touched, whether or not NT or a mark can
@@ -1184,7 +1182,7 @@ class NTScreeningRunner:
                         if position_key(p) in overlay.hits_by_key
                         or position_key(p) in overlay.dropped_keys
                     ]
-                    liquidated = liquidation_trades(
+                    liquidated = trade_ledger.screening_liquidation_trades(
                         overlay, [*trade_inputs, *touched], scan_funding, funding_calc
                     )
                     liquidation_ledgers = overlay.ledgers

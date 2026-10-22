@@ -20,7 +20,6 @@ import numpy as np
 from vibe_quant.liquidation_settings import LIQUIDATION_MODES  # one definition, shared
 from vibe_quant.metrics import (
     BarSeries,
-    LedgerBook,  # average-cost replay (as liquidation.overlay)
     LedgerEvent,
     daily_balance_returns,
     gross_pnl,
@@ -31,7 +30,6 @@ from vibe_quant.metrics import (
 )
 from vibe_quant.trade_ledger import (
     VALIDATION_RULES,
-    PositionCosts,
     accumulate,
     apply_validation_moments,
     cost_positions,
@@ -40,9 +38,10 @@ from vibe_quant.trade_ledger import (
     position_key,
     split_positions,
     validation_engine_moments,
+    validation_liquidated_run,
 )
 from vibe_quant.trade_ledger import (
-    accrue_position_funding as accrue_position_funding,  # re-exported: liquidation_metrics
+    accrue_position_funding as accrue_position_funding,  # re-exported name (kept importable here)
 )
 from vibe_quant.validation.fill_model import SlippageEstimator
 from vibe_quant.validation.results import TradeRecord, ValidationResult
@@ -943,80 +942,6 @@ def liquidation_execution_bar_ns(execution_timeframe: str | None) -> int:
     return seconds * 1_000_000_000
 
 
-def _liquidated_costs(
-    costs: PositionCosts,
-    hit: Any,
-    exit_override: tuple[int, float],
-) -> PositionCosts:
-    """Trade numbers of a liquidated position, from the venue fill and the account loss.
-
-    The account keeps the fills up to the liquidation (their commissions stay booked and
-    partial closes before it keep their PnL), then the liquidating close: price PnL
-    ``hit.realized_pnl`` and the clearance fee. Funding is the scan's, cut at the liquidation;
-    the strategy's own later exit never happened, so its modeled slippage leg is gone while
-    the entry leg's stays.
-    """
-    ts, price = exit_override
-    realized = LedgerBook()
-    kept_fees = 0.0
-    for fill in costs.pos.events:
-        if int(fill.ts_event) > hit.ts:
-            continue
-        sign = 1.0 if getattr(fill.order_side, "name", str(fill.order_side)).upper() == "BUY" else -1.0
-        commission = float(fill.commission)
-        kept_fees += commission
-        realized.apply(
-            LedgerEvent(
-                ts=int(fill.ts_event),
-                qty=sign * float(fill.last_qty),
-                price=float(fill.last_px),
-                cash=-commission,
-            )
-        )
-    realized_pnl = realized.realized + hit.realized_pnl - hit.clearance_fee
-    pos_fees = kept_fees + hit.clearance_fee
-    # the scan's funding input cut at the hit (open positions were accrued to their valuation
-    # horizon, so this is min(hit, horizon)); never re-accrued: the ledger carries exactly this
-    accrual = costs.accrual.truncated(ts) if costs.accrual is not None else None
-    return PositionCosts(
-        pos=costs.pos,
-        mark=None,  # a liquidated position is never marked at the end of the run
-        realized_pnl=realized_pnl,
-        exit_price=price,
-        exit_ns=ts,
-        exit_reason="liquidation",
-        pos_fees=pos_fees,
-        slippage_cost=costs.entry_slippage,
-        accrual=accrual,
-        fee_legs=(kept_fees, hit.clearance_fee),
-        gross_pnl=realized_pnl + abs(pos_fees),
-        entry_slippage=costs.entry_slippage,
-    )
-
-
-def _with_valuation_cash(
-    ledgers: dict[str, list[LedgerEvent]], survivors: Iterable[PositionCosts]
-) -> dict[str, list[LedgerEvent]]:
-    """Overlay ledgers plus the survivors' end-of-run valuation costs.
-
-    The exit fee (and the exit leg of the modeled slippage) of a position still open at the
-    run end is booked AFTER the scan, at its mark instant: it is a cost of valuing the
-    position, never a liquidation trigger, so the scan that decided the hits did not see it.
-    It still counts in the equity the ledger replays (no floor, no extra liquidation).
-    """
-    out = {iid: list(events) for iid, events in ledgers.items()}
-    for item in survivors:
-        mark = item.mark
-        if mark is None:
-            continue
-        events = out.setdefault(str(item.pos.instrument_id), [])
-        events.append(LedgerEvent(ts=mark.ts, cash=-mark.exit_fee))
-        if item.exit_slippage:
-            events.append(LedgerEvent(ts=mark.ts, cash=-item.exit_slippage))
-    # stable: the new cash sorts behind the events already at its instant
-    return {iid: sorted(events, key=lambda e: e.ts) for iid, events in out.items()}
-
-
 class _SlippageModel:
     """Post-fill SPEC slippage of one leg (entry or exit fill), as the extraction charges it.
 
@@ -1096,60 +1021,6 @@ def _scan_liquidation(
         funding_by_position=funding_by_position,
         cash_by_position=cash_by_position,
     )
-
-
-def _liquidated_run(
-    costed: list[PositionCosts],
-    still_open: list[Any],
-    overlay: Any,
-    *,
-    slip: _SlippageModel,
-    funding_by_key: dict[str, FundingAccrual],
-) -> tuple[list[PositionCosts], dict[str, list[LedgerEvent]]]:
-    """Trade numbers and ledgers of a run the overlay touched (a hit or a cross bust).
-
-    ``costed`` holds the closed positions and the marked survivors; the open positions the
-    venue liquidated or dropped come straight from the raw NT position (they were never
-    marked): liquidated ones get their venue-fill numbers, dropped ones vanish. Order: closed
-    first, then the open ones in position order, as without liquidation. The survivors'
-    end-of-run valuation cash is added to the overlay ledgers (see
-    :func:`_with_valuation_cash`).
-    """
-    ordered = [item for item in costed if item.mark is None]
-    marked = {position_key(item.pos): item for item in costed if item.mark is not None}
-    for pos in still_open:
-        key = position_key(pos)
-        if key in marked:
-            ordered.append(marked[key])
-            continue
-        entry_slip = slip.leg(pos, float(pos.avg_px_open))
-        ordered.append(
-            PositionCosts(  # placeholder: every number is replaced by _liquidated_costs
-                pos=pos,
-                mark=None,
-                realized_pnl=0.0,
-                exit_price=0.0,
-                exit_ns=0,
-                exit_reason="",
-                pos_fees=0.0,
-                slippage_cost=entry_slip,
-                accrual=funding_by_key.get(key),  # the scan's input; cut at the hit later
-                entry_slippage=entry_slip,
-            )
-        )
-    adjusted: list[PositionCosts] = []
-    for item in ordered:
-        key = position_key(item.pos)
-        if key in overlay.dropped_keys:
-            continue
-        hit = overlay.hits_by_key.get(key)
-        if hit is None:
-            adjusted.append(item)
-        else:
-            adjusted.append(
-                _liquidated_costs(item, hit, overlay.exit_override[key])
-            )
-    return adjusted, _with_valuation_cash(overlay.ledgers, adjusted)
 
 
 def extract_trades(
@@ -1387,7 +1258,7 @@ def extract_trades(
 
     ledgers: dict[str, list[LedgerEvent]] | None = None
     if recomputed:
-        costed, ledgers = _liquidated_run(
+        costed, ledgers = validation_liquidated_run(
             costed,
             still_open,
             overlay,
